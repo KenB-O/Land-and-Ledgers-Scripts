@@ -124,6 +124,18 @@ namespace LandLedgers.Economy
         public int FreightChargeCents => Mathf.Max(0, freightChargeCents);
         public float EstimatedRemainingGameSeconds => Mathf.Max(0f, ResolveCurrentStageDuration() - stageElapsedGameSeconds);
 
+        /// <summary>
+        /// MR-P001: True when this shipment is a pre-load blocked record that owns zero
+        /// physical cargo. Loading never occurred; source inventory was not committed.
+        /// </summary>
+        public bool IsPreLoadBlocked =>
+            !string.IsNullOrWhiteSpace(blockedReason)
+            && state == LogisticsShipmentStatus.Failed
+            && !loadApplied
+            && !sourceCommittedAtSchedule
+            && remainingQuantityUnits <= 0;
+
+
         public void AdvanceGameSeconds(float gameSeconds)
         {
             float remaining = Mathf.Max(0f, gameSeconds);
@@ -257,6 +269,52 @@ namespace LandLedgers.Economy
             state.stageElapsedGameSeconds = Mathf.Max(0f, dto.stageElapsedGameSeconds);
             state.totalElapsedGameSeconds = Mathf.Max(0f, dto.totalElapsedGameSeconds);
             state.routePlan = RestoreRoutePlanSaveDto(dto.routePlan);
+
+            // MR-P001: Normalize legacy blocked shipment data.
+            // Before MR-P001, CreateBlockedShipment set remainingQuantityUnits = planned,
+            // sourceCommittedAtSchedule = true, loadApplied = true, state = Delayed.
+            // This created phantom cargo that could survive reload and trigger delivery.
+
+            // Deterministic repair (J): Where evidence proves loading never occurred:
+            // - shipmentId starts with "blocked:" (direct CreateBlockedShipment record), OR
+            // - loadApplied is false with a blocked reason, OR
+            // - route planning / road access / carrier failure with empty route plan.
+            bool provablyNeverLoaded =
+                (!string.IsNullOrWhiteSpace(state.shipmentId) && state.shipmentId.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase))
+                || (!state.loadApplied && !string.IsNullOrWhiteSpace(state.blockedReason))
+                || (!string.IsNullOrWhiteSpace(state.blockedReason)
+                    && (state.routePlan == null || state.routePlan.TotalTravelCells <= 0)
+                    && (state.blockedReason.Contains("road access", StringComparison.OrdinalIgnoreCase)
+                        || state.blockedReason.Contains("route planning", StringComparison.OrdinalIgnoreCase)
+                        || state.blockedReason.Contains("carrier available", StringComparison.OrdinalIgnoreCase)));
+
+            if (provablyNeverLoaded && state.remainingQuantityUnits > 0)
+            {
+                state.remainingQuantityUnits = 0;
+                state.loadApplied = false;
+                state.sourceCommittedAtSchedule = false;
+                state.state = LogisticsShipmentStatus.Failed;
+            }
+
+            // Ambiguous quarantine (K): If legacy state is ambiguous (e.g. delayed with blocked reason,
+            // or has blocked reason but delivery never occurred and remaining cargo > 0),
+            // quarantine/block execution rather than inventing physical or economic history.
+            // Do not fabricate source deductions, payments, or destination receipts.
+            bool isAmbiguousMalformed =
+                !provablyNeverLoaded
+                && !string.IsNullOrWhiteSpace(state.blockedReason)
+                && !state.deliveryApplied
+                && state.remainingQuantityUnits > 0
+                && (state.state == LogisticsShipmentStatus.Delayed || state.state == LogisticsShipmentStatus.Failed);
+
+            if (isAmbiguousMalformed)
+            {
+                state.state = LogisticsShipmentStatus.Failed;
+                state.remainingQuantityUnits = 0;
+                state.loadApplied = false;
+                state.sourceCommittedAtSchedule = false;
+            }
+
             return state;
         }
 

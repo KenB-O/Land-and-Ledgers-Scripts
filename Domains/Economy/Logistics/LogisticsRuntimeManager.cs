@@ -794,7 +794,7 @@ namespace LandLedgers.Economy
 
         private bool TryApplyLoad(LogisticsShipmentState shipment)
         {
-            if (shipment == null || shipment.loadApplied)
+            if (shipment == null || shipment.loadApplied || shipment.state == LogisticsShipmentStatus.Failed || shipment.remainingQuantityUnits <= 0)
             {
                 return false;
             }
@@ -828,7 +828,7 @@ namespace LandLedgers.Economy
 
         private void TryApplyDelivery(LogisticsShipmentState shipment)
         {
-            if (shipment == null || shipment.deliveryApplied)
+            if (shipment == null || shipment.deliveryApplied || shipment.state == LogisticsShipmentStatus.Failed)
             {
                 return;
             }
@@ -836,8 +836,11 @@ namespace LandLedgers.Economy
             int deliveredUnits = shipment.remainingQuantityUnits;
             if (deliveredUnits <= 0)
             {
-                shipment.deliveryApplied = true;
-                shipment.state = LogisticsShipmentStatus.Partial;
+                if (shipment.state == LogisticsShipmentStatus.Unloading)
+                {
+                    shipment.deliveryApplied = true;
+                    shipment.state = LogisticsShipmentStatus.Partial;
+                }
                 return;
             }
 
@@ -1034,6 +1037,15 @@ namespace LandLedgers.Economy
             string blockedReason,
             string transferAgreementId = null)
         {
+            // MR-P001: Enforce physical conservation invariant.
+            // A shipment blocked before loading occurred owns ZERO physical cargo.
+            // plannedQuantityUnits is preserved for diagnostic/retry context only.
+            // remainingQuantityUnits = 0: no cargo exists to deliver or settle.
+            // sourceCommittedAtSchedule = false: no source stock was removed.
+            // loadApplied = false: loading never occurred.
+            // state = Failed: AdvanceGameSeconds exits immediately for Failed
+            // and TryApplyDelivery only fires for Unloading/Completed/Partial,
+            // so this shipment can never advance into delivery or settlement.
             LogisticsShipmentState shipment = new()
             {
                 shipmentId = BuildShipmentId("blocked", sourceBusinessId, destinationBusinessId, destinationCategoryId),
@@ -1049,10 +1061,11 @@ namespace LandLedgers.Economy
                 sourceCategoryId = sourceCategoryId ?? string.Empty,
                 destinationCategoryId = destinationCategoryId ?? string.Empty,
                 plannedQuantityUnits = Mathf.Max(0, units),
-                remainingQuantityUnits = Mathf.Max(0, units),
-                sourceCommittedAtSchedule = true,
-                loadApplied = true,
-                state = LogisticsShipmentStatus.Delayed,
+                remainingQuantityUnits = 0,
+                sourceCommittedAtSchedule = false,
+                loadApplied = false,
+                deliveryApplied = false,
+                state = LogisticsShipmentStatus.Failed,
                 blockedReason = string.IsNullOrWhiteSpace(blockedReason) ? "shipment blocked" : blockedReason.Trim()
             };
             shipments.Add(shipment);

@@ -20,8 +20,8 @@ namespace LandLedgers.Persistence
     [DefaultExecutionOrder(500)]
     public sealed class SaveLoadManager : MonoBehaviour
     {
-        private const int CurrentFormatVersion = 5;
-        private const int MinimumSupportedFormatVersion = 0;
+        private const int CurrentFormatVersion = SaveMigrationEnvelope.CurrentFormatVersion;
+        private const int MinimumSupportedFormatVersion = SaveMigrationEnvelope.MinimumSupportedFormatVersion;
         private const string SaveDirectoryName = "Saves";
         private const string DefaultSlotFileName = "default.json";
         private const string BackupSlotExtension = ".bak";
@@ -108,6 +108,8 @@ namespace LandLedgers.Persistence
         [SerializeField]
         private string lastPostRestoreConsistencySummary = string.Empty;
 
+        private MigrationManifestDto activeMigrationManifest;
+
         public string LastStatus => lastStatus;
         public string DefaultSlotPath => Path.Combine(Application.persistentDataPath, SaveDirectoryName, DefaultSlotFileName);
 
@@ -187,6 +189,7 @@ namespace LandLedgers.Persistence
             {
                 string json = JsonUtility.ToJson(save, true);
                 WriteSaveFileWithBackup(path, json);
+                activeMigrationManifest = save.migrationManifest;
             }
             catch (Exception ex)
             {
@@ -253,6 +256,7 @@ namespace LandLedgers.Persistence
             SaveRestoreDependencyReport restoreDependencyReport = BuildRestoreDependencyReport(save);
             RecordRestoreDependencyDiagnostics(restoreDependencyReport);
             PrepareManagersForRestore();
+            activeMigrationManifest = save.migrationManifest;
 
             timeManager?.SetPaused(true);
             SaveReferenceResolver resolver = new(townWorld);
@@ -378,6 +382,34 @@ namespace LandLedgers.Persistence
                 return false;
             }
 
+            if (save == null)
+            {
+                message = $"Save slot at {path} could not be parsed into a ledger save.";
+                return false;
+            }
+
+            int rawFormatVersion = save.manifest != null ? save.manifest.formatVersion : 0;
+            if (!SaveMigrationEnvelope.IsRawFormatVersionSupported(rawFormatVersion, path, out string versionError))
+            {
+                message = versionError;
+                return false;
+            }
+
+            // JsonUtility materialises a default MigrationManifestDto (not null) when the JSON key
+            // is absent from a legacy save (format version <= 5). Detect that default-constructed
+            // sentinel by its empty migrationRunId and null it out so TryInterpretAndValidateEnvelope
+            // enters the correct legacy-bootstrap branch rather than the manifest-validation branch.
+            if (save.migrationManifest != null && string.IsNullOrEmpty(save.migrationManifest.migrationRunId))
+            {
+                save.migrationManifest = null;
+            }
+
+            if (!SaveMigrationEnvelope.TryInterpretAndValidateEnvelope(save, rawFormatVersion, out string envelopeError))
+            {
+                message = $"Save migration envelope error in {path}: {envelopeError}";
+                return false;
+            }
+
             save = NormalizeLoadedSave(save, normalizationReport);
             if (save == null)
             {
@@ -385,13 +417,7 @@ namespace LandLedgers.Persistence
                 return false;
             }
 
-            saveFormatVersion = save.manifest != null ? save.manifest.formatVersion : 0;
-            if (saveFormatVersion < MinimumSupportedFormatVersion || saveFormatVersion > CurrentFormatVersion)
-            {
-                message = $"Unsupported save format {saveFormatVersion} in {path}. Supported range is {MinimumSupportedFormatVersion} to {CurrentFormatVersion}.";
-                return false;
-            }
-
+            saveFormatVersion = rawFormatVersion;
             message = $"Loaded save DTO from {path}.";
             return true;
         }
@@ -552,6 +578,7 @@ namespace LandLedgers.Persistence
                 debt = debt,
                 portfolio = portfolio,
                 firstSessionGuidance = guidance,
+                migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto
                 {
                     formatVersion = CurrentFormatVersion,
@@ -1427,9 +1454,21 @@ namespace LandLedgers.Persistence
             {
                 report.AddFatal("Save root is null.");
             }
-            else if (save.world == null)
+            else
             {
-                report.AddFatal("World state is missing.");
+                if (save.world == null)
+                {
+                    report.AddFatal("World state is missing.");
+                }
+
+                if (save.migrationManifest == null)
+                {
+                    report.AddFatal("Migration manifest is missing from save root.");
+                }
+                else if (!SaveMigrationEnvelope.ValidateMigrationManifest(save.migrationManifest, CurrentFormatVersion, out string manifestError))
+                {
+                    report.AddFatal($"Migration manifest is invalid: {manifestError}");
+                }
             }
 
             return report;
@@ -1437,7 +1476,13 @@ namespace LandLedgers.Persistence
 
         private static SaveIntegrityReport ValidateSaveDtoForRestore(LandLedgersSaveGameDto save)
         {
-            return ValidateSaveDtoCommon(save);
+            SaveIntegrityReport report = ValidateSaveDtoCommon(save);
+            if (save != null && save.migrationManifest == null)
+            {
+                report.AddFatal("Migration manifest is missing from save root during restore.");
+            }
+
+            return report;
         }
 
         private static SaveIntegrityReport ValidateSaveDtoCommon(LandLedgersSaveGameDto save)

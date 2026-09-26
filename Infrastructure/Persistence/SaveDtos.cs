@@ -17,6 +17,7 @@ namespace LandLedgers.Persistence
     public sealed class LandLedgersSaveGameDto
     {
         public SaveManifestDto manifest = new();
+        public MigrationManifestDto migrationManifest;
         public WorldSaveDto world = new();
         public TimeSaveDto time = new();
         public PopulationSaveDto population = new();
@@ -26,6 +27,24 @@ namespace LandLedgers.Persistence
         public PlayerDebtSaveDto debt = new();
         public PlayerPortfolioSaveDto portfolio = new();
         public FirstSessionGuidanceSaveDto firstSessionGuidance = new();
+    }
+
+    [Serializable]
+    public sealed class MigrationManifestDto
+    {
+        public int schemaVersion;
+        public int originalSchemaVersion;
+        public string migrationRunId = string.Empty;
+        public List<MigrationStepRecordDto> appliedSteps = new();
+    }
+
+    [Serializable]
+    public sealed class MigrationStepRecordDto
+    {
+        public string stepId = string.Empty;
+        public string appliedAtUtc = string.Empty;
+        public int fromVersion;
+        public int toVersion;
     }
 
     [Serializable]

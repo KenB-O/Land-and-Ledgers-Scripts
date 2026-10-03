@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Population;
 using UnityEngine;
 
@@ -12,7 +13,7 @@ namespace LandLedgers.Economy.Farming
     /// so productKind is an open string, not a fixed goods list.
     /// </summary>
     [Serializable]
-    public sealed class FarmProduceLot
+    public sealed class FarmProduceLot : ITransitLot
     {
         [SerializeField]
         private string lotId = string.Empty;
@@ -58,6 +59,16 @@ namespace LandLedgers.Economy.Farming
         {
             sold = true;
         }
+
+        // ITransitLot (FVS-3): produce rides delivery jobs. Within this slice's
+        // short transit windows (farm a few miles from town) produce does not
+        // spoil in transit — milk is the binding perishable (Canon §9.4). The
+        // transit-days record exists for the future spoilage model.
+        public string TransitLotId => LotId;
+        public int TransitQuantityUnits => QuantityUnits;
+        public void AgeInTransit(int transitDays) { /* recorded; no loss at this scale */ }
+        public int TransitSaleableUnits(int dayIndex) => sold ? 0 : QuantityUnits;
+        public void MarkTransitConsumed() { MarkSold(); }
     }
 
     /// <summary>

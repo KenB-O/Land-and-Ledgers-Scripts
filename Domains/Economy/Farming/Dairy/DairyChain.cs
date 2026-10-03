@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Primitives;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
@@ -39,7 +40,7 @@ namespace LandLedgers.Economy.Farming.Dairy
     /// neither be sold nor churned (Canon §9.1: spoilage is a real outcome).
     /// </summary>
     [Serializable]
-    public sealed class MilkLot
+    public sealed class MilkLot : ITransitLot
     {
         /// <summary>Calibration: days of saleable/churnable life at good handling.</summary>
         public const int FreshDays = 2;
@@ -59,6 +60,16 @@ namespace LandLedgers.Economy.Farming.Dairy
         {
             return QuantityUnits <= 0 || (dayIndex - ProducedDayIndex) > FreshDays;
         }
+
+        // ITransitLot (FVS-3): milk rides delivery jobs and ages in transit.
+        public string TransitLotId => LotId.ToString();
+        public int TransitQuantityUnits => Math.Max(0, QuantityUnits);
+        public void AgeInTransit(int transitDays)
+        {
+            AgeMilkLot(this, ProducedDayIndex + Math.Max(0, transitDays));
+        }
+        public int TransitSaleableUnits(int dayIndex) => SaleableUnits(dayIndex);
+        public void MarkTransitConsumed() { QuantityUnits = 0; }
 
         public int SaleableUnits(int dayIndex)
         {

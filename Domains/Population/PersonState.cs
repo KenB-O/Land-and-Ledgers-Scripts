@@ -14,6 +14,11 @@ namespace LandLedgers.Population
         public int householdId;
         public string professionId;
         public string professionName;
+        /// <summary>
+        /// PKG-6 (3A-D21): household-side wage MIRROR, not compensation authority. Agreed
+        /// compensation lives only on EmploymentRelationship; this snapshot feeds household
+        /// income summaries and must converge to the relationship terms, never override them.
+        /// </summary>
         public WageSnapshot wage;
         public PersonHealthState health = new();
         public WorkerVisibleProfile visibleWorkerProfile = new();

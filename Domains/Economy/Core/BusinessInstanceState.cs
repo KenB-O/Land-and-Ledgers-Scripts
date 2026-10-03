@@ -551,6 +551,10 @@ namespace LandLedgers.Economy
         [SerializeField]
         private MineRuntimeState mineState;
 
+        [SerializeField]
+        [Tooltip("BIZ-2: commercial capabilities this business identity exposes (Tech X §3.1). One business, many capabilities — no synthetic subsidiaries.")]
+        private List<string> capabilityIds = new List<string>();
+
         public string InstanceId => instanceId ?? string.Empty;
         public string ProfileId => profileId ?? string.Empty;
         public BusinessType BusinessType => businessType;
@@ -583,6 +587,38 @@ namespace LandLedgers.Economy
         public BusinessCashTransferRuleState CashTransferRule => cashTransferRule ??= new BusinessCashTransferRuleState();
         public BusinessReputationState BusinessReputation => businessReputation ??= new BusinessReputationState();
         public MineRuntimeState MineState => businessType == BusinessType.Mine ? mineState : null;
+
+        /// <summary>BIZ-2: capability ids this business identity exposes (Tech X §3.1).</summary>
+        public IReadOnlyList<string> CapabilityIds => capabilityIds;
+
+        /// <summary>BIZ-2: adds a capability id if not already present.</summary>
+        public void AddCapability(string capabilityId)
+        {
+            capabilityIds ??= new List<string>();
+            if (!string.IsNullOrWhiteSpace(capabilityId) && !HasCapability(capabilityId))
+            {
+                capabilityIds.Add(capabilityId);
+            }
+        }
+
+        /// <summary>BIZ-2: whether this business exposes a capability.</summary>
+        public bool HasCapability(string capabilityId)
+        {
+            if (string.IsNullOrWhiteSpace(capabilityId) || capabilityIds == null)
+            {
+                return false;
+            }
+
+            foreach (string id in capabilityIds)
+            {
+                if (string.Equals(id, capabilityId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         public BusinessRoleCoverageSnapshot BuildRoleCoverageSnapshot()
         {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Animals;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
@@ -268,6 +269,14 @@ namespace LandLedgers.Persistence
         public List<HouseholdSaveDto> households = new();
         public int nextPersonId;
         public int nextHouseholdId;
+        /// <summary>
+        /// HF-2: persistent animal authority state. Animal IDs come from the HF-1
+        /// EntityIdRegistry (kind Animal); the ID cursors persist via entityIdCursors.
+        /// </summary>
+        public List<AnimalState> animals = new();
+        public List<HistoricalAnimalRecord> historicalAnimals = new();
+        public List<LivestockCohort> cohorts = new();
+        public List<EggBatchState> eggBatches = new();
         public List<string> validationMessages = new();
         public List<RentalPropertySaveDto> rentalProperties = new();
         public List<RentalApplicantSaveDto> rentalApplicants = new();

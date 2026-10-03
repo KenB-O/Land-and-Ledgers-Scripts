@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
+using LandLedgers.Population;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Skills;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 
 namespace LandLedgers.Orchestration.Systems
@@ -27,6 +30,11 @@ namespace LandLedgers.Orchestration.Systems
     ///   LogisticsRuntimeManager and FreightCompanyRuntime (already MonoBehaviours).
     /// - Scenario goal evaluation: FirstLedgerGoalEvaluator.Evaluate runs on the
     ///   scenario tick once CLN-3 provides the live IFirstLedgerGameState.
+    /// - NX-2C drive-by: DailyNeedsService.ExecuteDay runs on DayChanged with
+    ///   the hub's WorkTimeBudgetStore (it had no live caller — the NX-1B
+    ///   nutrition teeth never bit). Needs a PopulationManager in the scene and
+    ///   SimulationDrivers.Journeys assigned by bootstrap; supplier registration
+    ///   is scene wiring (T1A pattern).
     /// </summary>
     public sealed class SimulationDrivers : MonoBehaviour
     {
@@ -45,6 +53,22 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField, Tooltip("Optional: weekly profit posts hook into its reset. Found automatically if empty.")]
         private SharedBusinessRuntimeManager sharedBusinessRuntime;
 
+        [SerializeField, Tooltip("Optional: drives DailyNeedsService. Found automatically if empty.")]
+        private PopulationManager populationManager;
+
+        /// <summary>
+        /// NX-2C: the journey model for embodied needs execution. Assigned by
+        /// scene bootstrap (like OnScenarioTick) — without it, daily needs
+        /// cannot execute embodied purchases and are skipped with a warning.
+        /// </summary>
+        public JourneyModel Journeys { get; set; }
+
+        // NX-2C drive-by: daily-needs execution state (owned by the driver).
+        private DailyNeedsService dailyNeedsService;
+        private HouseholdConsumptionPlanner consumptionPlanner;
+        private SupplierDirectory supplierDirectory;
+        private EmbodiedPurchaseExecutor purchaseExecutor;
+
         /// <summary>
         /// CLN-3 hook: scenario goal evaluation runs here. The bootstrap assigns this
         /// (e.g. FirstLedgerGoalEvaluator.Evaluate with the live game state); when
@@ -62,6 +86,7 @@ namespace LandLedgers.Orchestration.Systems
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
             playerDirector ??= FindAnyObjectByType<PlayerDirector>();
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            populationManager ??= FindAnyObjectByType<PopulationManager>();
 
             if (hub == null)
             {
@@ -186,6 +211,46 @@ namespace LandLedgers.Orchestration.Systems
             foreach (var runtime in hub.ButcherRuntimes)
             {
                 runtime?.AgeLotsToDay(absoluteDayIndex);
+            }
+
+            // NX-2C drive-by: DailyNeedsService.ExecuteDay had NO live caller —
+            // the NX-1B nutrition teeth never bit. Wire it here with the
+            // work-time budgets so missed meals reduce usable minutes for real.
+            DriveDailyNeeds(absoluteDayIndex);
+        }
+
+        private void DriveDailyNeeds(int absoluteDayIndex)
+        {
+            if (hub == null) return;
+            if (populationManager == null || populationManager.State == null)
+            {
+                return; // no population yet — nothing to feed
+            }
+            if (Journeys == null)
+            {
+                Debug.LogWarning("[SimulationDrivers] DailyNeedsService skipped: no JourneyModel assigned " +
+                    "(assign SimulationDrivers.Journeys in scene bootstrap — see DRIVERS.md).");
+                return;
+            }
+
+            dailyNeedsService ??= new DailyNeedsService();
+            consumptionPlanner ??= new HouseholdConsumptionPlanner();
+            // SupplierDirectory starts empty: scene wiring registers suppliers
+            // (T1A pattern — the general store registers its stocked categories).
+            supplierDirectory ??= new SupplierDirectory();
+            purchaseExecutor ??= new EmbodiedPurchaseExecutor(
+                populationManager.State, hub.HouseholdLedgers, supplierDirectory, Journeys,
+                null, hub.WorkTimeBudgets);
+
+            var diag = new List<string>();
+            DailyNeedsService.DayReport report = dailyNeedsService.ExecuteDay(
+                populationManager.State, consumptionPlanner, purchaseExecutor,
+                absoluteDayIndex, diag, hub.WorkTimeBudgets);
+            if (report.MealsMissed > 0 || report.PurchasesMade > 0)
+            {
+                Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
+                    $"{report.MealsEaten} eaten, {report.MealsMissed} missed, " +
+                    $"{report.PurchasesMade} purchases ({report.SpendCents}c).");
             }
         }
 

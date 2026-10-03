@@ -24,6 +24,7 @@ by the `SimulationSystemsHub` (CLN-1).
 | `DayChanged` | Roll daily work budgets | `WorkTimeBudgetStore.EnsureDay(absoluteDayIndex)` |
 | `DayChanged` | Age perishable meat | `ButcherRuntime.AgeLotsToDay(dayIndex)` per hub runtime |
 | `DayChanged` | Accumulate owner work minutes | Player's `MinutesWorked` → weekly accumulator (CLN-4) |
+| `DayChanged` | Execute NPC daily needs | `DailyNeedsService.ExecuteDay(population, planner, executor, dayIndex, diag, hub.WorkTimeBudgets)` (NX-2C drive-by — needs PopulationManager in scene + `Journeys` assigned) |
 | `WeekChanged` | Post owner labor | `Valuation.RecordOwnerLabor` per player-owned business (CLN-4) |
 | `ShortTick` | Advance player travel | `PlayerDirector.RecordMovementProgress(wholeMinutes, hub.WorkTimeBudgets)` |
 | `ShortTick` | Scenario goals (CLN-3) | `OnScenarioTick?.Invoke()` when a scenario is active |

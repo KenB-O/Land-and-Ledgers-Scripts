@@ -90,6 +90,8 @@ namespace LandLedgers.World.Journeys
         public TravelMode Mode;
         public bool Found;
         public string Diagnostic = string.Empty;
+        /// <summary>NX-2C: set when a condition provider altered this route (weather/road/river note).</summary>
+        public string ConditionNote = string.Empty;
     }
 
     /// <summary>
@@ -110,6 +112,13 @@ namespace LandLedgers.World.Journeys
         public const float FootMph = 3f;
         public const float HorsebackMph = 7f;
         public const float WagonMph = 4f;
+
+        /// <summary>
+        /// NX-2C: optional condition provider (weather, road surface, river).
+        /// Null = unconditioned routing (previous behavior). Not serialized —
+        /// the RouteConditionService owns its own save data.
+        /// </summary>
+        public IJourneyConditionProvider ConditionProvider { get; set; }
 
         private readonly Dictionary<string, JourneyLocation> locations =
             new Dictionary<string, JourneyLocation>(StringComparer.OrdinalIgnoreCase);
@@ -203,12 +212,15 @@ namespace LandLedgers.World.Journeys
                 return route;
             }
 
-            // Dijkstra over the edge list.
+            // Dijkstra over the edge list. Cost is conditioned miles when a
+            // condition provider is set (NX-2C): closed edges are skipped so
+            // routes go AROUND closures — never through them.
             var dist = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
             var prev = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var id in locations.Keys) dist[id] = float.PositiveInfinity;
             dist[fromLocationId] = 0f;
+            bool conditioned = false;
 
             while (true)
             {
@@ -238,7 +250,19 @@ namespace LandLedgers.World.Journeys
                         neighbor = edge.FromLocationId;
                     }
                     if (neighbor == null || visited.Contains(neighbor)) continue;
-                    float alt = dist[current] + edge.Miles;
+
+                    float edgeCost = edge.Miles;
+                    if (ConditionProvider != null &&
+                        ConditionProvider.TryGetEdgeCondition(edge.FromLocationId, edge.ToLocationId, mode,
+                            out float multiplier, out string closureReason))
+                    {
+                        if (!string.IsNullOrEmpty(closureReason))
+                            continue; // closed — route around, never invent passage
+                        edgeCost = edge.Miles * Mathf.Max(0.1f, multiplier);
+                        conditioned = true;
+                    }
+
+                    float alt = dist[current] + edgeCost;
                     if (alt < dist[neighbor])
                     {
                         dist[neighbor] = alt;
@@ -249,7 +273,9 @@ namespace LandLedgers.World.Journeys
 
             if (float.IsPositiveInfinity(dist[toLocationId]))
             {
-                route.Diagnostic = $"JourneyModel: no road connects '{fromLocationId}' to '{toLocationId}' — travel is not assumed free.";
+                route.Diagnostic = ConditionProvider != null
+                    ? $"JourneyModel: no open route connects '{fromLocationId}' to '{toLocationId}' — closures are routed around, never ignored."
+                    : $"JourneyModel: no road connects '{fromLocationId}' to '{toLocationId}' — travel is not assumed free.";
                 return route;
             }
 
@@ -263,11 +289,33 @@ namespace LandLedgers.World.Journeys
             }
             path.Reverse();
 
+            // Real miles along the path (conditions change time, not distance).
+            float realMiles = 0f;
+            for (int i = 0; i + 1 < path.Count; i++)
+                realMiles += EdgeMiles(path[i], path[i + 1]);
+
             route.Found = true;
             route.LegLocationIds = path;
-            route.TotalMiles = dist[toLocationId];
-            route.TotalMinutes = MinutesForMiles(route.TotalMiles, mode);
+            route.TotalMiles = realMiles;
+            route.TotalMinutes = MinutesForMiles(dist[toLocationId], mode);
+            if (conditioned)
+                route.ConditionNote = "Route conditioned by weather/road/river state (Canon 4.4).";
             return route;
+        }
+
+        private float EdgeMiles(string fromLocationId, string toLocationId)
+        {
+            foreach (var edge in edges)
+            {
+                if ((string.Equals(edge.FromLocationId, fromLocationId, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(edge.ToLocationId, toLocationId, StringComparison.OrdinalIgnoreCase)) ||
+                    (string.Equals(edge.FromLocationId, toLocationId, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(edge.ToLocationId, fromLocationId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return edge.Miles;
+                }
+            }
+            return 0f;
         }
 
         /// <summary>Straight-line miles between two locations (for authored estimates).</summary>

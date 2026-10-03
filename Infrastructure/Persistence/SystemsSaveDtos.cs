@@ -13,6 +13,7 @@ using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Liabilities;
 using LandLedgers.Economy.GeneralStore;
+using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -45,6 +46,10 @@ namespace LandLedgers.Persistence
         public LiabilityLedgerSaveDto liabilities = new();
         /// <summary>NX-2A: postal network (offices, mail in custody, contracts).</summary>
         public PostalServiceSaveDto postal = new();
+        /// <summary>NX-2B: agricultural disasters (fireguards, drought episodes).</summary>
+        public AgriculturalRiskSaveDto risk = new();
+        /// <summary>NX-2B: livestock disease outbreaks.</summary>
+        public LivestockDiseaseSaveDto disease = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

@@ -8,6 +8,7 @@ using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Liabilities;
+using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -105,6 +106,15 @@ namespace LandLedgers.Orchestration.Systems
         /// <summary>NX-2A: the postal network authority (offices, mail, contracts).</summary>
         public PostalService Postal => postalService ??= new PostalService();
 
+        private AgriculturalRiskService riskService;
+        private LivestockDiseaseService diseaseService;
+
+        /// <summary>NX-2B: agricultural disasters (grasshoppers, prairie fire, drought).</summary>
+        public AgriculturalRiskService Risk => riskService ??= new AgriculturalRiskService();
+
+        /// <summary>NX-2B: ranch-localized livestock disease outbreaks.</summary>
+        public LivestockDiseaseService Disease => diseaseService ??= new LivestockDiseaseService();
+
         public IReadOnlyList<ButcherRuntime> ButcherRuntimes => butcherRuntimes;
 
         /// <summary>Registers a butcher runtime for save tracking (one per butcher business).</summary>
@@ -143,6 +153,8 @@ namespace LandLedgers.Orchestration.Systems
             liabilityLedger ??= new BusinessLiabilityLedger();
             liabilityLedger.AttachValuation(valuation);
             postalService ??= new PostalService();
+            riskService ??= new AgriculturalRiskService();
+            diseaseService ??= new LivestockDiseaseService();
             liabilityLedger.SyncAllToValuation(null);
         }
 
@@ -164,6 +176,8 @@ namespace LandLedgers.Orchestration.Systems
                 farmSlice = FarmSlice.CaptureSaveDto(),
                 liabilities = Liabilities.CaptureSaveDto(),
                 postal = Postal.CaptureSaveDto(),
+                risk = Risk.CaptureSaveDto(),
+                disease = Disease.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -204,6 +218,8 @@ namespace LandLedgers.Orchestration.Systems
             FarmSlice.LoadFromSaveDto(dto.farmSlice);
             Liabilities.LoadFromSaveDto(dto.liabilities);
             Postal.LoadFromSaveDto(dto.postal);
+            Risk.LoadFromSaveDto(dto.risk);
+            Disease.LoadFromSaveDto(dto.disease);
 
             butcherRuntimes ??= new List<ButcherRuntime>();
             butcherRuntimes.Clear();

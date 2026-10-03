@@ -711,6 +711,153 @@ namespace LandLedgers.EditorTests.Economy
             method.Invoke(manager, new object[] { shipment });
         }
 
+        private static void InvokeFailShipmentAfterLoad(LogisticsRuntimeManager manager, LogisticsShipmentState shipment, string reason)
+        {
+            MethodInfo method = typeof(LogisticsRuntimeManager).GetMethod("FailShipmentAfterLoad", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(method);
+            method.Invoke(manager, new object[] { shipment, reason });
+        }
+
+        private static bool InvokeApplyLoad(LogisticsRuntimeManager manager, LogisticsShipmentState shipment)
+        {
+            MethodInfo method = typeof(LogisticsRuntimeManager).GetMethod("TryApplyLoad", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(method);
+            return (bool)method.Invoke(manager, new object[] { shipment });
+        }
+
+        private static LogisticsShipmentState LoadedShipment(string sourceBusinessId, string categoryId, int units)
+        {
+            return new LogisticsShipmentState
+            {
+                shipmentId = "test-loaded-1",
+                sourceBusinessInstanceId = sourceBusinessId,
+                destinationBusinessInstanceId = "dest-gone",
+                sourceCategoryId = categoryId,
+                destinationCategoryId = categoryId,
+                plannedQuantityUnits = units,
+                remainingQuantityUnits = units,
+                loadApplied = true,
+                sourceCommittedAtSchedule = false,
+                deliveryApplied = false,
+                state = LogisticsShipmentStatus.InTransit,
+            };
+        }
+
+        // -----------------------------------------------------------------------------------------
+        // T1D: post-load failure must not vaporize cargo — return to source, or quarantine
+        // -----------------------------------------------------------------------------------------
+        [Test]
+        public void PostLoadFailure_ReturnsCargoToSource()
+        {
+            List<Object> cleanup = new();
+            try
+            {
+                GameObject sharedObject = new("Shared Runtime");
+                GameObject logisticsObject = new("Logistics Runtime");
+                cleanup.Add(sharedObject);
+                cleanup.Add(logisticsObject);
+
+                SharedBusinessRuntimeManager sharedRuntime = sharedObject.AddComponent<SharedBusinessRuntimeManager>();
+                LogisticsRuntimeManager runtime = logisticsObject.AddComponent<LogisticsRuntimeManager>();
+                SetPrivateField(runtime, "sharedBusinessRuntime", sharedRuntime);
+
+                BusinessInstanceState seller = CreateBusiness(BusinessType.Butcher, "seller_t1d", 1);
+                SetStock(seller, "meat", 12); // 20 - 8 consumed at load = 12 on hand
+                SetBusinesses(sharedRuntime, new List<BusinessInstanceState> { seller });
+
+                LogisticsShipmentState shipment = LoadedShipment("seller_t1d", "meat", 8);
+                InvokeFailShipmentAfterLoad(runtime, shipment, "destination business unavailable");
+
+                Assert.AreEqual(LogisticsShipmentStatus.Failed, shipment.Status);
+                Assert.AreEqual(0, shipment.RemainingQuantityUnits, "Returned cargo leaves the shipment.");
+                Assert.AreEqual(20, seller.RuntimeState.GetCategoryStock("meat").CurrentStockUnits,
+                    "The 8 loaded units go home: 12 + 8 = 20. No phantom loss, no duplication.");
+                StringAssert.Contains("returned to source", shipment.BlockedReason);
+            }
+            finally
+            {
+                DestroyAll(cleanup);
+            }
+        }
+
+        [Test]
+        public void PostLoadFailure_SourceGone_QuarantinesCargoOnShipment()
+        {
+            List<Object> cleanup = new();
+            try
+            {
+                GameObject sharedObject = new("Shared Runtime");
+                GameObject logisticsObject = new("Logistics Runtime");
+                cleanup.Add(sharedObject);
+                cleanup.Add(logisticsObject);
+
+                SharedBusinessRuntimeManager sharedRuntime = sharedObject.AddComponent<SharedBusinessRuntimeManager>();
+                LogisticsRuntimeManager runtime = logisticsObject.AddComponent<LogisticsRuntimeManager>();
+                SetPrivateField(runtime, "sharedBusinessRuntime", sharedRuntime);
+                SetBusinesses(sharedRuntime, new List<BusinessInstanceState>()); // source is gone
+
+                LogisticsShipmentState shipment = LoadedShipment("seller_gone", "meat", 8);
+                InvokeFailShipmentAfterLoad(runtime, shipment, "destination business unavailable");
+
+                Assert.AreEqual(LogisticsShipmentStatus.Failed, shipment.Status);
+                Assert.AreEqual(8, shipment.RemainingQuantityUnits,
+                    "Cargo is quarantined ON the failed shipment — visible, not vanished.");
+                StringAssert.Contains("STRANDED CARGO", shipment.BlockedReason);
+            }
+            finally
+            {
+                DestroyAll(cleanup);
+            }
+        }
+
+        [Test]
+        public void LoadFailure_ZeroesShipmentCargo_SourceStockUntouched()
+        {
+            List<Object> cleanup = new();
+            try
+            {
+                GameObject sharedObject = new("Shared Runtime");
+                GameObject logisticsObject = new("Logistics Runtime");
+                cleanup.Add(sharedObject);
+                cleanup.Add(logisticsObject);
+
+                SharedBusinessRuntimeManager sharedRuntime = sharedObject.AddComponent<SharedBusinessRuntimeManager>();
+                LogisticsRuntimeManager runtime = logisticsObject.AddComponent<LogisticsRuntimeManager>();
+                SetPrivateField(runtime, "sharedBusinessRuntime", sharedRuntime);
+
+                BusinessInstanceState seller = CreateBusiness(BusinessType.Butcher, "seller_t1d3", 1);
+                SetStock(seller, "meat", 20);
+                SetBusinesses(sharedRuntime, new List<BusinessInstanceState> { seller });
+
+                var shipment = new LogisticsShipmentState
+                {
+                    shipmentId = "test-loadfail-1",
+                    sourceBusinessInstanceId = "seller_t1d3",
+                    sourceCategoryId = "meat",
+                    plannedQuantityUnits = 8,
+                    remainingQuantityUnits = 8,
+                    loadApplied = false,
+                    sourceCommittedAtSchedule = false,
+                    state = LogisticsShipmentStatus.Planned,
+                };
+                // Sabotage: point at a category the source does not stock.
+                shipment.sourceCategoryId = "unobtainium";
+
+                bool loaded = InvokeApplyLoad(runtime, shipment);
+
+                Assert.IsFalse(loaded);
+                Assert.AreEqual(LogisticsShipmentStatus.Failed, shipment.Status);
+                Assert.AreEqual(0, shipment.RemainingQuantityUnits,
+                    "Failed-before-load shipments own zero cargo — one lot is never counted twice.");
+                Assert.AreEqual(20, seller.RuntimeState.GetCategoryStock("meat").CurrentStockUnits,
+                    "Source stock untouched: nothing was consumed.");
+            }
+            finally
+            {
+                DestroyAll(cleanup);
+            }
+        }
+
         private static void SetPrivateField(object target, string fieldName, object value)
         {
             FieldInfo field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);

@@ -810,6 +810,8 @@ namespace LandLedgers.Economy
             {
                 shipment.state = LogisticsShipmentStatus.Failed;
                 shipment.blockedReason = "source business unavailable";
+                // T1D: failed before loading — no cargo was ever taken, so none exists to deliver.
+                shipment.remainingQuantityUnits = 0;
                 return false;
             }
 
@@ -818,12 +820,61 @@ namespace LandLedgers.Economy
             {
                 shipment.state = LogisticsShipmentStatus.Failed;
                 shipment.blockedReason = $"source stock unavailable: {shipment.sourceCategoryId}";
+                // T1D: the source kept its stock (nothing was consumed) — zero the
+                // shipment's cargo so one lot is never counted in two places.
+                shipment.remainingQuantityUnits = 0;
                 return false;
             }
 
             shipment.remainingQuantityUnits = consumed;
             shipment.loadApplied = true;
             return true;
+        }
+
+        /// <summary>
+        /// T1D (PL-01/PL-02, Tech X §11.4): failing a shipment AFTER its cargo was loaded
+        /// must not vaporize the goods. Disposition, in order:
+        /// 1. Return the cargo to the source business's stock (the physical goods go home).
+        /// 2. When the source is gone too, quarantine the cargo ON the failed shipment with
+        ///    an explicit stranded-cargo note — visible and auditable, never silently dropped.
+        /// Either way the conservation invariant holds: one physical lot is never in two
+        /// places at once, and never in zero places without a record (OQ-8 quarantine doctrine).
+        /// </summary>
+        private void FailShipmentAfterLoad(LogisticsShipmentState shipment, string reason)
+        {
+            if (shipment == null)
+            {
+                return;
+            }
+
+            int strandedUnits = Mathf.Max(0, shipment.remainingQuantityUnits);
+            string dispositionNote = string.Empty;
+
+            if (strandedUnits > 0 && shipment.loadApplied)
+            {
+                BusinessInstanceState source = FindBusinessByInstanceId(shipment.sourceBusinessInstanceId);
+                if (source != null && source.RuntimeState != null)
+                {
+                    int accepted = source.RuntimeState.AddCategoryStockUnits(shipment.sourceCategoryId, strandedUnits);
+                    shipment.remainingQuantityUnits = Mathf.Max(0, strandedUnits - accepted);
+                    if (accepted >= strandedUnits)
+                    {
+                        dispositionNote = $"; {strandedUnits}u {shipment.sourceCategoryId} returned to source stock";
+                    }
+                    else
+                    {
+                        dispositionNote = $"; {accepted}u {shipment.sourceCategoryId} returned to source stock; " +
+                            $"STRANDED CARGO: {shipment.remainingQuantityUnits}u quarantined on failed shipment (source could not reabsorb)";
+                    }
+                }
+                else
+                {
+                    dispositionNote = $"; STRANDED CARGO: {strandedUnits}u {shipment.sourceCategoryId} quarantined on failed shipment (source unavailable)";
+                }
+            }
+
+            shipment.state = LogisticsShipmentStatus.Failed;
+            shipment.blockedReason = reason + dispositionNote;
         }
 
         private void TryApplyDelivery(LogisticsShipmentState shipment)
@@ -850,8 +901,7 @@ namespace LandLedgers.Economy
                 {
                     if (generalStoreRuntime == null || !generalStoreRuntime.InitializeIfNeeded())
                     {
-                        shipment.state = LogisticsShipmentStatus.Failed;
-                        shipment.blockedReason = "general store runtime unavailable";
+                        FailShipmentAfterLoad(shipment, "general store runtime unavailable");
                         return;
                     }
 
@@ -914,8 +964,7 @@ namespace LandLedgers.Economy
                     BusinessInstanceState destination = FindBusinessByInstanceId(shipment.destinationBusinessInstanceId);
                     if (destination == null || destination.RuntimeState == null)
                     {
-                        shipment.state = LogisticsShipmentStatus.Failed;
-                        shipment.blockedReason = "destination business unavailable";
+                        FailShipmentAfterLoad(shipment, "destination business unavailable");
                         NotifyTransferAgreementDeliveryBlocked(shipment, shipment.blockedReason);
                         return;
                     }

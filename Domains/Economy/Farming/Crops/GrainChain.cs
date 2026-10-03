@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -366,11 +368,38 @@ namespace LandLedgers.Economy.Farming.Crops
 
         private readonly List<MillingBatch> batches = new List<MillingBatch>();
 
+        // EQP-2: mill station (Tech X §3.5). Not persisted — re-established from
+        // assets on load. Mills that never establish one keep legacy behavior.
+        private WorkstationInstance millStation;
+        private Func<string, WorkstationComponentView?> millStationFinder;
+
         public Miller() { }
 
         public Miller(string millerBusinessId)
         {
             MillerBusinessId = millerBusinessId ?? string.Empty;
+        }
+
+        /// <summary>
+        /// EQP-2: establishes the mill station from actual components. Milling
+        /// requires stones AND motive power (both hard) — the caller checks power
+        /// separately via the definition's MotivePowerSatisfied (Tech X §3.6).
+        /// </summary>
+        public void EstablishMillStation(WorkstationInstance station, Func<string, WorkstationComponentView?> findComponent)
+        {
+            millStation = station;
+            millStationFinder = findComponent;
+        }
+
+        /// <summary>
+        /// EQP-2: null when the station is ready or not established (legacy);
+        /// the reason when established but not ready.
+        /// </summary>
+        public string CheckMillStation(List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (millStation == null) return null;
+            return millStation.EvaluateReady(WorkstationCatalog.GrainMillStation, millStationFinder, diagnostics);
         }
 
         public static void RegisterSkills(SkillService skillService, List<string> diagnostics)
@@ -423,6 +452,11 @@ namespace LandLedgers.Economy.Farming.Crops
                 diagnostics.Add($"Miller.MillGrain: lot {grainLot.LotId} is {grainLot.ProductKind}, not threshed grain.");
                 return null;
             }
+
+            // EQP-2: mill-station gate (Tech X §3.5, §3.9) — enforced only once
+            // the miller establishes its station from actual components.
+            string stationReason = CheckMillStation(diagnostics);
+            if (stationReason != null) return null;
 
             var batch = new MillingBatch
             {

@@ -37,10 +37,33 @@ namespace LandLedgers.Economy.Equipment
         public List<WorkstationComponentRequirement> Components = new List<WorkstationComponentRequirement>();
         public string RequiredSpaceKind = string.Empty;  // "smithy", "bakehouse"; empty = any suitable space
         public string RequiredMotivePowerKind = string.Empty; // MotivePowerKind name; empty = none/human
+        /// <summary>EQP-2: acceptable motive power kinds (Tech X §3.6) — e.g. water OR steam for a mill.</summary>
+        public List<string> AcceptableMotivePowerKinds = new List<string>();
         public List<string> CapabilitiesGranted = new List<string>(); // task/capability ids
+        /// <summary>EQP-2: supportability requirements layered over condition (Canon 5.2).</summary>
+        public List<SupportRequirement> SupportRequirements = new List<SupportRequirement>();
         public string SourceNote = string.Empty; // e.g. "Tech X §3.5: BakeOven"
 
         public WorkstationDefinition() { }
+
+        /// <summary>
+        /// EQP-2: true when no motive power is constrained, or a recorded available
+        /// source matches the required kind or one of the acceptable kinds.
+        /// </summary>
+        public bool MotivePowerSatisfied(List<MotivePowerSource> sources, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (AcceptableMotivePowerKinds != null && AcceptableMotivePowerKinds.Count > 0)
+            {
+                foreach (string kind in AcceptableMotivePowerKinds)
+                {
+                    if (MotivePower.IsAvailable(kind, sources, new List<string>())) return true;
+                }
+                diagnostics.Add($"Workstation {WorkstationId}: needs motive power {string.Join("/", AcceptableMotivePowerKinds)} — none available (Tech X §3.6).");
+                return false;
+            }
+            return MotivePower.IsAvailable(RequiredMotivePowerKind, sources, diagnostics);
+        }
     }
 
     /// <summary>

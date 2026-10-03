@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Trade;
 using LandLedgers.Primitives;
 using LandLedgers.Skills;
@@ -54,6 +56,8 @@ namespace LandLedgers.Economy.Blacksmith
         public string BusinessInstanceId => businessInstanceId ?? string.Empty;
         public string BusinessName => businessName ?? string.Empty;
         public bool ForgeStationReady => forgeStationReady;
+        /// <summary>EQP-2: true once readiness derives from actual components (Tech X §3.5).</summary>
+        public bool ForgeStationDerivedFromComponents { get; private set; }
         public RepairQueue Repairs => repairQueue;
         public int RepairRevenueCents => Mathf.Max(0, repairRevenueCents);
         public IReadOnlyDictionary<string, EquipmentAsset> Assets => assets;
@@ -65,6 +69,51 @@ namespace LandLedgers.Economy.Blacksmith
             this.businessInstanceId = businessInstanceId ?? string.Empty;
             this.businessName = businessName ?? businessName ?? string.Empty;
             this.forgeStationReady = forgeStationReady;
+        }
+
+        /// <summary>
+        /// EQP-2: derives forge-station readiness from actual components
+        /// (Tech X §3.5), replacing the constructor flag. A building alone never
+        /// grants the workstation. Returns null when ready, else the reason.
+        /// Businesses that never call this keep the legacy constructor flag.
+        /// </summary>
+        public string EstablishForgeStationFromComponents(
+            List<EquipmentAsset> assets, string spaceId, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            var def = WorkstationCatalog.ForgeStation;
+            var station = new WorkstationInstance
+            {
+                InstanceId = "forge-station-" + businessInstanceId,
+                WorkstationId = def.WorkstationId,
+                BusinessInstanceId = businessInstanceId,
+                SpaceId = spaceId ?? string.Empty,
+            };
+            var byId = new Dictionary<string, EquipmentAsset>(StringComparer.Ordinal);
+            if (assets != null)
+            {
+                foreach (var asset in assets)
+                {
+                    if (asset == null || string.IsNullOrWhiteSpace(asset.AssetId)) continue;
+                    station.InstallComponent(asset.AssetId);
+                    byId[asset.AssetId] = asset;
+                }
+            }
+            string reason = station.EvaluateReady(def, id =>
+            {
+                if (!byId.TryGetValue(id, out var asset) || asset == null)
+                    return (WorkstationComponentView?)null;
+                return new WorkstationComponentView
+                {
+                    AssetId = asset.AssetId,
+                    Kind = asset.Kind,
+                    Condition01 = asset.Condition01,
+                    IsUsable = asset.IsUsable,
+                };
+            }, diagnostics);
+            forgeStationReady = reason == null;
+            ForgeStationDerivedFromComponents = true;
+            return reason;
         }
 
         public static void RegisterSkills(SkillService skillService, List<string> diagnostics)

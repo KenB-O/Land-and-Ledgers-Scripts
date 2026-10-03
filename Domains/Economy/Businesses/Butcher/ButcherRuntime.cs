@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using UnityEngine;
@@ -249,6 +251,12 @@ namespace LandLedgers.Economy.Butcher
         [SerializeField]
         private int nextLotNumber = 1;
 
+        // EQP-2: butcher-block workstation (Tech X §3.5). Not serialized —
+        // re-established from equipment assets on load. Businesses that never
+        // establish one keep the legacy un-gated behavior.
+        private WorkstationInstance butcherBlock;
+        private Func<string, WorkstationComponentView?> butcherBlockFinder;
+
         public string BusinessInstanceId => businessInstanceId ?? string.Empty;
         public IReadOnlyList<ButcherLot> Lots => lots;
         public int LivestockSpendCents => Mathf.Max(0, livestockSpendCents);
@@ -305,6 +313,28 @@ namespace LandLedgers.Economy.Butcher
         }
 
         /// <summary>
+        /// EQP-2: establishes the butcher-block workstation from actual components
+        /// (Tech X §3.5). Once established, Slaughter refuses when the block is
+        /// not ready — a wrecked block awaits repair, never deletion (Tech X §3.9).
+        /// </summary>
+        public void EstablishButcherBlock(WorkstationInstance station, Func<string, WorkstationComponentView?> findComponent)
+        {
+            butcherBlock = station;
+            butcherBlockFinder = findComponent;
+        }
+
+        /// <summary>
+        /// EQP-2: null when the block is ready or not established (legacy path);
+        /// the reason when established but not ready.
+        /// </summary>
+        public string CheckButcherBlock(List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (butcherBlock == null) return null;
+            return butcherBlock.EvaluateReady(WorkstationCatalog.ButcherBlock, butcherBlockFinder, diagnostics);
+        }
+
+        /// <summary>
         /// Slaughters an owned animal: marks it Slaughtered (terminal, ID never reused)
         /// and produces a balancing carcass yield. The yield fractions always sum to 1.
         /// </summary>
@@ -334,6 +364,11 @@ namespace LandLedgers.Economy.Butcher
                 diagnostics.Add($"Animal {animalId} is not owned by this butcher.");
                 return null;
             }
+
+            // EQP-2: butcher-block workstation gate (Tech X §3.5, §3.9) — enforced
+            // only once the business establishes its block.
+            string blockReason = CheckButcherBlock(diagnostics);
+            if (blockReason != null) return null;
 
             string problem = registry.RecordDisposition(
                 animalId, AnimalCommercialStatus.Slaughtered, dayIndex,

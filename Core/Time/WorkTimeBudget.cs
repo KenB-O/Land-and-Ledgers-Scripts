@@ -78,6 +78,26 @@ namespace LandLedgers.Time
         [SerializeField]
         private int minutesCommitted;
 
+        /// <summary>
+        /// NX-1B: work capacity multiplier from nutrition (0..1, default 1).
+        /// Malnourished persons have fewer usable minutes — the missed-meal
+        /// consequence bites here.
+        /// </summary>
+        private float capacityMultiplier01 = 1f;
+
+        /// <summary>NX-1B: sets the capacity multiplier (clamped 0..1).</summary>
+        public void SetCapacityMultiplier(float multiplier)
+        {
+            capacityMultiplier01 = Mathf.Clamp01(multiplier);
+        }
+
+        public float CapacityMultiplier01 => capacityMultiplier01;
+
+        /// <summary>
+        /// Effective usable budget after the capacity multiplier.
+        /// </summary>
+        public int EffectiveBudgetMinutes => Mathf.FloorToInt(dailyBudgetMinutes * capacityMultiplier01);
+
         [SerializeField]
         private int minutesWorked;
 
@@ -91,7 +111,7 @@ namespace LandLedgers.Time
         public int MinutesWorked => minutesWorked;
 
         /// <summary>Minutes still available for new task commitments today.</summary>
-        public int MinutesRemaining => Math.Max(0, dailyBudgetMinutes - minutesCommitted);
+        public int MinutesRemaining => Math.Max(0, EffectiveBudgetMinutes - minutesCommitted);
 
         public WorkTimeBudget()
         {
@@ -119,10 +139,11 @@ namespace LandLedgers.Time
             if (wholeMinutes > MinutesRemaining)
             {
                 rejectionReason = string.Format(
-                    "{0} has {1} of {2} daily work minutes remaining; the task needs {3}.",
+                    "{0} has {1} of {2} daily work minutes remaining (capacity {3:P0}); the task needs {4}.",
                     personId,
                     MinutesRemaining,
-                    dailyBudgetMinutes,
+                    EffectiveBudgetMinutes,
+                    capacityMultiplier01,
                     wholeMinutes);
                 return false;
             }

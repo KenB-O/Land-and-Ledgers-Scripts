@@ -26,6 +26,11 @@ namespace LandLedgers.Population
         /// </summary>
         public WageSnapshot wage;
         public PersonHealthState health = new();
+        /// <summary>
+        /// NX-1B: nutrition derived from actual meal history (Tech X §2.9).
+        /// Additive; defaults to fully nourished.
+        /// </summary>
+        public PersonNutritionState nutrition = new();
         public WorkerVisibleProfile visibleWorkerProfile = new();
         public WorkerHiddenTraits hiddenWorkerTraits = new();
         public WorkerTraitVisibility workerTraitVisibility = new();

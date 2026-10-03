@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
+using LandLedgers.Time;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -37,13 +39,16 @@ namespace LandLedgers.Population
 
         /// <summary>
         /// Executes one day of needs for every household in the population.
+        /// The optional budget store receives each person's nutrition-derived
+        /// work capacity (NX-1B: missed meals bite as fewer usable minutes).
         /// </summary>
         public DayReport ExecuteDay(
             PopulationState population,
             HouseholdConsumptionPlanner planner,
             IEmbodiedPurchaseExecutor executor,
             int dayIndex,
-            List<string> diag)
+            List<string> diag,
+            WorkTimeBudgetStore budgetStore = null)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -56,7 +61,7 @@ namespace LandLedgers.Population
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore);
             }
             return report;
         }
@@ -64,7 +69,8 @@ namespace LandLedgers.Population
         private void ExecuteHousehold(
             PopulationState population, HouseholdState household,
             HouseholdConsumptionPlanner planner, IEmbodiedPurchaseExecutor executor,
-            int dayIndex, DayReport report, List<string> diag)
+            int dayIndex, DayReport report, List<string> diag,
+            WorkTimeBudgetStore budgetStore)
         {
             int actingPersonId = FindActingAdult(population, household);
             if (actingPersonId < 0)
@@ -74,18 +80,26 @@ namespace LandLedgers.Population
             }
             report.HouseholdsServed++;
 
+            // Member states for per-person allocation (NX-1B).
+            var members = new List<PersonState>();
+            if (household.memberIds != null)
+                foreach (int memberId in household.memberIds)
+                {
+                    PersonState p = population.GetPerson(memberId);
+                    if (p != null) members.Add(p);
+                }
+
             // 1. Meals (GHOST-DEF-006): every member eats; each meal consumes
             //    one unit of staple_food from household reserves.
-            int members = household.memberIds != null ? household.memberIds.Count : 0;
-            int mealsNeeded = members * MealsPerPersonPerDay;
-            int mealsEaten = 0;
+            int mealsNeeded = members.Count * MealsPerPersonPerDay;
+            int mealsAvailable = 0;
             if (mealsNeeded > 0)
             {
                 HouseholdReserveState mealReserve = FindReserve(household, MealCategoryId);
                 int onHand = mealReserve != null ? Math.Max(0, mealReserve.currentUnits) : 0;
                 int fromStores = Math.Min(onHand, mealsNeeded);
                 if (mealReserve != null) mealReserve.currentUnits -= fromStores;
-                mealsEaten += fromStores;
+                mealsAvailable += fromStores;
 
                 int shortfall = mealsNeeded - fromStores;
                 if (shortfall > 0)
@@ -107,20 +121,42 @@ namespace LandLedgers.Population
                     {
                         report.PurchasesMade++;
                         report.SpendCents += result.AmountPaidCents;
-                        // The executor credited reserves; eat what arrived.
+                        // The executor credited reserves; take what arrived.
                         HouseholdReserveState after = FindReserve(household, MealCategoryId);
                         int available = after != null ? Math.Max(0, after.currentUnits) : 0;
                         int eatNow = Math.Min(available, shortfall);
                         if (after != null) after.currentUnits -= eatNow;
-                        mealsEaten += eatNow;
+                        mealsAvailable += eatNow;
                     }
+                }
+            }
+
+            // NX-1B: scarcity allocation — meals go per person by priority
+            // (children → workers → others); each person's nutrition derives
+            // from their actual meals (Tech X §2.9).
+            Dictionary<int, int> allocation = MealAllocator.Allocate(members, mealsAvailable, MealsPerPersonPerDay);
+            int mealsEaten = 0;
+            int undernourished = 0;
+            foreach (PersonState p in members)
+            {
+                int eaten = allocation.TryGetValue(p.id, out int a) ? a : 0;
+                mealsEaten += eaten;
+                bool missedAny = p.nutrition.ApplyDay(eaten, MealsPerPersonPerDay, dayIndex);
+                if (missedAny) undernourished++;
+
+                // Teeth: nutrition sets tomorrow's usable work minutes.
+                if (budgetStore != null)
+                {
+                    WorkTimeBudget budget = budgetStore.GetOrCreate(
+                        EntityId.For(EntityKind.Person, p.id));
+                    budget.SetCapacityMultiplier(p.nutrition.WorkCapacityMultiplier);
                 }
             }
             int missed = mealsNeeded - mealsEaten;
             report.MealsEaten += mealsEaten;
             report.MealsMissed += Math.Max(0, missed);
             if (missed > 0)
-                diag.Add($"DailyNeedsService: H{household.id} missed {missed} meals on day {dayIndex} — no supplier, no time, or no money. Logged, not faked.");
+                diag.Add($"DailyNeedsService: H{household.id} missed {missed} meals on day {dayIndex} ({undernourished} undernourished) — no supplier, no time, or no money. Logged, not faked.");
 
             // 2. The planner's remaining needs, executed through the same
             //    embodied channel (built on post-meal reserve levels, so the

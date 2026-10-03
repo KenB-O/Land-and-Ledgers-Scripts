@@ -2,6 +2,7 @@ using System;
 using LandLedgers.Economy;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
+using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Skills;
 using LandLedgers.Time;
 using UnityEngine;
@@ -144,7 +145,16 @@ namespace LandLedgers.Orchestration.Systems
                         && business.Owner.OwnerKind == BusinessOwnerKind.Player)
                     {
                         hub.Valuation.RegisterBusiness(business.InstanceId, "player", true);
-                        hub.Valuation.RecordOwnerLabor(business.InstanceId, weeklyHours, 0, 0);
+                        // NX-1B: owner labor at a resolved replacement rate —
+                        // local payroll evidence first, documented calibration
+                        // fallback; never silently zero.
+                        OwnerLaborRateResolver.ResolvedRate rate =
+                            OwnerLaborRateResolver.Resolve(hub.Employments, business.InstanceId);
+                        hub.Valuation.RecordOwnerLabor(business.InstanceId, weeklyHours, rate.CentsPerHour, 0);
+                        if (rate.Source == OwnerLaborRateResolver.RateSource.CalibrationFallback)
+                        {
+                            Debug.LogWarning($"[SimulationDrivers] owner-labor rate for {business.InstanceId}: {rate.BasisNote}");
+                        }
                     }
                 }
             }

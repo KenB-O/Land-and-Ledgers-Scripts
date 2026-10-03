@@ -410,5 +410,22 @@ namespace LandLedgers.Economy.Farming.Dairy
             cow.BiologicalState = AnimalBiologicalState.Dry;
             return null;
         }
+
+        /// <summary>Save support (CLN-1 pattern).</summary>
+        public DairyChainSaveDto CaptureSaveDto()
+        {
+            return new DairyChainSaveDto { cows = new List<DairyCowState>(cowStates.Values) };
+        }
+
+        /// <summary>Save support (CLN-1 pattern).</summary>
+        public void LoadFromSaveDto(DairyChainSaveDto dto)
+        {
+            cowStates.Clear();
+            if (dto == null || dto.cows == null) return;
+            foreach (var cow in dto.cows)
+            {
+                if (cow != null && cow.CowId.IsValid) cowStates[cow.CowId] = cow;
+            }
+        }
     }
 }

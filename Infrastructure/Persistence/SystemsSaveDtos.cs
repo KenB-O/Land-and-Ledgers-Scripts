@@ -5,9 +5,13 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Farming;
+using LandLedgers.Economy.Farming.Dairy;
+using LandLedgers.Economy.Farming.Delivery;
+using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
@@ -33,6 +37,26 @@ namespace LandLedgers.Persistence
         public CapabilityRegistrySaveDto capabilities = new();
         public OperatingLedgerSaveDto operatingLedger = new();
         public EmploymentRegistrySaveDto employments = new();
+        public FarmSliceSaveDto farmSlice = new();
+    }
+
+    /// <summary>FVS-4: dairy chain save section.</summary>
+    [Serializable]
+    public sealed class DairyChainSaveDto
+    {
+        public List<DairyCowState> cows = new();
+    }
+
+    /// <summary>FVS-4: farm vertical-slice save section (dairy, feed, poultry, deliveries, construction).</summary>
+    [Serializable]
+    public sealed class FarmSliceSaveDto
+    {
+        public List<DairyCowState> dairyCows = new();
+        public int feedStockUnits;
+        public string feedSource = string.Empty;
+        public List<EntityId> hens = new();
+        public List<DeliveryJob> deliveryJobs = new();
+        public List<FarmConstructionProject> constructionProjects = new();
     }
 
     [Serializable]

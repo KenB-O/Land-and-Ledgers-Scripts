@@ -62,6 +62,13 @@ namespace LandLedgers.Economy.Trade
         public const string SteelStockId = "steel-stock";
         public const string ForgeCoalId = "forge-coal";
         public const string LumberId = "lumber";
+        /// <summary>
+        /// EQP-5: hemlock/oak tanbark for the tannery. Historical: tanbark was a
+        /// real traded commodity in the 1800s US (hemlock dominant; bark peelers
+        /// and teamsters supplied the tanyards). Local bark supply waits on the
+        /// timber chain; until then the honest path is the named off-map origin.
+        /// </summary>
+        public const string TanbarkId = "tanbark";
 
         private static readonly Dictionary<string, ImportMaterial> materials =
             new Dictionary<string, ImportMaterial>(StringComparer.Ordinal);
@@ -78,6 +85,8 @@ namespace LandLedgers.Economy.Trade
                 "Off-map coal dealer, via railhead", 180, 12, 18));
             RegisterMaterial(new ImportMaterial(LumberId, "Lumber (boards)",
                 "Off-map timber country, via wagon road", 60, 6, 25));
+            RegisterMaterial(new ImportMaterial(TanbarkId, "Tanbark (hemlock/oak)",
+                "Off-map bark country, via wagon road", 90, 8, 12));
         }
 
         /// <summary>Registers (or replaces) a material. Returns a diagnostic on rejection.</summary>

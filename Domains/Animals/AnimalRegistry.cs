@@ -15,6 +15,13 @@ namespace LandLedgers.Animals
         Horse = 5,
         Goat = 6,
         Other = 7,
+        /// <summary>
+        /// EQP-5: mules and oxen as first-class motive power (Tech X §3.6 lists
+        /// human, horse, mule, ox, water, steam, electric). Previously these
+        /// registered as Other, losing their draft identity.
+        /// </summary>
+        Mule = 8,
+        Ox = 9,
     }
 
     /// <summary>Sex when known. Tech X §2.3: male chicks remain present in records.</summary>

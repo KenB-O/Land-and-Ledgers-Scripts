@@ -130,6 +130,7 @@ namespace LandLedgers.Economy
                 BusinessType.Barber => Create("barber", "Barber", "Provides periodic haircut, shave, and bath service without a heavy stock chain."),
                 BusinessType.Wheelwright => Create("wheelwright", "Wheelwright", "Repairs wagons, wheels, and practical wooden gear for town work."),
                 BusinessType.Mine => Create("working_mine", "Working Mine", "Pulls ore or coal through a staffed mine ledger without leaving the shared business shell."),
+                BusinessType.Tannery => Create("tannery", "Tannery", "Turns hides and bark tannin into workable leather for saddlers and harness makers."),
                 _ => Create("balanced", "Balanced", "Keeps the business balanced across its first-pass role.")
             };
         }

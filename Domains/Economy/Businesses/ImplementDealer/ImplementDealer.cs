@@ -20,6 +20,13 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
         public int UnitsOnHand;
         public string SupplierName = string.Empty; // upstream provenance
         public string SupplierVia = string.Empty; // "equ-1 import", "local blacksmith", ...
+        /// <summary>
+        /// EQP-5: the TRUE maker when the dealer did not make it — e.g. the local
+        /// blacksmith's business id when stocked "via local blacksmith". Empty =
+        /// the dealer made it (legacy stock).
+        /// </summary>
+        public string MakerBusinessId = string.Empty;
+        public string MakerBusinessName = string.Empty;
 
         public ImplementModel() { }
     }
@@ -88,6 +95,8 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
         private readonly List<ImplementModel> models = new List<ImplementModel>();
         private readonly List<PartLine> parts = new List<PartLine>();
         private readonly List<ImplementSale> sales = new List<ImplementSale>();
+        /// <summary>EQP-5: the equipment assets this dealer has created on sale (maker → dealer → buyer provenance).</summary>
+        private readonly List<EquipmentAsset> soldAssets = new List<EquipmentAsset>();
 
         /// <summary>Calibration: simple dealer repairs (adjustments, part swaps) in-house.</summary>
         public int SimpleRepairLaborCents = 75;
@@ -104,6 +113,8 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
         public IReadOnlyList<ImplementModel> Models => models;
         public IReadOnlyList<PartLine> Parts => parts;
         public IReadOnlyList<ImplementSale> Sales => sales;
+        /// <summary>EQP-5: assets created on sale, with true maker provenance.</summary>
+        public IReadOnlyList<EquipmentAsset> SoldAssets => soldAssets;
 
         /// <summary>Stocks a model line. Supplier must be named — no orphan inventory.</summary>
         public string StockModel(ImplementModel model, int units, List<string> diagnostics)
@@ -194,11 +205,14 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
                 OwnerKind = buyerKind,
                 OwnerId = buyerId,
                 LocationId = LocationId,
-                MadeByBusinessId = BusinessId,
-                MadeByBusinessName = DisplayName,
+                // EQP-5: the TRUE maker — the smithy when stocked "via local
+                // blacksmith", the dealer only for legacy/own-make stock.
+                MadeByBusinessId = string.IsNullOrWhiteSpace(line.MakerBusinessId) ? BusinessId : line.MakerBusinessId,
+                MadeByBusinessName = string.IsNullOrWhiteSpace(line.MakerBusinessName) ? DisplayName : line.MakerBusinessName,
                 MadeDayIndex = dayIndex,
             };
             asset.MaterialLotIds.Add($"dealer-stock:{line.SupplierName}");
+            soldAssets.Add(asset);
 
             int financed = Math.Max(0, line.PriceCents - Math.Max(0, downPaymentCents));
             int count = Math.Max(1, installmentCount);

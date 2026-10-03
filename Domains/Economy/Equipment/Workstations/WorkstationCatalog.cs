@@ -219,11 +219,31 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
+        /// <summary>
+        /// EQP-5: tanning yard. Historical: tanyards needed pits/vats and RUNNING
+        /// WATER, sited away from dense habitation. Tanning is a months-long
+        /// process, not a task that hurries — the yard grants the capability,
+        /// time does the work.
+        /// </summary>
+        public static WorkstationDefinition TanningYard
+        {
+            get
+            {
+                var def = Build("tanning-yard", "Tanning Yard", "tanyard",
+                    "EQP-5 historical research (2026-10-03); Tech X §3.5",
+                    new[] { "tan-hides" },
+                    ("tanning-pits", 1), ("hide-racks", 1), ("bark-mill", 1));
+                def.SupportRequirements.Add(new SupportRequirement("infrastructure", "running-water"));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "tanning"));
+                return def;
+            }
+        }
+
         /// <summary>All workstation definitions, for catalog-driven UI and validation.</summary>
         public static List<WorkstationDefinition> All => new List<WorkstationDefinition>
         {
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
-            CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation,
+            CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard,
         };
     }
 }

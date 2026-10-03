@@ -24,7 +24,13 @@ namespace LandLedgers.Economy
         Saloon = 15,
         Barber = 16,
         Wheelwright = 17,
-        Mine = 18
+        Mine = 18,
+        /// <summary>
+        /// EQP-5: the tannery as a distinct trade (historical: the tanner stood
+        /// between the butcher and the leatherworker). Turns hides + bark tannin
+        /// into workable leather — closes the saddler/harness supply hole.
+        /// </summary>
+        Tannery = 19
     }
 
     public enum BusinessCadence

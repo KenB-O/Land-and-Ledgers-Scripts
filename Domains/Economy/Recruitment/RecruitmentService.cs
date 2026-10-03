@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Core;
+using LandLedgers.Economy.Postal;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World.Journeys;
@@ -83,6 +84,9 @@ namespace LandLedgers.Economy.Recruitment
         public int SentDayIndex;
         public int ArrivalDayIndex;
         public bool Resolved;
+        /// <summary>NX-2A: when routed through the postal service, the MailItem id.
+        /// Resolution is then gated on the item's real arrival, not the estimate.</summary>
+        public string PostalMailId = string.Empty;
 
         public RecruitmentLetter() { }
     }
@@ -164,10 +168,11 @@ namespace LandLedgers.Economy.Recruitment
         /// persons over time — channel-dependent rates, deterministic per the
         /// effort's seed. Passive word-of-mouth (GHOST-DES-039) spreads slowly
         /// with no action at all.
+        /// NX-2A: postal-routed letters resolve on the mail item's real arrival.
         /// </summary>
         public void AdvanceDay(
             PopulationState population, EmploymentRelationshipRegistry employment,
-            int dayIndex, List<string> diag)
+            int dayIndex, List<string> diag, PostalService postal = null)
         {
             diag = diag ?? diagnostics;
             if (population == null) return;
@@ -192,7 +197,7 @@ namespace LandLedgers.Economy.Recruitment
                         effort.Channel.ToString(), "arrived on their own", diag);
             }
 
-            ResolveLetters(population, employment, dayIndex, diag);
+            ResolveLetters(population, employment, dayIndex, diag, postal);
         }
 
         private void TryAddInquiry(
@@ -312,11 +317,16 @@ namespace LandLedgers.Economy.Recruitment
         /// <summary>
         /// T2B: send a letter (Canon §6.3 — letters take real travel time).
         /// Arrival day comes from the journey model; no route = no letter.
+        /// NX-2A: when a postal service is provided, the letter travels by post —
+        /// posted at the nearest office, carried on real schedules with real
+        /// handoff, and resolution waits on the item's actual arrival. Without a
+        /// post office, the letter goes by foot messenger (the sender's errand).
         /// </summary>
         public RecruitmentLetter SendLetter(
             string effortId, int recipientPersonId,
             string fromLocationId, string toLocationId,
-            JourneyModel journeys, int dayIndex, List<string> diag)
+            JourneyModel journeys, int dayIndex, List<string> diag,
+            PostalService postal = null)
         {
             diag = diag ?? diagnostics;
             if (!efforts.TryGetValue(effortId, out RecruitmentEffort effort) || effort.Closed)
@@ -329,6 +339,33 @@ namespace LandLedgers.Economy.Recruitment
                 diag.Add("RecruitmentService.SendLetter: no journey model — letters take real travel time (Canon §6.3).");
                 return null;
             }
+
+            if (postal != null)
+            {
+                string fromOffice = postal.FindNearestOfficeId(fromLocationId, journeys, diag);
+                string toOffice = postal.FindNearestOfficeId(toLocationId, journeys, diag);
+                if (!string.IsNullOrEmpty(fromOffice) && !string.IsNullOrEmpty(toOffice))
+                {
+                    MailItem item = postal.PostItem(
+                        MailKind.Letter,
+                        $"hiring: {effort.RoleDisplayName} at {effort.BusinessInstanceId}",
+                        recipientPersonId, $"P{recipientPersonId}",
+                        fromOffice, toOffice, dayIndex, diag);
+                    if (item != null)
+                    {
+                        int postalDays = Math.Max(1, postal.EstimateTransitDays(fromOffice, toOffice, journeys));
+                        diag.Add($"RecruitmentService: letter routed by post ({fromOffice} → {toOffice}) — " +
+                            "no instant delivery; resolution waits on real arrival (NX-2A).");
+                        return FinishLetter(effortId, effort, recipientPersonId, dayIndex, postalDays, item.MailId, diag);
+                    }
+                    diag.Add("RecruitmentService.SendLetter: post office refused the letter — falling back to foot messenger.");
+                }
+                else
+                {
+                    diag.Add("RecruitmentService.SendLetter: no reachable post office — letter goes by foot messenger.");
+                }
+            }
+
             JourneyRoute route = journeys.FindRoute(fromLocationId, toLocationId, TravelMode.Foot);
             if (!route.Found)
             {
@@ -336,13 +373,21 @@ namespace LandLedgers.Economy.Recruitment
                 return null;
             }
             int transitDays = Math.Max(1, (route.TotalMinutes + 1439) / 1440);
+            return FinishLetter(effortId, effort, recipientPersonId, dayIndex, transitDays, string.Empty, diag);
+        }
+
+        private RecruitmentLetter FinishLetter(
+            string effortId, RecruitmentEffort effort, int recipientPersonId, int dayIndex,
+            int transitDays, string postalMailId, List<string> diag)
+        {
             var letter = new RecruitmentLetter
             {
                 LetterId = $"ltr-{effortId}-{recipientPersonId}-{dayIndex}",
-                EffortId = effortId,
+                EffortId = effort.EffortId,
                 RecipientPersonId = recipientPersonId,
                 SentDayIndex = dayIndex,
                 ArrivalDayIndex = dayIndex + transitDays,
+                PostalMailId = postalMailId ?? string.Empty,
             };
             letters[letter.LetterId] = letter;
             diag.Add($"RecruitmentService: letter {letter.LetterId} sent — arrives day {letter.ArrivalDayIndex} ({transitDays}d travel).");
@@ -351,11 +396,30 @@ namespace LandLedgers.Economy.Recruitment
 
         private void ResolveLetters(
             PopulationState population, EmploymentRelationshipRegistry employment,
-            int dayIndex, List<string> diag)
+            int dayIndex, List<string> diag, PostalService postal = null)
         {
             foreach (RecruitmentLetter letter in letters.Values)
             {
-                if (letter.Resolved || letter.ArrivalDayIndex > dayIndex) continue;
+                if (letter.Resolved) continue;
+                // NX-2A: postal-routed letters resolve on the mail item's REAL
+                // arrival, not the estimate — no instant information transfer.
+                if (!string.IsNullOrEmpty(letter.PostalMailId) && postal != null)
+                {
+                    MailItem item = postal.GetMailItem(letter.PostalMailId);
+                    if (item == null)
+                    {
+                        diag.Add($"RecruitmentService: letter {letter.LetterId} has no postal record — no reply faked.");
+                        letter.Resolved = true;
+                        continue;
+                    }
+                    if (item.Status != MailStatus.Arrived && item.Status != MailStatus.Collected)
+                        continue; // still traveling — the reply cannot exist yet
+                    diag.Add($"RecruitmentService: letter {letter.LetterId} arrived by post on day {dayIndex} (posted day {letter.SentDayIndex}).");
+                }
+                else if (letter.ArrivalDayIndex > dayIndex)
+                {
+                    continue;
+                }
                 letter.Resolved = true;
                 PersonState recipient = population.GetPerson(letter.RecipientPersonId);
                 if (recipient == null)

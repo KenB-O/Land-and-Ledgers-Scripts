@@ -13,6 +13,7 @@ using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Liabilities;
 using LandLedgers.Economy.GeneralStore;
+using LandLedgers.Economy.Postal;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
@@ -42,6 +43,8 @@ namespace LandLedgers.Persistence
         public EmploymentRegistrySaveDto employments = new();
         public FarmSliceSaveDto farmSlice = new();
         public LiabilityLedgerSaveDto liabilities = new();
+        /// <summary>NX-2A: postal network (offices, mail in custody, contracts).</summary>
+        public PostalServiceSaveDto postal = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

@@ -131,6 +131,7 @@ namespace LandLedgers.Economy
                 BusinessType.Wheelwright => Create("wheelwright", "Wheelwright", "Repairs wagons, wheels, and practical wooden gear for town work."),
                 BusinessType.Mine => Create("working_mine", "Working Mine", "Pulls ore or coal through a staffed mine ledger without leaving the shared business shell."),
                 BusinessType.Tannery => Create("tannery", "Tannery", "Turns hides and bark tannin into workable leather for saddlers and harness makers."),
+                BusinessType.PostOffice => Create("post_office", "Post Office", "Moves the town's letters and parcels on real schedules — the information network made physical."),
                 _ => Create("balanced", "Balanced", "Keeps the business balanced across its first-pass role.")
             };
         }

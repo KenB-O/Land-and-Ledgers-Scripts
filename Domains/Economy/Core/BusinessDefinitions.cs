@@ -30,7 +30,15 @@ namespace LandLedgers.Economy
         /// between the butcher and the leatherworker). Turns hides + bark tannin
         /// into workable leather — closes the saddler/harness supply hole.
         /// </summary>
-        Tannery = 19
+        Tannery = 19,
+        /// <summary>
+        /// NX-2A: the post office. Canon Part VII §7.1-7.2: postal service is a
+        /// real information network. Canon §16.4: the post office can be a paying
+        /// transportation customer (star-route contracts). Historically a federal
+        /// appointment; in-game it is created through the BIZ-1 workflow like any
+        /// business, with the postmaster appointment as its authority.
+        /// </summary>
+        PostOffice = 20
     }
 
     public enum BusinessCadence

@@ -8,6 +8,7 @@ using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Liabilities;
+using LandLedgers.Economy.Postal;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -99,6 +100,11 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        private PostalService postalService;
+
+        /// <summary>NX-2A: the postal network authority (offices, mail, contracts).</summary>
+        public PostalService Postal => postalService ??= new PostalService();
+
         public IReadOnlyList<ButcherRuntime> ButcherRuntimes => butcherRuntimes;
 
         /// <summary>Registers a butcher runtime for save tracking (one per butcher business).</summary>
@@ -136,6 +142,7 @@ namespace LandLedgers.Orchestration.Systems
             farmSlice ??= new FarmSliceSystems();
             liabilityLedger ??= new BusinessLiabilityLedger();
             liabilityLedger.AttachValuation(valuation);
+            postalService ??= new PostalService();
             liabilityLedger.SyncAllToValuation(null);
         }
 
@@ -156,6 +163,7 @@ namespace LandLedgers.Orchestration.Systems
                 employments = Employments.CaptureSaveDto(),
                 farmSlice = FarmSlice.CaptureSaveDto(),
                 liabilities = Liabilities.CaptureSaveDto(),
+                postal = Postal.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -195,6 +203,7 @@ namespace LandLedgers.Orchestration.Systems
             Employments.LoadFromSaveDto(dto.employments);
             FarmSlice.LoadFromSaveDto(dto.farmSlice);
             Liabilities.LoadFromSaveDto(dto.liabilities);
+            Postal.LoadFromSaveDto(dto.postal);
 
             butcherRuntimes ??= new List<ButcherRuntime>();
             butcherRuntimes.Clear();

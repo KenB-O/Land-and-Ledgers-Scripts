@@ -215,6 +215,40 @@ namespace LandLedgers.Economy
             return true;
         }
 
+        /// <summary>
+        /// T1B: active employments for one employer — the payroll population. Only
+        /// Active-lifecycle relationships are paid (Tech X §4.1–4.3).
+        /// </summary>
+        public List<EmploymentRelationship> GetActiveByEmployer(string businessId)
+        {
+            var active = new List<EmploymentRelationship>();
+            foreach (EmploymentRelationship relationship in byId.Values)
+            {
+                if (relationship != null && relationship.IsActive
+                    && string.Equals(relationship.EmployerBusinessId, businessId, StringComparison.Ordinal))
+                {
+                    active.Add(relationship);
+                }
+            }
+
+            return active;
+        }
+
+        /// <summary>
+        /// T1B: the payroll read — sum of agreed weekly wages over active employments.
+        /// This is the single source for what a business owes its workers each week.
+        /// </summary>
+        public int GetActiveWeeklyPayrollCents(string businessId)
+        {
+            int payroll = 0;
+            foreach (EmploymentRelationship relationship in GetActiveByEmployer(businessId))
+            {
+                payroll += Math.Max(0, relationship.Compensation.AgreedWeeklyWageCents);
+            }
+
+            return payroll;
+        }
+
         public int Count => byId.Count;
 
         public IReadOnlyList<string> Diagnostics => diagnostics;

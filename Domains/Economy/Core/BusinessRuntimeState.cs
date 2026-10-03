@@ -719,6 +719,14 @@ namespace LandLedgers.Economy
         [SerializeField]
         private string businessId;
 
+        /// <summary>
+        /// T1B: the PKG-6 wage authority. UNITY WIRING STEP (needs verification on the
+        /// dev machine): the scene bootstrap / SimulationSystemsHub AutoWire must set
+        /// this from the hub's EmploymentRelationshipRegistry. Until wired, payroll
+        /// reads and disbursement fall back to the legacy slot-wage loop.
+        /// </summary>
+        public EmploymentRelationshipRegistry EmploymentRegistry { get; set; }
+
         [SerializeField]
         private BusinessType businessType;
 
@@ -868,6 +876,14 @@ namespace LandLedgers.Economy
         {
             get
             {
+                // T1B: the PKG-6 registry is the wage authority (Tech X §4.1–4.3). The
+                // slot sum below is the legacy fallback for contexts where the registry
+                // has not been wired yet (see EmploymentRegistry).
+                if (EmploymentRegistry != null)
+                {
+                    return EmploymentRegistry.GetActiveWeeklyPayrollCents(BusinessId);
+                }
+
                 int payroll = 0;
                 for (int i = 0; i < workerSlots.Count; i++)
                 {
@@ -1704,6 +1720,14 @@ namespace LandLedgers.Economy
 
         public void ResolveWeeklyPayroll()
         {
+            // T1B: when the PKG-6 registry is wired, every wage flows through an
+            // employment record — nobody is paid who was never hired (Tech X §4.1–4.3).
+            if (EmploymentRegistry != null)
+            {
+                ResolveWeeklyPayrollFromEmployments(EmploymentRegistry);
+                return;
+            }
+
             for (int i = 0; i < workerSlots.Count; i++)
             {
                 WorkerSlotState slot = workerSlots[i];
@@ -1731,6 +1755,132 @@ namespace LandLedgers.Economy
             }
 
             RefreshWeeklyCashAfter();
+        }
+
+        /// <summary>
+        /// T1B: payroll through the employment authority. For each filled slot the
+        /// worker's employment record is resolved — or projected once from the slot
+        /// assignment evidence (Source=ProjectedFromWorkerSlot) when the legacy hire
+        /// path never registered one. Wages paid are the AGREED registry wages, never
+        /// the slot's template wage. Slot paid/suspended states are maintained as the
+        /// legacy compatibility projection (PKG-7) so existing readouts keep working.
+        /// </summary>
+        private void ResolveWeeklyPayrollFromEmployments(EmploymentRelationshipRegistry employments)
+        {
+            EnsureEmploymentRecords(employments);
+
+            foreach (EmploymentRelationship employment in employments.GetActiveByEmployer(BusinessId))
+            {
+                int wage = Mathf.Max(0, employment.Compensation.AgreedWeeklyWageCents);
+                if (wage <= 0)
+                {
+                    continue;
+                }
+
+                if (currentCashCents >= wage)
+                {
+                    currentCashCents -= wage;
+                    lastWeeklyPayrollCents += wage;
+                    RecordNetDelta(-wage);
+                    SyncSlotPaidState(employment.EmployeePersonId, paid: true);
+                    continue;
+                }
+
+                employment.LifecycleState = EmploymentLifecycleState.Suspended;
+                employment.SuspensionReason = EmploymentSuspensionReason.EmployerPaymentDefault;
+                AccrueOperatingLiabilityCents(wage, $"missed payroll for {employment.RoleDisplayName} (employment {employment.Id})");
+                SyncSlotPaidState(employment.EmployeePersonId, paid: false);
+                string workerId = employment.EmployeePersonId.ToString();
+                if (!lastSuspendedPayrollWorkerIds.Contains(workerId))
+                {
+                    lastSuspendedPayrollWorkerIds.Add(workerId);
+                }
+            }
+
+            RefreshWeeklyCashAfter();
+        }
+
+        /// <summary>
+        /// T1B migration-on-read: every filled slot's worker must hold an employment
+        /// record before payroll runs. Records are projected from the slot assignment
+        /// (the hiring evidence) exactly once — Register is first-wins, so existing
+        /// records are never overwritten. Slot reassignments (new worker, same slot)
+        /// get a person-specific id to avoid colliding with the previous worker's record.
+        /// </summary>
+        private void EnsureEmploymentRecords(EmploymentRelationshipRegistry employments)
+        {
+            foreach (WorkerSlotState slot in workerSlots)
+            {
+                if (slot == null || !slot.IsFilled)
+                {
+                    continue;
+                }
+
+                if (!int.TryParse(slot.AssignedWorkerId, out int personId))
+                {
+                    continue; // owner:xxx and unparsable ids — matches the projector's skip rule.
+                }
+
+                bool hasActive = false;
+                foreach (EmploymentRelationship existing in employments.GetActiveByEmployee(personId))
+                {
+                    if (string.Equals(existing.EmployerBusinessId, BusinessId, StringComparison.Ordinal))
+                    {
+                        hasActive = true;
+                        break;
+                    }
+                }
+
+                if (hasActive)
+                {
+                    continue;
+                }
+
+                List<EmploymentRelationship> projected =
+                    EmploymentRelationshipProjector.ProjectFromWorkerSlots(BusinessId, new[] { slot }, -1);
+                foreach (EmploymentRelationship relationship in projected)
+                {
+                    if (employments.TryGetById(relationship.Id, out EmploymentRelationship clash)
+                        && clash.EmployeePersonId != relationship.EmployeePersonId)
+                    {
+                        // Slot reassigned since the old record: keep the old record's
+                        // history intact and give the new worker their own id.
+                        relationship.Id = $"{relationship.Id}:p{relationship.EmployeePersonId}";
+                    }
+
+                    employments.Register(relationship);
+                }
+            }
+        }
+
+        /// <summary>
+        /// T1B: keeps the legacy slot paid-state projection in sync with employment
+        /// payroll outcomes, so slot-based UI readouts keep working (PKG-7).
+        /// </summary>
+        private void SyncSlotPaidState(int personId, bool paid)
+        {
+            string workerId = personId.ToString();
+            foreach (WorkerSlotState slot in workerSlots)
+            {
+                if (slot == null || !slot.IsFilled)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(slot.AssignedWorkerId, workerId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (paid)
+                {
+                    slot.MarkPaidActive();
+                }
+                else
+                {
+                    slot.SuspendForMissedPayroll();
+                }
+            }
         }
 
         public void BeginMonthlySummaryCadence(float reliability01, float competitionPressure01)

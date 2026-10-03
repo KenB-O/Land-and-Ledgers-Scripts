@@ -4009,26 +4009,6 @@ namespace LandLedgers.Economy
             return ManagerPolicyEffects.CalculateReorderThreshold01(baseThreshold, business.ControlState, business.ManagerPolicy);
         }
 
-        private static int GetFilledWeeklyPayrollCents(BusinessRuntimeState runtime)
-        {
-            if (runtime == null)
-            {
-                return 0;
-            }
-
-            int payroll = 0;
-            for (int i = 0; i < runtime.WorkerSlots.Count; i++)
-            {
-                WorkerSlotState slot = runtime.WorkerSlots[i];
-                if (slot != null && slot.IsFilled)
-                {
-                    payroll += slot.WeeklyWageCents;
-                }
-            }
-
-            return payroll;
-        }
-
         private static void SeedBlockedReasons(BusinessRuntimeState runtime, List<string> blockedReasons)
         {
             if (runtime == null || blockedReasons == null || string.IsNullOrWhiteSpace(runtime.LastWeeklyBlockedReason))

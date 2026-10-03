@@ -1,0 +1,105 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b1df927f0fe407ba45810966afb291c, type: 3}
+  m_Name: FirstLedger
+  m_EditorClassIdentifier: 
+  scenarioId: first-ledger
+  displayName: First Ledger
+  description: |-
+    1870. You step off the stage with your household, a stake of cash, and a ledger with nothing in it yet. The town needs merchants. Buy your first business, hire your first hand, and build $15,000 of owner equity — honestly, one entry at a time.
+
+    NOTE: name your household founders on this asset (Player Household section) before bootstrapping — the scenario declares the player household (GHOST-DEF-006).
+  playerHousehold:
+    scenarioPlayerId: player
+    householdName: Player Household
+    founderDisplayNames: []
+  populationInclusion:
+    includePlayerHousehold: 1
+    includeTownResidents: 1
+    includeRuralServicePopulation: 0
+    includeTransients: 0
+    notes: Money-goals scenario (Tech X §2.1): the player household and town residents count; rural-service and transient populations are excluded from scenario read models.
+  goals:
+  - goalId: acquire-first-business
+    text: Acquire your first business
+    targetText: Own 1 business
+    optional: 0
+  - goalId: hire-first-employee
+    text: Hire your first employee
+    targetText: 1 active employee
+    optional: 0
+  - goalId: equity-5000
+    text: Reach $5,000 owner equity
+    targetText: $5,000 (owner equity, not cash-in-business — Canon §11.4)
+    optional: 0
+  - goalId: own-two-businesses
+    text: Own two businesses
+    targetText: Own 2 businesses
+    optional: 0
+  - goalId: three-employees
+    text: Employ 3 people across your businesses
+    targetText: 3 active employees
+    optional: 0
+  - goalId: equity-10000
+    text: Reach $10,000 owner equity
+    targetText: $10,000 (owner equity — Canon §11.4)
+    optional: 0
+  - goalId: own-three-businesses
+    text: Own three businesses
+    targetText: Own 3 businesses
+    optional: 0
+  - goalId: equity-15000
+    text: Reach $15,000 owner equity
+    targetText: $15,000 owner equity — scenario complete
+    optional: 0
+  objectives:
+  - objectiveId: choose-first-business
+    linkedGoalId: acquire-first-business
+    text: Choose which business to buy first — the general store is the natural start.
+  - objectiveId: complete-purchase
+    linkedGoalId: acquire-first-business
+    text: Complete the acquisition (seller meeting, terms, handover).
+  - objectiveId: offer-employment
+    linkedGoalId: hire-first-employee
+    text: Offer a wage to a worker through the employment relationship.
+  - objectiveId: second-acquisition
+    linkedGoalId: own-two-businesses
+    text: Acquire a second business — freight or butcher pair well with the store.
+  - objectiveId: third-acquisition
+    linkedGoalId: own-three-businesses
+    text: Acquire a third business to complete the set.
+  startingTaskDefinitionIds: []
+  tunables:
+  - key: startingCashCents
+    kind: 1
+    floatValue: 0
+    intValue: 250000
+    textValue: 
+    description: Player household starting cash (cents).
+  - key: equityTarget1Cents
+    kind: 1
+    floatValue: 0
+    intValue: 500000
+    textValue: 
+    description: First equity milestone (cents of owner equity).
+  - key: equityTarget2Cents
+    kind: 1
+    floatValue: 0
+    intValue: 1000000
+    textValue: 
+    description: Second equity milestone.
+  - key: equityTarget3Cents
+    kind: 1
+    floatValue: 0
+    intValue: 1500000
+    textValue: 
+    description: Final equity milestone — scenario complete.

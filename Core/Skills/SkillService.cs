@@ -252,13 +252,18 @@ namespace LandLedgers.Skills
                 return 1;
             }
 
-            if (string.IsNullOrEmpty(definition.RequiredSkillId))
+            return EstimateMinutesForBase(definition.BaseMinutes, definition.RequiredSkillId, workerId);
+        }
+
+        public int EstimateMinutesForBase(int baseMinutes, string skillId, EntityId workerId)
+        {
+            if (string.IsNullOrEmpty(skillId))
             {
-                return Math.Max(1, definition.BaseMinutes);
+                return Math.Max(1, baseMinutes);
             }
 
-            int level = skillService.GetLevel(workerId, definition.RequiredSkillId);
-            return skillService.ScaleMinutes(definition.BaseMinutes, level);
+            int level = skillService.GetLevel(workerId, skillId);
+            return skillService.ScaleMinutes(baseMinutes, level);
         }
     }
 }

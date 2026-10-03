@@ -209,6 +209,14 @@ namespace LandLedgers.Tasks
         [SerializeField]
         private int plannedMinutes = 1;
 
+        /// <summary>
+        /// True when the planned minutes were set per-instance (e.g. quantity-driven
+        /// freight time) rather than taken from the definition. Assignment still
+        /// runs the value through the skill estimator.
+        /// </summary>
+        [SerializeField]
+        private bool hasPlannedMinutesOverride;
+
         [SerializeField]
         private EntityId assigneeId;
 
@@ -259,6 +267,7 @@ namespace LandLedgers.Tasks
         public TaskPriority Priority => priority;
         public List<TaskMaterial> ReservedMaterials => reservedMaterials;
         public int PlannedMinutes => Math.Max(1, plannedMinutes);
+        public bool HasPlannedMinutesOverride => hasPlannedMinutesOverride;
         public EntityId AssigneeId => assigneeId;
         public bool HasAssignee => assigneeId.Kind != EntityKind.Unspecified;
         public TaskStatus Status => status;
@@ -319,6 +328,17 @@ namespace LandLedgers.Tasks
         internal void SetPlannedMinutes(int minutes)
         {
             plannedMinutes = Math.Max(1, minutes);
+        }
+
+        /// <summary>
+        /// Sets an instance-specific planned-minutes base (e.g. freight unload time
+        /// from shipment quantity). Survives definition snapshots; skill scaling
+        /// still applies at assignment.
+        /// </summary>
+        internal void SetPlannedMinutesOverride(int minutes)
+        {
+            plannedMinutes = Math.Max(1, minutes);
+            hasPlannedMinutesOverride = true;
         }
 
         internal void AssignTo(EntityId personId)

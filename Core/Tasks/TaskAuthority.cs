@@ -14,6 +14,12 @@ namespace LandLedgers.Tasks
     public interface ITaskDurationEstimator
     {
         int EstimateMinutes(TaskDefinition definition, EntityId workerId);
+
+        /// <summary>
+        /// Scales an instance-specific base duration (e.g. quantity-driven freight
+        /// time) through the same curve. Additive: existing estimators keep working.
+        /// </summary>
+        int EstimateMinutesForBase(int baseMinutes, string skillId, EntityId workerId);
     }
 
     /// <summary>Default estimator: unskilled timing straight from the definition.</summary>
@@ -26,7 +32,12 @@ namespace LandLedgers.Tasks
                 return 1;
             }
 
-            return Math.Max(1, definition.BaseMinutes);
+            return EstimateMinutesForBase(definition.BaseMinutes, definition.RequiredSkillId, workerId);
+        }
+
+        public int EstimateMinutesForBase(int baseMinutes, string skillId, EntityId workerId)
+        {
+            return Math.Max(1, baseMinutes);
         }
     }
 
@@ -100,6 +111,21 @@ namespace LandLedgers.Tasks
         /// </summary>
         public WorkTask CreateTask(string definitionId, EntityId ownerId, int currentDayIndex, string customerRef = null, string termsRef = null)
         {
+            return CreateTaskInternal(definitionId, ownerId, currentDayIndex, -1, customerRef, termsRef);
+        }
+
+        /// <summary>
+        /// Creates a queued task with an instance-specific planned-minutes base
+        /// (e.g. freight unload time driven by shipment quantity). The base still
+        /// flows through the skill estimator at assignment, so skill scales it.
+        /// </summary>
+        public WorkTask CreateTaskWithPlannedMinutes(string definitionId, EntityId ownerId, int currentDayIndex, int plannedMinutesBase, string customerRef = null, string termsRef = null)
+        {
+            return CreateTaskInternal(definitionId, ownerId, currentDayIndex, plannedMinutesBase, customerRef, termsRef);
+        }
+
+        private WorkTask CreateTaskInternal(string definitionId, EntityId ownerId, int currentDayIndex, int plannedMinutesOverride, string customerRef, string termsRef)
+        {
             TaskDefinition definition = GetDefinition(definitionId);
             if (definition == null)
             {
@@ -108,6 +134,11 @@ namespace LandLedgers.Tasks
 
             var task = new WorkTask(idRegistry.Allocate(EntityKind.WorkTask), definitionId, ownerId, currentDayIndex);
             task.ApplyDefinitionSnapshot(definition);
+            if (plannedMinutesOverride > 0)
+            {
+                task.SetPlannedMinutesOverride(plannedMinutesOverride);
+            }
+
             task.SetCustomer(customerRef, termsRef);
 
             RebuildLookupsIfNeeded();
@@ -151,7 +182,19 @@ namespace LandLedgers.Tasks
             }
 
             TaskDefinition definition = GetDefinition(task.DefinitionId);
-            int plannedMinutes = durationEstimator.EstimateMinutes(definition, workerId);
+            int plannedMinutes;
+            if (task.HasPlannedMinutesOverride)
+            {
+                plannedMinutes = durationEstimator.EstimateMinutesForBase(
+                    task.PlannedMinutes,
+                    definition != null ? definition.RequiredSkillId : null,
+                    workerId);
+            }
+            else
+            {
+                plannedMinutes = durationEstimator.EstimateMinutes(definition, workerId);
+            }
+
             task.SetPlannedMinutes(plannedMinutes);
 
             string budgetReason;

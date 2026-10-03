@@ -162,6 +162,41 @@ namespace LandLedgers.Economy.Farming.Crops
         }
 
         /// <summary>
+        /// EQU-3: records a completed plowing. The plow-field TTS task may only be
+        /// assigned when a <see cref="DraftPower.DraftWorkUnit"/> (team + plow +
+        /// harness + driver) was assembled — this method enforces that the caller
+        /// passes the worked unit, transitions the field to Prepared, and wears the
+        /// implement. No unit, no plowing: the requirement is structural, not a hint.
+        /// </summary>
+        public string CompletePlowing(
+            string fieldId,
+            DraftPower.DraftWorkUnit unit,
+            int dayIndex,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            CropFieldState field = authority.GetField(fieldId);
+            if (field == null) return $"CropChain.CompletePlowing: unknown field '{fieldId}'.";
+            if (unit == null)
+                return $"CropChain.CompletePlowing: field '{fieldId}' needs a draft work unit (team + plow + harness + driver) — no unit, no plowing (Canon: PlowField requires plow, draft power and harness).";
+            if (unit.Implement == null || !string.Equals(unit.Implement.Kind, "plow", StringComparison.Ordinal))
+                return $"CropChain.CompletePlowing: the unit's implement is not a plow — refused loudly.";
+            if (unit.TeamAnimalIds == null || unit.TeamAnimalIds.Count < DraftPower.DraftWorkUnit.PlowTeamSize)
+                return $"CropChain.CompletePlowing: the unit has no full horse team — no team, no plowing.";
+
+            string problem = authority.CompleteOperation(fieldId, CropGrowthState.Prepared, diagnostics);
+            if (problem != null) return problem;
+
+            // Plowing wears the share (Tech X §3.9) — calibration rate.
+            unit.Implement.ApplyWear(0.04f);
+            diagnostics.Add(
+                $"CropChain: plowed field '{fieldId}' with unit {unit.UnitId} " +
+                $"({unit.TeamAnimalIds.Count} horses, driver {unit.DriverPersonId}) — " +
+                $"plow {unit.Implement.AssetId} condition now {unit.Implement.Condition01:0.00}.");
+            return null;
+        }
+
+        /// <summary>
         /// Tending (cultivation) during growth. Each tending pass raises the
         /// field's tended factor; untended fields yield less — missed work
         /// reduces through the field state (Canon §7.4D).

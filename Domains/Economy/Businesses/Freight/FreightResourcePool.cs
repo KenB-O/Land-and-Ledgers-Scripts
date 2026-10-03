@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Economy.DraftPower;
 using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using UnityEngine;
@@ -95,11 +96,29 @@ namespace LandLedgers.Economy.Freight
         [SerializeField]
         private List<string> reservedWagonIds = new List<string>();
 
-        [SerializeField]
-        private List<string> reservedAnimalKeys = new List<string>();
+        /// <summary>
+        /// EQU-3: animal + driver reservations now go through the ONE draft-power
+        /// authority (Tech X §3.8) — the same service the plow work unit uses.
+        /// Transient runtime state only; never persisted (see LoadFromSaveDto).
+        /// </summary>
+        private DraftPowerService draftPower;
 
-        [SerializeField]
-        private List<string> reservedDriverKeys = new List<string>();
+        /// <summary>
+        /// EQU-3: the shared draft-power authority (Tech X §3.8) — the same
+        /// service the plow work unit reserves through. Public so the plow unit
+        /// and the freight pool provably share one authority.
+        /// </summary>
+        public DraftPowerService DraftPower
+        {
+            get
+            {
+                if (draftPower == null)
+                    draftPower = new DraftPowerService();
+                return draftPower;
+            }
+        }
+
+        private DraftPowerService DraftAnimals => DraftPower;
 
         [SerializeField, Min(0)]
         private int yardCapacityWagons = 6;
@@ -149,8 +168,6 @@ namespace LandLedgers.Economy.Freight
             reservation = null;
             diagnostics ??= new List<string>();
             reservedWagonIds ??= new List<string>();
-            reservedAnimalKeys ??= new List<string>();
-            reservedDriverKeys ??= new List<string>();
 
             FreightWagon wagon = null;
             if (wagons != null)
@@ -174,58 +191,24 @@ namespace LandLedgers.Economy.Freight
                 return false;
             }
 
-            var animals = new List<EntityId>();
-            if (availableDraftAnimals != null)
-            {
-                foreach (EntityId animal in availableDraftAnimals)
-                {
-                    if (animals.Count >= 2)
-                    {
-                        break;
-                    }
-
-                    string key = animal.ToString();
-                    if (!reservedAnimalKeys.Contains(key))
-                    {
-                        animals.Add(animal);
-                    }
-                }
-            }
-
-            if (animals.Count < 2)
+            // EQU-3: animals + driver reserve through the ONE draft-power authority
+            // (Tech X §3.8) — the same service the plow work unit uses. The pool's
+            // legacy behavior is preserved: any draft animal qualifies here.
+            if (!DraftAnimals.TryReserveAnimals(availableDraftAnimals, 2, null,
+                purpose, out List<EntityId> animals, diagnostics))
             {
                 diagnostics.Add("Fewer than 2 unreserved draft animals available for the team.");
                 return false;
             }
 
-            EntityId driver = default;
-            bool foundDriver = false;
-            if (availableDrivers != null)
+            if (!DraftAnimals.TryReserveDriver(availableDrivers, out EntityId driver, diagnostics))
             {
-                foreach (EntityId candidate in availableDrivers)
-                {
-                    if (!reservedDriverKeys.Contains(candidate.ToString()))
-                    {
-                        driver = candidate;
-                        foundDriver = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!foundDriver)
-            {
+                DraftAnimals.ReleaseAnimals(animals);
                 diagnostics.Add("No unreserved driver available for the team.");
                 return false;
             }
 
             reservedWagonIds.Add(wagon.WagonId);
-            foreach (EntityId animal in animals)
-            {
-                reservedAnimalKeys.Add(animal.ToString());
-            }
-
-            reservedDriverKeys.Add(driver.ToString());
             wagon.SetStatus(FreightWagonStatus.OnRoute);
 
             reservation = new DraftTeamReservation(
@@ -244,15 +227,9 @@ namespace LandLedgers.Economy.Freight
             }
 
             reservedWagonIds?.Remove(reservation.WagonId);
-            if (reservation.DraftAnimalIds != null)
-            {
-                foreach (EntityId animal in reservation.DraftAnimalIds)
-                {
-                    reservedAnimalKeys?.Remove(animal.ToString());
-                }
-            }
-
-            reservedDriverKeys?.Remove(reservation.DriverPersonId.ToString());
+            // EQU-3: released through the shared draft-power authority.
+            DraftAnimals.ReleaseAnimals(reservation.DraftAnimalIds);
+            DraftAnimals.ReleaseDriver(reservation.DriverPersonId);
 
             FreightWagon wagon = GetWagon(reservation.WagonId);
             if (wagon != null && wagon.Status == FreightWagonStatus.OnRoute)
@@ -346,8 +323,9 @@ namespace LandLedgers.Economy.Freight
         {
             wagons.Clear();
             reservedWagonIds.Clear();
-            reservedAnimalKeys.Clear();
-            reservedDriverKeys.Clear();
+            // EQU-3: draft reservations are transient runtime state — a fresh
+            // authority on load means nothing stays reserved across a save.
+            draftPower = new DraftPowerService();
             if (dto == null)
             {
                 return;

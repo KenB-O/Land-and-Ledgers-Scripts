@@ -148,6 +148,10 @@ namespace LandLedgers.Economy.Farming.Integration
         public const float DailyFeedPerChicken = 0.05f;
         public const float DailyFeedPerPig = 0.5f;
         public const float DailyFeedPerSheep = 0.3f;
+        /// <summary>EQU-3: horses eat year-round (no meaningful grazing offset for working teams).</summary>
+        public const float DailyFeedPerHorse = 1.2f;
+        /// <summary>EQU-3: a working horse eats more than an idle one — honest upkeep.</summary>
+        public const float DailyFeedPerWorkingHorse = 2.5f;
         public const string HarvestHayTaskId = "harvest-hay";
 
         public int FeedStockUnits { get; private set; }
@@ -222,6 +226,52 @@ namespace LandLedgers.Economy.Farming.Integration
             float sheepNeed = sheepHead * DailyFeedPerSheep * (1f - grazingShare) * seasonMult;
             int needUnits = Mathf.CeilToInt(cowNeed + chickenNeed + pigNeed + sheepNeed);
 
+            return FinishConsumeDay(needUnits, season, dairy, cowIds, swine, diagnostics);
+        }
+
+        /// <summary>
+        /// EQU-3: feeding including horses. Working horses (plow teams, freight teams
+        /// on duty) eat at the higher working rate — draft power has honest upkeep.
+        /// Horses do not graze meaningfully off the winter schedule used here; their
+        /// ration comes from stock like pigs.
+        /// </summary>
+        public int ConsumeDay(
+            int cattleHead,
+            int chickenHead,
+            int pigHead,
+            int sheepHead,
+            int horseHead,
+            int workingHorseHead,
+            FarmSeason season,
+            DairyChain dairy,
+            IEnumerable<EntityId> cowIds,
+            PoultryChain flock,
+            Livestock.PigSheepChain swine,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+
+            float grazingShare = FarmSeasons.PastureGrazingShare(season);
+            float seasonMult = FarmSeasons.FeedMultiplierFor(season);
+            float cowNeed = cattleHead * DailyFeedPerCow * (1f - grazingShare) * seasonMult;
+            float chickenNeed = chickenHead * DailyFeedPerChicken * seasonMult;
+            float pigNeed = pigHead * DailyFeedPerPig * seasonMult;
+            float sheepNeed = sheepHead * DailyFeedPerSheep * (1f - grazingShare) * seasonMult;
+            float horseNeed = horseHead * DailyFeedPerHorse * seasonMult;
+            float workingHorseNeed = workingHorseHead * DailyFeedPerWorkingHorse * seasonMult;
+            int needUnits = Mathf.CeilToInt(cowNeed + chickenNeed + pigNeed + sheepNeed + horseNeed + workingHorseNeed);
+
+            return FinishConsumeDay(needUnits, season, dairy, cowIds, swine, diagnostics);
+        }
+
+        private int FinishConsumeDay(
+            int needUnits,
+            FarmSeason season,
+            DairyChain dairy,
+            IEnumerable<EntityId> cowIds,
+            Livestock.PigSheepChain swine,
+            List<string> diagnostics)
+        {
             int fedUnits = Math.Min(needUnits, FeedStockUnits);
             FeedStockUnits -= fedUnits;
             int shortfall = needUnits - fedUnits;

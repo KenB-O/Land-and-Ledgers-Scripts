@@ -120,6 +120,13 @@ namespace LandLedgers.Orchestration.Scenarios
             }
 
             ScenarioAsset asset = Service.GetScenario(scenarioId);
+
+            // DEV-3 rule 1: scenario state must come from an asset, never memory-only.
+            if (!DevGuards.RequireScenarioAsset(asset, this, nameof(SwitchScenario)))
+            {
+                return false;
+            }
+
             BootstrapPlayerHousehold(asset);
             EnqueueStartingTasks(asset);
 

@@ -34,6 +34,10 @@ namespace LandLedgers.Economy.Blacksmith
         public List<string> MaterialLotIds = new List<string>();
         public int MadeDayIndex;
 
+        // EQP-1: maintenance/utilization history (Tech X §3.3; Tech X 6.18) —
+        // repair history updates the asset and feeds future diligence/resale.
+        public List<string> MaintenanceLog = new List<string>();
+
         public bool IsReserved => !string.IsNullOrWhiteSpace(ReservedBy);
         public bool IsUsable => Condition01 > 0.05f;
 
@@ -64,6 +68,16 @@ namespace LandLedgers.Economy.Blacksmith
         public void RepairTo(float condition01)
         {
             Condition01 = Mathf.Clamp01(condition01);
+        }
+
+        /// <summary>
+        /// EQP-1: records a maintenance event (sharpening, repair, reconditioning).
+        /// History feeds diligence and resale (Tech X §3.3; Tech X 6.18).
+        /// </summary>
+        public void RecordMaintenance(string entry, int dayIndex)
+        {
+            if (string.IsNullOrWhiteSpace(entry)) return;
+            MaintenanceLog.Add($"Day {dayIndex}: {entry}");
         }
 
         public string TransferOwnership(string newOwnerKind, string newOwnerId, string reason)

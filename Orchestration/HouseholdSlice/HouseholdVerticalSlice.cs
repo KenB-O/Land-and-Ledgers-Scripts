@@ -6,6 +6,7 @@ using LandLedgers.Economy;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Orchestration.HouseholdSlice
 {
@@ -14,8 +15,11 @@ namespace LandLedgers.Orchestration.HouseholdSlice
     /// for the full journey/transaction simulation: it honors the embodied-execution
     /// contract (an acting Person executes; a real counterparty is named; the household
     /// ledger books the outflow with provenance) without pretending the travel simulation
-    /// exists yet. The real executor (Person -> journey -> transaction) replaces this.
+    /// exists yet. SUPERSEDED by T1A's <see cref="EmbodiedPurchaseExecutor"/> — new code
+    /// must use the real chain (Person -> journey -> transaction). Kept for the slice's
+    /// legacy test only.
     /// </summary>
+    [Obsolete("Use EmbodiedPurchaseExecutor (T1A): the real Person -> journey -> supplier -> transaction chain.")]
     public sealed class ScriptedPurchaseExecutor : IEmbodiedPurchaseExecutor
     {
         private readonly HouseholdLedgerRegistry ledgers;
@@ -126,6 +130,37 @@ namespace LandLedgers.Orchestration.HouseholdSlice
         public int SpouseId { get; private set; } = -1;
         public int HiredHandId { get; private set; } = -1;
         public string EmploymentId { get; private set; } = string.Empty;
+
+        /// <summary>
+        /// T1A: the slice's general store as a real <see cref="IGoodsSupplier"/> — finite
+        /// stock at real prices, at a real journey location. Replaces the price-list
+        /// fiction the scripted executor used.
+        /// </summary>
+        private sealed class SliceStoreSupplier : IGoodsSupplier
+        {
+            public string SupplierBusinessId => "B-general-store-1";
+            public string SupplierName => "general store";
+            public string LocationId => "slice-general-store";
+            private readonly Dictionary<string, int> stock;
+            private readonly Dictionary<string, int> prices;
+
+            public SliceStoreSupplier(Dictionary<string, int> prices, int stockUnits)
+            {
+                this.prices = prices;
+                stock = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kvp in prices) stock[kvp.Key] = stockUnits;
+            }
+
+            public bool HasCategory(string categoryId) => prices.ContainsKey(categoryId);
+            public int StockUnits(string categoryId) => stock.TryGetValue(categoryId, out int s) ? s : 0;
+            public int PricePerUnitCents(string categoryId) => prices.TryGetValue(categoryId, out int p) ? p : 0;
+            public int Sell(string categoryId, int requestedUnits, int dayIndex, List<string> diagnostics)
+            {
+                int sold = Math.Min(requestedUnits, StockUnits(categoryId));
+                if (sold > 0) stock[categoryId] -= sold;
+                return sold;
+            }
+        }
 
         private void Beat(string text)
         {
@@ -256,17 +291,24 @@ namespace LandLedgers.Orchestration.HouseholdSlice
                 "weekly farm profit draw", "farm");
 
             // Consumption: plan needs, execute through an acting Person (Canon 13.4).
+            // T1A: the real embodied chain — the founder walks a real journey to a
+            // real stocked supplier; no sale is faked.
             HouseholdState household = world.Population.GetHousehold(PlayerHouseholdId);
             household.reserves = new List<HouseholdReserveState>
             {
                 new HouseholdReserveState { categoryId = "staple_food", displayName = "Staple food", currentUnits = 4, lowThresholdUnits = 14, targetUnits = 20 },
             };
             List<ProcurementNeed> needs = world.Planner.BuildPlan(household, FounderId, dayIndex);
-            var prices = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-            {
-                { "staple_food", 120 },
-            };
-            var executor = new ScriptedPurchaseExecutor(world.Ledgers, prices);
+            var journeys = new JourneyModel();
+            journeys.RegisterLocation(new JourneyLocation("slice-farm", JourneyLocationKind.Farmstead, "Morrow Farm", 0f, 0f));
+            journeys.RegisterLocation(new JourneyLocation("slice-general-store", JourneyLocationKind.Store, "General Store", 2f, 0f));
+            journeys.AddEdge("slice-farm", "slice-general-store", 2.0f, "town road");
+            var directory = new SupplierDirectory();
+            directory.Register(new SliceStoreSupplier(
+                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { { "staple_food", 120 } },
+                stockUnits: 1000));
+            var executor = new EmbodiedPurchaseExecutor(
+                world.Population, world.Ledgers, directory, journeys, pid => "slice-farm");
             int executed = 0;
             foreach (ProcurementNeed need in needs)
             {

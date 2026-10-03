@@ -62,6 +62,24 @@ namespace LandLedgers.EditorTests.Economy.Farming
         }
 
         [Test]
+        public void Dealer_SellGrain_AggregateLotTakesRealId()
+        {
+            // T1A wart fix: the resale lot used to leave LotId Invalid, so the
+            // ledger sourceReference read "Invalid". With a registry it is real.
+            var dealer = new GrainDealer("dealer-1", 100000);
+            var diagnostics = new List<string>();
+            var ledger = new HouseholdLedger(7);
+            Assert.IsNull(dealer.BuyGrain(GrainLot(40), 50, 210, ledger, diagnostics));
+
+            var ids = new EntityIdRegistry();
+            CropLot sold = dealer.SellGrain(25, 60, 215, ledger, diagnostics, ids);
+            Assert.IsNotNull(sold);
+            Assert.AreEqual(25, sold.QuantityUnits);
+            Assert.IsTrue(sold.LotId.IsValid, "Aggregate resale lot carries a real HF-1 lot id.");
+            Assert.AreEqual(EntityKind.Lot, sold.LotId.Kind);
+        }
+
+        [Test]
         public void Elevator_StorageIsFinite()
         {
             var elevator = new GrainElevator("elevator-1", capacityUnits: 100);

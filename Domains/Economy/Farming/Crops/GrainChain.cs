@@ -193,10 +193,13 @@ namespace LandLedgers.Economy.Farming.Crops
         /// <summary>
         /// Sells grain from inventory to a miller (or other buyer). The buyer
         /// must pay; the dealer cannot sell grain it does not hold.
+        /// T1A wart fix: the aggregate resale lot now takes a real HF-1 lot id
+        /// from the caller's id registry instead of leaving LotId Invalid.
         /// </summary>
         public CropLot SellGrain(
             int requestedUnits, int pricePerUnitCents, int dayIndex,
-            HouseholdLedger dealerLedger, List<string> diagnostics)
+            HouseholdLedger dealerLedger, List<string> diagnostics,
+            EntityIdRegistry idRegistry = null)
         {
             diagnostics ??= new List<string>();
             if (requestedUnits <= 0)
@@ -227,6 +230,10 @@ namespace LandLedgers.Economy.Farming.Crops
                 {
                     soldLot = new CropLot
                     {
+                        // T1A: aggregate resale lots take a real id when the caller
+                        // provides the registry; without one the lot is still a real
+                        // commercial lot but its id is honestly reported as unregistered.
+                        LotId = idRegistry != null ? idRegistry.Allocate(EntityKind.Lot) : EntityId.Invalid,
                         Crop = lot.Crop,
                         ProductKind = "grain",
                         FarmId = lot.FarmId,

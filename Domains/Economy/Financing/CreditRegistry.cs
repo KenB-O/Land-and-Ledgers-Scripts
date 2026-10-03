@@ -274,6 +274,7 @@ namespace LandLedgers.Economy.Financing
             if (notes.TryGetValue(instrumentId, out PromissoryNote n)) n.Status = CreditInstrumentStatus.Satisfied;
             else if (sellerNotes.TryGetValue(instrumentId, out SellerFinanceNote s)) s.Status = CreditInstrumentStatus.Satisfied;
             else if (mortgages.TryGetValue(instrumentId, out MortgageDeed m)) m.Status = CreditInstrumentStatus.Satisfied;
+            else if (liens.TryGetValue(instrumentId, out PropertyLien l)) l.Status = CreditInstrumentStatus.Satisfied;
             else return $"CreditRegistry: unknown instrument '{instrumentId}'.";
 
             foreach (GuarantyAgreement g in guaranties.Values)

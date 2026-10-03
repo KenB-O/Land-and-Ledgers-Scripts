@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Population;
 using NUnit.Framework;

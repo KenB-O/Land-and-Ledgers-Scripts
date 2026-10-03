@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using LandLedgers.Animals;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Population;

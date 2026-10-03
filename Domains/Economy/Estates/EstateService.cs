@@ -49,6 +49,8 @@ namespace LandLedgers.Economy.Estates
         public List<string> EstateDebtIds = new List<string>(); // creditor claims against the estate
         public int ExecutorPersonId = -1;
         public List<string> SettledDebtIds = new List<string>();
+        /// <summary>NX-3C: when a will is probated for this estate, its id. Empty = intestate.</summary>
+        public string TestateWillId = string.Empty;
 
         public Estate() { }
     }

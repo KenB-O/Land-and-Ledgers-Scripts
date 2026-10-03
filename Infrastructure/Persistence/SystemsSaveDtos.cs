@@ -11,6 +11,7 @@ using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.Liabilities;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -40,6 +41,7 @@ namespace LandLedgers.Persistence
         public OperatingLedgerSaveDto operatingLedger = new();
         public EmploymentRegistrySaveDto employments = new();
         public FarmSliceSaveDto farmSlice = new();
+        public LiabilityLedgerSaveDto liabilities = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

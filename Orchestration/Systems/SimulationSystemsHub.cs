@@ -7,6 +7,7 @@ using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.Liabilities;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -71,6 +72,9 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField]
         private FarmSliceSystems farmSlice = new FarmSliceSystems();
 
+        /// <summary>SWN-3: business liabilities (loans, payables) — honest BIZ-5 inputs.</summary>
+        private BusinessLiabilityLedger liabilityLedger = new BusinessLiabilityLedger();
+
         public EntityIdRegistry Ids => idRegistry ??= new EntityIdRegistry();
         public AnimalRegistry Animals => animalRegistry ??= new AnimalRegistry(Ids);
         public HouseholdLedgerRegistry HouseholdLedgers => householdLedgers ??= new HouseholdLedgerRegistry();
@@ -84,6 +88,16 @@ namespace LandLedgers.Orchestration.Systems
         public BusinessOperatingLedger OperatingLedger => operatingLedger ??= new BusinessOperatingLedger();
         public EmploymentRelationshipRegistry Employments => employments ??= new EmploymentRelationshipRegistry();
         public FarmSliceSystems FarmSlice => farmSlice ??= new FarmSliceSystems();
+        /// <summary>SWN-3: the business liability ledger (valuation-attached).</summary>
+        public BusinessLiabilityLedger Liabilities
+        {
+            get
+            {
+                liabilityLedger ??= new BusinessLiabilityLedger();
+                liabilityLedger.AttachValuation(Valuation);
+                return liabilityLedger;
+            }
+        }
 
         public IReadOnlyList<ButcherRuntime> ButcherRuntimes => butcherRuntimes;
 
@@ -120,6 +134,9 @@ namespace LandLedgers.Orchestration.Systems
             operatingLedger ??= new BusinessOperatingLedger();
             employments ??= new EmploymentRelationshipRegistry();
             farmSlice ??= new FarmSliceSystems();
+            liabilityLedger ??= new BusinessLiabilityLedger();
+            liabilityLedger.AttachValuation(valuation);
+            liabilityLedger.SyncAllToValuation(null);
         }
 
         /// <summary>
@@ -138,6 +155,7 @@ namespace LandLedgers.Orchestration.Systems
                 operatingLedger = OperatingLedger.CaptureSaveDto(),
                 employments = Employments.CaptureSaveDto(),
                 farmSlice = FarmSlice.CaptureSaveDto(),
+                liabilities = Liabilities.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -176,6 +194,7 @@ namespace LandLedgers.Orchestration.Systems
             OperatingLedger.LoadFromSaveDto(dto.operatingLedger);
             Employments.LoadFromSaveDto(dto.employments);
             FarmSlice.LoadFromSaveDto(dto.farmSlice);
+            Liabilities.LoadFromSaveDto(dto.liabilities);
 
             butcherRuntimes ??= new List<ButcherRuntime>();
             butcherRuntimes.Clear();

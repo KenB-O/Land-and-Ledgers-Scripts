@@ -39,6 +39,27 @@ namespace LandLedgers.Economy.Recruitment
         Withdrawn = 4,
     }
 
+    /// <summary>
+    /// NX-3A: a real newspaper ad market. T2B's NewspaperAd channel buys
+    /// through this — GHOST-DES-076: advertising needs a real media market.
+    /// Implemented by the newspaper business; the recruitment service never
+    /// invents ad inventory. Size classes are strings ("notice",
+    /// "business-card", "quarter-column", "half-column") so this interface
+    /// stays decoupled from the newspaper's own enum.
+    /// </summary>
+    public interface INewspaperAdMarket
+    {
+        string MarketName { get; }
+        /// <summary>Rate in cents for one insertion of the named size class, or -1 when not offered.</summary>
+        int RateForSizeCents(string sizeClass);
+        /// <summary>
+        /// Places a real ad. Returns the placement id, or null (with a
+        /// diagnostic) when the market refuses it.
+        /// </summary>
+        string PlaceAd(string advertiserBusinessId, string adText, string sizeClass,
+            int insertions, int dayIndex, List<string> diag);
+    }
+
     /// <summary>T2B: one opened hiring effort for a role at a business.</summary>
     [Serializable]
     public sealed class RecruitmentEffort
@@ -116,10 +137,14 @@ namespace LandLedgers.Economy.Recruitment
         /// Opens a hiring effort. Paid channels record their real cost on the
         /// effort (the caller books the outflow through the normal expense
         /// flow — the cost is never silently absorbed).
+        /// NX-3A: the NewspaperAd channel buys through a REAL newspaper ad
+        /// market when one is provided. With no market, the channel is refused
+        /// loudly — GHOST-DES-076: advertising needs a real media market, and
+        /// T2B's upstream hole (ads through no newspaper) stays closed.
         /// </summary>
         public RecruitmentEffort OpenEffort(
             string businessInstanceId, string roleDisplayName, RecruitmentChannel channel,
-            int dayIndex, int seed, List<string> diag)
+            int dayIndex, int seed, List<string> diag, INewspaperAdMarket adMarket = null)
         {
             diag = diag ?? diagnostics;
             if (string.IsNullOrWhiteSpace(businessInstanceId) || string.IsNullOrWhiteSpace(roleDisplayName))
@@ -130,6 +155,12 @@ namespace LandLedgers.Economy.Recruitment
             if (channel == RecruitmentChannel.Unspecified)
             {
                 diag.Add("RecruitmentService.OpenEffort: a real channel is required (Canon §6.2).");
+                return null;
+            }
+            if (channel == RecruitmentChannel.NewspaperAd && adMarket == null)
+            {
+                diag.Add("RecruitmentService.OpenEffort: NewspaperAd requires a real newspaper ad market — " +
+                    "no newspaper exists, so no ad can be bought (GHOST-DES-076).");
                 return null;
             }
 
@@ -149,9 +180,28 @@ namespace LandLedgers.Economy.Recruitment
                     effort.CostDescription = "handbill printing";
                     break;
                 case RecruitmentChannel.NewspaperAd:
-                    effort.CostCents = 500; // placement — calibration
-                    effort.CostDescription = "newspaper advertisement placement";
-                    break;
+                    {
+                        // NX-3A: the ad is really placed — the market names its
+                        // rate and records the placement. A refused placement
+                        // refuses the effort; no phantom ad inventory.
+                        int rate = adMarket.RateForSizeCents("notice");
+                        if (rate < 0)
+                        {
+                            diag.Add($"RecruitmentService.OpenEffort: '{adMarket.MarketName}' offers no notice size — ad refused.");
+                            return null;
+                        }
+                        string placementId = adMarket.PlaceAd(
+                            businessInstanceId, $"Help wanted: {roleDisplayName}. Apply in person.",
+                            "notice", 1, dayIndex, diag);
+                        if (string.IsNullOrEmpty(placementId))
+                        {
+                            diag.Add("RecruitmentService.OpenEffort: the newspaper refused the ad — effort not opened.");
+                            return null;
+                        }
+                        effort.CostCents = rate;
+                        effort.CostDescription = $"newspaper advertisement placement ({adMarket.MarketName}, {placementId})";
+                        break;
+                    }
                 case RecruitmentChannel.Correspondence:
                     effort.CostCents = 25; // postage — calibration
                     effort.CostDescription = "postage";

@@ -55,6 +55,26 @@ namespace LandLedgers.EditorTests.Economy
             diag = new List<string>();
         }
 
+        /// <summary>
+        /// NX-3A test fake: a real newspaper ad market. The recruitment
+        /// service buys through this — GHOST-DES-076.
+        /// </summary>
+        private sealed class FakeAdMarket : INewspaperAdMarket
+        {
+            public int PlacedCount;
+            public string MarketName => "Test Gazette";
+            public int RateForSizeCents(string sizeClass) => 500;
+            public string PlaceAd(string advertiserBusinessId, string adText, string sizeClass,
+                int insertions, int dayIndex, List<string> diag)
+            {
+                PlacedCount++;
+                if (diag != null) diag.Add($"FakeAdMarket: placed test-ad-{PlacedCount} for '{advertiserBusinessId}'.");
+                return $"test-ad-{PlacedCount}";
+            }
+        }
+
+        private static INewspaperAdMarket TestMarket() => new FakeAdMarket();
+
         private static JourneyModel TwoTownJourney()
         {
             var journeys = new JourneyModel();
@@ -70,7 +90,11 @@ namespace LandLedgers.EditorTests.Economy
             var bad = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.Unspecified, 0, 42, diag);
             Assert.IsNull(bad);
 
-            var ad = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 42, diag);
+            // NX-3A: with no newspaper, the ad channel is refused — GHOST-DES-076.
+            var noPaper = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 42, diag);
+            Assert.IsNull(noPaper, "No newspaper exists — no ad can be bought.");
+
+            var ad = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 42, diag, TestMarket());
             Assert.IsNotNull(ad);
             Assert.Greater(ad.CostCents, 0, "Newspaper ads cost real money — book through expenses.");
 
@@ -81,7 +105,7 @@ namespace LandLedgers.EditorTests.Economy
         [Test]
         public void InquiriesArriveOverTimeFromActualPersonsOnly()
         {
-            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag);
+            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag, TestMarket());
 
             for (int day = 0; day < 60; day++)
                 service.AdvanceDay(population, employment, day, diag);
@@ -112,7 +136,7 @@ namespace LandLedgers.EditorTests.Economy
                     Source = EmploymentSource.Manual,
                 });
             }
-            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag);
+            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag, TestMarket());
             for (int day = 0; day < 30; day++)
                 service.AdvanceDay(population, employment, day, diag);
 
@@ -184,7 +208,7 @@ namespace LandLedgers.EditorTests.Economy
         [Test]
         public void HireFromInquiryCreatesARealEmploymentRelationship()
         {
-            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag);
+            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag, TestMarket());
             for (int day = 0; day < 60 && service.Inquiries.Count == 0; day++)
                 service.AdvanceDay(population, employment, day, diag);
             Assert.Greater(service.Inquiries.Count, 0);
@@ -203,7 +227,7 @@ namespace LandLedgers.EditorTests.Economy
         [Test]
         public void UnpaidHireIsRefused()
         {
-            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag);
+            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag, TestMarket());
             for (int day = 0; day < 60 && service.Inquiries.Count == 0; day++)
                 service.AdvanceDay(population, employment, day, diag);
             CandidateInquiry inquiry = service.Inquiries.First();

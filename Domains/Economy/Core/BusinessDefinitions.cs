@@ -38,7 +38,14 @@ namespace LandLedgers.Economy
         /// appointment; in-game it is created through the BIZ-1 workflow like any
         /// business, with the postmaster appointment as its authority.
         /// </summary>
-        PostOffice = 20
+        PostOffice = 20,
+        /// <summary>
+        /// NX-3A: the newspaper. Canon §5.8 / GHOST-DES-076: advertising is a
+        /// real media market — publication location, circulation, frequency,
+        /// placement inventory, rates, repeat terms. Closes T2B's upstream
+        /// hole: recruitment ads buy through a real paper or are refused.
+        /// </summary>
+        Newspaper = 21
     }
 
     public enum BusinessCadence

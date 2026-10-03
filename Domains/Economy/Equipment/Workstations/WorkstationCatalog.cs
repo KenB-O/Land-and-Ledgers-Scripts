@@ -239,11 +239,34 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
+        /// <summary>
+        /// NX-3A: PrintingPress. Tech X §3.5 names it; Canon Part V profiles the
+        /// typesetter/compositor (movable type, cases, composing stick, galley)
+        /// and the press operator (hand/platen/cylinder press, chases, ink
+        /// rollers, ink, paper, drying/stacking space). Capabilities derive
+        /// from the components — a pressroom alone never prints.
+        /// </summary>
+        public static WorkstationDefinition PrintingPress
+        {
+            get
+            {
+                var def = Build("printing-press", "Printing Press", "pressroom",
+                    "Tech X §3.5; Canon Part V: Typesetter/Press operator",
+                    new[] { "print-edition", "print-job-order", "sell-ad-space" },
+                    ("press", 1), ("type-cases", 1), ("composing-stick", 1), ("ink-rollers", 1));
+                def.SupportRequirements.Add(new SupportRequirement("consumable", "newsprint", 4));
+                def.SupportRequirements.Add(new SupportRequirement("consumable", "printer-ink", 1));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "typesetting"));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "presswork"));
+                return def;
+            }
+        }
+
         /// <summary>All workstation definitions, for catalog-driven UI and validation.</summary>
         public static List<WorkstationDefinition> All => new List<WorkstationDefinition>
         {
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
-            CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard,
+            CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard, PrintingPress,
         };
     }
 }

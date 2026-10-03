@@ -52,7 +52,7 @@ namespace LandLedgers.EditorTests.Economy
         public void Catalog_AllSevenWorkstations_DefinedAsData()
         {
             var all = WorkstationCatalog.All;
-            Assert.AreEqual(11, all.Count, "Group A + C + D: forge, oven, bar, mill, butcher block, saw line, assay bench, handling pens, store counter, kitchen, laundry.");
+            Assert.AreEqual(12, all.Count, "Group A + C + D + EQP-5: forge, oven, bar, mill, butcher block, saw line, assay bench, handling pens, store counter, kitchen, laundry, tanning yard.");
             foreach (var def in all)
             {
                 Assert.IsTrue(def.Components.Count > 0, $"{def.WorkstationId} must name components.");

@@ -67,6 +67,13 @@ namespace LandLedgers.ReadModels.Valuation
         [SerializeField, Min(0)]
         private int businessSpecificLiabilitiesCents;
 
+        /// <summary>
+        /// EQP-4: capital replacement need from worn equipment (Canon §11.5) —
+        /// a valuation adjustment, not a debt. Posted by EquipmentValuationSync.
+        /// </summary>
+        [SerializeField, Min(0)]
+        private int capitalReplacementNeedCents;
+
         [SerializeField, Min(0)]
         [Tooltip("Transferable productive-asset value: creates an asset FLOOR, never blindly added on top of earnings (Tech X §9.3).")]
         private int transferableAssetValueCents;
@@ -77,6 +84,8 @@ namespace LandLedgers.ReadModels.Valuation
         public int OwnerReplacementCostPerHourCents => Mathf.Max(0, ownerReplacementCostPerHourCents);
         public int OwnerActualWeeklyDrawCents => Mathf.Max(0, ownerActualWeeklyDrawCents);
         public int BusinessSpecificLiabilitiesCents => Mathf.Max(0, businessSpecificLiabilitiesCents);
+        /// <summary>EQP-4: capital replacement need from worn equipment (Canon §11.5).</summary>
+        public int CapitalReplacementNeedCents => Mathf.Max(0, capitalReplacementNeedCents);
         public int TransferableAssetValueCents => Mathf.Max(0, transferableAssetValueCents);
 
         public ValuationEvidence(string businessInstanceId)
@@ -100,6 +109,12 @@ namespace LandLedgers.ReadModels.Valuation
         public void SetLiabilities(int liabilitiesCents)
         {
             businessSpecificLiabilitiesCents = Mathf.Max(0, liabilitiesCents);
+        }
+
+        /// <summary>EQP-4: capital replacement need from worn equipment (Canon §11.5).</summary>
+        public void SetCapitalReplacementNeed(int needCents)
+        {
+            capitalReplacementNeedCents = Mathf.Max(0, needCents);
         }
 
         public void SetTransferableAssetValue(int assetValueCents)
@@ -222,7 +237,9 @@ namespace LandLedgers.ReadModels.Valuation
             // Asset floor, not asset addition (Tech X §9.3).
             double gross = Math.Max(earningsValue, evidence.TransferableAssetValueCents);
 
-            double equity = gross - evidence.BusinessSpecificLiabilitiesCents;
+            // EQP-4: capital replacement need is a valuation adjustment (Canon §11.5),
+            // distinct from business-specific liabilities (debts).
+            double equity = gross - evidence.BusinessSpecificLiabilitiesCents - evidence.CapitalReplacementNeedCents;
 
             ValuationConfidence confidence = window < 4 ? ValuationConfidence.Low
                 : window <= 12 ? ValuationConfidence.Medium
@@ -237,7 +254,8 @@ namespace LandLedgers.ReadModels.Valuation
             string notes = $"Maintainable weekly {maintainableWeekly:F0}c over {window}w; " +
                 $"owner-normalized {normalizedWeekly:F0}c/wk; ×{tuning.EarningsMultiple:F1} = " +
                 $"{earningsValue:F0}c earnings value; asset floor {evidence.TransferableAssetValueCents}c; " +
-                $"liabilities {evidence.BusinessSpecificLiabilitiesCents}c. " +
+                $"liabilities {evidence.BusinessSpecificLiabilitiesCents}c; " +
+                $"replacement need {evidence.CapitalReplacementNeedCents}c (Canon §11.5). " +
                 "Cash excluded by construction (Canon §11.4).";
 
             result.SetValues(grossCents, equityCents,
@@ -326,6 +344,22 @@ namespace LandLedgers.ReadModels.Valuation
             }
 
             entry.evidence.SetLiabilities(liabilitiesCents);
+            entry.cached = null;
+        }
+
+        /// <summary>
+        /// EQP-4 economic event: worn-equipment capital replacement need changed
+        /// (Canon §11.5). A valuation adjustment, distinct from debts.
+        /// </summary>
+        public void RecordCapitalReplacementNeed(string businessInstanceId, int needCents)
+        {
+            BusinessEntry entry = Find(businessInstanceId);
+            if (entry == null)
+            {
+                return;
+            }
+
+            entry.evidence.SetCapitalReplacementNeed(needCents);
             entry.cached = null;
         }
 

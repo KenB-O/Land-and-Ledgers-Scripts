@@ -33,7 +33,7 @@ namespace LandLedgers.EditorTests.Economy
         public void Catalog_AllNineKits_DefinedWithCanonicalContents()
         {
             var all = ToolKitCatalog.All;
-            Assert.AreEqual(9, all.Count, "Group B: carpenter, mason, tailor, barber, doctor, wheelwright, stable, miner, farrier.");
+            Assert.AreEqual(10, all.Count, "Group B+C: carpenter, mason, tailor, barber, doctor, wheelwright, stable, miner, farrier, ranch tack.");
             foreach (var def in all)
             {
                 Assert.IsTrue(def.CanonicalContents.Count > 0, $"{def.KitId} must carry canonical contents (Tech X §3.4).");

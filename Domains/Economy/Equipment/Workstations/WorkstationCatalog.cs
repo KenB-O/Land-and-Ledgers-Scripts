@@ -152,10 +152,78 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
-        /// <summary>All Group A definitions, for catalog-driven UI and validation.</summary>
+        /// <summary>
+        /// EQP-4 Group C: cattle handling pens. Handling/sorting cattle requires
+        /// corrals/chutes — a HARD requirement; cattle cannot be worked safely
+        /// without restraint infrastructure (Canon Part V: Ranch).
+        /// </summary>
+        public static WorkstationDefinition CattleHandlingPens
+        {
+            get
+            {
+                var def = Build("cattle-handling-pens", "Cattle Handling Pens", "ranch-yard",
+                    "Canon Part V: Ranch; Tech X §3.5",
+                    new[] { "handle-cattle", "sort-cattle" },
+                    ("corral-fencing", 1), ("handling-chute", 1), ("sorting-gates", 1));
+                return def;
+            }
+        }
+
+        /// <summary>
+        /// EQP-4 Group D: the store counter. Weighing/measuring goods requires
+        /// scales — a store that can't weigh can't sell by weight (Canon 4.2).
+        /// </summary>
+        public static WorkstationDefinition StoreCounter
+        {
+            get
+            {
+                var def = Build("store-counter", "Store Counter", "general-store",
+                    "Canon Part V: GeneralStore; Canon 4.2",
+                    new[] { "sell-by-weight", "cash-control" },
+                    ("counter", 1), ("scale-set", 1), ("cash-drawer", 1));
+                return def;
+            }
+        }
+
+        /// <summary>
+        /// EQP-4 Group D: boarding-house kitchen. Cooking requires stove + cookware
+        /// (Canon Part V: BoardingHouse).
+        /// </summary>
+        public static WorkstationDefinition BoardingKitchen
+        {
+            get
+            {
+                var def = Build("boarding-kitchen", "Boarding Kitchen", "boarding-house",
+                    "Canon Part V: BoardingHouse (cook)",
+                    new[] { "cook-meals" },
+                    ("stove-range", 1), ("cookware-set", 1), ("pantry-bins", 1));
+                def.SupportRequirements.Add(new SupportRequirement("fuel", "oven-wood", 2));
+                return def;
+            }
+        }
+
+        /// <summary>
+        /// EQP-4 Group D: boarding-house laundry. Requires tubs + water + soap
+        /// (Canon Part V: BoardingHouse).
+        /// </summary>
+        public static WorkstationDefinition LaundryStation
+        {
+            get
+            {
+                var def = Build("laundry-station", "Laundry Station", "boarding-house",
+                    "Canon Part V: BoardingHouse (laundress)",
+                    new[] { "do-laundry" },
+                    ("wash-tubs", 1), ("washboard-set", 1), ("irons", 1));
+                def.SupportRequirements.Add(new SupportRequirement("consumable", "soap-lye", 1));
+                return def;
+            }
+        }
+
+        /// <summary>All workstation definitions, for catalog-driven UI and validation.</summary>
         public static List<WorkstationDefinition> All => new List<WorkstationDefinition>
         {
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
+            CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation,
         };
     }
 }

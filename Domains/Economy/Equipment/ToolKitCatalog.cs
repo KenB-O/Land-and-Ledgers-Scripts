@@ -93,11 +93,21 @@ namespace LandLedgers.Economy.Equipment
             "shoeing hammer", "hoof knife", "rasp", "nippers",
             "clinching tools", "punch tools", "tongs", "shoeing box");
 
+        /// <summary>
+        /// EQP-4 Group C: ranch tack. Mounted work requires saddle/tack + horse;
+        /// the horse itself is NOT equipment (Tech X §3.6) — the tack is.
+        /// </summary>
+        public static ToolKitDefinition RanchTackKit => Kit(
+            "ranch-tack-kit", "Ranch Tack Kit", "ranch",
+            "Canon Part V: Ranch",
+            "saddle", "bridle", "reins", "rope/lariat", "halter",
+            "grooming tools", "hoof tools", "saddle blankets");
+
         /// <summary>All Group B kit definitions, for catalog-driven UI and validation.</summary>
         public static List<ToolKitDefinition> All => new List<ToolKitDefinition>
         {
             CarpenterHandToolKit, MasonKit, TailorHandKit, BarberKit, DoctorBag,
-            WheelwrightKit, StableGroomingKit, MinerHandKit, FarrierKit,
+            WheelwrightKit, StableGroomingKit, MinerHandKit, FarrierKit, RanchTackKit,
         };
 
         public static ToolKitDefinition Get(string kitId)

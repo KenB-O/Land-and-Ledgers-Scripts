@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Farming;
@@ -31,6 +32,7 @@ namespace LandLedgers.Persistence
         public FarmFlowSaveDto farmFlows = new();
         public CapabilityRegistrySaveDto capabilities = new();
         public OperatingLedgerSaveDto operatingLedger = new();
+        public EmploymentRegistrySaveDto employments = new();
     }
 
     [Serializable]
@@ -94,5 +96,11 @@ namespace LandLedgers.Persistence
     public sealed class OperatingLedgerSaveDto
     {
         public List<BusinessOperatingLedger.CommerceExport> records = new();
+    }
+
+    [Serializable]
+    public sealed class EmploymentRegistrySaveDto
+    {
+        public List<EmploymentRelationship> relationships = new();
     }
 }

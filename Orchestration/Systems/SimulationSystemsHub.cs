@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Farming;
@@ -63,6 +64,9 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField]
         private BusinessOperatingLedger operatingLedger = new BusinessOperatingLedger();
 
+        [SerializeField]
+        private EmploymentRelationshipRegistry employments = new EmploymentRelationshipRegistry();
+
         public EntityIdRegistry Ids => idRegistry ??= new EntityIdRegistry();
         public AnimalRegistry Animals => animalRegistry ??= new AnimalRegistry(Ids);
         public HouseholdLedgerRegistry HouseholdLedgers => householdLedgers ??= new HouseholdLedgerRegistry();
@@ -74,6 +78,7 @@ namespace LandLedgers.Orchestration.Systems
         public FarmFlowLedger FarmFlows => farmFlows ??= new FarmFlowLedger();
         public BusinessCapabilityRegistry Capabilities => capabilityRegistry ??= new BusinessCapabilityRegistry();
         public BusinessOperatingLedger OperatingLedger => operatingLedger ??= new BusinessOperatingLedger();
+        public EmploymentRelationshipRegistry Employments => employments ??= new EmploymentRelationshipRegistry();
 
         public IReadOnlyList<ButcherRuntime> ButcherRuntimes => butcherRuntimes;
 
@@ -108,6 +113,7 @@ namespace LandLedgers.Orchestration.Systems
             farmFlows ??= new FarmFlowLedger();
             capabilityRegistry ??= new BusinessCapabilityRegistry();
             operatingLedger ??= new BusinessOperatingLedger();
+            employments ??= new EmploymentRelationshipRegistry();
         }
 
         /// <summary>
@@ -124,6 +130,7 @@ namespace LandLedgers.Orchestration.Systems
                 farmFlows = FarmFlows.CaptureSaveDto(),
                 capabilities = Capabilities.CaptureSaveDto(),
                 operatingLedger = OperatingLedger.CaptureSaveDto(),
+                employments = Employments.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -160,6 +167,7 @@ namespace LandLedgers.Orchestration.Systems
             FarmFlows.LoadFromSaveDto(dto.farmFlows);
             Capabilities.LoadFromSaveDto(dto.capabilities, diagnostics);
             OperatingLedger.LoadFromSaveDto(dto.operatingLedger);
+            Employments.LoadFromSaveDto(dto.employments);
 
             butcherRuntimes ??= new List<ButcherRuntime>();
             butcherRuntimes.Clear();

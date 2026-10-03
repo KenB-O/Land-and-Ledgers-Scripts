@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 
 namespace LandLedgers.Economy
@@ -301,6 +302,42 @@ namespace LandLedgers.Economy
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// CLN-1: captures employment state for the save pipeline. Relationships
+        /// round-trip; the by-id lookup rebuilds on load.
+        /// </summary>
+        public EmploymentRegistrySaveDto CaptureSaveDto()
+        {
+            var dto = new EmploymentRegistrySaveDto();
+            foreach (EmploymentRelationship relationship in byId.Values)
+            {
+                if (relationship != null)
+                {
+                    dto.relationships.Add(relationship);
+                }
+            }
+
+            return dto;
+        }
+
+        /// <summary>CLN-1: restores employment state from the save pipeline.</summary>
+        public void LoadFromSaveDto(EmploymentRegistrySaveDto dto)
+        {
+            byId.Clear();
+            if (dto == null || dto.relationships == null)
+            {
+                return;
+            }
+
+            foreach (EmploymentRelationship relationship in dto.relationships)
+            {
+                if (relationship != null && !string.IsNullOrWhiteSpace(relationship.Id))
+                {
+                    byId[relationship.Id] = relationship;
+                }
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.Skills;
 using UnityEngine;
@@ -106,9 +107,19 @@ namespace LandLedgers.Economy.Tannery
         public string StartBatch(
             string hideLotId, int hideLbs, string hideSourceNote,
             int barkUnits, string barkSourceNote,
-            string workerPersonId, int dayIndex, List<string> diagnostics)
+            string workerPersonId, int dayIndex, List<string> diagnostics,
+            EquipmentTaskGate gate = null)
         {
             diagnostics = diagnostics ?? new List<string>();
+            // NX-1A: Canon 4.1 — tanning needs the tanning-yard workstation
+            // (EQP-5 built it as a real business type).
+            if (gate != null)
+            {
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Workstation("tanning-yard") },
+                    "business", BusinessInstanceId, dayIndex, diagnostics);
+                if (blocked != null) return blocked;
+            }
             if (string.IsNullOrWhiteSpace(hideLotId) || hideLbs <= 0)
                 return "TanneryRuntime: tanning needs a real hide lot — hides are not conjured.";
             int requiredBark = Math.Max(1, Mathf.CeilToInt(hideLbs / 10f * BarkUnitsPer10HideLbs));

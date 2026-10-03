@@ -100,6 +100,16 @@ namespace LandLedgers.Tasks
         [SerializeField]
         private List<string> equipmentClasses = new List<string>();
 
+        /// <summary>
+        /// NX-1A: Canon 5.2 supportability requirement specs, layered over
+        /// equipment condition. Format per entry: "kind:detail:unitsPerDay"
+        /// (e.g. "fuel:forge-coal:2"). Stored as strings so Core/Tasks keeps no
+        /// dependency on the Equipment domain; parsed by EquipmentTaskGate.
+        /// Empty = none beyond workstation requirements. Additive.
+        /// </summary>
+        [SerializeField]
+        private List<string> supportRequirementSpecs = new List<string>();
+
         [SerializeField]
         private List<TaskMaterial> inputs = new List<TaskMaterial>();
 
@@ -124,6 +134,9 @@ namespace LandLedgers.Tasks
         public List<string> RequiredCapabilityTags => requiredCapabilityTags;
         public List<string> CompatibleLocations => compatibleLocations;
         public List<string> EquipmentClasses => equipmentClasses;
+
+        /// <summary>NX-1A: Canon 5.2 supportability specs ("kind:detail:unitsPerDay").</summary>
+        public List<string> SupportRequirementSpecs => supportRequirementSpecs;
         public List<TaskMaterial> Inputs => inputs;
         public List<TaskMaterial> Outputs => outputs;
         public bool Interruptible => interruptible;

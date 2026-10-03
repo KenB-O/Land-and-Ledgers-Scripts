@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.MVP;
 using LandLedgers.Primitives;
@@ -77,7 +78,12 @@ namespace LandLedgers.Economy.Freight
             RegisterQuietly(authority, new TaskDefinition(LoadFreightTaskId, "Load freight", 1));
             RegisterQuietly(authority, new TaskDefinition(DriveRouteTaskId, "Drive route", 60));
             RegisterQuietly(authority, new TaskDefinition(UnloadFreightTaskId, "Unload freight", 1));
-            RegisterQuietly(authority, new TaskDefinition(RepairWagonTaskId, "Repair wagon", 120));
+            // NX-1A: wagon repair needs the wheelwright's hand tools (Canon 4.1;
+            // the kit exists in ToolKitCatalog). The wagon + team are reserved
+            // through the freight pool, not the equipment gate.
+            var repairWagon = new TaskDefinition(RepairWagonTaskId, "Repair wagon", 120);
+            repairWagon.EquipmentClasses.Add(EquipmentRequirementCodes.Kit("wheelwright-kit"));
+            RegisterQuietly(authority, repairWagon);
         }
 
         private static void RegisterQuietly(TaskAuthority authority, TaskDefinition definition)

@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.Economy.Farming.Dairy;
 using LandLedgers.Population;
@@ -171,6 +172,11 @@ namespace LandLedgers.Economy.Farming.Integration
             if (authority == null) return;
             var harvest = new TaskDefinition(HarvestHayTaskId, "Harvest hay", 120);
             harvest.SetRequiredSkill(SkillIds.CropTending, new[] { "hay-harvest" });
+            // NX-1A: same gate as CropChain cut-hay — scythe or horse mower
+            // (Canon 4.1, 4.7).
+            harvest.EquipmentClasses.Add(
+                EquipmentRequirementCodes.Asset("scythe") + "|" +
+                EquipmentRequirementCodes.Asset("horse-mower"));
             authority.RegisterDefinition(harvest, out _);
         }
 

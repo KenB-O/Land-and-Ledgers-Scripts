@@ -409,10 +409,21 @@ namespace LandLedgers.Economy.Butcher
         /// <summary>
         /// Retail sale from the retail site. Only sellable lots; provenance retained.
         /// Returns revenue cents. Spoiled lots can never be sold.
+        /// NX-1A: selling by weight requires a usable scale (Canon 4.1 — the
+        /// butcher profile lists scales as core equipment). "counter-scale" is
+        /// a recognized equipment-asset kind.
         /// </summary>
-        public int SellRetail(string lotId, int requestedLbs, List<string> diagnostics)
+        public int SellRetail(string lotId, int requestedLbs, List<string> diagnostics,
+            EquipmentTaskGate gate = null, int dayIndex = 0)
         {
             diagnostics ??= new List<string>();
+            if (gate != null)
+            {
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Asset("counter-scale") },
+                    "business", BusinessInstanceId, dayIndex, diagnostics);
+                if (blocked != null) return 0;
+            }
             ButcherLot lot = FindLot(lotId);
             if (lot == null)
             {
@@ -438,9 +449,17 @@ namespace LandLedgers.Economy.Butcher
         /// Wholesale to the general store's provisions (the vertical-slice link).
         /// </summary>
         public int SellWholesale(string lotId, int requestedLbs, string storeBusinessId,
-            List<string> diagnostics)
+            List<string> diagnostics, EquipmentTaskGate gate = null, int dayIndex = 0)
         {
             diagnostics ??= new List<string>();
+            // NX-1A: wholesale is also by weight — same scale gate (Canon 4.1).
+            if (gate != null)
+            {
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Asset("counter-scale") },
+                    "business", BusinessInstanceId, dayIndex, diagnostics);
+                if (blocked != null) return 0;
+            }
             ButcherLot lot = FindLot(lotId);
             if (lot == null)
             {

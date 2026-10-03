@@ -103,11 +103,23 @@ namespace LandLedgers.Economy.Equipment
             "saddle", "bridle", "reins", "rope/lariat", "halter",
             "grooming tools", "hoof tools", "saddle blankets");
 
+        /// <summary>
+        /// NX-1A: field hand-tool kit. Canon Part V: CropFarm core profile
+        /// (hoe, spade/shovel, fork, rake). Tending at field scale without any
+        /// tool is not a real method — the kit gates tend-field (Canon 4.1).
+        /// </summary>
+        public static ToolKitDefinition FieldHandKit => Kit(
+            "field-hand-kit", "Field Hand Tool Kit", "crop-farm",
+            "Canon Part V: CropFarm (hoe, spade/shovel, fork, rake)",
+            "hoe", "spade", "shovel", "fork", "rake", "hand seed sacks",
+            "knives", "sharpening file");
+
         /// <summary>All Group B kit definitions, for catalog-driven UI and validation.</summary>
         public static List<ToolKitDefinition> All => new List<ToolKitDefinition>
         {
             CarpenterHandToolKit, MasonKit, TailorHandKit, BarberKit, DoctorBag,
             WheelwrightKit, StableGroomingKit, MinerHandKit, FarrierKit, RanchTackKit,
+            FieldHandKit,
         };
 
         public static ToolKitDefinition Get(string kitId)

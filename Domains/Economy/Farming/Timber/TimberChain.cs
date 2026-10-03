@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Primitives;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
@@ -105,7 +106,11 @@ namespace LandLedgers.Economy.Farming.Timber
 
             var fell = new TaskDefinition(FellTimberTaskId, "Fell timber", FellMinutesPerLog);
             fell.SetRequiredSkill(ForestrySkillId, new[] { "felling" });
-            fell.EquipmentClasses.Add("axe / crosscut saw");
+            // NX-1A: coded — felling without an axe or saw is not a real method
+            // (Canon 4.1). Either hand tool or the two-man saw satisfies.
+            fell.EquipmentClasses.Add(
+                EquipmentRequirementCodes.Asset("felling-axe") + "|" +
+                EquipmentRequirementCodes.Asset("crosscut-saw"));
             string ignored;
             authority.RegisterDefinition(fell, out ignored);
         }
@@ -191,7 +196,10 @@ namespace LandLedgers.Economy.Farming.Timber
 
             var saw = new TaskDefinition(SawLogsTaskId, "Saw logs", SawMinutesPerLog);
             saw.SetRequiredSkill(TimberHarvest.ForestrySkillId, new[] { "sawmilling" });
-            saw.EquipmentClasses.Add("circular saw mill");
+            // NX-1A: coded — sawing requires the sawmill saw line workstation.
+            // A dull/broken saw gates all output until the filer works (the
+            // EQP-2 filer loop now bites: Tech X §3.9, Canon 4.1).
+            saw.EquipmentClasses.Add(EquipmentRequirementCodes.Workstation("sawmill-saw-line"));
             string ignored;
             authority.RegisterDefinition(saw, out ignored);
         }
@@ -202,9 +210,20 @@ namespace LandLedgers.Economy.Farming.Timber
             LogLot logLot,
             EntityId worker,
             int dayIndex,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            EquipmentTaskGate gate = null)
         {
             diagnostics = diagnostics ?? new List<string>();
+            // NX-1A: Canon 4.1 — the sawmill saw line workstation, with its
+            // support requirements (Canon 5.2). A dull/broken saw gates all
+            // output until the filer works (Tech X §3.9).
+            if (gate != null)
+            {
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Workstation("sawmill-saw-line") },
+                    "business", MillBusinessId, dayIndex, diagnostics);
+                if (blocked != null) return null;
+            }
             if (idRegistry == null || logLot == null || logLot.LogUnits <= 0)
             {
                 diagnostics.Add("Sawmill: need a registry and a non-empty log lot.");

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Primitives;
 using LandLedgers.Skills;
@@ -81,28 +82,38 @@ namespace LandLedgers.Economy.Farming.Crops
         {
             if (taskAuthority == null) return;
 
+            // NX-1A: equipment classes are coded (kit:/asset:/workstation:) and
+            // gate execution via EquipmentTaskGate (Canon 4.1). Only hard
+            // requirements are listed — hand methods remain possible per
+            // Canon 4.7 (planting by hand sacks, threshing with flails, stacking
+            // with forks need no significant equipment, so no gate).
             Register(taskAuthority, PlowFieldTaskId, "Plow field", PlowMinutesPerAcre,
-                new[] { "plowing" }, "plow");
+                new[] { "plowing" },
+                EquipmentRequirementCodes.Asset("moldboard-plow"));
             Register(taskAuthority, PlantFieldTaskId, "Plant field", PlantMinutesPerAcre,
-                new[] { "planting" }, "seed drill / hand sacks");
+                new[] { "planting" });
             Register(taskAuthority, TendFieldTaskId, "Tend growing crop", TendMinutesPerAcre,
-                new[] { "cultivating" }, "hoe / cultivator");
+                new[] { "cultivating" },
+                EquipmentRequirementCodes.Kit("field-hand-kit"));
             Register(taskAuthority, HarvestFieldTaskId, "Harvest field", HarvestMinutesPerAcre,
-                new[] { "harvest" }, "scythe / cradle / wagon");
+                new[] { "harvest" },
+                EquipmentRequirementCodes.Asset("scythe") + "|" + EquipmentRequirementCodes.Asset("reaper-binder"));
             Register(taskAuthority, ThreshGrainTaskId, "Thresh grain", ThreshMinutesPerLot,
-                new[] { "threshing" }, "flail / threshing floor");
+                new[] { "threshing" });
             Register(taskAuthority, CutHayTaskId, "Cut hay", CutHayMinutesPerAcre,
-                new[] { "hay-cutting" }, "scythe / mower");
+                new[] { "hay-cutting" },
+                EquipmentRequirementCodes.Asset("scythe") + "|" + EquipmentRequirementCodes.Asset("horse-mower"));
             Register(taskAuthority, StackHayTaskId, "Stack hay", StackHayMinutesPerAcre,
-                new[] { "hay-stacking" }, "wagon / forks");
+                new[] { "hay-stacking" });
         }
 
         private static void Register(TaskAuthority taskAuthority, string id, string name,
-            int minutesPerUnit, string[] tags, string equipment)
+            int minutesPerUnit, string[] tags, params string[] equipmentCodes)
         {
             var def = new TaskDefinition(id, name, minutesPerUnit);
             def.SetRequiredSkill(SkillIds.CropTending, tags);
-            def.EquipmentClasses.Add(equipment);
+            foreach (string code in equipmentCodes)
+                if (!string.IsNullOrWhiteSpace(code)) def.EquipmentClasses.Add(code);
             taskAuthority.RegisterDefinition(def, out _);
         }
 

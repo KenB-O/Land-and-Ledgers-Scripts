@@ -428,6 +428,11 @@ namespace LandLedgers.Economy.Farming.Crops
             if (authority == null) return;
             var mill = new TaskDefinition(CropChain.MillGrainTaskId, "Mill grain", MillMinutesPer100Units);
             mill.SetRequiredSkill(MillingSkillId, new[] { "milling" });
+            // NX-1A: milling requires the millstones-and-power workstation
+            // (EQP-2 GrainMillStation). Stones + power are both hard
+            // requirements (Tech X §3.5, §3.6); the gate also evaluates the
+            // station's support requirements (Canon 5.2).
+            mill.EquipmentClasses.Add(EquipmentRequirementCodes.Workstation("grain-mill-station"));
             authority.RegisterDefinition(mill, out _);
         }
 

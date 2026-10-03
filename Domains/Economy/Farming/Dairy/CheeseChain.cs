@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -98,6 +99,10 @@ namespace LandLedgers.Economy.Farming.Dairy
             if (authority == null) return;
             var make = new TaskDefinition(MakeCheeseTaskId, "Make cheese", MakeCheeseMinutesPer100Milk);
             make.SetRequiredSkill(CheeseMakingSkillId, new[] { "cheesemaking" });
+            // NX-1A: the vats/press the method doc already requires, as data
+            // (Canon 4.1, Tech X §3.10). "cheese-press" is a recognized
+            // equipment-asset kind.
+            make.EquipmentClasses.Add(EquipmentRequirementCodes.Asset("cheese-press"));
             authority.RegisterDefinition(make, out _);
         }
 
@@ -115,9 +120,18 @@ namespace LandLedgers.Economy.Farming.Dairy
             int dayIndex,
             string equipment,
             string rennetSource,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            EquipmentTaskGate gate = null)
         {
             diagnostics ??= new List<string>();
+            // NX-1A: Canon 4.1 — the vats/press the doc requires, enforced.
+            if (gate != null)
+            {
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Asset("cheese-press") },
+                    "business", farmId, dayIndex, diagnostics);
+                if (blocked != null) return null;
+            }
             if (idRegistry == null) return null;
 
             if (milkLots == null || milkLots.Count == 0)

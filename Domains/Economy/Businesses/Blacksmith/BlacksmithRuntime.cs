@@ -261,9 +261,19 @@ namespace LandLedgers.Economy.Blacksmith
             int dayIndex,
             SkillService skillService,
             LandLedgers.Population.HouseholdLedger customerLedger,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            EquipmentTaskGate gate = null)
         {
             diagnostics = diagnostics ?? new List<string>();
+            // NX-1A: Canon 4.1 — repair work happens at the forge station
+            // workstation (established from components, Tech X §3.5).
+            if (gate != null)
+            {
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Workstation("forge-station") },
+                    "business", BusinessInstanceId, dayIndex, diagnostics);
+                if (blocked != null) return blocked;
+            }
 
             RepairWorkOrder order = null;
             foreach (RepairWorkOrder o in repairQueue.Orders)

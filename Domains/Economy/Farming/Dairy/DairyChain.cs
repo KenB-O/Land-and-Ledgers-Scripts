@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Economy.Farming.Delivery;
@@ -183,6 +184,10 @@ namespace LandLedgers.Economy.Farming.Dairy
 
             var churn = new TaskDefinition(ChurnButterTaskId, "Churn butter", ChurnMinutesPerBatch);
             churn.SetRequiredSkill(DairyProcessingSkillId, new[] { "churning" });
+            // NX-1A: churning without a churn is not a real method (Canon 4.1).
+            // "churn" is a recognized equipment-asset kind; the farm must
+            // actually own (or be granted) one — bootstrap implication noted.
+            churn.EquipmentClasses.Add(EquipmentRequirementCodes.Asset("churn"));
             authority.RegisterDefinition(churn, out _);
         }
 
@@ -308,9 +313,20 @@ namespace LandLedgers.Economy.Farming.Dairy
             EntityId workerId,
             int dayIndex,
             string equipment,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            EquipmentTaskGate gate = null)
         {
             diagnostics = diagnostics ?? new List<string>();
+            // NX-1A: Canon 4.1 — churning needs a usable churn. The gate checks
+            // the farm's assets/kits plus recorded access grants (Tech X §3.7).
+            if (gate != null && inputLots != null && inputLots.Count > 0)
+            {
+                string farmId = inputLots[0].FarmId;
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Asset("churn") },
+                    "business", farmId, dayIndex, diagnostics);
+                if (blocked != null) return null;
+            }
             if (idRegistry == null)
             {
                 diagnostics.Add("DairyChain.ChurnButter: id registry missing.");

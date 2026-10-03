@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Population;
@@ -101,6 +102,9 @@ namespace LandLedgers.Economy.Farming.Livestock
 
             var shear = new TaskDefinition(ShearSheepTaskId, "Shear sheep", ShearMinutesPerHead);
             shear.SetRequiredSkill(SkillIds.AnimalHusbandry, new[] { "shearing" });
+            // NX-1A: shearing without shears is not a real method (Canon 4.1).
+            // "hand-shears" is a recognized equipment-asset kind.
+            shear.EquipmentClasses.Add(EquipmentRequirementCodes.Asset("hand-shears"));
             authority.RegisterDefinition(shear, out _);
         }
 
@@ -179,9 +183,18 @@ namespace LandLedgers.Economy.Farming.Livestock
             AnimalRegistry registry,
             EntityIdRegistry idRegistry,
             EntityId sheepId, EntityId workerId, string farmId,
-            int dayIndex, List<string> diagnostics)
+            int dayIndex, List<string> diagnostics,
+            EquipmentTaskGate gate = null)
         {
             diagnostics ??= new List<string>();
+            // NX-1A: Canon 4.1 — shearing without shears is not a real method.
+            if (gate != null)
+            {
+                string blocked = gate.CheckCodes(
+                    new List<string> { EquipmentRequirementCodes.Asset("hand-shears") },
+                    "business", farmId, dayIndex, diagnostics);
+                if (blocked != null) return null;
+            }
             if (registry == null || idRegistry == null)
             {
                 diagnostics.Add("PigSheepChain.ShearSheep: registry missing.");

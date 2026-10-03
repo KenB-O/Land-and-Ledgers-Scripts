@@ -41,6 +41,12 @@ namespace LandLedgers.Economy.Equipment
         public BusinessWorkstations Workstations; // may be null
         public Func<string, WorkstationDefinition> FindWorkstationDefinition; // may be null
         public Func<string, WorkstationComponentView?> FindComponent; // may be null
+        /// <summary>
+        /// NX-1A: support context for Canon 5.2 layering (fuel, consumables,
+        /// operator skills, repair capability, infrastructure). May be null —
+        /// requirements with no context refuse per Supportability.Evaluate.
+        /// </summary>
+        public SupportContext Support; // may be null
     }
 
     /// <summary>
@@ -124,7 +130,34 @@ namespace LandLedgers.Economy.Equipment
             return null;
         }
 
+        /// <summary>
+        /// NX-1A: a single equipment-classes entry. Alternatives separated by
+        /// '|' are OR-ed (Canon 4.7: hand methods may remain physically possible
+        /// at small scale while machinery changes throughput — e.g.
+        /// "asset:scythe|asset:reaper-binder"). Every alternative still needs a
+        /// valid prefix; the entry passes when ANY alternative is satisfied.
+        /// </summary>
         private static string CheckOne(string code, EquipmentAvailability availability)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return null; // ignore blanks
+            if (code.IndexOf('|') >= 0)
+            {
+                var failures = new List<string>();
+                foreach (string alt in code.Split('|'))
+                {
+                    string trimmed = alt.Trim();
+                    if (string.IsNullOrWhiteSpace(trimmed)) continue;
+                    string altRefusal = CheckSingle(trimmed, availability);
+                    if (altRefusal == null) return null; // one workable method suffices
+                    failures.Add(altRefusal);
+                }
+                return $"Task needs one of [{code}] — none available to {availability.HolderId}: " +
+                       string.Join(" ", failures);
+            }
+            return CheckSingle(code, availability);
+        }
+
+        private static string CheckSingle(string code, EquipmentAvailability availability)
         {
             if (string.IsNullOrWhiteSpace(code)) return null; // ignore blanks
             if (code.StartsWith(EquipmentRequirementCodes.KitPrefix, StringComparison.Ordinal))
@@ -153,7 +186,19 @@ namespace LandLedgers.Economy.Equipment
                 if (station == null)
                     return $"Task needs workstation '{wsId}' — not established (Tech X §3.5).";
                 var reasons = new List<string>();
-                return station.EvaluateReady(def, availability.FindComponent, reasons); // null when ready
+                string notReady = station.EvaluateReady(def, availability.FindComponent, reasons); // null when ready
+                if (notReady != null) return notReady;
+                // NX-1A: supportability layered over condition (Canon 5.2) — a
+                // repaired oven with no fuel is not usable. EvaluateReady does
+                // not cover SupportRequirements, so the gate does it here.
+                if (def.SupportRequirements != null && def.SupportRequirements.Count > 0)
+                {
+                    var support = Supportability.Evaluate(def.SupportRequirements, availability.Support);
+                    if (!support.Satisfied)
+                        return $"Task needs workstation '{wsId}' supportable — " +
+                               string.Join(" ", support.Reasons) + " (Canon 5.2).";
+                }
+                return null;
             }
             return $"Task equipment class '{code}' has an unknown prefix — refused, never assumed (Tech X §3.10).";
         }

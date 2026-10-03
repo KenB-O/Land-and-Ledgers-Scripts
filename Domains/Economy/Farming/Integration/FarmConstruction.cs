@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.Economy.Farming.Bootstrap;
 using LandLedgers.Population;
@@ -97,9 +98,13 @@ namespace LandLedgers.Economy.Farming.Integration
             if (authority == null) return;
             var coop = new TaskDefinition(BuildCoopTaskId, "Build chicken coop", CoopBuildMinutes);
             coop.SetRequiredSkill(SkillIds.BasicRepair, new[] { "carpentry" });
+            // NX-1A: building needs the carpenter's hand tools (Canon 4.1;
+            // Tech X §3.4 textbook ToolKit case).
+            coop.EquipmentClasses.Add(EquipmentRequirementCodes.Kit("carpenter-hand-tool-kit"));
             authority.RegisterDefinition(coop, out _);
             var barn = new TaskDefinition(BuildBarnTaskId, "Build barn", BarnBuildMinutes);
             barn.SetRequiredSkill(SkillIds.BasicRepair, new[] { "carpentry" });
+            barn.EquipmentClasses.Add(EquipmentRequirementCodes.Kit("carpenter-hand-tool-kit"));
             authority.RegisterDefinition(barn, out _);
         }
 

@@ -71,6 +71,20 @@ namespace LandLedgers.Tasks
         private EntityIdRegistry idRegistry = new EntityIdRegistry();
         private ITaskDurationEstimator durationEstimator = new DefaultTaskDurationEstimator();
 
+        /// <summary>NX-1A: optional execution gate (Canon 4.1). Null = no enforcement.</summary>
+        private ITaskExecutionGate executionGate;
+
+        /// <summary>
+        /// NX-1A: installs the equipment execution gate. Canon 4.1 CANON LOCK —
+        /// a task is executable only when the full combination exists (capable
+        /// person + required tool/equipment + workspace + materials + motive
+        /// power + authority + time). The gate is consulted in StartTask.
+        /// </summary>
+        public void SetExecutionGate(ITaskExecutionGate gate)
+        {
+            executionGate = gate;
+        }
+
         /// <summary>Swaps the duration estimator (TTS-3 installs the skill-based one).</summary>
         public void SetDurationEstimator(ITaskDurationEstimator estimator)
         {
@@ -224,6 +238,19 @@ namespace LandLedgers.Tasks
             {
                 rejectionReason = "Task " + taskId + " is " + task.Status + ", not Assigned.";
                 return false;
+            }
+
+            // NX-1A: Canon 4.1 — work begins only when the full combination
+            // exists. The gate names the missing requirement loudly; a
+            // refusal here is never a silent debuff (Tech X §3.9).
+            if (executionGate != null)
+            {
+                string gateRefusal = executionGate.CheckStart(task, GetDefinition(task.DefinitionId), currentDayIndex);
+                if (gateRefusal != null)
+                {
+                    rejectionReason = gateRefusal;
+                    return false;
+                }
             }
 
             task.MarkStarted(currentDayIndex);

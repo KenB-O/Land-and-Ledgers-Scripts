@@ -10,6 +10,12 @@ namespace LandLedgers.Population
         public int id;
         public string householdName;
         public string surname;
+        /// <summary>
+        /// PKG-8 (3A-D14/3A-D07): legacy dual-write list. HouseholdMembershipRegistry is the
+        /// sole membership authority; the member list is a DERIVED reverse index
+        /// (HouseholdMembershipRegistry.GetActiveMembers), never separately persisted.
+        /// Kept for save compatibility and migration evidence only.
+        /// </summary>
         public List<int> memberIds = new();
         public int homeBuildingId;
         public int weeklyIncomeSnapshot;

@@ -11,6 +11,11 @@ namespace LandLedgers.Population
         public int age;
         public AgeBand ageBand;
         public LaborAccessLevel laborAccessLevel;
+        /// <summary>
+        /// PKG-8 (3A-D14): legacy dual-write field. HouseholdMembershipRegistry is the sole
+        /// household-membership authority; this pointer is kept for save compatibility and
+        /// migration evidence only. Do not introduce new dual writes.
+        /// </summary>
         public int householdId;
         public string professionId;
         public string professionName;

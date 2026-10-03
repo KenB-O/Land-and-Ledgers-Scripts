@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using LandLedgers.Primitives;
 
 namespace LandLedgers.Population
 {
@@ -10,6 +11,22 @@ namespace LandLedgers.Population
         public int id;
         public string householdName;
         public string surname;
+        /// <summary>
+        /// HF-3: the household's HF-1 typed identity. Backfilled as EntityId(Household, id)
+        /// for pre-existing households; the M1 int allocator remains the id-space authority.
+        /// </summary>
+        public EntityId entityId;
+        /// <summary>
+        /// HF-3: household lifecycle state (Active / Transitional / Dissolved). Membership
+        /// itself is authoritative in HouseholdMembershipRegistry (PKG-8).
+        /// </summary>
+        public HouseholdLifecycleState lifecycleState;
+        /// <summary>
+        /// HF-3 / GHOST-DEF-006: true when this household is the scenario's player
+        /// household — a real simulated household, not an omitted special case.
+        /// </summary>
+        public bool isPlayerHousehold;
+        public string playerScenarioId = string.Empty;
         /// <summary>
         /// PKG-8 (3A-D14/3A-D07): legacy dual-write list. HouseholdMembershipRegistry is the
         /// sole membership authority; the member list is a DERIVED reverse index

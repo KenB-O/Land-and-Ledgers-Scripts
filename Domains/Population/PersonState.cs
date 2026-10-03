@@ -50,6 +50,11 @@ namespace LandLedgers.Population
         public string preferredProfessionBias = string.Empty;
         public int settlementDifficulty;
         public int hostHouseholdId = -1;
+        /// <summary>
+        /// HF-3: day index of death, or -1 if living. The Person record and PersonId are
+        /// retained after death — identity is never rewritten (Tech X §2.2).
+        /// </summary>
+        public int deathDayIndex = -1;
 
         public string DisplayName => $"{firstName} {lastName}";
 

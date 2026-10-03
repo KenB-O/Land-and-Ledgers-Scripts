@@ -159,6 +159,13 @@ namespace LandLedgers.Economy
 
         public IReadOnlyList<BusinessInstanceState> Businesses => businesses;
         public string Status => status;
+
+        /// <summary>
+        /// CLN-4: invoked for each business BEFORE its weekly sales are reset, with the
+        /// week's net still readable. The valuation wiring uses this to post weekly
+        /// profit (event-fed, never per-frame). Null by default.
+        /// </summary>
+        public Action<BusinessInstanceState> PreWeeklyResetCallback { get; set; }
         public IReadOnlyList<LocalRecurringOrderRelationshipState> LocalOrderRelationships => localRecurringOrderManager.Relationships;
         public IReadOnlyList<BusinessTransferAgreementState> TransferAgreements => transferAgreements;
         public string LastWeeklyRecurringLocalOrderSummary => lastWeeklyRecurringLocalOrderSummary ?? string.Empty;
@@ -2631,6 +2638,16 @@ namespace LandLedgers.Economy
                 if (business == null || business.BusinessType != businessType || business.RuntimeState == null)
                 {
                     continue;
+                }
+
+                // CLN-4: post the week's net to valuation BEFORE the reset clears it.
+                try
+                {
+                    PreWeeklyResetCallback?.Invoke(business);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[Valuation] Pre-weekly-reset callback failed: {ex.Message}");
                 }
 
                 business.RuntimeState.ResetWeekToDateSales();

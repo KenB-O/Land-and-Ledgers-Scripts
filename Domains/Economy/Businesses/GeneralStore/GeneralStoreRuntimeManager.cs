@@ -1971,7 +1971,9 @@ namespace LandLedgers.MVP
 
             if (townPulseRuntime == null)
             {
-                ResolveFallbackTownTrafficDemand(absoluteDayIndex);
+                // PL-03: synthetic fallback demand removed (was: households / 6 -> revenue).
+                // Aggregate town demand must not post revenue without an embodied buyer;
+                // the household-level purchasing loop above already resolves real demand.
                 return;
             }
 
@@ -1999,30 +2001,6 @@ namespace LandLedgers.MVP
             }
 
             townPulseRuntime.CompleteDailyResolution(absoluteDayIndex);
-        }
-
-        private void ResolveFallbackTownTrafficDemand(int absoluteDayIndex)
-        {
-            int householdCount = populationManager != null
-                && populationManager.State != null
-                && populationManager.State.households != null
-                    ? populationManager.State.households.Count
-                    : generatedHouseholdCount;
-            if (householdCount <= 0)
-            {
-                return;
-            }
-
-            int baseRequests = Mathf.Max(1, Mathf.CeilToInt(householdCount / 6f));
-            if (Mathf.Max(0, absoluteDayIndex) % 7 == SaturdayDayOfWeekIndex)
-            {
-                baseRequests *= 2;
-            }
-
-            ResolveTownPulseCategoryDemand("staple_food", baseRequests + 1);
-            ResolveTownPulseCategoryDemand("household_goods", baseRequests);
-            ResolveTownPulseCategoryDemand("clothing", Mathf.Max(1, baseRequests / 2));
-            ResolveTownPulseCategoryDemand("medicine_remedies", Mathf.Max(1, baseRequests / 2));
         }
 
         public int ResolveTownPulseCategoryDemand(string categoryId, int requestedUnits)

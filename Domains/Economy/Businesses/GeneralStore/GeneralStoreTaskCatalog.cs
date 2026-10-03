@@ -94,7 +94,8 @@ namespace LandLedgers.MVP
 
         /// <summary>
         /// A customer needs tending. The store is not self-serve: until a worker is
-        /// assigned, the customer waits in the queue (waiting consequences TBD).
+        /// assigned, the customer waits in the queue — T1C's CustomerQueue gives the
+        /// queue teeth (patience expiry and overlong lines write Tech X §5.4 lost sales).
         /// </summary>
         public static WorkTask EnqueueTendCustomer(TaskAuthority authority, EntityId storeId, int currentDayIndex, string customerRef)
         {

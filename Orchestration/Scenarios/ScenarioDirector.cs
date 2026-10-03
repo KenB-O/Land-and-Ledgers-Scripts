@@ -12,6 +12,11 @@ namespace LandLedgers.Orchestration.Scenarios
     /// DEV-1: the global scenario manager. Lives in the single scene (DEV-4: one scene,
     /// no main menu — scenario switching happens in-scene, never via scene loads).
     ///
+    /// ADR-001 (Land_and_Ledgers_ADR_001_One_Scene_Workflow_2026-10-03.md): Kennedy
+    /// directed single-scene development with no main menu for now. Do NOT add a menu
+    /// scene or multi-scene flow without revisiting that ADR with him — scenario
+    /// switching belongs here, in-scene, via SwitchScenario().
+    ///
     /// Responsibilities:
     /// - Owns the scenario registry (ScriptableObject assets, inspector-assignable).
     /// - SwitchScenario(): tears down the active run and bootstraps the new one in-scene.

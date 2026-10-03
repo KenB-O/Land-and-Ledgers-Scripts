@@ -434,6 +434,15 @@ namespace LandLedgers.Economy
 
     }
 
+    /// <summary>
+    /// Legacy worker-slot record. Mixes staffing need (slot id, required-for-opening), worker
+    /// identity (assigned worker), wage terms and missed-payroll state in one record.
+    /// PKG-2 (TECH §4.3 / SD-05): slot COUNTS are no longer a causal staffing authority. FTE and
+    /// headcount are derived read models (see WorkforceStaffingReadModel); slots must not
+    /// fabricate Persons or suppress seasonal hiring. PKG-7 decomposes this into RoleDefinition +
+    /// PositionState + EmploymentRelationship (3A-D19); until consumers migrate, this class is the
+    /// compatibility projection surface.
+    /// </summary>
     [Serializable]
     public sealed class WorkerSlotState
     {
@@ -466,11 +475,19 @@ namespace LandLedgers.Economy
         public string AssignedWorkerId => assignedWorkerId ?? string.Empty;
         public string AssignedWorkerDisplayName => string.IsNullOrWhiteSpace(assignedWorkerDisplayName) ? AssignedWorkerId : assignedWorkerDisplayName;
         public int WeeklyWageCents => Mathf.Max(0, weeklyWageCents);
+        /// <summary>
+        /// PKG-2 (TECH §4.3): a template staffing-need flag, not a causal gate. Whether a business
+        /// may operate is decided from actual worker coverage, not from slot definitions.
+        /// </summary>
         public bool RequiredForOpening => requiredForOpening;
         public bool IsPaidActive => IsFilled && paidActive && !suspendedForMissedPayroll;
         public bool SuspendedForMissedPayroll => suspendedForMissedPayroll;
         public bool IsFilled => !string.IsNullOrWhiteSpace(assignedWorkerId) || !string.IsNullOrWhiteSpace(assignedWorkerDisplayName);
 
+        /// <summary>
+        /// PKG-2: a derived continuity diagnostic, not staffing authority. Counts must be read
+        /// through WorkforceStaffingReadModel, never used to decide how many workers may be engaged.
+        /// </summary>
         public int StartupContinuityScore
         {
             get
@@ -603,6 +620,13 @@ namespace LandLedgers.Economy
             };
         }
 
+        /// <summary>
+        /// Assigns a worker to this slot. PKG-2: assignment through a slot is wage employment by
+        /// construction (the slot wage drives payroll); the relationship classifies as
+        /// WorkRelationshipKind.PermanentEmployment via WorkRelationshipProjection. Family labor
+        /// and operators must NOT be recorded here - they use the taxonomy's non-wage kinds
+        /// (TECH §4.1, §4.5; PL-04).
+        /// </summary>
         public void Assign(string workerId, int wageCents)
         {
             Assign(workerId, workerId, wageCents);

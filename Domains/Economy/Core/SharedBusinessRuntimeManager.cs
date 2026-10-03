@@ -2458,6 +2458,10 @@ namespace LandLedgers.Economy
             int openSlotIndex = FindFirstOpenWorkerSlotIndex(business);
             if (openSlotIndex < 0)
             {
+                // PKG-2 (TECH §4.3 / SD-05): the fixed slot list currently caps hiring. This is the
+                // causal-slot behavior under de-causalization - staffing decisions should derive from
+                // worker-time demand (LaborDemandPlan, P1), not from template slot counts. Behavior
+                // preserved for now; PKG-7 decomposes slots into RoleDefinition + PositionState.
                 message = $"No open {BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)} worker slots are available.";
                 return false;
             }

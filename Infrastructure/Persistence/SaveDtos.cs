@@ -277,6 +277,11 @@ namespace LandLedgers.Persistence
         public List<HistoricalAnimalRecord> historicalAnimals = new();
         public List<LivestockCohort> cohorts = new();
         public List<EggBatchState> eggBatches = new();
+        /// <summary>
+        /// HF-4: per-household cash ledgers (provenance-enforced). Balances derive from
+        /// entries; ID cursors persist via HF-1 entityIdCursors.
+        /// </summary>
+        public List<HouseholdLedgerState> householdLedgers = new();
         public List<string> validationMessages = new();
         public List<RentalPropertySaveDto> rentalProperties = new();
         public List<RentalApplicantSaveDto> rentalApplicants = new();

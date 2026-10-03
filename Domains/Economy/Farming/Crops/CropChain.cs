@@ -53,6 +53,8 @@ namespace LandLedgers.Economy.Farming.Crops
         public const string ThreshGrainTaskId = "thresh-grain";
         public const string CutHayTaskId = "cut-hay";
         public const string StackHayTaskId = "stack-hay";
+        /// <summary>CRP-3: milling task id (registered by Miller).</summary>
+        public const string MillGrainTaskId = "mill-grain";
 
         // Calibration: minutes per acre at skill level 1 (TTS-1 minute quantum).
         public const int PlowMinutesPerAcre = 120;

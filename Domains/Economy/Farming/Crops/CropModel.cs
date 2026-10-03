@@ -77,6 +77,11 @@ namespace LandLedgers.Economy.Farming.Crops
         // Hay staging (Canon §7.4F): hay has physical stages beyond the grain
         // cycle — standing, cut, curing, stacked. Grain crops ignore this.
         public HayStage HayStage = HayStage.NotHay;
+        public int HayCutDayIndex = -1; // day the hay was cut (curing clock)
+
+        // CRP-2: tending factor 0..1 — each tending pass raises realized yield.
+        // Missed work reduces through the field state (Canon §7.4D).
+        public float Tended01;
 
         public CropFieldState() { }
 

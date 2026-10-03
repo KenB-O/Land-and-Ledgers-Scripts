@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Farming.Crops;
 using LandLedgers.Economy.Farming.Dairy;
 using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Economy.Farming.Integration;
@@ -21,12 +22,15 @@ namespace LandLedgers.Economy.Farming.Integration
         private PoultryChain poultryChain = new PoultryChain();
         private readonly List<DeliveryJob> deliveryJobs = new List<DeliveryJob>();
         private readonly List<FarmConstructionProject> constructionProjects = new List<FarmConstructionProject>();
+        private CropChain cropChain;
 
         public DairyChain Dairy => dairyChain ??= new DairyChain();
         public FeedLoop Feed => feedLoop ??= new FeedLoop();
         public PoultryChain Poultry => poultryChain ??= new PoultryChain();
         public List<DeliveryJob> DeliveryJobs => deliveryJobs;
         public List<FarmConstructionProject> ConstructionProjects => constructionProjects;
+        /// <summary>CRP-2: the crop chain (lazy; shares its own field authority).</summary>
+        public CropChain Crops => cropChain ??= new CropChain(new CropFieldAuthority());
 
         public void SetFeedLoop(FeedLoop loop)
         {
@@ -43,6 +47,7 @@ namespace LandLedgers.Economy.Farming.Integration
                 hens = new List<EntityId>(Poultry.HenIds),
                 deliveryJobs = new List<DeliveryJob>(deliveryJobs),
                 constructionProjects = new List<FarmConstructionProject>(constructionProjects),
+                crop = Crops.CaptureSaveDto(),
             };
         }
 
@@ -61,6 +66,7 @@ namespace LandLedgers.Economy.Farming.Integration
             }
             if (dto.deliveryJobs != null) deliveryJobs.AddRange(dto.deliveryJobs);
             if (dto.constructionProjects != null) constructionProjects.AddRange(dto.constructionProjects);
+            if (dto.crop != null) Crops.LoadFromSaveDto(dto.crop);
         }
     }
 }

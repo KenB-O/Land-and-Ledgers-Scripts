@@ -5,6 +5,7 @@ using LandLedgers.Economy.Logistics;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Farming.Delivery
@@ -124,6 +125,73 @@ namespace LandLedgers.Economy.Farming.Delivery
             }
 
             return job;
+        }
+
+        /// <summary>
+        /// JRN-2: journey-aware delivery planning. Resolves real miles through
+        /// the journey model (farmstead node → business node) and plans the
+        /// delivery on those miles — so drive times, internal haul costs, and
+        /// freight charges derive from the 1:1 world scale (Canon §13.1)
+        /// instead of abstract legs. Falls back to the legacy distance honestly
+        /// (with a diagnostic) when the model cannot route.
+        /// </summary>
+        public static DeliveryJob PlanDeliveryWithJourney(
+            string saleAgreementId,
+            string productKind,
+            List<ITransitLot> lots,
+            string originFarmId,
+            string originBusinessId,
+            string destinationBusinessId,
+            string destinationName,
+            DeliveryHaulerOption hauler,
+            float distanceMilesOneWay,
+            int dayIndex,
+            string freightPayerBusinessId,
+            string haulerWorkerName,
+            JourneyModel journeyModel,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            float miles = Math.Max(0f, distanceMilesOneWay);
+
+            if (journeyModel != null)
+            {
+                string originLoc = JourneyTravel.LocationIdForFarm(originFarmId);
+                JourneyLocation originBusinessLoc =
+                    JourneyTravel.FindBusinessLocation(journeyModel, originBusinessId);
+                if (originBusinessLoc != null) originLoc = originBusinessLoc.LocationId;
+
+                JourneyLocation destLoc =
+                    JourneyTravel.FindBusinessLocation(journeyModel, destinationBusinessId);
+                if (destLoc != null)
+                {
+                    JourneyTravelEstimate estimate =
+                        JourneyTravel.EstimateDrive(journeyModel, originLoc, destLoc.LocationId);
+                    if (estimate.FromModel)
+                    {
+                        miles = estimate.Miles;
+                        diagnostics.Add($"DeliveryService: journey model routed {originLoc} → {destLoc.LocationId}: " +
+                            $"{estimate.Miles:F1} mi ≈ {estimate.MinutesOneWay} min by wagon.");
+                    }
+                    else
+                    {
+                        diagnostics.Add("DeliveryService: journey model could not route — legacy distance kept: "
+                            + estimate.Diagnostic);
+                    }
+                }
+                else
+                {
+                    diagnostics.Add($"DeliveryService: destination business '{destinationBusinessId}' has no journey location — legacy distance kept.");
+                }
+            }
+
+            return PlanDelivery(
+                saleAgreementId, productKind, lots,
+                originFarmId, originBusinessId,
+                destinationBusinessId, destinationName,
+                hauler, miles, dayIndex,
+                freightPayerBusinessId, haulerWorkerName,
+                diagnostics);
         }
 
         public static string DepartDelivery(DeliveryJob job, int dayIndex)

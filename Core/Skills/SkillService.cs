@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 
@@ -34,7 +35,7 @@ namespace LandLedgers.Skills
             new Dictionary<SkillKey, PersonSkillState>();
 
         [Serializable]
-        private sealed class PersonSkillEntry
+        public sealed class PersonSkillEntry
         {
             [SerializeField]
             public EntityId personId;
@@ -228,6 +229,42 @@ namespace LandLedgers.Skills
                     stateLookup[new SkillKey(entry.personId, entry.state.SkillId)] = entry.state;
                 }
             }
+        }
+
+        /// <summary>
+        /// CLN-1: captures skill state for the save pipeline. Definitions and per-person
+        /// skill entries; lookups rebuild on load.
+        /// </summary>
+        public SkillServiceSaveDto CaptureSaveDto()
+        {
+            return new SkillServiceSaveDto
+            {
+                definitions = new List<SkillDefinition>(skillDefinitions),
+                skillStates = new List<PersonSkillEntry>(skillStates),
+            };
+        }
+
+        /// <summary>CLN-1: restores skill state from the save pipeline.</summary>
+        public void LoadFromSaveDto(SkillServiceSaveDto dto)
+        {
+            skillDefinitions.Clear();
+            skillStates.Clear();
+            if (dto == null)
+            {
+                return;
+            }
+
+            if (dto.definitions != null)
+            {
+                skillDefinitions.AddRange(dto.definitions);
+            }
+
+            if (dto.skillStates != null)
+            {
+                skillStates.AddRange(dto.skillStates);
+            }
+
+            RebuildLookupsIfNeeded();
         }
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using LandLedgers.Persistence;
 
 namespace LandLedgers.ReadModels.Valuation
 {
@@ -265,6 +266,17 @@ namespace LandLedgers.ReadModels.Valuation
             public EnterpriseValuationResult cached;
         }
 
+        /// <summary>CLN-1: persisted valuation entry (save pipeline).</summary>
+        [Serializable]
+        public sealed class BusinessExport
+        {
+            public string businessInstanceId = string.Empty;
+            public string ownerKey = string.Empty;
+            public bool playerOwned;
+            public ValuationEvidence evidence;
+            public EnterpriseValuationResult cached;
+        }
+
         [SerializeField]
         private List<BusinessEntry> entries = new List<BusinessEntry>();
 
@@ -395,6 +407,64 @@ namespace LandLedgers.ReadModels.Valuation
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// CLN-1: captures valuation state for the save pipeline. Evidence and cached
+        /// results round-trip; the read model never recomputes from scratch on load.
+        /// </summary>
+        public ValuationReadModelSaveDto CaptureSaveDto()
+        {
+            var dto = new ValuationReadModelSaveDto();
+            if (entries != null)
+            {
+                foreach (BusinessEntry entry in entries)
+                {
+                    if (entry == null)
+                    {
+                        continue;
+                    }
+
+                    dto.entries.Add(new BusinessExport
+                    {
+                        businessInstanceId = entry.businessInstanceId,
+                        ownerKey = entry.ownerKey,
+                        playerOwned = entry.playerOwned,
+                        evidence = entry.evidence,
+                        cached = entry.cached,
+                    });
+                }
+            }
+
+            return dto;
+        }
+
+        /// <summary>CLN-1: restores valuation state from the save pipeline.</summary>
+        public void LoadFromSaveDto(ValuationReadModelSaveDto dto)
+        {
+            entries ??= new List<BusinessEntry>();
+            entries.Clear();
+            if (dto == null || dto.entries == null)
+            {
+                return;
+            }
+
+            foreach (BusinessExport exported in dto.entries)
+            {
+                if (exported == null || string.IsNullOrWhiteSpace(exported.businessInstanceId))
+                {
+                    continue;
+                }
+
+                entries.Add(new BusinessEntry
+                {
+                    businessInstanceId = exported.businessInstanceId,
+                    ownerKey = exported.ownerKey ?? string.Empty,
+                    playerOwned = exported.playerOwned,
+                    evidence = exported.evidence ?? new ValuationEvidence(exported.businessInstanceId),
+                    cached = exported.cached,
+                });
+            }
         }
     }
 }

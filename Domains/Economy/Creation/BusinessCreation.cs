@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using UnityEngine;
 
@@ -568,6 +569,15 @@ namespace LandLedgers.Economy.Creation
             public string firstCommerceDescription = string.Empty;
         }
 
+        /// <summary>CLN-1: persisted commerce record (save pipeline).</summary>
+        [Serializable]
+        public sealed class CommerceExport
+        {
+            public string businessKey = string.Empty;
+            public int firstCommerceDayIndex;
+            public string firstCommerceDescription = string.Empty;
+        }
+
         [SerializeField]
         private List<string> keys = new List<string>();
 
@@ -613,5 +623,60 @@ namespace LandLedgers.Economy.Creation
         }
 
         public int OperatingBusinessCount => keys != null ? keys.Count : 0;
+
+        /// <summary>
+        /// CLN-1: captures operating status for the save pipeline. First-commerce
+        /// records only — operating status is never synthesized on load.
+        /// </summary>
+        public OperatingLedgerSaveDto CaptureSaveDto()
+        {
+            var dto = new OperatingLedgerSaveDto();
+            if (keys != null && records != null)
+            {
+                for (int i = 0; i < keys.Count && i < records.Count; i++)
+                {
+                    CommerceRecord record = records[i];
+                    if (record == null)
+                    {
+                        continue;
+                    }
+
+                    dto.records.Add(new CommerceExport
+                    {
+                        businessKey = keys[i] ?? string.Empty,
+                        firstCommerceDayIndex = record.firstCommerceDayIndex,
+                        firstCommerceDescription = record.firstCommerceDescription,
+                    });
+                }
+            }
+
+            return dto;
+        }
+
+        /// <summary>CLN-1: restores operating status from the save pipeline.</summary>
+        public void LoadFromSaveDto(OperatingLedgerSaveDto dto)
+        {
+            keys.Clear();
+            records.Clear();
+            if (dto == null || dto.records == null)
+            {
+                return;
+            }
+
+            foreach (CommerceExport exported in dto.records)
+            {
+                if (exported == null || string.IsNullOrWhiteSpace(exported.businessKey))
+                {
+                    continue;
+                }
+
+                keys.Add(exported.businessKey);
+                records.Add(new CommerceRecord
+                {
+                    firstCommerceDayIndex = exported.firstCommerceDayIndex,
+                    firstCommerceDescription = exported.firstCommerceDescription ?? string.Empty,
+                });
+            }
+        }
     }
 }

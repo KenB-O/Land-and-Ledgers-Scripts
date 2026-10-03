@@ -6,6 +6,7 @@ using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.MVP;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
 using LandLedgers.Time;
 using LandLedgers.UI;
@@ -75,6 +76,9 @@ namespace LandLedgers.Persistence
 
         [SerializeField]
         private MvpSliceBootstrapper bootstrapper;
+
+        [SerializeField, Tooltip("CLN-1: owns the standalone simulation authorities (tasks, skills, animals, ledgers, valuation, freight, butcher, farm flows).")]
+        private SimulationSystemsHub systemsHub;
 
         [Header("Runtime Controls")]
         [SerializeField]
@@ -270,6 +274,40 @@ namespace LandLedgers.Persistence
             timeManager?.LoadFromSaveDto(save.time);
             populationManager?.LoadFromSaveDto(save.population);
             civicFoundation?.LoadFromSaveDto(save.civic);
+
+            // CLN-1: restore the HF-1 entity-ID cursors first (animal import requires
+            // restored cursors), then the HF-2/HF-4 population sections and the
+            // systems hub section.
+            if (systemsHub != null)
+            {
+                List<string> cursorDiagnostics = EntityIdSaveAdapter.ReadCursors(
+                    save,
+                    systemsHub.Ids,
+                    save.population != null ? save.population.nextPersonId : 0,
+                    save.population != null ? save.population.nextHouseholdId : 0,
+                    0);
+                foreach (string diagnostic in cursorDiagnostics)
+                {
+                    Debug.LogWarning($"[SaveLoad] {diagnostic}");
+                }
+
+                if (save.population != null)
+                {
+                    systemsHub.ImportAnimalState(
+                        save.population.animals,
+                        save.population.historicalAnimals,
+                        save.population.cohorts,
+                        save.population.eggBatches);
+                    systemsHub.ImportHouseholdLedgers(save.population.householdLedgers);
+                }
+
+                int absoluteDayIndex = save.time != null ? save.time.absoluteDayIndex : 0;
+                List<string> systemsDiagnostics = systemsHub.LoadFromSaveDto(save.systems, absoluteDayIndex);
+                foreach (string diagnostic in systemsDiagnostics)
+                {
+                    Debug.LogWarning($"[SaveLoad] {diagnostic}");
+                }
+            }
             storeRuntime?.LoadFromSaveDto(save.businesses != null ? save.businesses.deepGeneralStore : null);
 
             string deepStoreInstanceId = storeRuntime != null && storeRuntime.CurrentBusiness != null
@@ -584,6 +622,7 @@ namespace LandLedgers.Persistence
                 debt = debt,
                 portfolio = portfolio,
                 firstSessionGuidance = guidance,
+                systems = systemsHub != null ? systemsHub.CaptureSaveDto() : new SystemsSaveDto(),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto
                 {
@@ -651,6 +690,35 @@ namespace LandLedgers.Persistence
                 }
             };
 
+            // CLN-1: persist the HF-1 entity-ID cursors and the HF-2/HF-4 population
+            // sections (animals, cohorts, egg batches, household ledgers) from the
+            // systems hub. Legacy nextPersonId/nextHouseholdId/nextBuildingId fields
+            // remain the authority for their kinds (EntityIdSaveAdapter).
+            if (systemsHub != null)
+            {
+                EntityIdSaveAdapter.WriteCursors(
+                    save,
+                    systemsHub.Ids,
+                    save.population != null ? save.population.nextPersonId : 0,
+                    save.population != null ? save.population.nextHouseholdId : 0,
+                    0);
+
+                if (save.population != null)
+                {
+                    save.population.animals.Clear();
+                    save.population.historicalAnimals.Clear();
+                    save.population.cohorts.Clear();
+                    save.population.eggBatches.Clear();
+                    save.population.householdLedgers.Clear();
+                    systemsHub.ExportAnimalState(
+                        save.population.animals,
+                        save.population.historicalAnimals,
+                        save.population.cohorts,
+                        save.population.eggBatches);
+                    systemsHub.ExportHouseholdLedgers(save.population.householdLedgers);
+                }
+            }
+
             return save;
         }
 
@@ -697,6 +765,13 @@ namespace LandLedgers.Persistence
             hudController ??= FindAnyObjectByType<LandLedgersHUDController>();
             firstSessionGuidance ??= FindAnyObjectByType<FirstSessionGuidanceManager>();
             bootstrapper ??= FindAnyObjectByType<MvpSliceBootstrapper>();
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+
+            if (systemsHub == null)
+            {
+                GameObject systemsObject = new("Simulation Systems Hub");
+                systemsHub = systemsObject.AddComponent<SimulationSystemsHub>();
+            }
 
             if (sharedBusinessRuntime == null)
             {

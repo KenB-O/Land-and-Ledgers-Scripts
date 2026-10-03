@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using UnityEngine;
 
@@ -439,6 +440,52 @@ namespace LandLedgers.Economy.Butcher
             foreach (ButcherLot lot in lots)
             {
                 lot.AgeToDay(dayIndex, freshDays, agingDays);
+            }
+        }
+
+        /// <summary>
+        /// CLN-1: captures butcher state for the save pipeline. Lots carry provenance
+        /// (Tech X Part IV); the lot-number cursor persists so IDs are never reused.
+        /// </summary>
+        public ButcherRuntimeSaveDto CaptureSaveDto()
+        {
+            return new ButcherRuntimeSaveDto
+            {
+                businessInstanceId = BusinessInstanceId,
+                productionSiteId = productionSiteId ?? string.Empty,
+                retailSiteId = retailSiteId ?? string.Empty,
+                lots = new List<ButcherLot>(lots ?? new List<ButcherLot>()),
+            };
+        }
+
+        /// <summary>CLN-1: restores butcher state from the save pipeline.</summary>
+        public void LoadFromSaveDto(ButcherRuntimeSaveDto dto)
+        {
+            lots.Clear();
+            if (dto == null)
+            {
+                return;
+            }
+
+            if (dto.lots != null)
+            {
+                lots.AddRange(dto.lots);
+            }
+
+            // Advance the lot-number cursor past every restored lot so new lots never
+            // reuse an ID.
+            foreach (ButcherLot lot in lots)
+            {
+                if (lot == null || string.IsNullOrEmpty(lot.LotId) || lot.LotId.Length < 2
+                    || lot.LotId[0] != 'L')
+                {
+                    continue;
+                }
+
+                if (int.TryParse(lot.LotId.Substring(1), out int number))
+                {
+                    nextLotNumber = Mathf.Max(nextLotNumber, number + 1);
+                }
             }
         }
 

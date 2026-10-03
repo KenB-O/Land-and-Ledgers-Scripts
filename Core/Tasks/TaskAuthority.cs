@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using LandLedgers.Time;
 
@@ -442,6 +443,42 @@ namespace LandLedgers.Tasks
                 taskLookup[task.TaskId] = task;
                 GetOrCreateQueue(task.OwnerId).Add(task);
             }
+        }
+
+        /// <summary>
+        /// CLN-1: captures task state for the save pipeline. Definitions and work tasks;
+        /// lookups rebuild on load. The task ID cursor persists via HF-1 entityIdCursors.
+        /// </summary>
+        public TaskAuthoritySaveDto CaptureSaveDto()
+        {
+            return new TaskAuthoritySaveDto
+            {
+                definitions = new List<TaskDefinition>(definitions),
+                tasks = new List<WorkTask>(tasks),
+            };
+        }
+
+        /// <summary>CLN-1: restores task state from the save pipeline.</summary>
+        public void LoadFromSaveDto(TaskAuthoritySaveDto dto)
+        {
+            definitions.Clear();
+            tasks.Clear();
+            if (dto == null)
+            {
+                return;
+            }
+
+            if (dto.definitions != null)
+            {
+                definitions.AddRange(dto.definitions);
+            }
+
+            if (dto.tasks != null)
+            {
+                tasks.AddRange(dto.tasks);
+            }
+
+            RebuildLookupsIfNeeded();
         }
     }
 }

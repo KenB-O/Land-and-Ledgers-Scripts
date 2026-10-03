@@ -35,6 +35,12 @@ namespace LandLedgers.Persistence
         /// those kinds; this list additionally carries every other kind's cursor.
         /// </summary>
         public List<EntityIdCursorDto> entityIdCursors = new();
+        /// <summary>
+        /// CLN-1: simulation systems hub section (HF/TTS/DEV/BIZ/FRM standalone
+        /// authorities: tasks, skills, budgets, valuation, freight, butcher lots,
+        /// farm flows, capabilities, operating ledger).
+        /// </summary>
+        public SystemsSaveDto systems = new();
     }
 
     [Serializable]

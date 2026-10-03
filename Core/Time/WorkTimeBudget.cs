@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 
 namespace LandLedgers.Time
@@ -232,6 +233,31 @@ namespace LandLedgers.Time
             {
                 lookup[budget.PersonId] = budget;
             }
+        }
+
+        /// <summary>
+        /// CLN-1: captures work-time budget state for the save pipeline. Budgets and
+        /// the current day; the lookup rebuilds on load.
+        /// </summary>
+        public WorkTimeBudgetSaveDto CaptureSaveDto()
+        {
+            return new WorkTimeBudgetSaveDto
+            {
+                budgets = new List<WorkTimeBudget>(budgets),
+            };
+        }
+
+        /// <summary>CLN-1: restores work-time budget state from the save pipeline.</summary>
+        public void LoadFromSaveDto(WorkTimeBudgetSaveDto dto, int absoluteDayIndex)
+        {
+            budgets.Clear();
+            currentAbsoluteDayIndex = absoluteDayIndex;
+            if (dto != null && dto.budgets != null)
+            {
+                budgets.AddRange(dto.budgets);
+            }
+
+            RebuildLookupIfNeeded();
         }
     }
 }

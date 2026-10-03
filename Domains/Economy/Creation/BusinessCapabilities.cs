@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Persistence;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Creation
@@ -120,6 +121,40 @@ namespace LandLedgers.Economy.Creation
         }
 
         public int Count => capabilities.Count;
+
+        /// <summary>
+        /// CLN-1: captures the registered capabilities for the save pipeline.
+        /// Capabilities are data (Tech X §3.1); the registry round-trips as a list.
+        /// </summary>
+        public CapabilityRegistrySaveDto CaptureSaveDto()
+        {
+            var dto = new CapabilityRegistrySaveDto();
+            foreach (BusinessCapability capability in capabilities.Values)
+            {
+                if (capability != null)
+                {
+                    dto.capabilities.Add(capability);
+                }
+            }
+
+            return dto;
+        }
+
+        /// <summary>CLN-1: restores the registered capabilities from the save pipeline.</summary>
+        public void LoadFromSaveDto(CapabilityRegistrySaveDto dto, List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            capabilities.Clear();
+            if (dto == null || dto.capabilities == null)
+            {
+                return;
+            }
+
+            foreach (BusinessCapability capability in dto.capabilities)
+            {
+                Register(capability, diagnostics);
+            }
+        }
 
         /// <summary>Merges space requirements across capabilities (union).</summary>
         public PremisesRequirement MergeSpaceRequirements(IEnumerable<string> capabilityIds)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using UnityEngine;
 
@@ -324,6 +325,42 @@ namespace LandLedgers.Economy.Freight
                 }
 
                 return count;
+            }
+        }
+
+        /// <summary>
+        /// CLN-1: captures freight pool state for the save pipeline. Wagons and
+        /// reservations round-trip; yard capacity is configuration.
+        /// </summary>
+        public FreightResourcePoolSaveDto CaptureSaveDto()
+        {
+            return new FreightResourcePoolSaveDto
+            {
+                wagons = new List<FreightWagon>(wagons ?? new List<FreightWagon>()),
+                reservedWagonIds = new List<string>(reservedWagonIds ?? new List<string>()),
+            };
+        }
+
+        /// <summary>CLN-1: restores freight pool state from the save pipeline.</summary>
+        public void LoadFromSaveDto(FreightResourcePoolSaveDto dto)
+        {
+            wagons.Clear();
+            reservedWagonIds.Clear();
+            reservedAnimalKeys.Clear();
+            reservedDriverKeys.Clear();
+            if (dto == null)
+            {
+                return;
+            }
+
+            if (dto.wagons != null)
+            {
+                wagons.AddRange(dto.wagons);
+            }
+
+            if (dto.reservedWagonIds != null)
+            {
+                reservedWagonIds.AddRange(dto.reservedWagonIds);
             }
         }
     }

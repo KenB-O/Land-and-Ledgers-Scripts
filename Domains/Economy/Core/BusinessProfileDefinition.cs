@@ -626,6 +626,18 @@ namespace LandLedgers.Economy
                 BaselineDailyServiceCapacity);
         }
 
+        /// <summary>
+        /// BIZ-1: code fallback profile for business types without an authored
+        /// ScriptableObject profile, so any of the 19 BusinessTypes is creatable
+        /// through the formation workflow (Canon §3.1).
+        /// </summary>
+        public static BusinessProfileDefinition CreateFallback(BusinessType type, string displayName)
+        {
+            var profile = CreateInstance<BusinessProfileDefinition>();
+            profile.business = new BusinessDefinition(type, $"biz_{type}", displayName);
+            return profile;
+        }
+
         public ItemCategoryDefinition FindCategory(string categoryId)
         {
             if (string.IsNullOrWhiteSpace(categoryId) || categories == null)

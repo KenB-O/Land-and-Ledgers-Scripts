@@ -141,6 +141,22 @@ namespace LandLedgers.Economy
         public string BusinessId => string.IsNullOrWhiteSpace(businessId) ? displayName : businessId;
         public string DisplayName => string.IsNullOrWhiteSpace(displayName) ? BusinessId : displayName;
         public BusinessType BusinessType => businessType;
+
+        /// <summary>Default construction for Unity serialization.</summary>
+        public BusinessDefinition()
+        {
+        }
+
+        /// <summary>
+        /// BIZ-1: code-constructed definition for fallback profiles (business types
+        /// without an authored profile). Serialized fields keep their defaults otherwise.
+        /// </summary>
+        public BusinessDefinition(BusinessType businessType, string businessId, string displayName)
+        {
+            this.businessType = businessType;
+            this.businessId = string.IsNullOrWhiteSpace(businessId) ? businessType.ToString() : businessId;
+            this.displayName = string.IsNullOrWhiteSpace(displayName) ? businessType.ToString() : displayName;
+        }
         public string BuildingId => buildingId ?? string.Empty;
         public BusinessOperationsDefinition Operations => operations ?? new BusinessOperationsDefinition();
         public BusinessEconomyDefinition Economy => economy ?? new BusinessEconomyDefinition();

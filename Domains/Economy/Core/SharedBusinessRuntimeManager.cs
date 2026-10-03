@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using LandLedgers.Economy.Creation;
 using LandLedgers.MVP;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.World;
@@ -112,6 +114,18 @@ namespace LandLedgers.Economy
 
         [SerializeField]
         private BusinessProfileDefinition[] businessProfiles = Array.Empty<BusinessProfileDefinition>();
+
+        [Header("BIZ-1 Formation Workflow")]
+        [SerializeField]
+        [Tooltip("BIZ-1 (Canon XXVII §3.2, GHOST-DES-009): when true, the legacy synthetic passive auto-seed runs at opening instead of the authored formation workflow. Default false (deprecated). Kennedy can veto the deprecation by re-enabling this.")]
+        private bool useLegacyPassiveSeed;
+
+        [SerializeField]
+        [Tooltip("BIZ-1: operating status ledger — a business becomes operating only through recorded commerce (Canon §3.2).")]
+        private BusinessOperatingLedger operatingLedger = new BusinessOperatingLedger();
+
+        /// <summary>BIZ-1: HF-1 identity registry for business entity IDs (never reused).</summary>
+        private readonly EntityIdRegistry businessIdRegistry = new EntityIdRegistry();
 
         [Header("Staffing")]
         [SerializeField]
@@ -245,7 +259,7 @@ namespace LandLedgers.Economy
             }
 
             int startupRepairs = NormalizeSharedBusinessStartupState("restore");
-            int created = EnsureMissingCorePassiveBusinesses();
+            int created = EnsureOpeningBusinesses();
             if (created > 0)
             {
                 startupRepairs += NormalizeSharedBusinessStartupState("restore core-fill");
@@ -311,7 +325,7 @@ namespace LandLedgers.Economy
             {
                 EnsureProfilesLoaded();
                 int existingStartupRepairs = NormalizeSharedBusinessStartupState("existing");
-                int createdExisting = EnsureMissingCorePassiveBusinesses();
+                int createdExisting = EnsureOpeningBusinesses();
                 if (createdExisting > 0)
                 {
                     existingStartupRepairs += NormalizeSharedBusinessStartupState("existing core-fill");
@@ -350,18 +364,18 @@ namespace LandLedgers.Economy
                 }
             }
 
-            int target = GetPassiveStartupBusinessTarget();
-            int created = SeedPassiveStartStateBusinesses(target);
+            // BIZ-1: opening businesses form through the canonical workflow
+            // (authored roster → identity → ownership → premises → capital), not the
+            // synthetic count-based seed (Canon §3.2, GHOST-DES-009).
+            int created = EnsureOpeningBusinesses();
             int startupRepairs = NormalizeSharedBusinessStartupState("fresh seed");
-            int coreCreated = EnsureMissingCorePassiveBusinesses();
-            created += coreCreated;
-            if (coreCreated > 0)
+            if (created > 0)
             {
                 startupRepairs += NormalizeSharedBusinessStartupState("fresh core-fill");
             }
 
             int relationshipRepairs = NormalizeRecurringRelationshipActives(GetCurrentWeekKey());
-            status = $"Shared businesses initialized. Total={businesses.Count}, LaunchCreated={created}/{target}, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}.";
+            status = $"Shared businesses initialized. Total={businesses.Count}, LaunchCreated={created}, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}.";
         }
 
         public void ResolveBaselineOperations()
@@ -7384,6 +7398,155 @@ namespace LandLedgers.Economy
             return coreProfiles;
         }
 
+        /// <summary>
+        /// BIZ-1: the formation-workflow replacement for the synthetic auto-seed.
+        /// Routes the authored <see cref="OpeningBusinessRoster"/> through
+        /// <see cref="BusinessCreationAuthority"/> (Canon §3.1): every opening business
+        /// gets identity, ownership, capability-driven premises, and capital — and is
+        /// NOT operating until real commerce occurs (Canon §3.2). When
+        /// <see cref="useLegacyPassiveSeed"/> is true, the obsolete synthetic path runs
+        /// instead (Kennedy's veto).
+        /// </summary>
+        private int EnsureOpeningBusinesses()
+        {
+            if (useLegacyPassiveSeed)
+            {
+#pragma warning disable CS0618 // Intentional: Kennedy's veto path for the BIZ-1 deprecation.
+                return EnsureMissingCorePassiveBusinesses();
+#pragma warning restore CS0618
+            }
+
+            EnsureProfilesLoaded();
+            if (townWorld == null)
+            {
+                return 0;
+            }
+
+            if (townWorld.Grid == null)
+            {
+                townWorld.GenerateTownShell();
+            }
+
+            var authority = new BusinessCreationAuthority();
+            var context = new ManagerCreationContext(this);
+            var diagnostics = new List<string>();
+            int created = OpeningBusinessRoster.EnsureViaFormationWorkflow(
+                OpeningBusinessRoster.Default(),
+                authority,
+                context,
+                HasBusinessOfType,
+                result =>
+                {
+                    result.Business.ResolveWeeklyBaselineThroughput();
+                    result.Business.ResolveDailyBaselineService();
+                    result.Business.EnsureOwnerOperatorStaffing(result.Business.Owner);
+                    businesses.Add(result.Business);
+                    if (result.Premises.BuildingId >= 0)
+                    {
+                        assignedBuildingIds.Add(result.Premises.BuildingId);
+                    }
+                },
+                diagnostics);
+
+            foreach (string diagnostic in diagnostics)
+            {
+                Debug.Log($"[BIZ-1 Opening] {diagnostic}");
+            }
+
+            return created;
+        }
+
+        /// <summary>
+        /// BIZ-1: <see cref="IBusinessCreationContext"/> backed by this manager.
+        /// </summary>
+        private sealed class ManagerCreationContext : IBusinessCreationContext
+        {
+            private readonly SharedBusinessRuntimeManager manager;
+
+            public ManagerCreationContext(SharedBusinessRuntimeManager manager)
+            {
+                this.manager = manager;
+            }
+
+            public EntityIdRegistry IdRegistry => manager.businessIdRegistry;
+
+            public bool TryGetProfile(BusinessType type, out BusinessProfileDefinition profile)
+            {
+                profile = null;
+                if (manager.businessProfiles == null)
+                {
+                    return false;
+                }
+
+                foreach (BusinessProfileDefinition candidate in manager.businessProfiles)
+                {
+                    if (candidate != null && candidate.Business.BusinessType == type)
+                    {
+                        profile = candidate;
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            public BusinessProfileDefinition BuildFallbackProfile(BusinessType type, string displayName)
+            {
+                return BusinessProfileDefinition.CreateFallback(type, displayName);
+            }
+
+            public bool TryAssignPremises(PremisesKind kind, out int buildingId)
+            {
+                buildingId = -1;
+                if (manager.townWorld == null || manager.townWorld.Buildings == null)
+                {
+                    return false;
+                }
+
+                // Deterministic first-fit over unassigned buildings. The premises KIND was
+                // already resolved capability-first by the authority (Tech X §3.2); this
+                // only binds it to a concrete free building.
+                PlacedBuilding best = null;
+                foreach (PlacedBuilding building in manager.townWorld.Buildings)
+                {
+                    if (building == null || building.definition == null)
+                    {
+                        continue;
+                    }
+
+                    if (manager.assignedBuildingIds.Contains(building.id))
+                    {
+                        continue;
+                    }
+
+                    if (best == null || building.id < best.id)
+                    {
+                        best = building;
+                    }
+                }
+
+                if (best == null)
+                {
+                    return false;
+                }
+
+                buildingId = best.id;
+                return true;
+            }
+
+            public void LogDiagnostic(string message)
+            {
+                Debug.Log($"[BIZ-1] {message}");
+            }
+        }
+
+        /// <summary>
+        /// BIZ-1 OBSOLETE (Canon XXVII §3.2, GHOST-DES-009): the synthetic count-based
+        /// passive target conflicts with the formation workflow — opening businesses must
+        /// come through entity + premises + capital + commerce, not a target count.
+        /// Kept for Kennedy's veto via <see cref="useLegacyPassiveSeed"/>.
+        /// </summary>
+        [Obsolete("BIZ-1: deprecated per Canon XXVII §3.2 / GHOST-DES-009. Use the authored OpeningBusinessRoster through BusinessCreationAuthority instead.")]
         private int GetPassiveStartupBusinessTarget()
         {
             int eligibleProfileCount = 0;
@@ -7423,6 +7586,14 @@ namespace LandLedgers.Economy
             return Mathf.Min(preferred, maximumSupportedByProfiles, availableBuildings);
         }
 
+        /// <summary>
+        /// BIZ-1 OBSOLETE (Canon XXVII §3.2, GHOST-DES-009): synthetic passive auto-seed.
+        /// Opening businesses now form through <see cref="EnsureOpeningBusinesses"/>,
+        /// which routes the authored <see cref="OpeningBusinessRoster"/> through the
+        /// canonical formation workflow. Kept for Kennedy's veto via
+        /// <see cref="useLegacyPassiveSeed"/>.
+        /// </summary>
+        [Obsolete("BIZ-1: deprecated per Canon XXVII §3.2 / GHOST-DES-009. Opening formation now routes through BusinessCreationAuthority; re-enable via useLegacyPassiveSeed to veto.")]
         private int EnsureMissingCorePassiveBusinesses()
         {
             if (townWorld == null)

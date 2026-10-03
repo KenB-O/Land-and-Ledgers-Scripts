@@ -61,6 +61,7 @@ namespace LandLedgers.Persistence
         public List<FarmConstructionProject> constructionProjects = new();
         public CropChainSaveDto crop = new();
         public PigSheepChainSaveDto swine = new();
+        public CheeseChainSaveDto cheese = new();
     }
 
     [Serializable]

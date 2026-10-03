@@ -25,6 +25,7 @@ namespace LandLedgers.Economy.Farming.Integration
         private readonly List<FarmConstructionProject> constructionProjects = new List<FarmConstructionProject>();
         private CropChain cropChain;
         private PigSheepChain pigSheepChain;
+        private CheeseChain cheeseChain;
 
         public DairyChain Dairy => dairyChain ??= new DairyChain();
         public FeedLoop Feed => feedLoop ??= new FeedLoop();
@@ -35,6 +36,8 @@ namespace LandLedgers.Economy.Farming.Integration
         public CropChain Crops => cropChain ??= new CropChain(new CropFieldAuthority());
         /// <summary>SWN-1: pigs and sheep (lazy).</summary>
         public PigSheepChain Swine => pigSheepChain ??= new PigSheepChain();
+        /// <summary>SWN-2: cheese (lazy).</summary>
+        public CheeseChain Cheese => cheeseChain ??= new CheeseChain();
 
         public void SetFeedLoop(FeedLoop loop)
         {
@@ -53,6 +56,7 @@ namespace LandLedgers.Economy.Farming.Integration
                 constructionProjects = new List<FarmConstructionProject>(constructionProjects),
                 crop = Crops.CaptureSaveDto(),
                 swine = Swine.CaptureSaveDto(),
+                cheese = Cheese.CaptureSaveDto(),
             };
         }
 
@@ -73,6 +77,7 @@ namespace LandLedgers.Economy.Farming.Integration
             if (dto.constructionProjects != null) constructionProjects.AddRange(dto.constructionProjects);
             if (dto.crop != null) Crops.LoadFromSaveDto(dto.crop);
             if (dto.swine != null) Swine.LoadFromSaveDto(dto.swine);
+            if (dto.cheese != null) Cheese.LoadFromSaveDto(dto.cheese);
         }
     }
 }

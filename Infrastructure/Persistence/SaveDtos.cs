@@ -7,6 +7,7 @@ using LandLedgers.Economy.Valuation;
 using LandLedgers.MVP;
 using LandLedgers.Pathing;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.World;
@@ -27,6 +28,12 @@ namespace LandLedgers.Persistence
         public PlayerDebtSaveDto debt = new();
         public PlayerPortfolioSaveDto portfolio = new();
         public FirstSessionGuidanceSaveDto firstSessionGuidance = new();
+        /// <summary>
+        /// HF-1: universal per-kind entity-ID cursors (EntityIdSaveAdapter). Legacy
+        /// nextPersonId/nextHouseholdId/nextBuildingId fields remain the authority for
+        /// those kinds; this list additionally carries every other kind's cursor.
+        /// </summary>
+        public List<EntityIdCursorDto> entityIdCursors = new();
     }
 
     [Serializable]

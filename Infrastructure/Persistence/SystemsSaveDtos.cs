@@ -9,6 +9,7 @@ using LandLedgers.Economy.Farming.Crops;
 using LandLedgers.Economy.Farming.Dairy;
 using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Economy.Farming.Integration;
+using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Population;
@@ -59,6 +60,7 @@ namespace LandLedgers.Persistence
         public List<DeliveryJob> deliveryJobs = new();
         public List<FarmConstructionProject> constructionProjects = new();
         public CropChainSaveDto crop = new();
+        public PigSheepChainSaveDto swine = new();
     }
 
     [Serializable]

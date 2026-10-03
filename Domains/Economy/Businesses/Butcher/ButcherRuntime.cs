@@ -345,13 +345,11 @@ namespace LandLedgers.Economy.Butcher
             }
 
             // GHOST-DES-010: standard 1870 beef yield fractions — they MUST sum to 1.
-            var yields = new List<(CarcassProduct, float)>
-            {
-                (CarcassProduct.RetailCuts, 0.42f),
-                (CarcassProduct.Hide, 0.08f),
-                (CarcassProduct.Tallow, 0.05f),
-                (CarcassProduct.Waste, 0.45f),
-            };
+            // SWN-1: species-specific yield fractions. Cattle returns the exact
+            // GHOST-DES-010 1870 beef fractions (behavior-preserving); pigs and
+            // sheep get their own calibration fractions. Fractions always sum
+            // to 1.0 — no free product, ever.
+            var yields = CarcassYieldFractions.ForSpecies(animal.Species);
 
             var yield = new CarcassYield(animalId, animal.Species, liveWeightLbs, yields);
             diagnostics.Add($"Slaughtered {animalId}: {liveWeightLbs} lbs in → " +

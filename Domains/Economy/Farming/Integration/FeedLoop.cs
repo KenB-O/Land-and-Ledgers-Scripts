@@ -143,9 +143,11 @@ namespace LandLedgers.Economy.Farming.Integration
     [Serializable]
     public sealed class FeedLoop
     {
-        /// <summary>Calibration: daily feed units per head.</summary>
+        /// <summary>Calibration: daily feed units per head (SWN-1).</summary>
         public const float DailyFeedPerCow = 1f;
         public const float DailyFeedPerChicken = 0.05f;
+        public const float DailyFeedPerPig = 0.5f;
+        public const float DailyFeedPerSheep = 0.3f;
         public const string HarvestHayTaskId = "harvest-hay";
 
         public int FeedStockUnits { get; private set; }
@@ -177,7 +179,7 @@ namespace LandLedgers.Economy.Farming.Integration
 
         /// <summary>
         /// One day of feeding. Returns shortfall units (0 = fully fed).
-        /// Grazing covers part of cattle need in non-winter seasons
+        /// Grazing covers part of cattle/sheep need in non-winter seasons
         /// (FarmSeasons.PastureGrazingShare); the rest must come from stock.
         /// </summary>
         public int ConsumeDay(
@@ -189,14 +191,36 @@ namespace LandLedgers.Economy.Farming.Integration
             PoultryChain flock,
             List<string> diagnostics)
         {
+            return ConsumeDay(cattleHead, chickenHead, 0, 0, season, dairy, cowIds, flock, null, diagnostics);
+        }
+
+        /// <summary>
+        /// SWN-1: feeding including pigs and sheep. Pigs do not graze
+        /// meaningfully (full ration from stock); sheep graze like cattle.
+        /// Dairy byproducts (buttermilk/whey) may be fed to pigs via AddFeed
+        /// (Canon §9.7) — they arrive as stock with a named source.
+        /// </summary>
+        public int ConsumeDay(
+            int cattleHead,
+            int chickenHead,
+            int pigHead,
+            int sheepHead,
+            FarmSeason season,
+            DairyChain dairy,
+            IEnumerable<EntityId> cowIds,
+            PoultryChain flock,
+            Livestock.PigSheepChain swine,
+            List<string> diagnostics)
+        {
             diagnostics = diagnostics ?? new List<string>();
 
             float grazingShare = FarmSeasons.PastureGrazingShare(season);
-            float cowNeed = cattleHead * DailyFeedPerCow * (1f - grazingShare)
-                * FarmSeasons.FeedMultiplierFor(season);
-            float chickenNeed = chickenHead * DailyFeedPerChicken
-                * FarmSeasons.FeedMultiplierFor(season);
-            int needUnits = Mathf.CeilToInt(cowNeed + chickenNeed);
+            float seasonMult = FarmSeasons.FeedMultiplierFor(season);
+            float cowNeed = cattleHead * DailyFeedPerCow * (1f - grazingShare) * seasonMult;
+            float chickenNeed = chickenHead * DailyFeedPerChicken * seasonMult;
+            float pigNeed = pigHead * DailyFeedPerPig * seasonMult;
+            float sheepNeed = sheepHead * DailyFeedPerSheep * (1f - grazingShare) * seasonMult;
+            int needUnits = Mathf.CeilToInt(cowNeed + chickenNeed + pigNeed + sheepNeed);
 
             int fedUnits = Math.Min(needUnits, FeedStockUnits);
             FeedStockUnits -= fedUnits;
@@ -216,6 +240,11 @@ namespace LandLedgers.Economy.Farming.Integration
                             state.Condition01 = Mathf.Clamp01(state.Condition01 - 0.1f);
                         }
                     }
+                }
+                // SWN-1: underfed pigs/sheep lose condition too.
+                if (swine != null)
+                {
+                    swine.DegradeCondition(0.1f);
                 }
             }
             else if (needUnits > 0)

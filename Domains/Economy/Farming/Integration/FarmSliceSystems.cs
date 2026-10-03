@@ -4,6 +4,7 @@ using LandLedgers.Economy.Farming.Crops;
 using LandLedgers.Economy.Farming.Dairy;
 using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Economy.Farming.Integration;
+using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Primitives;
 using LandLedgers.Persistence;
 
@@ -23,6 +24,7 @@ namespace LandLedgers.Economy.Farming.Integration
         private readonly List<DeliveryJob> deliveryJobs = new List<DeliveryJob>();
         private readonly List<FarmConstructionProject> constructionProjects = new List<FarmConstructionProject>();
         private CropChain cropChain;
+        private PigSheepChain pigSheepChain;
 
         public DairyChain Dairy => dairyChain ??= new DairyChain();
         public FeedLoop Feed => feedLoop ??= new FeedLoop();
@@ -31,6 +33,8 @@ namespace LandLedgers.Economy.Farming.Integration
         public List<FarmConstructionProject> ConstructionProjects => constructionProjects;
         /// <summary>CRP-2: the crop chain (lazy; shares its own field authority).</summary>
         public CropChain Crops => cropChain ??= new CropChain(new CropFieldAuthority());
+        /// <summary>SWN-1: pigs and sheep (lazy).</summary>
+        public PigSheepChain Swine => pigSheepChain ??= new PigSheepChain();
 
         public void SetFeedLoop(FeedLoop loop)
         {
@@ -48,6 +52,7 @@ namespace LandLedgers.Economy.Farming.Integration
                 deliveryJobs = new List<DeliveryJob>(deliveryJobs),
                 constructionProjects = new List<FarmConstructionProject>(constructionProjects),
                 crop = Crops.CaptureSaveDto(),
+                swine = Swine.CaptureSaveDto(),
             };
         }
 
@@ -67,6 +72,7 @@ namespace LandLedgers.Economy.Farming.Integration
             if (dto.deliveryJobs != null) deliveryJobs.AddRange(dto.deliveryJobs);
             if (dto.constructionProjects != null) constructionProjects.AddRange(dto.constructionProjects);
             if (dto.crop != null) Crops.LoadFromSaveDto(dto.crop);
+            if (dto.swine != null) Swine.LoadFromSaveDto(dto.swine);
         }
     }
 }

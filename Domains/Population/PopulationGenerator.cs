@@ -196,7 +196,7 @@ namespace LandLedgers.Population
         private static void CreateHousehold(PopulationState state, PopulationGenerationSettings settings, System.Random random, BuildingRuntimeInfo home, int memberCount)
         {
             string surname = Pick(settings.surnames, random, "Hale");
-            int householdId = state.households.Count;
+            int householdId = state.AllocateNextHouseholdId();
             HouseholdState household = new()
             {
                 id = householdId,
@@ -215,7 +215,7 @@ namespace LandLedgers.Population
             for (int memberIndex = 0; memberIndex < memberCount; memberIndex++)
             {
                 PersonState person = CreateSettlementPerson(
-                    state.people.Count,
+                    state.AllocateNextPersonId(),
                     householdId,
                     surname,
                     home.buildingId,

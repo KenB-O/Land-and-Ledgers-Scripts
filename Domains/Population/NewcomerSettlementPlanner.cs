@@ -1065,7 +1065,7 @@ namespace LandLedgers.Population
             HouseholdState current = GetHousehold(state, person.householdId);
             RemovePersonFromHousehold(current, person.id);
 
-            int newHouseholdId = GetNextHouseholdId(state);
+            int newHouseholdId = state.AllocateNextHouseholdId();
             HouseholdState household = new()
             {
                 id = newHouseholdId,
@@ -1196,7 +1196,7 @@ namespace LandLedgers.Population
             int reserve = random.Next(profile.MinCashCents, profile.MaxCashCents + 1);
             return new HouseholdState
             {
-                id = GetNextHouseholdId(state),
+                id = state.AllocateNextHouseholdId(),
                 surname = surname,
                 householdName = $"{surname} Household",
                 homeBuildingId = homeBuildingId,
@@ -1240,7 +1240,7 @@ namespace LandLedgers.Population
             int forcedAge,
             int hostHouseholdId)
         {
-            int personId = state.people != null ? state.people.Count : 0;
+            int personId = state.AllocateNextPersonId();
             PersonState person = PopulationGenerator.CreateSettlementPerson(
                 personId,
                 householdId,
@@ -1532,7 +1532,7 @@ namespace LandLedgers.Population
 
                     household = new HouseholdState
                     {
-                        id = GetNextHouseholdId(state),
+                        id = state.AllocateNextHouseholdId(),
                         householdName = $"{option.DisplayName} Guests",
                         surname = "Boarding",
                         homeBuildingId = option.BuildingId,
@@ -2477,25 +2477,6 @@ namespace LandLedgers.Population
 
             household.memberIds?.Remove(personId);
             household.boarderPersonIds?.Remove(personId);
-        }
-
-        private static int GetNextHouseholdId(PopulationState state)
-        {
-            int next = 0;
-            if (state == null || state.households == null)
-            {
-                return next;
-            }
-
-            for (int i = 0; i < state.households.Count; i++)
-            {
-                if (state.households[i] != null)
-                {
-                    next = Mathf.Max(next, state.households[i].id + 1);
-                }
-            }
-
-            return next;
         }
 
         private static string BuildSettlementSummary(PopulationState state)

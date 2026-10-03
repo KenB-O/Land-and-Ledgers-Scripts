@@ -7,6 +7,7 @@ using LandLedgers.MVP;
 using LandLedgers.Economy;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Stopwatch = System.Diagnostics.Stopwatch;
@@ -329,6 +330,7 @@ namespace LandLedgers.World
 
         private readonly List<TownPlot> plots = new();
         private readonly List<PlacedBuilding> buildings = new();
+        private readonly SequentialIdAllocator buildingIdAllocator = new();
         private TownGrid grid;
         private readonly List<BuildingDefinition> fallbackBuildingDefinitions = new();
         private TownHallDefinition fallbackTownHallDefinition;
@@ -361,6 +363,12 @@ namespace LandLedgers.World
         public TownGrid Grid => grid;
         public IReadOnlyList<TownPlot> Plots => plots;
         public IReadOnlyList<PlacedBuilding> Buildings => buildings;
+        public int NextBuildingId => buildingIdAllocator.NextId;
+        public int AllocateNextBuildingId() => buildingIdAllocator.AllocateNext();
+        public void RestoreBuildingIdAllocator(int nextBuildingId)
+        {
+            buildingIdAllocator.RestoreExact(nextBuildingId);
+        }
         public Transform VisualRoot => visualRoot;
         public RegionalWorldState RegionalWorld => regionalWorld;
         public RegionalResourceSnapshot RegionalResources => regionalResources ??= new RegionalResourceSnapshot();
@@ -1310,7 +1318,7 @@ namespace LandLedgers.World
 
             building = new PlacedBuilding
             {
-                id = buildings.Count,
+                id = AllocateNextBuildingId(),
                 plotId = plot.id,
                 definition = definition,
                 footprint = footprint,
@@ -1634,6 +1642,8 @@ namespace LandLedgers.World
 
                 dto.buildings.Add(buildingDto);
             }
+
+            dto.nextBuildingId = NextBuildingId;
 
             return dto;
         }
@@ -2080,6 +2090,13 @@ namespace LandLedgers.World
 
             plots.Clear();
             buildings.Clear();
+            if (dto.nextBuildingId < 0)
+            {
+                message = $"World save validation error: persisted nextBuildingId ({dto.nextBuildingId}) is negative.";
+                return false;
+            }
+
+            RestoreBuildingIdAllocator(dto.nextBuildingId);
 
             if (dto.plots != null)
             {
@@ -2166,6 +2183,7 @@ namespace LandLedgers.World
         {
             plots.Clear();
             buildings.Clear();
+            buildingIdAllocator.RestoreExact(0);
             grid = null;
             generatedCellCount = 0;
             generatedRoadCellCount = 0;
@@ -4059,7 +4077,7 @@ namespace LandLedgers.World
 
                 PlacedBuilding building = new()
                 {
-                    id = buildings.Count,
+                    id = AllocateNextBuildingId(),
                     plotId = plot.id,
                     definition = definition,
                     footprint = footprint,
@@ -4096,7 +4114,7 @@ namespace LandLedgers.World
 
             PlacedBuilding building = new()
             {
-                id = buildings.Count,
+                id = AllocateNextBuildingId(),
                 plotId = plot.id,
                 definition = definition,
                 footprint = footprint,

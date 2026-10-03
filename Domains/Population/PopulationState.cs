@@ -1,11 +1,31 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Primitives;
 
 namespace LandLedgers.Population
 {
     [Serializable]
     public sealed class PopulationState
     {
+        private readonly SequentialIdAllocator personIdAllocator = new();
+        private readonly SequentialIdAllocator householdIdAllocator = new();
+
+        public int NextPersonId => personIdAllocator.NextId;
+        public int NextHouseholdId => householdIdAllocator.NextId;
+
+        public int AllocateNextPersonId() => personIdAllocator.AllocateNext();
+        public int AllocateNextHouseholdId() => householdIdAllocator.AllocateNext();
+
+        public void RestorePersonIdAllocator(int nextPersonId)
+        {
+            personIdAllocator.RestoreExact(nextPersonId);
+        }
+
+        public void RestoreHouseholdIdAllocator(int nextHouseholdId)
+        {
+            householdIdAllocator.RestoreExact(nextHouseholdId);
+        }
+
         public List<PersonState> people = new();
         public List<HouseholdState> households = new();
         public List<string> validationMessages = new();
@@ -48,6 +68,8 @@ namespace LandLedgers.Population
             rentalApplicants ??= new List<RentalApplicantState>();
             people.Clear();
             households.Clear();
+            personIdAllocator.RestoreExact(0);
+            householdIdAllocator.RestoreExact(0);
             validationMessages.Clear();
             rentalProperties.Clear();
             rentalApplicants.Clear();

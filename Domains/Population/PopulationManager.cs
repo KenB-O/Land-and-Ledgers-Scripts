@@ -720,6 +720,8 @@ namespace LandLedgers.Population
             dto.laborAbsorption01 = state.laborAbsorption01;
             dto.lastSettlementSummary = state.lastSettlementSummary ?? string.Empty;
             dto.lastRentalSummary = state.lastRentalSummary ?? string.Empty;
+            dto.nextPersonId = state.NextPersonId;
+            dto.nextHouseholdId = state.NextHouseholdId;
             return dto;
         }
 
@@ -923,6 +925,9 @@ namespace LandLedgers.Population
                     state.households.Add(household);
                 }
             }
+
+            state.RestorePersonIdAllocator(dto.nextPersonId);
+            state.RestoreHouseholdIdAllocator(dto.nextHouseholdId);
 
             if (dto.validationMessages != null)
             {

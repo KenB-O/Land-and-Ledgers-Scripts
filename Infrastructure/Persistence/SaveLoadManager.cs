@@ -410,6 +410,12 @@ namespace LandLedgers.Persistence
                 return false;
             }
 
+            if (!PersistentIdAllocatorMigration.TryMigrateOrValidate(save, out string migrationError))
+            {
+                message = $"ID allocator migration failed in {path}: {migrationError}";
+                return false;
+            }
+
             save = NormalizeLoadedSave(save, normalizationReport);
             if (save == null)
             {

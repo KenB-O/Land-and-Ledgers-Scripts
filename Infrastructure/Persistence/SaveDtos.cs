@@ -114,6 +114,7 @@ namespace LandLedgers.Persistence
         public List<RoadCellSaveDto> roadCells = new();
         public List<PlotSaveDto> plots = new();
         public List<BuildingSaveDto> buildings = new();
+        public int nextBuildingId;
     }
 
     [Serializable]
@@ -258,6 +259,8 @@ namespace LandLedgers.Persistence
     {
         public List<PersonSaveDto> people = new();
         public List<HouseholdSaveDto> households = new();
+        public int nextPersonId;
+        public int nextHouseholdId;
         public List<string> validationMessages = new();
         public List<RentalPropertySaveDto> rentalProperties = new();
         public List<RentalApplicantSaveDto> rentalApplicants = new();

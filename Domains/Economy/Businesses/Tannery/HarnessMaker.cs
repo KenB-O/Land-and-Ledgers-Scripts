@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Primitives;

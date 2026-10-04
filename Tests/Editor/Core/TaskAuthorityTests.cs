@@ -126,7 +126,6 @@ namespace LandLedgers.EditorTests.Core
             Assert.AreEqual(first.TaskId, authority.NextQueuedTask(Business(3)).TaskId);
             Assert.AreNotEqual(second.TaskId, authority.NextQueuedTask(Business(3)).TaskId);
         }
-        }
 
         [Test]
         public void InterruptTask_ReleasesCommitment_AndRequeues()

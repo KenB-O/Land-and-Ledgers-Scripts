@@ -84,7 +84,8 @@ namespace LandLedgers.Orchestration.Systems
             hub ??= FindAnyObjectByType<SimulationSystemsHub>();
             timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
-            playerDirector ??= FindAnyObjectByType<PlayerDirector>();
+            // PlayerDirector is a plain C# authority, not a UnityEngine.Object; scene
+            // auto-discovery is not available here. Bootstrap code may assign it.
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
 

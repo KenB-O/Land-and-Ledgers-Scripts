@@ -1,3 +1,5 @@
+using EntityId = LandLedgers.Primitives.EntityId;
+
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;

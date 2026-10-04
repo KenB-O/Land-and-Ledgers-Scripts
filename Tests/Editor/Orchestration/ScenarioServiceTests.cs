@@ -12,20 +12,20 @@ namespace LandLedgers.EditorTests.Orchestration
     [TestFixture]
     public sealed class ScenarioServiceTests
     {
-        private Scenarios.ScenarioService service;
+        private global::LandLedgers.Orchestration.Scenarios.ScenarioService service;
 
         [SetUp]
         public void SetUp()
         {
-            service = new Scenarios.ScenarioService();
+            service = new global::LandLedgers.Orchestration.Scenarios.ScenarioService();
         }
 
-        private static Scenarios.ScenarioAsset BuildAsset(
+        private static global::LandLedgers.Orchestration.Scenarios.ScenarioAsset BuildAsset(
             string scenarioId,
             string[] goalIds = null,
             string[] objectiveIds = null)
         {
-            var asset = ScriptableObject.CreateInstance<Scenarios.ScenarioAsset>();
+            var asset = ScriptableObject.CreateInstance<global::LandLedgers.Orchestration.Scenarios.ScenarioAsset>();
             var so = new SerializedObject(asset);
             so.FindProperty("scenarioId").stringValue = scenarioId;
             so.FindProperty("displayName").stringValue = "Test " + scenarioId;
@@ -133,7 +133,7 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.IsFalse(service.SetGoalCompleted("g1", true, out string reason));
             Assert.IsTrue(reason.Contains("No active scenario"));
 
-            Assert.IsFalse(service.SetTunable("k", new Scenarios.TunableValue("k", 1f), false, out reason));
+            Assert.IsFalse(service.SetTunable("k", new global::LandLedgers.Orchestration.Scenarios.TunableValue("k", 1f), false, out reason));
             Assert.IsTrue(reason.Contains("No active scenario"));
         }
 
@@ -172,10 +172,10 @@ namespace LandLedgers.EditorTests.Orchestration
             service.RegisterScenario(BuildAsset("s1"), out _);
             Assert.IsTrue(service.BeginScenario("s1", out _));
 
-            var overrideValue = new Scenarios.TunableValue("speed", 2.5f);
+            var overrideValue = new global::LandLedgers.Orchestration.Scenarios.TunableValue("speed", 2.5f);
             Assert.IsTrue(service.SetTunable("speed", overrideValue, false, out string reason), reason);
 
-            Scenarios.TunableValue effective = service.GetEffectiveTunable("speed");
+            global::LandLedgers.Orchestration.Scenarios.TunableValue effective = service.GetEffectiveTunable("speed");
             Assert.IsNotNull(effective);
             Assert.AreEqual(2.5f, effective.FloatValue, 0.0001f);
 
@@ -201,7 +201,7 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.IsTrue(service.BeginScenario("s1", out _));
 
             Assert.IsTrue(
-                service.SetTunable("speed", new Scenarios.TunableValue("speed", 3f), true, out string reason),
+                service.SetTunable("speed", new global::LandLedgers.Orchestration.Scenarios.TunableValue("speed", 3f), true, out string reason),
                 reason);
 
             Assert.AreEqual(1, service.ActiveState.Asset.Tunables.Count);

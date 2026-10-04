@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using LandLedgers.Animals;
-using LandLedgers.Economy.Businesses.Freight;
+using LandLedgers.Economy;
+using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Economy.Farming.Dairy;
-using LandLedgers.Economy.Logistics;
+using LandLedgers.Economy.Freight;
+using LandLedgers.MVP;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;

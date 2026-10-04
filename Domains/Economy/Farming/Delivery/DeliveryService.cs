@@ -1,7 +1,10 @@
+using EntityId = LandLedgers.Primitives.EntityId;
+
 using System;
 using System.Collections.Generic;
-using LandLedgers.Economy.Businesses.Freight;
-using LandLedgers.Economy.Logistics;
+using LandLedgers.Economy.Freight;
+using LandLedgers.Economy;
+using LandLedgers.MVP;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;

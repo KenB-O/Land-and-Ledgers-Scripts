@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -533,7 +533,7 @@ namespace LandLedgers.Economy.Recruitment
                 Compensation = CompensationTerms.FromWeeklyWage(weeklyWageCents, $"hired via {effort.Channel}"),
                 StartDayIndex = startDayIndex,
                 Source = EmploymentSource.Manual,
-                Notes = $"hired via {effort.Channel} (inquiry {inquiryId})",
+                LegacyNotes = $"hired via {effort.Channel} (inquiry {inquiryId})",
             };
             string problem = employment.Register(relationship);
             if (problem != null) return problem;

@@ -13,19 +13,19 @@ namespace LandLedgers.EditorTests.Orchestration
         [Test]
         public void TryParse_FirstClassKinds_RoundTrips()
         {
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("P12", out EntityId person));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("P12", out EntityId person));
             Assert.AreEqual(EntityKind.Person, person.Kind);
             Assert.AreEqual(12, person.Id);
 
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("H3", out EntityId household));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("H3", out EntityId household));
             Assert.AreEqual(EntityKind.Household, household.Kind);
             Assert.AreEqual(3, household.Id);
 
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("A7", out EntityId animal));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("A7", out EntityId animal));
             Assert.AreEqual(EntityKind.Animal, animal.Kind);
             Assert.AreEqual(7, animal.Id);
 
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("T99", out EntityId task));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("T99", out EntityId task));
             Assert.AreEqual(EntityKind.WorkTask, task.Kind);
             Assert.AreEqual(99, task.Id);
         }
@@ -34,11 +34,11 @@ namespace LandLedgers.EditorTests.Orchestration
         public void TryParse_MultiLetterPrefixes_LongestMatchWins()
         {
             // "PL12" must be Plot 12, not Person with garbage.
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("PL12", out EntityId plot));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("PL12", out EntityId plot));
             Assert.AreEqual(EntityKind.Plot, plot.Kind);
             Assert.AreEqual(12, plot.Id);
 
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("BLD7", out EntityId building));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("BLD7", out EntityId building));
             Assert.AreEqual(EntityKind.Building, building.Kind);
             Assert.AreEqual(7, building.Id);
         }
@@ -46,7 +46,7 @@ namespace LandLedgers.EditorTests.Orchestration
         [Test]
         public void TryParse_CustomKindFallbackForm()
         {
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("K1000:5", out EntityId custom));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("K1000:5", out EntityId custom));
             Assert.AreEqual(1000, (int)custom.Kind);
             Assert.AreEqual(5, custom.Id);
         }
@@ -55,7 +55,7 @@ namespace LandLedgers.EditorTests.Orchestration
         public void TryParse_ContractPrefix_NotConfusedWithCustomForm()
         {
             // "K" is the Contract prefix: "K12" is Contract 12, not a custom kind.
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("K12", out EntityId contract));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("K12", out EntityId contract));
             Assert.AreEqual(EntityKind.Contract, contract.Kind);
             Assert.AreEqual(12, contract.Id);
         }
@@ -63,19 +63,19 @@ namespace LandLedgers.EditorTests.Orchestration
         [Test]
         public void TryParse_InvalidInput_Rejected()
         {
-            Assert.IsFalse(Scenarios.EntityIdInputParser.TryParse("", out _));
-            Assert.IsFalse(Scenarios.EntityIdInputParser.TryParse("   ", out _));
-            Assert.IsFalse(Scenarios.EntityIdInputParser.TryParse("P", out _));
-            Assert.IsFalse(Scenarios.EntityIdInputParser.TryParse("P-1", out _));
-            Assert.IsFalse(Scenarios.EntityIdInputParser.TryParse("Z12", out _));
-            Assert.IsFalse(Scenarios.EntityIdInputParser.TryParse("K1:2:3", out _));
-            Assert.IsFalse(Scenarios.EntityIdInputParser.TryParse(null, out _));
+            Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("", out _));
+            Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("   ", out _));
+            Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("P", out _));
+            Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("P-1", out _));
+            Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("Z12", out _));
+            Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("K1:2:3", out _));
+            Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse(null, out _));
         }
 
         [Test]
         public void TryParse_CaseInsensitive()
         {
-            Assert.IsTrue(Scenarios.EntityIdInputParser.TryParse("p12", out EntityId id));
+            Assert.IsTrue(global::LandLedgers.Orchestration.Scenarios.EntityIdInputParser.TryParse("p12", out EntityId id));
             Assert.AreEqual(EntityKind.Person, id.Kind);
             Assert.AreEqual(12, id.Id);
         }
@@ -83,7 +83,7 @@ namespace LandLedgers.EditorTests.Orchestration
         [Test]
         public void PuppetEntityLookup_RegisterResolveUnregister()
         {
-            var lookup = new Scenarios.PuppetEntityLookup();
+            var lookup = new global::LandLedgers.Orchestration.Scenarios.PuppetEntityLookup();
             var id = EntityId.For(EntityKind.Person, 12);
             var target = new object();
 
@@ -103,7 +103,7 @@ namespace LandLedgers.EditorTests.Orchestration
         [Test]
         public void PuppetEntityLookup_InvalidIdOrNullTarget_Ignored()
         {
-            var lookup = new Scenarios.PuppetEntityLookup();
+            var lookup = new global::LandLedgers.Orchestration.Scenarios.PuppetEntityLookup();
 
             lookup.Register(EntityId.Invalid, new object(), "bad");
             lookup.Register(EntityId.For(EntityKind.Person, 1), null, "null target");

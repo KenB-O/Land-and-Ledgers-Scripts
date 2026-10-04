@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Recruitment;
 using LandLedgers.Population;
 using LandLedgers.World.Journeys;

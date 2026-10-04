@@ -125,7 +125,7 @@ namespace LandLedgers.MVP
         public static WorkTask EnqueueCleanStore(TaskAuthority authority, EntityId storeId, int currentDayIndex, string areaId)
         {
             WorkTask task = authority.CreateTask(CleanStoreId, storeId, currentDayIndex);
-            task.SetCustomer(areaId);
+            task.SetCustomer(areaId, string.Empty);
             return task;
         }
 

@@ -4,6 +4,7 @@ using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.DraftPower;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Crops;
+using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Population;
 using LandLedgers.Primitives;

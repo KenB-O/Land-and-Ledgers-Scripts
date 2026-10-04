@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.Core.Time;
+using LandLedgers.Time;
 using LandLedgers.Economy;
 using LandLedgers.Orchestration.Systems;
 using UnityEngine;

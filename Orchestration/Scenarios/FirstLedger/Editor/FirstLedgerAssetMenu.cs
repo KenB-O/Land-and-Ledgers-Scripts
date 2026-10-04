@@ -89,9 +89,9 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger.Editor
 
             const string path = "Assets/Orchestration/Scenarios/FirstLedger/FirstLedger.asset";
             string directory = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            if (!string.IsNullOrEmpty(directory) && !System.IO.Directory.Exists(directory))
             {
-                Directory.CreateDirectory(directory);
+                System.IO.Directory.CreateDirectory(directory);
             }
 
             AssetDatabase.CreateAsset(asset, path);

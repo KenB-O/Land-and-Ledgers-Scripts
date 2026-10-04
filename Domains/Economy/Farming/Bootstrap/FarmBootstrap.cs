@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Economy.Creation;
+using EntityId = LandLedgers.Primitives.EntityId;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Farming.Bootstrap

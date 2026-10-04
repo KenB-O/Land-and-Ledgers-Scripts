@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using LandLedgers.Animals;
-using LandLedgers.Economy.Businesses.Butcher;
+using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Population;
 using LandLedgers.Primitives;

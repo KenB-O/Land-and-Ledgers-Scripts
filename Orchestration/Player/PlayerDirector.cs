@@ -1,3 +1,5 @@
+using EntityId = LandLedgers.Primitives.EntityId;
+
 using System;
 using UnityEngine;
 using LandLedgers.Primitives;

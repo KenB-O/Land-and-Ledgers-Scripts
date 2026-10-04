@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Freight;
 using LandLedgers.MVP;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using NUnit.Framework;

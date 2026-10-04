@@ -1,3 +1,5 @@
+using EntityId = LandLedgers.Primitives.EntityId;
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -164,7 +166,7 @@ namespace LandLedgers.Tasks
         public void SetRequiredSkill(string skillId, IEnumerable<string> learningTags = null)
         {
             requiredSkillId = skillId;
-            learningTags.Clear();
+            this.learningTags.Clear();
             if (learningTags != null)
             {
                 this.learningTags.AddRange(learningTags);

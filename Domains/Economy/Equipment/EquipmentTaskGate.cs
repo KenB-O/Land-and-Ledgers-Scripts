@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Tasks;
 

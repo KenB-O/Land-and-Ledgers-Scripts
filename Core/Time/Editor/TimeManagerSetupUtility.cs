@@ -51,7 +51,7 @@ namespace LandLedgers.Editor
             string directory = Path.GetDirectoryName(SettingsPath);
             if (!string.IsNullOrEmpty(directory))
             {
-                Directory.CreateDirectory(directory);
+                System.IO.Directory.CreateDirectory(directory);
             }
 
             settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();

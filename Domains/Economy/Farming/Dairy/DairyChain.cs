@@ -1,8 +1,11 @@
+using EntityId = LandLedgers.Primitives.EntityId;
+
 using System;
 using LandLedgers.Economy.Equipment;
 using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Economy.Farming.Delivery;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
@@ -67,7 +70,7 @@ namespace LandLedgers.Economy.Farming.Dairy
         public int TransitQuantityUnits => Math.Max(0, QuantityUnits);
         public void AgeInTransit(int transitDays)
         {
-            AgeMilkLot(this, ProducedDayIndex + Math.Max(0, transitDays));
+            DairyChain.AgeMilkLot(this, ProducedDayIndex + Math.Max(0, transitDays));
         }
         public int TransitSaleableUnits(int dayIndex) => SaleableUnits(dayIndex);
         public void MarkTransitConsumed() { QuantityUnits = 0; }

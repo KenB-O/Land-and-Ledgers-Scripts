@@ -74,7 +74,7 @@ namespace LandLedgers.Editor
             string directory = Path.GetDirectoryName(PrefabPath);
             if (!string.IsNullOrEmpty(directory))
             {
-                Directory.CreateDirectory(directory);
+                System.IO.Directory.CreateDirectory(directory);
             }
 
             GameObject prefab = PrefabUtility.SaveAsPrefabAsset(hudRoot, PrefabPath);

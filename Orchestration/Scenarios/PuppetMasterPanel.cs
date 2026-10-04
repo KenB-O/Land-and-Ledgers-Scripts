@@ -1,3 +1,5 @@
+using EntityId = LandLedgers.Primitives.EntityId;
+
 using System.Collections.Generic;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;

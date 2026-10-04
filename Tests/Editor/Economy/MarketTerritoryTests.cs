@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Market;
 using LandLedgers.Population;
 using LandLedgers.World.Journeys;

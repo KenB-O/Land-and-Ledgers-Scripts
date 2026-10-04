@@ -529,7 +529,7 @@ namespace LandLedgers.Persistence
             string directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrWhiteSpace(directory))
             {
-                Directory.CreateDirectory(directory);
+                System.IO.Directory.CreateDirectory(directory);
             }
 
             string tempPath = path + TempSlotExtension;

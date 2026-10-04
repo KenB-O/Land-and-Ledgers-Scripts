@@ -155,7 +155,7 @@ namespace LandLedgers.Editor
                 return settings;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
+            System.IO.Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
             settings = ScriptableObject.CreateInstance<TownGenerationSettings>();
             settings.Sanitize();
             EnsureRoadMaterial(settings);
@@ -187,7 +187,7 @@ namespace LandLedgers.Editor
 
         private static void EnsureBuildingCatalog(TownGenerationSettings settings)
         {
-            Directory.CreateDirectory(BuildingsFolder);
+            System.IO.Directory.CreateDirectory(BuildingsFolder);
 
             BuildingDefinition[] authoredCatalog = LoadAuthoredBuildingCatalog();
             if (authoredCatalog.Length > 0)

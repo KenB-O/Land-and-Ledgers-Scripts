@@ -505,7 +505,7 @@ namespace LandLedgers.Economy.Postal
             return new PostalServiceSaveDto
             {
                 offices = new List<PostalOffice>(offices.Values),
-                mailItems = new List<MailItem>(mail),
+                mailItems = new List<MailItem>(mail.Values),
                 contracts = new List<PostalContract>(contracts.Values),
                 uncollectedPostageCents = uncollectedPostageCents,
                 sequence = sequence,

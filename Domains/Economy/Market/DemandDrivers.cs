@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Market

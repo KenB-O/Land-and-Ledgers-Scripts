@@ -523,7 +523,7 @@ namespace LandLedgers.Animals
 
         public IReadOnlyList<AnimalHealthIncident> HealthIncidents => healthIncidents;
 
-        internal string ValidateAndAdd(AnimalState animal)
+        public string ValidateAndAdd(AnimalState animal)
         {
             if (animal == null || !animal.AnimalId.IsValid || animal.AnimalId.Kind != EntityKind.Animal)
             {

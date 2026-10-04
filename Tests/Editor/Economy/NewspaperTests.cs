@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Recruitment;
 using LandLedgers.Primitives;

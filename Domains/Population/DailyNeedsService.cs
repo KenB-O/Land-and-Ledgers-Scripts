@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Population;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using LandLedgers.Time;
 using UnityEngine;

@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using LandLedgers.Orchestration.Scenarios.StartingChoice;
 using LandLedgers.Population;
 using NUnit.Framework;

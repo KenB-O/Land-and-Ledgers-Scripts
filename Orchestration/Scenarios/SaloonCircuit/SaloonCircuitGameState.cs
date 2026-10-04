@@ -56,7 +56,7 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
             {
                 if (business == null) continue;
                 if (string.Equals(business.InstanceId, saloonId, StringComparison.Ordinal))
-                    return business.OwnerKind == BusinessOwnerKind.Player ? 1f : 0f;
+                    return business.Owner != null && business.Owner.OwnerKind == BusinessOwnerKind.Player ? 1f : 0f;
             }
             return 0f;
         }

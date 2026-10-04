@@ -1,4 +1,5 @@
 using LandLedgers.Orchestration.Scenarios;
+using LandLedgers.UI;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -113,7 +114,7 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            GameObject objectiveObject = new GameObject("ScenarioObjectivePanel", typeof(RectTransform), typeof(Image));
+            GameObject objectiveObject = new GameObject("ScenarioObjectivePanel", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
             RectTransform rect = objectiveObject.transform as RectTransform;
             rect.SetParent(parent, false);
             rect.anchorMin = new Vector2(0f, 1f);
@@ -123,11 +124,42 @@ namespace LandLedgers.FirstLedger
             rect.sizeDelta = new Vector2(390f, 260f);
             objectiveObject.GetComponent<Image>().color = new Color(0.055f, 0.06f, 0.055f, 0.94f);
 
-            objectiveLabel = CreateText(objectiveObject.transform, string.Empty, 15f, FontStyles.Normal);
+            GameObject viewportObject = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            RectTransform viewport = viewportObject.transform as RectTransform;
+            viewport.SetParent(rect, false);
+            viewport.anchorMin = Vector2.zero;
+            viewport.anchorMax = Vector2.one;
+            viewport.offsetMin = new Vector2(12f, 12f);
+            viewport.offsetMax = new Vector2(-12f, -12f);
+
+            GameObject contentObject = new GameObject("Content", typeof(RectTransform), typeof(ContentSizeFitter));
+            RectTransform content = contentObject.transform as RectTransform;
+            content.SetParent(viewport, false);
+            content.anchorMin = new Vector2(0f, 1f);
+            content.anchorMax = new Vector2(1f, 1f);
+            content.pivot = new Vector2(0.5f, 1f);
+            content.anchoredPosition = Vector2.zero;
+            content.sizeDelta = new Vector2(0f, 0f);
+            ContentSizeFitter fitter = contentObject.GetComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            ScrollRect scroll = objectiveObject.GetComponent<ScrollRect>();
+            scroll.viewport = viewport;
+            scroll.content = content;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 28f;
+            ScrollRectInputRelay.Install(viewport, scroll);
+
+            objectiveLabel = CreateText(content, string.Empty, 15f, FontStyles.Normal);
             objectiveLabel.alignment = TextAlignmentOptions.TopLeft;
             LayoutElement element = objectiveLabel.GetComponent<LayoutElement>();
-            element.minHeight = 220f;
-            element.preferredHeight = 220f;
+            element.minHeight = 0f;
+            element.preferredHeight = -1f;
+            element.flexibleHeight = 0f;
+            objectiveLabel.overflowMode = TextOverflowModes.Overflow;
             RenderObjectives();
         }
 
@@ -165,10 +197,25 @@ namespace LandLedgers.FirstLedger
             label.fontStyle = style;
             label.color = new Color(0.92f, 0.9f, 0.8f, 1f);
             label.textWrappingMode = TextWrappingModes.Normal;
+            LandLedgersTypography.ApplyRole(label, ResolveTextRole(size, style), size);
             LayoutElement element = go.AddComponent<LayoutElement>();
             element.minHeight = size + 16f;
             element.preferredHeight = size + 28f;
             return label;
+        }
+
+        private static LandLedgersTypography.TextRole ResolveTextRole(float size, FontStyles style)
+        {
+            if ((style & FontStyles.Bold) != 0)
+            {
+                return size >= 24f
+                    ? LandLedgersTypography.TextRole.ScreenTitle
+                    : LandLedgersTypography.TextRole.ButtonLabel;
+            }
+
+            return size >= 18f
+                ? LandLedgersTypography.TextRole.PanelHeader
+                : LandLedgersTypography.TextRole.Body;
         }
 
         private static Button CreateButton(Transform parent, string label)
@@ -180,6 +227,7 @@ namespace LandLedgers.FirstLedger
             Button button = go.GetComponent<Button>();
             button.targetGraphic = image;
             CreateText(go.transform, label, 18f, FontStyles.Bold);
+            LandLedgersTypography.ApplyButtonLabel(button);
             LayoutElement element = go.AddComponent<LayoutElement>();
             element.minHeight = 52f;
             element.preferredHeight = 52f;

@@ -530,6 +530,45 @@ namespace LandLedgers.FirstLedger
             createPlayerBusinessOnInitialize = enabled;
         }
 
+        /// <summary>
+        /// Binds a formed player General Store from the shared business authority to
+        /// this store's operating runtime. Formation and operation remain separate:
+        /// this only selects the already-created business as the store manager's
+        /// current subject; it does not buy premises, fund the business, hire staff,
+        /// or fabricate opening stock.
+        /// </summary>
+        public bool TryBindFormedPlayerBusiness(BusinessInstanceState business, out string message)
+        {
+            AutoWire();
+            if (business == null || business.BusinessType != BusinessType.GeneralStore)
+            {
+                message = "Only a formed General Store can be bound to the store management runtime.";
+                return false;
+            }
+
+            if (business.Owner == null || business.Owner.OwnerKind != BusinessOwnerKind.Player)
+            {
+                message = "Only a player-owned General Store can be managed here.";
+                return false;
+            }
+
+            if (runtimeState != null && currentBusiness != business)
+            {
+                message = $"The General Store runtime is already managing {currentBusiness?.RuntimeDisplayName ?? "another store"}.";
+                return false;
+            }
+
+            currentBusiness = business;
+            runtimeState = business.RuntimeState;
+            storeBuildingId = business.AssignedBuildingId;
+            RefreshReorderState();
+            RefreshCurrentBusinessCapacityState();
+            PushCashToHud();
+            message = $"{business.RuntimeDisplayName} is ready for operating setup. Configure premises, funding, labor, and stock before opening.";
+            status = message;
+            return true;
+        }
+
         public bool TryOpenAtPlayerOwnedShell(int buildingId, out BusinessInstanceState business, out string message)
         {
             AutoWire();
@@ -1778,7 +1817,21 @@ namespace LandLedgers.FirstLedger
                 WorkerSlotState openSlot = runtimeState.WorkerSlots[openSlotIndex];
                 WorkerRoleFitResult fit = WorkerRoleFitEvaluator.Evaluate(candidate, BusinessType.GeneralStore, openSlot);
                 builder.AppendLine($"Position Open: {GetGeneralStoreRoleDisplayName(openSlot)} | Wage {FormatMoney(openSlot.WeeklyWageCents)}/wk");
-                builder.AppendLine($"Candidate {index + 1}/{candidates.Count}: {candidate.DisplayName} | {fit.Label} fit");
+                builder.AppendLine($"Recommended candidate: {candidate.DisplayName} | {fit.Label} fit");
+                builder.AppendLine("Available candidates (ranked by role fit):");
+                int visibleCount = Mathf.Min(candidates.Count, 5);
+                for (int i = 0; i < visibleCount; i++)
+                {
+                    PersonState listed = candidates[i];
+                    WorkerRoleFitResult listedFit = WorkerRoleFitEvaluator.Evaluate(listed, BusinessType.GeneralStore, openSlot);
+                    string marker = i == index ? "*" : "-";
+                    builder.AppendLine($"{marker} {listed.DisplayName} | {listedFit.Label} fit | {listed.age} years");
+                }
+
+                if (candidates.Count > visibleCount)
+                {
+                    builder.AppendLine($"{candidates.Count - visibleCount} additional eligible candidate(s) are available after these ranked names.");
+                }
             }
         }
 

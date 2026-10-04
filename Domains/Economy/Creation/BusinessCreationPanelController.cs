@@ -19,6 +19,7 @@ namespace LandLedgers.FirstLedger
     public sealed class BusinessCreationPanelController : MonoBehaviour
     {
         private SharedBusinessRuntimeManager sharedBusinessRuntime;
+        private GeneralStoreRuntimeManager storeRuntime;
         private GeneralStorePanelController managementController;
         private ManagementPanelView view;
         private Button createButton;
@@ -40,6 +41,7 @@ namespace LandLedgers.FirstLedger
             ManagementPanelView newView)
         {
             sharedBusinessRuntime = newSharedBusinessRuntime;
+            storeRuntime ??= FindAnyObjectByType<GeneralStoreRuntimeManager>();
             managementController = newManagementController;
             view = newView;
             configured = sharedBusinessRuntime != null && view != null;
@@ -199,6 +201,12 @@ namespace LandLedgers.FirstLedger
             }
 
             statusText.text = $"{business.RuntimeDisplayName} formed. Open it in Businesses to establish the operation.";
+            if (business.BusinessType == BusinessType.GeneralStore
+                && storeRuntime != null
+                && storeRuntime.TryBindFormedPlayerBusiness(business, out string bindingMessage))
+            {
+                statusText.text = bindingMessage;
+            }
             CloseForm();
             managementController?.Refresh();
         }

@@ -113,6 +113,12 @@ namespace LandLedgers.Economy.Wheelwright
         private readonly WheelwrightUsedWagonYard usedWagonYard = new WheelwrightUsedWagonYard();
         /// <summary>D3A: the customer account book — running tabs (Canon §7.2E book credit).</summary>
         private readonly WheelwrightAccountBook accountBook = new WheelwrightAccountBook();
+        /// <summary>D4K: the shop's recorded quote book (accept/decline, never silent billing).</summary>
+        private readonly RepairQuoteBook repairQuoteBook = new RepairQuoteBook();
+        /// <summary>D4K: the shop's pickup ledger (ready / picked up / delivered / unclaimed).</summary>
+        private readonly RepairPickupLedger repairPickupLedger = new RepairPickupLedger();
+        /// <summary>D4K: the shop's artisan-lien register (recorded claims on unpaid work).</summary>
+        private readonly ArtisanLienRegister repairLienRegister = new ArtisanLienRegister();
         private int usedWagonRevenueCents;
         private int sparePartRevenueCents;
         private int salvageRevenueCents;
@@ -135,6 +141,12 @@ namespace LandLedgers.Economy.Wheelwright
         public WheelwrightSparePartsShelf PartsShelf => partsShelf;
         public WheelwrightUsedWagonYard UsedWagons => usedWagonYard;
         public WheelwrightAccountBook Accounts => accountBook;
+        /// <summary>D4K: the shop's recorded quote book.</summary>
+        public RepairQuoteBook RepairQuotes => repairQuoteBook;
+        /// <summary>D4K: the shop's pickup ledger.</summary>
+        public RepairPickupLedger RepairPickups => repairPickupLedger;
+        /// <summary>D4K: the shop's artisan-lien register.</summary>
+        public ArtisanLienRegister RepairLiens => repairLienRegister;
         public IReadOnlyDictionary<string, EquipmentAsset> BuiltAssets => builtAssets;
         public int IronworkPartsOnHand => ironworkStock.Count;
 
@@ -265,6 +277,17 @@ namespace LandLedgers.Economy.Wheelwright
             foreach (var kv in lumberStock) total += kv.Value;
             return total;
         }
+
+        /// <summary>D4K (additive): lumber lot ids on hand, oldest-first (Tech X §6.1 lot discipline).</summary>
+        public List<string> LumberLotIds()
+        {
+            var ids = new List<string>(lumberStock.Keys);
+            ids.Sort(StringComparer.Ordinal);
+            return ids;
+        }
+
+        /// <summary>D4K (additive): read access to the smith-made ironwork shelf (provenance quoting).</summary>
+        public IReadOnlyList<EquipmentAsset> IronworkStock => ironworkStock;
 
         /// <summary>
         /// Receives a blacksmith-made wagon ironwork part ("wagon-part" recipe:
@@ -469,7 +492,13 @@ namespace LandLedgers.Economy.Wheelwright
             EquipmentTaskGate gate = null,
             WheelwrightRepairQuality quality = WheelwrightRepairQuality.Proper,
             float temporaryRestore01 = DefaultTemporaryRestore01,
-            string consumeSparePartKind = null)
+            string consumeSparePartKind = null,
+            // D4K (additive, default-off): when work completes UNPAID
+            // (customerLedger == null), record the artisan's lien on the
+            // shop's register; when supplied, announce the finished repair
+            // on the pickup ledger.
+            ArtisanLienRegister unpaidLienRegister = null,
+            RepairPickupLedger pickupAnnounceLedger = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             // Canon 4.1 — wagon repair happens at the wheel station workstation
@@ -540,6 +569,8 @@ namespace LandLedgers.Economy.Wheelwright
                 int remaining = materialUnits;
                 var sortedLots = new List<string>(lumberStock.Keys);
                 sortedLots.Sort(StringComparer.Ordinal);
+                // D4K (additive): provenance — the consumed units trace to real lots.
+                var consumedLotNotes = new List<string>();
                 foreach (string lotId in sortedLots)
                 {
                     if (remaining <= 0) break;
@@ -547,7 +578,11 @@ namespace LandLedgers.Economy.Wheelwright
                     lumberStock[lotId] -= take;
                     remaining -= take;
                     consumedLumberLotIds.Add(lotId);
+                    consumedLotNotes.Add($"{lotId}:{take}");
                 }
+                diagnostics.Add(
+                    $"WheelwrightRuntime: {workOrderId} consumed {materialUnits}x lumber " +
+                    $"from lots [{string.Join(", ", consumedLotNotes.ToArray())}].");
             }
 
             if (asset != null)
@@ -592,6 +627,14 @@ namespace LandLedgers.Economy.Wheelwright
                 $"WheelwrightRuntime: {workOrderId} complete — {order.AssetDescription} repaired" +
                 (quality == WheelwrightRepairQuality.Proper ? string.Empty : $" ({quality}, to {targetCondition:P0})") +
                 $", {order.AgreedPriceCents}c booked.");
+
+            // D4K (additive, default-off): unpaid completion secures the bill
+            // with a recorded artisan's lien; the finished item is announced
+            // ready for pickup/delivery.
+            if (customerLedger == null && unpaidLienRegister != null && order.AgreedPriceCents > 0)
+                unpaidLienRegister.RecordClaim(order, BusinessInstanceId, BusinessName, dayIndex, diagnostics);
+            if (pickupAnnounceLedger != null)
+                pickupAnnounceLedger.NotifyReady(order, dayIndex, diagnostics);
             return null;
         }
 

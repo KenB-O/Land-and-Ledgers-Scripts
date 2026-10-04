@@ -109,9 +109,12 @@ namespace LandLedgers.Economy.Wheelwright
 
         public static bool IsOpen(RepairWorkOrder order)
         {
+            // D4K (additive): Declined orders leave the active queue too —
+            // the customer said no; the order is closed, not pending.
             return order != null
                 && order.Status != RepairOrderStatus.Complete
-                && order.Status != RepairOrderStatus.Paid;
+                && order.Status != RepairOrderStatus.Paid
+                && order.Status != RepairOrderStatus.Declined;
         }
     }
 

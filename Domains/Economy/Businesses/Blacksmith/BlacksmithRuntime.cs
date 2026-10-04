@@ -50,9 +50,32 @@ namespace LandLedgers.Economy.Blacksmith
         private readonly Dictionary<string, int> materialStock =
             new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly List<string> consumedLotIds = new List<string>();
+        /// <summary>
+        /// D4K (additive): per-lot FIFO ledger shadowing materialStock — real
+        /// lots in, real lots out, so every part consumed traces to a lot.
+        /// Unit counts stay the authority; this ledger is provenance only.
+        /// </summary>
+        private readonly Dictionary<string, Queue<SmithMaterialLot>> materialLotLedger =
+            new Dictionary<string, Queue<SmithMaterialLot>>(StringComparer.Ordinal);
+
+        /// <summary>D4K: one received material lot, FIFO-consumed.</summary>
+        [Serializable]
+        private sealed class SmithMaterialLot
+        {
+            public string LotId = string.Empty;
+            public string MaterialName = string.Empty;
+            public string OriginName = string.Empty;
+            public int Units;
+        }
         private readonly Dictionary<string, EquipmentAsset> assets =
             new Dictionary<string, EquipmentAsset>(StringComparer.Ordinal);
         private readonly RepairQueue repairQueue = new RepairQueue();
+        /// <summary>D4K: the shop's recorded quote book (accept/decline, never silent billing).</summary>
+        private readonly RepairQuoteBook quoteBook = new RepairQuoteBook();
+        /// <summary>D4K: the shop's pickup ledger (ready / picked up / delivered / unclaimed).</summary>
+        private readonly RepairPickupLedger pickupLedger = new RepairPickupLedger();
+        /// <summary>D4K: the shop's artisan-lien register (recorded claims on unpaid work).</summary>
+        private readonly ArtisanLienRegister lienRegister = new ArtisanLienRegister();
         private int nextAssetNumber = 1;
         private int repairRevenueCents;
 
@@ -62,6 +85,12 @@ namespace LandLedgers.Economy.Blacksmith
         /// <summary>EQP-2: true once readiness derives from actual components (Tech X §3.5).</summary>
         public bool ForgeStationDerivedFromComponents { get; private set; }
         public RepairQueue Repairs => repairQueue;
+        /// <summary>D4K: the shop's recorded quote book.</summary>
+        public RepairQuoteBook RepairQuotes => quoteBook;
+        /// <summary>D4K: the shop's pickup ledger.</summary>
+        public RepairPickupLedger RepairPickups => pickupLedger;
+        /// <summary>D4K: the shop's artisan-lien register.</summary>
+        public ArtisanLienRegister RepairLiens => lienRegister;
         public int RepairRevenueCents => Mathf.Max(0, repairRevenueCents);
         public IReadOnlyDictionary<string, EquipmentAsset> Assets => assets;
 
@@ -170,12 +199,79 @@ namespace LandLedgers.Economy.Blacksmith
             if (!materialStock.TryGetValue(lot.MaterialId, out int onHand))
                 onHand = 0;
             materialStock[lot.MaterialId] = onHand + lot.Units;
+            // D4K (additive): the lot joins the FIFO provenance ledger.
+            if (!materialLotLedger.TryGetValue(lot.MaterialId, out Queue<SmithMaterialLot> lots))
+            {
+                lots = new Queue<SmithMaterialLot>();
+                materialLotLedger[lot.MaterialId] = lots;
+            }
+            lots.Enqueue(new SmithMaterialLot
+            {
+                LotId = lot.LotId ?? string.Empty,
+                MaterialName = lot.MaterialName ?? string.Empty,
+                OriginName = lot.OriginName ?? string.Empty,
+                Units = lot.Units,
+            });
             diagnostics.Add($"BlacksmithRuntime: received {lot.Units}x {lot.MaterialName} ({lot.LotId}, {lot.OriginName}).");
         }
 
         public int MaterialOnHand(string materialId)
         {
             return materialStock.TryGetValue(materialId, out int units) ? units : 0;
+        }
+
+        /// <summary>
+        /// D4K (additive): units of one LOT on hand — provenance read, never
+        /// the authority for sufficiency (MaterialOnHand is).
+        /// </summary>
+        public int LotUnitsOnHand(string materialId, string lotId)
+        {
+            if (!materialLotLedger.TryGetValue(materialId, out Queue<SmithMaterialLot> lots))
+                return 0;
+            foreach (SmithMaterialLot lot in lots)
+                if (string.Equals(lot.LotId, lotId, StringComparison.Ordinal))
+                    return Math.Max(0, lot.Units);
+            return 0;
+        }
+
+        /// <summary>D4K (additive): lot ids on hand for a material, FIFO order.</summary>
+        public List<string> SmithLotIdsOnHand(string materialId)
+        {
+            var ids = new List<string>();
+            if (!materialLotLedger.TryGetValue(materialId, out Queue<SmithMaterialLot> lots))
+                return ids;
+            foreach (SmithMaterialLot lot in lots)
+                if (lot.Units > 0 && !ids.Contains(lot.LotId))
+                    ids.Add(lot.LotId);
+            return ids;
+        }
+
+        /// <summary>
+        /// D4K (additive): records FIFO lot consumption against the ledger and
+        /// reports the consumed lot ids. Never refuses — the caller already
+        /// verified sufficiency against MaterialOnHand; this is provenance
+        /// bookkeeping only. Units the ledger cannot trace are reported as
+        /// "unallocated" (a data smell, never silent).
+        /// </summary>
+        public void RecordLotConsumption(string materialId, int units, List<string> outConsumedLotIds)
+        {
+            outConsumedLotIds = outConsumedLotIds ?? new List<string>();
+            int remaining = Math.Max(0, units);
+            if (materialLotLedger.TryGetValue(materialId, out Queue<SmithMaterialLot> lots))
+            {
+                foreach (SmithMaterialLot lot in lots)
+                {
+                    if (remaining <= 0) break;
+                    if (lot.Units <= 0) continue;
+                    int take = Math.Min(lot.Units, remaining);
+                    lot.Units -= take;
+                    remaining -= take;
+                    consumedLotIds.Add(lot.LotId);
+                    outConsumedLotIds.Add($"{lot.LotId}:{take}");
+                }
+            }
+            if (remaining > 0)
+                outConsumedLotIds.Add($"unallocated:{remaining}");
         }
 
         /// <summary>
@@ -265,7 +361,13 @@ namespace LandLedgers.Economy.Blacksmith
             SkillService skillService,
             LandLedgers.Population.HouseholdLedger customerLedger,
             List<string> diagnostics,
-            EquipmentTaskGate gate = null)
+            EquipmentTaskGate gate = null,
+            // D4K (additive, default-off): when work completes UNPAID
+            // (customerLedger == null), record the artisan's lien on the
+            // shop's register; when supplied, announce the finished repair
+            // on the pickup ledger.
+            ArtisanLienRegister unpaidLienRegister = null,
+            RepairPickupLedger pickupAnnounceLedger = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             // NX-1A: Canon 4.1 — repair work happens at the forge station
@@ -298,6 +400,12 @@ namespace LandLedgers.Economy.Blacksmith
                 if (MaterialOnHand(order.MaterialId) < order.MaterialUnitsNeeded)
                     return $"BlacksmithRuntime: short {order.MaterialUnitsNeeded - MaterialOnHand(order.MaterialId)}x {order.MaterialId} for {workOrderId}.";
                 materialStock[order.MaterialId] -= order.MaterialUnitsNeeded;
+                // D4K (additive): provenance — the consumed units trace to real lots.
+                var consumedLotNotes = new List<string>();
+                RecordLotConsumption(order.MaterialId, order.MaterialUnitsNeeded, consumedLotNotes);
+                diagnostics.Add(
+                    $"BlacksmithRuntime: {workOrderId} consumed {order.MaterialUnitsNeeded}x {order.MaterialId} " +
+                    $"from lots [{string.Join(", ", consumedLotNotes.ToArray())}].");
             }
 
             if (asset != null)
@@ -315,6 +423,14 @@ namespace LandLedgers.Economy.Blacksmith
             order.CompletedDayIndex = dayIndex;
             repairRevenueCents += order.AgreedPriceCents;
             diagnostics.Add($"BlacksmithRuntime: {workOrderId} complete — {order.AssetDescription} repaired, {order.AgreedPriceCents}c booked.");
+
+            // D4K (additive, default-off): unpaid completion secures the bill
+            // with a recorded artisan's lien; the finished item is announced
+            // ready for pickup/delivery.
+            if (customerLedger == null && unpaidLienRegister != null && order.AgreedPriceCents > 0)
+                unpaidLienRegister.RecordClaim(order, BusinessInstanceId, BusinessName, dayIndex, diagnostics);
+            if (pickupAnnounceLedger != null)
+                pickupAnnounceLedger.NotifyReady(order, dayIndex, diagnostics);
             return null;
         }
     }

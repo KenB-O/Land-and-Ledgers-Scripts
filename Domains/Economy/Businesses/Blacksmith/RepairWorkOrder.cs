@@ -13,6 +13,11 @@ namespace LandLedgers.Economy.Blacksmith
         InProgress = 4,  // labor being performed
         Complete = 5,    // work done, awaiting payment
         Paid = 6,
+        /// <summary>
+        /// D4K (additive): the customer declined the recorded quote — the order
+        /// leaves the active queue. Never billed, never silently dropped.
+        /// </summary>
+        Declined = 7,
     }
 
     public enum RepairUrgency
@@ -57,6 +62,11 @@ namespace LandLedgers.Economy.Blacksmith
         public RepairOrderStatus Status = RepairOrderStatus.Unspecified;
         public int OpenedDayIndex;
         public int CompletedDayIndex = -1;
+        /// <summary>
+        /// D4K (additive): rush requested — one urgency step up, rush labor
+        /// premium prices at quote. Set by RepairPrioritization.RequestRush.
+        /// </summary>
+        public bool RushRequested;
     }
 
     /// <summary>
@@ -153,6 +163,18 @@ namespace LandLedgers.Economy.Blacksmith
             });
             for (int i = 0; i < sorted.Count; i++)
                 sorted[i].QueuePosition = i + 1;
+        }
+
+        /// <summary>
+        /// D4K (additive): re-sorts after an operator-driven priority change
+        /// (rush, escalation). Queue order stays urgency &gt; FIFO — this only
+        /// re-applies it.
+        /// </summary>
+        public void NotifyPriorityChanged(List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            RecomputeQueuePositions();
+            diagnostics.Add("RepairQueue: priorities changed — queue positions recomputed.");
         }
     }
 }

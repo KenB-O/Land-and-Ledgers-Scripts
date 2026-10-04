@@ -13,6 +13,7 @@ using LandLedgers.Primitives;
 using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.World;
+using LandLedgers.World.Property;
 
 namespace LandLedgers.Persistence
 {
@@ -1032,6 +1033,11 @@ namespace LandLedgers.Persistence
         public string lastPurchaseSummary = string.Empty;
         public string lastConstructionSupportSummary = string.Empty;
         public string lastConstructionQueueSummary = string.Empty;
+        // P5: the T2F title chain for player-acquired parcels (was never recorded
+        // in production before P5) and the live property-tax book.
+        public TitleAuthority.TitleSaveDto titleChain = new();
+        public PropertyTaxService.PropertyTaxSaveDto propertyTax = new();
+        public int lastPropertyTaxDay;
     }
 
     [Serializable]

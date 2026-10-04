@@ -12,6 +12,7 @@ using LandLedgers.Progression;
 using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.World;
+using LandLedgers.World.Property;
 using UnityEngine;
 
 namespace LandLedgers.Economy
@@ -768,6 +769,30 @@ namespace LandLedgers.Economy
         [SerializeField]
         private List<AcquisitionDealState> activeDeals = new();
 
+        // P5 — property & legal: the T2F title authority for player-acquired parcels
+        // and the live property-tax driver. Plain (non-Unity-serialized) state;
+        // persisted through AcquisitionSaveDto capture/restore like the other runtime
+        // books (ownershipAptitude pattern).
+        private readonly TitleAuthority titleAuthority = new TitleAuthority();
+        private readonly List<string> titleDiagnostics = new List<string>();
+        private PlayerPropertyTaxDriver propertyTaxDriver;
+
+        private PlayerPropertyTaxDriver PropertyTaxes
+        {
+            get
+            {
+                if (propertyTaxDriver == null)
+                {
+                    propertyTaxDriver = new PlayerPropertyTaxDriver(
+                        new PropertyTaxService(),
+                        () => ownedPlotIds,
+                        GetAssessedValueCentsForPlot,
+                        TrySpend);
+                }
+                return propertyTaxDriver;
+            }
+        }
+
         [SerializeField]
         private List<string> watchedListingIds = new();
 
@@ -972,6 +997,7 @@ namespace LandLedgers.Economy
 
             RemoveBusinessListingForBuilding(building.id);
             playerPortfolio?.AddOwnerCash(offerCents, $"{business.RuntimeDisplayName} sale");
+            RecordTitleDisposal(plot, buyerName, offerCents); // P5: T2F chain
             RefreshOwnedBuildability();
             RebuildMarket();
             lastPurchaseSummary = $"Sold {business.RuntimeDisplayName} to {buyerName} for {FormatMoney(offerCents)}. {saleRead}";
@@ -1087,6 +1113,11 @@ namespace LandLedgers.Economy
                 }
             }
 
+            // P5: persist the T2F title chain and the property-tax book.
+            dto.titleChain = titleAuthority.CaptureSaveDto();
+            dto.propertyTax = PropertyTaxes.Taxes.CaptureSaveDto();
+            dto.lastPropertyTaxDay = PropertyTaxes.LastProcessedDayIndex;
+
             return dto;
         }
 
@@ -1125,6 +1156,12 @@ namespace LandLedgers.Economy
             expansionPressureStreakWeeks = Mathf.Max(0, dto.expansionPressureStreakWeeks);
             developmentInventoryPressure = Mathf.Max(0, dto.developmentInventoryPressure);
             lastTownActionSummary = dto.lastTownActionSummary ?? string.Empty;
+
+            // P5: restore the T2F title chain and the property-tax book (null-guarded
+            // for pre-P5 saves, which simply start with an empty chain/book).
+            if (dto.titleChain != null) titleAuthority.LoadFromSaveDto(dto.titleChain);
+            if (dto.propertyTax != null) PropertyTaxes.Taxes.LoadFromSaveDto(dto.propertyTax);
+            PropertyTaxes.RestoreLastProcessedDayIndex(dto.lastPropertyTaxDay);
 
             if (dto.ownedPlotIds != null)
             {
@@ -7296,6 +7333,7 @@ namespace LandLedgers.Economy
             ResolveWeeklyConstructionQueue(out _);
             ResolveWeeklyTownActionPressure();
             RunWeeklyAcquisitionReview(GetCurrentDayIndex());
+            PropertyTaxes.ResolveWeek(GetCurrentDayIndex()); // P5: live property-tax cycle
         }
 
         private void EnsureMarket()
@@ -8215,6 +8253,7 @@ namespace LandLedgers.Economy
                 ownedPlotIds.Add(plot.id);
             }
 
+            RecordTitleAcquisition(plot, listing.ownerDisplayName, deal.listingId, finalPriceCents); // P5: T2F chain
             RecordLandAppreciationPurchase(plot, null, finalPriceCents, LandAppreciationImprovementState.Empty);
             listing.playerOwned = true;
             RecordOwnershipAptitudeGain(OwnershipAptitudeSource.LandPurchased);
@@ -8263,6 +8302,7 @@ namespace LandLedgers.Economy
             LandAppreciationImprovementState purchasedImprovementState = !string.IsNullOrWhiteSpace(listing.businessInstanceId)
                 ? LandAppreciationImprovementState.OperatingBusiness
                 : LandAppreciationImprovementState.ImprovedShell;
+            RecordTitleAcquisition(plot, listing.ownerDisplayName, deal.listingId, finalPriceCents); // P5: T2F chain
             RecordLandAppreciationPurchase(plot, building, finalPriceCents, purchasedImprovementState);
             listing.playerOwned = true;
 
@@ -8439,6 +8479,7 @@ namespace LandLedgers.Economy
                 ownedPlotIds.Add(plot.id);
             }
 
+            RecordTitleAcquisition(plot, listing.ownerDisplayName, listing.listingId, listing.askingPriceCents); // P5: T2F chain
             RecordLandAppreciationPurchase(plot, null, listing.askingPriceCents, LandAppreciationImprovementState.Empty);
             listing.playerOwned = true;
             lastPurchaseSummary = $"{listing.title} purchased for {FormatMoney(listing.askingPriceCents)}.";
@@ -8514,6 +8555,7 @@ namespace LandLedgers.Economy
             LandAppreciationImprovementState purchasedImprovementState = !string.IsNullOrWhiteSpace(listing.businessInstanceId)
                 ? LandAppreciationImprovementState.OperatingBusiness
                 : LandAppreciationImprovementState.ImprovedShell;
+            RecordTitleAcquisition(plot, listing.ownerDisplayName, listing.listingId, listing.askingPriceCents); // P5: T2F chain
             RecordLandAppreciationPurchase(plot, building, listing.askingPriceCents, purchasedImprovementState);
             listing.playerOwned = true;
             string acquiredLabel = !string.IsNullOrWhiteSpace(listing.businessDisplayName) ? listing.businessDisplayName : listing.title;
@@ -8557,6 +8599,89 @@ namespace LandLedgers.Economy
             }
 
             return playerPortfolio.TrySpendOwnerCash(cents, label, out message);
+        }
+
+        /// <summary>
+        /// P5: records a player acquisition in the T2F title chain (dead end P5-TITLE:
+        /// the purchase flows previously never touched the chain). The economic
+        /// purchase already happened (cash moved); a recording problem is logged to
+        /// the title diagnostics, never silently dropped and never voids the deal.
+        /// </summary>
+        private void RecordTitleAcquisition(TownPlot plot, string sellerName, string instrumentId, int priceCents)
+        {
+            if (plot == null) return;
+            var diag = new List<string>();
+            string problem = PlayerTitleBridge.RecordPlayerAcquisition(
+                titleAuthority, plot.id, sellerName, instrumentId, priceCents, GetCurrentDayIndex(), diag);
+            foreach (string line in diag) titleDiagnostics.Add(line);
+            if (!string.IsNullOrEmpty(problem))
+            {
+                titleDiagnostics.Add(problem);
+                Debug.LogWarning($"[Acquisitions] Title chain recording: {problem}", this);
+            }
+        }
+
+        /// <summary>P5: records a player disposal (sale) in the T2F title chain.</summary>
+        private void RecordTitleDisposal(TownPlot plot, string buyerName, int priceCents)
+        {
+            if (plot == null) return;
+            var diag = new List<string>();
+            string problem = PlayerTitleBridge.RecordPlayerDisposal(
+                titleAuthority, plot.id, buyerName,
+                $"sale-plot-{plot.id}-day-{GetCurrentDayIndex()}",
+                priceCents, GetCurrentDayIndex(), diag);
+            foreach (string line in diag) titleDiagnostics.Add(line);
+            if (!string.IsNullOrEmpty(problem))
+            {
+                titleDiagnostics.Add(problem);
+                Debug.LogWarning($"[Acquisitions] Title chain recording: {problem}", this);
+            }
+        }
+
+        /// <summary>
+        /// P5: assessed value for the property-tax levy — the parcel's live estimated
+        /// value, falling back to total cost basis when no estimate is on file.
+        /// </summary>
+        private int GetAssessedValueCentsForPlot(int plotId)
+        {
+            for (int i = 0; i < ownedLandAppreciations.Count; i++)
+            {
+                LandAppreciationState state = ownedLandAppreciations[i];
+                if (state == null || state.plotId != plotId) continue;
+                int estimated = Mathf.Max(0, state.currentEstimatedValueCents);
+                return estimated > 0 ? estimated : Mathf.Max(0, state.TotalBasisCents);
+            }
+            return 0;
+        }
+
+        /// <summary>P5: title-chain diagnostics (recording notes and any problems).</summary>
+        public IReadOnlyList<string> TitleDiagnostics => titleDiagnostics;
+
+        /// <summary>P5: the queryable T2F chain of title for a town plot (journey step 3).</summary>
+        public IReadOnlyList<TitleRecord> GetTitleChainForPlot(int plotId)
+        {
+            return titleAuthority.ChainOf(PlayerTitleBridge.ParcelKeyForPlot(plotId));
+        }
+
+        /// <summary>P5: the current record holder of a town plot per the title chain.</summary>
+        public string GetTitleHolderForPlot(int plotId)
+        {
+            return titleAuthority.CurrentHolder(PlayerTitleBridge.ParcelKeyForPlot(plotId));
+        }
+
+        /// <summary>P5: the player's live property-tax assessments (journey step 5).</summary>
+        public IReadOnlyList<TaxAssessment> PlayerPropertyTaxAssessments => PropertyTaxes.Taxes.AllAssessments;
+
+        /// <summary>P5: property-tax driver diagnostics (levies, delinquencies, payments).</summary>
+        public IReadOnlyList<string> PropertyTaxDiagnostics => PropertyTaxes.Diagnostics;
+
+        /// <summary>
+        /// P5: player-facing property-tax payment — spends owner cash first, then
+        /// books the payment against the assessment.
+        /// </summary>
+        public bool TryPayPropertyTax(string assessmentId, int amountCents, out string message)
+        {
+            return PropertyTaxes.TryPayAssessment(assessmentId, amountCents, GetCurrentDayIndex(), out message);
         }
 
         private void RefundSpend(int cents, string label)

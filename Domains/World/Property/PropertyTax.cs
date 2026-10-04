@@ -383,5 +383,77 @@ namespace LandLedgers.World.Property
         {
             return sales.TryGetValue(saleId, out TaxSale sale) ? sale : null;
         }
+
+        #region Queries (P5: the live tax driver and read surfaces need these)
+
+        public TaxAssessment GetAssessment(string assessmentId)
+        {
+            return !string.IsNullOrEmpty(assessmentId) && assessments.TryGetValue(assessmentId, out TaxAssessment a) ? a : null;
+        }
+
+        public IReadOnlyList<TaxAssessment> AllAssessments
+        {
+            get { return new List<TaxAssessment>(assessments.Values); }
+        }
+
+        /// <summary>True when this parcel already has an assessment for the given tax year.</summary>
+        public bool HasAssessmentForParcelYear(string parcelId, int taxYear)
+        {
+            if (string.IsNullOrEmpty(parcelId)) return false;
+            foreach (TaxAssessment assessment in assessments.Values)
+            {
+                if (assessment != null &&
+                    string.Equals(assessment.ParcelId, parcelId, StringComparison.Ordinal) &&
+                    assessment.TaxYear == taxYear)
+                    return true;
+            }
+            return false;
+        }
+
+        #endregion
+
+        #region Save / Load - P5: the service previously had no save DTO, so assessments
+        // died with the session. Save-DTO methods live in the owning runtime class.
+
+        [Serializable]
+        public sealed class PropertyTaxSaveDto
+        {
+            public List<TaxAssessment> Assessments = new List<TaxAssessment>();
+            public List<TaxSale> Sales = new List<TaxSale>();
+        }
+
+        public PropertyTaxSaveDto CaptureSaveDto()
+        {
+            return new PropertyTaxSaveDto
+            {
+                Assessments = new List<TaxAssessment>(assessments.Values),
+                Sales = new List<TaxSale>(sales.Values),
+            };
+        }
+
+        public void LoadFromSaveDto(PropertyTaxSaveDto dto)
+        {
+            assessments.Clear();
+            sales.Clear();
+            if (dto == null) return;
+            if (dto.Assessments != null)
+            {
+                foreach (TaxAssessment assessment in dto.Assessments)
+                {
+                    if (assessment != null && !string.IsNullOrEmpty(assessment.AssessmentId))
+                        assessments[assessment.AssessmentId] = assessment;
+                }
+            }
+            if (dto.Sales != null)
+            {
+                foreach (TaxSale sale in dto.Sales)
+                {
+                    if (sale != null && !string.IsNullOrEmpty(sale.SaleId))
+                        sales[sale.SaleId] = sale;
+                }
+            }
+        }
+
+        #endregion
     }
 }

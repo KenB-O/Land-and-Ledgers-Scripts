@@ -54,6 +54,7 @@ namespace LandLedgers.Economy
         /// provenance), kitchen labor, and meal-quality abstraction. Value
         /// appended, never renumbered (W2B).
         /// </summary>
+        Restaurant = 22,
         /// <summary>
         /// W3A: the hotel. Canon §8.1 / Tech §2.2: hotels are settlement
         /// infrastructure drawing transient arrivals and higher-paying

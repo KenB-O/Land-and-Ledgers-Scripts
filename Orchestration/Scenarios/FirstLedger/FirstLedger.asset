@@ -15,7 +15,7 @@ MonoBehaviour:
   scenarioId: first-ledger
   displayName: First Ledger
   description: |-
-    1870. You step off the stage with your household, a stake of cash, and a ledger with nothing in it yet. The town needs merchants. Buy your first business, hire your first hand, and build $15,000 of owner equity — honestly, one entry at a time.
+    1870. You step off the stage with your household, a stake of cash, and a ledger with nothing in it yet. The town needs merchants. Form your first business, hire your first hand, and build $15,000 of owner equity — honestly, one entry at a time.
 
     NOTE: name your household founders on this asset (Player Household section) before bootstrapping — the scenario declares the player household (GHOST-DEF-006).
   playerHousehold:
@@ -30,8 +30,8 @@ MonoBehaviour:
     notes: Money-goals scenario (Tech X §2.1): the player household and town residents count; rural-service and transient populations are excluded from scenario read models.
   goals:
   - goalId: acquire-first-business
-    text: Acquire your first business
-    targetText: Own 1 business
+    text: Form your first business
+    targetText: Own 1 business organization
     optional: 0
   - goalId: hire-first-employee
     text: Hire your first employee
@@ -43,7 +43,7 @@ MonoBehaviour:
     optional: 0
   - goalId: own-two-businesses
     text: Own two businesses
-    targetText: Own 2 businesses
+    targetText: Own 2 business organizations
     optional: 0
   - goalId: three-employees
     text: Employ 3 people across your businesses
@@ -55,7 +55,7 @@ MonoBehaviour:
     optional: 0
   - goalId: own-three-businesses
     text: Own three businesses
-    targetText: Own 3 businesses
+    targetText: Own 3 business organizations
     optional: 0
   - goalId: equity-15000
     text: Reach $15,000 owner equity
@@ -64,19 +64,19 @@ MonoBehaviour:
   objectives:
   - objectiveId: choose-first-business
     linkedGoalId: acquire-first-business
-    text: Choose which business to buy first — the general store is the natural start.
+    text: Choose which business to form first — the general store is the natural start.
   - objectiveId: complete-purchase
     linkedGoalId: acquire-first-business
-    text: Complete the acquisition (seller meeting, terms, handover).
+    text: Complete formation, then configure the business for real operation.
   - objectiveId: offer-employment
     linkedGoalId: hire-first-employee
     text: Offer a wage to a worker through the employment relationship.
   - objectiveId: second-acquisition
     linkedGoalId: own-two-businesses
-    text: Acquire a second business — freight or butcher pair well with the store.
+    text: Form or acquire a second business — freight or farm pair well with the store.
   - objectiveId: third-acquisition
     linkedGoalId: own-three-businesses
-    text: Acquire a third business to complete the set.
+    text: Form or acquire a third business to complete the set.
   startingTaskDefinitionIds: []
   tunables:
   - key: startingCashCents

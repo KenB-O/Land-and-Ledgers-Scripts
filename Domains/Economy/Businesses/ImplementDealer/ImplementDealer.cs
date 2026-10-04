@@ -99,6 +99,8 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
         private readonly List<ImplementSale> sales = new List<ImplementSale>();
         /// <summary>EQP-5: the equipment assets this dealer has created on sale (maker → dealer → buyer provenance).</summary>
         private readonly List<EquipmentAsset> soldAssets = new List<EquipmentAsset>();
+        /// <summary>D4L: trade-ins this dealer has taken — valuation via the existing service, credit recorded.</summary>
+        private readonly ImplementDealerTradeInBook tradeInBook = new ImplementDealerTradeInBook();
 
         /// <summary>Calibration: simple dealer repairs (adjustments, part swaps) in-house.</summary>
         public int SimpleRepairLaborCents = 75;
@@ -117,6 +119,8 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
         public IReadOnlyList<ImplementSale> Sales => sales;
         /// <summary>EQP-5: assets created on sale, with true maker provenance.</summary>
         public IReadOnlyList<EquipmentAsset> SoldAssets => soldAssets;
+        /// <summary>D4L: the dealer's trade-in book (valuation via the existing service; credit recorded, never auto-valued).</summary>
+        public ImplementDealerTradeInBook TradeInBook => tradeInBook;
 
         /// <summary>Stocks a model line. Supplier must be named — no orphan inventory.</summary>
         public string StockModel(ImplementModel model, int units, List<string> diagnostics)
@@ -260,6 +264,43 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
             int sold = Math.Min(units, line.UnitsOnHand);
             line.UnitsOnHand -= sold;
             return sold;
+        }
+
+        /// <summary>
+        /// D4L: takes a used machine in trade from a customer. The dealer values
+        /// it through the existing valuation service (needs real
+        /// replacement-cost data); the CREDIT is the negotiated recorded
+        /// amount. Title transfers to the dealer with provenance intact.
+        /// </summary>
+        public DealerTradeInRecord TakeTradeIn(
+            EquipmentAsset asset,
+            string customerKind,
+            string customerId,
+            string customerName,
+            int replacementCostCents,
+            int agreedCreditCents,
+            int dayIndex,
+            EntityIdRegistry idRegistry,
+            List<string> diagnostics)
+        {
+            return tradeInBook.TakeTradeIn(
+                asset, customerKind, customerId, customerName,
+                BusinessId, DisplayName,
+                replacementCostCents, agreedCreditCents, dayIndex,
+                idRegistry, diagnostics ?? new List<string>());
+        }
+
+        /// <summary>
+        /// D4L: applies trade-in credit against a new implement sale as a
+        /// recorded amount. The ImplementSale's notes stand as recorded; the
+        /// application is the offset record.
+        /// </summary>
+        public string ApplyTradeInCredit(
+            string tradeInKey, EntityId saleId, int creditCents,
+            int dayIndex, List<string> diagnostics)
+        {
+            return tradeInBook.ApplyCreditToSale(
+                tradeInKey, saleId, creditCents, dayIndex, diagnostics ?? new List<string>());
         }
 
         /// <summary>

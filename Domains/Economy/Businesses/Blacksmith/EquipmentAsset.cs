@@ -38,6 +38,11 @@ namespace LandLedgers.Economy.Blacksmith
         // repair history updates the asset and feeds future diligence/resale.
         public List<string> MaintenanceLog = new List<string>();
 
+        // D4L: ownership chain — prior owners as history, so title transfers
+        // keep provenance intact (Canon §6.5I: history affects diligence,
+        // resale, confidence). Follows the animal OwnershipHistory shape.
+        public List<EquipmentOwnershipRecord> OwnershipHistory = new List<EquipmentOwnershipRecord>();
+
         public bool IsReserved => !string.IsNullOrWhiteSpace(ReservedBy);
         public bool IsUsable => Condition01 > 0.05f;
 
@@ -82,13 +87,63 @@ namespace LandLedgers.Economy.Blacksmith
 
         public string TransferOwnership(string newOwnerKind, string newOwnerId, string reason)
         {
+            return TransferOwnership(newOwnerKind, newOwnerId, reason, -1);
+        }
+
+        /// <summary>
+        /// D4L: transfers title and appends the transfer to OwnershipHistory —
+        /// prior owners as history, provenance intact. A negative dayIndex
+        /// records the transfer with the day unknown (legacy callers).
+        /// </summary>
+        public string TransferOwnership(string newOwnerKind, string newOwnerId, string reason, int dayIndex)
+        {
             if (string.IsNullOrWhiteSpace(newOwnerId))
                 return $"EquipmentAsset {AssetId}: new owner id is required.";
             if (IsReserved)
                 return $"EquipmentAsset {AssetId}: cannot transfer while reserved by {ReservedBy}.";
+            OwnershipHistory.Add(new EquipmentOwnershipRecord
+            {
+                FromOwnerKind = OwnerKind,
+                FromOwnerId = OwnerId,
+                ToOwnerKind = newOwnerKind ?? string.Empty,
+                ToOwnerId = newOwnerId,
+                DayIndex = dayIndex,
+                Reason = reason ?? string.Empty,
+            });
             OwnerKind = newOwnerKind ?? string.Empty;
             OwnerId = newOwnerId;
             return null;
+        }
+    }
+
+    /// <summary>
+    /// D4L: one recorded ownership transfer on an equipment asset — prior
+    /// owners as history (Canon §6.5I). The current owner is the asset's
+    /// OwnerKind/OwnerId; this list is the chain behind it.
+    /// </summary>
+    [Serializable]
+    public sealed class EquipmentOwnershipRecord
+    {
+        public string FromOwnerKind = string.Empty;
+        public string FromOwnerId = string.Empty;
+        public string ToOwnerKind = string.Empty;
+        public string ToOwnerId = string.Empty;
+        public int DayIndex = -1; // -1 = day unknown (legacy transfers)
+        public string Reason = string.Empty;
+
+        public EquipmentOwnershipRecord() { }
+
+        public EquipmentOwnershipRecord Clone()
+        {
+            return new EquipmentOwnershipRecord
+            {
+                FromOwnerKind = FromOwnerKind,
+                FromOwnerId = FromOwnerId,
+                ToOwnerKind = ToOwnerKind,
+                ToOwnerId = ToOwnerId,
+                DayIndex = DayIndex,
+                Reason = Reason,
+            };
         }
     }
 

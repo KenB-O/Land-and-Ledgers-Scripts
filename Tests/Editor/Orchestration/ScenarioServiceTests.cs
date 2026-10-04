@@ -94,7 +94,7 @@ namespace LandLedgers.EditorTests.Orchestration
         }
 
         [Test]
-        public void BeginScenario_NoPlayerHousehold_ProducesWarningDiagnostic()
+        public void BeginScenario_EmptyFounderListUsesRuntimeResolutionContract()
         {
             service.RegisterScenario(BuildAsset("s1"), out _);
 
@@ -110,7 +110,8 @@ namespace LandLedgers.EditorTests.Orchestration
                 }
             }
 
-            Assert.IsTrue(warned, "Expected a GHOST-DEF-006 warning diagnostic.");
+            Assert.IsFalse(warned,
+                "A valid household declaration with runtime-resolved founders must not report the household as absent.");
         }
 
         [Test]

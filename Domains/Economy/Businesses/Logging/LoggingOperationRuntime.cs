@@ -19,6 +19,9 @@ namespace LandLedgers.Economy.Businesses.Logging
     /// What this owns (the detailed layer):
     /// - the landing stock: felled LogLots staged at the landing, each with
     ///   full stand provenance (stand -> feller -> day);
+    /// - the landing's authored staging capacity (D2D): the Canon §8.5A
+    ///   bottleneck made explicit — felling above capacity is refused loudly
+    ///   at the camp gate, never silently staged past the landing's limits;
     /// - rights-gated felling: RunFelling goes through the shared
     ///   LoggingStandRegistry (which owns the T1E rights gate), and is
     ///   equipment-gated on the T1E "fell-timber" codes (Canon 4.1);
@@ -42,6 +45,39 @@ namespace LandLedgers.Economy.Businesses.Logging
         private readonly EntityIdRegistry idRegistry;
         private readonly List<LogLot> landingStock = new List<LogLot>(); // felled lots staged at the landing
         private readonly List<LogHaul> hauls = new List<LogHaul>(); // active + recently finished hauls
+
+        /// <summary>
+        /// D2D: how many logs the landing can stage. Canon §8.5A bottleneck
+        /// doctrine — "hiring more loggers does not help if the yard or mill
+        /// cannot absorb their output." Authored per operation (a real
+        /// physical limit of the landing ground); defaults to unbounded so
+        /// existing behavior is unchanged until an author sets it.
+        /// </summary>
+        public int LandingCapacityLogUnits { get; private set; } = int.MaxValue;
+
+        /// <summary>
+        /// Authors the landing's staging capacity. Negative values are
+        /// refused loudly; the capacity is never silently shrunk below the
+        /// logs already staged (that would strand them — refuse instead).
+        /// </summary>
+        public string SetLandingCapacity(int logUnits, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (logUnits < 0)
+            {
+                diag.Add($"LoggingOperationRuntime: LANDING CAPACITY REFUSED — {logUnits} is not a capacity.");
+                return "negative-capacity";
+            }
+            if (logUnits < LandingLogUnits)
+            {
+                diag.Add($"LoggingOperationRuntime: LANDING CAPACITY REFUSED — {LandingLogUnits} logs are " +
+                    $"already staged; shrinking capacity to {logUnits} would strand them. Haul logs out first.");
+                return "capacity-below-staged";
+            }
+            LandingCapacityLogUnits = logUnits;
+            diag.Add($"LoggingOperationRuntime: landing capacity set to {logUnits} logs.");
+            return null;
+        }
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId;
@@ -211,6 +247,7 @@ namespace LandLedgers.Economy.Businesses.Logging
         public sealed class LoggingOperationSaveDto
         {
             public string BusinessInstanceId = string.Empty;
+            public int LandingCapacityLogUnits = int.MaxValue; // D2D: authored landing capacity
             public List<LogLot> LandingStock = new List<LogLot>();
             public List<LogHaul.LogHaulSaveDto> Hauls = new List<LogHaul.LogHaulSaveDto>();
         }
@@ -220,6 +257,7 @@ namespace LandLedgers.Economy.Businesses.Logging
             var dto = new LoggingOperationSaveDto
             {
                 BusinessInstanceId = businessInstanceId,
+                LandingCapacityLogUnits = LandingCapacityLogUnits,
             };
             foreach (var lot in landingStock)
             {
@@ -248,6 +286,7 @@ namespace LandLedgers.Economy.Businesses.Logging
             hauls.Clear();
             if (dto == null) return;
             businessInstanceId = dto.BusinessInstanceId ?? string.Empty;
+            LandingCapacityLogUnits = dto.LandingCapacityLogUnits < 0 ? int.MaxValue : dto.LandingCapacityLogUnits;
             if (dto.LandingStock != null)
             {
                 foreach (var lot in dto.LandingStock)

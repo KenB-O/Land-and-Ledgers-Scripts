@@ -68,6 +68,30 @@ namespace LandLedgers.Economy
         [SerializeField]
         private List<MineOreShipmentOrder> shipmentOrders = new List<MineOreShipmentOrder>();
 
+        /// <summary>D3C: operating posture (Canon 21.7L). Lazy default NormalProduction for legacy saves.</summary>
+        [SerializeField]
+        private MineOperatingPosture operatingPosture = MineOperatingPosture.NormalProduction;
+
+        /// <summary>D3C: preservation burden while idle/closed (Canon 21.7L). Lazy-initialized for legacy saves.</summary>
+        [SerializeField]
+        private MinePreservationBurden preservationBurden;
+
+        /// <summary>D3C: owner allocation among producing work fronts (Canon 21.7D). Lazy-initialized for legacy saves.</summary>
+        [SerializeField]
+        private MineWorkFrontAllocation workFrontAllocation;
+
+        /// <summary>
+        /// D3C: caller-set restart readiness penalty 0-1 (research hold — Canon
+        /// 21.7L notes a wet idle mine gets harder to restart but names no
+        /// function; the caller computes it, default 0 = no penalty).
+        /// </summary>
+        [SerializeField, Range(0f, 1f)]
+        private float restartReadinessPenalty01;
+
+        /// <summary>D3C: cost-cause ledger (Canon 21.7Q). Lazy-initialized for legacy saves.</summary>
+        [SerializeField]
+        private MineCostLedger costLedger;
+
         public MineralResourceKind MineralKind => mineralKind;
         public float DepositConfidence01 => Mathf.Clamp01(depositConfidence01);
         public MineDevelopmentStage DevelopmentStage => developmentStage;
@@ -150,6 +174,69 @@ namespace LandLedgers.Economy
             return new MineOreShipmentService(ShipmentOrders);
         }
 
+        /// <summary>D3C: operating posture (Canon 21.7L). Legacy saves default to NormalProduction.</summary>
+        public MineOperatingPosture OperatingPosture => operatingPosture == MineOperatingPosture.Unspecified
+            ? MineOperatingPosture.NormalProduction
+            : operatingPosture;
+
+        /// <summary>D3C: records an owner posture decision.</summary>
+        public void SetOperatingPosture(MineOperatingPosture posture)
+        {
+            if (posture != MineOperatingPosture.Unspecified)
+                operatingPosture = posture;
+        }
+
+        /// <summary>D3C: preservation burden while idle/closed, never null (lazy-initialized for legacy saves).</summary>
+        public MinePreservationBurden PreservationBurden
+        {
+            get
+            {
+                if (preservationBurden == null)
+                    preservationBurden = new MinePreservationBurden();
+                return preservationBurden;
+            }
+        }
+
+        public void SetPreservationBurden(MinePreservationBurden burden)
+        {
+            if (burden != null)
+                preservationBurden = burden;
+        }
+
+        /// <summary>D3C: work-front allocation, never null (lazy-initialized for legacy saves).</summary>
+        public MineWorkFrontAllocation WorkFrontAllocation
+        {
+            get
+            {
+                if (workFrontAllocation == null)
+                    workFrontAllocation = new MineWorkFrontAllocation();
+                return workFrontAllocation;
+            }
+        }
+
+        /// <summary>
+        /// D3C: caller-set restart readiness penalty 0-1 (research hold).
+        /// Set explicitly by the caller that assessed the idle mine's water
+        /// exposure; never derived here.
+        /// </summary>
+        public float RestartReadinessPenalty01 => Mathf.Clamp01(restartReadinessPenalty01);
+
+        public void SetRestartReadinessPenalty(float penalty01)
+        {
+            restartReadinessPenalty01 = Mathf.Clamp01(penalty01);
+        }
+
+        /// <summary>D3C: cost-cause ledger (Canon 21.7Q), never null (lazy-initialized for legacy saves).</summary>
+        public MineCostLedger CostLedger
+        {
+            get
+            {
+                if (costLedger == null)
+                    costLedger = new MineCostLedger();
+                return costLedger;
+            }
+        }
+
         public static MineRuntimeState CreateDefault(MineralResourceKind kind)
         {
             return new MineRuntimeState
@@ -214,6 +301,11 @@ namespace LandLedgers.Economy
                 hoistRegister = HoistRegister.CaptureSaveDto(),
                 timberingLedger = TimberingLedger.CaptureSaveDto(),
                 shipmentLedger = shipmentLedger,
+                operatingPosture = OperatingPosture,
+                preservationBurden = PreservationBurden.CaptureSaveDto(),
+                workFrontAllocation = WorkFrontAllocation.CaptureSaveDto(),
+                restartReadinessPenalty01 = RestartReadinessPenalty01,
+                costLedger = CostLedger.CaptureSaveDto(),
             };
         }
 
@@ -243,6 +335,11 @@ namespace LandLedgers.Economy
             state.hoistRegister = MineHoistRegister.FromSaveDto(dto.hoistRegister);
             state.timberingLedger = MineTimberingLedger.FromSaveDto(dto.timberingLedger);
             state.shipmentOrders = new List<MineOreShipmentOrder>();
+            state.operatingPosture = dto.operatingPosture;
+            state.preservationBurden = MinePreservationBurden.FromSaveDto(dto.preservationBurden);
+            state.workFrontAllocation = MineWorkFrontAllocation.FromSaveDto(dto.workFrontAllocation);
+            state.restartReadinessPenalty01 = Mathf.Clamp01(dto.restartReadinessPenalty01);
+            state.costLedger = MineCostLedger.FromSaveDto(dto.costLedger);
             if (dto.shipmentLedger != null)
             {
                 foreach (MineOreShipmentOrderSaveDto orderDto in dto.shipmentLedger.orders)

@@ -789,6 +789,25 @@ namespace LandLedgers.Persistence
 
         /// <summary>W8D: ore shipment orders to declared smelters.</summary>
         public MineOreShipmentLedgerSaveDto shipmentLedger = new();
+
+        /// <summary>D3C: operating posture (Canon 21.7L).</summary>
+        public MineOperatingPosture operatingPosture = MineOperatingPosture.NormalProduction;
+
+        /// <summary>D3C: preservation burden while idle/closed (Canon 21.7L).</summary>
+        public MinePreservationBurdenSaveDto preservationBurden = new();
+
+        /// <summary>D3C: owner allocation among producing work fronts (Canon 21.7D).</summary>
+        public MineWorkFrontAllocationSaveDto workFrontAllocation = new();
+
+        /// <summary>
+        /// D3C: caller-set restart readiness penalty 0-1 (research hold — Canon
+        /// 21.7L notes a wet idle mine gets harder to restart but names no
+        /// function; the caller computes it, default 0 = no penalty).
+        /// </summary>
+        public float restartReadinessPenalty01;
+
+        /// <summary>D3C: cost-cause ledger (Canon 21.7Q).</summary>
+        public MineCostLedgerSaveDto costLedger = new();
     }
 
     [Serializable]

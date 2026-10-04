@@ -44,22 +44,34 @@ namespace LandLedgers.Economy.Businesses.Mine
         [SerializeField, Min(1)]
         private int transitDays = 21;
 
+        /// <summary>
+        /// D3C: optional grade-aware settlement terms (Canon 21.7H). Null keeps
+        /// the legacy flat per-ton price — existing links and saves are
+        /// unaffected.
+        /// </summary>
+        [SerializeField]
+        private MineSmelterSettlementTerms settlementTerms;
+
         public string LinkId => linkId ?? string.Empty;
         public string SmelterName => smelterName ?? string.Empty;
         public MineralResourceKind MineralKind => mineralKind;
         public int PricePerTonCents => Math.Max(0, pricePerTonCents);
         public int TransitDays => Math.Max(1, transitDays);
 
+        /// <summary>D3C: grade-aware settlement terms, or null for the flat per-ton price.</summary>
+        public MineSmelterSettlementTerms SettlementTerms => settlementTerms;
+
         public MineSmelterLink() { }
 
         public MineSmelterLink(string linkId, string smelterName, MineralResourceKind mineralKind,
-            int pricePerTonCents, int transitDays)
+            int pricePerTonCents, int transitDays, MineSmelterSettlementTerms settlementTerms = null)
         {
             this.linkId = linkId ?? string.Empty;
             this.smelterName = smelterName ?? string.Empty;
             this.mineralKind = mineralKind;
             this.pricePerTonCents = Math.Max(0, pricePerTonCents);
             this.transitDays = Math.Max(1, transitDays);
+            this.settlementTerms = settlementTerms;
         }
     }
 
@@ -136,6 +148,20 @@ namespace LandLedgers.Economy.Businesses.Mine
         [SerializeField, Min(-1)]
         private int deliveredDayIndex = -1;
 
+        /// <summary>
+        /// D3C: the grade picture captured at placement from the FIFO dispense
+        /// lines — the settlement audit trail (Canon 21.7H).
+        /// </summary>
+        [SerializeField]
+        private MineShipmentGradeSummary gradeSummary;
+
+        /// <summary>
+        /// D3C: the settlement terms agreed at placement (snapshot from the
+        /// link). Null means the legacy flat per-ton price.
+        /// </summary>
+        [SerializeField]
+        private MineSmelterSettlementTerms settlementTerms;
+
         public string OrderId => orderId ?? string.Empty;
         public string MineBusinessId => mineBusinessId ?? string.Empty;
         public string MineBusinessName => mineBusinessName ?? string.Empty;
@@ -151,6 +177,27 @@ namespace LandLedgers.Economy.Businesses.Mine
         public MineOreShipmentStatus Status => status;
         public int DeliveredDayIndex => deliveredDayIndex;
         public bool IsDelivered => status == MineOreShipmentStatus.Delivered;
+
+        /// <summary>D3C: grade picture captured at placement (never null; empty for legacy orders).</summary>
+        public MineShipmentGradeSummary GradeSummary
+        {
+            get
+            {
+                if (gradeSummary == null)
+                    gradeSummary = new MineShipmentGradeSummary();
+                return gradeSummary;
+            }
+        }
+
+        /// <summary>D3C: settlement terms agreed at placement, or null for the flat per-ton price.</summary>
+        public MineSmelterSettlementTerms SettlementTerms => settlementTerms;
+
+        /// <summary>D3C: records the placement-time grade summary and terms snapshot.</summary>
+        public void SetPlacementSummary(MineShipmentGradeSummary summary, MineSmelterSettlementTerms terms)
+        {
+            gradeSummary = summary ?? new MineShipmentGradeSummary();
+            settlementTerms = terms;
+        }
 
         public MineOreShipmentOrder() { }
 
@@ -193,6 +240,8 @@ namespace LandLedgers.Economy.Businesses.Mine
                 expectedArrivalDayIndex = ExpectedArrivalDayIndex,
                 status = status,
                 deliveredDayIndex = deliveredDayIndex,
+                gradeSummary = GradeSummary.CaptureSaveDto(),
+                settlementTerms = settlementTerms != null ? settlementTerms.CaptureSaveDto() : null,
             };
         }
 
@@ -216,6 +265,8 @@ namespace LandLedgers.Economy.Businesses.Mine
                 status = dto.status,
                 deliveredDayIndex = dto.deliveredDayIndex,
             };
+            order.gradeSummary = MineShipmentGradeSummary.FromSaveDto(dto.gradeSummary);
+            order.settlementTerms = MineSmelterSettlementTerms.FromSaveDto(dto.settlementTerms);
             return order;
         }
     }
@@ -285,6 +336,11 @@ namespace LandLedgers.Economy.Businesses.Mine
             }
 
             var dispenseDiag = new List<string>();
+            // D3C: snapshot lots BEFORE dispense — emptied lots leave the
+            // stockpile, but the settlement still needs their grades.
+            var lotSnapshot = new Dictionary<EntityId, MineOreLot>();
+            foreach (MineOreLot lot in stock.Lots)
+                lotSnapshot[lot.LotId] = lot;
             List<MineOreDispenseLine> lines = stock.DispenseTons(tons, link.SmelterName, dispenseDiag);
             if (lines.Count == 0)
             {
@@ -295,6 +351,9 @@ namespace LandLedgers.Economy.Businesses.Mine
             var order = new MineOreShipmentOrder(
                 $"ORE-SHIP-{nextOrderNumber++:D4}", mineBusinessId, mineBusinessName,
                 link.MineralKind, tons, link, originShaftId, dayIndex);
+            order.SetPlacementSummary(
+                MineShipmentGradeSummary.Compute(lines, lotId => lotSnapshot.TryGetValue(lotId, out MineOreLot lot) ? lot : null),
+                link.SettlementTerms);
             orders.Add(order);
             return order;
         }
@@ -302,9 +361,14 @@ namespace LandLedgers.Economy.Businesses.Mine
         /// <summary>
         /// Settles a delivered shipment: the smelter pays (SaleProceeds with
         /// the named smelter as counterparty). Refuses early or duplicate
-        /// settlement.
+        /// settlement. D3C: when the order carries grade-aware settlement
+        /// terms, the smelter pays net recovery value (gross minus treatment
+        /// and freight, Canon 21.7H); otherwise the legacy flat per-ton price
+        /// applies. An optional cost ledger receives the treatment/freight
+        /// causes (Canon 21.7Q).
         /// </summary>
-        public string SettleDelivery(string orderId, HouseholdLedger businessCash, int dayIndex)
+        public string SettleDelivery(string orderId, HouseholdLedger businessCash, int dayIndex,
+            MineCostLedger costLedger = null)
         {
             MineOreShipmentOrder order = FindOrder(orderId);
             if (order == null)
@@ -316,10 +380,33 @@ namespace LandLedgers.Economy.Businesses.Mine
             if (businessCash == null)
                 return "MineOreShipmentService.SettleDelivery: the mine's operating cash ledger is required.";
 
-            string rejection = businessCash.RecordInflow(dayIndex, order.TotalCents,
-                HouseholdIncomeSource.SaleProceeds, order.OrderId,
-                $"ore shipment {order.OrderId}: {order.Tons} tons {order.MineralKind} to {order.SmelterName}",
-                order.SmelterName);
+            int payableCents;
+            string paymentMemo;
+            if (order.SettlementTerms != null)
+            {
+                var settleDiag = new List<string>();
+                MineSettlementBreakdown breakdown = order.SettlementTerms.ComputeSettlement(
+                    order.GradeSummary, order.Tons, settleDiag);
+                foreach (string line in settleDiag)
+                    diagnostics.Add($"MineOreShipmentService.SettleDelivery: {line}");
+                payableCents = breakdown.NetCents;
+                paymentMemo = $"ore shipment {order.OrderId}: {order.Tons} tons {order.MineralKind} to {order.SmelterName} " +
+                    $"(graded settlement: {breakdown.Describe()} assay coverage {order.GradeSummary.AssayCoverage01:P0})";
+                if (costLedger != null)
+                {
+                    string feedRejection = MineCostFeed.FeedShipmentSettlement(order, breakdown, costLedger, dayIndex, diagnostics);
+                    if (feedRejection != null)
+                        return $"MineOreShipmentService.SettleDelivery: cost feed failed — {feedRejection}";
+                }
+            }
+            else
+            {
+                payableCents = order.TotalCents;
+                paymentMemo = $"ore shipment {order.OrderId}: {order.Tons} tons {order.MineralKind} to {order.SmelterName}";
+            }
+
+            string rejection = businessCash.RecordInflow(dayIndex, payableCents,
+                HouseholdIncomeSource.SaleProceeds, order.OrderId, paymentMemo, order.SmelterName);
             if (rejection != null)
                 return $"MineOreShipmentService.SettleDelivery: payment failed — {rejection}";
 
@@ -391,6 +478,8 @@ namespace LandLedgers.Economy.Businesses.Mine
         public int expectedArrivalDayIndex;
         public MineOreShipmentStatus status = MineOreShipmentStatus.InTransit;
         public int deliveredDayIndex = -1;
+        public MineShipmentGradeSummarySaveDto gradeSummary;
+        public MineSmelterSettlementTermsSaveDto settlementTerms;
     }
 
     [Serializable]

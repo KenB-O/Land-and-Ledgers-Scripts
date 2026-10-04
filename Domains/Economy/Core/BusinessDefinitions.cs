@@ -84,7 +84,18 @@ namespace LandLedgers.Economy
         /// (production, storage demand, working capital, transport).
         /// Value appended, never renumbered (W5B).
         /// </summary>
-        GrainElevator = 25
+        GrainElevator = 25,
+        /// <summary>
+        /// W7A: the bank as an operating business. Canon §18.8: a
+        /// player-owned bank operates as a business with both assets and
+        /// liabilities — deposits are money the bank owes, not free owner
+        /// cash. The operating business WRAPS the T2A/NX-3B instruments
+        /// (BankDeposits ledger, PrivateLenderFunds, notes, mortgages,
+        /// liens); it never bypasses them. The bank creates no money:
+        /// every loan, note, and withdrawal moves real cash.
+        /// Value appended, never renumbered (W7A).
+        /// </summary>
+        Bank = 26
     }
 
     public enum BusinessCadence

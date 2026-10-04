@@ -290,6 +290,33 @@ namespace LandLedgers.Economy
                     new TraitWeight(WorkerTraitKind.Honesty, 0.14f, "trustworthy freight handling"));
             }
 
+            if (businessType == BusinessType.Bank)
+            {
+                if (normalizedSlot.Contains("cashier"))
+                {
+                    return new WorkerRoleProfile(roleDisplayName, 0.08f,
+                        new TraitWeight(WorkerTraitKind.Honesty, 0.38f, "cash custody"),
+                        new TraitWeight(WorkerTraitKind.Care, 0.26f, "exact counting and books"),
+                        new TraitWeight(WorkerTraitKind.Reliability, 0.24f, "steady window hours"),
+                        new TraitWeight(WorkerTraitKind.SocialSkill, 0.08f, "depositor handling"));
+                }
+
+                if (normalizedSlot.Contains("teller"))
+                {
+                    return new WorkerRoleProfile(roleDisplayName, 0.06f,
+                        new TraitWeight(WorkerTraitKind.Honesty, 0.34f, "cash handling"),
+                        new TraitWeight(WorkerTraitKind.Care, 0.28f, "exact payment and receipt"),
+                        new TraitWeight(WorkerTraitKind.Reliability, 0.22f, "steady window work"),
+                        new TraitWeight(WorkerTraitKind.SocialSkill, 0.12f, "customer counter work"));
+                }
+
+                return new WorkerRoleProfile(roleDisplayName, 0.05f,
+                    new TraitWeight(WorkerTraitKind.Care, 0.32f, "ledger and correspondence"),
+                    new TraitWeight(WorkerTraitKind.Honesty, 0.28f, "record trustworthiness"),
+                    new TraitWeight(WorkerTraitKind.Reliability, 0.26f, "steady desk work"),
+                    new TraitWeight(WorkerTraitKind.LearningSpeed, 0.10f, "figures and forms"));
+            }
+
             if (businessType == BusinessType.Builder || businessType == BusinessType.Wheelwright)
             {
                 return new WorkerRoleProfile(roleDisplayName, 0.05f,

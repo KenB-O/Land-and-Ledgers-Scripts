@@ -929,7 +929,8 @@ namespace LandLedgers.World
                 new BusinessSuitabilityEntry { businessType = BusinessType.Tailor, suitable = true },
                 new BusinessSuitabilityEntry { businessType = BusinessType.Saloon, suitable = true },
                 new BusinessSuitabilityEntry { businessType = BusinessType.Barber, suitable = true },
-                new BusinessSuitabilityEntry { businessType = BusinessType.Wheelwright, suitable = true }
+                new BusinessSuitabilityEntry { businessType = BusinessType.Wheelwright, suitable = true },
+                new BusinessSuitabilityEntry { businessType = BusinessType.Bank, suitable = true }
             };
         }
 
@@ -943,7 +944,8 @@ namespace LandLedgers.World
                 || businessType == BusinessType.Tailor
                 || businessType == BusinessType.Saloon
                 || businessType == BusinessType.Barber
-                || businessType == BusinessType.Wheelwright;
+                || businessType == BusinessType.Wheelwright
+                || businessType == BusinessType.Bank;
         }
 
         private static BusinessSuitabilityEntry[] CreateNoBusinessSuitability()
@@ -967,7 +969,8 @@ namespace LandLedgers.World
                 new BusinessSuitabilityEntry { businessType = BusinessType.Tailor, suitable = false },
                 new BusinessSuitabilityEntry { businessType = BusinessType.Saloon, suitable = false },
                 new BusinessSuitabilityEntry { businessType = BusinessType.Barber, suitable = false },
-                new BusinessSuitabilityEntry { businessType = BusinessType.Wheelwright, suitable = false }
+                new BusinessSuitabilityEntry { businessType = BusinessType.Wheelwright, suitable = false },
+                new BusinessSuitabilityEntry { businessType = BusinessType.Bank, suitable = false }
             };
         }
     }

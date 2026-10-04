@@ -224,5 +224,57 @@ namespace LandLedgers.Economy.Financing
                 }
             }
         }
+
+        /// <summary>
+        /// W7A: the owner's own capital enters the bank — cash in, NO new
+        /// liability. Capital is named-source money, never conjured; the
+        /// operating business records the vault specie lots that physically
+        /// arrive with it. Owner equity is therefore CashOnHand minus
+        /// DepositsOwed, never a deposit account in disguise.
+        /// </summary>
+        public string RecordCapitalInflow(int amountCents, string sourceNote, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (amountCents <= 0) return "BankDepositLedger.RecordCapitalInflow: the capital must be positive.";
+            if (string.IsNullOrWhiteSpace(sourceNote))
+                return "BankDepositLedger.RecordCapitalInflow: the capital source must be named — capital is never conjured.";
+            CashOnHandCents += amountCents;
+            diag.Add($"BankDepositLedger [{BankName}]: owner capital +{amountCents}c ({sourceNote}) — cash on hand now {CashOnHandCents}c, owed {DepositsOwedCents()}c.");
+            return null;
+        }
+
+        #region Save / Load
+        [Serializable]
+        public sealed class BankDepositLedgerSaveDto
+        {
+            public string BankName = string.Empty;
+            public int CashOnHandCents;
+            public List<DepositAccount> Accounts = new List<DepositAccount>();
+        }
+
+        public BankDepositLedgerSaveDto CaptureSaveDto()
+        {
+            return new BankDepositLedgerSaveDto
+            {
+                BankName = BankName,
+                CashOnHandCents = CashOnHandCents,
+                Accounts = new List<DepositAccount>(accounts.Values),
+            };
+        }
+
+        public void LoadFromSaveDto(BankDepositLedgerSaveDto dto)
+        {
+            accounts.Clear();
+            diagnostics.Clear();
+            if (dto == null) return;
+            BankName = dto.BankName ?? string.Empty;
+            CashOnHandCents = Math.Max(0, dto.CashOnHandCents);
+            foreach (DepositAccount a in dto.Accounts)
+            {
+                if (a == null || string.IsNullOrWhiteSpace(a.AccountId)) continue;
+                accounts[a.AccountId] = a;
+            }
+        }
+        #endregion
     }
 }

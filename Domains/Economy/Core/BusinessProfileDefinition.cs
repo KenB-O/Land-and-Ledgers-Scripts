@@ -133,6 +133,7 @@ namespace LandLedgers.Economy
                 BusinessType.Tannery => Create("tannery", "Tannery", "Turns hides and bark tannin into workable leather for saddlers and harness makers."),
                 BusinessType.PostOffice => Create("post_office", "Post Office", "Moves the town's letters and parcels on real schedules — the information network made physical."),
                 BusinessType.Newspaper => Create("weekly_paper", "Weekly Paper", "Prints the town's weekly on a real press — editions, paid ads, subscriptions, and job printing."),
+                BusinessType.Bank => Create("bank", "Bank", "Takes deposits as real liabilities, keeps vault specie, and lends only what it holds — the town's money business."),
                 _ => Create("balanced", "Balanced", "Keeps the business balanced across its first-pass role.")
             };
         }

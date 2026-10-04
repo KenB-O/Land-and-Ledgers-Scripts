@@ -13,6 +13,16 @@ by the `SimulationSystemsHub` (CLN-1).
 3. Leave all serialized fields empty — both components find what they need via
    `FindAnyObjectByType` / `TimeManager.Instance` on Awake. Fill fields only to
    override (e.g. a test double).
+4. P6 travel & communication bootstrap (all scene work, none of it invented by the hub):
+   - Author the world layout: register `JourneyLocation`s and road `JourneyEdge`s on
+     `hub.Journeys` (e.g. via `WorldLayoutBuilder.Build`), plus `RouteConditionService.SetEdgeAttributes`
+     for fords/ferries/dirt roads so NX-2C weather can close them.
+   - Assign `hub.WeatherSeed` from the world's canonical seed (deterministic weather).
+   - Register post offices via `hub.Postal.RegisterOffice` (office id, journey
+     location id, business instance id, departure weekdays, seed).
+   - Move intents: call `PlayerDirector.TryIssueMoveIntentViaJourney(hub.Journeys, ...)`
+     from the map UI — no production caller issues move intents yet, so the player
+     cannot travel without it.
 
 ## What each driver does
 
@@ -26,7 +36,12 @@ by the `SimulationSystemsHub` (CLN-1).
 | `DayChanged` | Roll daily work budgets | `WorkTimeBudgetStore.EnsureDay(absoluteDayIndex)` |
 | `DayChanged` | Age perishable meat | `ButcherRuntime.AgeLotsToDay(dayIndex)` per hub runtime |
 | `DayChanged` | Accumulate owner work minutes | Player's `MinutesWorked` → weekly accumulator (CLN-4) |
-| `DayChanged` | Execute NPC daily needs | `DailyNeedsService.ExecuteDay(population, planner, executor, dayIndex, diag, hub.WorkTimeBudgets)` (NX-2C drive-by — needs PopulationManager in scene + `Journeys` assigned) |
+| `DayChanged` | Advance weather/route conditions | `hub.RouteConditions.AdvanceDay(dayIndex, hub.WeatherSeed, diag)` — P6: NX-2C closures actually close roads through the journey model's condition provider (blizzard → warning logged) |
+| `DayChanged` | Dispatch/arrive mail | `hub.Postal.AdvanceDay(hub.Journeys, dayIndex, diag)` — P6: NX-2A letters actually move posted → in-transit → arrived on office schedules |
+| `DayChanged` | Advance money-order books | `hub.MoneyOrders.AdvanceDay(dayIndex, diag)` — P6: advices arrive, stale orders expire (D4E) |
+| `DayChanged` | Audit registered mail | `hub.RegisteredMail.AuditOverdue(dayIndex, diag)` — P6: overdue items audited (D4F) |
+| `DayChanged` | Advance recruitment | `hub.Recruiting.AdvanceDay(population, hub.Employments, dayIndex, diag, hub.Postal)` when a population exists — P6: T2B inquiries accrue from real persons; postal-routed letters resolve only on real arrival |
+| `DayChanged` | Execute NPC daily needs | `DailyNeedsService.ExecuteDay(population, planner, executor, dayIndex, diag, hub.WorkTimeBudgets)` (NX-2C drive-by — needs PopulationManager in scene + a non-empty journey model: `SimulationDrivers.Journeys`, falling back to the hub-owned `hub.Journeys`) |
 | `WeekChanged` | Sync liabilities to valuation | `hub.Liabilities.SyncAllToValuation(null)` — P1: the SWN-3 liability ledger now feeds the BIZ-5 read model weekly |
 | `WeekChanged` | Post owner labor | `Valuation.RecordOwnerLabor` per player-owned business (CLN-4) |
 | `ShortTick` | Advance player travel | `PlayerDirector.RecordMovementProgress(wholeMinutes, hub.WorkTimeBudgets)` |

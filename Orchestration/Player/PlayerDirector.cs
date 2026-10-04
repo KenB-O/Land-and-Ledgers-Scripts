@@ -5,6 +5,7 @@ using UnityEngine;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Orchestration.Player
 {
@@ -19,9 +20,10 @@ namespace LandLedgers.Orchestration.Player
     /// tests); the Unity side supplies an <see cref="IPlayerAvatar"/> that the
     /// director notifies of each intent.
     ///
-    /// Travel timing is currently a flat per-route minute estimate booked against
-    /// the budget. When the location/journey model lands, intents feed it instead —
-    /// the director API does not change.
+    /// Travel timing: TryIssueMoveIntent books a caller-supplied minute estimate
+    /// against the budget (legacy path); TryIssueMoveIntentViaJourney routes the
+    /// trip through the JRN-1 journey model instead — real miles, real mode
+    /// speed, NX-2C weather closures honored (P6).
     /// </summary>
     [Serializable]
     public sealed class PlayerDirector
@@ -109,6 +111,59 @@ namespace LandLedgers.Orchestration.Player
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// P6: issues a movement intent FED BY THE JOURNEY MODEL — the fulfillment
+        /// of the TTS-4 promise ("when the location/journey model lands, intents
+        /// feed it instead"). Travel minutes come from real routed miles at the
+        /// chosen mode's speed (Canon §13.1 1:1 world scale, TTS-1 minute
+        /// quantum); NX-2C weather closures are honored by the model's routing
+        /// (closed edges are routed around; unreachable destinations are refused
+        /// with the model's diagnostic, never travelled by fiat).
+        /// </summary>
+        public bool TryIssueMoveIntentViaJourney(
+            JourneyModel journeys,
+            string destinationLocationId,
+            TravelMode mode,
+            WorkTimeBudgetStore budgets,
+            IPlayerAvatar avatar,
+            out string rejectionReason)
+        {
+            rejectionReason = null;
+            if (journeys == null)
+            {
+                rejectionReason = "Cannot travel: no journey model — travel minutes cannot be routed.";
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(destinationLocationId))
+            {
+                rejectionReason = "Move intent requires a destination.";
+                return false;
+            }
+
+            if (IsBusy)
+            {
+                rejectionReason = "Player is busy (" + DescribeActivity() + "); cancel first.";
+                return false;
+            }
+
+            JourneyRoute route = journeys.FindRoute(currentLocationId, destinationLocationId, mode);
+            if (!route.Found)
+            {
+                rejectionReason = "Cannot travel: " + route.Diagnostic;
+                return false;
+            }
+
+            if (route.TotalMinutes <= 0)
+            {
+                // Same place — no travel, no budget booked.
+                currentLocationId = destinationLocationId;
+                return true;
+            }
+
+            return TryIssueMoveIntent(destinationLocationId, route.TotalMinutes, budgets, avatar, out rejectionReason);
         }
 
         /// <summary>

@@ -10,6 +10,7 @@ using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Liabilities;
 using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
+using LandLedgers.Economy.Recruitment;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -125,6 +126,48 @@ namespace LandLedgers.Orchestration.Systems
         /// <summary>NX-2A: the postal network authority (offices, mail, contracts).</summary>
         public PostalService Postal => postalService ??= new PostalService();
 
+        // P6: travel & communication authorities. The hub owns them so the
+        // drivers (CLN-2) can advance them daily and the save pipeline (CLN-1)
+        // can round-trip them. Scene bootstrap registers the actual content
+        // (journey locations/edges, post offices, weather seed) — the hub
+        // never invents geography.
+        private JourneyModel journeyModel;
+        private RouteConditionService routeConditions;
+        private MoneyOrderService moneyOrderService;
+        private RegisteredMailService registeredMailService;
+        private RecruitmentService recruitmentService;
+        private int weatherSeed;
+
+        /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
+        public JourneyModel Journeys => journeyModel ??= new JourneyModel();
+
+        /// <summary>
+        /// P6: NX-2C weather/route conditions. Wired as the journey model's
+        /// condition provider on Awake and after every load (the provider is
+        /// not serialized — re-attachment is the hub's job).
+        /// </summary>
+        public RouteConditionService RouteConditions => routeConditions ??= new RouteConditionService();
+
+        /// <summary>P6: D4E postal money-order books (bound to the hub's postal service).</summary>
+        public MoneyOrderService MoneyOrders => moneyOrderService ??= new MoneyOrderService(Postal);
+
+        /// <summary>P6: D4F registered-mail custody chain (subscribes to the hub's postal handoffs).</summary>
+        public RegisteredMailService RegisteredMail => registeredMailService ??= new RegisteredMailService(Postal);
+
+        /// <summary>P6: T2B recruitment workflows (efforts, inquiries, letters).</summary>
+        public RecruitmentService Recruiting => recruitmentService ??= new RecruitmentService();
+
+        /// <summary>
+        /// P6: weather seed for the route-condition service. Bootstrap-assigned
+        /// from the world's canonical seed (deterministic weather); persisted
+        /// in the save DTO so a loaded game continues the same weather stream.
+        /// </summary>
+        public int WeatherSeed
+        {
+            get => weatherSeed;
+            set => weatherSeed = Math.Max(0, value);
+        }
+
         private AgriculturalRiskService riskService;
         private LivestockDiseaseService diseaseService;
 
@@ -232,6 +275,15 @@ namespace LandLedgers.Orchestration.Systems
             liabilityLedger ??= new BusinessLiabilityLedger();
             liabilityLedger.AttachValuation(valuation);
             postalService ??= new PostalService();
+            // P6: travel & communication authorities. The condition provider is
+            // not serialized — (re-)attachment is the hub's job, here and after
+            // every load.
+            journeyModel ??= new JourneyModel();
+            routeConditions ??= new RouteConditionService();
+            journeyModel.ConditionProvider = routeConditions;
+            moneyOrderService ??= new MoneyOrderService(postalService);
+            registeredMailService ??= new RegisteredMailService(postalService);
+            recruitmentService ??= new RecruitmentService();
             riskService ??= new AgriculturalRiskService();
             diseaseService ??= new LivestockDiseaseService();
             liabilityLedger.SyncAllToValuation(null);
@@ -320,6 +372,12 @@ namespace LandLedgers.Orchestration.Systems
                 postal = Postal.CaptureSaveDto(),
                 risk = Risk.CaptureSaveDto(),
                 disease = Disease.CaptureSaveDto(),
+                journeys = Journeys.CaptureSaveDto(),
+                routeConditions = RouteConditions.CaptureSaveDto(),
+                moneyOrders = MoneyOrders.CaptureSaveDto(),
+                registeredMail = RegisteredMail.CaptureSaveDto(),
+                recruiting = Recruiting.CaptureSaveDto(),
+                weatherSeed = weatherSeed,
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -362,6 +420,14 @@ namespace LandLedgers.Orchestration.Systems
             Postal.LoadFromSaveDto(dto.postal);
             Risk.LoadFromSaveDto(dto.risk);
             Disease.LoadFromSaveDto(dto.disease);
+            Journeys.LoadFromSaveDto(dto.journeys);
+            RouteConditions.LoadFromSaveDto(dto.routeConditions);
+            MoneyOrders.LoadFromSaveDto(dto.moneyOrders);
+            RegisteredMail.LoadFromSaveDto(dto.registeredMail);
+            Recruiting.LoadFromSaveDto(dto.recruiting);
+            weatherSeed = Math.Max(0, dto.weatherSeed);
+            // The condition provider is not serialized — re-attach after load.
+            Journeys.ConditionProvider = RouteConditions;
 
             butcherRuntimes ??= new List<ButcherRuntime>();
             butcherRuntimes.Clear();

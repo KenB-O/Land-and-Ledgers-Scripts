@@ -613,5 +613,50 @@ namespace LandLedgers.Economy.Recruitment
             diag.Add($"RecruitmentService: effort {effortId} closed.");
             return null;
         }
+
+        /// <summary>
+        /// P6: captures open efforts, inquiries, and in-flight letters for the
+        /// save pipeline (CLN-1 pattern) — an effort's seeded inquiry stream
+        /// and its unresolved letters survive save/load.
+        /// </summary>
+        public RecruitmentServiceSaveDto CaptureSaveDto()
+        {
+            return new RecruitmentServiceSaveDto
+            {
+                efforts = new List<RecruitmentEffort>(efforts.Values),
+                inquiries = new List<CandidateInquiry>(inquiries.Values),
+                letters = new List<RecruitmentLetter>(letters.Values),
+                sequence = sequence,
+            };
+        }
+
+        /// <summary>P6: restores efforts, inquiries, and letters from the save pipeline.</summary>
+        public void LoadFromSaveDto(RecruitmentServiceSaveDto dto)
+        {
+            efforts.Clear();
+            inquiries.Clear();
+            letters.Clear();
+            if (dto == null) return;
+            if (dto.efforts != null)
+                foreach (RecruitmentEffort e in dto.efforts)
+                    if (e != null && !string.IsNullOrEmpty(e.EffortId)) efforts[e.EffortId] = e;
+            if (dto.inquiries != null)
+                foreach (CandidateInquiry i in dto.inquiries)
+                    if (i != null && !string.IsNullOrEmpty(i.InquiryId)) inquiries[i.InquiryId] = i;
+            if (dto.letters != null)
+                foreach (RecruitmentLetter l in dto.letters)
+                    if (l != null && !string.IsNullOrEmpty(l.LetterId)) letters[l.LetterId] = l;
+            sequence = Math.Max(0, dto.sequence);
+        }
+    }
+
+    /// <summary>P6: save data for the recruitment service (CLN-1 pattern).</summary>
+    [Serializable]
+    public sealed class RecruitmentServiceSaveDto
+    {
+        public List<RecruitmentEffort> efforts = new List<RecruitmentEffort>();
+        public List<CandidateInquiry> inquiries = new List<CandidateInquiry>();
+        public List<RecruitmentLetter> letters = new List<RecruitmentLetter>();
+        public int sequence;
     }
 }

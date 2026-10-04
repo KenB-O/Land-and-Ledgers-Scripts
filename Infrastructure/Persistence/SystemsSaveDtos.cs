@@ -15,12 +15,14 @@ using LandLedgers.Economy.Liabilities;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
+using LandLedgers.Economy.Recruitment;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Persistence
 {
@@ -50,6 +52,18 @@ namespace LandLedgers.Persistence
         public AgriculturalRiskSaveDto risk = new();
         /// <summary>NX-2B: livestock disease outbreaks.</summary>
         public LivestockDiseaseSaveDto disease = new();
+        /// <summary>P6: journey model — locations and the road network (JRN-1).</summary>
+        public JourneyModelSaveDto journeys = new();
+        /// <summary>P6: weather/route conditions over the journey model (NX-2C).</summary>
+        public RouteConditionSaveDto routeConditions = new();
+        /// <summary>P6: postal money-order books (D4E).</summary>
+        public MoneyOrderServiceSaveDto moneyOrders = new();
+        /// <summary>P6: registered-mail custody chain (D4F).</summary>
+        public RegisteredMailSaveDto registeredMail = new();
+        /// <summary>P6: recruitment efforts, inquiries, in-flight letters (T2B).</summary>
+        public RecruitmentServiceSaveDto recruiting = new();
+        /// <summary>P6: weather seed for the route-condition service (bootstrap-assigned from the world seed).</summary>
+        public int weatherSeed;
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

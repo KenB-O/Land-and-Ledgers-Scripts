@@ -34,8 +34,15 @@ namespace LandLedgers.Orchestration.Systems
     /// - NX-2C drive-by: DailyNeedsService.ExecuteDay runs on DayChanged with
     ///   the hub's WorkTimeBudgetStore (it had no live caller — the NX-1B
     ///   nutrition teeth never bit). Needs a PopulationManager in the scene and
-    ///   SimulationDrivers.Journeys assigned by bootstrap; supplier registration
-    ///   is scene wiring (T1A pattern).
+    ///   a non-empty journey model (SimulationDrivers.Journeys, falling back to
+    ///   the hub-owned model); supplier registration is scene wiring (T1A
+    ///   pattern).
+    /// - P6 travel &amp; communication daily drives: the hub's RouteConditionService
+    ///   advances the weather (NX-2C closures actually close roads), PostalService
+    ///   dispatches/arrives mail on real schedules (NX-2A letters actually move),
+    ///   MoneyOrderService advances advices/expiry (D4E), RegisteredMailService
+    ///   audits overdue items (D4F), and RecruitmentService accrues inquiries and
+    ///   resolves letters — postal-routed ones only on real arrival (T2B).
     /// </summary>
     public sealed class SimulationDrivers : MonoBehaviour
     {
@@ -226,10 +233,51 @@ namespace LandLedgers.Orchestration.Systems
                 runtime?.AgeLotsToDay(absoluteDayIndex);
             }
 
+            // P6: travel & communication daily drives. Weather actually changes
+            // (NX-2C: blizzards close roads through the journey model's
+            // condition provider), mail actually moves on office schedules
+            // (NX-2A: posted → in-transit → arrived → collected), money-order
+            // advices arrive and stale orders expire (D4E), overdue registered
+            // items are audited (D4F), and recruitment letters resolve —
+            // postal-routed ones only on the mail item's real arrival (T2B).
+            DriveTravelAndComms(absoluteDayIndex);
+
             // NX-2C drive-by: DailyNeedsService.ExecuteDay had NO live caller —
             // the NX-1B nutrition teeth never bit. Wire it here with the
             // work-time budgets so missed meals reduce usable minutes for real.
             DriveDailyNeeds(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// P6: advances the hub's travel &amp; communication authorities one day.
+        /// Safe no-ops when nothing is registered yet (no offices, no weather
+        /// attributes, no recruitment efforts): the services loop over empty
+        /// registries instead of inventing traffic.
+        /// </summary>
+        private void DriveTravelAndComms(int absoluteDayIndex)
+        {
+            if (hub == null) return;
+            var diag = new List<string>();
+
+            hub.RouteConditions.AdvanceDay(absoluteDayIndex, hub.WeatherSeed, diag);
+            if (hub.RouteConditions.IsBlizzard())
+            {
+                Debug.LogWarning($"[SimulationDrivers] BLIZZARD day {absoluteDayIndex} — " +
+                    "roads closed; journeys route around or refuse (NX-2C).");
+            }
+
+            hub.Postal.AdvanceDay(hub.Journeys, absoluteDayIndex, diag);
+            hub.MoneyOrders.AdvanceDay(absoluteDayIndex, diag);
+            hub.RegisteredMail.AuditOverdue(absoluteDayIndex, diag);
+
+            // T2B: open efforts accrue inquiries from real persons; letters
+            // resolve — postal-routed ones only when the mail item really
+            // arrived (no instant information transfer).
+            if (populationManager != null && populationManager.State != null)
+            {
+                hub.Recruiting.AdvanceDay(
+                    populationManager.State, hub.Employments, absoluteDayIndex, diag, hub.Postal);
+            }
         }
 
         private void DriveDailyNeeds(int absoluteDayIndex)
@@ -239,10 +287,15 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return; // no population yet — nothing to feed
             }
-            if (Journeys == null)
+            // P6: fall back to the hub's journey model when the driver carries
+            // no explicit one — the model is hub-owned now. An empty model (no
+            // locations authored yet) still skips honestly instead of routing
+            // embodied purchases through nothing.
+            JourneyModel journeys = Journeys ?? hub.Journeys;
+            if (!HasAnyLocation(journeys))
             {
-                Debug.LogWarning("[SimulationDrivers] DailyNeedsService skipped: no JourneyModel assigned " +
-                    "(assign SimulationDrivers.Journeys in scene bootstrap — see DRIVERS.md).");
+                Debug.LogWarning("[SimulationDrivers] DailyNeedsService skipped: no journey locations " +
+                    "registered (author the world layout in scene bootstrap — see DRIVERS.md).");
                 return;
             }
 
@@ -255,7 +308,7 @@ namespace LandLedgers.Orchestration.Systems
             // travel-time leg of embodied purchasing actually gates on the
             // person's TTS-1 work-time budget (previously always skipped).
             purchaseExecutor ??= new EmbodiedPurchaseExecutor(
-                populationManager.State, hub.HouseholdLedgers, supplierDirectory, Journeys,
+                populationManager.State, hub.HouseholdLedgers, supplierDirectory, journeys,
                 null, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid));
 
             // P2: W2B/W2C/W3B nutrition links — count real prepared meals
@@ -281,6 +334,15 @@ namespace LandLedgers.Orchestration.Systems
                     $"{report.MealsEaten} eaten, {report.MealsMissed} missed, " +
                     $"{report.PurchasesMade} purchases ({report.SpendCents}c).");
             }
+        }
+
+        /// <summary>P6: true when the journey model has any routable location.</summary>
+        private static bool HasAnyLocation(JourneyModel journeys)
+        {
+            if (journeys == null) return false;
+            foreach (JourneyLocation location in journeys.AllLocations())
+                if (location != null) return true;
+            return false;
         }
 
         private void OnShortTick(SimulationTickContext context)

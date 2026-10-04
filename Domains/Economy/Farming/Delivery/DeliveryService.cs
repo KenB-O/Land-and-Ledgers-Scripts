@@ -354,6 +354,13 @@ namespace LandLedgers.Economy.Farming.Delivery
                 sourceBusinessInstanceId = job.OriginBusinessId,
                 destinationBusinessInstanceId = job.DestinationBusinessId,
                 summaryLabel = $"{job.QuantityUnits} {job.ProductKind} ({job.OriginFarmId} → {job.DestinationName})",
+                // P6: transit runs on REAL travel time — the journey-routed (or
+                // legacy-estimated) one-way distance at wagon speed, converted
+                // to game seconds for the shipment stage machine. The previous
+                // default (120 game-seconds) completed every haul in two
+                // minutes regardless of distance.
+                transitDurationGameSeconds = Mathf.Max(60f,
+                    EstimateDriveMinutesOneWay(Math.Max(0f, job.DistanceMilesOneWay)) * 60f),
             };
             return shipment;
         }

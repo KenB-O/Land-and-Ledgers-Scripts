@@ -26,6 +26,13 @@ namespace LandLedgers.Economy.Businesses.Sawmill
         public EntityId SawedBy = EntityId.Invalid;
         public int SawedDayIndex;
         public string ConversionProfileId = string.Empty; // which SawmillConversionProfile was applied
+        /// <summary>
+        /// D2B: the day this lumber was stacked for air-drying (green-lumber
+        /// handling, Canon §8.5A chain stage). Drying-duration calibration
+        /// is research-blocked — the field records the factual start of
+        /// drying so a later pass can apply researched species schedules.
+        /// </summary>
+        public int StackedDayIndex = -1;
 
         public SawmillLumberLot() { }
 
@@ -181,6 +188,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     SawedBy = lot.SawedBy,
                     SawedDayIndex = lot.SawedDayIndex,
                     ConversionProfileId = lot.ConversionProfileId,
+                    StackedDayIndex = lot.StackedDayIndex,
                 });
             }
             return dto;

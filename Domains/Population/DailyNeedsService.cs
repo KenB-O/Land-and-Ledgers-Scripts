@@ -40,6 +40,8 @@ namespace LandLedgers.Population
             public int MealsFromRestaurants;
             /// <summary>W2C: of MealsEaten, how many were board-included meals at boarding houses (Canon §2.5).</summary>
             public int MealsFromBoardingHouses;
+            /// <summary>W3B: of MealsEaten, how many were dining-room meals at hotels (Canon §2.5).</summary>
+            public int MealsFromHotels;
         }
 
         /// <summary>
@@ -54,6 +56,9 @@ namespace LandLedgers.Population
         /// The optional boarding-meal source (W2C, same Canon) reports
         /// board-included meals served by boarding houses; the two sources
         /// are summed under one per-person daily cap. Null = pre-W2C
+        /// behavior exactly. The optional hotel-meal source (W3B, same
+        /// Canon) reports dining-room meals served by hotels; all three
+        /// sources sum under the same per-person daily cap. Null = pre-W3B
         /// behavior exactly.
         /// </summary>
         public DayReport ExecuteDay(
@@ -64,7 +69,8 @@ namespace LandLedgers.Population
             List<string> diag,
             WorkTimeBudgetStore budgetStore = null,
             IRestaurantMealDaySource restaurantMeals = null,
-            IBoardingHouseMealDaySource boardingMeals = null)
+            IBoardingHouseMealDaySource boardingMeals = null,
+            IHotelMealDaySource hotelMeals = null)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -77,7 +83,7 @@ namespace LandLedgers.Population
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals);
             }
             return report;
         }
@@ -88,7 +94,8 @@ namespace LandLedgers.Population
             int dayIndex, DayReport report, List<string> diag,
             WorkTimeBudgetStore budgetStore,
             IRestaurantMealDaySource restaurantMeals,
-            IBoardingHouseMealDaySource boardingMeals)
+            IBoardingHouseMealDaySource boardingMeals,
+            IHotelMealDaySource hotelMeals)
         {
             int actingPersonId = FindActingAdult(population, household);
             if (actingPersonId < 0)
@@ -110,16 +117,18 @@ namespace LandLedgers.Population
             // 1. Meals (GHOST-DEF-006): every member eats; each meal consumes
             //    one unit of staple_food from household reserves — EXCEPT
             //    meals already eaten at a restaurant (W2B nutrition link,
-            //    Canon §2.5) or as board-included meals at a boarding house
-            //    (W2C nutrition link, same Canon): a person who genuinely ate
-            //    draws (and buys) only their remaining need. The two sources
-            //    sum under one per-person daily cap — a boarder who also ate
-            //    at an eating house is never double-fed. Null sources mean
-            //    full caps — pre-W2B/W2C behavior.
+            //    Canon §2.5), as board-included meals at a boarding house
+            //    (W2C nutrition link, same Canon), or in a hotel dining room
+            //    (W3B nutrition link, same Canon): a person who genuinely ate
+            //    draws (and buys) only their remaining need. The three
+            //    sources sum under one per-person daily cap — a guest who
+            //    also ate at an eating house is never double-fed. Null
+            //    sources mean full caps — pre-W2B/W2C/W3B behavior.
             int totalDailyNeed = members.Count * MealsPerPersonPerDay;
             var reserveMealCaps = new Dictionary<int, int>();
             int mealsEatenAtRestaurants = 0;
             int mealsEatenAtBoardingHouses = 0;
+            int mealsEatenAtHotels = 0;
             foreach (PersonState member in members)
             {
                 int eatenAtRestaurant = restaurantMeals != null
@@ -128,9 +137,13 @@ namespace LandLedgers.Population
                 int eatenBoard = boardingMeals != null
                     ? boardingMeals.MealsEatenAtBoardingHouse(member.id, dayIndex)
                     : 0;
-                int eatenOut = Math.Max(0, Math.Min(MealsPerPersonPerDay, eatenAtRestaurant + eatenBoard));
+                int eatenAtHotel = hotelMeals != null
+                    ? hotelMeals.MealsEatenAtHotel(member.id, dayIndex)
+                    : 0;
+                int eatenOut = Math.Max(0, Math.Min(MealsPerPersonPerDay, eatenAtRestaurant + eatenBoard + eatenAtHotel));
                 mealsEatenAtRestaurants += Math.Max(0, Math.Min(MealsPerPersonPerDay, eatenAtRestaurant));
                 mealsEatenAtBoardingHouses += Math.Max(0, Math.Min(MealsPerPersonPerDay, eatenBoard));
+                mealsEatenAtHotels += Math.Max(0, Math.Min(MealsPerPersonPerDay, eatenAtHotel));
                 reserveMealCaps[member.id] = MealsPerPersonPerDay - eatenOut;
             }
 
@@ -177,9 +190,10 @@ namespace LandLedgers.Population
 
             // NX-1B: scarcity allocation — meals go per person by priority
             // (children → workers → others); each person's nutrition derives
-            // from their actual meals (Tech X §2.9). W2B: per-person caps —
-            // a restaurant diner draws only their remaining need from the
-            // household, never a full share on top of a full stomach.
+            // from their actual meals (Tech X §2.9). W2B/W2C/W3B: per-person
+            // caps — a restaurant diner, boarder, or hotel guest draws only
+            // their remaining need from the household, never a full share
+            // on top of a full stomach.
             Dictionary<int, int> allocation = MealAllocator.Allocate(members, mealsAvailable, reserveMealCaps, MealsPerPersonPerDay);
             int mealsEaten = 0;
             int undernourished = 0;
@@ -205,6 +219,7 @@ namespace LandLedgers.Population
             report.MealsMissed += Math.Max(0, missed);
             report.MealsFromRestaurants += mealsEatenAtRestaurants;
             report.MealsFromBoardingHouses += mealsEatenAtBoardingHouses;
+            report.MealsFromHotels += mealsEatenAtHotels;
             if (missed > 0)
                 diag.Add($"DailyNeedsService: H{household.id} missed {missed} meals on day {dayIndex} ({undernourished} undernourished) — no supplier, no time, or no money. Logged, not faked.");
 

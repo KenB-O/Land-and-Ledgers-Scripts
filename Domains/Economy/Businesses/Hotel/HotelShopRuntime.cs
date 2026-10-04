@@ -19,15 +19,18 @@ namespace LandLedgers.Economy.Businesses.Hotel
     /// - housekeeping: bed-linen turnover with lot provenance and the
     ///   in-house laundry loop (Canon §8.1E);
     /// - the nightly-state register: every guest resolves to a hotel
-    ///   room in a named room — the W2C hook, now live.
+    ///   room in a named room — the W2C hook, now live;
+    /// - W3B: traveler demand (arrivals routed to real beds — full hotels
+    ///   refuse loudly, never invent rooms), the livery stable link
+    ///   (guests' horses/teams booked into real stalls), and the dining
+    ///   room (room-and-board meals from real pantry lots with provenance,
+    ///   following the W2C kitchen pattern with hotel-specific policy).
     ///
     /// Money moves only through ledger authorities, never here: nightly
-    /// sales and weekly rent-due reports are settled by the caller. A
-    /// hotel guest sleeps locally without becoming a resident
-    /// (Tech §2.10). Hotel meals are NOT this package: a hotel wanting
-    /// room-and-board needs a food-procurement/kitchen layer (W2C
-    /// boarding-house kitchen is the pattern); room rates here are
-    /// room-only policy.
+    /// sales, weekly rent-due, and the locked room charges on traveler
+    /// demand results are settled by the caller. A hotel guest sleeps
+    /// locally without becoming a resident (Tech §2.10). W3A's room rates
+    /// remain room-only policy; board is the W3B kitchen's own package.
     /// </summary>
     public sealed class HotelShopRuntime
     {
@@ -37,7 +40,14 @@ namespace LandLedgers.Economy.Businesses.Hotel
         private readonly HotelRateSchedule rateSchedule = new HotelRateSchedule();
         private readonly HotelGuestRegister guestRegister = new HotelGuestRegister();
         private readonly HotelHousekeeping housekeeping;
+        private readonly HotelKitchen kitchen;
         private readonly EntityIdRegistry idRegistry;
+        /// <summary>
+        /// W3B: the livery-side stable booking authority this hotel links
+        /// to. Owned by the caller (the future Livery business), not by the
+        /// hotel — the hotel only holds the link.
+        /// </summary>
+        private LiveryStableBookings liveryStable;
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId;
@@ -45,12 +55,14 @@ namespace LandLedgers.Economy.Businesses.Hotel
         public HotelRateSchedule RateSchedule => rateSchedule;
         public HotelGuestRegister GuestRegister => guestRegister;
         public HotelHousekeeping Housekeeping => housekeeping;
+        public HotelKitchen Kitchen => kitchen;
 
         public HotelShopRuntime(string businessInstanceId, EntityIdRegistry idRegistry)
         {
             this.businessInstanceId = businessInstanceId ?? string.Empty;
             this.idRegistry = idRegistry;
             this.housekeeping = new HotelHousekeeping(idRegistry);
+            this.kitchen = new HotelKitchen(idRegistry);
         }
 
         /// <summary>One-time opening linen/soap endowment — explicit, flagged, never auto-replenished.</summary>
@@ -63,6 +75,50 @@ namespace LandLedgers.Economy.Businesses.Hotel
         public void EnsureImportables(List<string> diag)
         {
             HotelConsumableSupply.EnsureHotelImportables(diag ?? diagnostics);
+        }
+
+        /// <summary>W3B: registers the dining room's food ingredients as importables — EQU-1 declared trade link.</summary>
+        public void EnsureFoodImportables(List<string> diag)
+        {
+            HotelFoodSupply.EnsureHotelFoodImportables(diag ?? diagnostics);
+        }
+
+        /// <summary>W3B: one-time opening pantry endowment — explicit, flagged, never auto-replenished.</summary>
+        public void ApplyOpeningPantryEndowment(int dayIndex, List<string> diag)
+        {
+            HotelFoodBootstrap.ApplyBootstrapEndowment(kitchen.FoodStock, idRegistry, dayIndex, diag ?? diagnostics);
+        }
+
+        /// <summary>
+        /// W3B: attaches the livery-side stable booking authority this hotel
+        /// links guests' teams to. The stable is NOT hotel-owned — the
+        /// caller owns it (the future Livery business's authority); the
+        /// hotel only holds the link so checkout releases the stalls.
+        /// </summary>
+        public void AttachLiveryStable(LiveryStableBookings stableBookings, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            liveryStable = stableBookings;
+            diag.Add(liveryStable != null
+                ? "HotelShopRuntime: livery stable linked — guests' horses/teams book real stalls."
+                : "HotelShopRuntime: livery stable detached — teams must stable elsewhere.");
+        }
+
+        /// <summary>
+        /// W3B: books livery stalls for one guest's animals. Returns the
+        /// refusal (loud — the team must stable elsewhere), or null. A
+        /// guest with no animals never calls this.
+        /// </summary>
+        public string BookLiveryStallsForGuest(int personId, List<EntityId> animalIds, int nights, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (liveryStable == null)
+                return "HotelShopRuntime: no livery stable linked — the traveler's team cannot be stabled through this hotel.";
+            HotelGuestRecord record = guestRegister.FindRecord(personId);
+            if (record == null)
+                return $"HotelShopRuntime: person {personId} holds no hotel agreement — stalls book only for real guests.";
+            return liveryStable.BookStalls(personId, animalIds, record.StartDayIndex,
+                Math.Max(1, nights), diag);
         }
 
         /// <summary>Adds a physical room. Returns the refusal, or null.</summary>
@@ -102,10 +158,17 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 nightlyRate, weeklyRate, startDayIndex, nightsPaid, roomInventory, diag);
         }
 
-        /// <summary>Checks a guest out, vacating their bed. Returns the refusal, or null.</summary>
+        /// <summary>
+        /// Checks a guest out, vacating their bed and releasing their livery
+        /// stable booking. Returns the refusal, or null.
+        /// </summary>
         public string CheckOutGuest(int personId, List<string> diag)
         {
-            return guestRegister.CheckOut(personId, roomInventory, diag ?? diagnostics);
+            diag = diag ?? diagnostics;
+            string refusal = guestRegister.CheckOut(personId, roomInventory, diag);
+            if (liveryStable != null && refusal == null)
+                liveryStable.ReleaseBookings(personId, diag);
+            return refusal;
         }
 
         /// <summary>
@@ -121,10 +184,11 @@ namespace LandLedgers.Economy.Businesses.Hotel
         /// <summary>
         /// Runs one day: settles tonight's room nights, turns over linen
         /// for every occupied bed-night (provenance recorded on the sale),
-        /// and launders dirty linen with the housekeeping labor minutes
-        /// supplied. Returns tonight's room-night sales.
+        /// launders dirty linen with the housekeeping labor minutes
+        /// supplied, and runs the dining room (W3B) with the kitchen labor
+        /// minutes supplied. Returns tonight's room-night sales.
         /// </summary>
-        public List<HotelRoomNightSale> ExecuteDay(int dayIndex, int housekeepingLaborMinutes, List<string> diag)
+        public List<HotelRoomNightSale> ExecuteDay(int dayIndex, int housekeepingLaborMinutes, List<string> diag, int kitchenLaborMinutes = 0)
         {
             diag = diag ?? diagnostics;
             if (dayIndex < 0)
@@ -158,11 +222,14 @@ namespace LandLedgers.Economy.Businesses.Hotel
             int washed = housekeeping.Launder(dayIndex, Math.Max(0, housekeepingLaborMinutes),
                 out int laborConsumed, diag);
 
+            int fullyServed = kitchen.ExecuteDay(guestRegister, dayIndex, Math.Max(0, kitchenLaborMinutes), diag);
+
             int nightlyCents = 0;
             foreach (HotelRoomNightSale sale in sales)
                 if (sale != null) nightlyCents += Math.Max(0, sale.CentsCharged);
             diag.Add($"HotelShopRuntime: day {dayIndex} — {sales.Count} room-night sale(s), {nightlyCents}¢ room revenue, " +
-                $"{linenFailures} linen shortfall(s), {washed} set(s) laundered ({laborConsumed} labor minute(s)).");
+                $"{linenFailures} linen shortfall(s), {washed} set(s) laundered ({laborConsumed} labor minute(s)), " +
+                $"{fullyServed} guest(s) fully served in the dining room.");
             return sales;
         }
 
@@ -201,6 +268,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
             public HotelRateSchedule.HotelRateScheduleSaveDto RateSchedule = new HotelRateSchedule.HotelRateScheduleSaveDto();
             public HotelGuestRegister.HotelGuestRegisterSaveDto GuestRegister = new HotelGuestRegister.HotelGuestRegisterSaveDto();
             public HotelHousekeeping.HotelHousekeepingSaveDto Housekeeping = new HotelHousekeeping.HotelHousekeepingSaveDto();
+            public HotelKitchen.HotelKitchenSaveDto Kitchen = new HotelKitchen.HotelKitchenSaveDto();
         }
 
         public HotelShopRuntimeSaveDto CaptureSaveDto()
@@ -212,6 +280,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 RateSchedule = rateSchedule.CaptureSaveDto(),
                 GuestRegister = guestRegister.CaptureSaveDto(),
                 Housekeeping = housekeeping.CaptureSaveDto(),
+                Kitchen = kitchen.CaptureSaveDto(),
             };
         }
 
@@ -221,6 +290,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
             roomInventory.LoadFromSaveDto(dto.RoomInventory);
             rateSchedule.LoadFromSaveDto(dto.RateSchedule);
             housekeeping.LoadFromSaveDto(dto.Housekeeping);
+            kitchen.LoadFromSaveDto(dto.Kitchen);
             guestRegister.LoadFromSaveDto(dto.GuestRegister);
 
             // Post-load integrity: every guest's bed must actually be

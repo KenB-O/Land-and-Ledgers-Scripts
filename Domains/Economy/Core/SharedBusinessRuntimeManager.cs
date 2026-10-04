@@ -8065,6 +8065,34 @@ namespace LandLedgers.Economy
             SortProfilesForDeterministicSeeding();
         }
 
+        /// <summary>
+        /// Returns the authored business catalog exposed by the shared runtime.
+        /// Formation UI must use this list rather than maintaining a second enum
+        /// list that can advertise types with no configured operating profile.
+        /// </summary>
+        public BusinessType[] GetPlayerCreatableBusinessTypes()
+        {
+            EnsureProfilesLoaded();
+            if (businessProfiles == null || businessProfiles.Length == 0)
+            {
+                return Array.Empty<BusinessType>();
+            }
+
+            List<BusinessType> types = new List<BusinessType>(businessProfiles.Length);
+            for (int i = 0; i < businessProfiles.Length; i++)
+            {
+                BusinessProfileDefinition profile = businessProfiles[i];
+                if (profile == null || profile.Business == null || types.Contains(profile.Business.BusinessType))
+                {
+                    continue;
+                }
+
+                types.Add(profile.Business.BusinessType);
+            }
+
+            return types.ToArray();
+        }
+
         private void Awake()
         {
             AutoWire();

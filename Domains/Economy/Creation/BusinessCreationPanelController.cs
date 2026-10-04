@@ -113,7 +113,11 @@ namespace LandLedgers.FirstLedger
                 "Formation creates the legal/economic business first. It does not buy land or make the business operational.",
                 12f, FontStyles.Normal);
 
-            businessTypes = (BusinessType[])Enum.GetValues(typeof(BusinessType));
+            businessTypes = sharedBusinessRuntime.GetPlayerCreatableBusinessTypes();
+            if (businessTypes.Length == 0)
+            {
+                businessTypes = (BusinessType[])Enum.GetValues(typeof(BusinessType));
+            }
             selectedTypeIndex = Math.Max(0, Array.IndexOf(businessTypes, BusinessType.GeneralStore));
             typeDropdown = CreateDropdown(overlay.transform, "BusinessTypeDropdown");
             typeDropdown.onValueChanged.AddListener(SelectBusinessType);

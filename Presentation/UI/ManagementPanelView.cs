@@ -970,6 +970,16 @@ namespace LandLedgers.UI
             }
 
             storeSections ??= rentingOverviewText != null ? rentingOverviewText.transform.parent as RectTransform : null;
+            // Older authored canvases placed the upper store row directly under
+            // the body. Normalize that one legacy shape into the current shared
+            // section container so the management shell has one stable hierarchy.
+            RectTransform directUpperRow = propertyDetailBodyContent != null
+                ? FindRect(propertyDetailBodyContent, "PropertyDetail_StoreUpperRow")
+                : null;
+            if (storeSections == propertyDetailBodyContent && directUpperRow != null && canCreate)
+            {
+                storeSections = null;
+            }
             if (storeSections == null && propertyDetailBodyContent != null && canCreate)
             {
                 storeSections = CreateRect("PropertyDetail_StoreSections", propertyDetailBodyContent);
@@ -984,15 +994,20 @@ namespace LandLedgers.UI
                 element.preferredHeight = -1f;
                 element.flexibleWidth = 1f;
                 element.flexibleHeight = 0f;
+                if (directUpperRow != null)
+                {
+                    if (Application.isPlaying)
+                    {
+                        directUpperRow.SetParent(storeSections, false);
+                    }
+                }
             }
 
             if (storeSections != null
                 && propertyDetailBodyContent != null
-                && storeSections != propertyDetailBodyContent
-                && storeSections.parent != propertyDetailBodyContent
+                && storeSections.parent == propertyDetailBodyContent
                 && storeSections.name == "PropertyDetail_StoreSections")
             {
-                storeSections.SetParent(propertyDetailBodyContent, false);
                 storeSections.SetAsFirstSibling();
             }
 
@@ -1004,6 +1019,21 @@ namespace LandLedgers.UI
             if (storeSections != null)
             {
                 RectTransform upperRow = FindRect(storeSections, "PropertyDetail_StoreUpperRow");
+                if (upperRow == null && canCreate)
+                {
+                    upperRow = CreateRect("PropertyDetail_StoreUpperRow", storeSections);
+                    HorizontalLayoutGroup rowLayout = upperRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+                    rowLayout.childAlignment = TextAnchor.UpperLeft;
+                    rowLayout.childControlWidth = true;
+                    rowLayout.childControlHeight = true;
+                    rowLayout.childForceExpandWidth = true;
+                    rowLayout.childForceExpandHeight = false;
+                    rowLayout.spacing = 8f;
+                    LayoutElement rowElement = upperRow.gameObject.AddComponent<LayoutElement>();
+                    rowElement.preferredHeight = -1f;
+                    rowElement.flexibleWidth = 1f;
+                    rowElement.flexibleHeight = 0f;
+                }
                 if (upperRow != null)
                 {
                     storeOverviewText ??= FindText(upperRow, "StoreOverviewText");
@@ -1011,7 +1041,7 @@ namespace LandLedgers.UI
                     RetireStoreUpperRow(upperRow);
                 }
 
-                if (storeOverviewText != null && storeOverviewText.transform.parent != storeSections)
+                if (storeOverviewText != null && Application.isPlaying && storeOverviewText.transform.parent != storeSections)
                 {
                     storeOverviewText.transform.SetParent(storeSections, false);
                 }
@@ -1020,7 +1050,7 @@ namespace LandLedgers.UI
                 {
                     storeFinanceText = CreateText("StoreFinanceText", storeSections, "Store ledger loads at runtime.", 14f, FontStyles.Normal);
                 }
-                else if (storeFinanceText.transform.parent != storeSections)
+                else if (Application.isPlaying && storeFinanceText.transform.parent != storeSections)
                 {
                     storeFinanceText.transform.SetParent(storeSections, false);
                 }
@@ -1103,7 +1133,7 @@ namespace LandLedgers.UI
                     businessBreakdownContent = CreateRect("BusinessBreakdown_Content", breakdownSection);
                 }
 
-                if (businessBreakdownContent != null && businessBreakdownContent.parent != breakdownSection)
+                if (businessBreakdownContent != null && Application.isPlaying && businessBreakdownContent.parent != breakdownSection)
                 {
                     businessBreakdownContent.SetParent(breakdownSection, false);
                 }
@@ -1178,6 +1208,13 @@ namespace LandLedgers.UI
 
             RectTransform activeParent = topRow != null ? topRow : parent;
             RectTransform quietParent = topRow != null ? topRow : parent;
+            if (body != null && canCreate)
+            {
+                // Keep quiet/off-market provenance visually separate from the
+                // active lead feed; both are legitimate acquisition surfaces,
+                // but they are not the same evidence stream.
+                quietParent = EnsureDashboardRow(body, "Acquisition_QuietRow", true);
+            }
             RectTransform selectedParent = bottomRow != null ? bottomRow : parent;
             RectTransform historyParent = bottomRow != null ? bottomRow : parent;
 
@@ -1194,11 +1231,39 @@ namespace LandLedgers.UI
                 quietParent,
                 "AcquisitionOffMarket_Section",
                 "Quiet / Off-Market Leads",
-                acquisitionOffMarketText,
+                acquisitionOffMarketText == acquisitionForSaleText ? null : acquisitionOffMarketText,
                 "AcquisitionOffMarket_BodyText",
                 "Quiet leads load at runtime.",
                 150f,
                 canCreate);
+            if (canCreate
+                && acquisitionOffMarketText != null
+                && acquisitionForSaleText != null
+                && (acquisitionOffMarketText == acquisitionForSaleText
+                    || acquisitionOffMarketText.transform.parent == acquisitionForSaleText.transform.parent))
+            {
+                RectTransform dedicatedQuietRow = CreateRect("Acquisition_QuietEvidenceRow", body ?? parent);
+                HorizontalLayoutGroup quietLayout = dedicatedQuietRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+                quietLayout.childAlignment = TextAnchor.UpperLeft;
+                quietLayout.childControlWidth = true;
+                quietLayout.childControlHeight = true;
+                quietLayout.childForceExpandWidth = true;
+                quietLayout.childForceExpandHeight = false;
+                quietLayout.spacing = 8f;
+                LayoutElement quietElement = dedicatedQuietRow.gameObject.AddComponent<LayoutElement>();
+                quietElement.preferredHeight = -1f;
+                quietElement.flexibleWidth = 1f;
+                quietElement.flexibleHeight = 0f;
+                acquisitionOffMarketText = EnsureSectionBody(
+                    dedicatedQuietRow,
+                    "AcquisitionOffMarket_Section",
+                    "Quiet / Off-Market Leads",
+                    null,
+                    "AcquisitionOffMarket_BodyText",
+                    "Quiet leads load at runtime.",
+                    150f,
+                    true);
+            }
             acquisitionSelectedLeadText = EnsureSectionBody(
                 selectedParent,
                 "AcquisitionSelectedLead_Section",
@@ -1485,7 +1550,7 @@ namespace LandLedgers.UI
                 return;
             }
 
-            if (cashTransferRoot.parent != parent)
+            if (Application.isPlaying && cashTransferRoot.parent != parent)
             {
                 cashTransferRoot.SetParent(parent, false);
             }
@@ -1558,9 +1623,35 @@ namespace LandLedgers.UI
             RectTransform storeSections = propertyDetailBodyContent != null
                 ? propertyDetailBodyContent.Find("PropertyDetail_StoreSections") as RectTransform
                 : null;
+            if (storeSections == null && propertyDetailBodyContent != null)
+            {
+                storeSections = CreateRect("PropertyDetail_StoreSections", propertyDetailBodyContent);
+                VerticalLayoutGroup sectionLayout = storeSections.gameObject.AddComponent<VerticalLayoutGroup>();
+                sectionLayout.childAlignment = TextAnchor.UpperLeft;
+                sectionLayout.childControlWidth = true;
+                sectionLayout.childControlHeight = true;
+                sectionLayout.childForceExpandWidth = true;
+                sectionLayout.childForceExpandHeight = false;
+                sectionLayout.spacing = 8f;
+            }
             RectTransform upperRow = storeSections != null
                 ? storeSections.Find("PropertyDetail_StoreUpperRow") as RectTransform
                 : null;
+            if (upperRow == null && storeSections != null)
+            {
+                upperRow = CreateRect("PropertyDetail_StoreUpperRow", storeSections);
+                HorizontalLayoutGroup rowLayout = upperRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+                rowLayout.childAlignment = TextAnchor.UpperLeft;
+                rowLayout.childControlWidth = true;
+                rowLayout.childControlHeight = true;
+                rowLayout.childForceExpandWidth = true;
+                rowLayout.childForceExpandHeight = false;
+                rowLayout.spacing = 8f;
+                LayoutElement rowElement = upperRow.gameObject.AddComponent<LayoutElement>();
+                rowElement.preferredHeight = -1f;
+                rowElement.flexibleWidth = 1f;
+                rowElement.flexibleHeight = 0f;
+            }
 
             if (storeSections != null)
             {
@@ -1606,7 +1697,10 @@ namespace LandLedgers.UI
             LayoutElement layout = upperRow.GetComponent<LayoutElement>() ?? upperRow.gameObject.AddComponent<LayoutElement>();
             layout.ignoreLayout = true;
             layout.minHeight = 0f;
-            layout.preferredHeight = 0f;
+            // Keep the retired row's authored auto-size contract intact for
+            // layout diagnostics, while ignoreLayout removes it from the live
+            // stack so the replacement sections own the visible height.
+            layout.preferredHeight = -1f;
             layout.flexibleHeight = 0f;
             upperRow.gameObject.SetActive(false);
         }
@@ -1960,7 +2054,7 @@ namespace LandLedgers.UI
 
             RectTransform financeBottomRow = financesScrollContent != null ? FindRect(financesScrollContent, "Finances_BottomRow") : null;
             RectTransform parent = financeBottomRow != null ? financeBottomRow : (financesScrollContent != null ? financesScrollContent : financesContentRoot);
-            if (bankLoanRoot != null && parent != null && bankLoanRoot.parent != parent)
+            if (bankLoanRoot != null && parent != null && Application.isPlaying && bankLoanRoot.parent != parent)
             {
                 bankLoanRoot.SetParent(parent, false);
                 bankLoanRoot.SetAsLastSibling();
@@ -2040,9 +2134,12 @@ namespace LandLedgers.UI
 
             TMP_InputField input = rect.gameObject.AddComponent<TMP_InputField>();
             input.lineType = TMP_InputField.LineType.SingleLine;
-            input.contentType = TMP_InputField.ContentType.DecimalNumber;
-            input.characterValidation = TMP_InputField.CharacterValidation.Decimal;
+            // Setting characterValidation explicitly switches TMP back to its
+            // Custom content mode. Apply the authored semantic content type last
+            // so numeric cash controls remain numeric in the inspector and at runtime.
             input.keyboardType = TouchScreenKeyboardType.DecimalPad;
+            input.characterValidation = TMP_InputField.CharacterValidation.Decimal;
+            input.contentType = TMP_InputField.ContentType.DecimalNumber;
             input.targetGraphic = image;
 
             TMP_Text placeholderText = CreateInputText("Placeholder", rect, placeholder, new Color(0.62f, 0.58f, 0.49f, 1f));
@@ -2081,9 +2178,9 @@ namespace LandLedgers.UI
             }
 
             input.lineType = TMP_InputField.LineType.SingleLine;
-            input.contentType = TMP_InputField.ContentType.DecimalNumber;
-            input.characterValidation = TMP_InputField.CharacterValidation.Decimal;
             input.keyboardType = TouchScreenKeyboardType.DecimalPad;
+            input.characterValidation = TMP_InputField.CharacterValidation.Decimal;
+            input.contentType = TMP_InputField.ContentType.DecimalNumber;
             input.characterLimit = 16;
 
             if (input.placeholder is TMP_Text placeholderText)
@@ -2498,6 +2595,11 @@ namespace LandLedgers.UI
         private static void MoveToParent(Component component, RectTransform parent)
         {
             if (component == null || parent == null || component.transform.parent == parent)
+            {
+                return;
+            }
+
+            if (!Application.isPlaying)
             {
                 return;
             }

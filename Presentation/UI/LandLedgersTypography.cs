@@ -78,7 +78,13 @@ namespace LandLedgers.UI
                 return cached;
             }
 
-            TMP_FontAsset resolved = FindLoadedFont(FontName(role));
+            TMP_FontAsset resolved = null;
+#if UNITY_EDITOR
+            // Editor smoke tests and prefab repair run before these generated assets
+            // are resident in Resources. Resolve the authored asset directly first.
+            resolved = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetPath(role));
+#endif
+            resolved = IsUsableFont(resolved) ? resolved : FindLoadedFont(FontName(role));
             if (!IsUsableFont(resolved))
             {
                 resolved = GetSafeDefaultFont();

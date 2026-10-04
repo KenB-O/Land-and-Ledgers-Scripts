@@ -54,7 +54,17 @@ namespace LandLedgers.Economy
         /// provenance), kitchen labor, and meal-quality abstraction. Value
         /// appended, never renumbered (W2B).
         /// </summary>
-        Restaurant = 22
+        /// <summary>
+        /// W3A: the hotel. Canon §8.1 / Tech §2.2: hotels are settlement
+        /// infrastructure drawing transient arrivals and higher-paying
+        /// commercial travelers; Canon §2.4 names the hotel room a
+        /// legitimate nightly state. Room nights as sold inventory, room
+        /// classes (single/double/parlor suite), nightly + weekly rate
+        /// policy, guest registration, room-night sales records,
+        /// housekeeping linen with provenance. Value appended, never
+        /// renumbered (W3A).
+        /// </summary>
+        Hotel = 23
     }
 
     public enum BusinessCadence

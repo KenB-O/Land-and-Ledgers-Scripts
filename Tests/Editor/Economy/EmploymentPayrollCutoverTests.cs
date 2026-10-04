@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Reflection;
 using LandLedgers.Economy;
 using NUnit.Framework;
 
@@ -13,7 +15,18 @@ namespace LandLedgers.Editor.Economy
         private static BusinessInstanceState CreateBusiness(BusinessType businessType)
         {
             BusinessProfileDefinition profile = BusinessProfileDefinition.CreateFallback(businessType, "Test Business");
-            return BusinessInstanceState.Create("test_payroll_cutover", profile, 0, BusinessOwnerIdentity.Player());
+            BusinessInstanceState business = BusinessInstanceState.Create(
+                "test_payroll_cutover", profile, 0, BusinessOwnerIdentity.Player());
+            FieldInfo slotsField = typeof(BusinessRuntimeState).GetField(
+                "workerSlots", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(slotsField);
+            var slots = (List<WorkerSlotState>)slotsField.GetValue(business.RuntimeState);
+            if (slots.Count == 0)
+            {
+                slots.Add(new WorkerSlotState("test-slot", "Test Slot", 1200, true));
+            }
+
+            return business;
         }
 
         private static WorkerSlotState FirstSlot(BusinessInstanceState business)

@@ -15,7 +15,7 @@ namespace LandLedgers.EditorTests.Economy
     {
         private static WorkerSlotState FilledSlot(string slotId, string workerId, int wageCents)
         {
-            var slot = new WorkerSlotState();
+            var slot = new WorkerSlotState(slotId, $"Worker {workerId}", wageCents, false);
             slot.Assign(workerId, $"Worker {workerId}", wageCents);
             return slot;
         }

@@ -180,7 +180,8 @@ namespace LandLedgers.EditorTests.Economy
 
                 Assert.AreEqual(4, buyer.RuntimeState.GetCategoryStock("meat").CurrentStockUnits);
                 Assert.AreEqual(900, seller.RuntimeState.LastWeeklyLocalTransferRevenueCents);
-                Assert.AreEqual(325, buyer.RuntimeState.LastWeeklyLocalTransferCostCents);
+                Assert.AreEqual(1075, buyer.RuntimeState.LastWeeklyLocalTransferCostCents,
+                    "Buyer cost is the agreed per-unit cost (4 × 250c) plus the 75c freight charge.");
                 Assert.AreEqual(75, carrier.RuntimeState.LastWeeklyLocalTransferRevenueCents);
                 StringAssert.Contains("freight", buyer.RuntimeState.LastWeeklyTransferSummary.ToLowerInvariant());
             }
@@ -239,7 +240,8 @@ namespace LandLedgers.EditorTests.Economy
 
                 Assert.AreEqual(4, buyer.RuntimeState.GetCategoryStock("meat").CurrentStockUnits);
                 Assert.AreEqual(900, seller.RuntimeState.LastWeeklyLocalTransferRevenueCents);
-                Assert.AreEqual(250, buyer.RuntimeState.LastWeeklyLocalTransferCostCents);
+                Assert.AreEqual(1000, buyer.RuntimeState.LastWeeklyLocalTransferCostCents,
+                    "Source delivery still charges the agreed per-unit cost (4 × 250c), but no freight.");
                 Assert.AreEqual(0, carrier.RuntimeState.LastWeeklyLocalTransferRevenueCents);
             }
             finally
@@ -286,10 +288,11 @@ namespace LandLedgers.EditorTests.Economy
                         ShipmentHaulingMode.HiredFreight,
                         buyer.InstanceId);
 
-                Assert.AreEqual(ShipmentHaulingMode.SourceDelivers, haulingMode);
-                Assert.AreEqual(LogisticsSupplierClass.LocalBusiness, supplierClass);
+                Assert.AreEqual(ShipmentHaulingMode.HiredFreight, haulingMode,
+                    "A hired-freight request cannot silently change its hauling authority when no carrier exists.");
+                Assert.AreEqual(LogisticsSupplierClass.HiredHauling, supplierClass);
                 Assert.IsEmpty(carrierId);
-                Assert.IsEmpty(payerId);
+                Assert.AreEqual(buyer.InstanceId, payerId);
                 Assert.AreEqual(0, freightChargeCents);
             }
             finally

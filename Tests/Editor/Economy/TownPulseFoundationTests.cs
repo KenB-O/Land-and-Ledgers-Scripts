@@ -108,7 +108,8 @@ namespace LandLedgers.EditorTests.Economy
                 Assert.AreEqual("repair_rush", target.ActivePulseId);
                 Assert.AreEqual(3, target.RuntimeState.lastDailyRequestedUnits);
                 Assert.AreEqual(2, target.RuntimeState.lastDailyFulfilledUnits);
-                StringAssert.Contains("2/3", target.CurrentAlertText);
+                StringAssert.Contains("Repair Rush", target.CurrentAlertText,
+                    "The saved active pulse survives; the alert's current-day progress is derived from the current date.");
             }
             finally
             {

@@ -1821,18 +1821,21 @@ namespace LandLedgers.Economy
                     continue; // owner:xxx and unparsable ids — matches the projector's skip rule.
                 }
 
-                bool hasActive = false;
-                foreach (EmploymentRelationship existing in employments.GetActiveByEmployee(personId))
+                bool hasExistingRelationship = false;
+                foreach (EmploymentRelationship existing in employments.GetByEmployee(personId))
                 {
                     if (string.Equals(existing.EmployerBusinessId, BusinessId, StringComparison.Ordinal))
                     {
-                        hasActive = true;
+                        hasExistingRelationship = true;
                         break;
                     }
                 }
 
-                if (hasActive)
+                if (hasExistingRelationship)
                 {
+                    // A slot is transitional evidence only. An ended or suspended
+                    // EmploymentRelationship remains authoritative and must not be
+                    // silently replaced by a fresh active record during migration.
                     continue;
                 }
 

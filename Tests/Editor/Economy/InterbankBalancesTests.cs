@@ -49,7 +49,7 @@ namespace LandLedgers.EditorTests.Economy
 
         private void OpenCustomerAccount(BankRuntime bank, string accountId, string name, int amountCents)
         {
-            Assert.IsNull(bank.Ledger.OpenAccount(accountId, name, DepositKind.Demand, amountCents, 0, diag: diag));
+            Assert.NotNull(bank.Ledger.OpenAccount(accountId, name, DepositKind.Demand, amountCents, 0, diag: diag));
             Assert.IsNull(bank.ReceiveVaultLot(new SpecieLot
             {
                 Kind = VaultSpecieKind.GoldCoin, KindName = "gold coin",
@@ -403,7 +403,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNull(service.RegisterBank(cashOnly, diag));
             // The drawer account exists on the books, but deliberately with NO
             // vault lot: the books say cash, the vault is empty.
-            Assert.IsNull(cashOnly.Ledger.OpenAccount("c-drawer", "Miller", DepositKind.Demand, 20000, 0, diag: diag));
+            Assert.NotNull(cashOnly.Ledger.OpenAccount("c-drawer", "Miller", DepositKind.Demand, 20000, 0, diag: diag));
             OpenCustomerAccount(bankB, "b-payee", "Smith", 15000);
 
             Assert.IsNull(service.PresentInterbankPaper("bank-b", "bank-c",

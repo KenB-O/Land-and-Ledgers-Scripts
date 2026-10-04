@@ -328,10 +328,11 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNotNull(lots);
             Assert.AreEqual(DepositorClass.CounterpartyBank, ledgerB.WithdrawalEvents[0].Class);
 
-            // Drawdown for bank A: cash 70000 + drawable demand interbank asset 25000 = 95000.
+            // The 5000c withdrawal has returned home, so bank A has 75000c cash
+            // plus the remaining 25000c drawable interbank asset.
             var ledgerA = new DepositorConfidenceLedger("bank-d4b-a");
             ledgerA.AttachInterbankSettlement(settlement);
-            Assert.AreEqual(95000, ledgerA.LiquidCoverageCents(bankA));
+            Assert.AreEqual(100000, ledgerA.LiquidCoverageCents(bankA));
         }
 
         // ---------- save / load ----------

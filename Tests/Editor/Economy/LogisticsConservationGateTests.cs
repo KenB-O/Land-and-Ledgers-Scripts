@@ -582,7 +582,14 @@ namespace LandLedgers.EditorTests.Economy
         {
             GameObject go = new("Logistics Runtime Test");
             cleanup.Add(go);
-            return go.AddComponent<LogisticsRuntimeManager>();
+            LogisticsRuntimeManager runtime = go.AddComponent<LogisticsRuntimeManager>();
+            // These tests intentionally exercise missing-road-access paths. Do not let
+            // an unrelated scene-world singleton make the fixture routeable.
+            SetPrivateField(runtime, "townWorld", null);
+            SetPrivateField(runtime, "pathingManager", null);
+            SetPrivateField(runtime, "generalStoreRuntime", null);
+            SetPrivateField(runtime, "sharedBusinessRuntime", null);
+            return runtime;
         }
 
         private static TownGrid CreateRoadGrid(int width, int depth, int roadZ)

@@ -134,8 +134,15 @@ namespace LandLedgers.EditorTests.Economy.Farming
             Assert.AreEqual(0, job.FreightChargeCents, "Internal hauling books no freight revenue.");
 
             var ledger = new HouseholdLedger(7);
+            Assert.IsNull(ledger.RecordInflow(
+                100,
+                job.InternalCost.TotalCostCents,
+                HouseholdIncomeSource.OwnerContribution,
+                "farm-biz-1",
+                "test capital for documented internal haul cost",
+                "farm-biz-1"));
             Assert.IsNull(DeliveryService.PostInternalHaulCost(ledger, job, 100, diagnostics));
-            Assert.Less(ledger.GetBalanceCents(), 0, "Haul cost posts as an outflow with provenance.");
+            Assert.AreEqual(0, ledger.GetBalanceCents(), "Haul cost posts as a funded outflow with provenance.");
         }
 
         [Test]

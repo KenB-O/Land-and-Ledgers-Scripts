@@ -280,6 +280,7 @@ namespace LandLedgers.EditorTests.Population
                 });
 
                 PopulationManager target = targetObject.AddComponent<PopulationManager>();
+                SetPrivateField(target, "townWorld", null);
                 target.LoadFromSaveDto(legacyDto);
 
                 PersonState person = target.State.GetPerson(201);
@@ -288,7 +289,8 @@ namespace LandLedgers.EditorTests.Population
                 Assert.IsTrue(person.settlementPressure.initialized);
                 Assert.AreEqual("Stable household", person.settlementPressure.summary);
                 Assert.AreEqual(0.45f, person.laborUrgency01);
-                Assert.AreEqual(-1, person.hostHouseholdId);
+                Assert.AreEqual(20, person.hostHouseholdId,
+                    "Legacy household membership is a provable relationship and is restored as the host household.");
 
                 HouseholdState household = target.State.GetHousehold(20);
                 Assert.AreEqual(NewcomerArrivalProfile.SettledResident, household.arrivalProfile);
@@ -358,6 +360,7 @@ namespace LandLedgers.EditorTests.Population
                 PopulationSaveDto legacyDto = JsonUtility.FromJson<PopulationSaveDto>(json);
 
                 PopulationManager target = targetObject.AddComponent<PopulationManager>();
+                SetPrivateField(target, "townWorld", null);
                 target.LoadFromSaveDto(legacyDto);
 
                 PersonState person = target.State.GetPerson(301);

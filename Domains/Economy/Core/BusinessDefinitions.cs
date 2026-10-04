@@ -64,7 +64,16 @@ namespace LandLedgers.Economy
         /// housekeeping linen with provenance. Value appended, never
         /// renumbered (W3A).
         /// </summary>
-        Hotel = 23
+        Hotel = 23,
+        /// <summary>
+        /// W4C: logging — timber stands, felling rights, log skidding and
+        /// hauling. Canon §8.5/§8.5A: the primary-production layer below the
+        /// sawmill — standing timber -> felling -> extraction/skidding/hauling
+        /// -> log landing -> mill intake. Felling is rights-gated (timber
+        /// theft is a claim, not a harvest). Value appended, never
+        /// renumbered (W4C).
+        /// </summary>
+        Logging = 24
     }
 
     public enum BusinessCadence

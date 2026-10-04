@@ -281,12 +281,35 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
+        /// <summary>
+        /// W1C: tailor cutting table station. Canon Part V tailor profile: the
+        /// cutting table is core equipment ("Ironing/CuttingTable", Tech X
+        /// §3.5); "larger pressing table" and "stock of cloth/notions" are the
+        /// scale column. One definition, many instances — the tailor shop
+        /// runtime pools tables and assigns one per bench stage (cut/sew/press),
+        /// so concurrent bench work never exceeds ready tables. Canon 4.7: the
+        /// sewing machine is capacity only and never gates — it is not a
+        /// component here.
+        /// </summary>
+        public static WorkstationDefinition TailorCuttingTableStation
+        {
+            get
+            {
+                var def = Build("tailor-cutting-table", "Tailor Cutting Table", "tailor-shop",
+                    "W1C; Tech X §3.5 (TailorHandKit; Ironing/CuttingTable); Canon Part V: Tailor (cutting table; sewing machine capacity-only, never gates)",
+                    new[] { "tailoring" },
+                    ("cutting-table", 1));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "tailoring"));
+                return def;
+            }
+        }
+
         /// <summary>All workstation definitions, for catalog-driven UI and validation.</summary>
         public static List<WorkstationDefinition> All => new List<WorkstationDefinition>
         {
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
             CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard, PrintingPress,
-            BarberChairStation,
+            BarberChairStation, TailorCuttingTableStation,
         };
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Legal;
 using LandLedgers.Primitives;
 using LandLedgers.World.Property;
 using UnityEngine;
@@ -67,9 +68,12 @@ namespace LandLedgers.Economy.Businesses.Lawyer
     /// distinct; unauthorized use can exist without granting title).
     ///
     /// The grantor's recorded-holding is CHECKED at record time but does not
-    /// block recording: territorial recording systems record questionable
-    /// instruments too, and the resulting defect is exactly what T3D calls
-    /// "color of title" (ClaimBasis.ColorOfTitle). The warning is logged.
+    /// block recording: the dated LegalRegime decides whether questionable
+    /// instruments are accepted for recording (D3D: W9's inline "territorial
+    /// recording systems record questionable instruments too" assumption is
+    /// now regime data — LegalRegime.RecordingAcceptsQuestionableInstruments).
+    /// The resulting defect is exactly what T3D calls "color of title"
+    /// (ClaimBasis.ColorOfTitle). The warning is logged.
     /// </summary>
     public sealed class LawyerDeedService
     {
@@ -196,13 +200,16 @@ namespace LandLedgers.Economy.Businesses.Lawyer
         /// <summary>
         /// Records a finalized deed through the T2F TitleAuthority. This is the
         /// ONLY step that moves title, and the authority performs it. The
-        /// grantor's recorded holding is checked and a mismatch is warned —
-        /// recording a questionable instrument yields color of title (T3D),
-        /// not an ownership fact.
+        /// grantor's recorded holding is checked; when it mismatches, the
+        /// dated LegalRegime (when supplied) decides whether a questionable
+        /// instrument is accepted for recording — with no regime, W9 behavior
+        /// is preserved (accepted, warned). Recording a questionable instrument
+        /// yields color of title (T3D ClaimBasis.ColorOfTitle), not an
+        /// ownership fact; validity is for the dispute system.
         /// </summary>
         public string RecordDeed(
             string deedId, TitleAuthority titles, EntityIdRegistry ids,
-            int dayIndex, string note, List<string> diag)
+            int dayIndex, string note, List<string> diag, LegalRegime regime = null)
         {
             diag = diag ?? diagnostics;
             if (!deeds.TryGetValue(deedId, out DraftedDeed deed))
@@ -220,6 +227,15 @@ namespace LandLedgers.Economy.Businesses.Lawyer
             }
             if (!string.Equals(recordedHolder, deed.GrantorName, StringComparison.Ordinal))
             {
+                bool acceptsQuestionable = regime != null
+                    ? regime.RecordingAcceptsQuestionableInstruments(dayIndex)
+                    : true; // no regime supplied: W9 behavior preserved
+                if (!acceptsQuestionable)
+                {
+                    diag.Add($"LawyerDeedService.RecordDeed: recorded holder of '{deed.ParcelId}' is '{recordedHolder}', " +
+                        $"not the grantor '{deed.GrantorName}' — the dated legal regime does not accept questionable instruments for recording.");
+                    return $"RecordDeed: grantor '{deed.GrantorName}' is not the recorded holder of '{deed.ParcelId}' and the regime refuses questionable instruments.";
+                }
                 diag.Add($"LawyerDeedService.RecordDeed: WARNING — recorded holder of '{deed.ParcelId}' is '{recordedHolder}', " +
                     $"not the grantor '{deed.GrantorName}'. Recorded as color of title (T3D ClaimBasis.ColorOfTitle); validity is for the dispute system.");
             }

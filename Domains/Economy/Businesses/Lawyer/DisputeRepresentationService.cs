@@ -24,6 +24,27 @@ namespace LandLedgers.Economy.Businesses.Lawyer
     }
 
     /// <summary>
+    /// D3D: the dispute lifecycle stage counsel is appearing through. Canon
+    /// Part IX §9.1: "claim/demand -> response -> negotiation/settlement ->
+    /// formal proceeding where needed -> decision/judgment -> enforcement."
+    /// The stage is REPORTED by the dispute mechanics and recorded here —
+    /// counsel never advances a case by decree. "Exact court procedure ...
+    /// remain[s] dated research," so the formal-proceeding entry records the
+    /// appearance (the court appearance, as far as the canon describes it)
+    /// and nothing about how the proceeding was conducted.
+    /// </summary>
+    public enum DisputeStageKind
+    {
+        Unspecified = 0,
+        ClaimDemand = 1,
+        Response = 2,
+        NegotiationSettlement = 3,
+        FormalProceeding = 4, // the court appearance, as far as the canon describes it
+        DecisionJudgment = 5,
+        Enforcement = 6,
+    }
+
+    /// <summary>
     /// W9B: one engagement to represent a real client in a T3D property
     /// dispute. The engagement RECORDS the lawyer's appearance; it never
     /// decides the dispute. Outcomes — settlement, judgment, enforcement —
@@ -45,6 +66,9 @@ namespace LandLedgers.Economy.Businesses.Lawyer
         public int OpenedDayIndex;
         public int ClosedDayIndex = -1;
         public string OutcomeNote = string.Empty;
+        public DisputeStageKind CurrentStage = DisputeStageKind.Unspecified; // D3D: canon §9.1 lifecycle stage, as reported by the dispute mechanics
+        public int StageDayIndex = -1;
+        public string StageNote = string.Empty;
 
         public RepresentationEngagement() { }
     }
@@ -146,6 +170,31 @@ namespace LandLedgers.Economy.Businesses.Lawyer
             engagement.Status = RepresentationStatus.Withdrawn;
             engagement.ClosedDayIndex = dayIndex;
             diag.Add($"DisputeRepresentationService: counsel withdrew from claim {engagement.ClaimId} (day {dayIndex}) — the dispute proceeds without them.");
+            return null;
+        }
+
+        /// <summary>
+        /// D3D: records the dispute lifecycle stage counsel is appearing
+        /// through (Canon §9.1). The stage is REPORTED by the dispute
+        /// mechanics — the lawyer records the appearance; recording a stage
+        /// never advances, settles, or decides the case. A FormalProceeding
+        /// entry is the court appearance, as far as the canon describes it:
+        /// exact court procedure remains dated research and is not modeled.
+        /// </summary>
+        public string RecordStage(string engagementId, DisputeStageKind stage, string stageNote, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!engagements.TryGetValue(engagementId, out RepresentationEngagement engagement))
+                return $"RecordStage: unknown engagement '{engagementId}'.";
+            if (engagement.Status != RepresentationStatus.Active)
+                return $"RecordStage: engagement '{engagementId}' is {engagement.Status} — stages record only for active engagements.";
+            if (stage == DisputeStageKind.Unspecified)
+                return $"RecordStage: the lifecycle stage must be stated (Canon §9.1).";
+
+            engagement.CurrentStage = stage;
+            engagement.StageDayIndex = dayIndex;
+            engagement.StageNote = stageNote ?? string.Empty;
+            diag.Add($"DisputeRepresentationService: engagement {engagementId} — counsel appearing through stage {stage} (day {dayIndex}). Recorded, not decided.");
             return null;
         }
 

@@ -243,6 +243,25 @@ namespace LandLedgers.Economy.Financing
             return null;
         }
 
+        /// <summary>
+        /// W7B: end-of-day teller balancing — a counted cash shortage is a REAL
+        /// loss. Cash on hand drops; with liabilities unchanged, owner equity
+        /// drops by the same amount. Never silently absorbed (Canon §18.12:
+        /// loss costs are part of bank income economics).
+        /// </summary>
+        public string RecordCashShortage(int amountCents, string reason, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (amountCents <= 0) return "BankDepositLedger.RecordCashShortage: the shortage must be positive.";
+            if (string.IsNullOrWhiteSpace(reason))
+                return "BankDepositLedger.RecordCashShortage: the shortage reason must be stated.";
+            if (amountCents > CashOnHandCents)
+                return $"BankDepositLedger.RecordCashShortage: shortage {amountCents}c exceeds cash on hand {CashOnHandCents}c — count again, do not book the impossible.";
+            CashOnHandCents -= amountCents;
+            diag.Add($"BankDepositLedger [{BankName}]: SHORTAGE — {amountCents}c booked as a real loss ({reason}). Cash on hand now {CashOnHandCents}c.");
+            return null;
+        }
+
         #region Save / Load
         [Serializable]
         public sealed class BankDepositLedgerSaveDto

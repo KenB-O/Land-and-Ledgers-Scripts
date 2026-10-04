@@ -347,12 +347,31 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
+        /// <summary>
+        /// W7B: teller window. Canon §18.10/§18.12: deposits and withdrawals
+        /// are the bank's daily commerce — the window (counter + cash drawer
+        /// + scale) is where liabilities are taken on and paid out. A
+        /// banking-house room alone grants nothing (Tech X §3.5).
+        /// </summary>
+        public static WorkstationDefinition TellerWindowStation
+        {
+            get
+            {
+                var def = Build("teller-window", "Teller Window", "banking-house",
+                    "W7B; Tech X §3.5 (teller window as workstation); Canon §18.10/§18.12",
+                    new[] { "take-deposits", "pay-withdrawals" },
+                    ("teller-counter", 1), ("cash-drawer", 1), ("scale-set", 1));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "teller-work"));
+                return def;
+            }
+        }
+
         /// <summary>All workstation definitions, for catalog-driven UI and validation.</summary>
         public static List<WorkstationDefinition> All => new List<WorkstationDefinition>
         {
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
             CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard, PrintingPress,
-            BarberChairStation, TailorCuttingTableStation,
+            BarberChairStation, TailorCuttingTableStation, TellerWindowStation,
         };
     }
 }

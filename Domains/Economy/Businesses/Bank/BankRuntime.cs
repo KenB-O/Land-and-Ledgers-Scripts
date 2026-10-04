@@ -296,6 +296,24 @@ namespace LandLedgers.Economy.Bank
             return drawn;
         }
 
+        /// <summary>
+        /// W7B: voids a just-received lot — rollback when its accounting half
+        /// fails (e.g. the deposit the cash was handed over for is refused).
+        /// Only reverses a physical receipt that never completed; never used
+        /// to erase a finished transaction.
+        /// </summary>
+        public string VoidVaultLot(string lotId, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            int index = vaultLots.FindIndex(l => string.Equals(l.LotId, lotId, StringComparison.Ordinal));
+            if (index < 0)
+                return $"BankRuntime.VoidVaultLot: lot '{lotId}' is not in the vault — cannot void.";
+            SpecieLot lot = vaultLots[index];
+            vaultLots.RemoveAt(index);
+            diagnostics.Add($"BankRuntime [{businessName}]: voided receipt {lot.AmountCents}c ({lot.LotId}) — its accounting half failed, so the cash never entered.");
+            return null;
+        }
+
         public int VaultSpecieTotalCents()
         {
             int total = 0;

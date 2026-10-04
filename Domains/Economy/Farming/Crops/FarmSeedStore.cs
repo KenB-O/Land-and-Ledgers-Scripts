@@ -158,6 +158,38 @@ namespace LandLedgers.Economy.Farming.Crops
         }
 
         /// <summary>
+        /// D2G: the farm's honest record of what came up. Stamps the observed
+        /// germination rate on a lot the farm holds, for the incident book
+        /// (<see cref="SeedQualityIncidentBook"/>) to file against the
+        /// merchant's declaration. A report needs a real lot and a real
+        /// number 0–100; anything else is refused loudly. Returns null on
+        /// success, or the refusal string.
+        /// </summary>
+        public string ReportSeedQuality(
+            EntityId lotId,
+            int reportedGerminationRatePct,
+            string note,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (reportedGerminationRatePct < 0 || reportedGerminationRatePct > 100)
+            {
+                return $"FarmSeedStore: farm '{FarmId}' reports no germination number {reportedGerminationRatePct} — a quality report needs an observed rate 0–100.";
+            }
+            foreach (var lot in lots)
+            {
+                if (lot == null || !lot.LotId.Equals(lotId)) continue;
+                lot.ReportedGerminationRatePct = reportedGerminationRatePct;
+                diagnostics.Add(
+                    $"FarmSeedStore: farm '{FarmId}' reports lot {lotId} ({CropVarietyCatalog.DisplayNameOf(lot.VarietyId)} {lot.Crop}) " +
+                    $"at {reportedGerminationRatePct}% observed germination" +
+                    (string.IsNullOrWhiteSpace(note) ? "." : $": {note}"));
+                return null;
+            }
+            return $"FarmSeedStore: farm '{FarmId}' holds no lot {lotId} — reports attach to real lots only.";
+        }
+
+        /// <summary>
         /// Buys seed from a seed merchant. The merchant's lot-level provenance
         /// (breeder/grower → merchant) travels into the farm's store. Returns
         /// the purchase record (caller settles the price), or null with a LOUD

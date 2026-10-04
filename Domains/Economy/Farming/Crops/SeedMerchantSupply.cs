@@ -237,6 +237,10 @@ namespace LandLedgers.Economy.Farming.Crops
                 Units = growerLot.Units,
                 AcquiredDayIndex = dayIndex,
                 Provenance = growerLot.Provenance != null ? growerLot.Provenance.Copy() : new SeedProvenanceChain(),
+                // D2G: the grower's own quality declaration travels with the lot when present.
+                QualityGrade = growerLot.QualityGrade,
+                DeclaredGerminationRatePct = growerLot.DeclaredGerminationRatePct,
+                QualityDeclarationNote = growerLot.QualityDeclarationNote,
             };
             lot.SourceDescription = lot.RenderSource();
             lots.Add(lot);
@@ -266,6 +270,38 @@ namespace LandLedgers.Economy.Farming.Crops
             lot.SourceDescription = lot.RenderSource();
             lots.Add(lot);
             return null;
+        }
+
+        /// <summary>
+        /// D2G: records the seller's quality declaration on a merchant lot —
+        /// the grade and claimed germination the lot is sold under. The
+        /// declaration travels with the lot to the buying farm (see
+        /// <see cref="SellSeedLots"/>): it is the "guarantee" record the
+        /// incident book (<see cref="SeedQualityIncidentBook"/>) holds the
+        /// merchant to. Returns a problem string, or null on success.
+        /// </summary>
+        public string SetLotQualityDeclaration(
+            EntityId lotId,
+            SeedQualityGrade grade,
+            int germinationRatePct,
+            string note,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            foreach (var lot in lots)
+            {
+                if (lot == null || !lot.LotId.Equals(lotId)) continue;
+                lot.QualityGrade = grade;
+                lot.DeclaredGerminationRatePct = SeedQuality.NormalizeGerminationRate(germinationRatePct);
+                lot.QualityDeclarationNote = note ?? string.Empty;
+                diagnostics.Add(
+                    $"SeedMerchant: {SupplierName} declared lot {lotId} as {SeedQuality.GradeDisplayName(grade)}" +
+                    (lot.DeclaredGerminationRatePct == SeedQuality.UndeclaredGerminationRate
+                        ? ", germination undeclared."
+                        : $", {lot.DeclaredGerminationRatePct}% germination claimed."));
+                return null;
+            }
+            return $"SeedMerchant: {SupplierName} holds no lot {lotId} — declarations attach to real lots only.";
         }
 
         /// <summary>
@@ -324,6 +360,11 @@ namespace LandLedgers.Economy.Farming.Crops
                     Units = take,
                     AcquiredDayIndex = dayIndex,
                     Provenance = lot.Provenance != null ? lot.Provenance.Copy() : new SeedProvenanceChain(),
+                    // D2G: the seller's quality declaration travels with the lot —
+                    // the farm inherits the claim the merchant is held to.
+                    QualityGrade = lot.QualityGrade,
+                    DeclaredGerminationRatePct = lot.DeclaredGerminationRatePct,
+                    QualityDeclarationNote = lot.QualityDeclarationNote,
                 };
                 farmLot.Provenance.AppendHop(SeedProvenanceRoles.Merchant, SupplierName, SupplierBusinessId, dayIndex);
                 farmLot.SourceDescription = farmLot.RenderSource();

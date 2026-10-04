@@ -38,6 +38,33 @@ namespace LandLedgers.Economy.Farming.Crops
         /// </summary>
         public bool IsBootstrapEndowment;
 
+        /// <summary>
+        /// D2G: the seller's declared quality grade at the sale (a claim, not a
+        /// canon standard). <see cref="SeedQualityGrade.Unstated"/> when the
+        /// seller declared nothing — honesty, not a guess.
+        /// </summary>
+        public SeedQualityGrade QualityGrade = SeedQualityGrade.Unstated;
+
+        /// <summary>
+        /// D2G: the merchant's claimed germination rate at the sale, percent.
+        /// <see cref="SeedQuality.UndeclaredGerminationRate"/> when undeclared.
+        /// Data only — never read by yield calibration.
+        /// </summary>
+        public int DeclaredGerminationRatePct = SeedQuality.UndeclaredGerminationRate;
+
+        /// <summary>
+        /// D2G: the buyer's observed germination rate after sowing, percent.
+        /// <see cref="SeedQuality.UndeclaredGerminationRate"/> until reported.
+        /// Data only — never read by yield calibration.
+        /// </summary>
+        public int ReportedGerminationRatePct = SeedQuality.UndeclaredGerminationRate;
+
+        /// <summary>
+        /// D2G: the seller's quality claim in words (e.g. "seed house catalogue
+        /// warranted 95% germination"). Empty when nothing was claimed.
+        /// </summary>
+        public string QualityDeclarationNote = string.Empty;
+
         public SeedLot() { }
 
         /// <summary>

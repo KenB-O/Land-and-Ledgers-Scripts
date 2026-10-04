@@ -31,14 +31,23 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         [SerializeField, Range(0, 100)]
         private int dayOldDiscountPct = 50;
 
+        [SerializeField, Range(0, 100)]
+        private int finePremiumPct = 25;
+
+        [SerializeField, Range(0, 100)]
+        private int roughDiscountPct = 25;
+
         public RestaurantPriceSchedule() { }
 
-        public RestaurantPriceSchedule(int beefStewCents, int roastPlateCents, int creamedStewCents, int dayOldDiscountPct)
+        public RestaurantPriceSchedule(int beefStewCents, int roastPlateCents, int creamedStewCents, int dayOldDiscountPct,
+            int finePremiumPct = 25, int roughDiscountPct = 25)
         {
             this.beefStewCents = Math.Max(0, beefStewCents);
             this.roastPlateCents = Math.Max(0, roastPlateCents);
             this.creamedStewCents = Math.Max(0, creamedStewCents);
             this.dayOldDiscountPct = Math.Max(0, Math.Min(100, dayOldDiscountPct));
+            this.finePremiumPct = Math.Max(0, Math.Min(100, finePremiumPct));
+            this.roughDiscountPct = Math.Max(0, Math.Min(100, roughDiscountPct));
         }
 
         public int BeefStewCents => Math.Max(0, beefStewCents);
@@ -47,6 +56,12 @@ namespace LandLedgers.Economy.Businesses.Restaurant
 
         /// <summary>Percent of the fresh price leftover (day-old) meals sell for (100 = no discount).</summary>
         public int DayOldDiscountPct => Math.Max(0, Math.Min(100, dayOldDiscountPct));
+
+        /// <summary>D1E: percent premium over the fresh price for Fine-quality meals (Canon §8.1B meal quality).</summary>
+        public int FinePremiumPct => Math.Max(0, Math.Min(100, finePremiumPct));
+
+        /// <summary>D1E: percent discount off the fresh price for Rough-quality meals (Canon §8.1B meal quality).</summary>
+        public int RoughDiscountPct => Math.Max(0, Math.Min(100, roughDiscountPct));
     }
 
     /// <summary>
@@ -99,6 +114,12 @@ namespace LandLedgers.Economy.Businesses.Restaurant
 
         /// <summary>W2B: the kitchen workstation id. Defined in WorkstationCatalog (restaurant kitchen: stove-range + cookware-set + pantry-bins).</summary>
         public const string RestaurantKitchenStationId = "restaurant-kitchen";
+
+        /// <summary>D1E: stove-fuel item id for the kitchen range (Canon §8.1B: food service demands fuel).</summary>
+        public const string FuelItemId = "restaurant-fuelwood";
+
+        /// <summary>D1E TUNING: cordwood units burned per batch cooking.</summary>
+        public const int FuelUnitsPerBatchCooking = 1;
 
         /// <summary>TUNING: batch cookings available per ready kitchen per day.</summary>
         public const int BatchesPerKitchenPerDay = 6;

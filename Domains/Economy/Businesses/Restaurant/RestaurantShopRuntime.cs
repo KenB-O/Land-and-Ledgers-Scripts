@@ -36,6 +36,9 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         public int ScheduledDayIndex;
         public RestaurantMealBatchStage Stage = RestaurantMealBatchStage.Planned;
 
+        /// <summary>D1E: the declared service this batch was planned for ("dinner", "supper", ...) — planning intent, may be empty.</summary>
+        public string TargetServiceWindowId = string.Empty;
+
         /// <summary>Ingredients dispensed into this batch's custody at prep, with provenance.</summary>
         public List<RestaurantFoodDispenseLine> IngredientsInCustody = new List<RestaurantFoodDispenseLine>();
 
@@ -73,6 +76,9 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         public int PreparedDayIndex;
         public int MealsRemaining;
         public RestaurantMealCondition Condition = RestaurantMealCondition.Fresh;
+
+        /// <summary>D1E: the quality band of this lot — whose hands made it (Canon §8.1B meal quality).</summary>
+        public RestaurantMealQualityBand QualityBand = RestaurantMealQualityBand.House;
 
         /// <summary>Upstream ingredient chains cooked into this lot (full provenance).</summary>
         public List<string> InputProvenance = new List<string>();
@@ -119,6 +125,13 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         public int PersonId; // the diner — nutrition credit goes to a real person
         public int PriceCents;
         public RestaurantMealCondition ConditionServedAt = RestaurantMealCondition.Fresh;
+
+        /// <summary>D1E: the quality band of the meal served (Canon §8.1B; feeds the quality-aware nutrition link).</summary>
+        public RestaurantMealQualityBand QualityBand = RestaurantMealQualityBand.House;
+
+        /// <summary>D1E: the declared service this meal was eaten at ("dinner", "supper", ...) — may be empty.</summary>
+        public string ServiceWindowId = string.Empty;
+
         public string ProvenanceChain = string.Empty;
 
         public RestaurantServedMealRecord() { }
@@ -171,6 +184,12 @@ namespace LandLedgers.Economy.Businesses.Restaurant
     /// way W1C/W2A route around the tailor's and bakery's shared resolution.
     /// Seating/table throughput is out of scope (W2B: meal service + nutrition
     /// link; the kitchen is the production bottleneck analog).
+    ///
+    /// D1E depth: cook roster (staffed cooks set capacity, quality and prep
+    /// efficiency; empty roster = proprietor cooks), stove-fuel store (batch
+    /// cooking burns fuel), meal quality bands (price + nutrition weight),
+    /// declared mealtime services, the regulars book (visits, never credit),
+    /// and standing-order / reorder-signal procurement.
     /// </summary>
     public sealed class RestaurantShopRuntime
     {
@@ -186,9 +205,34 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         private readonly List<RestaurantWasteRecord> waste = new List<RestaurantWasteRecord>();
         private readonly List<string> wasteNotedLotIds = new List<string>();
         private readonly RestaurantMealDayLedger mealDayLedger = new RestaurantMealDayLedger();
+
+        /// <summary>D1E: the stove-fuel store (Canon §8.1B: food service demands fuel).</summary>
+        private readonly RestaurantFuelStock fuelStock = new RestaurantFuelStock();
+
+        /// <summary>D1E: the cook roster (Canon §8.1E). Empty roster = the proprietor cooks (W2B fallback).</summary>
+        private readonly RestaurantCookStaff cookStaff = new RestaurantCookStaff();
+
+        /// <summary>D1E: the house's quality policy (Canon §8.1B meal quality).</summary>
+        private readonly RestaurantMealQualityPolicy qualityPolicy = new RestaurantMealQualityPolicy();
+
+        /// <summary>D1E: declared mealtime services (Canon §2.3: meals are day events).</summary>
+        private readonly RestaurantServiceSchedule serviceSchedule = new RestaurantServiceSchedule();
+
+        /// <summary>D1E: the regulars book — visit facts only, no credit (fork boundary).</summary>
+        private readonly RestaurantRegulars regulars = new RestaurantRegulars();
+
+        /// <summary>D1E: standing ingredient orders — the buyer side of supply agreements (Canon §8.1B).</summary>
+        private readonly List<RestaurantStandingOrder> standingOrders = new List<RestaurantStandingOrder>();
+
+        /// <summary>D1E: the pantry's reorder policy (threshold signals).</summary>
+        private readonly RestaurantResupplyPolicy resupplyPolicy = new RestaurantResupplyPolicy();
+
         private RestaurantPriceSchedule prices = new RestaurantPriceSchedule();
         private int batchSeq;
         private int serveSeq;
+
+        /// <summary>D1E: when true (default), batch cooking burns stove fuel; without fuel the batch stays prepped, loudly.</summary>
+        public bool RequireKitchenFuel = true;
 
         private readonly List<string> diagnostics = new List<string>();
 
@@ -201,6 +245,27 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         public IReadOnlyList<RestaurantWasteRecord> Waste => waste;
         public RestaurantPriceSchedule Prices => prices;
 
+        /// <summary>D1E: the stove-fuel store.</summary>
+        public RestaurantFuelStock FuelStock => fuelStock;
+
+        /// <summary>D1E: the cook roster.</summary>
+        public RestaurantCookStaff CookStaff => cookStaff;
+
+        /// <summary>D1E: the house's quality policy.</summary>
+        public RestaurantMealQualityPolicy QualityPolicy => qualityPolicy;
+
+        /// <summary>D1E: declared mealtime services.</summary>
+        public RestaurantServiceSchedule ServiceSchedule => serviceSchedule;
+
+        /// <summary>D1E: the regulars book (visit facts only — no credit).</summary>
+        public RestaurantRegulars Regulars => regulars;
+
+        /// <summary>D1E: standing ingredient orders.</summary>
+        public IReadOnlyList<RestaurantStandingOrder> StandingOrders => standingOrders;
+
+        /// <summary>D1E: the pantry's reorder policy.</summary>
+        public RestaurantResupplyPolicy ResupplyPolicy => resupplyPolicy;
+
         /// <summary>The served-meal day ledger — the producer side of the nutrition link (IRestaurantMealDaySource).</summary>
         public IRestaurantMealDaySource MealDaySource => mealDayLedger;
 
@@ -212,6 +277,88 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         public void SetPriceSchedule(RestaurantPriceSchedule schedule)
         {
             prices = schedule ?? new RestaurantPriceSchedule();
+        }
+
+        /// <summary>
+        /// D1E: names a cook to the roster (Canon §8.1E). Returns a rejection
+        /// string, or null on success.
+        /// </summary>
+        public string AssignCook(int personId, int cookingSkillLevel, int dayIndex, List<string> diag, int minutesPerDay = 0)
+        {
+            return cookStaff.AssignCook(personId, cookingSkillLevel, dayIndex, diag ?? diagnostics, minutesPerDay);
+        }
+
+        /// <summary>
+        /// D1E: a cook leaves the roster. Returns a rejection string, or null
+        /// on success. When the last cook leaves, the kitchen stops loudly.
+        /// </summary>
+        public string RemoveCook(int personId, int dayIndex, List<string> diag)
+        {
+            return cookStaff.RemoveCook(personId, dayIndex, diag ?? diagnostics);
+        }
+
+        /// <summary>
+        /// D1E: declares a mealtime service for a day (Canon §2.3). Returns a
+        /// rejection string, or null on success.
+        /// </summary>
+        public string DeclareServiceWindow(string serviceId, string displayName, int dayIndex, int plannedMeals, List<string> diag)
+        {
+            return serviceSchedule.DeclareServiceWindow(serviceId, displayName, dayIndex, plannedMeals, diag ?? diagnostics);
+        }
+
+        /// <summary>
+        /// D1E: records a standing ingredient order — the buyer side of a
+        /// supply agreement (Canon §8.1B). Returns a rejection string, or
+        /// null on success. The order is policy, not fulfillment.
+        /// </summary>
+        public string AddStandingOrder(RestaurantStandingOrder order, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (order == null) return "RestaurantShopRuntime: null standing order refused.";
+            if (string.IsNullOrWhiteSpace(order.OrderId))
+                return "RestaurantShopRuntime: a standing order needs an id.";
+            if (string.IsNullOrWhiteSpace(order.FoodName))
+                return "RestaurantShopRuntime: a standing order needs a food name (restaurant-meat/bread/produce/dairy).";
+            if (string.IsNullOrWhiteSpace(order.SupplierBusinessId))
+                return "RestaurantShopRuntime: a standing order must name its supplier — no orphan orders.";
+            if (order.UnitsPerDelivery <= 0 || order.CadenceDays <= 0)
+                return $"RestaurantShopRuntime: standing order '{order.OrderId}' needs positive units and cadence.";
+
+            foreach (var existing in standingOrders)
+            {
+                if (existing != null && string.Equals(existing.OrderId, order.OrderId, StringComparison.OrdinalIgnoreCase))
+                    return $"RestaurantShopRuntime: standing order '{order.OrderId}' is already on the books — not duplicated.";
+            }
+
+            standingOrders.Add(order);
+            diag.Add($"RestaurantShopRuntime: standing order '{order.OrderId}' recorded — {order.UnitsPerDelivery} × {order.FoodName} " +
+                $"every {order.CadenceDays} day(s) from {order.SupplierBusinessId} ({order.SupplierKind}), next due day {order.NextDueDayIndex}.");
+            return null;
+        }
+
+        /// <summary>D1E: standing orders due on the day — data for the caller to place real orders.</summary>
+        public List<RestaurantStandingOrder> DueStandingOrders(int dayIndex, List<string> diag)
+        {
+            return RestaurantResupplyEvaluator.DueStandingOrders(standingOrders, dayIndex, diag ?? diagnostics);
+        }
+
+        /// <summary>D1E: advances a standing order's schedule after the caller placed the real order.</summary>
+        public string MarkStandingOrderPlaced(string orderId, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            foreach (var order in standingOrders)
+            {
+                if (order != null && string.Equals(order.OrderId, orderId, StringComparison.OrdinalIgnoreCase))
+                    return RestaurantResupplyEvaluator.MarkOrderPlaced(order, dayIndex, diag);
+            }
+
+            return $"RestaurantShopRuntime: no standing order '{orderId}' on the books — nothing advanced.";
+        }
+
+        /// <summary>D1E: pantry reorder signals — data, never orders.</summary>
+        public List<RestaurantResupplySignal> EvaluateResupplySignals(int dayIndex, List<string> diag)
+        {
+            return RestaurantResupplyEvaluator.EvaluateSignals(foodStock, resupplyPolicy, dayIndex, diag ?? diagnostics);
         }
 
         /// <summary>
@@ -283,8 +430,11 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         /// with a LOUD diagnostic — callers tell them apart (ids never contain
         /// the "RestaurantShopRuntime:" prefix). One batch = one pot's worth
         /// of meals; no ingredients are dispensed yet — that happens at prep.
+        /// D1E: the optional service window id records which declared service
+        /// the batch is planned for (planning intent only — it never cooks
+        /// anything by itself).
         /// </summary>
-        public List<string> PlanMealBatch(string mealId, int batchCount, int dayIndex, List<string> diag)
+        public List<string> PlanMealBatch(string mealId, int batchCount, int dayIndex, List<string> diag, string serviceWindowId = null)
         {
             diag = diag ?? diagnostics;
             if (!RestaurantMealCatalog.IsKnownMeal(mealId))
@@ -302,13 +452,16 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                     MealId = mealId,
                     ScheduledDayIndex = dayIndex,
                     Stage = RestaurantMealBatchStage.Planned,
+                    TargetServiceWindowId = serviceWindowId ?? string.Empty,
                 };
-                batch.StageLog.Add($"day {dayIndex}: batch planned ({spec.DisplayName}, {spec.MealsYieldPerBatch} meals)");
+                batch.StageLog.Add($"day {dayIndex}: batch planned ({spec.DisplayName}, {spec.MealsYieldPerBatch} meals)" +
+                    (string.IsNullOrWhiteSpace(serviceWindowId) ? string.Empty : $" for service '{serviceWindowId}'"));
                 batches.Add(batch);
                 ids.Add(batch.BatchId);
             }
 
-            diag.Add($"RestaurantShopRuntime: planned {batchCount} meal batch(es) of {spec.DisplayName} (day {dayIndex}).");
+            diag.Add($"RestaurantShopRuntime: planned {batchCount} meal batch(es) of {spec.DisplayName} (day {dayIndex})" +
+                (string.IsNullOrWhiteSpace(serviceWindowId) ? "." : $" for service '{serviceWindowId}'."));
             return ids;
         }
 
@@ -327,6 +480,11 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         ///    the batch's custody (loud refusal on shortfall — the batch
         ///    stays planned), then cooking claims one batch slot on a ready
         ///    kitchen. Stages cascade while the cook's labor minutes last.
+        /// D1E: the labor budget comes from the cook roster when the house
+        /// has ever named a cook (empty roster = the proprietor cooks, the
+        /// W2B fallback); a roster with no cook on duty stops the kitchen
+        /// loudly. Batch cooking burns stove fuel (RequireKitchenFuel); the
+        /// cooked lot's quality band follows the leading cook's skill.
         /// Each WorkDay call is one day: kitchen batch budgets reset at its
         /// start. Returns the number of batches cooked. The id registry is
         /// optional: when provided, meal lots take real HF-1 lot ids; without
@@ -368,7 +526,26 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                 diag.Add("RestaurantShopRuntime: no ready kitchen — cooking requires the stove; nothing cooks today.");
             }
 
-            int laborRemaining = CookMinutesPerDay;
+            int laborRemaining;
+            int leadingCookSkill;
+            if (!cookStaff.HasRoster)
+            {
+                // W2B fallback: no named cook — the proprietor cooks (Canon §8.1E).
+                laborRemaining = CookMinutesPerDay;
+                leadingCookSkill = 0;
+            }
+            else if (!cookStaff.HasActiveCook(dayIndex))
+            {
+                diag.Add($"RestaurantShopRuntime: the cook roster is empty today — nobody is at the stove. {CountActiveBatches()} batch(es) stay parked (Canon §8.1E: loss of the cook damages the house).");
+                return 0;
+            }
+            else
+            {
+                laborRemaining = cookStaff.TotalMinutesToday(dayIndex);
+                leadingCookSkill = cookStaff.LeadingCookSkill(dayIndex);
+                diag.Add($"RestaurantShopRuntime: {laborRemaining} cook-minute(s) on duty today (leading skill {leadingCookSkill}).");
+            }
+
             int cooked = 0;
             var snapshot = new List<RestaurantMealBatch>(batches);
 
@@ -376,7 +553,7 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             {
                 if (!batch.IsActive) continue;
 
-                while (TryAdvanceOneBatch(batch, dayIndex, ref laborRemaining, kitchenBatchesLeft, diag, idRegistry))
+                while (TryAdvanceOneBatch(batch, dayIndex, leadingCookSkill, ref laborRemaining, kitchenBatchesLeft, diag, idRegistry))
                 {
                     cooked++;
                 }
@@ -424,9 +601,12 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         /// true when the batch finished COOKING (the caller counts it);
         /// prep-only advances return false so a prep-followed-by-cook in one
         /// day counts exactly one cooked batch.
+        /// D1E: prep minutes are skill-adjusted (a strong cook is faster);
+        /// the cook stage first checks stove fuel — a cold stove leaves the
+        /// batch prepped, loudly.
         /// </summary>
         private bool TryAdvanceOneBatch(
-            RestaurantMealBatch batch, int dayIndex, ref int laborRemaining,
+            RestaurantMealBatch batch, int dayIndex, int leadingCookSkill, ref int laborRemaining,
             Dictionary<int, int> kitchenBatchesLeft, List<string> diag,
             EntityIdRegistry idRegistry)
         {
@@ -436,6 +616,8 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                 diag.Add($"RestaurantShopRuntime: batch {batch.BatchId} names unknown menu item '{batch.MealId}' — stays parked, never guessed.");
                 return false;
             }
+
+            int prepMinutes = RestaurantCookStaff.EffectivePrepMinutes(spec.PrepMinutes, leadingCookSkill);
 
             switch (batch.Stage)
             {
@@ -455,21 +637,27 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                         return false;
                     }
 
-                    if (!SpendLabor(ref laborRemaining, spec.PrepMinutes, diag, batch, "prepping"))
+                    if (!SpendLabor(ref laborRemaining, prepMinutes, diag, batch, "prepping"))
                     {
                         ReturnCustodyToPantry(batch, taken, dayIndex, diag, idRegistry);
-                        diag.Add($"RestaurantShopRuntime: batch {batch.BatchId} prep needs {spec.PrepMinutes}m — stays planned for tomorrow.");
+                        diag.Add($"RestaurantShopRuntime: batch {batch.BatchId} prep needs {prepMinutes}m — stays planned for tomorrow.");
                         return false;
                     }
 
                     batch.IngredientsInCustody.AddRange(taken);
                     SetStage(batch, RestaurantMealBatchStage.Prepped, dayIndex,
-                        $"prepped ({spec.PrepMinutes}m, ingredients from {taken.Count} lot line(s))");
+                        $"prepped ({prepMinutes}m, ingredients from {taken.Count} lot line(s))");
                     // Prepped — cascade into cooking below (falls through by
                     // recursion, not fallthrough; stage is now Prepped).
                     break;
 
                 case RestaurantMealBatchStage.Prepped:
+                    if (!CheckStoveFuel(batch, spec, dayIndex, diag))
+                    {
+                        // Cold stove: the batch waits, prepped, for fuel.
+                        return false;
+                    }
+
                     int kitchenIndex = ClaimBatchSlot(kitchenBatchesLeft);
                     if (kitchenIndex < 0)
                     {
@@ -484,7 +672,7 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                         return false;
                     }
 
-                    CookBatch(batch, spec, kitchenIndex, dayIndex, diag, idRegistry);
+                    CookBatch(batch, spec, kitchenIndex, leadingCookSkill, dayIndex, diag, idRegistry);
                     return true;
 
                 default:
@@ -492,7 +680,30 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             }
 
             // A batch that just prepped cascades into the cook stage immediately.
-            return TryAdvanceOneBatch(batch, dayIndex, ref laborRemaining, kitchenBatchesLeft, diag, idRegistry);
+            return TryAdvanceOneBatch(batch, dayIndex, leadingCookSkill, ref laborRemaining, kitchenBatchesLeft, diag, idRegistry);
+        }
+
+        /// <summary>
+        /// D1E: the stove-fuel precondition for cooking. Checks availability
+        /// WITHOUT dispensing (the dispense happens at the actual cooking, so
+        /// a labor shortfall never strands burned fuel). No fuel → the batch
+        /// stays prepped, loudly. Skipped entirely when RequireKitchenFuel is
+        /// false (contexts where stove fuel is not modeled).
+        /// </summary>
+        private bool CheckStoveFuel(RestaurantMealBatch batch, RestaurantMealSpec spec, int dayIndex, List<string> diag)
+        {
+            if (!RequireKitchenFuel) return true;
+            int need = RestaurantMealCatalog.FuelUnitsPerBatchCooking;
+            int onHand = fuelStock.UnitsOnHand(RestaurantMealCatalog.FuelItemId);
+            if (onHand < need)
+            {
+                diag.Add($"RestaurantShopRuntime: batch {batch.BatchId} ({spec.DisplayName}) waits on stove fuel — " +
+                    $"only {onHand} unit(s) of '{RestaurantMealCatalog.FuelItemId}' on hand, need {need}. " +
+                    "The stove stays cold; the batch stays prepped. Reorder through the fuel dealer or an import order.");
+                return false;
+            }
+
+            return true;
         }
 
         private bool DispenseIngredient(
@@ -553,9 +764,15 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             }
         }
 
-        /// <summary>Cooks a prepped batch: one kitchen batch slot → one prepared-meal lot with full input provenance.</summary>
+        /// <summary>
+        /// Cooks a prepped batch: one kitchen batch slot → one prepared-meal
+        /// lot with full input provenance. D1E: burns the stove fuel (the
+        /// availability check already passed, so the dispense cannot fail
+        /// here) and stamps the lot's quality band from the leading cook's
+        /// skill (Canon §8.1B meal quality).
+        /// </summary>
         private void CookBatch(
-            RestaurantMealBatch batch, RestaurantMealSpec spec, int kitchenIndex, int dayIndex,
+            RestaurantMealBatch batch, RestaurantMealSpec spec, int kitchenIndex, int leadingCookSkill, int dayIndex,
             List<string> diag, EntityIdRegistry idRegistry)
         {
             var lot = new RestaurantMealLot
@@ -568,10 +785,24 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                 PreparedDayIndex = dayIndex,
                 MealsRemaining = spec.MealsYieldPerBatch,
                 Condition = RestaurantMealCondition.Fresh,
+                QualityBand = qualityPolicy.DeriveBand(leadingCookSkill),
             };
             foreach (var line in batch.IngredientsInCustody)
             {
                 if (line != null) lot.InputProvenance.Add($"{line.UnitsTaken}× {line.FoodName} from {line.ProvenanceChain}");
+            }
+
+            if (RequireKitchenFuel)
+            {
+                var fuelLines = fuelStock.TryDispenseUnits(
+                    RestaurantMealCatalog.FuelItemId, RestaurantMealCatalog.FuelUnitsPerBatchCooking, dayIndex, diag);
+                if (fuelLines != null)
+                {
+                    foreach (var fuelLine in fuelLines)
+                    {
+                        if (fuelLine != null) lot.InputProvenance.Add($"{fuelLine.UnitsTaken}× {fuelLine.FuelName} (stove fuel) from {fuelLine.ProvenanceChain}");
+                    }
+                }
             }
 
             mealShelf.Add(lot);
@@ -581,8 +812,8 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             batch.IngredientsInCustody.Clear();
 
             SetStage(batch, RestaurantMealBatchStage.Cooked, dayIndex,
-                $"cooked in kitchen {kitchenIndex} ({spec.CookMinutes}m) → {spec.MealsYieldPerBatch} meal(s)");
-            diag.Add($"RestaurantShopRuntime: batch {batch.BatchId} cooked — {spec.MealsYieldPerBatch} meal(s) of {spec.DisplayName} (day {dayIndex}, kitchen {kitchenIndex}).");
+                $"cooked in kitchen {kitchenIndex} ({spec.CookMinutes}m) → {spec.MealsYieldPerBatch} meal(s), quality {lot.QualityBand}");
+            diag.Add($"RestaurantShopRuntime: batch {batch.BatchId} cooked — {spec.MealsYieldPerBatch} meal(s) of {spec.DisplayName} (day {dayIndex}, kitchen {kitchenIndex}, quality {lot.QualityBand}).");
         }
 
         /// <summary>
@@ -594,8 +825,13 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         /// diner's nutrition (Canon §2.5). Returns the served-meal record —
         /// the caller settles it as an ordinary ledger outflow — or null with
         /// a LOUD diagnostic on shortfall.
+        /// D1E: the optional service window id names the declared mealtime
+        /// service the meal was eaten at; the served price is quality-aware
+        /// (Canon §8.1B); the diner's visit is noted in the regulars book
+        /// (visits only — never credit); the meal's quality weight rides the
+        /// day ledger for the quality-aware nutrition link.
         /// </summary>
-        public RestaurantServedMealRecord ServeMeal(string mealId, int personId, int dayIndex, List<string> diag)
+        public RestaurantServedMealRecord ServeMeal(string mealId, int personId, int dayIndex, List<string> diag, string serviceWindowId = null)
         {
             diag = diag ?? diagnostics;
             if (!RestaurantMealCatalog.IsKnownMeal(mealId))
@@ -630,6 +866,12 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                 if (lot.TakeMeals(1) <= 0) continue;
 
                 int price = lot.ConditionServedAtPrice(prices);
+
+                // The service is claimed only when it was declared: an
+                // undeclared service id is served anyway (the meal is real)
+                // but is not recorded as a service, loudly.
+                bool serviceClaimed = serviceSchedule.NoteServedCover(serviceWindowId, dayIndex, diag);
+
                 var record = new RestaurantServedMealRecord
                 {
                     ServedId = $"{businessInstanceId}-served-{serveSeq++}",
@@ -639,19 +881,29 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                     PersonId = personId,
                     PriceCents = price,
                     ConditionServedAt = lot.Condition,
+                    QualityBand = lot.QualityBand,
+                    ServiceWindowId = serviceClaimed ? (serviceWindowId ?? string.Empty) : string.Empty,
                     ProvenanceChain = lot.InputProvenance != null
                         ? string.Join(" | ", lot.InputProvenance)
                         : string.Empty,
                 };
                 servedMeals.Add(record);
 
-                string ledgerRefusal = mealDayLedger.ReportServedMeal(personId, dayIndex, diag);
+                string ledgerRefusal = mealDayLedger.ReportServedMeal(
+                    personId, dayIndex, RestaurantMealQualityPolicy.QualityWeight01(lot.QualityBand), diag);
                 if (ledgerRefusal != null)
                 {
                     diag.Add($"RestaurantShopRuntime: {ledgerRefusal}");
                 }
 
-                diag.Add($"RestaurantShopRuntime: served 1 {lot.MealId} to person {personId} (day {dayIndex}, {lot.Condition}, {price}¢).");
+                string visitRefusal = regulars.NoteVisit(personId, mealId, dayIndex, diag);
+                if (visitRefusal != null)
+                {
+                    diag.Add($"RestaurantShopRuntime: {visitRefusal}");
+                }
+
+                diag.Add($"RestaurantShopRuntime: served 1 {lot.MealId} to person {personId} (day {dayIndex}, {lot.Condition}, quality {lot.QualityBand}, {price}¢" +
+                    (string.IsNullOrWhiteSpace(serviceWindowId) ? ")." : $", service '{serviceWindowId}')."));
                 return record;
             }
 
@@ -798,6 +1050,16 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             public RestaurantMealDayLedger.RestaurantMealDayLedgerSaveDto MealDayLedger = new RestaurantMealDayLedger.RestaurantMealDayLedgerSaveDto();
             public int BatchSeq;
             public int ServeSeq;
+
+            // D1E depth state.
+            public RestaurantFuelStock.RestaurantFuelStockSaveDto FuelStock = new RestaurantFuelStock.RestaurantFuelStockSaveDto();
+            public RestaurantCookStaff.RestaurantCookStaffSaveDto CookStaff = new RestaurantCookStaff.RestaurantCookStaffSaveDto();
+            public RestaurantMealQualityPolicy QualityPolicy = new RestaurantMealQualityPolicy();
+            public RestaurantServiceSchedule.RestaurantServiceScheduleSaveDto ServiceSchedule = new RestaurantServiceSchedule.RestaurantServiceScheduleSaveDto();
+            public RestaurantRegulars.RestaurantRegularsSaveDto Regulars = new RestaurantRegulars.RestaurantRegularsSaveDto();
+            public List<RestaurantStandingOrder> StandingOrders = new List<RestaurantStandingOrder>();
+            public RestaurantResupplyPolicy ResupplyPolicy = new RestaurantResupplyPolicy();
+            public bool RequireKitchenFuel = true;
         }
 
         public RestaurantShopRuntimeSaveDto CaptureSaveDto()
@@ -810,6 +1072,13 @@ namespace LandLedgers.Economy.Businesses.Restaurant
                 MealDayLedger = mealDayLedger.CaptureSaveDto(),
                 BatchSeq = batchSeq,
                 ServeSeq = serveSeq,
+                FuelStock = fuelStock.CaptureSaveDto(),
+                CookStaff = cookStaff.CaptureSaveDto(),
+                QualityPolicy = qualityPolicy,
+                ServiceSchedule = serviceSchedule.CaptureSaveDto(),
+                Regulars = regulars.CaptureSaveDto(),
+                ResupplyPolicy = resupplyPolicy,
+                RequireKitchenFuel = RequireKitchenFuel,
             };
             dto.Kitchens.AddRange(kitchens);
             // Only live batches rehydrate; cooked batches are history and
@@ -823,6 +1092,14 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             dto.ServedMeals.AddRange(servedMeals);
             dto.Waste.AddRange(waste);
             dto.WasteNotedLotIds.AddRange(wasteNotedLotIds);
+            if (standingOrders != null)
+            {
+                foreach (var order in standingOrders)
+                {
+                    if (order != null) dto.StandingOrders.Add(order);
+                }
+            }
+
             return dto;
         }
 
@@ -831,6 +1108,18 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             if (dto == null) return;
             foodStock.LoadFromSaveDto(dto.FoodStock);
             mealDayLedger.LoadFromSaveDto(dto.MealDayLedger);
+            fuelStock.LoadFromSaveDto(dto.FuelStock);
+            cookStaff.LoadFromSaveDto(dto.CookStaff);
+            serviceSchedule.LoadFromSaveDto(dto.ServiceSchedule);
+            regulars.LoadFromSaveDto(dto.Regulars);
+            if (dto.QualityPolicy != null)
+            {
+                qualityPolicy.FineMinCookSkillLevel = dto.QualityPolicy.FineMinCookSkillLevel;
+                qualityPolicy.HouseMinCookSkillLevel = dto.QualityPolicy.HouseMinCookSkillLevel;
+            }
+
+            if (dto.ResupplyPolicy != null) CopyResupplyPolicy(dto.ResupplyPolicy);
+            RequireKitchenFuel = dto.RequireKitchenFuel;
             if (dto.Prices != null) prices = dto.Prices;
             batchSeq = Math.Max(0, dto.BatchSeq);
             serveSeq = Math.Max(0, dto.ServeSeq);
@@ -886,6 +1175,28 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             {
                 wasteNotedLotIds.AddRange(dto.WasteNotedLotIds);
             }
+
+            standingOrders.Clear();
+            if (dto.StandingOrders != null)
+            {
+                foreach (var order in dto.StandingOrders)
+                {
+                    if (order != null) standingOrders.Add(order);
+                }
+            }
+        }
+
+        /// <summary>D1E: copies a resupply policy's fields (the policy object itself is never aliased).</summary>
+        private void CopyResupplyPolicy(RestaurantResupplyPolicy source)
+        {
+            resupplyPolicy.MeatThresholdUnits = source.MeatThresholdUnits;
+            resupplyPolicy.MeatOrderUnits = source.MeatOrderUnits;
+            resupplyPolicy.BreadThresholdUnits = source.BreadThresholdUnits;
+            resupplyPolicy.BreadOrderUnits = source.BreadOrderUnits;
+            resupplyPolicy.ProduceThresholdUnits = source.ProduceThresholdUnits;
+            resupplyPolicy.ProduceOrderUnits = source.ProduceOrderUnits;
+            resupplyPolicy.DairyThresholdUnits = source.DairyThresholdUnits;
+            resupplyPolicy.DairyOrderUnits = source.DairyOrderUnits;
         }
         #endregion
     }
@@ -893,13 +1204,38 @@ namespace LandLedgers.Economy.Businesses.Restaurant
     /// <summary>
     /// W2B: condition-aware pricing helper for prepared-meal lots. Keeps the
     /// aging price logic next to the lot type.
+    /// D1E: prices are quality-aware (Canon §8.1B meal quality) — the
+    /// quality premium/discount applies to the fresh price, and the day-old
+    /// condition discount applies on top of the quality price.
     /// </summary>
     public static class RestaurantMealPricing
     {
         /// <summary>
-        /// The price a prepared-meal lot serves for at its CURRENT condition:
-        /// fresh → fresh price; day-old → schedule discount; spoiled → zero
-        /// (spoiled lots never serve anyway — this is the guard, not the plan).
+        /// D1E: the fresh price of a menu item at a quality band — the
+        /// schedule price, moved by the band's premium/discount. Unspecified
+        /// and House price at the schedule price exactly (W2B behavior).
+        /// </summary>
+        public static int QualityAdjustedFreshPriceCents(string mealId, RestaurantMealQualityBand band, RestaurantPriceSchedule prices)
+        {
+            int fresh = RestaurantMealCatalog.GetFreshPriceCents(mealId, prices);
+            prices = prices ?? new RestaurantPriceSchedule();
+            switch (band)
+            {
+                case RestaurantMealQualityBand.Fine:
+                    return fresh * (100 + prices.FinePremiumPct) / 100;
+                case RestaurantMealQualityBand.Rough:
+                    return fresh * (100 - prices.RoughDiscountPct) / 100;
+                default:
+                    return fresh;
+            }
+        }
+
+        /// <summary>
+        /// The price a prepared-meal lot serves for at its CURRENT condition
+        /// and quality: fresh → quality-adjusted fresh price; day-old →
+        /// the schedule's day-old discount applied to the quality price;
+        /// spoiled → zero (spoiled lots never serve anyway — this is the
+        /// guard, not the plan).
         /// </summary>
         public static int ConditionServedAtPrice(this RestaurantMealLot lot, RestaurantPriceSchedule prices)
         {
@@ -907,9 +1243,11 @@ namespace LandLedgers.Economy.Businesses.Restaurant
             switch (lot.Condition)
             {
                 case RestaurantMealCondition.Fresh:
-                    return RestaurantMealCatalog.GetFreshPriceCents(lot.MealId, prices);
+                    return QualityAdjustedFreshPriceCents(lot.MealId, lot.QualityBand, prices);
                 case RestaurantMealCondition.DayOld:
-                    return RestaurantMealCatalog.GetDayOldPriceCents(lot.MealId, prices);
+                    int qualityFresh = QualityAdjustedFreshPriceCents(lot.MealId, lot.QualityBand, prices);
+                    prices = prices ?? new RestaurantPriceSchedule();
+                    return qualityFresh * prices.DayOldDiscountPct / 100;
                 default:
                     return 0;
             }

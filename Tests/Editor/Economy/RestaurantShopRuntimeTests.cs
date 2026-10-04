@@ -44,6 +44,8 @@ namespace LandLedgers.Editor.Economy
             var runtime = new RestaurantShopRuntime("rest-biz-1");
             var registry = new EntityIdRegistry();
             RestaurantFoodBootstrap.ApplyBootstrapEndowment(runtime.FoodStock, registry, day, diag);
+            // D1E: the stove-fuel endowment — batch cooking burns fuel.
+            RestaurantFuelBootstrap.ApplyBootstrapEndowment(runtime.FuelStock, registry, day, diag);
             for (int i = 0; i < kitchenCount; i++)
             {
                 Assert.Null(runtime.AddKitchen("cookhouse", new List<string>

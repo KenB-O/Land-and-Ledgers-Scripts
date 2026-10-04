@@ -219,5 +219,119 @@ namespace LandLedgers.EditorTests.Economy.Farming
             Assert.IsNotNull(authority.GetDefinition(FreightCompanyRuntime.LoadFreightTaskId));
             Assert.IsNotNull(authority.GetDefinition(FreightCompanyRuntime.UnloadFreightTaskId));
         }
+
+        private static FreightCompanyRuntime DispatchReadyCompany()
+        {
+            var company = new FreightCompanyRuntime("freight-co-1");
+            company.ResourcePool.AddWagon(new FreightWagon("wagon-1", "Wagon 1", 600));
+            return company;
+        }
+
+        private static List<EntityId> DraftAnimals()
+        {
+            var ids = new EntityIdRegistry();
+            return new List<EntityId>
+            {
+                ids.Allocate(EntityKind.Animal),
+                ids.Allocate(EntityKind.Animal),
+            };
+        }
+
+        private static List<EntityId> DraftDrivers()
+        {
+            var ids = new EntityIdRegistry();
+            return new List<EntityId> { EntityId.For(EntityKind.Person, 11) };
+        }
+
+        private DeliveryJob FreightJob(List<string> diagnostics)
+        {
+            AnimalState cow;
+            MilkLot lot = FreshMilkLot(100, out cow);
+            DeliveryJob job = DeliveryService.PlanDelivery("agree-dispatch", "milk", AsTransit(lot),
+                "test-farm", "farm-biz-1", "store-1", "General Store",
+                DeliveryHaulerOption.FreightCompany, 4f, 100, "farm-biz-1", null, diagnostics);
+            Assert.IsNotNull(job, "Plan failed: " + string.Join(" | ", diagnostics));
+            return job;
+        }
+
+        [Test]
+        public void DispatchViaFreightCompany_AcceptsDispatchesAndDeparts()
+        {
+            var diagnostics = new List<string>();
+            DeliveryJob job = FreightJob(diagnostics);
+            var company = DispatchReadyCompany();
+            var authority = new TaskAuthority();
+            FreightCompanyRuntime.RegisterTaskDefinitions(authority);
+
+            string problem = DeliveryService.DispatchViaFreightCompany(
+                job, company, authority, EntityId.For(EntityKind.Business, 3), 100,
+                DraftAnimals(), DraftDrivers(), diagnostics);
+
+            Assert.IsNull(problem, "Dispatch failed: " + string.Join(" | ", diagnostics));
+            Assert.AreEqual(DeliveryJobStatus.InTransit, job.Status, "Dispatched jobs depart.");
+            Assert.AreEqual(1, company.ActiveShipments.Count, "Shipment accepted by the company.");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, company.ActiveShipments[0].Status);
+        }
+
+        [Test]
+        public void DispatchViaFreightCompany_NoTeam_JobWaitsPlanned()
+        {
+            var diagnostics = new List<string>();
+            DeliveryJob job = FreightJob(diagnostics);
+            // No wagon in the pool: the team cannot be reserved.
+            var company = new FreightCompanyRuntime("freight-co-empty");
+            var authority = new TaskAuthority();
+            FreightCompanyRuntime.RegisterTaskDefinitions(authority);
+
+            string problem = DeliveryService.DispatchViaFreightCompany(
+                job, company, authority, EntityId.For(EntityKind.Business, 3), 100,
+                DraftAnimals(), DraftDrivers(), diagnostics);
+
+            Assert.IsNotNull(problem, "Dispatch must refuse loudly when no team is available.");
+            Assert.AreEqual(DeliveryJobStatus.Planned, job.Status,
+                "The shipment waits; the company never invents capacity.");
+        }
+
+        [Test]
+        public void DispatchViaFreightCompany_WrongHauler_Refused()
+        {
+            AnimalState cow;
+            MilkLot lot = FreshMilkLot(100, out cow);
+            var diagnostics = new List<string>();
+            DeliveryJob job = DeliveryService.PlanDelivery("agree-own", "milk", AsTransit(lot),
+                "test-farm", "farm-biz-1", "store-1", "General Store",
+                DeliveryHaulerOption.FarmOwnTeam, 2f, 100, null, null, diagnostics);
+            Assert.IsNotNull(job);
+
+            var company = DispatchReadyCompany();
+            var authority = new TaskAuthority();
+
+            string problem = DeliveryService.DispatchViaFreightCompany(
+                job, company, authority, EntityId.For(EntityKind.Business, 3), 100,
+                DraftAnimals(), DraftDrivers(), diagnostics);
+
+            Assert.IsNotNull(problem, "Own-team jobs must not route through the freight company.");
+            Assert.AreEqual(DeliveryJobStatus.Planned, job.Status);
+        }
+
+        [Test]
+        public void DispatchViaFreightCompany_AlreadyDeparted_Refused()
+        {
+            var diagnostics = new List<string>();
+            DeliveryJob job = FreightJob(diagnostics);
+            var company = DispatchReadyCompany();
+            var authority = new TaskAuthority();
+            FreightCompanyRuntime.RegisterTaskDefinitions(authority);
+
+            Assert.IsNull(DeliveryService.DispatchViaFreightCompany(
+                job, company, authority, EntityId.For(EntityKind.Business, 3), 100,
+                DraftAnimals(), DraftDrivers(), diagnostics));
+            Assert.AreEqual(DeliveryJobStatus.InTransit, job.Status);
+
+            string second = DeliveryService.DispatchViaFreightCompany(
+                job, company, authority, EntityId.For(EntityKind.Business, 3), 100,
+                DraftAnimals(), DraftDrivers(), diagnostics);
+            Assert.IsNotNull(second, "Double dispatch must be refused.");
+        }
     }
 }

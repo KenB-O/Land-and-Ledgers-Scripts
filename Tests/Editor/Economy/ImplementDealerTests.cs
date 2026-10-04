@@ -146,8 +146,53 @@ namespace LandLedgers.Editor.Economy
 
             Assert.AreEqual(4, dealer.SellPart("share-14", 4, "farm-1", diagnostics));
             Assert.AreEqual(2, dealer.Parts[0].UnitsOnHand);
-            Assert.AreEqual(0, dealer.SellPart("share-14", 4, "farm-1", diagnostics), "Oversell refused.");
-            Assert.AreEqual(2, dealer.Parts[0].UnitsOnHand);
+            // P3 verdict on the D4L mismatch: partial fulfillment is canon-correct
+            // (Canon §35 — "Do not reduce every shortage to Agreement Failed";
+            // §3.4 "reduce quantity"). The dealer sells what is on hand instead of
+            // refusing the whole request; oversell (going below zero) never happens.
+            Assert.AreEqual(2, dealer.SellPart("share-14", 4, "farm-1", diagnostics), "Short sale sells remaining stock.");
+            Assert.AreEqual(0, dealer.Parts[0].UnitsOnHand);
+            Assert.AreEqual(0, dealer.SellPart("share-14", 4, "farm-1", diagnostics), "Empty stock sells nothing.");
+            Assert.AreEqual(0, dealer.Parts[0].UnitsOnHand);
+        }
+
+        [Test]
+        public void SellPart_NonPositiveUnits_MoveNothing()
+        {
+            var dealer = NewDealer();
+            var diagnostics = new List<string>();
+            dealer.StockPart(new PartLine
+            {
+                PartId = "share-14",
+                DisplayName = "14-inch Plowshare",
+                FitsModelId = "plow-14",
+                PriceCents = 120,
+                SupplierName = "Springfield Works",
+            }, 6, diagnostics);
+
+            Assert.AreEqual(0, dealer.SellPart("share-14", 0, "farm-1", diagnostics));
+            Assert.AreEqual(0, dealer.SellPart("share-14", -3, "farm-1", diagnostics));
+            Assert.AreEqual(6, dealer.Parts[0].UnitsOnHand, "Non-positive quantities must never move stock.");
+        }
+
+        [Test]
+        public void SellPart_ShortSale_RecordsMerchantEvidence()
+        {
+            var dealer = NewDealer();
+            var diagnostics = new List<string>();
+            dealer.StockPart(new PartLine
+            {
+                PartId = "share-14",
+                DisplayName = "14-inch Plowshare",
+                FitsModelId = "plow-14",
+                PriceCents = 120,
+                SupplierName = "Springfield Works",
+            }, 2, diagnostics);
+
+            diagnostics.Clear();
+            Assert.AreEqual(2, dealer.SellPart("share-14", 4, "farm-1", diagnostics));
+            Assert.IsTrue(diagnostics.Exists(d => d.Contains("short sale")),
+                "Short sales must write merchant evidence: " + string.Join(" | ", diagnostics));
         }
     }
 }

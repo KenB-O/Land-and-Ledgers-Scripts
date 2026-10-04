@@ -55,8 +55,13 @@ valuation read model from real settlement paths — event-fed, never per-frame:
   **`SkillService.ApplyPracticeFromTask(authority, taskId, minutesWorked)`** so XP
   accrues (TTS-3: 1 XP per minute practiced).
 - **Freight/butcher `AdvanceGameSeconds`** — shipments advance inside
-  `LogisticsRuntimeManager` (line ~770) and `FreightCompanyRuntime` (line ~191);
-  both are already scene MonoBehaviours. No driver needed.
+  `LogisticsRuntimeManager` (the live scene MonoBehaviour path for local-trade
+  transfers). `FreightCompanyRuntime` is NOT a scene MonoBehaviour — no live
+  instance exists yet, so its `AdvanceGameSeconds` is test-only. P3 added the
+  code bridge `DeliveryService.DispatchViaFreightCompany` (build → accept →
+  dispatch → depart), which gives `TryDispatchShipment` a real caller path;
+  the remaining gap is live scene wiring: a delivery-job source, a
+  freight-company instance, and real draft-animal/driver lists.
 - **Scenario goal evaluation** — the bootstrap assigns `SimulationDrivers.OnScenarioTick`
   (CLN-3 wires `FirstLedgerGoalEvaluator.Evaluate` with the live game state).
 

@@ -243,7 +243,13 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
 
         /// <summary>
         /// Sells spare parts over the counter. Finite stock, named buyer.
-        /// Returns units actually sold.
+        /// Returns units actually sold. P3 verdict (D4L test/implementation
+        /// mismatch): the implementation's partial-fulfillment behavior is
+        /// canon-correct — Canon §35 ("Do not reduce every shortage to
+        /// Agreement Failed") and §3.4 ("reduce quantity") — so a short sale
+        /// sells what is on hand rather than refusing the whole request.
+        /// Short sales write merchant evidence to diagnostics (Canon §13.x
+        /// lost-sale evidence); stock never goes negative.
         /// </summary>
         public int SellPart(string partId, int units, string buyerId, List<string> diagnostics)
         {
@@ -261,8 +267,19 @@ namespace LandLedgers.Economy.Businesses.ImplementDealer
                 return 0;
             }
 
+            if (units <= 0)
+            {
+                diagnostics.Add($"ImplementDealer: cannot sell {units} units of '{partId}' — non-positive quantities never move stock.");
+                return 0;
+            }
+
             int sold = Math.Min(units, line.UnitsOnHand);
             line.UnitsOnHand -= sold;
+            if (sold < Math.Max(0, units))
+            {
+                diagnostics.Add($"ImplementDealer: short sale of '{partId}' — buyer {buyerId} asked for " +
+                    $"{units}, only {sold} on hand (stock exhausted; no oversell).");
+            }
             return sold;
         }
 

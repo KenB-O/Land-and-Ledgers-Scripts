@@ -263,10 +263,71 @@ namespace LandLedgers.Economy.Farming.Delivery
         }
 
         /// <summary>
+        /// P3: the live orchestration for the FreightCompany hauler option.
+        /// Runs the built shipment through TryAcceptShipment →
+        /// TryDispatchShipment → DepartDelivery on the freight company
+        /// runtime: one physical pool, draft team reserved from real
+        /// animals/drivers, external payer only (Canon §3.6, §11.2).
+        /// Returns null on success, or the refusal reason (job keeps its
+        /// Planned status; the shipment waits — capacity is never invented).
+        /// This is the code path that gives TryDispatchShipment its live
+        /// caller; the remaining gap is a live source of delivery jobs and a
+        /// live freight-company instance with real draft lists (scene work).
+        /// </summary>
+        public static string DispatchViaFreightCompany(
+            DeliveryJob job,
+            FreightCompanyRuntime freightCompany,
+            TaskAuthority taskAuthority,
+            EntityId businessEntityId,
+            int dayIndex,
+            List<EntityId> availableDraftAnimals,
+            List<EntityId> availableDrivers,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (job == null) return "DeliveryService: no delivery job to dispatch.";
+            if (freightCompany == null) return $"DeliveryService: no freight company for job {job.JobId}.";
+            if (job.Hauler != DeliveryHaulerOption.FreightCompany)
+            {
+                return $"DeliveryService: job {job.JobId} hauler is {job.Hauler}, not the freight company.";
+            }
+            if (job.Status != DeliveryJobStatus.Planned)
+            {
+                return $"DeliveryService: job {job.JobId} is {job.Status}; only planned jobs dispatch.";
+            }
+
+            LogisticsShipmentState shipment = BuildFreightShipment(job, diagnostics);
+            if (shipment == null)
+            {
+                return $"DeliveryService: job {job.JobId} produced no shippable cargo.";
+            }
+
+            if (!freightCompany.TryAcceptShipment(shipment, diagnostics))
+            {
+                return $"DeliveryService: freight company refused job {job.JobId}.";
+            }
+
+            if (!freightCompany.TryDispatchShipment(
+                shipment.ShipmentId, taskAuthority, businessEntityId, dayIndex,
+                availableDraftAnimals, availableDrivers, diagnostics))
+            {
+                return $"DeliveryService: job {job.JobId} could not dispatch (no team — the job waits).";
+            }
+
+            string departProblem = DepartDelivery(job, dayIndex);
+            if (departProblem != null) return departProblem;
+
+            diagnostics.Add($"DeliveryService: job {job.JobId} dispatched via freight company " +
+                $"(shipment {shipment.ShipmentId}, departed day {dayIndex}).");
+            return null;
+        }
+
+        /// <summary>
         /// Builds the BIZ-3 shipment for the FreightCompany hauler option. The
-        /// caller runs it through TryAcceptShipment → TryDispatchShipment →
-        /// (on completion) CollectFreightCharge on the freight company runtime:
-        /// one physical pool, external payer only (Canon §3.6, §11.2).
+        /// live caller is DispatchViaFreightCompany (build → accept → dispatch
+        /// → depart); on completion the freight company collects via
+        /// CollectFreightCharge: one physical pool, external payer only
+        /// (Canon §3.6, §11.2).
         /// </summary>
         public static LogisticsShipmentState BuildFreightShipment(DeliveryJob job, List<string> diagnostics)
         {

@@ -30,6 +30,8 @@ namespace LandLedgers.Economy.Estates
         public int CashCents;                            // CashAmount kind
         public bool HeldForWitnessConflict;              // interested witness — held, not voided by fiat
         public bool Distributed;
+        /// <summary>D4C: voided by a will-contest settlement or ruling. Never decided by fiat.</summary>
+        public bool InvalidatedByContest;
 
         public Bequest() { }
     }
@@ -55,6 +57,8 @@ namespace LandLedgers.Economy.Estates
         public bool Revoked;
         public bool Probated;
         public bool Contested;
+        /// <summary>D4C: invalidated in whole by a contest ruling. Conveys nothing, like a revoked will.</summary>
+        public bool InvalidatedByContest;
         public string ContestGrounds = string.Empty;
         public int ContestantPersonId = -1;
 
@@ -173,6 +177,8 @@ namespace LandLedgers.Economy.Estates
             diag = diag ?? diagnostics;
             if (will == null) return "ProbateService.ProbateWill: a will is required.";
             if (will.Revoked) return $"ProbateService.ProbateWill: will {will.WillId} was revoked — it conveys nothing.";
+            if (will.InvalidatedByContest)
+                return $"ProbateService.ProbateWill: will {will.WillId} was invalidated by a contest ruling — it conveys nothing.";
             if (will.Contested)
                 return $"ProbateService.ProbateWill: will {will.WillId} is contested ({will.ContestGrounds}) — distributions pause pending the proceeding.";
             if (estate == null) return "ProbateService.ProbateWill: the estate must be opened first.";
@@ -247,8 +253,12 @@ namespace LandLedgers.Economy.Estates
             if (!will.Probated) return $"ProbateService.DistributeBequest: will {will.WillId} is not probated.";
             if (will.Contested) return $"ProbateService.DistributeBequest: will {will.WillId} is contested — distributions pause.";
             if (will.Revoked) return $"ProbateService.DistributeBequest: will {will.WillId} was revoked.";
+            if (will.InvalidatedByContest)
+                return $"ProbateService.DistributeBequest: will {will.WillId} was invalidated by a contest ruling — it conveys nothing.";
             if (bequest.HeldForWitnessConflict)
                 return "ProbateService.DistributeBequest: this bequest is held (witness conflict / invalid devise) — flagged, not distributed.";
+            if (bequest.InvalidatedByContest)
+                return "ProbateService.DistributeBequest: this bequest was voided by a contest settlement or ruling — flagged, not distributed.";
             if (bequest.Distributed) return "ProbateService.DistributeBequest: already distributed.";
             if (bequest.Kind != BequestKind.Parcel)
                 return $"ProbateService.DistributeBequest: {bequest.Kind} bequests distribute through their own custodians (caller records the transfer).";
@@ -270,6 +280,43 @@ namespace LandLedgers.Economy.Estates
         public Will Get(string willId)
         {
             return wills.TryGetValue(willId, out Will will) ? will : null;
+        }
+
+        /// <summary>
+        /// D4C: lifts the contest pause after the proceeding ends (withdrawal,
+        /// settlement, adjudication, dismissal). The outcome itself is
+        /// recorded on the D4C contest record — this only re-opens the
+        /// probate path. Never called while a contest is still live.
+        /// </summary>
+        public string LiftContestPause(Will will, string reason, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (will == null) return "ProbateService.LiftContestPause: a will is required.";
+            if (!will.Contested)
+            {
+                diag.Add($"ProbateService.LiftContestPause: will {will.WillId} is not contested — nothing to lift.");
+                return null;
+            }
+            will.Contested = false;
+            diag.Add($"ProbateService: contest pause lifted on will {will.WillId} ({reason ?? "proceeding ended"}) — the contest record holds the history.");
+            return null;
+        }
+
+        /// <summary>
+        /// D4C: all wills recorded for one testator, oldest first. Used for
+        /// the post-invalidation fallback to the most recent prior valid
+        /// will (NX-3C rule). Read-only.
+        /// </summary>
+        public List<Will> FindTestatorWills(int testatorPersonId)
+        {
+            var matches = new List<Will>();
+            foreach (Will will in wills.Values)
+            {
+                if (will != null && will.TestatorPersonId == testatorPersonId)
+                    matches.Add(will);
+            }
+            matches.Sort((a, b) => a.SignedDayIndex.CompareTo(b.SignedDayIndex));
+            return matches;
         }
     }
 }

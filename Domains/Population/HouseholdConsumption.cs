@@ -100,11 +100,15 @@ namespace LandLedgers.Population
             }
 
             // 2. Demand-snapshot gaps: unmet need the household already tracks.
+            // P2: category ids must match HouseholdReserveCatalog exactly —
+            // "general_goods"/"medicine"/"heating_fuel" were phantom ids no
+            // reserve ever held, so purchases credited to them vanished
+            // untracked (EmbodiedPurchaseExecutor logs "no reserve tracked").
             HouseholdDemandSnapshot demand = household.demandSnapshot;
             AddDemandNeed(needs, household.id, "staple_food", demand.foodNeed, requestingPersonId, dayIndex);
-            AddDemandNeed(needs, household.id, "general_goods", demand.generalGoodsNeed, requestingPersonId, dayIndex);
-            AddDemandNeed(needs, household.id, "medicine", demand.medicineNeed, requestingPersonId, dayIndex);
-            AddDemandNeed(needs, household.id, "heating_fuel", demand.heatingNeed, requestingPersonId, dayIndex);
+            AddDemandNeed(needs, household.id, "household_goods", demand.generalGoodsNeed, requestingPersonId, dayIndex);
+            AddDemandNeed(needs, household.id, "medicine_remedies", demand.medicineNeed, requestingPersonId, dayIndex);
+            AddDemandNeed(needs, household.id, HouseholdReserveCatalog.FuelWoodCategoryId, demand.heatingNeed, requestingPersonId, dayIndex);
 
             return needs;
         }

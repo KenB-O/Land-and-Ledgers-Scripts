@@ -333,9 +333,16 @@ namespace LandLedgers.Population
 
             string baseSummary = household.BuildInspectionSummary();
             string healthSummary = BuildHouseholdHealthInspectionSegment(household);
-            return string.IsNullOrWhiteSpace(healthSummary)
-                ? baseSummary
-                : $"{baseSummary} | {healthSummary}";
+            string nutritionSummary = BuildHouseholdNutritionInspectionSegment(household);
+            string combined = baseSummary;
+            if (!string.IsNullOrWhiteSpace(healthSummary))
+            {
+                combined = $"{combined} | {healthSummary}";
+            }
+
+            return string.IsNullOrWhiteSpace(nutritionSummary)
+                ? combined
+                : $"{combined} | {nutritionSummary}";
         }
 
         public string BuildHouseholdInspectionSummaryByHomeBuildingId(int homeBuildingId)
@@ -348,9 +355,16 @@ namespace LandLedgers.Population
 
             string baseSummary = household.BuildInspectionSummary();
             string healthSummary = BuildHouseholdHealthInspectionSegment(household);
-            return string.IsNullOrWhiteSpace(healthSummary)
-                ? baseSummary
-                : $"{baseSummary} | {healthSummary}";
+            string nutritionSummary = BuildHouseholdNutritionInspectionSegment(household);
+            string combined = baseSummary;
+            if (!string.IsNullOrWhiteSpace(healthSummary))
+            {
+                combined = $"{combined} | {healthSummary}";
+            }
+
+            return string.IsNullOrWhiteSpace(nutritionSummary)
+                ? combined
+                : $"{combined} | {nutritionSummary}";
         }
 
         private HouseholdState FindHouseholdById(int householdId)
@@ -491,7 +505,8 @@ namespace LandLedgers.Population
                         laborReadinessModifier = person.laborReadinessModifier,
                         preferredProfessionBias = person.preferredProfessionBias,
                         settlementDifficulty = person.settlementDifficulty,
-                        hostHouseholdId = person.hostHouseholdId
+                        hostHouseholdId = person.hostHouseholdId,
+                        nutrition = person.nutrition != null ? person.nutrition.Clone() : new PersonNutritionState()
                     });
                 }
             }
@@ -775,7 +790,8 @@ namespace LandLedgers.Population
                         laborReadinessModifier = personDto.laborReadinessModifier,
                         preferredProfessionBias = personDto.preferredProfessionBias,
                         settlementDifficulty = Mathf.Max(0, personDto.settlementDifficulty),
-                        hostHouseholdId = personDto.hostHouseholdId
+                        hostHouseholdId = personDto.hostHouseholdId,
+                        nutrition = personDto.nutrition != null ? personDto.nutrition.Clone() : new PersonNutritionState()
                     };
 
                     person.EnsureWorkerTraitsInitialized(1000 + person.id);
@@ -1963,6 +1979,61 @@ namespace LandLedgers.Population
                 builder.Append(FormatMoney(household.lastDailyMedicalSpendCents));
             }
 
+            return builder.ToString();
+        }
+
+        /// <summary>
+        /// P2: makes the nutrition → work-capacity teeth OBSERVABLE in the
+        /// household inspection (Canon §25: aggregate adequacy, not a
+        /// minigame). Empty when every member is adequately nourished.
+        /// </summary>
+        private string BuildHouseholdNutritionInspectionSegment(HouseholdState household)
+        {
+            if (household == null || state == null || household.memberIds == null)
+            {
+                return string.Empty;
+            }
+
+            int memberCount = 0;
+            int undernourished = 0;
+            float worstNutrition01 = 1f;
+            float worstCapacityMultiplier = 1f;
+            for (int i = 0; i < household.memberIds.Count; i++)
+            {
+                PersonState person = state.GetPerson(household.memberIds[i]);
+                if (person == null || person.nutrition == null)
+                {
+                    continue;
+                }
+
+                memberCount++;
+                if (person.nutrition.IsUndernourished)
+                {
+                    undernourished++;
+                }
+
+                if (person.nutrition.nutrition01 < worstNutrition01)
+                {
+                    worstNutrition01 = person.nutrition.nutrition01;
+                    worstCapacityMultiplier = person.nutrition.WorkCapacityMultiplier;
+                }
+            }
+
+            if (memberCount <= 0 || undernourished <= 0)
+            {
+                return string.Empty;
+            }
+
+            StringBuilder builder = new();
+            builder.Append("Nutrition ");
+            builder.Append(undernourished);
+            builder.Append('/');
+            builder.Append(memberCount);
+            builder.Append(" undernourished (worst ");
+            builder.Append(Mathf.RoundToInt(worstNutrition01 * 100f));
+            builder.Append("%, work capacity ");
+            builder.Append(Mathf.RoundToInt(worstCapacityMultiplier * 100f));
+            builder.Append("%)");
             return builder.ToString();
         }
     }

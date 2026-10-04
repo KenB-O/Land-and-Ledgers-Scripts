@@ -126,10 +126,10 @@ namespace LandLedgers.EditorTests.Population
             var planner = new HouseholdConsumptionPlanner();
             List<ProcurementNeed> needs = planner.BuildPlan(household, requestingPersonId: 7, dayIndex: 100);
 
-            Assert.AreEqual(2, needs.Count); // 8u staple shortfall + 3u medicine
+            Assert.AreEqual(2, needs.Count); // 8u staple shortfall + 3u medicine_remedies
             Assert.AreEqual("staple_food", needs[0].CategoryId);
             Assert.AreEqual(8, needs[0].UnitsNeeded);
-            Assert.AreEqual("medicine", needs[1].CategoryId);
+            Assert.AreEqual("medicine_remedies", needs[1].CategoryId);
             // Planning alone moves no money and books no revenue: Canon 13.4.
             Assert.AreEqual(0, ledger.GetBalanceCents());
             Assert.AreEqual(0, ledger.Entries.Count);

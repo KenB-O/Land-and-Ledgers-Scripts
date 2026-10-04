@@ -345,6 +345,11 @@ namespace LandLedgers.Persistence
         public string preferredProfessionBias = string.Empty;
         public int settlementDifficulty;
         public int hostHouseholdId = -1;
+        /// <summary>
+        /// P2: per-person nutrition state (Canon §2.5 / Tech X §2.9). Previously
+        /// dropped on every save — loaded persons came back fully nourished.
+        /// </summary>
+        public PersonNutritionState nutrition = new();
     }
 
     [Serializable]

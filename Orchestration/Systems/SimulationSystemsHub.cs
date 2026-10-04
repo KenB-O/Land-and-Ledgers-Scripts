@@ -15,8 +15,10 @@ using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.Barber;
+using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Doctor;
 using LandLedgers.Economy.Businesses.GrainMill;
+using LandLedgers.Economy.Businesses.Hotel;
 using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Economy.Businesses.Newspaper;
@@ -133,6 +135,66 @@ namespace LandLedgers.Orchestration.Systems
         public LivestockDiseaseService Disease => diseaseService ??= new LivestockDiseaseService();
 
         public IReadOnlyList<ButcherRuntime> ButcherRuntimes => butcherRuntimes;
+
+        /// <summary>
+        /// P2: W2B/W2C/W3B nutrition-link registries. Restaurant, boarding-house
+        /// and hotel shop runtimes (or their meal-day ledgers) register their
+        /// served-meal sources here so the daily-needs driver can count real
+        /// prepared meals (Canon §2.5) instead of double-feeding households
+        /// whose members genuinely ate out. Transient: the ledgers persist via
+        /// their owning runtimes' own save DTOs; owners re-register after load.
+        /// Empty registries mean no meals are counted — never estimates.
+        /// </summary>
+        private readonly List<IRestaurantMealDaySource> restaurantMealSources = new List<IRestaurantMealDaySource>();
+        private readonly List<IBoardingHouseMealDaySource> boardingHouseMealSources = new List<IBoardingHouseMealDaySource>();
+        private readonly List<IHotelMealDaySource> hotelMealSources = new List<IHotelMealDaySource>();
+
+        public IReadOnlyList<IRestaurantMealDaySource> RestaurantMealSources => restaurantMealSources;
+        public IReadOnlyList<IBoardingHouseMealDaySource> BoardingHouseMealSources => boardingHouseMealSources;
+        public IReadOnlyList<IHotelMealDaySource> HotelMealSources => hotelMealSources;
+
+        public void RegisterRestaurantMealSource(IRestaurantMealDaySource source)
+        {
+            if (source != null && !restaurantMealSources.Contains(source))
+            {
+                restaurantMealSources.Add(source);
+            }
+        }
+
+        public void RegisterBoardingHouseMealSource(IBoardingHouseMealDaySource source)
+        {
+            if (source != null && !boardingHouseMealSources.Contains(source))
+            {
+                boardingHouseMealSources.Add(source);
+            }
+        }
+
+        public void RegisterHotelMealSource(IHotelMealDaySource source)
+        {
+            if (source != null && !hotelMealSources.Contains(source))
+            {
+                hotelMealSources.Add(source);
+            }
+        }
+
+        /// <summary>
+        /// P2: builds the per-day meal-source composites the daily-needs
+        /// service consumes. Empty registries yield empty composites (which
+        /// report zero meals — identical to passing null). Public + static so
+        /// EditMode tests can verify composition without a scene.
+        /// </summary>
+        public static void BuildMealSourceComposites(
+            IReadOnlyList<IRestaurantMealDaySource> restaurantSources,
+            IReadOnlyList<IBoardingHouseMealDaySource> boardingSources,
+            IReadOnlyList<IHotelMealDaySource> hotelSources,
+            out CompositeRestaurantMealSource restaurants,
+            out CompositeBoardingHouseMealSource boardingHouses,
+            out CompositeHotelMealSource hotels)
+        {
+            restaurants = new CompositeRestaurantMealSource(restaurantSources);
+            boardingHouses = new CompositeBoardingHouseMealSource(boardingSources);
+            hotels = new CompositeHotelMealSource(hotelSources);
+        }
 
         /// <summary>Registers a butcher runtime for save tracking (one per butcher business).</summary>
         public ButcherRuntime GetOrCreateButcherRuntime(string businessInstanceId, string productionSiteId, string retailSiteId)

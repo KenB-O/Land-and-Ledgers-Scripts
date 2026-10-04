@@ -61,5 +61,20 @@ namespace LandLedgers.Population
                                    0.25f;
 
         public bool IsUndernourished => nutrition01 < 0.70f;
+
+        /// <summary>
+        /// P2: deep copy for save capture (the owning class keeps its own
+        /// save-DTO method). Nutrition is plain value state — no sharing.
+        /// </summary>
+        public PersonNutritionState Clone()
+        {
+            return new PersonNutritionState
+            {
+                nutrition01 = nutrition01,
+                consecutiveUndernourishedDays = consecutiveUndernourishedDays,
+                mealsMissedTrailing7Days = mealsMissedTrailing7Days,
+                lastUpdateDayIndex = lastUpdateDayIndex,
+            };
+        }
     }
 }

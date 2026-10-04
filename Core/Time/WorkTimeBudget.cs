@@ -84,7 +84,10 @@ namespace LandLedgers.Time
         /// NX-1B: work capacity multiplier from nutrition (0..1, default 1).
         /// Malnourished persons have fewer usable minutes — the missed-meal
         /// consequence bites here.
+        /// P2: serialized so a save/load keeps today's capacity (it is
+        /// re-derived by DailyNeedsService every game-day anyway).
         /// </summary>
+        [SerializeField]
         private float capacityMultiplier01 = 1f;
 
         /// <summary>NX-1B: sets the capacity multiplier (clamped 0..1).</summary>

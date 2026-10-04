@@ -4,6 +4,7 @@ using LandLedgers.Economy;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Skills;
 using LandLedgers.Time;
@@ -250,14 +251,30 @@ namespace LandLedgers.Orchestration.Systems
             // SupplierDirectory starts empty: scene wiring registers suppliers
             // (T1A pattern — the general store registers its stocked categories).
             supplierDirectory ??= new SupplierDirectory();
+            // P2: wire the legacy person-int id space to HF-1 EntityIds so the
+            // travel-time leg of embodied purchasing actually gates on the
+            // person's TTS-1 work-time budget (previously always skipped).
             purchaseExecutor ??= new EmbodiedPurchaseExecutor(
                 populationManager.State, hub.HouseholdLedgers, supplierDirectory, Journeys,
-                null, hub.WorkTimeBudgets);
+                null, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid));
+
+            // P2: W2B/W2C/W3B nutrition links — count real prepared meals
+            // served by live eating-house runtimes (Canon §2.5) so households
+            // never double-feed a member who genuinely ate out. Empty
+            // registries compose to zero meals: pre-W2B/W2C/W3B behavior.
+            SimulationSystemsHub.BuildMealSourceComposites(
+                hub.RestaurantMealSources,
+                hub.BoardingHouseMealSources,
+                hub.HotelMealSources,
+                out var restaurantMeals,
+                out var boardingMeals,
+                out var hotelMeals);
 
             var diag = new List<string>();
             DailyNeedsService.DayReport report = dailyNeedsService.ExecuteDay(
                 populationManager.State, consumptionPlanner, purchaseExecutor,
-                absoluteDayIndex, diag, hub.WorkTimeBudgets);
+                absoluteDayIndex, diag, hub.WorkTimeBudgets,
+                restaurantMeals, boardingMeals, hotelMeals);
             if (report.MealsMissed > 0 || report.PurchasesMade > 0)
             {
                 Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +

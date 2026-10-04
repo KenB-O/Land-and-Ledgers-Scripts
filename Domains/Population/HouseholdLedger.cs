@@ -131,7 +131,14 @@ namespace LandLedgers.Population
                 "employer");
         }
 
-        /// <summary>Records a cash outflow. Purpose is required.</summary>
+        /// <summary>
+        /// Records a cash outflow. Purpose is required.
+        /// P2: the balance must cover the outflow (Canon XIII 13.2 —
+        /// ordinary household cash may not replenish by fiat, and the T1A
+        /// embodied-purchase executor's contract promises "if the household
+        /// cannot pay, nothing moves"). Households that cannot pay a need
+        /// leave it unmet and logged, never negative.
+        /// </summary>
         public string RecordOutflow(int dayIndex, int amountCents, string purpose, string counterparty)
         {
             if (amountCents <= 0)
@@ -142,6 +149,12 @@ namespace LandLedgers.Population
             if (string.IsNullOrWhiteSpace(purpose))
             {
                 return Reject("Rejected outflow: purpose is required.");
+            }
+
+            int balanceCents = GetBalanceCents();
+            if (amountCents > balanceCents)
+            {
+                return Reject($"Rejected outflow of {amountCents}c: household balance is {balanceCents}c — insufficient funds, nothing moved.");
             }
 
             AddEntry(dayIndex, -amountCents, HouseholdIncomeSource.Unspecified, string.Empty, string.Empty, purpose, counterparty ?? string.Empty);

@@ -1,5 +1,6 @@
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace LandLedgers.EditorTests.Orchestration
 {
@@ -47,6 +48,7 @@ namespace LandLedgers.EditorTests.Orchestration
         public void RequireScenarioAsset_NullAsset_FailsLoudly()
         {
             // Logs an error (loud by design); returns false so callers cannot proceed silently.
+            LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex(".*no ScenarioAsset supplied.*"));
             Assert.IsFalse(global::LandLedgers.Orchestration.Scenarios.DevGuards.RequireScenarioAsset(null, null, "Test"));
         }
 

@@ -625,8 +625,11 @@ namespace LandLedgers.FirstLedger
         [ContextMenu("Resolve Daily Sales")]
         public void ResolveDailySales()
         {
-            if (!InitializeIfNeeded())
+            if (!InitializeIfNeeded() || runtimeState == null)
             {
+                status = string.IsNullOrWhiteSpace(status)
+                    ? "No player General Store is operating yet. Form one from Businesses before resolving sales."
+                    : status;
                 return;
             }
 

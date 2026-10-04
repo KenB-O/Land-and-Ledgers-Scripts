@@ -1,0 +1,6 @@
+{
+    "name": "LandLedgers.PlayModeTests",
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

@@ -22,6 +22,12 @@ namespace LandLedgers.Economy.Bank
     /// W7C: third-party commercial paper the bank bought at the discount
     /// window — the asset half. The bank paid PaidCents for FaceCents of
     /// maker promise; the difference is profit only if collected in full.
+    ///
+    /// D3B: customer paper discounted over the counter carries endorser
+    /// recourse (period practice) — the customer who endorsed the paper to
+    /// the bank answers for it if the maker defaults, through a registered
+    /// T2A guaranty (GuarantyInstrumentId). Desk-selected purchases have no
+    /// recourse: the bank bought the risk as priced.
     /// </summary>
     [Serializable]
     public sealed class DiscountedPaper
@@ -32,6 +38,12 @@ namespace LandLedgers.Economy.Bank
         public int PaidCents;
         public int DiscountedDayIndex;
         public bool Collected;
+        /// <summary>D3B: the customer who endorsed this paper to the bank (empty when desk-selected).</summary>
+        public string CustomerEndorserName = string.Empty;
+        /// <summary>D3B: true when the endorser remains liable on maker default.</summary>
+        public bool HasRecourse;
+        /// <summary>D3B: registry key of the endorser's guaranty (empty when no recourse).</summary>
+        public string GuarantyInstrumentId = string.Empty;
 
         public DiscountedPaper() { }
     }
@@ -124,9 +136,14 @@ namespace LandLedgers.Economy.Bank
         /// the borrower's loan note to the bank (asset) and the bank's bearer
         /// notes (liability). The notes are the disbursement — no specie
         /// moves, and the gate keeps every note specie-backed.
+        ///
+        /// D3B: when a loan book is supplied, the borrower's loan note is
+        /// registered on it as an earning asset (balance-sheet consolidation,
+        /// Canon §16.4). Existing callers are unaffected.
         /// </summary>
         public string IssueNotesForLoan(string borrowerName, int faceAmountCents,
-            string loanTerms, int dayIndex, List<string> diagnostics)
+            string loanTerms, int dayIndex, List<string> diagnostics,
+            BankLoanBook loanBook = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             string ready = DeskReady(diagnostics);
@@ -161,6 +178,13 @@ namespace LandLedgers.Economy.Bank
                 HolderName = borrowerName,
                 IssuedDayIndex = dayIndex,
             });
+            if (loanBook != null)
+            {
+                string bookRefusal = loanBook.RegisterBorrowerNote(loanNote.InstrumentId,
+                    borrowerName, faceAmountCents, dayIndex, false, diagnostics);
+                if (bookRefusal != null)
+                    diagnostics.Add($"NoteDesk [{bank.BusinessName}]: BOOKING GAP — the loan note stands but is not on the loan book: {bookRefusal}");
+            }
             diagnostics.Add($"NoteDesk [{bank.BusinessName}]: issued {faceAmountCents}c in bank notes to '{borrowerName}' against loan note '{loanNote.InstrumentId}' — outstanding now {NotesOutstandingCents()}c on {bank.VaultSpecieTotalCents()}c vault specie.");
             return null;
         }
@@ -298,9 +322,12 @@ namespace LandLedgers.Economy.Bank
         /// vault specie together, and DisburseLoan refuses what the bank does
         /// not hold. The bank's own paper is never discounted (that is
         /// issuance, a different flow).
+        ///
+        /// D3B: when a loan book is supplied, the paper is registered on it
+        /// at paid cost. Existing callers are unaffected.
         /// </summary>
         public string DiscountNote(EntityId instrumentId, int priceCents,
-            int dayIndex, List<string> diagnostics)
+            int dayIndex, List<string> diagnostics, BankLoanBook loanBook = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             string ready = DeskReady(diagnostics);
@@ -330,14 +357,21 @@ namespace LandLedgers.Economy.Bank
             }
 
             note.HolderName = bank.BusinessName;
-            discountedPaper.Add(new DiscountedPaper
+            var paper = new DiscountedPaper
             {
                 InstrumentId = instrumentId,
                 MakerName = note.MakerName,
                 FaceCents = note.PrincipalCents,
                 PaidCents = priceCents,
                 DiscountedDayIndex = dayIndex,
-            });
+            };
+            discountedPaper.Add(paper);
+            if (loanBook != null)
+            {
+                string bookRefusal = loanBook.RegisterDiscountedPaper(paper, diagnostics);
+                if (bookRefusal != null)
+                    diagnostics.Add($"NoteDesk [{bank.BusinessName}]: BOOKING GAP — discounted paper stands but is not on the loan book: {bookRefusal}");
+            }
             diagnostics.Add($"NoteDesk [{bank.BusinessName}]: discounted '{instrumentId}' ({note.MakerName} → {note.PayeeName}, face {note.PrincipalCents}c) for {priceCents}c — {note.PrincipalCents - priceCents}c discount profit if collected in full.");
             return null;
         }
@@ -346,9 +380,12 @@ namespace LandLedgers.Economy.Bank
         /// Collects discounted paper at full face when the maker pays, in
         /// specie. The discount profit realizes as cash (equity up, no new
         /// liability) — the honest end of the discount window.
+        ///
+        /// D3B: when a loan book is supplied, the asset retires from the
+        /// books. Existing callers are unaffected.
         /// </summary>
         public string CollectDiscountedNote(EntityId instrumentId, int dayIndex,
-            List<string> diagnostics)
+            List<string> diagnostics, BankLoanBook loanBook = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             string ready = DeskReady(diagnostics);
@@ -382,7 +419,134 @@ namespace LandLedgers.Economy.Bank
 
             credit.SatisfyInstrument(instrumentId.ToString(), diagnostics);
             paper.Collected = true;
+            if (loanBook != null)
+            {
+                string bookRefusal = loanBook.MarkAssetCollected(instrumentId, diagnostics);
+                if (bookRefusal != null)
+                    diagnostics.Add($"NoteDesk [{bank.BusinessName}]: BOOKING GAP — paper collected but the book entry did not retire: {bookRefusal}");
+            }
             diagnostics.Add($"NoteDesk [{bank.BusinessName}]: collected {paper.FaceCents}c on '{instrumentId}' — discount profit {paper.FaceCents - paper.PaidCents}c realized in cash.");
+            return null;
+        }
+
+        /// <summary>
+        /// D3B: the customer-facing discount window. A customer endorses
+        /// their note receivable to the bank and walks away with cash today
+        /// at the stated price — the classic "discounting commercial paper."
+        /// Period practice, and the honest version of it: the ENDORSER
+        /// remains liable. A T2A guaranty is registered (guarantor = customer,
+        /// creditor = bank, debtor = maker, exposure = face), so a maker
+        /// default calls the endorser through RecordDiscountDefault instead
+        /// of vanishing into a write-off. Finite capital — the bank pays cash
+        /// it holds, exactly like the desk-selected DiscountNote.
+        ///
+        /// The maker discounting their OWN note is refused here — that is a
+        /// loan application, a different flow with its own underwriting.
+        /// </summary>
+        public string DiscountCustomerPaper(string customerName, EntityId instrumentId,
+            int priceCents, string terms, int dayIndex, BankLoanBook loanBook,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            string ready = DeskReady(diagnostics);
+            if (ready != null) return ready;
+            if (string.IsNullOrWhiteSpace(customerName))
+                return "NoteDesk.DiscountCustomerPaper: the customer must be named — the bank discounts paper for someone.";
+            if (!credit.TryGetPromissoryNote(instrumentId, out PromissoryNote note) || note == null)
+                return $"NoteDesk.DiscountCustomerPaper: no promissory note '{instrumentId}' on the registry — the desk discounts real paper, not rumors.";
+            if (note.Status != CreditInstrumentStatus.Active)
+                return $"NoteDesk.DiscountCustomerPaper: note '{instrumentId}' is {note.Status} — only live paper is discounted.";
+            if (string.Equals(note.MakerName, customerName, StringComparison.Ordinal))
+                return $"NoteDesk.DiscountCustomerPaper: '{customerName}' is the maker of '{instrumentId}' — a maker discounting their own note is borrowing, not discounting. Route to a loan.";
+            if (string.Equals(note.MakerName, bank.BusinessName, StringComparison.Ordinal))
+                return $"NoteDesk.DiscountCustomerPaper: note '{instrumentId}' is the bank's own paper — the desk discounts third-party paper, not its own notes.";
+            if (priceCents <= 0)
+                return "NoteDesk.DiscountCustomerPaper: the price must be positive.";
+            if (priceCents > note.PrincipalCents)
+                return $"NoteDesk.DiscountCustomerPaper: {priceCents}c for {note.PrincipalCents}c face is a premium, not a discount — refused.";
+            foreach (DiscountedPaper existing in discountedPaper)
+                if (!existing.Collected && existing.InstrumentId.Equals(instrumentId))
+                    return $"NoteDesk.DiscountCustomerPaper: note '{instrumentId}' is already on the bank's books.";
+
+            string refused = bank.Ledger.DisburseLoan(priceCents, $"customer-discount-{instrumentId}", diagnostics);
+            if (refused != null) return refused;
+            List<SpecieLot> drawn = bank.DrawVaultLots(priceCents, diagnostics);
+            if (drawn == null)
+            {
+                bank.Ledger.ReceiveLoanPayment(priceCents, $"customer-discount-{instrumentId} (voided)", diagnostics);
+                diagnostics.Add($"NoteDesk [{bank.BusinessName}]: the vault could not produce {priceCents}c — the ledger disbursement was reversed, the discount is refused.");
+                return $"NoteDesk.DiscountCustomerPaper: the vault cannot produce {priceCents}c — refused.";
+            }
+
+            GuarantyAgreement guaranty = credit.IssueGuaranty(ids, customerName, bank.BusinessName,
+                note.MakerName, instrumentId.ToString(), note.PrincipalCents,
+                "endorser recourse on discount" + (string.IsNullOrWhiteSpace(terms) ? "" : ": " + terms),
+                dayIndex, diagnostics);
+            if (guaranty == null)
+            {
+                foreach (SpecieLot lot in drawn)
+                    bank.ReceiveVaultLot(lot, dayIndex, diagnostics);
+                bank.Ledger.ReceiveLoanPayment(priceCents, $"customer-discount-{instrumentId} (voided)", diagnostics);
+                return $"NoteDesk.DiscountCustomerPaper: the endorser guaranty could not be registered — the discount is unwound, no recourse, no deal.";
+            }
+
+            note.HolderName = bank.BusinessName;
+            var paper = new DiscountedPaper
+            {
+                InstrumentId = instrumentId,
+                MakerName = note.MakerName,
+                FaceCents = note.PrincipalCents,
+                PaidCents = priceCents,
+                DiscountedDayIndex = dayIndex,
+                CustomerEndorserName = customerName,
+                HasRecourse = true,
+                GuarantyInstrumentId = guaranty.InstrumentId.ToString(),
+            };
+            discountedPaper.Add(paper);
+            if (loanBook != null)
+            {
+                string bookRefusal = loanBook.RegisterDiscountedPaper(paper, diagnostics);
+                if (bookRefusal != null)
+                    diagnostics.Add($"NoteDesk [{bank.BusinessName}]: BOOKING GAP — discounted paper stands but is not on the loan book: {bookRefusal}");
+            }
+            diagnostics.Add($"NoteDesk [{bank.BusinessName}]: discounted customer paper '{instrumentId}' ({note.MakerName}, face {note.PrincipalCents}c) for '{customerName}' at {priceCents}c — endorser recourse registered ('{guaranty.InstrumentId}', exposure {note.PrincipalCents}c).");
+            return null;
+        }
+
+        /// <summary>
+        /// D3B: the maker of customer-discounted paper defaulted. The
+        /// endorser's guaranty is called through the registry (Active →
+        /// Called — the obligation becomes real, never silently dropped),
+        /// and the loan book converts the paper to a recourse receivable
+        /// against the endorser. Paper bought with no recourse cannot come
+        /// here — charge it off through the loan book instead.
+        /// </summary>
+        public string RecordDiscountDefault(EntityId instrumentId, int defaultedAmountCents,
+            int dayIndex, BankLoanBook loanBook, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            string ready = DeskReady(diagnostics);
+            if (ready != null) return ready;
+            DiscountedPaper paper = null;
+            foreach (DiscountedPaper candidate in discountedPaper)
+                if (!candidate.Collected && candidate.InstrumentId.Equals(instrumentId))
+                { paper = candidate; break; }
+            if (paper == null)
+                return $"NoteDesk.RecordDiscountDefault: note '{instrumentId}' is not on the bank's books.";
+            if (!paper.HasRecourse || string.IsNullOrWhiteSpace(paper.CustomerEndorserName))
+                return $"NoteDesk.RecordDiscountDefault: note '{instrumentId}' was bought with no endorser recourse — the bank owns the loss. Charge it off through the loan book.";
+
+            int called = Math.Min(paper.FaceCents, Math.Max(0, defaultedAmountCents));
+            credit.RecordDefault(instrumentId.ToString(), defaultedAmountCents, dayIndex,
+                null, null, null, diagnostics);
+            if (loanBook != null)
+            {
+                string bookRefusal = loanBook.RecordDiscountDefault(instrumentId, called,
+                    paper.CustomerEndorserName, dayIndex, diagnostics);
+                if (bookRefusal != null)
+                    diagnostics.Add($"NoteDesk [{bank.BusinessName}]: BOOKING GAP — guaranty called but the book entry did not convert: {bookRefusal}");
+            }
+            diagnostics.Add($"NoteDesk [{bank.BusinessName}]: '{instrumentId}' defaulted — endorser '{paper.CustomerEndorserName}' answers {called}c (guaranty '{paper.GuarantyInstrumentId}' called).");
             return null;
         }
 

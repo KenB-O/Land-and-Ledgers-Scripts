@@ -295,6 +295,43 @@ namespace LandLedgers.Economy.Financing
             return null;
         }
 
+        /// <summary>
+        /// D3B: general cash outflow for operating purposes — owner
+        /// distributions, operating expenses, remittances to correspondents,
+        /// collection proceeds paid out. Cash out, refused when the bank does
+        /// not hold it — never faked. The purpose is always named; the
+        /// operating layer pairs the physical specie that leaves the vault.
+        /// </summary>
+        public string RecordOperatingOutflow(int amountCents, string purpose, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (amountCents <= 0) return "BankDepositLedger.RecordOperatingOutflow: the outflow must be positive.";
+            if (string.IsNullOrWhiteSpace(purpose))
+                return "BankDepositLedger.RecordOperatingOutflow: the purpose must be stated — cash never leaves unnamed.";
+            if (amountCents > CashOnHandCents)
+                return $"BankDepositLedger.RecordOperatingOutflow: '{purpose}' needs {amountCents}c but the bank holds {CashOnHandCents}c — refused, never faked.";
+            CashOnHandCents -= amountCents;
+            diag.Add($"BankDepositLedger [{BankName}]: -{amountCents}c operating outflow ({purpose}) — cash on hand now {CashOnHandCents}c.");
+            return null;
+        }
+
+        /// <summary>
+        /// D3B: general cash inflow — draws on correspondents, draft-sale
+        /// proceeds, local collection receipts, fee income taken in cash.
+        /// The source is always named; the operating layer pairs the physical
+        /// specie lot that arrives in the vault.
+        /// </summary>
+        public string RecordOperatingInflow(int amountCents, string source, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (amountCents <= 0) return "BankDepositLedger.RecordOperatingInflow: the inflow must be positive.";
+            if (string.IsNullOrWhiteSpace(source))
+                return "BankDepositLedger.RecordOperatingInflow: the source must be named — no anonymous cash.";
+            CashOnHandCents += amountCents;
+            diag.Add($"BankDepositLedger [{BankName}]: +{amountCents}c operating inflow ({source}) — cash on hand now {CashOnHandCents}c.");
+            return null;
+        }
+
         #region Save / Load
         [Serializable]
         public sealed class BankDepositLedgerSaveDto

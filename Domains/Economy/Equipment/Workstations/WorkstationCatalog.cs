@@ -262,11 +262,31 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
+        /// <summary>W1B: barber chair station. Canon Part V barber profile: the barber
+        /// chair is core equipment; "multiple chairs" is the scale column. One
+        /// definition, many instances — the barbershop runtime pools chairs and
+        /// assigns one per service, so concurrent customers never exceed ready
+        /// chairs. Tech X §3.5 names the BarberStation/Kit requirement family.
+        /// </summary>
+        public static WorkstationDefinition BarberChairStation
+        {
+            get
+            {
+                var def = Build("barber-chair-station", "Barber Chair Station", "barber-shop",
+                    "W1B; Tech X §3.5 (BarberStation/Kit); Canon Part V: Barber (barber chair; multiple chairs as scale)",
+                    new[] { "barbering" },
+                    ("barber-chair", 1));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "barbering"));
+                return def;
+            }
+        }
+
         /// <summary>All workstation definitions, for catalog-driven UI and validation.</summary>
         public static List<WorkstationDefinition> All => new List<WorkstationDefinition>
         {
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
             CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard, PrintingPress,
+            BarberChairStation,
         };
     }
 }

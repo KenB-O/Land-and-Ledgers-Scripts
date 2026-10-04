@@ -47,6 +47,21 @@ namespace LandLedgers.Economy.Equipment.Workstations
             return station;
         }
 
+        /// <summary>
+        /// W1B: registers a pre-built workstation instance — e.g. one chair of a
+        /// multi-chair pool sharing a single definition, where the definition id
+        /// alone cannot key the instances. Returns a rejection string, or null on
+        /// success. Never invents readiness.
+        /// </summary>
+        public string RegisterInstance(WorkstationInstance station)
+        {
+            if (station == null) return "BusinessWorkstations: null station — nothing registered.";
+            if (string.IsNullOrWhiteSpace(station.WorkstationId))
+                return "BusinessWorkstations: station needs a workstation id — nothing registered.";
+            stations[station.WorkstationId] = station;
+            return null;
+        }
+
         public IEnumerable<WorkstationInstance> All => stations.Values;
 
         /// <summary>

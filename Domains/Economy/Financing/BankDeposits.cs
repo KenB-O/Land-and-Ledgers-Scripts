@@ -262,6 +262,39 @@ namespace LandLedgers.Economy.Financing
             return null;
         }
 
+        /// <summary>
+        /// W7C: specie received against bank notes issued — cash in, matched
+        /// by the note liability the NoteDesk tracks. Like a deposit the bank
+        /// owes on demand, but the claim is bearer paper, not an account.
+        /// </summary>
+        public string RecordNoteBackedSpecieInflow(int amountCents, string noteReference, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (amountCents <= 0) return "BankDepositLedger.RecordNoteBackedSpecieInflow: the specie must be positive.";
+            if (string.IsNullOrWhiteSpace(noteReference))
+                return "BankDepositLedger.RecordNoteBackedSpecieInflow: the note issue must be named.";
+            CashOnHandCents += amountCents;
+            diag.Add($"BankDepositLedger [{BankName}]: +{amountCents}c specie against notes '{noteReference}' — cash on hand now {CashOnHandCents}c (notes outstanding tracked on the desk).");
+            return null;
+        }
+
+        /// <summary>
+        /// W7C: note redemption paid in specie — cash out, matched by the
+        /// retired note liability. Refuses what the bank does not hold.
+        /// </summary>
+        public string RecordNoteRedemptionOutflow(int amountCents, string noteReference, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (amountCents <= 0) return "BankDepositLedger.RecordNoteRedemptionOutflow: the redemption must be positive.";
+            if (string.IsNullOrWhiteSpace(noteReference))
+                return "BankDepositLedger.RecordNoteRedemptionOutflow: the redeemed notes must be named.";
+            if (amountCents > CashOnHandCents)
+                return $"BankDepositLedger.RecordNoteRedemptionOutflow: '{noteReference}' needs {amountCents}c but the bank holds {CashOnHandCents}c — redemption refused, never faked.";
+            CashOnHandCents -= amountCents;
+            diag.Add($"BankDepositLedger [{BankName}]: -{amountCents}c specie redeeming notes '{noteReference}' — cash on hand now {CashOnHandCents}c.");
+            return null;
+        }
+
         #region Save / Load
         [Serializable]
         public sealed class BankDepositLedgerSaveDto

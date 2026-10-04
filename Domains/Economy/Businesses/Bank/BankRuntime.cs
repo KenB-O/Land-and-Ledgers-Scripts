@@ -152,6 +152,15 @@ namespace LandLedgers.Economy.Bank
         /// <summary>Owner equity: what the bank holds minus what it owes.</summary>
         public int OwnerEquityCents() => ledger.CashOnHandCents - ledger.DepositsOwedCents();
 
+        /// <summary>
+        /// W7C: owner equity with the note desk's demand liabilities included —
+        /// cash on hand minus deposits owed minus notes outstanding. Conservative:
+        /// registered loan assets (borrower notes, discounted paper) are NOT
+        /// counted here; full balance-sheet consolidation is a later depth item.
+        /// </summary>
+        public int OwnerEquityAfterNotesCents(int notesOutstandingCents)
+            => ledger.CashOnHandCents - ledger.DepositsOwedCents() - Math.Max(0, notesOutstandingCents);
+
         public BankRuntime() : this(string.Empty, string.Empty, string.Empty) { }
 
         public BankRuntime(string businessInstanceId, string businessName, string ownerName)

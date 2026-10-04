@@ -78,6 +78,12 @@ namespace LandLedgers.Economy.Financing
         public int SignedDayIndex;
         public CreditInstrumentStatus Status = CreditInstrumentStatus.Active;
         public List<string> CollateralEquipmentAssetIds = new List<string>();
+        /// <summary>
+        /// W7C: current holder by endorsement. Bearer paper passes by
+        /// delivery — the holder, not just the named payee, can present it.
+        /// Empty means unendorsed / held by the payee.
+        /// </summary>
+        public string HolderName = string.Empty;
 
         EntityId ICreditInstrument.InstrumentId => InstrumentId;
         CreditInstrumentKind ICreditInstrument.Kind => CreditInstrumentKind.PromissoryNote;

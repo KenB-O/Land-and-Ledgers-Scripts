@@ -291,6 +291,22 @@ namespace LandLedgers.Economy.Financing
             return null;
         }
 
+        /// <summary>
+        /// W7C: read-only lookup so the note desk can verify paper before
+        /// discounting or redeeming it. The registry stays the authority;
+        /// this only exposes what it already holds.
+        /// </summary>
+        public bool TryGetPromissoryNote(EntityId instrumentId, out PromissoryNote note)
+        {
+            note = null;
+            if (instrumentId.IsValid && notes.TryGetValue(Key(instrumentId), out PromissoryNote found))
+            {
+                note = found;
+                return true;
+            }
+            return false;
+        }
+
         public int InstrumentCount =>
             notes.Count + sellerNotes.Count + mortgages.Count + liens.Count + guaranties.Count;
 

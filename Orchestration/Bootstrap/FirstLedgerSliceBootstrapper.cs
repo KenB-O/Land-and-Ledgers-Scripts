@@ -1,12 +1,16 @@
+using System.Collections.Generic;
 using LandLedgers.Civic;
 using System.Text;
 using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Orchestration.Scenarios;
+using LandLedgers.Orchestration.Player;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Pathing;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.Time;
 using LandLedgers.UI;
 using LandLedgers.World;
@@ -91,6 +95,9 @@ namespace LandLedgers.FirstLedger
         private FirstSessionGuidanceManager firstSessionGuidance;
 
         [SerializeField]
+        private SimulationSystemsHub systemsHub;
+
+        [SerializeField]
         private PopulationGenerationSettings populationSettings;
 
         [SerializeField]
@@ -157,6 +164,9 @@ namespace LandLedgers.FirstLedger
 
         private bool initialized;
         private bool initializing;
+        private HouseholdMembershipRegistry playerHouseholdMemberships;
+        private KinshipRegistry playerHouseholdKinship;
+        private HouseholdLifecycleManager playerHouseholdLifecycle;
 
         public string LastStartupTimingSummary => lastStartupTimingSummary ?? string.Empty;
         public WorldStartupIntent StartupIntent => startupIntent;
@@ -271,6 +281,8 @@ namespace LandLedgers.FirstLedger
                 populationManager.GeneratePopulationSnapshot();
             }
             AppendStartupTiming(timing, stepTimer, "population generation");
+
+            ConfigureScenarioAuthorities();
 
             ConfigureTownPulseRuntime();
             ConfigurePlayerPortfolioManager();
@@ -621,6 +633,88 @@ namespace LandLedgers.FirstLedger
             populationManager.Configure(townWorld, populationSettings, false);
         }
 
+        private void ConfigureScenarioAuthorities()
+        {
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            ScenarioDirector scenarioDirector = FindAnyObjectByType<ScenarioDirector>();
+            PopulationState population = populationManager != null ? populationManager.State : null;
+            if (systemsHub == null || scenarioDirector == null || population == null)
+            {
+                return;
+            }
+
+            playerHouseholdMemberships = new HouseholdMembershipRegistry();
+            playerHouseholdKinship = new KinshipRegistry();
+            playerHouseholdLifecycle = new HouseholdLifecycleManager(
+                population,
+                playerHouseholdMemberships,
+                playerHouseholdKinship,
+                systemsHub.Ids);
+            playerHouseholdLifecycle.EnsureEntityIds();
+
+            scenarioDirector.Lifecycle = playerHouseholdLifecycle;
+            scenarioDirector.FounderResolver = ResolveScenarioFounders;
+
+            PersonState firstPerson = FindFirstLivingPerson(population);
+            if (firstPerson != null)
+            {
+                scenarioDirector.PlayerDirector = new PlayerDirector(
+                    LandLedgers.Primitives.EntityId.For(EntityKind.Person, firstPerson.id),
+                    "town-core");
+            }
+        }
+
+        private List<int> ResolveScenarioFounders(string requestedDisplayName)
+        {
+            var resolved = new List<int>();
+            PopulationState population = populationManager != null ? populationManager.State : null;
+            if (population == null || population.people == null)
+            {
+                return resolved;
+            }
+
+            bool hasRequestedName = !string.IsNullOrWhiteSpace(requestedDisplayName);
+            for (int i = 0; i < population.people.Count; i++)
+            {
+                PersonState person = population.people[i];
+                if (person == null || person.deathDayIndex >= 0)
+                {
+                    continue;
+                }
+
+                if (!hasRequestedName
+                    || string.Equals(person.DisplayName, requestedDisplayName.Trim(), System.StringComparison.OrdinalIgnoreCase))
+                {
+                    resolved.Add(person.id);
+                    if (hasRequestedName || resolved.Count == 1)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return resolved;
+        }
+
+        private static PersonState FindFirstLivingPerson(PopulationState population)
+        {
+            if (population == null || population.people == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < population.people.Count; i++)
+            {
+                PersonState person = population.people[i];
+                if (person != null && person.deathDayIndex < 0)
+                {
+                    return person;
+                }
+            }
+
+            return null;
+        }
+
         private void ConfigureCivicFoundation()
         {
             if (civicFoundation == null)
@@ -858,6 +952,7 @@ namespace LandLedgers.FirstLedger
             hudController ??= FindAnyObjectByType<LandLedgersHUDController>();
             firstSessionGuidance ??= FindAnyObjectByType<FirstSessionGuidanceManager>();
             preAuthoredTerrainProfile ??= FindAnyObjectByType<PreAuthoredTerrainWorldProfile>();
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
 
             if (saveLoadManager == null)
             {

@@ -218,6 +218,12 @@ namespace LandLedgers.Orchestration.Scenarios
         public string HouseholdName => householdName;
         public IReadOnlyList<string> FounderDisplayNames => founderDisplayNames;
 
-        public bool IsDeclared => founderDisplayNames != null && founderDisplayNames.Count > 0;
+        // A scenario may intentionally leave founders empty when the opening
+        // population is generated at runtime. The world bootstrap then resolves
+        // a real generated Person instead of treating the player household as
+        // absent. An entirely missing declaration is still invalid.
+        public bool IsDeclared => !string.IsNullOrWhiteSpace(scenarioPlayerId)
+            && !string.IsNullOrWhiteSpace(householdName)
+            && founderDisplayNames != null;
     }
 }

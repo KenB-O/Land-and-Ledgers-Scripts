@@ -95,7 +95,19 @@ namespace LandLedgers.Economy
         /// every loan, note, and withdrawal moves real cash.
         /// Value appended, never renumbered (W7A).
         /// </summary>
-        Bank = 26
+        Bank = 26,
+        /// <summary>
+        /// W9A: the lawyer / notary as a professional practice. Canon §
+        /// offices list: desk; law/reference books; pen/ink/paper; document
+        /// files/forms; seal where required; secure records. Revenue is
+        /// retainer + per-matter billing against real clients (persons);
+        /// every fee is an itemized invoice and any unpaid balance is a
+        /// real receivable — the practice cannot bill nobody. Legal work
+        /// never operates by fiat: the lawyer drafts, files and represents
+        /// through the existing T2F / NX-3C / T3D instruments (W9B).
+        /// Value appended, never renumbered (W9A).
+        /// </summary>
+        Lawyer = 27
     }
 
     public enum BusinessCadence

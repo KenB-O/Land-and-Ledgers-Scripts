@@ -182,6 +182,18 @@ namespace LandLedgers.Economy
                     new TraitWeight(WorkerTraitKind.LearningSpeed, 0.10f, "trainability"));
             }
 
+            // W9A: the lawyer as skilled occupation — fiduciary trust and legal
+            // learning first; Canon office list implies drafting care and
+            // counsel over physical stamina.
+            if (businessType == BusinessType.Lawyer)
+            {
+                return new WorkerRoleProfile(roleDisplayName, 0.06f,
+                    new TraitWeight(WorkerTraitKind.Honesty, 0.34f, "fiduciary trust"),
+                    new TraitWeight(WorkerTraitKind.LearningSpeed, 0.30f, "legal learning"),
+                    new TraitWeight(WorkerTraitKind.Care, 0.20f, "careful drafting"),
+                    new TraitWeight(WorkerTraitKind.SocialSkill, 0.11f, "client counsel"));
+            }
+
             if (businessType == BusinessType.Ranch || businessType == BusinessType.CropFarm)
             {
                 return new WorkerRoleProfile(roleDisplayName, 0.05f,

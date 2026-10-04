@@ -1233,6 +1233,7 @@ namespace LandLedgers.Economy
                 BusinessType.Barber => "Barber",
                 BusinessType.Wheelwright => "Wheelwright",
                 BusinessType.Mine => "Mine",
+                BusinessType.Lawyer => "Law Office",
                 _ => "Business"
             };
         }

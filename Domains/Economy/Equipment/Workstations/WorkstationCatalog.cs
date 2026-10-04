@@ -325,6 +325,32 @@ namespace LandLedgers.Economy.Equipment.Workstations
         }
 
         /// <summary>
+        /// D1B: barber bath station. Canon Part V barber profile: "bath tubs /
+        /// hot-water capability" is the scale column — the bath service line
+        /// exists because the shop invested in tubs, not because a chair is
+        /// free. The tub is a component asset (condition-gated like any
+        /// equipment); hot water is an infrastructure support requirement —
+        /// period pattern: a laundry stove / boiler / kettle on the premises
+        /// (the laundress profile). One definition, many instances — the shop
+        /// runtime pools tubs and assigns one per bath, so concurrent baths
+        /// never exceed ready tubs with hot water. Tech X §3.5 names the
+        /// BarberStation/Kit requirement family.
+        /// </summary>
+        public static WorkstationDefinition BarberBathStation
+        {
+            get
+            {
+                var def = Build("barber-bath-station", "Barber Bath Station", "barber-shop",
+                    "D1B; Tech X §3.5 (BarberStation/Kit); Canon Part V: Barber (bath tubs/hot-water capability as scale)",
+                    new[] { "bathing" },
+                    ("bath-tub", 1));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "barbering"));
+                def.SupportRequirements.Add(new SupportRequirement("infrastructure", "hot-water"));
+                return def;
+            }
+        }
+
+        /// <summary>
         /// W1C: tailor cutting table station. Canon Part V tailor profile: the
         /// cutting table is core equipment ("Ironing/CuttingTable", Tech X
         /// §3.5); "larger pressing table" and "stock of cloth/notions" are the
@@ -371,7 +397,7 @@ namespace LandLedgers.Economy.Equipment.Workstations
         {
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
             CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard, PrintingPress,
-            BarberChairStation, TailorCuttingTableStation, TellerWindowStation,
+            BarberChairStation, BarberBathStation, TailorCuttingTableStation, TellerWindowStation,
         };
     }
 }

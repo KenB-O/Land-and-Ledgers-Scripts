@@ -82,6 +82,19 @@ namespace LandLedgers.Economy.Businesses.Barber
         /// <summary>W1B: the workstation id services require. Defined in WorkstationCatalog; chairs are pooled by the shop runtime.</summary>
         public const string BarberChairStationId = "barber-chair-station";
 
+        /// <summary>
+        /// D1B: the bath-tub workstation id. Defined in WorkstationCatalog; tubs
+        /// are pooled by the shop runtime. Canon Part V barber profile: "bath
+        /// tubs/hot-water capability" is the scale column.
+        /// </summary>
+        public const string BarberBathStationId = "barber-bath-station";
+
+        /// <summary>D1B: equipment kind a bath-tub component asset carries.</summary>
+        public const string BathTubEquipmentKind = "bath-tub";
+
+        /// <summary>D1B: infrastructure id for the hot-water capability a bath needs (stove/boiler/kettle on the premises).</summary>
+        public const string HotWaterInfrastructureId = "hot-water";
+
         /// <summary>TUNING: minutes a shave occupies a chair (labor equals occupancy).</summary>
         public const int ShaveMinutes = 20;
 

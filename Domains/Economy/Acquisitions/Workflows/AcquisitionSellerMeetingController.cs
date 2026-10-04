@@ -5,7 +5,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
-namespace LandLedgers.MVP
+namespace LandLedgers.FirstLedger
 {
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(326)]
@@ -43,13 +43,13 @@ namespace LandLedgers.MVP
                 return;
             }
 
-            if (MvpKeyboardInput.WasPressedThisFrame(Key.Escape))
+            if (FirstLedgerKeyboardInput.WasPressedThisFrame(Key.Escape))
             {
                 Close();
                 return;
             }
 
-            if (MvpKeyboardInput.WasAnyPressedThisFrame(Key.Enter, Key.NumpadEnter))
+            if (FirstLedgerKeyboardInput.WasAnyPressedThisFrame(Key.Enter, Key.NumpadEnter))
             {
                 AdvanceDeal();
                 return;
@@ -353,32 +353,32 @@ namespace LandLedgers.MVP
 
         private static int ResolveShortcutIndex()
         {
-            if (MvpKeyboardInput.WasAnyPressedThisFrame(Key.Digit1, Key.Numpad1))
+            if (FirstLedgerKeyboardInput.WasAnyPressedThisFrame(Key.Digit1, Key.Numpad1))
             {
                 return 0;
             }
 
-            if (MvpKeyboardInput.WasAnyPressedThisFrame(Key.Digit2, Key.Numpad2))
+            if (FirstLedgerKeyboardInput.WasAnyPressedThisFrame(Key.Digit2, Key.Numpad2))
             {
                 return 1;
             }
 
-            if (MvpKeyboardInput.WasAnyPressedThisFrame(Key.Digit3, Key.Numpad3))
+            if (FirstLedgerKeyboardInput.WasAnyPressedThisFrame(Key.Digit3, Key.Numpad3))
             {
                 return 2;
             }
 
-            if (MvpKeyboardInput.WasAnyPressedThisFrame(Key.Digit4, Key.Numpad4))
+            if (FirstLedgerKeyboardInput.WasAnyPressedThisFrame(Key.Digit4, Key.Numpad4))
             {
                 return 3;
             }
 
-            if (MvpKeyboardInput.WasAnyPressedThisFrame(Key.Digit5, Key.Numpad5))
+            if (FirstLedgerKeyboardInput.WasAnyPressedThisFrame(Key.Digit5, Key.Numpad5))
             {
                 return 4;
             }
 
-            if (MvpKeyboardInput.WasAnyPressedThisFrame(Key.Digit6, Key.Numpad6))
+            if (FirstLedgerKeyboardInput.WasAnyPressedThisFrame(Key.Digit6, Key.Numpad6))
             {
                 return 5;
             }
@@ -510,7 +510,7 @@ namespace LandLedgers.MVP
         }
     }
 
-    internal static class MvpKeyboardInput
+    internal static class FirstLedgerKeyboardInput
     {
         public static bool WasPressedThisFrame(Key key)
         {

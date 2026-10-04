@@ -337,7 +337,7 @@ namespace LandLedgers.World
         [Header("Civic")]
         public bool generateTownHall = true;
 
-        [Tooltip("Single MVP civic holding placed near the town center. Its referenced physical shell is placed in the world.")]
+        [Tooltip("Single slice civic holding placed near the town center. Its referenced physical shell is placed in the world.")]
         public TownHallDefinition townHallDefinition;
 
         [Tooltip("Physical civic shell used when a later Schoolhouse is established. Falls back to the Town Hall civic shell when unset.")]

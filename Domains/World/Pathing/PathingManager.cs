@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.World;
 using UnityEngine;
 
@@ -651,7 +651,7 @@ namespace LandLedgers.Pathing
                 return false;
             }
 
-            MvpSliceBootstrapper bootstrapper = FindAnyObjectByType<MvpSliceBootstrapper>();
+            FirstLedgerSliceBootstrapper bootstrapper = FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
             if (bootstrapper != null)
             {
                 bootstrapper.InitializeSlice();

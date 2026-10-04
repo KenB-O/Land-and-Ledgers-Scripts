@@ -96,8 +96,8 @@ A prior structural audit identified multiple tight couplings and cyclical relati
    - `SharedBusinessRuntimeManager` and `AcquisitionMarketManager` directly query and hold references to `TownWorldController`, parcel plots, and tile grid data.
 2. **`Economy <-> Population`**:
    - `SharedBusinessRuntimeManager`, `WorkerRoleFitEvaluator`, and `OpportunityPressureRuntimeManager` directly inspect `PopulationManager` arrays, household reserves, and demographic traits.
-3. **`Economy <-> former MVP / Orchestration`**:
-   - Domain managers maintain back-references to `MvpSliceBootstrapper` or expect initialization orchestration directly in `Awake`/`Start`.
+3. **`Economy <-> former first-slice / Orchestration`**:
+   - Domain managers maintain back-references to `FirstLedgerSliceBootstrapper` or expect initialization orchestration directly in `Awake`/`Start`.
 4. **`Persistence <-> Domain Simulations`**:
    - `SaveLoadManager` directly sets internal fields on domain managers during state restore rather than utilizing decoupled memento interfaces.
 5. **`Simulation -> UI Direct Invocations`**:

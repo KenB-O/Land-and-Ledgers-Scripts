@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using LandLedgers.Economy.Financing;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using UnityEngine;
 
 namespace LandLedgers.Economy

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using NUnit.Framework;
@@ -13,7 +13,7 @@ namespace LandLedgers.EditorTests.Population
     public sealed class HouseholdReserveInventoryTests
     {
         [Test]
-        public void HouseholdReserveInitializationCreatesCompactMvpCategories()
+        public void HouseholdReserveInitializationCreatesCompactSliceCategories()
         {
             HouseholdState household = CreateHousehold();
 

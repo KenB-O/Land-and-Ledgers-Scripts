@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Time;
@@ -1641,7 +1641,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(source.AcquisitionMarket.TryStartBusinessFromOwnedShell(shell.id, activationIndex, out BusinessInstanceState startedBusiness, out string startMessage), startMessage);
             source.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
-            GameObject sourceDebtObject = new("MVP Save Load Source Debt");
+            GameObject sourceDebtObject = new("Slice Save Load Source Debt");
             GameObject restoredDebtObject = null;
             try
             {
@@ -1649,7 +1649,7 @@ namespace LandLedgers.Editor.Economy
                 sourceDebt.Configure(null, source.StoreRuntime, source.AcquisitionMarket, source.SharedBusinessRuntime, source.PlayerPortfolio);
                 sourceDebt.LoadFromSaveDto(new PlayerDebtSaveDto
                 {
-                    activeLoan = CreateIntegrationActiveLoan("mvp_integration_save_load_loan", 25000, 1250)
+                    activeLoan = CreateIntegrationActiveLoan("slice_integration_save_load_loan", 25000, 1250)
                 });
 
                 Assert.IsTrue(sourceDebt.HasActiveLoan);
@@ -1692,7 +1692,7 @@ namespace LandLedgers.Editor.Economy
                 restored.PlayerPortfolio.LoadFromSaveDto(portfolio);
                 restored.AcquisitionMarket.LoadFromSaveDto(acquisition);
 
-                restoredDebtObject = new GameObject("MVP Save Load Restored Debt");
+                restoredDebtObject = new GameObject("Slice Save Load Restored Debt");
                 PlayerDebtManager restoredDebt = restoredDebtObject.AddComponent<PlayerDebtManager>();
                 restoredDebt.Configure(null, restored.StoreRuntime, restored.AcquisitionMarket, restored.SharedBusinessRuntime, restored.PlayerPortfolio);
                 restoredDebt.LoadFromSaveDto(debt);

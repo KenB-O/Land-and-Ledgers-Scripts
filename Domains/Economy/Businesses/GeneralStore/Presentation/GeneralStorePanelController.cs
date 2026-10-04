@@ -16,7 +16,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
-namespace LandLedgers.MVP
+namespace LandLedgers.FirstLedger
 {
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(320)]

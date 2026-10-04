@@ -6,7 +6,7 @@ using LandLedgers.Time;
 using LandLedgers.World;
 using UnityEngine;
 
-namespace LandLedgers.MVP
+namespace LandLedgers.FirstLedger
 {
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(270)]

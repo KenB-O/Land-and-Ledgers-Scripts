@@ -1,6 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.World;
 using NUnit.Framework;
@@ -92,7 +92,7 @@ namespace LandLedgers.Editor.World
             Scene scene = EditorSceneManager.OpenScene("Assets/Main Scene.unity", OpenSceneMode.Single);
             Assert.IsTrue(scene.IsValid());
 
-            MvpSliceBootstrapper bootstrapper = Object.FindAnyObjectByType<MvpSliceBootstrapper>();
+            FirstLedgerSliceBootstrapper bootstrapper = Object.FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
             PreAuthoredTerrainWorldProfile profile = Object.FindAnyObjectByType<PreAuthoredTerrainWorldProfile>();
             Terrain terrain = Object.FindAnyObjectByType<Terrain>();
             SerializedObject serializedBootstrapper = new(bootstrapper);
@@ -272,7 +272,7 @@ namespace LandLedgers.Editor.World
                     $"Remote resource site '{resources.RemoteSites[i].Id}' is invalid at {anchor}.");
             }
 
-            MvpSliceBootstrapper bootstrapper = Object.FindAnyObjectByType<MvpSliceBootstrapper>();
+            FirstLedgerSliceBootstrapper bootstrapper = Object.FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
             Debug.Log($"[PreAuthoredStartupProbe] Main Scene Play Mode transition and startup completed in {elapsedMilliseconds} ms; "
                 + $"town passes={townWorld.GenerationPassCount}, regional terrain tiles built=0, "
                 + $"buildings={townWorld.Buildings.Count}, resource districts={resources.Districts.Count}, "

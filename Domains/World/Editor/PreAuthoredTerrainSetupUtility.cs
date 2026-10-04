@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -53,7 +53,7 @@ namespace LandLedgers.World.Editor
                 throw new InvalidOperationException("Pre-authored terrain validation requires a loaded scene.");
             }
 
-            MvpSliceBootstrapper bootstrapper = FindInScene<MvpSliceBootstrapper>(scene);
+            FirstLedgerSliceBootstrapper bootstrapper = FindInScene<FirstLedgerSliceBootstrapper>(scene);
             PreAuthoredTerrainWorldProfile profile = FindInScene<PreAuthoredTerrainWorldProfile>(scene);
             TownWorldController townWorld = FindInScene<TownWorldController>(scene);
             PopulationManager population = FindInScene<PopulationManager>(scene);
@@ -62,7 +62,7 @@ namespace LandLedgers.World.Editor
 
             if (bootstrapper == null)
             {
-                failures.Add("MvpSliceBootstrapper is missing");
+                failures.Add("FirstLedgerSliceBootstrapper is missing");
             }
 
             if (profile == null)

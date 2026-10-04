@@ -14,7 +14,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
 using Stopwatch = System.Diagnostics.Stopwatch;
 
-namespace LandLedgers.MVP
+namespace LandLedgers.FirstLedger
 {
     public enum WorldStartupIntent
     {
@@ -25,7 +25,7 @@ namespace LandLedgers.MVP
 
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(240)]
-    public sealed class MvpSliceBootstrapper : MonoBehaviour
+    public sealed class FirstLedgerSliceBootstrapper : MonoBehaviour
     {
         [Header("Scene Systems")]
         [SerializeField]

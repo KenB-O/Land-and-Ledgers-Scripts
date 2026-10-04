@@ -6,7 +6,7 @@ using LandLedgers.UI;
 using LandLedgers.World;
 using UnityEngine;
 
-namespace LandLedgers.MVP
+namespace LandLedgers.FirstLedger
 {
     public enum FirstSessionObjectiveStep
     {

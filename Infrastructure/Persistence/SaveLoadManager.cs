@@ -5,7 +5,7 @@ using System.Linq;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
 using LandLedgers.Time;
@@ -75,7 +75,7 @@ namespace LandLedgers.Persistence
         private FirstSessionGuidanceManager firstSessionGuidance;
 
         [SerializeField]
-        private MvpSliceBootstrapper bootstrapper;
+        private FirstLedgerSliceBootstrapper bootstrapper;
 
         [SerializeField, Tooltip("CLN-1: owns the standalone simulation authorities (tasks, skills, animals, ledgers, valuation, freight, butcher, farm flows).")]
         private SimulationSystemsHub systemsHub;
@@ -764,7 +764,7 @@ namespace LandLedgers.Persistence
             managementPanel ??= FindAnyObjectByType<GeneralStorePanelController>();
             hudController ??= FindAnyObjectByType<LandLedgersHUDController>();
             firstSessionGuidance ??= FindAnyObjectByType<FirstSessionGuidanceManager>();
-            bootstrapper ??= FindAnyObjectByType<MvpSliceBootstrapper>();
+            bootstrapper ??= FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
 
             if (systemsHub == null)

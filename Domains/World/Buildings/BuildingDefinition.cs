@@ -72,7 +72,7 @@ namespace LandLedgers.World
         private BuildingResidentialMode residentialMode = BuildingResidentialMode.StandaloneHousehold;
 
         [SerializeField, Min(0)]
-        [Tooltip("Current MVP supports one household well; higher values are reserved for later apartment/multi-family work.")]
+        [Tooltip("Current slice supports one household well; higher values are reserved for later apartment/multi-family work.")]
         private int residentHouseholdCapacity = 1;
 
         [Header("Agricultural Site")]

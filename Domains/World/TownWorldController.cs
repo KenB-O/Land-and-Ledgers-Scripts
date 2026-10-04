@@ -3,7 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using LandLedgers.Civic;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.Economy;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -1162,13 +1162,13 @@ namespace LandLedgers.World
         [ContextMenu("Generate Town Shell")]
         public void GenerateTownShell()
         {
-            if (Application.isPlaying && FindAnyObjectByType<MvpSliceBootstrapper>() != null)
+            if (Application.isPlaying && FindAnyObjectByType<FirstLedgerSliceBootstrapper>() != null)
             {
                 if (!startupConfigured)
                 {
                     if (verboseStartupLogging)
                     {
-                        Debug.Log("[TownWorld] Fresh generation request ignored until MvpSliceBootstrapper configures the terrain mode.", this);
+                        Debug.Log("[TownWorld] Fresh generation request ignored until FirstLedgerSliceBootstrapper configures the terrain mode.", this);
                     }
 
                     return;
@@ -1176,7 +1176,7 @@ namespace LandLedgers.World
 
                 if (generationPassCount > 0 || grid != null)
                 {
-                    Debug.LogWarning("[TownWorld] Duplicate fresh generation request ignored; MvpSliceBootstrapper already created the opening town.", this);
+                    Debug.LogWarning("[TownWorld] Duplicate fresh generation request ignored; FirstLedgerSliceBootstrapper already created the opening town.", this);
                     return;
                 }
             }
@@ -2274,13 +2274,13 @@ namespace LandLedgers.World
         {
             if (generateOnStart
                 && Application.isPlaying
-                && FindAnyObjectByType<MvpSliceBootstrapper>() == null)
+                && FindAnyObjectByType<FirstLedgerSliceBootstrapper>() == null)
             {
                 GenerateTownShell();
             }
             else if (generateOnStart && Application.isPlaying && verboseStartupLogging)
             {
-                Debug.Log("[TownWorld] Automatic Start generation skipped because MvpSliceBootstrapper owns fresh-world startup.", this);
+                Debug.Log("[TownWorld] Automatic Start generation skipped because FirstLedgerSliceBootstrapper owns fresh-world startup.", this);
             }
         }
 

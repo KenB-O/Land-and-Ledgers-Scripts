@@ -119,7 +119,7 @@ Houses all spatial, grid, terrain, procedural generation, and navigation systems
 
 ### `Orchestration/Bootstrap/`
 - **Responsibility**: Game entry point and startup coordinator across world generation, population seeding, business initialization, and UI binding.
-- **Representative Files**: `MvpSliceBootstrapper.cs`.
+- **Representative Files**: `FirstLedgerSliceBootstrapper.cs`..
 
 ### `Orchestration/Guidance/`
 - **Responsibility**: Tutorial sequences, first-session player guidance milestones, and contextual hints.

@@ -11,7 +11,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
-namespace LandLedgers.MVP
+namespace LandLedgers.FirstLedger
 {
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(325)]
@@ -70,7 +70,7 @@ namespace LandLedgers.MVP
             if (view != null
                 && view.Root != null
                 && view.Root.gameObject.activeInHierarchy
-                && MvpKeyboardInput.WasPressedThisFrame(Key.Escape))
+                && FirstLedgerKeyboardInput.WasPressedThisFrame(Key.Escape))
             {
                 Close();
             }

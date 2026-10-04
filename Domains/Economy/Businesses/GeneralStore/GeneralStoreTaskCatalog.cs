@@ -3,7 +3,7 @@ using LandLedgers.Primitives;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
 
-namespace LandLedgers.MVP
+namespace LandLedgers.FirstLedger
 {
     /// <summary>
     /// Goods classes for freight handling. Fragile and perishable goods are handled

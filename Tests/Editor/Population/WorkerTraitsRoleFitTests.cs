@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
-using LandLedgers.MVP;
+using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using NUnit.Framework;
 using UnityEngine;
@@ -265,7 +265,7 @@ namespace LandLedgers.Editor.Population
 
                 int gained = ApprenticeshipProgressionEvaluator.AdvancePaidWeek(person, businessType, 9, slot);
 
-                Assert.AreEqual(0, gained, $"{businessType} should not advance apprenticeship in the MVP slice.");
+                Assert.AreEqual(0, gained, $"{businessType} should not advance apprenticeship in the First Ledger slice.");
                 Assert.AreEqual(ApprenticeshipStage.Helper, person.apprenticeship.Stage);
                 Assert.AreEqual(0, person.apprenticeship.ExperiencePoints);
             }

@@ -11,7 +11,7 @@ using TMPro;
 
 namespace LandLedgers.Editor.Economy
 {
-    public sealed class MvpIntegrationSmokeTests
+    public sealed class SliceIntegrationSmokeTests
     {
         [Test]
         public void MainSceneManagementPanelBindsRuntimeControlsAndTabs()
@@ -163,7 +163,7 @@ namespace LandLedgers.Editor.Economy
             List<UnityEngine.Object> cleanup = new();
             try
             {
-                GameObject portfolioObject = new("MVP Management Cash Transfer Smoke Portfolio");
+                GameObject portfolioObject = new("Slice Management Cash Transfer Smoke Portfolio");
                 cleanup.Add(portfolioObject);
                 PlayerPortfolioManager portfolio = portfolioObject.AddComponent<PlayerPortfolioManager>();
                 portfolio.LoadFromSaveDto(new PlayerPortfolioSaveDto
@@ -173,7 +173,7 @@ namespace LandLedgers.Editor.Economy
                 });
 
                 BusinessInstanceState business = BusinessInstanceState.Create(
-                    "mvp_management_cash_transfer_smoke",
+                    "slice_management_cash_transfer_smoke",
                     LoadProfile(BusinessType.GeneralStore),
                     0,
                     BusinessOwnerIdentity.Player());

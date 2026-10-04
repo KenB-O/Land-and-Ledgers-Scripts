@@ -40,7 +40,13 @@ namespace LandLedgers.Economy.Blacksmith
         public string ReportedProblem = string.Empty;
         public string DiagnosedProblem = string.Empty;
         public RepairUrgency Urgency = RepairUrgency.Routine;
-        public string RequiredCapability = string.Empty; // "smithing", "farrier", "wagon-work"
+        public string RequiredCapability = string.Empty; // "smithing", "farrier", "wheelwright-work" (D3A: "wagon-work" retired — see WheelwrightRuntime.WheelwrightCapabilityCode)
+        /// <summary>
+        /// D3A (additive): the failed component this job needs, e.g. "wagon-wheel".
+        /// Set at diagnosis; lets a repair consume a finished spare part from
+        /// the shop's shelf instead of raw materials. Empty = no named component.
+        /// </summary>
+        public string ComponentKind = string.Empty;
         public int MaterialUnitsNeeded;
         public string MaterialId = string.Empty;
         public string LocationId = string.Empty; // where the asset IS — physical truth
@@ -95,7 +101,8 @@ namespace LandLedgers.Economy.Blacksmith
         /// proper quote (Canon §7.2D).
         /// </summary>
         public string Diagnose(string workOrderId, string diagnosedProblem,
-            int materialUnitsNeeded, string materialId, int estimatedLaborMinutes)
+            int materialUnitsNeeded, string materialId, int estimatedLaborMinutes,
+            string componentKind = null)
         {
             RepairWorkOrder order = Find(workOrderId);
             if (order == null) return $"RepairQueue: unknown work order '{workOrderId}'.";
@@ -105,6 +112,9 @@ namespace LandLedgers.Economy.Blacksmith
             order.MaterialUnitsNeeded = Math.Max(0, materialUnitsNeeded);
             order.MaterialId = materialId ?? string.Empty;
             order.EstimatedLaborMinutes = Math.Max(0, estimatedLaborMinutes);
+            // D3A (additive): naming the failed component lets the wheelwright
+            // complete the job from its spare-parts shelf.
+            order.ComponentKind = componentKind ?? string.Empty;
             order.Status = RepairOrderStatus.Diagnosed;
             return null;
         }

@@ -7,6 +7,21 @@ using UnityEngine;
 namespace LandLedgers.Economy.Wheelwright
 {
     /// <summary>
+    /// D3A: repair quality tiers (Canon §6.5C: "Repair quality can distinguish
+    /// proper, temporary and improvised work where economically meaningful").
+    /// A field repair may restore a disabled wagon enough to return to town
+    /// without making it equivalent to shop work (Canon §7.2C) — temporary and
+    /// improvised repairs restore partial condition and record a known defect
+    /// requiring proper shop follow-up.
+    /// </summary>
+    public enum WheelwrightRepairQuality
+    {
+        Proper = 0,      // full shop restoration
+        Temporary = 1,   // interim fix to a parameterized condition; follow-up required
+        Improvised = 2,  // field-expedient fix with whatever is at hand; lower restoration
+    }
+
+    /// <summary>
     /// W6b: the wagon repair economy — pricing (parts + labor), turnaround
     /// times, queue prioritization rules, and the demand links: draft-power
     /// wagon condition deteriorates with use → generates repair demand; freight

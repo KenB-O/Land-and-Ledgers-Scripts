@@ -14,7 +14,8 @@ namespace LandLedgers.Economy.Blacksmith
     /// <summary>
     /// EQU-2: a real blacksmith business (BusinessType.Blacksmith exists in the enum;
     /// created through the BIZ-1 workflow, not a menu). Canon §7.2 + Rev XI: the shop
-    /// is a bundle of capabilities (smithing, farrier, wagon-work), not a hard class.
+    /// is a bundle of capabilities (smithing, farrier — plus "wheelwright-work" when
+    /// it employs a qualified wheelwright, D3A), not a hard class.
     /// It both FABRICATES equipment from imported materials and REPAIRS the assets
     /// the freight/wagon/farm economy wears out — the repair demand already exists
     /// with zero suppliers until now.

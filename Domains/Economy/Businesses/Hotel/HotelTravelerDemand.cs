@@ -123,7 +123,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
             result.PersonId = arrival.PersonId;
 
             HotelRoomInventory inventory = runtime.RoomInventory;
-            HotelRoom room = FindOpenRoom(inventory, arrival.PreferredRoomClass,
+            HotelRoom room = FindOpenRoom(runtime, arrival.PreferredRoomClass,
                 out int bedIndex, out bool classFallback, arrival, d);
             if (room == null)
             {
@@ -131,6 +131,10 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 result.Refusal = $"HotelTravelerDemand: traveler {arrival.PersonId} refused — no open bed " +
                     $"(preferred {arrival.PreferredRoomClass}, no other class open either). Capacity is real beds, never invented.";
                 d.Add(result.Refusal);
+                // D2A: a recorded refusal is a reputation fact (Canon §8.1G
+                // "repeated overcrowding"), not a silently dropped customer.
+                runtime.RecordReputationEvent(arrival.ArrivalDayIndex, HotelExperienceKind.OvercrowdingRefusal,
+                    $"traveler {arrival.PersonId} turned away — the house was full", d);
                 return result;
             }
 
@@ -210,19 +214,52 @@ namespace LandLedgers.Economy.Businesses.Hotel
             return null;
         }
 
-        private static HotelRoom FindOpenRoom(HotelRoomInventory inventory, HotelRoomClass preferred,
+        /// <summary>
+        /// Finds the first open bed the walk-in traveler may take. D2A:
+        /// reservation-held beds are withheld — a walk-in never takes a
+        /// bed the proprietor promised a contract/commercial customer
+        /// (Canon §8.1D). Proprietor-household rooms are already excluded
+        /// by the inventory itself (Canon §8.1A).
+        /// </summary>
+        private static HotelRoom FindOpenRoom(HotelShopRuntime runtime, HotelRoomClass preferred,
             out int bedIndex, out bool classFallback, TravelerArrival arrival, List<string> diag)
         {
             bedIndex = -1;
             classFallback = false;
+            if (runtime == null) return null;
+            HotelRoomInventory inventory = runtime.RoomInventory;
             if (inventory == null) return null;
+            int dayIndex = arrival != null ? arrival.ArrivalDayIndex : 0;
 
             // Preferred class first — a commercial traveler who asked for
             // the parlor suite gets it when it is open.
+            int skip = runtime.RoomReservations.WithheldFromWalkIns(preferred, dayIndex);
             foreach (HotelRoom room in inventory.Rooms)
             {
                 if (room == null || room.RoomClass != preferred) continue;
-                if (room.TryFindOpenBed(out int open)) { bedIndex = open; return room; }
+                if (room.ProprietorOccupied) continue;
+                if (room.TryFindOpenBed(out int open))
+                {
+                    // Withheld beds are skipped: the first N open beds of
+                    // the class belong to the reservation book.
+                    if (skip > 0)
+                    {
+                        int openBeds = room.OpenBedCount;
+                        if (skip >= openBeds) { skip -= openBeds; continue; }
+                        bedIndex = -1;
+                        for (int b = 0; b < room.BedCount; b++)
+                        {
+                            if (room.IsBedOccupied(b)) continue;
+                            if (skip > 0) { skip--; continue; }
+                            bedIndex = b;
+                            break;
+                        }
+                        if (bedIndex < 0) continue;
+                        return room;
+                    }
+                    bedIndex = open;
+                    return room;
+                }
             }
 
             // Any open bed: a traveler sleeps where there is a bed rather
@@ -231,9 +268,28 @@ namespace LandLedgers.Economy.Businesses.Hotel
             foreach (HotelRoom room in inventory.Rooms)
             {
                 if (room == null || room.RoomClass == preferred) continue;
+                if (room.ProprietorOccupied) continue;
+                int fallbackSkip = runtime.RoomReservations.WithheldFromWalkIns(room.RoomClass, dayIndex);
                 if (room.TryFindOpenBed(out int open))
                 {
-                    bedIndex = open;
+                    if (fallbackSkip > 0)
+                    {
+                        int openBeds = room.OpenBedCount;
+                        if (fallbackSkip >= openBeds) continue;
+                        bedIndex = -1;
+                        for (int b = 0; b < room.BedCount; b++)
+                        {
+                            if (room.IsBedOccupied(b)) continue;
+                            if (fallbackSkip > 0) { fallbackSkip--; continue; }
+                            bedIndex = b;
+                            break;
+                        }
+                        if (bedIndex < 0) continue;
+                    }
+                    else
+                    {
+                        bedIndex = open;
+                    }
                     classFallback = true;
                     diag.Add($"HotelTravelerDemand: traveler {arrival.PersonId} preferred {preferred} — full; " +
                         $"taking {room.RoomClass} '{room.RoomNumber}' instead (class fallback).");

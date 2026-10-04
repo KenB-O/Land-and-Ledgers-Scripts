@@ -15,7 +15,8 @@ namespace LandLedgers.Economy.Businesses.Hotel
     /// boarding house (transient 25¢ room-only) because §8.1C's hotel guests
     /// are "higher-paying transient guests" — commercial travelers pay for
     /// the private room. Weekly terms run about 5.5 nightly rates (a modest
-    /// staying-the-week discount, period custom).
+    /// staying-the-week discount, period custom); D2A monthly terms run
+    /// 4× weekly (the boarding-house D1F ratio).
     /// </summary>
     [Serializable]
     public sealed class HotelRateSchedule
@@ -32,6 +33,12 @@ namespace LandLedgers.Economy.Businesses.Hotel
         private int doubleWeeklyCents = 330;
         [SerializeField, Min(0)]
         private int parlorSuiteWeeklyCents = 550;
+        [SerializeField, Min(0)]
+        private int singleMonthlyCents = 880;
+        [SerializeField, Min(0)]
+        private int doubleMonthlyCents = 1320;
+        [SerializeField, Min(0)]
+        private int parlorSuiteMonthlyCents = 2200;
 
         public HotelRateSchedule() { }
 
@@ -52,6 +59,10 @@ namespace LandLedgers.Economy.Businesses.Hotel
         public int SingleWeeklyCents => Math.Max(0, singleWeeklyCents);
         public int DoubleWeeklyCents => Math.Max(0, doubleWeeklyCents);
         public int ParlorSuiteWeeklyCents => Math.Max(0, parlorSuiteWeeklyCents);
+        /// <summary>D2A: monthly rates — the §8.1D longer-stay term.</summary>
+        public int SingleMonthlyCents => Math.Max(0, singleMonthlyCents);
+        public int DoubleMonthlyCents => Math.Max(0, doubleMonthlyCents);
+        public int ParlorSuiteMonthlyCents => Math.Max(0, parlorSuiteMonthlyCents);
 
         /// <summary>Per-night rate for a room class (nightly stay).</summary>
         public int NightlyRateCents(HotelRoomClass roomClass)
@@ -75,6 +86,24 @@ namespace LandLedgers.Economy.Businesses.Hotel
             }
         }
 
+        /// <summary>D2A: per-month rate for a room class (monthly term).</summary>
+        public int MonthlyRateCents(HotelRoomClass roomClass)
+        {
+            switch (roomClass)
+            {
+                case HotelRoomClass.DoubleRoom: return DoubleMonthlyCents;
+                case HotelRoomClass.ParlorSuite: return ParlorSuiteMonthlyCents;
+                default: return SingleMonthlyCents;
+            }
+        }
+
+        private static int MonthlyOrDefault(int monthlyCents, int weeklyCents)
+        {
+            monthlyCents = Math.Max(0, monthlyCents);
+            if (monthlyCents == 0 && weeklyCents > 0) return 4 * weeklyCents;
+            return monthlyCents;
+        }
+
         #region Save / Load
         [Serializable]
         public sealed class HotelRateScheduleSaveDto
@@ -85,6 +114,9 @@ namespace LandLedgers.Economy.Businesses.Hotel
             public int SingleWeeklyCents;
             public int DoubleWeeklyCents;
             public int ParlorSuiteWeeklyCents;
+            public int SingleMonthlyCents;
+            public int DoubleMonthlyCents;
+            public int ParlorSuiteMonthlyCents;
         }
 
         public HotelRateScheduleSaveDto CaptureSaveDto()
@@ -97,6 +129,9 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 SingleWeeklyCents = SingleWeeklyCents,
                 DoubleWeeklyCents = DoubleWeeklyCents,
                 ParlorSuiteWeeklyCents = ParlorSuiteWeeklyCents,
+                SingleMonthlyCents = SingleMonthlyCents,
+                DoubleMonthlyCents = DoubleMonthlyCents,
+                ParlorSuiteMonthlyCents = ParlorSuiteMonthlyCents,
             };
         }
 
@@ -109,6 +144,13 @@ namespace LandLedgers.Economy.Businesses.Hotel
             singleWeeklyCents = Math.Max(0, dto.SingleWeeklyCents);
             doubleWeeklyCents = Math.Max(0, dto.DoubleWeeklyCents);
             parlorSuiteWeeklyCents = Math.Max(0, dto.ParlorSuiteWeeklyCents);
+            // D2A migration: saves written before monthly terms existed
+            // carry zero monthly rates. A zero monthly rate with a
+            // positive weekly rate means "unset" — fall back to the 4×
+            // weekly calibration default rather than a free room.
+            singleMonthlyCents = MonthlyOrDefault(dto.SingleMonthlyCents, singleWeeklyCents);
+            doubleMonthlyCents = MonthlyOrDefault(dto.DoubleMonthlyCents, doubleWeeklyCents);
+            parlorSuiteMonthlyCents = MonthlyOrDefault(dto.ParlorSuiteMonthlyCents, parlorSuiteWeeklyCents);
         }
         #endregion
     }

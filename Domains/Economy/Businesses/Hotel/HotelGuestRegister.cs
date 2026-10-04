@@ -9,12 +9,25 @@ namespace LandLedgers.Economy.Businesses.Hotel
     /// stay (short-stay traveler, billed per night, expires when paid
     /// nights run out) versus a weekly agreement (weeks-or-months guest,
     /// billed per week, persists until checkout — the period hotel's
-    /// longer-stay custom).
+    /// longer-stay custom). D2A adds the Monthly agreement (Canon §8.1D
+    /// "weekly or longer-stay terms"; §8.1C "board for weeks or months
+    /// before renting") — billed per 30-day cycle, persists until
+    /// checkout.
     /// </summary>
     public enum HotelStayKind
     {
         Nightly = 0,
         Weekly = 1,
+        /// <summary>D2A: longer-stay monthly agreement (Canon §8.1D). Append-only — never renumbered.</summary>
+        Monthly = 2,
+    }
+
+    /// <summary>
+    /// D2A: TUNING — days per monthly billing cycle (the boarding-house D1F ratio).
+    /// </summary>
+    public static class HotelBilling
+    {
+        public const int MonthlyBillingDays = 30;
     }
 
     /// <summary>
@@ -34,6 +47,10 @@ namespace LandLedgers.Economy.Businesses.Hotel
         public HotelStayKind StayKind = HotelStayKind.Nightly;
         public int LockedNightlyRateCents;
         public int LockedWeeklyRateCents;
+        /// <summary>D2A: locked monthly rate (0 for non-monthly agreements).</summary>
+        public int LockedMonthlyRateCents;
+        /// <summary>D2A: the room reservation this guest checked in under (empty for walk-ins).</summary>
+        public string ReservationId = string.Empty;
         public int StartDayIndex;
         /// <summary>Nightly stays: paid nights remaining (checked out when this reaches 0).</summary>
         public int NightsRemaining;
@@ -83,6 +100,8 @@ namespace LandLedgers.Economy.Businesses.Hotel
         public string RoomNumber = string.Empty;
         public int NightsCovered = 7;
         public int CentsDue;
+        /// <summary>D2A: which term produced the dues (Weekly or Monthly).</summary>
+        public HotelStayKind StayKind = HotelStayKind.Weekly;
         public string Label = string.Empty;
 
         public HotelRoomRentDue() { }
@@ -110,11 +129,15 @@ namespace LandLedgers.Economy.Businesses.Hotel
         /// <summary>
         /// Checks a real guest into a specific open bed. Rates are locked at
         /// agreement (from the schedule passed in). Nightly stays need at
-        /// least one paid night. Returns the refusal, or null on success.
+        /// least one paid night. Monthly agreements lock the monthly rate
+        /// (D2A). A reservation id records the contract/commercial hold the
+        /// guest checked in under (D2A; empty for walk-ins). Returns the
+        /// refusal, or null on success.
         /// </summary>
         public string CheckIn(int personId, string roomNumber, int bedIndex, HotelRoomClass roomClass,
             HotelStayKind stayKind, int nightlyRateCents, int weeklyRateCents,
-            int startDayIndex, int nightsPaid, HotelRoomInventory inventory, List<string> diag)
+            int startDayIndex, int nightsPaid, HotelRoomInventory inventory, List<string> diag,
+            int monthlyRateCents = 0, string reservationId = null)
         {
             diag = diag ?? diagnostics;
             if (personId <= 0)
@@ -125,7 +148,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 return "HotelGuestRegister.CheckIn: no room inventory — a guest cannot sleep in a ledger.";
             if (stayKind == HotelStayKind.Nightly && nightsPaid <= 0)
                 return "HotelGuestRegister.CheckIn: a nightly stay needs at least one paid night.";
-            if (nightlyRateCents < 0 || weeklyRateCents < 0)
+            if (nightlyRateCents < 0 || weeklyRateCents < 0 || monthlyRateCents < 0)
                 return "HotelGuestRegister.CheckIn: rates cannot be negative.";
 
             string refusal = inventory.AssignSpecificBed(personId, roomNumber, bedIndex, diag);
@@ -140,11 +163,14 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 StayKind = stayKind,
                 LockedNightlyRateCents = Math.Max(0, nightlyRateCents),
                 LockedWeeklyRateCents = Math.Max(0, weeklyRateCents),
+                LockedMonthlyRateCents = Math.Max(0, monthlyRateCents),
+                ReservationId = reservationId ?? string.Empty,
                 StartDayIndex = startDayIndex,
                 NightsRemaining = stayKind == HotelStayKind.Nightly ? nightsPaid : 0,
                 NightlyState = BoardingNightlyState.HotelRoom,
             });
-            diag.Add($"HotelGuestRegister: person {personId} checked in ({stayKind}, {roomClass}) at bed {bedIndex} in '{roomNumber}', day {startDayIndex}.");
+            diag.Add($"HotelGuestRegister: person {personId} checked in ({stayKind}, {roomClass}) at bed {bedIndex} in '{roomNumber}', day {startDayIndex}" +
+                (string.IsNullOrWhiteSpace(reservationId) ? "." : $" (under reservation '{reservationId}')."));
             return null;
         }
 
@@ -191,10 +217,10 @@ namespace LandLedgers.Economy.Businesses.Hotel
         /// <summary>
         /// Nightly settlement: every guest present tonight produces a
         /// room-night sale (nightly guests at their locked nightly rate;
-        /// weekly guests at 0 — their rent settles weekly). Nightly
-        /// stays decrement paid nights and check out after their last
-        /// paid night. Linen turnover is applied by the caller
-        /// (housekeeping), which fills in the sale's linen fields.
+        /// weekly and monthly guests at 0 — their rent settles weekly /
+        /// monthly). Nightly stays decrement paid nights and check out
+        /// after their last paid night. Linen turnover is applied by the
+        /// caller (housekeeping), which fills in the sale's linen fields.
         /// </summary>
         public List<HotelRoomNightSale> SettleNight(int dayIndex, HotelRoomInventory inventory, List<string> diag)
         {
@@ -225,16 +251,17 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 }
                 else
                 {
+                    string termLabel = record.StayKind == HotelStayKind.Monthly ? "monthly term" : "weekly term";
                     sales.Add(new HotelRoomNightSale
                     {
                         PersonId = record.PersonId,
                         RoomNumber = record.RoomNumber,
                         BedIndex = record.BedIndex,
                         RoomClass = record.RoomClass,
-                        StayKind = HotelStayKind.Weekly,
+                        StayKind = record.StayKind,
                         DayIndex = dayIndex,
                         CentsCharged = 0,
-                        Label = $"room night (weekly term) — person {record.PersonId}, {record.RoomClass} '{record.RoomNumber}' bed {record.BedIndex}, night of day {dayIndex}",
+                        Label = $"room night ({termLabel}) — person {record.PersonId}, {record.RoomClass} '{record.RoomNumber}' bed {record.BedIndex}, night of day {dayIndex}",
                     });
                 }
             }
@@ -267,10 +294,40 @@ namespace LandLedgers.Economy.Businesses.Hotel
                     RoomNumber = record.RoomNumber,
                     NightsCovered = 7,
                     CentsDue = record.LockedWeeklyRateCents,
+                    StayKind = HotelStayKind.Weekly,
                     Label = $"weekly room rent — person {record.PersonId}, {record.RoomClass} '{record.RoomNumber}' bed {record.BedIndex}, week ending day {dayIndex}",
                 });
             }
             diag.Add($"HotelGuestRegister: weekly settlement day {dayIndex} — {due.Count} weekly guest(s) owe rent.");
+            return due;
+        }
+
+        /// <summary>
+        /// D2A: monthly agreements' rent due for one monthly cycle (Canon
+        /// §8.1D longer-stay terms). The caller drives the cycle (every
+        /// <see cref="HotelBilling.MonthlyBillingDays"/> days); the
+        /// register only reports who owes what under which locked rate.
+        /// </summary>
+        public List<HotelRoomRentDue> RentDueMonthly(int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var due = new List<HotelRoomRentDue>();
+            for (int i = 0; i < guests.Count; i++)
+            {
+                HotelGuestRecord record = guests[i];
+                if (record == null || record.StayKind != HotelStayKind.Monthly) continue;
+                if (record.LockedMonthlyRateCents <= 0) continue;
+                due.Add(new HotelRoomRentDue
+                {
+                    PersonId = record.PersonId,
+                    RoomNumber = record.RoomNumber,
+                    NightsCovered = HotelBilling.MonthlyBillingDays,
+                    CentsDue = record.LockedMonthlyRateCents,
+                    StayKind = HotelStayKind.Monthly,
+                    Label = $"monthly room rent — person {record.PersonId}, {record.RoomClass} '{record.RoomNumber}' bed {record.BedIndex}, cycle ending day {dayIndex}",
+                });
+            }
+            diag.Add($"HotelGuestRegister: monthly settlement day {dayIndex} — {due.Count} monthly guest(s) owe rent.");
             return due;
         }
 
@@ -296,6 +353,8 @@ namespace LandLedgers.Economy.Businesses.Hotel
                     StayKind = record.StayKind,
                     LockedNightlyRateCents = Math.Max(0, record.LockedNightlyRateCents),
                     LockedWeeklyRateCents = Math.Max(0, record.LockedWeeklyRateCents),
+                    LockedMonthlyRateCents = Math.Max(0, record.LockedMonthlyRateCents),
+                    ReservationId = record.ReservationId ?? string.Empty,
                     StartDayIndex = record.StartDayIndex,
                     NightsRemaining = Math.Max(0, record.NightsRemaining),
                     NightlyState = BoardingNightlyState.HotelRoom,
@@ -320,6 +379,8 @@ namespace LandLedgers.Economy.Businesses.Hotel
                     StayKind = record.StayKind,
                     LockedNightlyRateCents = Math.Max(0, record.LockedNightlyRateCents),
                     LockedWeeklyRateCents = Math.Max(0, record.LockedWeeklyRateCents),
+                    LockedMonthlyRateCents = Math.Max(0, record.LockedMonthlyRateCents),
+                    ReservationId = record.ReservationId ?? string.Empty,
                     StartDayIndex = record.StartDayIndex,
                     NightsRemaining = Math.Max(0, record.NightsRemaining),
                     NightlyState = BoardingNightlyState.HotelRoom,

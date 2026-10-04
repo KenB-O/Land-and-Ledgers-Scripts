@@ -38,6 +38,15 @@ namespace LandLedgers.Economy.Businesses.Hotel
         public HotelRoomClass RoomClass = HotelRoomClass.SingleRoom;
         public int BedCount;
 
+        /// <summary>
+        /// D2A: the proprietor's own household occupies this room — part
+        /// of the building without becoming identical to the boarders
+        /// (Canon §8.1A). Proprietor-occupied rooms are real beds but not
+        /// sellable: no check-in, no reservation hold, never counted as
+        /// open. They still count as physical beds.
+        /// </summary>
+        public bool ProprietorOccupied;
+
         // bedIndex -> personId. Only occupied beds are recorded.
         public List<HotelRoomBedAssignment> OccupiedBeds = new List<HotelRoomBedAssignment>();
 
@@ -45,7 +54,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
 
         public int OccupiedBedCount => OccupiedBeds != null ? OccupiedBeds.Count : 0;
 
-        public int OpenBedCount => Math.Max(0, BedCount - OccupiedBedCount);
+        public int OpenBedCount => ProprietorOccupied ? 0 : Math.Max(0, BedCount - OccupiedBedCount);
 
         public bool HasPerson(int personId)
         {
@@ -184,6 +193,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
                 HotelRoom room = rooms[i];
                 if (room == null) continue;
                 if (roomClass.HasValue && room.RoomClass != roomClass.Value) continue;
+                if (room.ProprietorOccupied) continue;
                 if (room.TryFindOpenBed(out int open))
                 {
                     room.OccupiedBeds.Add(new HotelRoomBedAssignment(open, personId));
@@ -209,6 +219,8 @@ namespace LandLedgers.Economy.Businesses.Hotel
             HotelRoom room = FindRoom(roomNumber);
             if (room == null)
                 return $"HotelRoomInventory.AssignSpecificBed: no room '{roomNumber}'.";
+            if (room.ProprietorOccupied)
+                return $"HotelRoomInventory.AssignSpecificBed: '{roomNumber}' is proprietor household space (Canon §8.1A) — not sellable.";
             if (bedIndex < 0 || bedIndex >= room.BedCount)
                 return $"HotelRoomInventory.AssignSpecificBed: bed {bedIndex} does not exist in '{roomNumber}' ({room.BedCount} bed(s)).";
             if (room.IsBedOccupied(bedIndex))
@@ -216,6 +228,28 @@ namespace LandLedgers.Economy.Businesses.Hotel
 
             room.OccupiedBeds.Add(new HotelRoomBedAssignment(bedIndex, personId));
             diag.Add($"HotelRoomInventory: person {personId} takes bed {bedIndex} in '{roomNumber}'.");
+            return null;
+        }
+
+        /// <summary>
+        /// D2A: marks a room as proprietor-household space (or returns it
+        /// to the sellable stock). Canon §8.1A: the proprietor's own
+        /// household can occupy part of the building. An occupied room
+        /// cannot become proprietor space — guests are never displaced by
+        /// the flag.
+        /// </summary>
+        public string SetProprietorUse(string roomNumber, bool proprietorOccupied, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            HotelRoom room = FindRoom(roomNumber);
+            if (room == null)
+                return $"HotelRoomInventory.SetProprietorUse: no room '{roomNumber}'.";
+            if (proprietorOccupied && room.OccupiedBedCount > 0)
+                return $"HotelRoomInventory.SetProprietorUse: '{roomNumber}' has {room.OccupiedBedCount} guest(s) — guests are never displaced by the flag.";
+            room.ProprietorOccupied = proprietorOccupied;
+            diag.Add(proprietorOccupied
+                ? $"HotelRoomInventory: '{roomNumber}' set aside as proprietor-household space (Canon §8.1A) — not sellable."
+                : $"HotelRoomInventory: '{roomNumber}' returned to the sellable stock.");
             return null;
         }
 
@@ -282,6 +316,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
                     RoomNumber = room.RoomNumber,
                     RoomClass = room.RoomClass,
                     BedCount = room.BedCount,
+                    ProprietorOccupied = room.ProprietorOccupied,
                 };
                 if (room.OccupiedBeds != null)
                     foreach (HotelRoomBedAssignment a in room.OccupiedBeds)
@@ -306,6 +341,7 @@ namespace LandLedgers.Economy.Businesses.Hotel
                     RoomNumber = room.RoomNumber,
                     RoomClass = room.RoomClass,
                     BedCount = Math.Max(0, room.BedCount),
+                    ProprietorOccupied = room.ProprietorOccupied,
                 };
                 if (room.OccupiedBeds != null)
                     foreach (HotelRoomBedAssignment a in room.OccupiedBeds)

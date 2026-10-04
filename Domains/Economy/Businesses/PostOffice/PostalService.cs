@@ -28,6 +28,7 @@ namespace LandLedgers.Economy.Postal
         Arrived = 3,       // at the destination office, awaiting in-person collection
         Collected = 4,     // picked up by the recipient (Canon §7.2: rural collection is in person)
         ForwardedOffMap = 5, // left the simulated world honestly — no fake return
+        Lost = 6,        // D4F: registered-mail loss — the chain broke; recorded, never auto-resolved
     }
 
     /// <summary>NX-2A: one physical mail item with a real chain of custody.</summary>
@@ -47,6 +48,10 @@ namespace LandLedgers.Economy.Postal
         public string CurrentOfficeId = string.Empty;
         public int DueArrivalDayIndex = -1;
         public List<string> History = new List<string>();
+        /// <summary>D4F: registered by the registered-mail service (D4F). Registered
+        /// items are released only against recipient signature/identification
+        /// through the registered-delivery path — CollectMail refuses them.</summary>
+        public bool IsRegistered;
 
         public MailItem() { }
     }
@@ -85,6 +90,23 @@ namespace LandLedgers.Economy.Postal
         public int TotalPaidCents;
 
         public PostalContract() { }
+    }
+
+    /// <summary>
+    /// D4F (additive): one custody handoff of a mail item between custodians —
+    /// the structured record behind the registered-mail chain of custody.
+    /// </summary>
+    [Serializable]
+    public sealed class PostalHandoff
+    {
+        public MailItem Item;
+        public string OfficeId = string.Empty;
+        public int DayIndex;
+        /// <summary>dispatched | handoff | arrived | forwarded-offmap | collected</summary>
+        public string Action = string.Empty;
+        public string Note = string.Empty;
+
+        public PostalHandoff() { }
     }
 
     /// <summary>NX-2A: save data for the postal network authority.</summary>
@@ -138,6 +160,26 @@ namespace LandLedgers.Economy.Postal
 
         private readonly List<string> diagnostics = new List<string>();
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>
+        /// D4F (additive): raised for every custody handoff of a mail item —
+        /// dispatch, intermediate handoffs, arrival, off-map forwarding, and
+        /// collection. The registered-mail service subscribes to build its
+        /// chain-of-custody log. No subscriber = no behavior change.
+        /// </summary>
+        public event Action<PostalHandoff> CustodyHandoff;
+
+        private void RaiseHandoff(MailItem item, string officeId, int dayIndex, string action, string note)
+        {
+            CustodyHandoff?.Invoke(new PostalHandoff
+            {
+                Item = item,
+                OfficeId = officeId ?? string.Empty,
+                DayIndex = dayIndex,
+                Action = action ?? string.Empty,
+                Note = note ?? string.Empty,
+            });
+        }
 
         public IReadOnlyCollection<PostalOffice> Offices => offices.Values;
         public IReadOnlyCollection<MailItem> MailItems => mail.Values;
@@ -317,6 +359,7 @@ namespace LandLedgers.Economy.Postal
                 {
                     item.Status = MailStatus.ForwardedOffMap;
                     item.History.Add($"day {dayIndex}: forwarded off-map — left the simulated world.");
+                    RaiseHandoff(item, item.CurrentOfficeId, dayIndex, "forwarded-offmap", "forwarded off-map — left the simulated world.");
                     diag.Add($"PostalService: {item.MailId} forwarded off-map.");
                 }
                 else
@@ -324,6 +367,7 @@ namespace LandLedgers.Economy.Postal
                     item.Status = MailStatus.Arrived;
                     item.CurrentOfficeId = item.ToOfficeId;
                     item.History.Add($"day {dayIndex}: arrived at {item.ToOfficeId} — awaiting in-person collection.");
+                    RaiseHandoff(item, item.ToOfficeId, dayIndex, "arrived", $"arrived at {item.ToOfficeId} — awaiting collection.");
                     diag.Add($"PostalService: {item.MailId} arrived at {item.ToOfficeId}.");
                 }
             }
@@ -342,6 +386,7 @@ namespace LandLedgers.Economy.Postal
                     item.Status = MailStatus.InTransit;
                     item.DueArrivalDayIndex = dayIndex + 1;
                     item.History.Add($"day {dayIndex}: dispatched {office.OfficeId} → off-map.");
+                    RaiseHandoff(item, office.OfficeId, dayIndex, "dispatched", $"dispatched {office.OfficeId} → off-map.");
                 }
                 diag.Add($"PostalService: {items.Count} item(s) dispatched {office.OfficeId} → off-map.");
                 return;
@@ -387,8 +432,13 @@ namespace LandLedgers.Economy.Postal
                 item.DueArrivalDayIndex = dayIndex + transitDays + (onTime ? 0 : 1);
                 item.History.Add($"day {dayIndex}: dispatched {office.OfficeId} → {destOfficeId} " +
                     $"({route.TotalMiles:0.0} mi, due day {item.DueArrivalDayIndex}).");
+                RaiseHandoff(item, office.OfficeId, dayIndex, "dispatched",
+                    $"dispatched {office.OfficeId} → {destOfficeId} ({route.TotalMiles:0.0} mi).");
                 foreach (string hop in handoffNotes)
+                {
                     item.History.Add($"day {dayIndex}: handed off through {hop} (Canon §16.4 handoff).");
+                    RaiseHandoff(item, hop, dayIndex, "handoff", $"handed off through {hop} (Canon §16.4).");
+                }
             }
             diag.Add($"PostalService: {items.Count} item(s) dispatched {office.OfficeId} → {destOfficeId} " +
                 $"({route.TotalMiles:0.0} mi, {transitDays}d{(onTime ? "" : ", +1d missed connection")}).");
@@ -407,12 +457,43 @@ namespace LandLedgers.Economy.Postal
                 if (item.Status != MailStatus.Arrived) continue;
                 if (!string.Equals(item.ToOfficeId, officeId, StringComparison.OrdinalIgnoreCase)) continue;
                 if (item.RecipientPersonId != recipientPersonId) continue;
+                // D4F: registered items are released only against recipient
+                // signature/identification through the registered-delivery path.
+                if (item.IsRegistered)
+                {
+                    diag.Add($"PostalService: {item.MailId} is registered — collect it with signature/identification, not ordinary collection.");
+                    continue;
+                }
                 item.Status = MailStatus.Collected;
                 item.History.Add($"day {dayIndex}: collected in person at {officeId}.");
+                RaiseHandoff(item, officeId, dayIndex, "collected", $"collected in person at {officeId}.");
                 collected.Add(item);
             }
             diag.Add($"PostalService: {collected.Count} item(s) collected at {officeId} by P{recipientPersonId}.");
             return collected;
+        }
+
+        /// <summary>
+        /// D4F (additive): releases ONE registered item after the
+        /// registered-mail service has verified the recipient's identity and
+        /// taken the signature. Identity verification is the registry
+        /// service's job; this is the only path that releases registered
+        /// items into collection.
+        /// </summary>
+        public bool CollectRegisteredItem(string mailId, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            MailItem item = GetMailItem(mailId);
+            if (item == null || !item.IsRegistered || item.Status != MailStatus.Arrived)
+            {
+                diag.Add($"PostalService.CollectRegisteredItem: '{mailId}' is not an arrived registered item — nothing released.");
+                return false;
+            }
+            item.Status = MailStatus.Collected;
+            item.History.Add($"day {dayIndex}: collected against signature at {item.ToOfficeId} (registered delivery).");
+            RaiseHandoff(item, item.ToOfficeId, dayIndex, "collected", "collected against signature (registered delivery).");
+            diag.Add($"PostalService: registered item {item.MailId} collected at {item.ToOfficeId} against signature.");
+            return true;
         }
 
         /// <summary>

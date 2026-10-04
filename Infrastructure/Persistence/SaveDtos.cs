@@ -777,6 +777,9 @@ namespace LandLedgers.Persistence
 
         /// <summary>W8B: the ore stockpile with assay results.</summary>
         public MineOreStockSaveDto oreStock = new();
+
+        /// <summary>W8C: the crew roster.</summary>
+        public MineLaborRegisterSaveDto laborRegister = new();
     }
 
     [Serializable]

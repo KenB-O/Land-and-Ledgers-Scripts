@@ -51,6 +51,10 @@ namespace LandLedgers.Economy
         [SerializeField]
         private MineOreStock oreStock;
 
+        /// <summary>W8C: the crew roster — miner employment by role/shift/wage. Lazy-initialized so older saves load with an empty roster.</summary>
+        [SerializeField]
+        private MineLaborRegister laborRegister;
+
         public MineralResourceKind MineralKind => mineralKind;
         public float DepositConfidence01 => Mathf.Clamp01(depositConfidence01);
         public MineDevelopmentStage DevelopmentStage => developmentStage;
@@ -80,6 +84,17 @@ namespace LandLedgers.Economy
                 if (oreStock == null)
                     oreStock = new MineOreStock();
                 return oreStock;
+            }
+        }
+
+        /// <summary>W8C: the crew roster, never null (lazy-initialized for legacy saves).</summary>
+        public MineLaborRegister LaborRegister
+        {
+            get
+            {
+                if (laborRegister == null)
+                    laborRegister = new MineLaborRegister();
+                return laborRegister;
             }
         }
 
@@ -139,6 +154,7 @@ namespace LandLedgers.Economy
                 lastWeeklyOutputSummary = LastWeeklyOutputSummary,
                 shaftPlan = ShaftPlan.CaptureSaveDto(),
                 oreStock = OreStock.CaptureSaveDto(),
+                laborRegister = LaborRegister.CaptureSaveDto(),
             };
         }
 
@@ -164,6 +180,7 @@ namespace LandLedgers.Economy
                 : dto.lastWeeklyOutputSummary;
             state.shaftPlan = MineShaftPlan.FromSaveDto(dto.shaftPlan);
             state.oreStock = MineOreStock.FromSaveDto(dto.oreStock);
+            state.laborRegister = MineLaborRegister.FromSaveDto(dto.laborRegister);
             return state;
         }
 

@@ -102,6 +102,14 @@ The following files represent major centralized authorities with high code volum
 
 ---
 
+### Depositor Confidence / Bank Liquidity Signals Authority
+- **CONCEPT**: Per-bank withdrawal-pattern records (timed withdrawal events, amounts, depositor classes), liquidity-coverage computation from real deposit ledgers and interbank assets, panic-transmission channel readings, and parameterized confidence tiers (Canon §18.8–§18.11). Signals only — no enacted run/panic behavior.
+- **CURRENT AUTHORITY**: `DepositorConfidenceLedger` & `BankDepositorConfidenceView`
+- **LOCATION**: `Domains/Economy/Businesses/Bank/DepositorConfidence.cs`
+- **NOTES / KNOWN LIMITATIONS**: Records come only from real withdrawals executed through `RecordWithdrawalAttempt` (NX-3B ledger + W7 vault two-track model). Read-only views over `BankRuntime`; no bank logic changed. Tier thresholds are calibration, not canon; acting on a tier (tighten credit, suspend, fail) is the operating layer's job.
+
+---
+
 ### Acquisition Authority
 - **CONCEPT**: Commercial property listings, business acquisitions, property diligence, valuation bidding, and ownership closing.
 - **CURRENT AUTHORITY**: `AcquisitionMarketManager`

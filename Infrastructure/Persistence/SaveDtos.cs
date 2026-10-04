@@ -774,6 +774,9 @@ namespace LandLedgers.Persistence
 
         /// <summary>W8A: the shaft plan (shafts as improvements, tracked levels, named veins).</summary>
         public MineShaftPlanSaveDto shaftPlan = new();
+
+        /// <summary>W8B: the ore stockpile with assay results.</summary>
+        public MineOreStockSaveDto oreStock = new();
     }
 
     [Serializable]

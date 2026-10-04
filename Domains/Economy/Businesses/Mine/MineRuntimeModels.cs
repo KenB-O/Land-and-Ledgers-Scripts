@@ -47,6 +47,10 @@ namespace LandLedgers.Economy
         [SerializeField]
         private MineShaftPlan shaftPlan;
 
+        /// <summary>W8B: the ore stockpile — real lots with grade/assayer provenance. Lazy-initialized so older saves load with an empty stock.</summary>
+        [SerializeField]
+        private MineOreStock oreStock;
+
         public MineralResourceKind MineralKind => mineralKind;
         public float DepositConfidence01 => Mathf.Clamp01(depositConfidence01);
         public MineDevelopmentStage DevelopmentStage => developmentStage;
@@ -65,6 +69,17 @@ namespace LandLedgers.Economy
                 if (shaftPlan == null)
                     shaftPlan = new MineShaftPlan();
                 return shaftPlan;
+            }
+        }
+
+        /// <summary>W8B: the ore stockpile, never null (lazy-initialized for legacy saves).</summary>
+        public MineOreStock OreStock
+        {
+            get
+            {
+                if (oreStock == null)
+                    oreStock = new MineOreStock();
+                return oreStock;
             }
         }
 
@@ -123,6 +138,7 @@ namespace LandLedgers.Economy
                 campPressure01 = CampPressure01,
                 lastWeeklyOutputSummary = LastWeeklyOutputSummary,
                 shaftPlan = ShaftPlan.CaptureSaveDto(),
+                oreStock = OreStock.CaptureSaveDto(),
             };
         }
 
@@ -147,6 +163,7 @@ namespace LandLedgers.Economy
                 ? "No mine output resolved yet."
                 : dto.lastWeeklyOutputSummary;
             state.shaftPlan = MineShaftPlan.FromSaveDto(dto.shaftPlan);
+            state.oreStock = MineOreStock.FromSaveDto(dto.oreStock);
             return state;
         }
 

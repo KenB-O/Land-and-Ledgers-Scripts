@@ -27,7 +27,15 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
     ///   it does not hold (MR-P001 doctrine);
     /// - storage policy as data (capacity shared across both books, fees
     ///   on custody grain only; exact charges are a Canon R6 §6
-    ///   calibration hold).
+    ///   calibration hold);
+    /// - D2F: the storage-fee ledger (GrainElevatorFeeLedger) — per-customer
+    ///   fee accounts. Charges (period accruals, intake/outturn handling)
+    ///   and payments are recorded honestly; money moves only through
+    ///   ledger authorities;
+    /// - D2F: the grade-dispute book (GrainElevatorGradeDisputeBook) — the
+    ///   formal record of grader-vs-storer disagreements. Canon is silent
+    ///   on regrade process and dockage; the book records claims, responses,
+    ///   settlements and escalations as DATA and never auto-decides.
     ///
     /// Links: farms and CRP-3 grain dealers deliver into custody or sell
     /// into the dealer book (farm -> dealer -> elevator); the W5A mill's
@@ -42,12 +50,16 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
         private readonly EntityIdRegistry idRegistry;
         private readonly GrainElevatorGrainStock grainStock;
         private readonly GrainElevatorObligations obligations;
+        private readonly GrainElevatorFeeLedger feeLedger;
+        private readonly GrainElevatorGradeDisputeBook disputeBook;
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId;
         public BusinessType BusinessType => BusinessType.GrainElevator;
         public GrainElevatorGrainStock GrainStock => grainStock;
         public GrainElevatorObligations Obligations => obligations;
+        public GrainElevatorFeeLedger FeeLedger => feeLedger;
+        public GrainElevatorGradeDisputeBook DisputeBook => disputeBook;
 
         public GrainElevatorShopRuntime(string businessInstanceId, EntityIdRegistry idRegistry)
         {
@@ -55,6 +67,9 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             this.idRegistry = idRegistry;
             this.grainStock = new GrainElevatorGrainStock(this.businessInstanceId);
             this.obligations = new GrainElevatorObligations(this.grainStock, this.businessInstanceId);
+            this.feeLedger = new GrainElevatorFeeLedger();
+            this.disputeBook = new GrainElevatorGradeDisputeBook();
+            this.obligations.FeeLedger = this.feeLedger;
         }
 
         public void SetStoragePolicy(GrainElevatorStoragePolicy policy)
@@ -83,7 +98,21 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
                 return null;
             }
             var stored = grainStock.Lots[grainStock.Lots.Count - 1];
-            return obligations.IssueReceipt(idRegistry, stored.ElevatorLotId, dayIndex, diag);
+            var receipt = obligations.IssueReceipt(idRegistry, stored.ElevatorLotId, dayIndex, diag);
+
+            // D2F: receiving (intake handling) is a policy-data charge on the
+            // named storer's fee account — the ledger authority posts the
+            // money; this only records what is owed.
+            int handlingRate = grainStock.Policy.IntakeHandlingCentsPerUnit;
+            if (receipt != null && handlingRate > 0)
+            {
+                feeLedger.PostCharge(
+                    idRegistry, stored.CustomerId, stored.CustomerName,
+                    stored.ElevatorLotId.ToString(), GrainElevatorFeeChargeKind.IntakeHandling,
+                    stored.GrainUnits, 0, handlingRate, stored.GrainUnits * handlingRate, dayIndex,
+                    "receiving charge on custody intake", diag);
+            }
+            return receipt;
         }
 
         /// <summary>W5B: the named holder redeems a receipt for their grain.</summary>
@@ -142,6 +171,93 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             return obligations.CancelForwardLot(forwardLotId, diag ?? diagnostics);
         }
 
+        // ---------- D2F: storage-fee billing and payments ----------
+
+        /// <summary>
+        /// D2F: closes out storage billing through the given day — posts one
+        /// PeriodAccrual charge per custody lot with completed, unbilled
+        /// periods to the fee ledger. Driven by the runtime or an
+        /// orchestration tick; the ledger authority posts the money.
+        /// Returns the number of charges posted.
+        /// </summary>
+        public int BillStoragePeriods(int dayIndex, List<string> diag)
+        {
+            return grainStock.BillPeriods(idRegistry, dayIndex, feeLedger, diag ?? diagnostics);
+        }
+
+        /// <summary>
+        /// D2F: records a storage-fee payment from a named customer (the
+        /// ledger authority posts the money; this only records it against
+        /// the customer's fee account). Returns the payment, or null on
+        /// refusal.
+        /// </summary>
+        public GrainElevatorFeePayment RecordStoragePayment(
+            string customerId, string customerName, int amountCents, int dayIndex, string note, List<string> diag)
+        {
+            return feeLedger.RecordPayment(
+                idRegistry, customerId, customerName, amountCents, dayIndex, note, diag ?? diagnostics);
+        }
+
+        /// <summary>D2F: a named customer's unpaid storage-fee balance in cents (negative = credit).</summary>
+        public int StorageUnpaidBalance(string customerId)
+        {
+            return feeLedger.UnpaidBalanceCents(customerId);
+        }
+
+        // ---------- D2F: grade disputes ----------
+
+        /// <summary>
+        /// D2F: files a grading dispute — the named storer claims a stored
+        /// lot deserves a different grade. Recorded loudly; the runtime
+        /// never auto-decides.
+        /// </summary>
+        public GrainElevatorGradeDispute FileGradeDispute(
+            EntityId elevatorLotId, EntityId receiptId,
+            string customerId, string customerName,
+            string claimedGradeId, int claimedDockageUnits,
+            string reasonNote, int dayIndex, List<string> diag)
+        {
+            return disputeBook.FileDispute(
+                idRegistry, grainStock, elevatorLotId, receiptId,
+                customerId, customerName, claimedGradeId, claimedDockageUnits,
+                reasonNote, dayIndex, diag ?? diagnostics);
+        }
+
+        /// <summary>D2F: records the elevator's response to a filed dispute (a counter-position — the stored grade is unchanged).</summary>
+        public string RespondToGradeDispute(
+            EntityId disputeId, string responseGradeId, string responseNote, int dayIndex, List<string> diag)
+        {
+            return disputeBook.RecordResponse(disputeId, responseGradeId, responseNote, dayIndex, diag ?? diagnostics);
+        }
+
+        /// <summary>
+        /// D2F: settles a dispute — records the agreed grade AND who decided
+        /// it (the fork captured as data), then applies the grade through
+        /// the stock's re-grade authority.
+        /// </summary>
+        public string SettleGradeDispute(
+            EntityId disputeId, string settledGradeId, string decidedBy, int dayIndex, List<string> diag)
+        {
+            return disputeBook.SettleDispute(disputeId, settledGradeId, decidedBy, dayIndex, grainStock, diag ?? diagnostics);
+        }
+
+        /// <summary>D2F: the filer withdraws their claim — recorded, not erased.</summary>
+        public string WithdrawGradeDispute(EntityId disputeId, int dayIndex, List<string> diag)
+        {
+            return disputeBook.WithdrawDispute(disputeId, dayIndex, diag ?? diagnostics);
+        }
+
+        /// <summary>
+        /// D2F: escalates a dispute to a formal proceeding. Recorded loudly
+        /// and NOT resolved — the outcome arrives later as data via
+        /// SettleGradeDispute (canon: exact court procedure is dated
+        /// research).
+        /// </summary>
+        public string EscalateGradeDispute(EntityId disputeId, string note, int dayIndex, List<string> diag)
+        {
+            return disputeBook.EscalateDispute(disputeId, note, dayIndex, diag ?? diagnostics);
+        }
+
         // ---------- save / load ----------
 
         /// <summary>W5B save contract: lives inside the owning runtime class.</summary>
@@ -151,6 +267,8 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             public string BusinessInstanceId = string.Empty;
             public GrainElevatorGrainStock.GrainElevatorGrainStockSaveDto GrainStock = new GrainElevatorGrainStock.GrainElevatorGrainStockSaveDto();
             public GrainElevatorObligations.GrainElevatorObligationsSaveDto Obligations = new GrainElevatorObligations.GrainElevatorObligationsSaveDto();
+            public GrainElevatorFeeLedger.GrainElevatorFeeLedgerSaveDto FeeLedger = new GrainElevatorFeeLedger.GrainElevatorFeeLedgerSaveDto();
+            public GrainElevatorGradeDisputeBook.GrainElevatorGradeDisputeBookSaveDto DisputeBook = new GrainElevatorGradeDisputeBook.GrainElevatorGradeDisputeBookSaveDto();
         }
 
         public GrainElevatorShopRuntimeSaveDto CaptureSaveDto()
@@ -160,6 +278,8 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
                 BusinessInstanceId = businessInstanceId,
                 GrainStock = grainStock.CaptureSaveDto(),
                 Obligations = obligations.CaptureSaveDto(),
+                FeeLedger = feeLedger.CaptureSaveDto(),
+                DisputeBook = disputeBook.CaptureSaveDto(),
             };
         }
 
@@ -168,6 +288,8 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             if (dto == null) return;
             grainStock.LoadFromSaveDto(dto.GrainStock);
             obligations.LoadFromSaveDto(dto.Obligations);
+            feeLedger.LoadFromSaveDto(dto.FeeLedger);
+            disputeBook.LoadFromSaveDto(dto.DisputeBook);
         }
     }
 }

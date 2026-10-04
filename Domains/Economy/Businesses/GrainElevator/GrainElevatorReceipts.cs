@@ -101,6 +101,13 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
         public IReadOnlyList<GrainElevatorReceipt> Receipts => receipts;
         public IReadOnlyList<GrainElevatorForwardLot> ForwardLots => forwardLots;
 
+        /// <summary>
+        /// D2F: the fee ledger this obligation book posts release-time
+        /// storage-fee charges to. Set by the runtime; null means fees are
+        /// computed but not posted (the pre-D2F path).
+        /// </summary>
+        public GrainElevatorFeeLedger FeeLedger { get; set; }
+
         public GrainElevatorReceipt FindReceipt(EntityId receiptId)
         {
             foreach (var r in receipts)
@@ -220,6 +227,22 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
                 return null;
             }
 
+            // D2F FORK: withholding release for unpaid storage fees is NOT
+            // canon doctrine — canon says "exact court procedure, lien
+            // priority, redemption and filing law remain dated research."
+            // The flag is an explicit operator-set policy and defaults to
+            // false: by default the runtime never self-help seizes bailment
+            // grain.
+            if (FeeLedger != null && stock.Policy.WithholdReleaseForUnpaidFees
+                && FeeLedger.HasUnpaidFees(receipt.HolderId))
+            {
+                int owed = FeeLedger.UnpaidBalanceCents(receipt.HolderId);
+                diag.Add($"GrainElevatorObligations.RedeemReceipt: release on receipt {receiptId} WITHHELD — "
+                    + $"{receipt.HolderName} ({receipt.HolderId}) owes {owed}c in unpaid storage fees. "
+                    + "This withholding comes from the operator-set WithholdReleaseForUnpaidFees policy, not from canon doctrine.");
+                return null;
+            }
+
             int released = Math.Min(requestedUnits, Math.Min(receipt.UnitsRemaining, lot.GrainUnits));
             if (released <= 0)
             {
@@ -227,11 +250,12 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
                 return null;
             }
 
-            // Fee accrues on the units actually released, aging from receipt
-            // of custody (the bailment obligation starts at delivery).
-            int days = Math.Max(0, dayIndex - lot.ReceivedDayIndex);
-            int periods = Math.Max(1, days / 30);
-            int feeCents = released * stock.Policy.CustodyFeeCentsPerUnitPer30Days * periods;
+            // D2F: the single fee authority — storage fee on the released
+            // units (completed unbilled periods, minimum one period when
+            // nothing was ever billed) plus outturn handling, posted to the
+            // fee ledger. The ledger authority posts the money; this only
+            // records what is owed.
+            int feeCents = stock.SettleReleaseFees(idRegistry, lot, released, dayIndex, FeeLedger, diag);
 
             lot.GrainUnits -= released;
             if (lot.GrainUnits <= 0) stock.RemoveLot(lot);
@@ -244,7 +268,7 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
 
             var releasedLot = BuildReleasedCropLot(idRegistry, lot, released, receipt, diag);
             diag.Add($"GrainElevatorObligations ({elevatorBusinessId}): redeemed receipt {receiptId} — "
-                + $"released {released}u to {receipt.HolderName}; fee {feeCents}c for {days} days ({periods} period(s)).");
+                + $"released {released}u to {receipt.HolderName}; fee {feeCents}c owed (storage + handling, posted to the fee ledger).");
             return new ReceiptRedemption { ReleasedLot = releasedLot, FeeCentsOwed = feeCents };
         }
 

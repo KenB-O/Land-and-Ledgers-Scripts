@@ -46,6 +46,13 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
         public int ReceivedDayIndex;                 // custody starts at DELIVERY (bailment), not harvest
         public int UnitCostCents;                    // dealer book only: what the elevator paid
 
+        // D2F: fee-billing watermark. Storage fees are sold in 30-day blocks
+        // from the received day; this marks the last day billed through.
+        // Initialized to the received day (nothing billed yet) and advanced
+        // ONLY by BillPeriods. Releases settle per-release without moving
+        // the watermark.
+        public int LastBilledDayIndex;
+
         // Custody book: the named owner the elevator holds FOR (bailment needs an owner).
         public string CustomerId = string.Empty;
         public string CustomerName = string.Empty;
@@ -81,19 +88,35 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
     /// calibration (2c per unit per 30 days). Fees accrue ONLY on custody
     /// grain (owed by the named storer); the elevator charges itself no fee
     /// on its own dealer stock.
+    ///
+    /// D2F: handling charges (receiving / outturn) are also policy DATA with
+    /// zero defaults — the MECHANISM of a handling charge is recorded, but
+    /// no historical rate is locked. WithholdReleaseForUnpaidFees is an
+    /// explicit design fork (canon leaves lien priority/procedure as dated
+    /// research): it defaults to false — the runtime never self-help
+    /// seizes bailment grain without an operator-set policy.
     /// </summary>
     [Serializable]
     public sealed class GrainElevatorStoragePolicy
     {
         public int CapacityUnits = 5000;
         public int CustodyFeeCentsPerUnitPer30Days = 2;
+        public int IntakeHandlingCentsPerUnit = 0;   // D2F: receiving charge on custody intake (data, not canon)
+        public int OutturnHandlingCentsPerUnit = 0;  // D2F: shipping charge on release (data, not canon)
+        public bool WithholdReleaseForUnpaidFees = false; // D2F: FORK — see GrainElevatorFeeLedger; default false
 
         public GrainElevatorStoragePolicy() { }
 
-        public GrainElevatorStoragePolicy(int capacityUnits, int custodyFeeCentsPerUnitPer30Days)
+        public GrainElevatorStoragePolicy(
+            int capacityUnits, int custodyFeeCentsPerUnitPer30Days,
+            int intakeHandlingCentsPerUnit = 0, int outturnHandlingCentsPerUnit = 0,
+            bool withholdReleaseForUnpaidFees = false)
         {
             CapacityUnits = Math.Max(0, capacityUnits);
             CustodyFeeCentsPerUnitPer30Days = Math.Max(0, custodyFeeCentsPerUnitPer30Days);
+            IntakeHandlingCentsPerUnit = Math.Max(0, intakeHandlingCentsPerUnit);
+            OutturnHandlingCentsPerUnit = Math.Max(0, outturnHandlingCentsPerUnit);
+            WithholdReleaseForUnpaidFees = withholdReleaseForUnpaidFees;
         }
     }
 
@@ -248,6 +271,7 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
                 GrainUnits = source.QuantityUnits,
                 ElevatorGradeId = gradeId,
                 ReceivedDayIndex = receivedDayIndex,
+                LastBilledDayIndex = receivedDayIndex, // D2F: nothing billed yet at intake
                 UnitCostCents = Math.Max(0, unitCostCents),
                 CustomerId = customerId ?? string.Empty,
                 CustomerName = customerName ?? string.Empty,
@@ -418,6 +442,123 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             return Math.Max(0, lot.GrainUnits) * policy.CustodyFeeCentsPerUnitPer30Days * periods;
         }
 
+        /// <summary>
+        /// D2F: completed, unbilled 30-day periods on one custody lot at the
+        /// given day. Storage is sold in 30-day blocks from the received
+        /// day; the watermark LastBilledDayIndex marks what is paid up.
+        /// </summary>
+        public int BillablePeriods(GrainElevatorStoredLot lot, int dayIndex)
+        {
+            if (lot == null || lot.Kind != GrainElevatorLotKind.Custody) return 0;
+            int watermark = Math.Max(lot.ReceivedDayIndex, lot.LastBilledDayIndex);
+            return Math.Max(0, (dayIndex - watermark) / 30);
+        }
+
+        /// <summary>
+        /// D2F: closes out storage billing through the given day — posts one
+        /// PeriodAccrual charge per custody lot with completed, unbilled
+        /// periods to the fee ledger, and advances each lot's watermark.
+        /// The runtime (or orchestration tick) drives this; money still
+        /// posts only through ledger authorities. Returns the number of
+        /// charges posted.
+        /// </summary>
+        public int BillPeriods(
+            EntityIdRegistry idRegistry, int dayIndex,
+            GrainElevatorFeeLedger ledger, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            int posted = 0;
+            if (ledger == null)
+            {
+                diag.Add($"GrainElevatorGrainStock ({elevatorBusinessId}): billing refused — no fee ledger to post to.");
+                return 0;
+            }
+            foreach (var lot in lots)
+            {
+                if (lot.Kind != GrainElevatorLotKind.Custody) continue;
+                int units = Math.Max(0, lot.GrainUnits);
+                if (units <= 0) continue;
+                int periods = BillablePeriods(lot, dayIndex);
+                if (periods <= 0) continue;
+                int rate = policy.CustodyFeeCentsPerUnitPer30Days;
+                int amount = units * rate * periods;
+                int watermark = Math.Max(lot.ReceivedDayIndex, lot.LastBilledDayIndex);
+                var charge = ledger.PostCharge(
+                    idRegistry, lot.CustomerId, lot.CustomerName,
+                    lot.ElevatorLotId.ToString(), GrainElevatorFeeChargeKind.PeriodAccrual,
+                    units, periods, rate, amount, dayIndex,
+                    $"storage periods {watermark}..{watermark + periods * 30} (day {lot.ReceivedDayIndex} receipt)",
+                    diag);
+                if (charge != null)
+                {
+                    lot.LastBilledDayIndex = watermark + periods * 30;
+                    posted++;
+                }
+            }
+            diag.Add($"GrainElevatorGrainStock ({elevatorBusinessId}): billing through day {dayIndex} — {posted} period charge(s) posted.");
+            return posted;
+        }
+
+        /// <summary>
+        /// D2F: the single fee authority for a release of custody grain.
+        /// Settles the storage fee on the RELEASED units — 30-day periods
+        /// counted from the received day (the pre-D2F anchoring, minimum
+        /// one period), minus any periods already billed lot-wide by
+        /// BillPeriods — plus the outturn handling charge. Both post to the
+        /// fee ledger. The billing watermark is advanced ONLY by
+        /// BillPeriods; releases settle per-release without rewriting the
+        /// lot's billing history. Returns the total cents owed.
+        /// </summary>
+        public int SettleReleaseFees(
+            EntityIdRegistry idRegistry, GrainElevatorStoredLot lot, int releasedUnits, int dayIndex,
+            GrainElevatorFeeLedger ledger, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (lot == null || lot.Kind != GrainElevatorLotKind.Custody) return 0;
+            int released = Math.Max(0, releasedUnits);
+            if (released <= 0) return 0;
+
+            int rate = policy.CustodyFeeCentsPerUnitPer30Days;
+            int totalPeriods = Math.Max(1, Math.Max(0, dayIndex - lot.ReceivedDayIndex) / 30);
+            int billedPeriods = Math.Max(0, (Math.Max(lot.LastBilledDayIndex, lot.ReceivedDayIndex) - lot.ReceivedDayIndex) / 30);
+            int chargePeriods = Math.Max(0, totalPeriods - billedPeriods);
+            int storageFee = released * rate * chargePeriods;
+
+            int total = 0;
+            if (ledger != null)
+            {
+                ledger.PostCharge(
+                    idRegistry, lot.CustomerId, lot.CustomerName,
+                    lot.ElevatorLotId.ToString(), GrainElevatorFeeChargeKind.PeriodAccrual,
+                    released, chargePeriods, rate, storageFee, dayIndex,
+                    $"release of {released}u; {chargePeriods} of {totalPeriods} period(s) unbilled",
+                    diag);
+            }
+            total += storageFee;
+
+            int handlingRate = policy.OutturnHandlingCentsPerUnit;
+            if (handlingRate > 0)
+            {
+                int handling = released * handlingRate;
+                if (ledger != null)
+                {
+                    ledger.PostCharge(
+                        idRegistry, lot.CustomerId, lot.CustomerName,
+                        lot.ElevatorLotId.ToString(), GrainElevatorFeeChargeKind.OutturnHandling,
+                        released, 0, handlingRate, handling, dayIndex,
+                        $"outturn handling on release of {released}u",
+                        diag);
+                }
+                total += handling;
+            }
+
+            diag.Add($"GrainElevatorGrainStock ({elevatorBusinessId}): release fee on lot {lot.ElevatorLotId} — "
+                + $"{released}u x {rate}c x {chargePeriods} period(s) = {storageFee}c storage"
+                + (handlingRate > 0 ? $" + {released * handlingRate}c outturn handling" : string.Empty)
+                + $" = {total}c owed by {lot.CustomerName}.");
+            return total;
+        }
+
         /// <summary>W5B save contract: lives inside the owning stock class.</summary>
         [Serializable]
         public sealed class GrainElevatorGrainStockSaveDto
@@ -430,7 +571,10 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
         {
             var dto = new GrainElevatorGrainStockSaveDto
             {
-                Policy = new GrainElevatorStoragePolicy(policy.CapacityUnits, policy.CustodyFeeCentsPerUnitPer30Days),
+                Policy = new GrainElevatorStoragePolicy(
+                    policy.CapacityUnits, policy.CustodyFeeCentsPerUnitPer30Days,
+                    policy.IntakeHandlingCentsPerUnit, policy.OutturnHandlingCentsPerUnit,
+                    policy.WithholdReleaseForUnpaidFees),
             };
             foreach (var lot in lots)
             {
@@ -441,6 +585,7 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
                     GrainUnits = lot.GrainUnits,
                     ElevatorGradeId = lot.ElevatorGradeId,
                     ReceivedDayIndex = lot.ReceivedDayIndex,
+                    LastBilledDayIndex = lot.LastBilledDayIndex,
                     UnitCostCents = lot.UnitCostCents,
                     CustomerId = lot.CustomerId,
                     CustomerName = lot.CustomerName,
@@ -467,6 +612,11 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
                 foreach (var lot in dto.Lots)
                 {
                     if (lot == null) continue;
+                    // D2F migration: saves written before the billing
+                    // watermark existed carry 0 — clamp to the received day
+                    // so old saves never double-bill.
+                    if (lot.LastBilledDayIndex < lot.ReceivedDayIndex)
+                        lot.LastBilledDayIndex = lot.ReceivedDayIndex;
                     lots.Add(lot);
                 }
             }

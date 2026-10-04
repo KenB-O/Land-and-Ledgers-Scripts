@@ -62,8 +62,9 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public int FlourUnitsPerBatch;   // lb of flour per dough batch
         public int NotionUnitsPerBatch;  // yeast/soda/salt/lard per dough batch
         public int YieldUnitsPerBatch;   // loaves/rolls/pies per baked batch
-        public int PrepMinutes;          // mix + knead + proof + shape
+        public int PrepMinutes;          // mix + knead + shape (hands-on)
         public int BakeMinutes;          // oven time per batch
+        public int ProofMinutes;         // D1D: rack time per batch (proofing stage)
     }
 
     /// <summary>
@@ -129,6 +130,54 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public const int RollsBakeMinutes = 45;
         public const int PieBakeMinutes = 45;
 
+        /// <summary>
+        /// D1D TUNING: proof minutes required per dough batch, by product.
+        /// Proofing is a scheduled stage (Canon Part III §3.1 names proof as a
+        /// meaningful bakery task; the canon equipment profile lists the
+        /// proofing rack). Proof consumes rack time, not baker labor.
+        /// </summary>
+        public const int BreadProofMinutes = 120;
+        public const int RollsProofMinutes = 90;
+        public const int PieProofMinutes = 60;
+
+        /// <summary>
+        /// D1D TUNING: proof minutes one proofing-rack slot provides per day.
+        /// Daily proof capacity = rack slots × this value, allocated FIFO.
+        /// </summary>
+        public const int ProofMinutesPerSlotPerDay = 120;
+
+        /// <summary>
+        /// D1D TUNING: default proofing-rack slots. The canon equipment profile
+        /// lists the proofing rack but gives no slot count — this is
+        /// calibration, settable per shop via
+        /// <see cref="BakeryShopRuntime.SetProofingRackSlots"/>.
+        /// </summary>
+        public const int DefaultProofingRackSlots = 4;
+
+        /// <summary>
+        /// D1D: oven fuel — the firebox burns cordwood. Item id for fuel lots
+        /// (canon equipment profile: "Oven/firebox"; Canon §8.1B meal service
+        /// demands fuel; the logistics templates include fuel_dealer_to_bakery).
+        /// </summary>
+        public const string FuelItemId = "bakery-fuelwood";
+
+        /// <summary>D1D TUNING: cordwood units burned per oven firing.</summary>
+        public const int FuelUnitsPerFiring = 1;
+
+        /// <summary>
+        /// D1D TUNING: wholesale planning lead days — accounts due within this
+        /// window drive automatic batch planning (Canon §7.3E: large recurring
+        /// buyers improve throughput visibility).
+        /// </summary>
+        public const int WholesalePlanningLeadDays = 1;
+
+        /// <summary>
+        /// D1D TUNING: retail reference demand (units/day) used only by the
+        /// proportional wholesale/retail sharing policy. Canon §7.3E names the
+        /// sharing choice but gives no demand figure — calibration.
+        /// </summary>
+        public const int RetailReferenceDemandUnits = 24;
+
         /// <summary>Product specs as data, for the shop runtime's scheduler.</summary>
         public static BakeryProductSpec GetSpec(string productId)
         {
@@ -139,6 +188,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
                     FlourUnitsPerBatch = BreadFlourPerBatch, NotionUnitsPerBatch = StandardNotionsPerBatch,
                     YieldUnitsPerBatch = BreadYieldPerBatch,
                     PrepMinutes = BreadPrepMinutes, BakeMinutes = BreadBakeMinutes,
+                    ProofMinutes = BreadProofMinutes,
                 };
             if (string.Equals(productId, RollsId, StringComparison.Ordinal))
                 return new BakeryProductSpec
@@ -147,6 +197,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
                     FlourUnitsPerBatch = RollsFlourPerBatch, NotionUnitsPerBatch = StandardNotionsPerBatch,
                     YieldUnitsPerBatch = RollsYieldPerBatch,
                     PrepMinutes = RollsPrepMinutes, BakeMinutes = RollsBakeMinutes,
+                    ProofMinutes = RollsProofMinutes,
                 };
             if (string.Equals(productId, PieId, StringComparison.Ordinal))
                 return new BakeryProductSpec
@@ -155,6 +206,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
                     FlourUnitsPerBatch = PieFlourPerBatch, NotionUnitsPerBatch = StandardNotionsPerBatch,
                     YieldUnitsPerBatch = PieYieldPerBatch,
                     PrepMinutes = PiePrepMinutes, BakeMinutes = PieBakeMinutes,
+                    ProofMinutes = PieProofMinutes,
                 };
             return default;
         }

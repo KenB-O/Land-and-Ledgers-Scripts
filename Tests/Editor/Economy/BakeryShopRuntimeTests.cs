@@ -48,6 +48,8 @@ namespace LandLedgers.Editor.Economy
             var runtime = new BakeryShopRuntime("bakery-biz-1");
             var registry = new EntityIdRegistry();
             BakeryFlourBootstrap.ApplyBootstrapEndowment(runtime.FlourStock, registry, day, diag);
+            // D1D: every firing burns cordwood — the shop opens with a fuel pile.
+            BakeryFuelBootstrap.ApplyBootstrapEndowment(runtime.FuelStock, registry, day, diag);
             for (int i = 0; i < ovenCount; i++)
             {
                 Assert.Null(runtime.AddOven("bakehouse", new List<string>
@@ -112,23 +114,47 @@ namespace LandLedgers.Editor.Economy
         public void WorkDay_OvenCapacityGatesBake_OneOvenFourFirings()
         {
             var diag = new List<string>();
-            var runtime = StockedShop(diag); // one oven, 4 firings/day, bootstrap flour for 10 bread batches
+            // D1D: rolls (90m proof each) fit 5-across on the rack (5×90=450 ≤ 480),
+            // so the OVEN is the binding gate here, not proofing.
+            var runtime = StockedShop(diag); // one oven, 4 firings/day
 
-            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 5, 300, diag));
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.RollsId, 5, 300, diag));
             int baked = WorkDay(runtime, 300, diag);
             Assert.AreEqual(BakeryBreadCatalog.FiringsPerOvenPerDay, baked,
                 "one oven bakes at most its daily firing budget");
             Assert.AreEqual(BakeryBreadCatalog.FiringsPerOvenPerDay, runtime.BreadShelf.Count);
 
-            // The 5th batch stays prepped (flour in custody, not conjured back) — parked, not dropped.
-            int prepped = 0;
+            // The 5th batch proofed but found no firing — parked proofed, not dropped.
+            int proofedWaiting = 0;
             foreach (var batch in runtime.Batches)
             {
-                if (batch.Stage == BakeryBatchStage.Prepped) prepped++;
+                if (batch.Stage == BakeryBatchStage.Proofing && batch.ProofMinutesRemaining <= 0) proofedWaiting++;
             }
 
-            Assert.AreEqual(1, prepped);
+            Assert.AreEqual(1, proofedWaiting);
             StringAssert.Contains("fully booked", string.Join("\n", diag).ToLower());
+        }
+
+        [Test]
+        public void WorkDay_ProofingRackGatesBake_FifthBatchWaits()
+        {
+            var diag = new List<string>();
+            // D1D: two ovens (8 firings) but one 4-slot rack (4×120=480 proof-min/day):
+            // bread needs 120m proof each, so the RACK gates at 4 batches.
+            var runtime = StockedShop(diag, ovenCount: 2);
+
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 5, 300, diag));
+            int baked = WorkDay(runtime, 300, diag);
+            Assert.AreEqual(4, baked, "the proofing rack — not the ovens — binds here");
+
+            int waitingOnRack = 0;
+            foreach (var batch in runtime.Batches)
+            {
+                if (batch.Stage == BakeryBatchStage.Proofing && batch.ProofMinutesRemaining > 0) waitingOnRack++;
+            }
+
+            Assert.AreEqual(1, waitingOnRack, "the 5th batch waits for rack time, loudly");
+            StringAssert.Contains("proofing rack at capacity", string.Join("\n", diag).ToLower());
         }
 
         [Test]
@@ -138,6 +164,7 @@ namespace LandLedgers.Editor.Economy
             var runtime = new BakeryShopRuntime("bakery-biz-1");
             var registry = new EntityIdRegistry();
             BakeryFlourBootstrap.ApplyBootstrapEndowment(runtime.FlourStock, registry, 290, diag);
+            BakeryFuelBootstrap.ApplyBootstrapEndowment(runtime.FuelStock, registry, 290, diag);
             // An oven with no components: not ready.
             Assert.Null(runtime.AddOven("bakehouse", new List<string>(), diag));
 
@@ -154,6 +181,8 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             // No flour at all: nothing dispensed, nothing conjured.
             var runtime = new BakeryShopRuntime("bakery-biz-1");
+            var fuelRegistry = new EntityIdRegistry();
+            BakeryFuelBootstrap.ApplyBootstrapEndowment(runtime.FuelStock, fuelRegistry, 290, diag);
             Assert.Null(runtime.AddOven("bakehouse", new List<string>
             {
                 "oven-chamber-1", "kneading-table-1", "proofing-rack-1", "bake-peels-1",

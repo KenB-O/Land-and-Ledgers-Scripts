@@ -72,6 +72,12 @@ namespace LandLedgers.Economy.Farming.Crops
         // Provenance.
         public int PlantedDayIndex = -1;
         public string SeedSource = string.Empty;  // where the seed came from (no orphan inputs)
+        /// <summary>
+        /// W5C: the variety planted, as <see cref="CropVarietyCatalog"/> id(s)
+        /// (joined with "+" when several lots were sown). SeedSource carries the
+        /// human chain; this is the data link.
+        /// </summary>
+        public string SeedVarietyId = string.Empty;
         public string OwnerFarmId = string.Empty; // duplicate of FarmId for parcel-level clarity
 
         // Hay staging (Canon §7.4F): hay has physical stages beyond the grain

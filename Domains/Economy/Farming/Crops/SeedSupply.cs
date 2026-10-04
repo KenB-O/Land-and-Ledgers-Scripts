@@ -18,7 +18,41 @@ namespace LandLedgers.Economy.Farming.Crops
         public string SourceDescription = string.Empty; // e.g. "saved from farm-1 wheat harvest 210" or "bought: general store <- seed farm"
         public int AcquiredDayIndex;
 
+        /// <summary>
+        /// W5C: the variety as data (<see cref="CropVarietyCatalog"/> id).
+        /// <see cref="CropVarietyCatalog.UnknownVarietyId"/> when unrecorded —
+        /// honesty, not a guess.
+        /// </summary>
+        public string VarietyId = string.Empty;
+
+        /// <summary>
+        /// W5C: the structured upstream chain (breeder/grower → merchant → farm).
+        /// <see cref="SourceDescription"/> remains the human summary; the chain is
+        /// the auditable record.
+        /// </summary>
+        public SeedProvenanceChain Provenance = new SeedProvenanceChain();
+
+        /// <summary>
+        /// W5C: explicit one-time bootstrap endowment (scenario start). Flagged,
+        /// never a supplier — the honest fallback when no real supplier exists yet.
+        /// </summary>
+        public bool IsBootstrapEndowment;
+
         public SeedLot() { }
+
+        /// <summary>
+        /// W5C: the source string a planting records — the structured chain when
+        /// present, the legacy description otherwise.
+        /// </summary>
+        public string RenderSource()
+        {
+            if (Provenance != null && Provenance.HasHops)
+            {
+                string variety = CropVarietyCatalog.DisplayNameOf(VarietyId);
+                return $"{variety} seed: {Provenance.Render()}";
+            }
+            return SourceDescription ?? string.Empty;
+        }
     }
 
     /// <summary>

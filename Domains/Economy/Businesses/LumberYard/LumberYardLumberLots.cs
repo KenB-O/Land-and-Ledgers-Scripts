@@ -93,6 +93,18 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public bool IsBootstrapEndowment;
         public int UnitCostCents;
 
+        // D2C: project-stockpile reservation (Canon §6.4) — the live
+        // reservation sits on the lot so it survives save/load with the stock.
+        // Earmarked units leave the ordinary sale inventory until released.
+        public string EarmarkedForProjectId = string.Empty;
+        public int EarmarkedUnits;
+
+        // D2C: landed-cost charges recorded at intake (Canon §5.1): the
+        // freight/handling beyond the acquisition unit cost that retail
+        // pricing must follow (Canon §5.3).
+        public int LandedFreightCents;
+        public int LandedHandlingCents;
+
         public LumberYardLumberLot() { }
 
         public string ProvenanceChain()
@@ -413,11 +425,17 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             SortFifo();
 
             int remaining = units;
+            int earmarkedSkipped = 0;
             foreach (var lot in lots)
             {
                 if (remaining <= 0) break;
                 if (!MatchesFilter(lot, speciesFilter, gradeFilter)) continue;
-                int available = Math.Max(0, lot.LumberUnits);
+                // D2C: earmarked project stock (Canon §6.4) is not ordinary
+                // sale inventory — ordinary withdrawals take only the
+                // unreserved portion.
+                int reserved = Math.Max(0, lot.EarmarkedUnits);
+                earmarkedSkipped += reserved;
+                int available = Math.Max(0, lot.LumberUnits) - reserved;
                 if (available <= 0) continue;
                 int take = Math.Min(remaining, available);
                 lot.LumberUnits -= take;
@@ -439,10 +457,238 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 string filterNote = string.IsNullOrWhiteSpace(speciesFilter) && string.IsNullOrWhiteSpace(gradeFilter)
                     ? string.Empty
                     : $" (filter: species '{speciesFilter}', grade '{gradeFilter}')";
-                diag.Add($"LumberYardLumberStock ({yardBusinessId}): shortfall — requested {units}, withdrew {units - remaining}{filterNote}. "
+                string earmarkNote = earmarkedSkipped > 0
+                    ? $" {earmarkedSkipped} units are earmarked project stock and not for ordinary sale (Canon §6.4)."
+                    : string.Empty;
+                diag.Add($"LumberYardLumberStock ({yardBusinessId}): shortfall — requested {units}, withdrew {units - remaining}{filterNote}.{earmarkNote} "
                     + "Empty shelves stay empty; nothing invented.");
             }
             return lines;
+        }
+
+        /// <summary>D2C: finds a lot by its yard custody id, or null.</summary>
+        public LumberYardLumberLot FindLot(EntityId lotId)
+        {
+            foreach (var lot in lots)
+            {
+                if (lot != null && lot.LotId.Equals(lotId)) return lot;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// D2C: units available for ORDINARY sale — the sale inventory after
+        /// earmarked project stock is excluded (Canon §6.4: allocated project
+        /// material is not simultaneously available for normal sale).
+        /// </summary>
+        public int AvailableUnitsForSale(string speciesFilter, string gradeFilter)
+        {
+            int total = 0;
+            foreach (var lot in lots)
+            {
+                if (!MatchesFilter(lot, speciesFilter, gradeFilter)) continue;
+                total += Math.Max(0, Math.Max(0, lot.LumberUnits) - Math.Max(0, lot.EarmarkedUnits));
+            }
+            return total;
+        }
+
+        /// <summary>D2C: earmarked units reserved for one project, under optional filters.</summary>
+        public int EarmarkedUnitsForProject(string projectId, string speciesFilter, string gradeFilter)
+        {
+            if (string.IsNullOrWhiteSpace(projectId)) return 0;
+            int total = 0;
+            foreach (var lot in lots)
+            {
+                if (!MatchesFilter(lot, speciesFilter, gradeFilter)) continue;
+                if (!string.Equals(lot.EarmarkedForProjectId, projectId.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                total += Math.Max(0, Math.Min(Math.Max(0, lot.EarmarkedUnits), Math.Max(0, lot.LumberUnits)));
+            }
+            return total;
+        }
+
+        /// <summary>
+        /// D2C: reserves units on a yard lot for a named project. One lot
+        /// serves one project at a time — a lot already earmarked for a
+        /// different project refuses loudly (reservations must not lie about
+        /// what is promised to whom). Returns the refusal, or null.
+        /// </summary>
+        public string EarmarkUnits(EntityId lotId, string projectId, int units, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var lot = FindLot(lotId);
+            if (lot == null)
+                return $"LumberYardLumberStock.EarmarkUnits: no yard lot {lotId} — reservations name real lots.";
+            if (units <= 0)
+                return "LumberYardLumberStock.EarmarkUnits: earmarked units must be positive.";
+            if (!string.IsNullOrWhiteSpace(lot.EarmarkedForProjectId)
+                && !string.Equals(lot.EarmarkedForProjectId, projectId, StringComparison.OrdinalIgnoreCase))
+                return $"LumberYardLumberStock.EarmarkUnits: lot {lotId} is already earmarked for project "
+                    + $"'{lot.EarmarkedForProjectId}' — one lot serves one project at a time.";
+            int free = Math.Max(0, lot.LumberUnits) - Math.Max(0, lot.EarmarkedUnits);
+            if (units > free)
+                return $"LumberYardLumberStock.EarmarkUnits: lot {lotId} has only {free} unreserved units — {units} requested.";
+
+            lot.EarmarkedForProjectId = projectId;
+            lot.EarmarkedUnits = Math.Max(0, lot.EarmarkedUnits) + units;
+            diag.Add($"LumberYardLumberStock ({yardBusinessId}): lot {lotId} now earmarks "
+                + $"{lot.EarmarkedUnits} units for project '{projectId}' ({free - units} unreserved remain).");
+            return null;
+        }
+
+        /// <summary>
+        /// D2C: releases earmarked units on a lot back to ordinary sale
+        /// inventory. Partial releases are allowed. Sets projectId to the
+        /// project the reservation belonged to. Returns the refusal, or null.
+        /// </summary>
+        public string ReleaseEarmark(EntityId lotId, int units, out string projectId, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            projectId = string.Empty;
+            var lot = FindLot(lotId);
+            if (lot == null)
+                return $"LumberYardLumberStock.ReleaseEarmark: no yard lot {lotId}.";
+            if (units <= 0)
+                return "LumberYardLumberStock.ReleaseEarmark: released units must be positive.";
+            int reserved = Math.Max(0, lot.EarmarkedUnits);
+            if (reserved <= 0 || string.IsNullOrWhiteSpace(lot.EarmarkedForProjectId))
+                return $"LumberYardLumberStock.ReleaseEarmark: lot {lotId} carries no earmark — nothing to release.";
+            if (units > reserved)
+                return $"LumberYardLumberStock.ReleaseEarmark: lot {lotId} earmarks only {reserved} units — {units} requested.";
+
+            projectId = lot.EarmarkedForProjectId;
+            lot.EarmarkedUnits = reserved - units;
+            if (lot.EarmarkedUnits <= 0)
+            {
+                lot.EarmarkedUnits = 0;
+                lot.EarmarkedForProjectId = string.Empty;
+            }
+            diag.Add($"LumberYardLumberStock ({yardBusinessId}): released {units} earmarked units on lot {lotId} "
+                + $"(project '{projectId}') back to sale inventory.");
+            return null;
+        }
+
+        /// <summary>
+        /// D2C: withdraws units from ONE project's earmarked stock only
+        /// (Canon §6.4 project stockpile draw). Returns dispense lines with
+        /// provenance; a shortfall returns fewer lines — never invented units.
+        /// </summary>
+        public List<LumberYardLumberDispenseLine> TryWithdrawProjectStock(
+            int units, string projectId, string speciesFilter, string gradeFilter, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var lines = new List<LumberYardLumberDispenseLine>();
+            if (units <= 0 || string.IsNullOrWhiteSpace(projectId)) return lines;
+
+            SortFifo();
+
+            int remaining = units;
+            bool hadReservation = false;
+            foreach (var lot in lots)
+            {
+                if (remaining <= 0) break;
+                if (!MatchesFilter(lot, speciesFilter, gradeFilter)) continue;
+                if (!string.Equals(lot.EarmarkedForProjectId, projectId.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                hadReservation = true;
+                int reserved = Math.Min(Math.Max(0, lot.EarmarkedUnits), Math.Max(0, lot.LumberUnits));
+                if (reserved <= 0) continue;
+                int take = Math.Min(remaining, reserved);
+                lot.LumberUnits -= take;
+                lot.EarmarkedUnits = Math.Max(0, lot.EarmarkedUnits) - take;
+                if (lot.EarmarkedUnits <= 0) lot.EarmarkedForProjectId = string.Empty;
+                remaining -= take;
+                lines.Add(new LumberYardLumberDispenseLine
+                {
+                    LotId = lot.LotId,
+                    UnitsTaken = take,
+                    YardGradeId = lot.YardGradeId,
+                    Species = lot.Species,
+                    ProvenanceChain = lot.ProvenanceChain(),
+                });
+            }
+
+            lots.RemoveAll(l => l.LumberUnits <= 0);
+
+            if (remaining > 0 && hadReservation)
+            {
+                diag.Add($"LumberYardLumberStock ({yardBusinessId}): project-stockpile shortfall for project "
+                    + $"'{projectId}' — requested {units}, withdrew {units - remaining} from earmarked stock. "
+                    + "Earmarks are promises; nothing invented.");
+            }
+            return lines;
+        }
+
+        /// <summary>
+        /// D2C: cull-grade units available for audited disposal — cull lots
+        /// only, earmarked project stock never touched.
+        /// </summary>
+        public int DisposableCullUnits()
+        {
+            int total = 0;
+            foreach (var lot in lots)
+            {
+                if (!string.Equals(lot.YardGradeId, LumberYardGradeCatalog.CullGradeId, StringComparison.OrdinalIgnoreCase)) continue;
+                total += Math.Max(0, Math.Max(0, lot.LumberUnits) - Math.Max(0, lot.EarmarkedUnits));
+            }
+            return total;
+        }
+
+        /// <summary>
+        /// D2C: removes cull units from cull-grade lots only, FIFO, skipping
+        /// earmarked reservations. Returns dispense lines for the audit
+        /// record. Merchantable and clear stock is never touched here.
+        /// </summary>
+        public List<LumberYardLumberDispenseLine> DisposeCullUnits(int units, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var lines = new List<LumberYardLumberDispenseLine>();
+            if (units <= 0) return lines;
+
+            SortFifo();
+
+            int remaining = units;
+            foreach (var lot in lots)
+            {
+                if (remaining <= 0) break;
+                if (!string.Equals(lot.YardGradeId, LumberYardGradeCatalog.CullGradeId, StringComparison.OrdinalIgnoreCase)) continue;
+                int available = Math.Max(0, lot.LumberUnits) - Math.Max(0, lot.EarmarkedUnits);
+                if (available <= 0) continue;
+                int take = Math.Min(remaining, available);
+                lot.LumberUnits -= take;
+                remaining -= take;
+                lines.Add(new LumberYardLumberDispenseLine
+                {
+                    LotId = lot.LotId,
+                    UnitsTaken = take,
+                    YardGradeId = lot.YardGradeId,
+                    Species = lot.Species,
+                    ProvenanceChain = lot.ProvenanceChain(),
+                });
+            }
+
+            lots.RemoveAll(l => l.LumberUnits <= 0);
+            return lines;
+        }
+
+        /// <summary>
+        /// D2C: records freight/handling charges on an existing lot so retail
+        /// pricing can follow the true landed cost (Canon §5.1, §5.3). Refuses
+        /// unknown lots and negative charges loudly. Returns the refusal, or
+        /// null.
+        /// </summary>
+        public string RecordLandedCharges(EntityId lotId, int freightCents, int handlingCents, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var lot = FindLot(lotId);
+            if (lot == null)
+                return $"LumberYardLumberStock.RecordLandedCharges: no yard lot {lotId} — charges attach to real lots.";
+            if (freightCents < 0 || handlingCents < 0)
+                return "LumberYardLumberStock.RecordLandedCharges: charges cannot be negative.";
+
+            lot.LandedFreightCents += freightCents;
+            lot.LandedHandlingCents += handlingCents;
+            diag.Add($"LumberYardLumberStock ({yardBusinessId}): lot {lotId} landed charges recorded — "
+                + $"freight {lot.LandedFreightCents}c, handling {lot.LandedHandlingCents}c total.");
+            return null;
         }
 
         /// <summary>W4B save contract: lives inside the owning stock class.</summary>
@@ -477,6 +723,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     OriginName = lot.OriginName,
                     IsBootstrapEndowment = lot.IsBootstrapEndowment,
                     UnitCostCents = lot.UnitCostCents,
+                    EarmarkedForProjectId = lot.EarmarkedForProjectId,
+                    EarmarkedUnits = lot.EarmarkedUnits,
+                    LandedFreightCents = lot.LandedFreightCents,
+                    LandedHandlingCents = lot.LandedHandlingCents,
                 });
             }
             return dto;

@@ -38,6 +38,22 @@ namespace LandLedgers.Economy.Businesses.LumberYard
     /// (AcquisitionMarketManager + ConstructionSupportNodeState) — no
     /// rewrite, no rename, no renumber; the yard is a new honest supplier the
     /// construction system can draw on.
+    ///
+    /// D2C depth on top of the W4B width:
+    /// - project stockpiles (Canon §6.4): lumber earmarked for a named
+    ///   project leaves ordinary sale inventory until deliberately released;
+    ///   construction sales draw the project's earmark first;
+    /// - delivery obligations (Canon §6.5, Part VI §6.2): named destinations,
+    ///   named carriers, policy-based delivery charges carried for the ledger;
+    ///   freight execution stays with LogisticsRuntimeManager;
+    /// - contractor credit (Canon Part VI §6.4, §7.3): named contractor
+    ///   accounts with credit postures and per-account settlement terms,
+    ///   receivables invoicing, payments that only shrink balances, and
+    ///   bad-debt write-off that erases nothing but collectability;
+    /// - landed-cost pricing (Canon §5.1, §5.3): freight/handling charges
+    ///   recorded on lots, grade-policy quotes derived from real lots;
+    /// - cull disposal (Canon §4.5): audited burn/discard/give-away of
+    ///   cull-grade stock only, always recorded.
     /// </summary>
     public sealed class LumberYardShopRuntime
     {
@@ -46,6 +62,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         private readonly EntityIdRegistry idRegistry;
         private readonly LumberYardLumberStock lumberStock;
         private readonly LumberYardHardwareStock hardwareStock;
+        private readonly LumberYardProjectStockpile stockpile;
+        private readonly LumberYardDeliveryRegister deliveryRegister;
+        private readonly LumberYardContractorLedger contractorLedger;
+        private readonly LumberYardCullDisposalRegister cullDisposal;
         private readonly List<LumberYardSaleRecord> salesHistory = new List<LumberYardSaleRecord>();
         private bool openingStockApplied;
 
@@ -54,6 +74,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public EntityIdRegistry IdRegistry => idRegistry;
         public LumberYardLumberStock LumberStock => lumberStock;
         public LumberYardHardwareStock HardwareStock => hardwareStock;
+        public LumberYardProjectStockpile Stockpile => stockpile;
+        public LumberYardDeliveryRegister DeliveryRegister => deliveryRegister;
+        public LumberYardContractorLedger ContractorLedger => contractorLedger;
+        public LumberYardCullDisposalRegister CullDisposal => cullDisposal;
         public IReadOnlyList<LumberYardSaleRecord> SalesHistory => salesHistory;
         public bool OpeningStockApplied => openingStockApplied;
 
@@ -63,6 +87,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             this.idRegistry = idRegistry;
             this.lumberStock = new LumberYardLumberStock(this.businessInstanceId);
             this.hardwareStock = new LumberYardHardwareStock(this.businessInstanceId);
+            this.stockpile = new LumberYardProjectStockpile(this.businessInstanceId);
+            this.deliveryRegister = new LumberYardDeliveryRegister(this.businessInstanceId);
+            this.contractorLedger = new LumberYardContractorLedger(this.businessInstanceId);
+            this.cullDisposal = new LumberYardCullDisposalRegister(this.businessInstanceId);
         }
 
         private EntityId AllocateYardLotId(List<string> diag)
@@ -154,8 +182,24 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         /// the sale record carries every lot's provenance. Returns null on
         /// refusal. Money moves through ledger authorities; the record carries
         /// the agreed prices for posting.
+        ///
+        /// D2C: stockpile-aware (Canon §6.4) — the named project's earmarked
+        /// lumber is available to THIS project and drawn first; ordinary sale
+        /// inventory covers the remainder. Earmarked stock is invisible to
+        /// retail and to other projects.
         /// </summary>
         public LumberYardSaleRecord TrySellToConstructionProject(
+            string projectId,
+            int lumberUnits, int lumberUnitPriceCents,
+            int nailsUnits, int nailsUnitPriceCents,
+            int dayIndex,
+            List<string> diag)
+        {
+            return ExecuteConstructionSale(projectId, lumberUnits, lumberUnitPriceCents,
+                nailsUnits, nailsUnitPriceCents, dayIndex, diag);
+        }
+
+        private LumberYardSaleRecord ExecuteConstructionSale(
             string projectId,
             int lumberUnits, int lumberUnitPriceCents,
             int nailsUnits, int nailsUnitPriceCents,
@@ -181,7 +225,11 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 return null;
             }
 
-            int lumberAvailable = lumberStock.AvailableUnits(null, null);
+            // D2C: the named project's earmarked stock (Canon §6.4) is available
+            // to THIS project, drawn first; ordinary sale inventory covers the
+            // remainder. Other projects and retail never see earmarked stock.
+            int projectReserved = lumberStock.EarmarkedUnitsForProject(projectId, null, null);
+            int lumberAvailable = lumberStock.AvailableUnitsForSale(null, null) + projectReserved;
             int nailsAvailable = hardwareStock.TotalHardwareUnits;
             if (lumberAvailable < lumberUnits || nailsAvailable < nailsUnits)
             {
@@ -202,7 +250,13 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
             if (lumberUnits > 0)
             {
-                var lines = lumberStock.TryWithdrawUnits(lumberUnits, null, null, diag);
+                var lines = new List<LumberYardLumberDispenseLine>();
+                lines.AddRange(lumberStock.TryWithdrawProjectStock(lumberUnits, projectId, null, null, diag));
+                int takenSoFar = 0;
+                foreach (var line in lines) takenSoFar += line.UnitsTaken;
+                int remainder = lumberUnits - takenSoFar;
+                if (remainder > 0)
+                    lines.AddRange(lumberStock.TryWithdrawUnits(remainder, null, null, diag));
                 int taken = 0;
                 foreach (var line in lines) taken += line.UnitsTaken;
                 record.Lines.Add(new LumberYardMaterialSaleLine
@@ -269,7 +323,9 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 return null;
             }
 
-            int available = lumberStock.AvailableUnits(speciesFilter, gradeFilter);
+            // D2C: retail draws only ordinary sale inventory — earmarked project
+            // stock (Canon §6.4) is never sold to walk-in buyers.
+            int available = lumberStock.AvailableUnitsForSale(speciesFilter, gradeFilter);
             if (available < units)
             {
                 diag.Add($"LumberYardShopRuntime ({businessInstanceId}): RETAIL SALE REFUSED to '{buyerLabel}' — "
@@ -306,6 +362,218 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             return record;
         }
 
+        // ---- D2C: project stockpile ----
+
+        /// <summary>
+        /// D2C: reserves yard lumber for a named construction project (Canon
+        /// §6.4 project stockpile). Reserved units leave ordinary sale
+        /// inventory until deliberately released. Returns the refusal, or
+        /// null.
+        /// </summary>
+        public string EarmarkLumberForProject(
+            EntityId lotId, string projectId, int units, int dayIndex, List<string> diag)
+        {
+            return stockpile.Earmark(lumberStock, lotId, projectId, units, dayIndex, diag ?? diagnostics);
+        }
+
+        /// <summary>
+        /// D2C: releases earmarked lumber back to ordinary sale inventory.
+        /// Returns the refusal, or null.
+        /// </summary>
+        public string ReleaseProjectEarmark(
+            EntityId lotId, int units, int dayIndex, List<string> diag)
+        {
+            return stockpile.Release(lumberStock, lotId, units, dayIndex, diag ?? diagnostics);
+        }
+
+        // ---- D2C: delivery ----
+
+        /// <summary>
+        /// D2C: schedules delivery of a recorded yard sale to a named
+        /// destination (Canon §6.5 direct-to-project; Part VI §6.2 delivery
+        /// obligation). Refuses sales the yard never recorded. Returns the
+        /// refusal, or null.
+        /// </summary>
+        public string ScheduleDeliveryForSale(
+            LumberYardSaleRecord sale,
+            string destinationLabel,
+            int miles,
+            bool yardDelivers,
+            string carrierLabel,
+            bool buyerProvidesUnloading,
+            LumberYardDeliveryPolicy policy,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (sale == null || !salesHistory.Contains(sale))
+                return "LumberYardShopRuntime: deliveries fulfill recorded yard sales — unknown sale refused.";
+            return deliveryRegister.ScheduleDelivery(sale, destinationLabel, miles, yardDelivers,
+                carrierLabel, buyerProvidesUnloading, policy, idRegistry, dayIndex, diag);
+        }
+
+        /// <summary>D2C: marks a delivery obligation complete. Returns the refusal, or null.</summary>
+        public string MarkDeliveryComplete(EntityId orderId, int dayIndex, List<string> diag)
+        {
+            return deliveryRegister.MarkDelivered(orderId, dayIndex, diag ?? diagnostics);
+        }
+
+        // ---- D2C: contractor credit ----
+
+        /// <summary>
+        /// D2C: sells construction materials to a project ON ACCOUNT to a
+        /// named contractor (Canon Part VI §6.4: credit sale creates
+        /// revenue/receivable without cash). ATOMIC with the same loud
+        /// refusal as the cash sale, plus the account gates: no account, no
+        /// account sale; strict posture, no account sale; over the credit
+        /// limit, no account sale. The invoice is a receivable for the ledger
+        /// authority to post — money never moves here. Returns the invoice,
+        /// or null on refusal.
+        /// </summary>
+        public LumberYardContractorInvoice TrySellToConstructionProjectOnAccount(
+            string projectId,
+            string contractorBusinessId,
+            int lumberUnits, int lumberUnitPriceCents,
+            int nailsUnits, int nailsUnitPriceCents,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (string.IsNullOrWhiteSpace(contractorBusinessId))
+            {
+                diag.Add("LumberYardShopRuntime: account sales name their contractor — anonymous accounts refused.");
+                return null;
+            }
+            var account = contractorLedger.FindAccount(contractorBusinessId);
+            if (account == null)
+            {
+                diag.Add($"LumberYardShopRuntime: no contractor account for '{contractorBusinessId}' — open one before selling on account.");
+                return null;
+            }
+            if (account.CreditPosture == LumberYardCreditPosture.Strict)
+            {
+                diag.Add($"LumberYardShopRuntime: contractor '{contractorBusinessId}' is on strict credit posture — cash terms, account sale refused.");
+                return null;
+            }
+            int estimatedCents = Math.Max(0, lumberUnits) * Math.Max(0, lumberUnitPriceCents)
+                + Math.Max(0, nailsUnits) * Math.Max(0, nailsUnitPriceCents);
+            if (estimatedCents <= 0)
+            {
+                diag.Add("LumberYardShopRuntime: nothing chargeable — no account sale recorded.");
+                return null;
+            }
+            int outstanding = contractorLedger.OutstandingForContractor(contractorBusinessId);
+            if (outstanding + estimatedCents > Math.Max(0, account.Terms.CreditLimitCents))
+            {
+                diag.Add($"LumberYardShopRuntime: account sale refused for '{contractorBusinessId}' — over credit limit "
+                    + $"(outstanding {outstanding}c + {estimatedCents}c > limit {account.Terms.CreditLimitCents}c). "
+                    + "The yard never invents money.");
+                return null;
+            }
+
+            var record = ExecuteConstructionSale(projectId, lumberUnits, lumberUnitPriceCents,
+                nailsUnits, nailsUnitPriceCents, dayIndex, diag);
+            if (record == null) return null;
+
+            return IssueContractorInvoiceForSale(contractorBusinessId, record, null, dayIndex, diag);
+        }
+
+        /// <summary>
+        /// D2C: invoices a recorded yard sale to a contractor account,
+        /// optionally including a delivery charge (Canon §7.3:
+        /// delivered-material payments are a real settlement form). The sale
+        /// must be one the yard recorded. Returns the invoice, or null on
+        /// refusal.
+        /// </summary>
+        public LumberYardContractorInvoice IssueContractorInvoiceForSale(
+            string contractorBusinessId,
+            LumberYardSaleRecord sale,
+            LumberYardDeliveryOrder deliveryOrder,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (sale == null || !salesHistory.Contains(sale))
+            {
+                diag.Add("LumberYardShopRuntime: invoices bill recorded yard sales — unknown sale refused.");
+                return null;
+            }
+            var invoice = new LumberYardContractorInvoice
+            {
+                ContractorBusinessId = contractorBusinessId ?? string.Empty,
+                SaleId = sale.SaleId,
+                DeliveryOrderId = deliveryOrder != null ? deliveryOrder.OrderId : EntityId.Invalid,
+                IssuedDayIndex = dayIndex,
+            };
+            foreach (var line in sale.Lines)
+            {
+                if (line == null) continue;
+                string what = line.ResourceKind == ConstructionResourceKind.Lumber
+                    ? $"lumber — {line.UnitsSold} units @ {line.UnitPriceCents}c"
+                    : $"nails/hardware — {line.UnitsSold} units @ {line.UnitPriceCents}c";
+                invoice.Lines.Add(new LumberYardContractorInvoiceLine(what, line.LineTotalCents));
+            }
+            if (deliveryOrder != null && deliveryOrder.ChargeCents > 0)
+            {
+                invoice.Lines.Add(new LumberYardContractorInvoiceLine(
+                    $"delivery to {deliveryOrder.DestinationLabel} ({deliveryOrder.Miles} mi)", deliveryOrder.ChargeCents));
+            }
+
+            string refusal = contractorLedger.IssueInvoice(invoice, idRegistry, diag);
+            return refusal == null ? invoice : null;
+        }
+
+        /// <summary>
+        /// D2C: records a contractor's payment against an invoice. The
+        /// caller's real money moves alongside this call; the ledger only
+        /// shrinks the receivable. Returns the refusal, or null.
+        /// </summary>
+        public string RecordContractorPayment(EntityId invoiceId, int cents, int dayIndex, List<string> diag)
+        {
+            return contractorLedger.RecordPayment(invoiceId, cents, dayIndex, diag ?? diagnostics);
+        }
+
+        // ---- D2C: landed-cost pricing ----
+
+        /// <summary>
+        /// D2C: quotes a per-unit retail price derived from the FIFO landed
+        /// cost of the yard's actual sale-available lots (Canon §5.3: retail
+        /// pricing follows landed cost). Returns -1 when nothing matching is
+        /// in stock — no stock, no quote.
+        /// </summary>
+        public int QuoteRetailLumberPrice(
+            string speciesFilter,
+            string gradeFilter,
+            LumberYardGradePricePolicy policy,
+            List<string> diag)
+        {
+            return LumberYardPricing.QuoteRetailUnitPriceCents(lumberStock, speciesFilter, gradeFilter, policy, diag ?? diagnostics);
+        }
+
+        // ---- D2C: cull disposal ----
+
+        /// <summary>
+        /// D2C: disposes cull-grade lumber (burned, discarded, given away)
+        /// with a full audit record (Canon §4.5: losses and discards stay
+        /// visible). ATOMIC: on insufficient cull stock, refused loudly and
+        /// nothing is disposed. Returns the refusal, or null.
+        /// </summary>
+        public string DisposeCullUnits(
+            int units,
+            LumberYardCullDisposalReason reason,
+            string note,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (idRegistry == null)
+            {
+                diag.Add("LumberYardShopRuntime: no EntityIdRegistry — disposal refused.");
+                return "LumberYardShopRuntime: no EntityIdRegistry — disposal refused.";
+            }
+            return cullDisposal.DisposeCull(lumberStock, units, reason, note, idRegistry, dayIndex, diag);
+        }
+
         /// <summary>W4B save contract: lives inside the owning runtime class.</summary>
         [Serializable]
         public sealed class LumberYardShopRuntimeSaveDto
@@ -317,6 +585,14 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             public LumberYardHardwareStock.LumberYardHardwareStockSaveDto HardwareStock =
                 new LumberYardHardwareStock.LumberYardHardwareStockSaveDto();
             public List<LumberYardSaleRecord> SalesHistory = new List<LumberYardSaleRecord>();
+            public LumberYardProjectStockpile.LumberYardProjectStockpileSaveDto Stockpile =
+                new LumberYardProjectStockpile.LumberYardProjectStockpileSaveDto();
+            public LumberYardDeliveryRegister.LumberYardDeliveryRegisterSaveDto DeliveryRegister =
+                new LumberYardDeliveryRegister.LumberYardDeliveryRegisterSaveDto();
+            public LumberYardContractorLedger.LumberYardContractorLedgerSaveDto ContractorLedger =
+                new LumberYardContractorLedger.LumberYardContractorLedgerSaveDto();
+            public LumberYardCullDisposalRegister.LumberYardCullDisposalRegisterSaveDto CullDisposal =
+                new LumberYardCullDisposalRegister.LumberYardCullDisposalRegisterSaveDto();
         }
 
         public LumberYardShopRuntimeSaveDto CaptureSaveDto()
@@ -327,6 +603,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 OpeningStockApplied = openingStockApplied,
                 LumberStock = lumberStock.CaptureSaveDto(),
                 HardwareStock = hardwareStock.CaptureSaveDto(),
+                Stockpile = stockpile.CaptureSaveDto(),
+                DeliveryRegister = deliveryRegister.CaptureSaveDto(),
+                ContractorLedger = contractorLedger.CaptureSaveDto(),
+                CullDisposal = cullDisposal.CaptureSaveDto(),
             };
             foreach (var sale in salesHistory)
             {
@@ -340,6 +620,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         {
             lumberStock.LoadFromSaveDto(dto != null ? dto.LumberStock : null);
             hardwareStock.LoadFromSaveDto(dto != null ? dto.HardwareStock : null);
+            stockpile.LoadFromSaveDto(dto != null ? dto.Stockpile : null);
+            deliveryRegister.LoadFromSaveDto(dto != null ? dto.DeliveryRegister : null);
+            contractorLedger.LoadFromSaveDto(dto != null ? dto.ContractorLedger : null);
+            cullDisposal.LoadFromSaveDto(dto != null ? dto.CullDisposal : null);
             salesHistory.Clear();
             openingStockApplied = dto != null && dto.OpeningStockApplied;
             if (dto != null && dto.SalesHistory != null)

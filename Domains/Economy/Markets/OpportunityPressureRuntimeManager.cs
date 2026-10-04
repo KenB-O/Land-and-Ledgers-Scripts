@@ -564,7 +564,13 @@ namespace LandLedgers.Economy
         private void OnDisable()
         {
             UnsubscribeFromTime();
-            hudController?.SetOpportunityNoticeAlert(string.Empty);
+            // Null-conditional dispatch checks only the managed reference. Unity
+            // can destroy the HUD native object first during scene/test teardown,
+            // so use Unity's overloaded null check before touching it.
+            if (hudController != null)
+            {
+                hudController.SetOpportunityNoticeAlert(string.Empty);
+            }
         }
 
         private void AutoWire()

@@ -203,6 +203,30 @@ namespace LandLedgers.Economy.Equipment.Workstations
         }
 
         /// <summary>
+        /// W2B: restaurant kitchen. Cooking requires stove + cookware
+        /// (Canon §8.1B: commercial meal service needs kitchen labor and
+        /// real ingredient economics) — the room is not enough, mirroring
+        /// the Tech X §3.5 bake-oven gate. Same canonical hardware as the
+        /// boarding-house kitchen; the workstation id is restaurant-scoped
+        /// so the equipment gate resolves it to the eating house's own
+        /// kitchens.
+        /// </summary>
+        public static WorkstationDefinition RestaurantKitchen
+        {
+            get
+            {
+                var def = Build("restaurant-kitchen", "Restaurant Kitchen", "restaurant",
+                    "W2B; Canon §8.1B (eating-house meal service)",
+                    new[] { "cook-meals" },
+                    ("stove-range", 1), ("cookware-set", 1), ("pantry-bins", 1));
+                // A stove with no fuel is not usable (Canon 5.2; mirrors the
+                // boarding-house kitchen's fuel support requirement).
+                def.SupportRequirements.Add(new SupportRequirement("fuel", "oven-wood", 2));
+                return def;
+            }
+        }
+
+        /// <summary>
         /// EQP-4 Group D: boarding-house laundry. Requires tubs + water + soap
         /// (Canon Part V: BoardingHouse).
         /// </summary>

@@ -45,7 +45,16 @@ namespace LandLedgers.Economy
         /// placement inventory, rates, repeat terms. Closes T2B's upstream
         /// hole: recruitment ads buy through a real paper or are refused.
         /// </summary>
-        Newspaper = 21
+        Newspaper = 21,
+        /// <summary>
+        /// W2B: the restaurant / eating house. Canon §2.5: restaurant/saloon
+        /// meals are a legitimate meal source — served meals genuinely
+        /// satisfy NPC nutrition. Canon §8.1B: commercial meal service with
+        /// real ingredient economics (meat, bread, produce, dairy with
+        /// provenance), kitchen labor, and meal-quality abstraction. Value
+        /// appended, never renumbered (W2B).
+        /// </summary>
+        Restaurant = 22
     }
 
     public enum BusinessCadence

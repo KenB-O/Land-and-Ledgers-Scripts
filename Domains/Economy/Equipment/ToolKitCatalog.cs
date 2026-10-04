@@ -114,12 +114,26 @@ namespace LandLedgers.Economy.Equipment
             "hoe", "spade", "shovel", "fork", "rake", "hand seed sacks",
             "knives", "sharpening file");
 
+        /// <summary>
+        /// W2B: cook's hand kit. Canon §8.1B: commercial meal service is
+        /// kitchen labor with real tools — the hand kit (knives, cleaver,
+        /// ladles, cutting board, bowls) gates meal prep/cook tasks via the
+        /// NX-1 teeth gate. The stove itself is capacity/scale (Canon 4.7):
+        /// it lives in the restaurant-kitchen workstation, never in this kit.
+        /// </summary>
+        public static ToolKitDefinition CookHandKit => Kit(
+            "cook-hand-kit", "Cook's Hand Kit", "restaurant",
+            "W2B; Canon §8.1B (eating-house kitchen labor)",
+            "butcher knife", "paring knife", "cleaver", "ladles",
+            "skimmer", "cutting board", "mixing bowls", "measuring cups",
+            "sharpening steel", "pot holders");
+
         /// <summary>All Group B kit definitions, for catalog-driven UI and validation.</summary>
         public static List<ToolKitDefinition> All => new List<ToolKitDefinition>
         {
             CarpenterHandToolKit, MasonKit, TailorHandKit, BarberKit, DoctorBag,
             WheelwrightKit, StableGroomingKit, MinerHandKit, FarrierKit, RanchTackKit,
-            FieldHandKit,
+            FieldHandKit, CookHandKit,
         };
 
         public static ToolKitDefinition Get(string kitId)

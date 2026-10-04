@@ -36,12 +36,19 @@ namespace LandLedgers.Population
             public int MealsMissed;
             public int PurchasesMade;
             public int SpendCents;
+            /// <summary>W2B: of MealsEaten, how many were served at restaurants (Canon §2.5 nutrition link).</summary>
+            public int MealsFromRestaurants;
         }
 
         /// <summary>
         /// Executes one day of needs for every household in the population.
         /// The optional budget store receives each person's nutrition-derived
         /// work capacity (NX-1B: missed meals bite as fewer usable minutes).
+        /// The optional restaurant-meal source (W2B nutrition link, Canon
+        /// §2.5) reports meals persons actually ate at eating houses that day:
+        /// those meals genuinely satisfy nutrition, so the household draws
+        /// (and buys) only each diner's remaining need — never double-fed,
+        /// never double-counted. Null source = pre-W2B behavior exactly.
         /// </summary>
         public DayReport ExecuteDay(
             PopulationState population,
@@ -49,7 +56,8 @@ namespace LandLedgers.Population
             IEmbodiedPurchaseExecutor executor,
             int dayIndex,
             List<string> diag,
-            WorkTimeBudgetStore budgetStore = null)
+            WorkTimeBudgetStore budgetStore = null,
+            IRestaurantMealDaySource restaurantMeals = null)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -62,7 +70,7 @@ namespace LandLedgers.Population
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals);
             }
             return report;
         }
@@ -71,7 +79,8 @@ namespace LandLedgers.Population
             PopulationState population, HouseholdState household,
             HouseholdConsumptionPlanner planner, IEmbodiedPurchaseExecutor executor,
             int dayIndex, DayReport report, List<string> diag,
-            WorkTimeBudgetStore budgetStore)
+            WorkTimeBudgetStore budgetStore,
+            IRestaurantMealDaySource restaurantMeals)
         {
             int actingPersonId = FindActingAdult(population, household);
             if (actingPersonId < 0)
@@ -91,8 +100,26 @@ namespace LandLedgers.Population
                 }
 
             // 1. Meals (GHOST-DEF-006): every member eats; each meal consumes
-            //    one unit of staple_food from household reserves.
-            int mealsNeeded = members.Count * MealsPerPersonPerDay;
+            //    one unit of staple_food from household reserves — EXCEPT
+            //    meals already eaten at a restaurant (W2B nutrition link,
+            //    Canon §2.5): a diner genuinely ate, so the household draws
+            //    (and buys) only their remaining need. The caps are per
+            //    person; null source means full caps — pre-W2B behavior.
+            int totalDailyNeed = members.Count * MealsPerPersonPerDay;
+            var reserveMealCaps = new Dictionary<int, int>();
+            int mealsEatenAtRestaurants = 0;
+            foreach (PersonState member in members)
+            {
+                int eatenOut = restaurantMeals != null
+                    ? restaurantMeals.MealsEatenAtRestaurant(member.id, dayIndex)
+                    : 0;
+                eatenOut = Math.Max(0, Math.Min(MealsPerPersonPerDay, eatenOut));
+                mealsEatenAtRestaurants += eatenOut;
+                reserveMealCaps[member.id] = MealsPerPersonPerDay - eatenOut;
+            }
+
+            int mealsNeeded = 0;
+            foreach (int cap in reserveMealCaps.Values) mealsNeeded += cap;
             int mealsAvailable = 0;
             if (mealsNeeded > 0)
             {
@@ -134,15 +161,19 @@ namespace LandLedgers.Population
 
             // NX-1B: scarcity allocation — meals go per person by priority
             // (children → workers → others); each person's nutrition derives
-            // from their actual meals (Tech X §2.9).
-            Dictionary<int, int> allocation = MealAllocator.Allocate(members, mealsAvailable, MealsPerPersonPerDay);
+            // from their actual meals (Tech X §2.9). W2B: per-person caps —
+            // a restaurant diner draws only their remaining need from the
+            // household, never a full share on top of a full stomach.
+            Dictionary<int, int> allocation = MealAllocator.Allocate(members, mealsAvailable, reserveMealCaps, MealsPerPersonPerDay);
             int mealsEaten = 0;
             int undernourished = 0;
             foreach (PersonState p in members)
             {
                 int eaten = allocation.TryGetValue(p.id, out int a) ? a : 0;
-                mealsEaten += eaten;
-                bool missedAny = p.nutrition.ApplyDay(eaten, MealsPerPersonPerDay, dayIndex);
+                int eatenOut = MealsPerPersonPerDay - (reserveMealCaps.TryGetValue(p.id, out int cap) ? cap : MealsPerPersonPerDay);
+                int totalEaten = eaten + eatenOut;
+                mealsEaten += totalEaten;
+                bool missedAny = p.nutrition.ApplyDay(totalEaten, MealsPerPersonPerDay, dayIndex);
                 if (missedAny) undernourished++;
 
                 // Teeth: nutrition sets tomorrow's usable work minutes.
@@ -153,9 +184,10 @@ namespace LandLedgers.Population
                     budget.SetCapacityMultiplier(p.nutrition.WorkCapacityMultiplier);
                 }
             }
-            int missed = mealsNeeded - mealsEaten;
+            int missed = totalDailyNeed - mealsEaten;
             report.MealsEaten += mealsEaten;
             report.MealsMissed += Math.Max(0, missed);
+            report.MealsFromRestaurants += mealsEatenAtRestaurants;
             if (missed > 0)
                 diag.Add($"DailyNeedsService: H{household.id} missed {missed} meals on day {dayIndex} ({undernourished} undernourished) — no supplier, no time, or no money. Logged, not faked.");
 

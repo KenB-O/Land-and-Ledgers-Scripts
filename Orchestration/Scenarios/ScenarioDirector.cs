@@ -224,6 +224,33 @@ namespace LandLedgers.Orchestration.Scenarios
 
         // ---- Live-edit API (puppet master, DEV-2) ----
 
+        /// <summary>
+        /// P7: records a goal completion produced by live evaluation (e.g. the
+        /// FirstLedgerGoalEvaluator ticking on SimulationDrivers). The completion
+        /// lands in the scenario runtime state, so the puppet master panel and
+        /// every other ScenarioRuntimeState reader see it — before P7 the
+        /// evaluators only logged and the panel showed every goal incomplete
+        /// forever. Guarded: applies only when the named scenario is the active
+        /// one, so a stray evaluator tick can never mark goals on the wrong
+        /// scenario. Unknown goal ids are rejected quietly (false) — evaluation
+        /// runs every tick and must never spam the console.
+        /// </summary>
+        public bool RecordLiveGoalCompletion(string scenarioId, string goalId)
+        {
+            if (string.IsNullOrWhiteSpace(scenarioId) || string.IsNullOrWhiteSpace(goalId))
+            {
+                return false;
+            }
+
+            if (!HasActiveScenario
+                || !string.Equals(ActiveScenarioId, scenarioId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return Service.SetGoalCompleted(goalId, true, out _);
+        }
+
         public bool SetGoalCompleted(string goalId, bool completed)
         {
             if (!Service.SetGoalCompleted(goalId, completed, out string rejectionReason))

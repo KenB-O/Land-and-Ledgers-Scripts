@@ -45,7 +45,7 @@ by the `SimulationSystemsHub` (CLN-1).
 | `WeekChanged` | Sync liabilities to valuation | `hub.Liabilities.SyncAllToValuation(null)` — P1: the SWN-3 liability ledger now feeds the BIZ-5 read model weekly |
 | `WeekChanged` | Post owner labor | `Valuation.RecordOwnerLabor` per player-owned business (CLN-4) |
 | `ShortTick` | Advance player travel | `PlayerDirector.RecordMovementProgress(wholeMinutes, hub.WorkTimeBudgets)` |
-| `ShortTick` | Scenario goals (CLN-3) | `OnScenarioTick?.Invoke()` when a scenario is active |
+| `ShortTick` | Scenario goals (CLN-3) | `OnScenarioTick?.Invoke()` when a scenario is active — P7: multicast event; every subscribed scenario bootstrap's evaluator ticks (no last-writer-wins) |
 
 ## Valuation events (CLN-4)
 
@@ -77,7 +77,8 @@ valuation read model from real settlement paths — event-fed, never per-frame:
   dispatch → depart), which gives `TryDispatchShipment` a real caller path;
   the remaining gap is live scene wiring: a delivery-job source, a
   freight-company instance, and real draft-animal/driver lists.
-- **Scenario goal evaluation** — the bootstrap assigns `SimulationDrivers.OnScenarioTick`
+- **Scenario goal evaluation** — scenario bootstraps subscribe `SimulationDrivers.OnScenarioTick`
+  (P7: multicast event — subscribing never steals the tick from another bootstrap)
   (CLN-3 wires `FirstLedgerGoalEvaluator.Evaluate` with the live game state).
 
 ## Save/load

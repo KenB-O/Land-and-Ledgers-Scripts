@@ -78,11 +78,15 @@ namespace LandLedgers.Orchestration.Systems
         private EmbodiedPurchaseExecutor purchaseExecutor;
 
         /// <summary>
-        /// CLN-3 hook: scenario goal evaluation runs here. The bootstrap assigns this
-        /// (e.g. FirstLedgerGoalEvaluator.Evaluate with the live game state); when
-        /// null, the scenario tick is a no-op.
+        /// CLN-3 hook: scenario goal evaluation runs here. Scenario bootstraps
+        /// subscribe their evaluators (e.g. FirstLedgerGoalEvaluator.Evaluate
+        /// with the live game state); when no subscriber is attached, the
+        /// scenario tick is a no-op. P7: a multicast event, not a settable
+        /// property — two scenario bootstraps in one scene must not silently
+        /// steal the tick from each other (last-writer-wins dropped one
+        /// evaluator's goals entirely).
         /// </summary>
-        public Action OnScenarioTick { get; set; }
+        public event Action OnScenarioTick;
 
         // CLN-4: accumulated player worked minutes for the current week (owner labor).
         private int weeklyPlayerWorkedMinutes;
@@ -362,7 +366,7 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
 
-            // Scenario goal evaluation (CLN-3 assigns OnScenarioTick).
+            // Scenario goal evaluation (CLN-3 bootstraps subscribe OnScenarioTick).
             if (scenarioDirector != null && scenarioDirector.HasActiveScenario)
             {
                 OnScenarioTick?.Invoke();

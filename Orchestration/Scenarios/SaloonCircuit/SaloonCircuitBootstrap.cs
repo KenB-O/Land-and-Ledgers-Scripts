@@ -94,7 +94,9 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
 
             if (drivers != null)
             {
-                drivers.OnScenarioTick = RunEvaluation;
+                // P7: multicast — a second scenario bootstrap in the scene must
+                // not silently steal the tick from this evaluator.
+                drivers.OnScenarioTick += RunEvaluation;
             }
             else
             {
@@ -110,9 +112,9 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
                 evaluator.GoalCompleted -= OnGoalCompleted;
             }
 
-            if (drivers != null && drivers.OnScenarioTick == (System.Action)RunEvaluation)
+            if (drivers != null)
             {
-                drivers.OnScenarioTick = null;
+                drivers.OnScenarioTick -= RunEvaluation;
             }
         }
 
@@ -133,6 +135,10 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
         private void OnGoalCompleted(string goalId)
         {
             Debug.Log($"[SaloonCircuit] Goal completed: {goalId}");
+            // P7: live completions reach the scenario runtime state — the puppet
+            // master panel reads ScenarioRuntimeState, not this evaluator.
+            // Guarded by scenario id: never marks goals on another scenario.
+            scenarioDirector?.RecordLiveGoalCompletion(SaloonCircuitScenario.ScenarioId, goalId);
         }
     }
 }

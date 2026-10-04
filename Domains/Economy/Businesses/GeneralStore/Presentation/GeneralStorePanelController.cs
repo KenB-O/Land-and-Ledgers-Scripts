@@ -1001,8 +1001,11 @@ namespace LandLedgers.FirstLedger
 
             SetButtonVisible(view.DecreaseMarginButton, isStore || isLand || isManagedBusiness);
             SetButtonVisible(view.IncreaseMarginButton, isStore || isLand || isManagedBusiness);
-            SetButtonVisible(view.NextWorkerButton, isStore || isLand || isManagedBusiness || isVacantShell || isHolding);
-            SetButtonVisible(view.PreviousWorkerButton, isStore || isLand || isManagedBusiness || isVacantShell || isHolding);
+            // Worker selection is presented in the staffing section. Keep the
+            // legacy cycle buttons for property/building choices, but do not make
+            // a hidden worker carousel the primary hiring workflow.
+            SetButtonVisible(view.NextWorkerButton, isLand || isVacantShell || isHolding);
+            SetButtonVisible(view.PreviousWorkerButton, isLand || isVacantShell || isHolding);
             SetButtonVisible(view.AssignWorkerButton, isStore || isManagedBusiness || (isLand && selectedOwnedLandDevelopmentIntent == OwnedLandDevelopmentIntent.Business));
             SetButtonVisible(view.BuildProjectButton, isLand || isVacantShell || isHolding);
 
@@ -1014,11 +1017,9 @@ namespace LandLedgers.FirstLedger
                 SetButtonLabel(view.IncreaseMarginButton, "Price +");
                 SetButtonInteractable(view.DecreaseMarginButton, storeRuntime != null && storeRuntime.CanDecreaseStoreMargin);
                 SetButtonInteractable(view.IncreaseMarginButton, storeRuntime != null && storeRuntime.CanIncreaseStoreMargin);
-                SetButtonLabel(view.PreviousWorkerButton, "Prev Worker");
-                SetButtonLabel(view.NextWorkerButton, "Next Worker");
-                SetButtonLabel(view.AssignWorkerButton, fireMode ? "Dismiss" : "Hire");
-                SetButtonInteractable(view.NextWorkerButton, selectionCount > 1);
-                SetButtonInteractable(view.PreviousWorkerButton, selectionCount > 1);
+                SetButtonLabel(view.AssignWorkerButton, fireMode ? "Dismiss Worker" : "Hire Candidate");
+                SetButtonInteractable(view.NextWorkerButton, false);
+                SetButtonInteractable(view.PreviousWorkerButton, false);
                 SetButtonInteractable(view.AssignWorkerButton, selectionCount > 0);
                 SetButtonInteractable(view.BuildProjectButton, false);
                 return;
@@ -1076,11 +1077,9 @@ namespace LandLedgers.FirstLedger
                 SetButtonLabel(view.IncreaseMarginButton, "Price +");
                 SetButtonInteractable(view.DecreaseMarginButton, sharedBusinessRuntime != null);
                 SetButtonInteractable(view.IncreaseMarginButton, sharedBusinessRuntime != null);
-                SetButtonLabel(view.PreviousWorkerButton, "Prev Worker");
-                SetButtonLabel(view.NextWorkerButton, "Next Worker");
-                SetButtonLabel(view.AssignWorkerButton, fireMode ? "Dismiss" : "Hire");
-                SetButtonInteractable(view.NextWorkerButton, selectionCount > 1);
-                SetButtonInteractable(view.PreviousWorkerButton, selectionCount > 1);
+                SetButtonLabel(view.AssignWorkerButton, fireMode ? "Dismiss Worker" : "Hire Candidate");
+                SetButtonInteractable(view.NextWorkerButton, false);
+                SetButtonInteractable(view.PreviousWorkerButton, false);
                 SetButtonInteractable(view.AssignWorkerButton, selectionCount > 0);
                 SetButtonVisible(view.BuildProjectButton, true);
                 SetButtonLabel(view.BuildProjectButton, "Sell Business");
@@ -1183,10 +1182,10 @@ namespace LandLedgers.FirstLedger
                 "Price +" => "Raise the price adjustment to favor profit per sale.",
                 "House" or "House selected" => "Set this plot to residential construction.",
                 "Business" or "Business selected" => "Set this plot to business construction.",
-                "Prev Worker" => "Move to the previous worker candidate or assigned staff member.",
-                "Next Worker" => "Move to the next worker candidate or assigned staff member.",
-                "Hire" => "Hire the selected worker into the first open role.",
-                "Dismiss" => "Remove the selected worker from this business.",
+                "Prev Worker" => "Legacy property navigation control.",
+                "Next Worker" => "Legacy property navigation control.",
+                "Hire" or "Hire Candidate" => "Hire the candidate shown in Staffing into the first open role.",
+                "Dismiss" or "Dismiss Worker" => "Remove the selected worker from this business.",
                 "Prev House" => "Choose the previous housing plan for this plot.",
                 "Next House" => "Choose the next housing plan for this plot.",
                 "Prev Business" => "Choose the previous business option for this site.",
@@ -6452,7 +6451,7 @@ namespace LandLedgers.FirstLedger
                 || summary.ContinuityStatus == BusinessContinuityStatus.Understaffed
                 || summary.ContinuityStatus == BusinessContinuityStatus.Pressured)
             {
-                return "Pick a worker with Prev/Next Worker, then Hire.";
+                return "Review the candidate shown in Staffing, then press Hire Candidate.";
             }
 
             if (runtime.CurrentCashCents <= 0)

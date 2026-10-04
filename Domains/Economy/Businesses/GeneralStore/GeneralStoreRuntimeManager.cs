@@ -1749,7 +1749,7 @@ namespace LandLedgers.FirstLedger
             if (GetOpenWorkerSlotCount() <= 0)
             {
                 builder.AppendLine("Hiring");
-                builder.AppendLine("No open slots. Use Prev/Next Worker to review the current team.");
+                builder.AppendLine("No open slots. Review the current team below.");
                 int selectedSlotIndex = FindFilledWorkerSlotIndexBySelection(selectedCandidateIndex);
                 if (selectedSlotIndex >= 0)
                 {

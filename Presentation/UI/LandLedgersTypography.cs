@@ -5,13 +5,21 @@ using UnityEngine;
 using UnityEngine.UI;
 
 #if UNITY_EDITOR
+using System.Reflection;
 using UnityEditor;
+using UnityEngine.TextCore.LowLevel;
 #endif
 
 namespace LandLedgers.UI
 {
     public static class LandLedgersTypography
     {
+#if UNITY_EDITOR
+        static LandLedgersTypography()
+        {
+            EditorApplication.delayCall += EnsureAllFontAssets;
+        }
+#endif
         public enum FontRole
         {
             BitterRegular,
@@ -79,10 +87,20 @@ namespace LandLedgers.UI
             }
 
             TMP_FontAsset resolved = null;
+#if !UNITY_EDITOR
+            resolved = Resources.Load<TMP_FontAsset>($"Core/UI/Fonts/{FontName(role)}");
+#endif
 #if UNITY_EDITOR
             // Editor smoke tests and prefab repair run before these generated assets
             // are resident in Resources. Resolve the authored asset directly first.
             resolved = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetPath(role));
+            if (!IsUsableFont(resolved))
+            {
+                // The first editor invocation can arrive before the delayed
+                // bootstrap callback. Generate/load the deterministic project
+                // asset synchronously instead of falling back to Liberation Sans.
+                resolved = EnsureFontAsset(role);
+            }
 #endif
             resolved = IsUsableFont(resolved) ? resolved : FindLoadedFont(FontName(role));
             if (!IsUsableFont(resolved))
@@ -257,7 +275,7 @@ namespace LandLedgers.UI
         }
 
 #if UNITY_EDITOR
-        private const string FontAssetFolder = "Assets/Core/UI/Fonts";
+        private const string FontAssetFolder = "Assets/Resources/Core/UI/Fonts";
         private const string TmpSettingsPath = "Assets/Asset Packs/TextMesh Pro/Resources/TMP Settings.asset";
         private const string MainUiPrefabPath = "Assets/Core/UI/UI Canvas.prefab";
 
@@ -298,6 +316,9 @@ namespace LandLedgers.UI
             {
                 EnsureFontAsset(RequiredRoles[i]);
             }
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
         }
 
         public static void ConfigureTmpSettings()
@@ -331,12 +352,82 @@ namespace LandLedgers.UI
 
             if (existing != null)
             {
-                Debug.LogWarning($"TMP font asset '{assetPath}' has no valid atlas texture. Leaving it unchanged; use TextMesh Pro Font Asset Creator to regenerate it.");
+                AssetDatabase.DeleteAsset(assetPath);
+            }
+
+            if (!TryGenerateFontAsset(role, assetPath))
+            {
+                Debug.LogWarning($"Missing TMP font source for '{FontName(role)}'. Expected the authored Land & Ledgers font pack under Assets/Asset Packs/Fonts.");
                 return null;
             }
 
-            Debug.LogWarning($"Missing TMP font asset '{assetPath}'. Create it with TextMesh Pro Font Asset Creator before assigning it to gameplay UI.");
+            TMP_FontAsset generated = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(assetPath);
+            if (IsUsableFont(generated))
+            {
+                FontCache[role] = generated;
+                return generated;
+            }
+
             return null;
+        }
+
+        private static bool TryGenerateFontAsset(FontRole role, string assetPath)
+        {
+            string sourcePath = role switch
+            {
+                FontRole.BitterRegular => "Assets/Asset Packs/Fonts/Bitter/static/Bitter-Regular.ttf",
+                FontRole.BitterMedium => "Assets/Asset Packs/Fonts/Bitter/static/Bitter-Medium.ttf",
+                FontRole.BitterSemiBold => "Assets/Asset Packs/Fonts/Bitter/static/Bitter-SemiBold.ttf",
+                FontRole.BitterBold => "Assets/Asset Packs/Fonts/Bitter/static/Bitter-Bold.ttf",
+                FontRole.BitterBlack => "Assets/Asset Packs/Fonts/Bitter/static/Bitter-Black.ttf",
+                FontRole.SourceSansRegular => "Assets/Asset Packs/Fonts/Source_Sans_3/static/SourceSans3-Regular.ttf",
+                FontRole.SourceSansSemiBold => "Assets/Asset Packs/Fonts/Source_Sans_3/static/SourceSans3-SemiBold.ttf",
+                FontRole.SourceSansBold => "Assets/Asset Packs/Fonts/Source_Sans_3/static/SourceSans3-Bold.ttf",
+                _ => string.Empty
+            };
+
+            Font source = AssetDatabase.LoadAssetAtPath<Font>(sourcePath);
+            if (source == null)
+            {
+                return false;
+            }
+
+            TMP_FontAsset generated = TMP_FontAsset.CreateFontAsset(
+                source, 90, 9, GlyphRenderMode.SDFAA, 1024, 1024, AtlasPopulationMode.Dynamic);
+            if (generated == null)
+            {
+                return false;
+            }
+
+            generated.name = FontName(role);
+            Texture2D atlas = generated.atlasTexture;
+            Material material = generated.material;
+            atlas.name = generated.name + " Atlas";
+            material.name = generated.name + " Material";
+            AssetDatabase.CreateAsset(generated, assetPath);
+            AssetDatabase.AddObjectToAsset(atlas, generated);
+            AssetDatabase.AddObjectToAsset(material, generated);
+
+            uint[] characters = new uint[95];
+            for (uint i = 0; i < characters.Length; i++)
+            {
+                characters[i] = i + 32;
+            }
+
+            if (!generated.TryAddCharacters(characters, out _))
+            {
+                AssetDatabase.DeleteAsset(assetPath);
+                return false;
+            }
+
+            MethodInfo flush = typeof(TMP_FontAsset).GetMethod(
+                "UpdateAtlasTexturesInQueue", BindingFlags.Static | BindingFlags.NonPublic);
+            flush?.Invoke(null, null);
+            EditorUtility.SetDirty(generated);
+            EditorUtility.SetDirty(atlas);
+            EditorUtility.SetDirty(material);
+            AssetDatabase.SaveAssets();
+            return true;
         }
 
         private static TMP_FontAsset LoadLiberationSans()

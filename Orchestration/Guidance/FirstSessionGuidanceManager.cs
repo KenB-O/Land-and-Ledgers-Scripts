@@ -216,13 +216,17 @@ namespace LandLedgers.FirstLedger
             firstSalesObserved |= firstWorkerHired && facts.FirstSalesObserved;
             moneyModelReviewed |= facts.ManagementOpen && facts.CurrentTab == ManagementPanelTab.Finances;
             acquisitionsOpened |= facts.ManagementOpen
-                && facts.CurrentTab == ManagementPanelTab.Acquisitions
-                && facts.CurrentAcquisitionSection == AcquisitionMarketSection.Land;
-            firstLandPurchased |= facts.OwnedLandCount > baselineOwnedLandCount;
-            returnedToProperties |= firstLandPurchased
+                && facts.CurrentTab == ManagementPanelTab.Acquisitions;
+            // This legacy progress field is retained for save compatibility. The
+            // first expansion is now a business formation, not an implicit land
+            // purchase; premises remain a separate follow-up when required.
+            firstLandPurchased |= facts.OwnedLandCount > baselineOwnedLandCount
+                || facts.OwnedBusinessCount > baselineOwnedBusinessCount;
+            returnedToProperties |= (firstLandPurchased || facts.OwnedBusinessCount > baselineOwnedBusinessCount)
                 && facts.ManagementOpen
                 && facts.CurrentTab == ManagementPanelTab.Properties;
-            firstBusinessShellBuilt |= firstLandPurchased && facts.StartableOwnedShellExists;
+            firstBusinessShellBuilt |= facts.StartableOwnedShellExists
+                || facts.OwnedBusinessCount > baselineOwnedBusinessCount;
             firstBusinessStarted |= firstBusinessShellBuilt
                 && (facts.PlayerOwnedExpansionBusinessExists || facts.OwnedBusinessCount > baselineOwnedBusinessCount);
 
@@ -303,7 +307,7 @@ namespace LandLedgers.FirstLedger
                     step,
                     "Hire your first store worker",
                     "The store needs staff before it can reliably turn inventory into sales.",
-                    "Use Prev Worker or Next Worker to choose a candidate, then click Hire."),
+                    "Open Labor / Staffing, review the real candidate list, then hire the person who fits the business."),
                 FirstSessionObjectiveStep.ObserveFirstSales => new FirstSessionObjectiveState(
                     step,
                     "Observe first store sales",
@@ -317,7 +321,7 @@ namespace LandLedgers.FirstLedger
                 FirstSessionObjectiveStep.OpenAcquisitions => new FirstSessionObjectiveState(
                     step,
                     "Open Acquisitions",
-                    "Liquid Cash / Owner Cash funds expansion, and serious land deals begin at the acquisitions desk before work returns to Properties.",
+                    "Liquid Cash / Owner Cash funds expansion; acquisition leads and business formation are separate decisions from premises.",
                     "Open the Acquisitions tab."),
                 FirstSessionObjectiveStep.CompleteFirstLandPurchase => new FirstSessionObjectiveState(
                     step,
@@ -326,19 +330,19 @@ namespace LandLedgers.FirstLedger
                     "Open Businesses, choose Create Business, then select the business type that fits your plan."),
                 FirstSessionObjectiveStep.ReturnToProperties => new FirstSessionObjectiveState(
                     step,
-                    "Return to the owned parcel",
-                    "Once the deed closes, construction moves back to Properties; the market is the deal desk, not the build desk.",
-                    "Open Properties and select the new Plot row."),
+                    "Configure the formed business",
+                    "The business now exists as its own owned organization. Open it from Businesses and add premises, assets, labor, and inputs only where its operation requires them.",
+                    "Open Businesses and select the newly formed business."),
                 FirstSessionObjectiveStep.BuildFirstBusinessShell => new FirstSessionObjectiveState(
                     step,
-                    "Build a business-ready building",
-                    "The shell turns land into an improved site and spends Liquid Cash / Owner Cash plus local lumber, hardware, and labor.",
-                    "Select the owned plot, set it to Business, choose a business and shell, then click Build Shell."),
+                    "Establish operating capability",
+                    "A formed business becomes operational only after it has the premises, assets, labor, route capability, and inputs its business type actually requires.",
+                    "Open the business management sections and complete the requirements shown for this operation."),
                 FirstSessionObjectiveStep.StartFirstBusiness => new FirstSessionObjectiveState(
                     step,
-                    "Start the business",
-                    "Opening spends fit-out cash and inputs, then turns the vacant building into an operating business you own.",
-                    "Select the vacant building shell, choose a business, then click Start Business."),
+                    "Operate the business",
+                    "Ownership and formation are not the same as operation. Let real capability and commerce move this business into operating status.",
+                    "Use the business management panel to fund, staff, supply, and operate the business."),
                 _ => new FirstSessionObjectiveState(
                     FirstSessionObjectiveStep.Complete,
                     "First expansion loop complete",

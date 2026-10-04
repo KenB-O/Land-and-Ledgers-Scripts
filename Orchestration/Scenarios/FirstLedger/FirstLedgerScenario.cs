@@ -5,7 +5,7 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
     /// <summary>
     /// BIZ-6: the "First Ledger" scenario definition — the first real scenario built
     /// on the DEV-1 infrastructure. A money-goals progression from Kennedy's
-    /// playtesting: buy businesses, hire hands, build owner equity.
+    /// playtesting: form businesses, hire hands, build owner equity.
     ///
     /// Canon requirements honored:
     /// - Opening narration (Canon Part I §1.1).
@@ -20,7 +20,7 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
 
         public const string OpeningNarration =
             "1870. You step off the stage with your household, a stake of cash, and a " +
-            "ledger with nothing in it yet. The town needs merchants. Buy your first " +
+            "ledger with nothing in it yet. The town needs merchants. Form your first " +
             "business, hire your first hand, and build $15,000 of owner equity — " +
             "honestly, one entry at a time.";
 
@@ -42,8 +42,8 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
             return new List<ScenarioGoal>
             {
                 new ScenarioGoal("acquire-first-business",
-                    "Acquire your first business",
-                    "Own 1 business"),
+                    "Form your first business",
+                    "Own 1 business organization"),
                 new ScenarioGoal("hire-first-employee",
                     "Hire your first employee",
                     "1 active employee"),
@@ -52,7 +52,7 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
                     "$5,000 (owner equity, not cash-in-business — Canon §11.4)"),
                 new ScenarioGoal("own-two-businesses",
                     "Own two businesses",
-                    "Own 2 businesses"),
+                    "Own 2 business organizations"),
                 new ScenarioGoal("three-employees",
                     "Employ 3 people across your businesses",
                     "3 active employees"),
@@ -61,7 +61,7 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
                     "$10,000 (owner equity — Canon §11.4)"),
                 new ScenarioGoal("own-three-businesses",
                     "Own three businesses",
-                    "Own 3 businesses"),
+                    "Own 3 business organizations"),
                 new ScenarioGoal("equity-15000",
                     "Reach $15,000 owner equity",
                     "$15,000 owner equity — scenario complete"),
@@ -73,19 +73,19 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
             return new List<ScenarioObjective>
             {
                 new ScenarioObjective("choose-first-business",
-                    "Choose which business to buy first — the general store is the natural start.",
+                    "Choose which business to form first — the general store is the natural start.",
                     "acquire-first-business"),
                 new ScenarioObjective("complete-purchase",
-                    "Complete the acquisition (seller meeting, terms, handover).",
+                    "Complete formation, then configure the business for real operation.",
                     "acquire-first-business"),
                 new ScenarioObjective("offer-employment",
                     "Offer a wage to a worker through the employment relationship.",
                     "hire-first-employee"),
                 new ScenarioObjective("second-acquisition",
-                    "Acquire a second business — freight or butcher pair well with the store.",
+                    "Form or acquire a second business — freight or farm pair well with the store.",
                     "own-two-businesses"),
                 new ScenarioObjective("third-acquisition",
-                    "Acquire a third business to complete the set.",
+                    "Form or acquire a third business to complete the set.",
                     "own-three-businesses"),
             };
         }

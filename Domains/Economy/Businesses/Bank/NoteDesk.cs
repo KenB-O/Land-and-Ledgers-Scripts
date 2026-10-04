@@ -342,8 +342,8 @@ namespace LandLedgers.Economy.Bank
                 return "NoteDesk.DiscountNote: the price must be positive.";
             if (priceCents > note.PrincipalCents)
                 return $"NoteDesk.DiscountNote: {priceCents}c for {note.PrincipalCents}c face is a premium, not a discount — refused.";
-            foreach (DiscountedPaper paper in discountedPaper)
-                if (!paper.Collected && paper.InstrumentId.Equals(instrumentId))
+            foreach (DiscountedPaper existingPaper in discountedPaper)
+                if (!existingPaper.Collected && existingPaper.InstrumentId.Equals(instrumentId))
                     return $"NoteDesk.DiscountNote: note '{instrumentId}' is already on the bank's books.";
 
             string refused = bank.Ledger.DisburseLoan(priceCents, $"discount-{instrumentId}", diagnostics);

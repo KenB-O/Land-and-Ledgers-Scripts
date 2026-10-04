@@ -89,7 +89,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(70000, sheet.TotalAssetsCents(), "50000c cash + 20000c loan asset.");
             Assert.AreEqual(20000, sheet.TotalLiabilitiesCents(), "20000c notes outstanding.");
             Assert.AreEqual(50000, sheet.TotalEquityCents());
-            Assert.AreEqual(0, sheet.UndistributedProfitsCents(), "No profit yet — notes issued at face against a face asset.");
+            Assert.AreEqual(0, sheet.UndistributedProfitsCents, "No profit yet — notes issued at face against a face asset.");
             Assert.IsTrue(sheet.Balances(), "Canon §18.15: the sheet must balance.");
         }
 
@@ -108,7 +108,7 @@ namespace LandLedgers.EditorTests.Economy
 
             BankBalanceSheet sheet = book.BuildBalanceSheet();
             Assert.IsTrue(sheet.Balances());
-            Assert.AreEqual(1000, sheet.UndistributedProfitsCents(),
+            Assert.AreEqual(1000, sheet.UndistributedProfitsCents,
                 "The 1000c discount spread is the only real profit — derived, never asserted.");
 
             Assert.IsNull(book.TransferToSurplus(400, diag));
@@ -134,7 +134,7 @@ namespace LandLedgers.EditorTests.Economy
 
             BankBalanceSheet sheet = book.BuildBalanceSheet();
             Assert.IsTrue(sheet.Balances());
-            Assert.AreEqual(-20000, sheet.UndistributedProfitsCents(),
+            Assert.AreEqual(-20000, sheet.UndistributedProfitsCents,
                 "The 20000c charge-off is a real loss — equity is poorer, nothing was hidden.");
             Assert.AreEqual(30000, sheet.TotalEquityCents());
         }
@@ -227,7 +227,7 @@ namespace LandLedgers.EditorTests.Economy
                 "The paper converted to a receivable against the ENDORSER at the called amount.");
             BankBalanceSheet sheet = book.BuildBalanceSheet();
             Assert.IsTrue(sheet.Balances());
-            Assert.AreEqual(1000, sheet.UndistributedProfitsCents(),
+            Assert.AreEqual(1000, sheet.UndistributedProfitsCents,
                 "Bought at 9000c, endorser answers 10000c — the economics of recourse, derived.");
         }
 
@@ -276,7 +276,7 @@ namespace LandLedgers.EditorTests.Economy
 
             BankBalanceSheet sheet = book.BuildBalanceSheet();
             Assert.IsTrue(sheet.Balances());
-            Assert.AreEqual(50, sheet.UndistributedProfitsCents(), "The draft fee is the only new equity.");
+            Assert.AreEqual(50, sheet.UndistributedProfitsCents, "The draft fee is the only new equity.");
         }
 
         [Test]
@@ -312,7 +312,7 @@ namespace LandLedgers.EditorTests.Economy
 
             BankBalanceSheet sheet = book.BuildBalanceSheet();
             Assert.IsTrue(sheet.Balances());
-            Assert.AreEqual(60, sheet.UndistributedProfitsCents(), "The collection fee is real income — derived.");
+            Assert.AreEqual(60, sheet.UndistributedProfitsCents, "The collection fee is real income — derived.");
         }
 
         [Test]
@@ -351,7 +351,7 @@ namespace LandLedgers.EditorTests.Economy
 
             BankBalanceSheet sheet = book.BuildBalanceSheet();
             Assert.IsTrue(sheet.Balances());
-            Assert.AreEqual(100, sheet.UndistributedProfitsCents(), "The collection fee, derived.");
+            Assert.AreEqual(100, sheet.UndistributedProfitsCents, "The collection fee, derived.");
             Assert.AreEqual(50100, sheet.TotalAssetsCents(), "40000c ledger cash + 10100c outside balance.");
         }
 

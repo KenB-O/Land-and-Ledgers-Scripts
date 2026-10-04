@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using UnityEngine;
 

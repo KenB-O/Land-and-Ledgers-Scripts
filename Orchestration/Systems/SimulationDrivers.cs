@@ -4,6 +4,7 @@ using LandLedgers.Economy;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Population;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Skills;

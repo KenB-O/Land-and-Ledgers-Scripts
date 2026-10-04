@@ -8,6 +8,7 @@ using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;

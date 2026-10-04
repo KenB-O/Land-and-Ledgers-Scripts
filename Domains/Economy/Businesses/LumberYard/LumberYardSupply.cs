@@ -99,7 +99,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     AcquiredDayIndex = dayIndex,
                     SourceKind = LumberYardLumberSourceKind.Bootstrap,
                     IsBootstrapEndowment = true,
-                    SupplierNote = BootstrapSupplierNote,
+                    SellerNote = BootstrapSupplierNote,
                 }, diag);
                 if (refusal != null)
                 {

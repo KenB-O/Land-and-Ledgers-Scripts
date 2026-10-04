@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Farming.Crops;
-using LandLedgers.Primitives;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Tasks;
 using UnityEngine;
 

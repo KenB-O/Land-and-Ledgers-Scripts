@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
 
 namespace LandLedgers.Economy.Businesses.Barber

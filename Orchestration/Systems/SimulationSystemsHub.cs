@@ -28,7 +28,6 @@ using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Businesses.Tailor;
 using LandLedgers.Economy.Farming.Crops;
 using LandLedgers.Economy.Farming.Dairy;
-using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.FirstLedger;
@@ -325,9 +324,9 @@ namespace LandLedgers.Orchestration.Systems
             // Mine + mill catalogs.
             MineAssayTaskCatalog.Register(tasks, diagnostics);
             MineHoistingTaskCatalog.Register(tasks, diagnostics);
-            MineLaborTaskCatalog.Register(tasks, diagnostics);
+            MineLaborRegister.MineLaborTaskCatalog.Register(tasks, diagnostics);
             MineShaftTaskCatalog.Register(tasks, diagnostics);
-            GrainMillStoneState.RegisterTaskDefinitions(tasks, diagnostics);
+            GrainMillMaintenanceTasks.RegisterTaskDefinitions(tasks, diagnostics);
             SawmillMaintenanceTasks.RegisterTaskDefinitions(tasks, diagnostics);
             LoggingTaskDefinitions.RegisterTaskDefinitions(tasks, skills, diagnostics);
 

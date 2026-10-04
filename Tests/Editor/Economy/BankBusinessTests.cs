@@ -41,7 +41,7 @@ namespace LandLedgers.EditorTests.Economy
             };
         }
 
-        private static BankRuntime OpenedBank(int capitalCents = 50000)
+        private BankRuntime OpenedBank(int capitalCents = 50000)
         {
             var bank = NewBank();
             Assert.IsNull(bank.EstablishVault("iron safe", false, true, diag));

@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.Restaurant;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using NUnit.Framework;
 

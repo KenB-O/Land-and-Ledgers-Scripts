@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.Hotel;
+using LandLedgers.Economy.Businesses.Restaurant;
 using LandLedgers.Population;
 using LandLedgers.World.Journeys;
 using NUnit.Framework;

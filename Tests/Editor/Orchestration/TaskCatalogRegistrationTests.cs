@@ -75,7 +75,7 @@ namespace LandLedgers.EditorTests.Orchestration
         {
             TaskAuthority tasks = RegisteredAuthority();
 
-            Assert.IsNotNull(tasks.GetDefinition(LoggingTaskDefinitions.SkidLogs), "skid logs");
+            Assert.IsNotNull(tasks.GetDefinition(LoggingTaskIds.SkidLogs), "skid logs");
             Assert.IsNotNull(tasks.GetDefinition(PostalService.SortMailTaskId), "sort mail");
             Assert.IsNotNull(tasks.GetDefinition(PostalService.DeliverLocalMailTaskId), "deliver mail");
         }

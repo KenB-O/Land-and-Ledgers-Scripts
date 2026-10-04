@@ -54,7 +54,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsFalse(string.IsNullOrWhiteSpace(result.RoomNumber));
             Assert.AreEqual(0, result.BedIndex);
 
-            Assert.IsTrue(hotel.GuestRegister.TryGetNightlyPlacement(501, out HotelNightlyPlacement placement));
+            Assert.IsTrue(hotel.TryGetNightlyPlacement(501, out HotelNightlyPlacement placement));
             Assert.AreEqual(BoardingNightlyState.HotelRoom, placement.NightlyState);
             Assert.AreEqual(HotelStayKind.Nightly, placement.StayKind);
         }
@@ -94,7 +94,7 @@ namespace LandLedgers.Editor.Economy
                 hotel, Arrival(702, 1, HotelRoomClass.SingleRoom), diag);
 
             Assert.AreEqual(HotelTravelerDemandOutcome.CheckedIn, result.Outcome);
-            Assert.IsTrue(hotel.GuestRegister.TryGetNightlyPlacement(702, out HotelNightlyPlacement placement));
+            Assert.IsTrue(hotel.TryGetNightlyPlacement(702, out HotelNightlyPlacement placement));
             Assert.AreEqual(HotelRoomClass.DoubleRoom, placement.RoomClass, "fell back to the open double");
             Assert.IsTrue(diag.Exists(d => d.Contains("class fallback")), "the class change is never silent");
         }

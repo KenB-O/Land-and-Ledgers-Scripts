@@ -1,6 +1,6 @@
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.Lawyer;
-using LandLedgers.Economy.Core;
 using NUnit.Framework;
 
 namespace LandLedgers.EditorTests.Economy

@@ -55,7 +55,7 @@ namespace LandLedgers.Economy.Freight
         }
 
         internal void SetStatus(FreightWagonStatus value) => status = value;
-        internal void Damage(float amount01) => condition01 = Mathf.Clamp01(condition01 - Mathf.Abs(amount01));
+        public void Damage(float amount01) => condition01 = Mathf.Clamp01(condition01 - Mathf.Abs(amount01));
         internal void Repair(float amount01) => condition01 = Mathf.Clamp01(condition01 + Mathf.Abs(amount01));
     }
 

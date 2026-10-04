@@ -170,6 +170,12 @@ namespace LandLedgers.Economy.Businesses.Tailor
 
             // FIFO by acquisition day. D1C: grade preference orders lots —
             // preferred-grade lots first (FIFO within), then the rest (FIFO).
+            var ordered = new List<TailorClothLot>();
+            foreach (var lot in lots)
+            {
+                if (string.Equals(lot.ClothName, clothName, StringComparison.OrdinalIgnoreCase))
+                    ordered.Add(lot);
+            }
             bool preferGrade = !string.IsNullOrWhiteSpace(preferredGradeLabel);
             ordered.Sort((a, b) =>
             {

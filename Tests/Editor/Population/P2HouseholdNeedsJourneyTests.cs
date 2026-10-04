@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.Restaurant;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 
 namespace LandLedgers.Economy.Businesses.BoardingHouse
 {

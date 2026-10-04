@@ -239,6 +239,7 @@ namespace LandLedgers.Economy.Market.PriceHistory
             row.QuoteSide = latest.QuoteSide;
             row.UnitLabel = latest.UnitLabel ?? string.Empty;
             row.SourceTransactionReference = latest.SourceTransactionReference ?? string.Empty;
+            row.SettlementName = latest.SettlementName ?? string.Empty;
             if (earlier != null && earlier.ObservationId != latest.ObservationId)
             {
                 row.EarlierPriceCents = earlier.UnitPriceCents;

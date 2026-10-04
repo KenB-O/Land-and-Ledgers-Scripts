@@ -34,6 +34,13 @@ namespace LandLedgers.Economy.Businesses.Newspaper
         public int PricePerCopyCents;
         public bool Stale; // older than a week: wrapping paper, not news
 
+        /// <summary>
+        /// D4J: content components assembled into this dated edition
+        /// (e.g. a market-report column). Part of the dated lot — a stale
+        /// edition's components are wrapping paper along with it.
+        /// </summary>
+        public List<NewspaperEditionComponent> Components = new List<NewspaperEditionComponent>();
+
         public NewspaperEdition() { }
     }
 
@@ -246,6 +253,40 @@ namespace LandLedgers.Economy.Businesses.Newspaper
 
             diag.Add($"NewspaperRuntime: edition #{edition.IssueNumber} published day {dayIndex} — {copies} copies.");
             return edition;
+        }
+
+        /// <summary>
+        /// D4J: attaches a content component (e.g. a market-report column) to
+        /// a published edition — the component goes through the same dated
+        /// edition assembly as everything else in the issue. The component
+        /// must be compiled as-of the edition's own publication day, so a
+        /// column can never carry a different day's prices than its edition.
+        /// Returns null on success, an error message on refusal.
+        /// </summary>
+        public string AttachEditionComponent(string editionId, NewspaperEditionComponent component, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (component == null)
+                return "NewspaperRuntime.AttachEditionComponent: no component to attach.";
+            if (component.Kind == NewspaperEditionComponentKind.Unspecified)
+                return "NewspaperRuntime.AttachEditionComponent: the component kind is required.";
+            if (string.IsNullOrWhiteSpace(component.ComponentId))
+                return "NewspaperRuntime.AttachEditionComponent: the component id is required.";
+            NewspaperEdition edition = null;
+            foreach (NewspaperEdition e in editions)
+                if (string.Equals(e.EditionId, editionId, StringComparison.Ordinal)) { edition = e; break; }
+            if (edition == null)
+                return $"NewspaperRuntime.AttachEditionComponent: no edition '{editionId}'.";
+            if (component.CompiledDayIndex != edition.PublicationDayIndex)
+                return $"NewspaperRuntime.AttachEditionComponent: component compiled for day {component.CompiledDayIndex} " +
+                    $"does not belong on edition #{edition.IssueNumber} published day {edition.PublicationDayIndex}.";
+            foreach (NewspaperEditionComponent existing in edition.Components)
+                if (string.Equals(existing.ComponentId, component.ComponentId, StringComparison.Ordinal))
+                    return $"NewspaperRuntime.AttachEditionComponent: component '{component.ComponentId}' " +
+                        $"is already on edition #{edition.IssueNumber}.";
+            edition.Components.Add(component);
+            diag.Add($"NewspaperRuntime: attached {component.Kind} '{component.Title}' to edition #{edition.IssueNumber}.");
+            return null;
         }
 
         /// <summary>

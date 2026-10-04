@@ -26,6 +26,13 @@ namespace LandLedgers.Economy.Market.PriceHistory
         public string CommodityKind = string.Empty;
         public int AsOfDayIndex;
 
+        /// <summary>
+        /// D4J: authored settlement name at record time (empty when the
+        /// observation carried none). Lets the market-report column print a
+        /// human town name without a second lookup.
+        /// </summary>
+        public string SettlementName = string.Empty;
+
         /// <summary>False when no history exists for (settlement, commodity).</summary>
         public bool HasData;
 

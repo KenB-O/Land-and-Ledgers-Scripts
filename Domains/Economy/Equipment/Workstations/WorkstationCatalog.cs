@@ -33,6 +33,25 @@ namespace LandLedgers.Economy.Equipment.Workstations
             return def;
         }
 
+        /// <summary>
+        /// W6a: WheelwrightStation. Canon Part V: Wheelwright / wagon maker —
+        /// wheel jig, workbench, woodworking hand tools, forge access for tire
+        /// bending/shrinking. Wheel-making and wagon repair happen here; the
+        /// shop building alone grants nothing (Tech X §3.5).
+        /// </summary>
+        public static WorkstationDefinition WheelwrightStation
+        {
+            get
+            {
+                var def = Build("wheelwright-station", "Wheelwright Station", "wheelwright-shop",
+                    "Tech X §3.5; Canon Part V: Wheelwright / wagon maker",
+                    new[] { "wheelwright-build", "wheelwright-repair-order" },
+                    ("wheel-jig", 1), ("workbench", 1), ("wheelwright-hand-tools", 1));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "wheelwrighting"));
+                return def;
+            }
+        }
+
         /// <summary>Tech X §3.5: ForgeStation. EQP-2 migrates the EQU-2 flag to derived readiness.</summary>
         public static WorkstationDefinition ForgeStation
         {

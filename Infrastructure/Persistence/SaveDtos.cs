@@ -780,6 +780,15 @@ namespace LandLedgers.Persistence
 
         /// <summary>W8C: the crew roster.</summary>
         public MineLaborRegisterSaveDto laborRegister = new();
+
+        /// <summary>W8D: installed hoisting plants.</summary>
+        public MineHoistRegisterSaveDto hoistRegister = new();
+
+        /// <summary>W8D: timbering consumption records.</summary>
+        public MineTimberingLedgerSaveDto timberingLedger = new();
+
+        /// <summary>W8D: ore shipment orders to declared smelters.</summary>
+        public MineOreShipmentLedgerSaveDto shipmentLedger = new();
     }
 
     [Serializable]

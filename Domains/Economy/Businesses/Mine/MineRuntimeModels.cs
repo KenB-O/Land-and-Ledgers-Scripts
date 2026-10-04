@@ -1,6 +1,7 @@
 using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Persistence;
 using LandLedgers.World;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace LandLedgers.Economy
@@ -55,6 +56,18 @@ namespace LandLedgers.Economy
         [SerializeField]
         private MineLaborRegister laborRegister;
 
+        /// <summary>W8D: installed hoisting plants (real equipment with condition). Lazy-initialized for legacy saves.</summary>
+        [SerializeField]
+        private MineHoistRegister hoistRegister;
+
+        /// <summary>W8D: timbering consumption records (lumber demand link). Lazy-initialized for legacy saves.</summary>
+        [SerializeField]
+        private MineTimberingLedger timberingLedger;
+
+        /// <summary>W8D: ore shipment orders to declared smelters. Persisted; the shipment service operates on this list.</summary>
+        [SerializeField]
+        private List<MineOreShipmentOrder> shipmentOrders = new List<MineOreShipmentOrder>();
+
         public MineralResourceKind MineralKind => mineralKind;
         public float DepositConfidence01 => Mathf.Clamp01(depositConfidence01);
         public MineDevelopmentStage DevelopmentStage => developmentStage;
@@ -96,6 +109,45 @@ namespace LandLedgers.Economy
                     laborRegister = new MineLaborRegister();
                 return laborRegister;
             }
+        }
+
+        /// <summary>W8D: installed hoisting plants, never null (lazy-initialized for legacy saves).</summary>
+        public MineHoistRegister HoistRegister
+        {
+            get
+            {
+                if (hoistRegister == null)
+                    hoistRegister = new MineHoistRegister();
+                return hoistRegister;
+            }
+        }
+
+        /// <summary>W8D: timbering consumption records, never null (lazy-initialized for legacy saves).</summary>
+        public MineTimberingLedger TimberingLedger
+        {
+            get
+            {
+                if (timberingLedger == null)
+                    timberingLedger = new MineTimberingLedger();
+                return timberingLedger;
+            }
+        }
+
+        /// <summary>W8D: the authoritative ore shipment order list (the shipment service operates on this).</summary>
+        public List<MineOreShipmentOrder> ShipmentOrders
+        {
+            get
+            {
+                if (shipmentOrders == null)
+                    shipmentOrders = new List<MineOreShipmentOrder>();
+                return shipmentOrders;
+            }
+        }
+
+        /// <summary>W8D: builds the shipment service around this runtime's order list.</summary>
+        public MineOreShipmentService CreateShipmentService()
+        {
+            return new MineOreShipmentService(ShipmentOrders);
         }
 
         public static MineRuntimeState CreateDefault(MineralResourceKind kind)
@@ -141,6 +193,10 @@ namespace LandLedgers.Economy
 
         public MineRuntimeSaveDto CaptureSaveDto()
         {
+            var shipmentLedger = new MineOreShipmentLedgerSaveDto();
+            foreach (MineOreShipmentOrder order in ShipmentOrders)
+                shipmentLedger.orders.Add(order.CaptureSaveDto());
+
             return new MineRuntimeSaveDto
             {
                 mineralKind = MineralKind,
@@ -155,6 +211,9 @@ namespace LandLedgers.Economy
                 shaftPlan = ShaftPlan.CaptureSaveDto(),
                 oreStock = OreStock.CaptureSaveDto(),
                 laborRegister = LaborRegister.CaptureSaveDto(),
+                hoistRegister = HoistRegister.CaptureSaveDto(),
+                timberingLedger = TimberingLedger.CaptureSaveDto(),
+                shipmentLedger = shipmentLedger,
             };
         }
 
@@ -181,6 +240,18 @@ namespace LandLedgers.Economy
             state.shaftPlan = MineShaftPlan.FromSaveDto(dto.shaftPlan);
             state.oreStock = MineOreStock.FromSaveDto(dto.oreStock);
             state.laborRegister = MineLaborRegister.FromSaveDto(dto.laborRegister);
+            state.hoistRegister = MineHoistRegister.FromSaveDto(dto.hoistRegister);
+            state.timberingLedger = MineTimberingLedger.FromSaveDto(dto.timberingLedger);
+            state.shipmentOrders = new List<MineOreShipmentOrder>();
+            if (dto.shipmentLedger != null)
+            {
+                foreach (MineOreShipmentOrderSaveDto orderDto in dto.shipmentLedger.orders)
+                {
+                    MineOreShipmentOrder order = MineOreShipmentOrder.FromSaveDto(orderDto);
+                    if (order != null)
+                        state.shipmentOrders.Add(order);
+                }
+            }
             return state;
         }
 

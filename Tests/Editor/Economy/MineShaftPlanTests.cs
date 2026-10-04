@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Tasks;
+using LandLedgers.World;
 using NUnit.Framework;
 
 namespace LandLedgers.Editor.Economy

@@ -19,12 +19,15 @@ by the `SimulationSystemsHub` (CLN-1).
 | Tick event | Driver action | Authority call |
 |---|---|---|
 | Awake (once) | Install skill-based durations | `TaskAuthority.SetDurationEstimator(new SkillTaskDurationEstimator(hub.Skills))` |
+| Awake (once) | Register all static task catalogs | `SimulationSystemsHub.RegisterTaskCatalogs(hub.Tasks, hub.Skills, hub.Postal, diag)` — P1: no production caller ever registered any catalog, so the first `CreateTask` threw "Unknown TaskDefinitionId" |
 | Awake (once) | Hand authorities to scenarios | `ScenarioDirector.TaskAuthority = hub.Tasks` |
 | Awake (once) | Hook weekly profit posts | `SharedBusinessRuntimeManager.PreWeeklyResetCallback = PostWeeklyProfitToValuation` |
+| Awake (once) | Wire employment authority | `SharedBusinessRuntimeManager.EmploymentRegistry = hub.Employments` — P1: payroll now pays through `EmploymentRelationship` records (agreed wages) instead of the legacy slot-template path |
 | `DayChanged` | Roll daily work budgets | `WorkTimeBudgetStore.EnsureDay(absoluteDayIndex)` |
 | `DayChanged` | Age perishable meat | `ButcherRuntime.AgeLotsToDay(dayIndex)` per hub runtime |
 | `DayChanged` | Accumulate owner work minutes | Player's `MinutesWorked` → weekly accumulator (CLN-4) |
 | `DayChanged` | Execute NPC daily needs | `DailyNeedsService.ExecuteDay(population, planner, executor, dayIndex, diag, hub.WorkTimeBudgets)` (NX-2C drive-by — needs PopulationManager in scene + `Journeys` assigned) |
+| `WeekChanged` | Sync liabilities to valuation | `hub.Liabilities.SyncAllToValuation(null)` — P1: the SWN-3 liability ledger now feeds the BIZ-5 read model weekly |
 | `WeekChanged` | Post owner labor | `Valuation.RecordOwnerLabor` per player-owned business (CLN-4) |
 | `ShortTick` | Advance player travel | `PlayerDirector.RecordMovementProgress(wholeMinutes, hub.WorkTimeBudgets)` |
 | `ShortTick` | Scenario goals (CLN-3) | `OnScenarioTick?.Invoke()` when a scenario is active |
@@ -41,9 +44,9 @@ valuation read model from real settlement paths — event-fed, never per-frame:
   the real work-time budgets) and posts weekly hours per player-owned business via
   `Valuation.RecordOwnerLabor`. Replacement cost and draw default to 0 until the
   compensation paths provide them.
-- **Liabilities**: businesses carry no balance-sheet liability ledger yet, so there
-  is no settlement path to wire. `Valuation.RecordLiabilities` stays available for
-  when one exists — nothing is synthesized in the meantime.
+- **Liabilities**: the SWN-3 `BusinessLiabilityLedger` (hub-owned, save-persisted)
+  feeds the read model via `hub.Liabilities.SyncAllToValuation(null)` every
+  `WeekChanged` (P1) — real balances, re-synced weekly, never synthesized.
 
 ## Call sites that are NOT ticks (documented, not driven)
 

@@ -15,7 +15,7 @@ this form. (GHOST-DES-029: the player gets a general Create Business action.)
 
 | Control | Type | Binds to |
 |---|---|---|
-| Business type picker | Dropdown | `view.BusinessTypeOptions` → writes `form.SetBusinessType(...)`. All 19 `BusinessType` values must be present. |
+| Business type picker | Dropdown | `view.BusinessTypeOptions` → writes `form.SetBusinessType(...)`. All 28 `BusinessType` values must be present. |
 | Business name | Text field | `form.SetDisplayName(...)` |
 | Premises section | Radio/dropdown group | `form.Premises.SetMode(...)` — one of: No premises required / Use owned property / Lease property / Acquire property / Use existing compatible space / Mobile route |
 | Compatible space kind | Dropdown (visible when "Use existing compatible space") | `form.Premises.SetCompatibleSpaceKind(...)` — House room / Barn space / Yard area / Shared premises |

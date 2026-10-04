@@ -109,6 +109,12 @@ namespace LandLedgers.Orchestration.Systems
             if (sharedBusinessRuntime != null)
             {
                 sharedBusinessRuntime.PreWeeklyResetCallback = PostWeeklyProfitToValuation;
+
+                // P1: payroll reads the PKG-6 employment authority. The hub owns the
+                // registry (save-persisted); the manager wires it into every
+                // business runtime state so ResolveWeeklyPayroll pays agreed
+                // employment wages instead of the legacy slot-template path.
+                sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
             }
         }
 
@@ -158,6 +164,11 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return;
             }
+
+            // P1: SWN-3 liability ledger -> BIZ-5 valuation. Liabilities change
+            // during the week (loans drawn, payables accrued); re-sync weekly so
+            // the valuation read model reflects real balances, not boot-time ones.
+            hub.Liabilities.SyncAllToValuation(null);
 
             // CLN-4: owner labor — the player's accumulated weekly worked minutes feed
             // the valuation for each player-owned business (real work-time path).

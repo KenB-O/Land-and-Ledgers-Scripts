@@ -332,7 +332,7 @@ namespace LandLedgers.Economy.Creation
 
     /// <summary>
     /// BIZ-1: the player's/business-founder's intent (Canon §3.1). An intent is a request;
-    /// the authority validates and executes it. Any of the 19 BusinessTypes may be created.
+    /// the authority validates and executes it. Any of the 28 BusinessTypes may be created.
     /// </summary>
     [Serializable]
     public sealed class CreateBusinessIntent
@@ -516,7 +516,7 @@ namespace LandLedgers.Economy.Creation
             }
 
             // Step 4: profile (authored data when present; code fallback otherwise so any
-            // of the 19 BusinessTypes is creatable even without an authored profile).
+            // of the 28 BusinessTypes is creatable even without an authored profile).
             if (!context.TryGetProfile(intent.BusinessType, out BusinessProfileDefinition profile)
                 || profile == null)
             {

@@ -549,6 +549,10 @@ namespace LandLedgers.Economy
         private BusinessReputationState businessReputation = new();
 
         [SerializeField]
+        [Tooltip("P1: explicit sale terms (Canon XXVII Part IX §9.1) — recorded when the business is sold, so the cash/inventory/employee inclusion is never silent.")]
+        private BusinessSaleTerms saleTerms = new BusinessSaleTerms();
+
+        [SerializeField]
         private MineRuntimeState mineState;
 
         [SerializeField]
@@ -561,6 +565,8 @@ namespace LandLedgers.Economy
         public int AssignedBuildingId => assignedBuildingId;
         public string RuntimeDisplayName => string.IsNullOrWhiteSpace(runtimeDisplayName) ? BusinessRuntimeNaming.Build(owner, businessType) : runtimeDisplayName;
         public BusinessOwnerIdentity Owner => owner;
+        /// <summary>P1: the explicit sale terms (Canon XXVII Part IX §9.1), if the business was sold.</summary>
+        public BusinessSaleTerms SaleTerms => saleTerms ??= new BusinessSaleTerms();
         public BusinessControlState ControlState => ManagerPolicyEffects.SanitizeControlState(controlState, owner);
         public ManagerPolicyPreset ManagerPolicy => ManagerPolicyEffects.SanitizePolicy(managerPolicy);
         public string ControlStateDisplayName => ManagerPolicyEffects.GetDisplayName(ControlState);
@@ -816,6 +822,16 @@ namespace LandLedgers.Economy
             runtimeDisplayName = BusinessRuntimeNaming.Build(owner, businessType);
         }
 
+        /// <summary>
+        /// P1: records the explicit sale terms (Canon XXVII Part IX §9.1) — what
+        /// cash, inventory and employee offers the sale included. Called by the
+        /// transfer path; the terms are never synthesized elsewhere.
+        /// </summary>
+        public void RecordSaleTerms(BusinessSaleTerms terms)
+        {
+            saleTerms = terms ?? new BusinessSaleTerms();
+        }
+
         public void TransferToPlayerOwnership()
         {
             SetOwner(BusinessOwnerIdentity.Player());
@@ -1044,7 +1060,8 @@ namespace LandLedgers.Economy
                 cashTransferRule = CashTransferRule.CaptureSaveDto(),
                 businessReputation = CaptureBusinessReputationSaveDto(BusinessReputation),
                 runtime = runtimeState != null ? runtimeState.CaptureSaveDto() : null,
-                mine = mineState != null ? mineState.CaptureSaveDto() : null
+                mine = mineState != null ? mineState.CaptureSaveDto() : null,
+                saleTerms = (saleTerms ?? new BusinessSaleTerms()).CaptureSaveDto()
             };
         }
 
@@ -1078,7 +1095,8 @@ namespace LandLedgers.Economy
                 runtimeState = BusinessRuntimeState.FromSaveDto(dto.runtime, dto.businessType),
                 mineState = dto.businessType == BusinessType.Mine
                     ? MineRuntimeState.FromSaveDto(dto.mine) ?? MineRuntimeState.CreateDefault(MineralResourceKind.Coal)
-                    : null
+                    : null,
+                saleTerms = BusinessSaleTerms.FromSaveDto(dto.saleTerms)
             };
 
             if (state.businessType == BusinessType.Sawmill)

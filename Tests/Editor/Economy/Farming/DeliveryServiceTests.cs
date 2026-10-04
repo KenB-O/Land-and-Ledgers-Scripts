@@ -212,7 +212,7 @@ namespace LandLedgers.EditorTests.Economy.Farming
             Assert.IsNotNull(job);
 
             var authority = new TaskAuthority();
-            new FreightCompanyRuntime("x").RegisterTaskDefinitions(authority);
+            FreightCompanyRuntime.RegisterTaskDefinitions(authority);
             DeliveryService.EnqueueHandlingTasks(authority, job, EntityId.For(EntityKind.Person, 9), 100);
 
             // Loading + unloading tasks exist (TTS-5 math); exact count via definitions present.

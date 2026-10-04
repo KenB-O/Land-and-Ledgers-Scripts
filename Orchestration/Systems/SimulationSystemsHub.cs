@@ -13,7 +13,24 @@ using LandLedgers.Economy.Postal;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Economy.Businesses.Bakery;
+using LandLedgers.Economy.Businesses.Barber;
+using LandLedgers.Economy.Businesses.Doctor;
+using LandLedgers.Economy.Businesses.GrainMill;
+using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.Mine;
+using LandLedgers.Economy.Businesses.Newspaper;
+using LandLedgers.Economy.Businesses.Restaurant;
+using LandLedgers.Economy.Businesses.Sawmill;
+using LandLedgers.Economy.Businesses.Tailor;
+using LandLedgers.Economy.Farming.Crops;
+using LandLedgers.Economy.Farming.Dairy;
+using LandLedgers.Economy.Farming.Integration;
+using LandLedgers.Economy.Farming.Livestock;
+using LandLedgers.Economy.Farming.Timber;
+using LandLedgers.FirstLedger;
 using LandLedgers.ReadModels.Valuation;
+using LandLedgers.World.Journeys;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -156,6 +173,69 @@ namespace LandLedgers.Orchestration.Systems
             riskService ??= new AgriculturalRiskService();
             diseaseService ??= new LivestockDiseaseService();
             liabilityLedger.SyncAllToValuation(null);
+
+            // P1: boot-time task-definition registration. Every static task catalog
+            // registers its definitions here — before this pass, NO production caller
+            // ever registered any catalog, so the first CreateTask for freight,
+            // travel, farm, or shop work threw "Unknown TaskDefinitionId".
+            // Registration is idempotent (the authority rejects duplicates).
+            RegisterTaskCatalogs(taskAuthority, skillService, postalService, null);
+        }
+
+        /// <summary>
+        /// P1: registers every static task catalog with the hub's TaskAuthority.
+        /// Public + static so EditMode tests can verify coverage without a scene.
+        /// </summary>
+        public static void RegisterTaskCatalogs(
+            TaskAuthority tasks,
+            SkillService skills,
+            PostalService postal,
+            List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            if (tasks == null)
+            {
+                diagnostics.Add("RegisterTaskCatalogs: no TaskAuthority — task definitions not registered.");
+                return;
+            }
+
+            // Shop/service catalogs.
+            GeneralStoreTaskCatalog.RegisterAll(tasks);
+            BakeryBreadCatalog.RegisterAll(tasks);
+            BarberServiceCatalog.RegisterAll(tasks);
+            DoctorTreatmentCatalog.RegisterAll(tasks);
+            NewspaperTaskCatalog.RegisterAll(tasks);
+            RestaurantMealCatalog.RegisterAll(tasks);
+            TailorGarmentCatalog.RegisterAll(tasks);
+
+            // Mine + mill catalogs.
+            MineAssayTaskCatalog.Register(tasks, diagnostics);
+            MineHoistingTaskCatalog.Register(tasks, diagnostics);
+            MineLaborTaskCatalog.Register(tasks, diagnostics);
+            MineShaftTaskCatalog.Register(tasks, diagnostics);
+            GrainMillStoneState.RegisterTaskDefinitions(tasks, diagnostics);
+            SawmillMaintenanceTasks.RegisterTaskDefinitions(tasks, diagnostics);
+            LoggingTaskDefinitions.RegisterTaskDefinitions(tasks, skills, diagnostics);
+
+            // Farming chains.
+            CropChain.RegisterTaskDefinitions(tasks);
+            Miller.RegisterTaskDefinitions(tasks);
+            CheeseChain.RegisterTaskDefinitions(tasks);
+            CreameryLabor.RegisterTaskDefinitions(tasks);
+            DairyChain.RegisterTaskDefinitions(tasks);
+            FarmConstruction.RegisterTaskDefinitions(tasks);
+            FeedLoop.RegisterTaskDefinitions(tasks);
+            PoultryChain.RegisterTaskDefinitions(tasks);
+            PigSheepChain.RegisterTaskDefinitions(tasks);
+            TimberHarvest.RegisterTaskDefinitions(tasks);
+            Sawmill.RegisterTaskDefinitions(tasks);
+
+            // Travel + freight + post.
+            JourneyTravel.RegisterTaskDefinitions(tasks);
+            FreightCompanyRuntime.RegisterTaskDefinitions(tasks);
+            postal?.RegisterTaskDefinitions(tasks);
+
+            diagnostics.Add("RegisterTaskCatalogs: all static task catalogs registered (duplicates rejected).");
         }
 
         /// <summary>

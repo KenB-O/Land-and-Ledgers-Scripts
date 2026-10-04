@@ -69,8 +69,12 @@ namespace LandLedgers.Economy.Freight
             this.businessInstanceId = businessInstanceId ?? string.Empty;
         }
 
-        /// <summary>Registers the freight task definitions with a TTS-2 authority.</summary>
-        public void RegisterTaskDefinitions(TaskAuthority authority)
+        /// <summary>
+        /// P1: static so the simulation hub can register freight tasks at boot
+        /// (no instance required; duplicates are rejected by the authority).
+        /// Registers the freight task definitions with a TTS-2 authority.
+        /// </summary>
+        public static void RegisterTaskDefinitions(TaskAuthority authority)
         {
             if (authority == null)
             {

@@ -166,6 +166,40 @@ namespace LandLedgers.Economy
         /// profit (event-fed, never per-frame). Null by default.
         /// </summary>
         public Action<BusinessInstanceState> PreWeeklyResetCallback { get; set; }
+
+        /// <summary>
+        /// P1: the PKG-6 employment authority (Canon §6 / Tech X §4.1-4.3).
+        /// Assigned by bootstrap (SimulationDrivers sets this from the hub's
+        /// EmploymentRelationshipRegistry). When set, every business's
+        /// BusinessRuntimeState gets the registry wired in, so
+        /// ResolveWeeklyPayroll pays through employment records (agreed wages,
+        /// suspension on default) instead of the legacy slot-template path.
+        /// Null by default (legacy payroll behavior preserved).
+        /// </summary>
+        public EmploymentRelationshipRegistry EmploymentRegistry { get; set; }
+
+        /// <summary>
+        /// P1: wires the employment authority into every business runtime state
+        /// that does not already have one. Called on the weekly path and after
+        /// formation/restore so newly created businesses are covered too.
+        /// </summary>
+        public void WireEmploymentRegistryToBusinesses()
+        {
+            if (EmploymentRegistry == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business?.RuntimeState != null && business.RuntimeState.EmploymentRegistry == null)
+                {
+                    business.RuntimeState.EmploymentRegistry = EmploymentRegistry;
+                }
+            }
+        }
+
         public IReadOnlyList<LocalRecurringOrderRelationshipState> LocalOrderRelationships => localRecurringOrderManager.Relationships;
         public IReadOnlyList<BusinessTransferAgreementState> TransferAgreements => transferAgreements;
         public string LastWeeklyRecurringLocalOrderSummary => lastWeeklyRecurringLocalOrderSummary ?? string.Empty;
@@ -292,6 +326,7 @@ namespace LandLedgers.Economy
             lastWeeklyTransferAgreementSummary = string.IsNullOrWhiteSpace(savedTransferAgreementSummary)
                 ? "No owned transfer agreements resolved yet."
                 : savedTransferAgreementSummary;
+            WireEmploymentRegistryToBusinesses();
             status = $"Shared businesses restored. Total={businesses.Count}, CoreCreated={created}, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}.";
         }
 
@@ -339,6 +374,7 @@ namespace LandLedgers.Economy
                 }
 
                 int existingRelationshipRepairs = NormalizeRecurringRelationshipActives(GetCurrentWeekKey());
+                WireEmploymentRegistryToBusinesses();
                 status = $"Shared businesses ready. Total={businesses.Count}, CoreCreated={createdExisting}, StartupRepairs={existingStartupRepairs}, RelationshipRepairs={existingRelationshipRepairs}.";
                 return;
             }
@@ -382,6 +418,7 @@ namespace LandLedgers.Economy
             }
 
             int relationshipRepairs = NormalizeRecurringRelationshipActives(GetCurrentWeekKey());
+            WireEmploymentRegistryToBusinesses();
             status = $"Shared businesses initialized. Total={businesses.Count}, LaunchCreated={created}, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}.";
         }
 
@@ -395,55 +432,73 @@ namespace LandLedgers.Economy
             }
         }
 
+        /// <summary>
+        /// P1: every BusinessType whose businesses get the weekly settlement reset
+        /// and weekly payroll from <see cref="ResolveWeeklySharedOperations"/>.
+        /// GeneralStore is deliberately excluded — its payroll/settlement runs
+        /// through GeneralStoreRuntimeManager.ResolveWeeklyPayrollAndReorder.
+        /// The array is public so EditMode tests can assert full enum coverage
+        /// (BusinessType is append-only; a new type must be added here or it
+        /// silently gets no payroll/settlement).
+        /// </summary>
+        public static readonly BusinessType[] WeeklySettlementBusinessTypes =
+        {
+            BusinessType.Blacksmith,
+            BusinessType.Butcher,
+            BusinessType.Ranch,
+            BusinessType.CropFarm,
+            BusinessType.Doctor,
+            BusinessType.Sawmill,
+            BusinessType.LumberYard,
+            BusinessType.BoardingHouse,
+            BusinessType.LiveryFreight,
+            BusinessType.Builder,
+            BusinessType.FuelDealer,
+            BusinessType.GrainMill,
+            BusinessType.Bakery,
+            BusinessType.Tailor,
+            BusinessType.Saloon,
+            BusinessType.Barber,
+            BusinessType.Wheelwright,
+            BusinessType.Mine,
+            BusinessType.Tannery,
+            BusinessType.PostOffice,
+            BusinessType.Newspaper,
+            BusinessType.Restaurant,
+            BusinessType.Hotel,
+            BusinessType.Logging,
+            BusinessType.GrainElevator,
+            BusinessType.Bank,
+            BusinessType.Lawyer,
+        };
+
         public void ResolveWeeklySharedOperations()
         {
             InitializeIfNeeded(generalStoreRuntime != null ? generalStoreRuntime.CurrentBusiness : null);
             EnsureProfilesLoaded();
+            WireEmploymentRegistryToBusinesses();
             StringBuilder builder = new();
             builder.Append("Weekly shared operations: ");
             int operationCount = 0;
             int transferCount = 0;
             int cashTransferCount = 0;
 
-            ResetWeeklySettlementForType(BusinessType.CropFarm);
-            ResetWeeklySettlementForType(BusinessType.Ranch);
-            ResetWeeklySettlementForType(BusinessType.Butcher);
-            ResetWeeklySettlementForType(BusinessType.Blacksmith);
-            ResetWeeklySettlementForType(BusinessType.Doctor);
-            ResetWeeklySettlementForType(BusinessType.Sawmill);
-            ResetWeeklySettlementForType(BusinessType.LumberYard);
-            ResetWeeklySettlementForType(BusinessType.BoardingHouse);
-            ResetWeeklySettlementForType(BusinessType.LiveryFreight);
-            ResetWeeklySettlementForType(BusinessType.Builder);
-            ResetWeeklySettlementForType(BusinessType.FuelDealer);
-            ResetWeeklySettlementForType(BusinessType.GrainMill);
-            ResetWeeklySettlementForType(BusinessType.Bakery);
-            ResetWeeklySettlementForType(BusinessType.Tailor);
-            ResetWeeklySettlementForType(BusinessType.Saloon);
-            ResetWeeklySettlementForType(BusinessType.Barber);
-            ResetWeeklySettlementForType(BusinessType.Wheelwright);
-            ResetWeeklySettlementForType(BusinessType.Mine);
+            // P1: weekly settlement + payroll now cover every BusinessType except
+            // GeneralStore (its payroll/settlement runs through
+            // GeneralStoreRuntimeManager.ResolveWeeklyPayrollAndReorder). The
+            // newer types (Tannery..Lawyer) were silently skipped before — their
+            // workers were never paid and weekly nets never settled.
+            foreach (BusinessType settledType in WeeklySettlementBusinessTypes)
+            {
+                ResetWeeklySettlementForType(settledType);
+            }
 
             cashTransferCount += ResolveAutomaticBusinessCashTransfers(BusinessCashAutoTransferMode.LowerOnly, builder);
 
-            ResolvePayrollForType(BusinessType.CropFarm);
-            ResolvePayrollForType(BusinessType.Ranch);
-            ResolvePayrollForType(BusinessType.Butcher);
-            ResolvePayrollForType(BusinessType.Blacksmith);
-            ResolvePayrollForType(BusinessType.Doctor);
-            ResolvePayrollForType(BusinessType.Sawmill);
-            ResolvePayrollForType(BusinessType.LumberYard);
-            ResolvePayrollForType(BusinessType.BoardingHouse);
-            ResolvePayrollForType(BusinessType.LiveryFreight);
-            ResolvePayrollForType(BusinessType.Builder);
-            ResolvePayrollForType(BusinessType.FuelDealer);
-            ResolvePayrollForType(BusinessType.GrainMill);
-            ResolvePayrollForType(BusinessType.Bakery);
-            ResolvePayrollForType(BusinessType.Tailor);
-            ResolvePayrollForType(BusinessType.Saloon);
-            ResolvePayrollForType(BusinessType.Barber);
-            ResolvePayrollForType(BusinessType.Wheelwright);
-            ResolvePayrollForType(BusinessType.Mine);
+            foreach (BusinessType payrollType in WeeklySettlementBusinessTypes)
+            {
+                ResolvePayrollForType(payrollType);
+            }
 
             operationCount += ResolveArchetypeRoutedWeeklyOperations(builder);
 
@@ -2004,12 +2059,77 @@ namespace LandLedgers.Economy
 
             string receiver = string.IsNullOrWhiteSpace(receiverDisplayName) ? "Town" : receiverDisplayName.Trim();
             playerPortfolio?.RemoveDistributionCheckpoint(business.InstanceId);
+
+            // P1: explicit sale terms (Canon XXVII Part IX §9.1) — the sale states
+            // what cash, inventory and employee offers it includes. Nothing about
+            // the transfer is silent: cash on hand and shelf inventory transfer
+            // with the business as a going concern, stated here; the buyer offers
+            // every current worker continued employment at their agreed wage
+            // (§9.3 — workers remain independent persons; acceptance depth TBD).
+            BusinessSaleTerms terms = BuildSaleTerms(business, receiver);
+            business.RecordSaleTerms(terms);
+
             business.SetOwner(BusinessOwnerIdentity.Town(receiver));
             business.ResolveWeeklyBaselineThroughput();
             business.ResolveDailyBaselineService();
-            message = $"{business.RuntimeDisplayName} transferred to {receiver}.";
+            message = $"{business.RuntimeDisplayName} transferred to {receiver}. {terms.BuildSummary()}";
             status = message;
             return true;
+        }
+
+        /// <summary>
+        /// P1: builds the explicit sale terms from the business's actual state at
+        /// closing (Canon XXVII Part IX §9.1). Cash on hand and inventory transfer
+        /// with the business; the player may draw cash down through the normal
+        /// distribution machinery BEFORE selling — whatever remains is stated here.
+        /// </summary>
+        private BusinessSaleTerms BuildSaleTerms(BusinessInstanceState business, string buyerDisplayName)
+        {
+            string seller = business?.Owner != null ? business.Owner.DisplayName : "Unknown seller";
+            int includedCash = business?.RuntimeState != null ? business.RuntimeState.CurrentCashCents : 0;
+
+            var inventoryParts = new List<string>();
+            IReadOnlyList<CategoryStockState> stocks = business?.RuntimeState?.CategoryStock;
+            if (stocks != null)
+            {
+                foreach (CategoryStockState stock in stocks)
+                {
+                    if (stock != null && stock.CurrentStockUnits > 0)
+                    {
+                        inventoryParts.Add($"{stock.CurrentStockUnits} units of {stock.CategoryId}");
+                    }
+                }
+            }
+            string inventoryStatement = inventoryParts.Count > 0
+                ? $"included as-is: {string.Join(", ", inventoryParts)}"
+                : "no shelf inventory included";
+
+            var employeeParts = new List<string>();
+            IReadOnlyList<WorkerSlotState> slots = business?.RuntimeState?.WorkerSlots;
+            if (slots != null)
+            {
+                foreach (WorkerSlotState slot in slots)
+                {
+                    if (slot != null && slot.IsFilled)
+                    {
+                        employeeParts.Add(
+                            $"buyer offers {slot.AssignedWorkerDisplayName} continued employment " +
+                            $"as {slot.SlotDisplayName} at {slot.WeeklyWageCents}c/week");
+                    }
+                }
+            }
+            string employeeStatement = employeeParts.Count > 0
+                ? string.Join("; ", employeeParts)
+                : "no workers employed at closing";
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : -1;
+            return new BusinessSaleTerms(
+                seller,
+                buyerDisplayName,
+                includedCash,
+                inventoryStatement,
+                employeeStatement,
+                dayIndex);
         }
 
         public bool TryStartPlayerBusinessAtShell(BusinessType businessType, int buildingId, out BusinessInstanceState business, out string message)

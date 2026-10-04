@@ -632,7 +632,7 @@ namespace LandLedgers.Economy
 
         /// <summary>
         /// BIZ-1: code fallback profile for business types without an authored
-        /// ScriptableObject profile, so any of the 19 BusinessTypes is creatable
+        /// ScriptableObject profile, so any of the 28 BusinessTypes is creatable
         /// through the formation workflow (Canon §3.1).
         /// </summary>
         public static BusinessProfileDefinition CreateFallback(BusinessType type, string displayName)

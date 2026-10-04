@@ -738,6 +738,17 @@ namespace LandLedgers.Persistence
     }
 
     [Serializable]
+    public sealed class BusinessSaleTermsSaveDto
+    {
+        public string sellerDisplayName = string.Empty;
+        public string buyerDisplayName = string.Empty;
+        public int includedCashCents;
+        public string inventoryStatement = string.Empty;
+        public string employeeOfferStatement = string.Empty;
+        public int closingDayIndex = -1;
+    }
+
+    [Serializable]
     public sealed class BusinessInstanceSaveDto
     {
         public string instanceId = string.Empty;
@@ -757,6 +768,8 @@ namespace LandLedgers.Persistence
         public BusinessReputationSaveDto businessReputation = new();
         public BusinessRuntimeSaveDto runtime = new();
         public MineRuntimeSaveDto mine = new();
+        /// <summary>P1: explicit sale terms (Canon XXVII Part IX §9.1) — empty until the business is sold.</summary>
+        public BusinessSaleTermsSaveDto saleTerms = new();
     }
 
     [Serializable]

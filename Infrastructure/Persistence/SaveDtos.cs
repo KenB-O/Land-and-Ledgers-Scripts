@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Valuation;
 using LandLedgers.MVP;
@@ -770,6 +771,9 @@ namespace LandLedgers.Persistence
         public float remainingRichness01 = 0.8f;
         public float campPressure01;
         public string lastWeeklyOutputSummary = string.Empty;
+
+        /// <summary>W8A: the shaft plan (shafts as improvements, tracked levels, named veins).</summary>
+        public MineShaftPlanSaveDto shaftPlan = new();
     }
 
     [Serializable]

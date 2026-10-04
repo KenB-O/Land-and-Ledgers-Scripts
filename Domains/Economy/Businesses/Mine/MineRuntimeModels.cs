@@ -1,3 +1,4 @@
+using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Persistence;
 using LandLedgers.World;
 using UnityEngine;
@@ -42,6 +43,10 @@ namespace LandLedgers.Economy
         [SerializeField, TextArea(1, 3)]
         private string lastWeeklyOutputSummary = string.Empty;
 
+        /// <summary>W8A: the mine plan — shafts as property improvements, levels/drives as tracked workings, named veins. Lazy-initialized so older saves load with an empty plan.</summary>
+        [SerializeField]
+        private MineShaftPlan shaftPlan;
+
         public MineralResourceKind MineralKind => mineralKind;
         public float DepositConfidence01 => Mathf.Clamp01(depositConfidence01);
         public MineDevelopmentStage DevelopmentStage => developmentStage;
@@ -51,6 +56,17 @@ namespace LandLedgers.Economy
         public float RemainingRichness01 => Mathf.Clamp01(remainingRichness01);
         public float CampPressure01 => Mathf.Clamp01(campPressure01);
         public string LastWeeklyOutputSummary => string.IsNullOrWhiteSpace(lastWeeklyOutputSummary) ? "No mine output resolved yet." : lastWeeklyOutputSummary;
+
+        /// <summary>W8A: the mine plan, never null (lazy-initialized for legacy saves).</summary>
+        public MineShaftPlan ShaftPlan
+        {
+            get
+            {
+                if (shaftPlan == null)
+                    shaftPlan = new MineShaftPlan();
+                return shaftPlan;
+            }
+        }
 
         public static MineRuntimeState CreateDefault(MineralResourceKind kind)
         {
@@ -105,7 +121,8 @@ namespace LandLedgers.Economy
                 safetyRisk01 = SafetyRisk01,
                 remainingRichness01 = RemainingRichness01,
                 campPressure01 = CampPressure01,
-                lastWeeklyOutputSummary = LastWeeklyOutputSummary
+                lastWeeklyOutputSummary = LastWeeklyOutputSummary,
+                shaftPlan = ShaftPlan.CaptureSaveDto(),
             };
         }
 
@@ -129,6 +146,7 @@ namespace LandLedgers.Economy
             state.lastWeeklyOutputSummary = string.IsNullOrWhiteSpace(dto.lastWeeklyOutputSummary)
                 ? "No mine output resolved yet."
                 : dto.lastWeeklyOutputSummary;
+            state.shaftPlan = MineShaftPlan.FromSaveDto(dto.shaftPlan);
             return state;
         }
 

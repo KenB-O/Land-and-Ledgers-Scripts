@@ -78,6 +78,15 @@ namespace LandLedgers.Economy.Businesses.Tailor
         public int PressMinutes;
         public int AssessMinutes;
         public int MendMinutes;
+
+        /// <summary>
+        /// D1C: the caller's preferred cloth grade for this garment (see
+        /// TailorClothGrades). Empty = no preference; the reservation falls
+        /// back to plain FIFO. The catalog leaves this empty for every
+        /// garment — the canon defines no grade mapping, so none is invented
+        /// here; a shop sets its own suggested grades if it rates cloth.
+        /// </summary>
+        public string SuggestedClothGrade;
     }
 
     /// <summary>

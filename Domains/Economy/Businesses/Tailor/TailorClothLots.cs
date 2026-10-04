@@ -38,6 +38,16 @@ namespace LandLedgers.Economy.Businesses.Tailor
         /// </summary>
         public bool IsBootstrapEndowment;
 
+        /// <summary>
+        /// D1C: supplier-declared cloth grade (e.g. "utility", "fine") — see
+        /// TailorClothGrades. Recorded for provenance; the default cloth-grade
+        /// policy (Unrated) gives it no simulation effect. Empty = undeclared.
+        /// </summary>
+        public string GradeLabel = string.Empty;
+
+        /// <summary>D1C: supplier-declared fiber/weight note (free text, e.g. "coarse wool"). Provenance only.</summary>
+        public string FiberNote = string.Empty;
+
         public TailorClothLot() { }
 
         /// <summary>Human-readable upstream chain for ledgers and diagnostics.</summary>
@@ -72,6 +82,9 @@ namespace LandLedgers.Economy.Businesses.Tailor
         public string ClothName = string.Empty;
         public int UnitsTaken;
         public string ProvenanceChain = string.Empty;
+
+        /// <summary>D1C: the lot's supplier-declared grade label, carried for provenance (empty = undeclared).</summary>
+        public string GradeLabel = string.Empty;
 
         public TailorClothDispenseLine() { }
     }
@@ -121,10 +134,16 @@ namespace LandLedgers.Economy.Businesses.Tailor
         }
 
         /// <summary>
-        /// Dispenses units FIFO (oldest first). Returns null with a diagnostic
-        /// when the shelf cannot cover the request — no units are conjured.
+        /// Dispenses units FIFO (oldest first). D1C: when a non-empty
+        /// preferredGradeLabel is given, lots declaring that grade are
+        /// preferred first (FIFO within grade), then the remainder comes
+        /// FIFO from the other lots — the preference never conjures units,
+        /// it only orders which real lots give them up. Returns null with a
+        /// diagnostic when the shelf cannot cover the request — no units are
+        /// conjured.
         /// </summary>
-        public List<TailorClothDispenseLine> TryDispenseUnits(string clothName, int units, int dayIndex, List<string> diag)
+        public List<TailorClothDispenseLine> TryDispenseUnits(
+            string clothName, int units, int dayIndex, List<string> diag, string preferredGradeLabel = null)
         {
             diag = diag ?? diagnostics;
             var lines = new List<TailorClothDispenseLine>();
@@ -149,17 +168,20 @@ namespace LandLedgers.Economy.Businesses.Tailor
                 return null;
             }
 
-            // FIFO by acquisition day.
-            var ordered = new List<TailorClothLot>();
-            foreach (var lot in lots)
+            // FIFO by acquisition day. D1C: grade preference orders lots —
+            // preferred-grade lots first (FIFO within), then the rest (FIFO).
+            bool preferGrade = !string.IsNullOrWhiteSpace(preferredGradeLabel);
+            ordered.Sort((a, b) =>
             {
-                if (string.Equals(lot.ClothName, clothName, StringComparison.OrdinalIgnoreCase))
+                if (preferGrade)
                 {
-                    ordered.Add(lot);
+                    bool aPref = string.Equals(a.GradeLabel, preferredGradeLabel, StringComparison.OrdinalIgnoreCase);
+                    bool bPref = string.Equals(b.GradeLabel, preferredGradeLabel, StringComparison.OrdinalIgnoreCase);
+                    if (aPref != bPref) return aPref ? -1 : 1;
                 }
-            }
 
-            ordered.Sort((a, b) => a.AcquiredDayIndex.CompareTo(b.AcquiredDayIndex));
+                return a.AcquiredDayIndex.CompareTo(b.AcquiredDayIndex);
+            });
 
             int remaining = units;
             foreach (var lot in ordered)
@@ -174,6 +196,7 @@ namespace LandLedgers.Economy.Businesses.Tailor
                     ClothName = lot.ClothName,
                     UnitsTaken = take,
                     ProvenanceChain = lot.ProvenanceChain(),
+                    GradeLabel = lot.GradeLabel ?? string.Empty,
                 });
             }
 
@@ -345,7 +368,8 @@ namespace LandLedgers.Economy.Businesses.Tailor
             string originName,
             int dayIndex,
             EntityIdRegistry idRegistry,
-            List<string> diag)
+            List<string> diag,
+            string gradeLabel = null)
         {
             diag = diag ?? new List<string>();
             if (stock == null) return "TailorClothSupply.ReceiveImportArrival: no cloth stock.";
@@ -362,6 +386,7 @@ namespace LandLedgers.Economy.Businesses.Tailor
                 ImportOrderId = importOrderId,
                 OriginName = originName ?? string.Empty,
                 IsBootstrapEndowment = false,
+                GradeLabel = gradeLabel ?? string.Empty,
             }, diag);
         }
     }

@@ -58,6 +58,9 @@ namespace LandLedgers.Economy.Businesses.Tailor
         public bool FinalFittingRecorded;
         public string FinalFittingNotes = string.Empty;
 
+        /// <summary>D1C: how many times the customer failed to come in for a fitting. Data only — the Population domain owns customer behavior; the order stays parked.</summary>
+        public int MissedFittings;
+
         public List<string> StageLog = new List<string>();
 
         public TailorGarmentOrder() { }
@@ -129,6 +132,29 @@ namespace LandLedgers.Economy.Businesses.Tailor
         private TailorPieceRateSchedule pieceRates = new TailorPieceRateSchedule();
         private int orderSeq;
 
+        /// <summary>D1C: bespoke vs ready-made fork — default Disabled (W1C bespoke-only); caller opts into WorkwearBatches.</summary>
+        private TailorReadyMadeMode readyMadeMode = TailorReadyMadeMode.Disabled;
+
+        private TailorReadyMadePolicy readyMadePolicy = new TailorReadyMadePolicy();
+
+        /// <summary>D1C: cloth-grade policy — default Unrated (grades recorded for provenance only).</summary>
+        private TailorClothGradePolicy clothGradePolicy = new TailorClothGradePolicy();
+
+        private readonly List<TailorReadyMadeBatch> readyMadeBatches = new List<TailorReadyMadeBatch>();
+        private readonly List<TailorAlterationOrder> alterationOrders = new List<TailorAlterationOrder>();
+        private readonly List<TailorAlterationRecord> alterationDeliveries = new List<TailorAlterationRecord>();
+        private int alterationSeq;
+
+        /// <summary>
+        /// D1C: per-garment cloth-grade preferences (garment id → grade label).
+        /// The catalog leaves SuggestedClothGrade empty for every garment (the
+        /// canon defines no grade mapping), so this is the caller's knob: a
+        /// shop that rates cloth sets its own preferences here. Empty = no
+        /// preference, plain FIFO.
+        /// </summary>
+        private readonly Dictionary<string, string> garmentGradePreferences =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
         /// <summary>Per-day table claims: order id → table index, released on failed advances.</summary>
         private readonly Dictionary<string, int> pendingTableClaims = new Dictionary<string, int>();
 
@@ -140,6 +166,68 @@ namespace LandLedgers.Economy.Businesses.Tailor
         public IReadOnlyList<TailorGarmentOrder> Orders => orders;
         public IReadOnlyList<TailorDeliveryRecord> Deliveries => deliveries;
         public TailorPieceRateSchedule PieceRates => pieceRates;
+
+        /// <summary>D1C: ready-made batches sewn for the shelf this run. The caller feeds UnitsSewn into the business's "clothing" CategoryStockState.</summary>
+        public IReadOnlyList<TailorReadyMadeBatch> ReadyMadeBatches => readyMadeBatches;
+
+        /// <summary>D1C: open and closed alteration orders (customer-owned garments).</summary>
+        public IReadOnlyList<TailorAlterationOrder> AlterationOrders => alterationOrders;
+
+        public IReadOnlyList<TailorAlterationRecord> AlterationDeliveries => alterationDeliveries;
+
+        public TailorReadyMadeMode ReadyMadeMode => readyMadeMode;
+        public TailorReadyMadePolicy ReadyMadePolicy => readyMadePolicy;
+        public TailorClothGradePolicy ClothGradePolicy => clothGradePolicy;
+
+        public void SetReadyMadeMode(TailorReadyMadeMode mode, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            readyMadeMode = mode;
+            diag.Add($"TailorShopRuntime: ready-made mode → {mode} (D1C bespoke/ready-made fork — Disabled preserves W1C behavior).");
+        }
+
+        public void SetReadyMadePolicy(TailorReadyMadePolicy policy)
+        {
+            readyMadePolicy = policy ?? new TailorReadyMadePolicy();
+        }
+
+        public void SetClothGradePolicy(TailorClothGradePolicy policy)
+        {
+            clothGradePolicy = policy ?? new TailorClothGradePolicy();
+        }
+
+        /// <summary>
+        /// D1C: sets (or clears, with an empty grade) this shop's cloth-grade
+        /// preference for a garment. The reservation prefers matching lots,
+        /// FIFO otherwise — and the preference never conjures units.
+        /// </summary>
+        public void SetGarmentGradePreference(string garmentId, string gradeLabel, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (string.IsNullOrWhiteSpace(garmentId)) return;
+            if (string.IsNullOrWhiteSpace(gradeLabel))
+            {
+                garmentGradePreferences.Remove(garmentId);
+                diag.Add($"TailorShopRuntime: grade preference cleared for '{garmentId}' — reservation falls back to FIFO.");
+                return;
+            }
+
+            garmentGradePreferences[garmentId] = gradeLabel;
+            diag.Add($"TailorShopRuntime: grade preference for '{garmentId}' → '{gradeLabel}'.");
+        }
+
+        /// <summary>D1C: the effective grade preference for a garment (runtime override, else the catalog's suggested grade, else empty).</summary>
+        public string GetGarmentGradePreference(string garmentId, TailorGarmentSpec spec)
+        {
+            if (!string.IsNullOrWhiteSpace(garmentId)
+                && garmentGradePreferences.TryGetValue(garmentId, out string pref)
+                && !string.IsNullOrWhiteSpace(pref))
+            {
+                return pref;
+            }
+
+            return spec.SuggestedClothGrade ?? string.Empty;
+        }
 
         public TailorShopRuntime(string businessInstanceId)
         {
@@ -313,6 +401,151 @@ namespace LandLedgers.Economy.Businesses.Tailor
         }
 
         /// <summary>
+        /// D1C: places an alteration order for a customer-owned garment. The
+        /// shop holds no cloth for alterations — only notions are consumed.
+        /// Returns the order id, or a rejection string starting with
+        /// "TailorShopRuntime:".
+        /// </summary>
+        public string PlaceAlterationOrder(EntityId customerPersonId, string alterationId, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!customerPersonId.IsValid || customerPersonId.Kind != EntityKind.Person)
+                return "TailorShopRuntime: the customer must be a valid person — no anonymous or batch alteration orders.";
+            if (!TailorAlterationCatalog.IsKnownAlteration(alterationId))
+                return $"TailorShopRuntime: unknown alteration '{alterationId}' — only the catalogued alterations are offered.";
+
+            var order = new TailorAlterationOrder
+            {
+                OrderId = $"{businessInstanceId}-alt-{alterationSeq++}",
+                CustomerPersonId = customerPersonId,
+                AlterationId = alterationId,
+                OrderDayIndex = dayIndex,
+                Stage = TailorAlterationStage.Ordered,
+            };
+            order.StageLog.Add($"day {dayIndex}: alteration order placed ({alterationId})");
+            alterationOrders.Add(order);
+            diag.Add($"TailorShopRuntime: alteration order {order.OrderId} placed — {alterationId} for {customerPersonId} (day {dayIndex}).");
+            return order.OrderId;
+        }
+
+        /// <summary>
+        /// D1C: records that the customer came in for an alteration's pinning
+        /// fitting. The order cannot start bench work until this is called
+        /// (for alterations that need pinning). Returns a rejection string,
+        /// or null on success.
+        /// </summary>
+        public string RecordPinningFitting(string orderId, string pinningNotes, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            TailorAlterationOrder order = FindAlterationOrder(orderId);
+            if (order == null) return $"TailorShopRuntime: no alteration order '{orderId}' — fitting not recorded.";
+            if (!order.IsActive) return $"TailorShopRuntime: alteration order {orderId} is {order.Stage} — no fitting on a closed order.";
+            if (order.Stage != TailorAlterationStage.Ordered)
+                return $"TailorShopRuntime: alteration order {orderId} is at {order.Stage} — the pinning fitting happens before bench work.";
+            if (!TailorAlterationCatalog.GetSpec(order.AlterationId).NeedsPinningFitting)
+                return $"TailorShopRuntime: alteration order {orderId} needs no pinning fitting — it goes straight to the bench.";
+            if (order.PinningFittingRecorded)
+                return $"TailorShopRuntime: alteration order {orderId} already had its pinning fitting.";
+
+            order.PinningFittingRecorded = true;
+            order.PinningFittingNotes = pinningNotes ?? string.Empty;
+            order.StageLog.Add($"day {dayIndex}: pinning fitting held" +
+                (string.IsNullOrWhiteSpace(pinningNotes) ? "" : $" — notes: {pinningNotes}"));
+            diag.Add($"TailorShopRuntime: pinning fitting recorded for alteration order {orderId} (day {dayIndex}).");
+            return null;
+        }
+
+        /// <summary>
+        /// D1C: records a missed fitting — the customer did not come in.
+        /// Pure data: the order stays parked at its fitting stage. Customer
+        /// behavior (whether they ever come) belongs to the Population
+        /// domain; nothing here simulates a no-show.
+        /// </summary>
+        public string RecordMissedFitting(string orderId, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            TailorGarmentOrder garmentOrder = FindOrder(orderId);
+            if (garmentOrder != null)
+            {
+                if (!garmentOrder.IsActive)
+                    return $"TailorShopRuntime: order {orderId} is {garmentOrder.Stage} — no missed fitting on a closed order.";
+                garmentOrder.MissedFittings++;
+                garmentOrder.StageLog.Add($"day {dayIndex}: customer missed fitting (#{garmentOrder.MissedFittings}) — order stays parked");
+                diag.Add($"TailorShopRuntime: order {orderId} missed a fitting (#{garmentOrder.MissedFittings}, day {dayIndex}) — stays parked, never skipped.");
+                return null;
+            }
+
+            TailorAlterationOrder alterationOrder = FindAlterationOrder(orderId);
+            if (alterationOrder != null)
+            {
+                if (!alterationOrder.IsActive)
+                    return $"TailorShopRuntime: alteration order {orderId} is {alterationOrder.Stage} — no missed fitting on a closed order.";
+                alterationOrder.MissedFittings++;
+                alterationOrder.StageLog.Add($"day {dayIndex}: customer missed pinning fitting (#{alterationOrder.MissedFittings}) — order stays parked");
+                diag.Add($"TailorShopRuntime: alteration order {orderId} missed its pinning fitting (#{alterationOrder.MissedFittings}, day {dayIndex}) — stays parked, never skipped.");
+                return null;
+            }
+
+            return $"TailorShopRuntime: no order '{orderId}' — missed fitting not recorded.";
+        }
+
+        /// <summary>
+        /// D1C: cancels an open alteration order. Notions already dispensed
+        /// but not yet sewn return to the shelf as a fresh lot whose
+        /// provenance names the cancellation and the original chains — never
+        /// silently absorbed. Returns a rejection string, or null on success.
+        /// </summary>
+        public string CancelAlterationOrder(string orderId, int dayIndex, EntityIdRegistry idRegistry, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            TailorAlterationOrder order = FindAlterationOrder(orderId);
+            if (order == null) return $"TailorShopRuntime: no alteration order '{orderId}' — nothing cancelled.";
+            if (!order.IsActive) return $"TailorShopRuntime: alteration order {orderId} is already {order.Stage}.";
+
+            if (order.NotionsUsed.Count > 0)
+            {
+                if (idRegistry == null)
+                    return $"TailorShopRuntime: alteration order {orderId} holds notions in custody and there is no id registry — cancel refused rather than orphan the notions.";
+
+                int unitsBack = 0;
+                var chains = new List<string>();
+                foreach (var line in order.NotionsUsed)
+                {
+                    if (line == null) continue;
+                    unitsBack += Math.Max(0, line.UnitsTaken);
+                    if (!string.IsNullOrWhiteSpace(line.ProvenanceChain)) chains.Add(line.ProvenanceChain);
+                }
+
+                if (unitsBack > 0)
+                {
+                    string rejection = clothStock.ReceiveLot(new TailorClothLot
+                    {
+                        LotId = idRegistry.Allocate(EntityKind.Lot),
+                        ClothName = TailorGarmentCatalog.NotionsItemId,
+                        Units = unitsBack,
+                        AcquiredDayIndex = dayIndex,
+                        ImportOrderId = $"return-{orderId}",
+                        OriginName = "Returned to shelf from cancelled alteration order",
+                        SupplierNote = "Originally: " + string.Join(" | ", chains),
+                        IsBootstrapEndowment = false,
+                    }, diag);
+                    if (rejection != null)
+                    {
+                        diag.Add($"TailorShopRuntime: {rejection}");
+                        return $"TailorShopRuntime: alteration order {orderId} cancel refused — returned notions could not be re-lotted.";
+                    }
+                }
+
+                order.NotionsUsed.Clear();
+            }
+
+            order.Stage = TailorAlterationStage.Cancelled;
+            order.StageLog.Add($"day {dayIndex}: alteration order cancelled");
+            diag.Add($"TailorShopRuntime: alteration order {orderId} cancelled (day {dayIndex}).");
+            return null;
+        }
+
+        /// <summary>
         /// Counts cutting tables whose workstation instance evaluates ready
         /// against the catalog definition. Loud per-table diagnostics — an
         /// unready table is named, never silently skipped.
@@ -392,6 +625,34 @@ namespace LandLedgers.Economy.Businesses.Tailor
                 }
             }
 
+            // D1C: alteration orders (customer-owned garments) cascade after the
+            // bespoke garment queue, drawing from the same labor and table pool.
+            var altSnapshot = new List<TailorAlterationOrder>(alterationOrders);
+            foreach (var altOrder in altSnapshot)
+            {
+                if (!altOrder.IsActive) continue;
+
+                while (TryAdvanceAlterationStage(altOrder, dayIndex, ref laborRemaining, tableFree, diag))
+                {
+                    advances++;
+                }
+            }
+
+            // D1C: ready-made workwear batching (the opt-in fork) uses whatever
+            // labor and table-days remain after real orders. Default mode is
+            // Disabled, so this phase is a no-op unless the caller opts in.
+            if (readyMadeMode == TailorReadyMadeMode.WorkwearBatches)
+            {
+                var batch = TailorReadyMadeProduction.SewBatch(
+                    clothStock, readyMadePolicy, readyMadeMode, ref laborRemaining, tableFree,
+                    $"{businessInstanceId}-rm-{dayIndex}-{readyMadeBatches.Count}", dayIndex, diag);
+                if (batch != null && batch.UnitsSewn > 0)
+                {
+                    readyMadeBatches.Add(batch);
+                    advances += batch.UnitsSewn;
+                }
+            }
+
             return advances;
         }
 
@@ -425,8 +686,10 @@ namespace LandLedgers.Economy.Businesses.Tailor
 
                 case TailorOrderStage.Measured:
                     // Cloth reservation: dispense into the order's custody with provenance.
+                    // D1C: the garment's grade preference (if any) prefers matching lots, FIFO otherwise.
                     var clothLines = clothStock.TryDispenseUnits(
-                        TailorGarmentCatalog.ClothItemId, spec.ClothYards, dayIndex, diag);
+                        TailorGarmentCatalog.ClothItemId, spec.ClothYards, dayIndex, diag,
+                        GetGarmentGradePreference(order.GarmentId, spec));
                     if (clothLines == null)
                     {
                         diag.Add($"TailorShopRuntime: order {order.OrderId} ({spec.DisplayName}) refused — no cloth on hand. Stays parked.");
@@ -578,9 +841,120 @@ namespace LandLedgers.Economy.Businesses.Tailor
             }
         }
 
+        /// <summary>
+        /// D1C: advances one alteration order one stage. The garment is
+        /// customer-owned: no cloth is ever reserved; notions dispense with
+        /// provenance and unused notions return on cancellation. Bench work
+        /// occupies one ready cutting table for the day, mirroring the W1C
+        /// mending flow.
+        /// </summary>
+        private bool TryAdvanceAlterationStage(
+            TailorAlterationOrder order, int dayIndex, ref int laborRemaining,
+            Dictionary<int, bool> tableFree, List<string> diag)
+        {
+            TailorAlterationSpec spec = TailorAlterationCatalog.GetSpec(order.AlterationId);
+            if (string.IsNullOrEmpty(spec.AlterationId))
+            {
+                diag.Add($"TailorShopRuntime: alteration order {order.OrderId} names unknown alteration '{order.AlterationId}' — stays parked, never guessed.");
+                return false;
+            }
+
+            switch (order.Stage)
+            {
+                case TailorAlterationStage.Ordered:
+                    if (spec.NeedsPinningFitting && !order.PinningFittingRecorded)
+                    {
+                        diag.Add($"TailorShopRuntime: alteration order {order.OrderId} waits on its pinning fitting — the customer has not come in. Stays parked.");
+                        return false;
+                    }
+
+                    if (!ClaimTable(tableFree, diag, order)) return false;
+
+                    // Notions already dispensed on a previous attempt stay with
+                    // the order — dispense only the shortfall, never double-charge.
+                    int notionsHeld = 0;
+                    foreach (var held in order.NotionsUsed)
+                    {
+                        if (held != null) notionsHeld += Math.Max(0, held.UnitsTaken);
+                    }
+
+                    List<TailorClothDispenseLine> notionLines = new List<TailorClothDispenseLine>();
+                    if (notionsHeld < spec.NotionsUnits)
+                    {
+                        notionLines = clothStock.TryDispenseUnits(
+                            TailorGarmentCatalog.NotionsItemId, spec.NotionsUnits - notionsHeld, dayIndex, diag);
+                        if (notionLines == null)
+                        {
+                            ReleaseTableClaim(tableFree, order);
+                            diag.Add($"TailorShopRuntime: alteration order {order.OrderId} ({spec.DisplayName}) refused — no notions on hand. Stays parked.");
+                            return false;
+                        }
+                    }
+
+                    if (!SpendLaborAlteration(ref laborRemaining, spec.LaborMinutes, diag, order))
+                    {
+                        ReleaseTableClaim(tableFree, order);
+                        // Notions were already dispensed — they stay with the order, never silently returned.
+                        order.NotionsUsed.AddRange(notionLines);
+                        return false;
+                    }
+
+                    order.NotionsUsed.AddRange(notionLines);
+                    order.Stage = TailorAlterationStage.Altered;
+                    pendingTableClaims.Remove(order.OrderId);
+                    order.StageLog.Add($"day {dayIndex}: → Altered ({spec.DisplayName}, {spec.LaborMinutes}m)");
+                    return true;
+
+                case TailorAlterationStage.Altered:
+                    DeliverAlteration(order, spec, dayIndex, diag);
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        private void DeliverAlteration(TailorAlterationOrder order, TailorAlterationSpec spec, int dayIndex, List<string> diag)
+        {
+            var record = new TailorAlterationRecord
+            {
+                OrderId = order.OrderId,
+                CustomerPersonId = order.CustomerPersonId,
+                AlterationId = order.AlterationId,
+                DayIndex = dayIndex,
+                FeeCents = Math.Max(0, spec.FeeCents),
+            };
+            record.NotionsProvenance.AddRange(order.NotionsUsed);
+            // The notions are now IN the altered garment: lines move to the
+            // delivery record, so the order never double-counts.
+            order.NotionsUsed.Clear();
+
+            alterationDeliveries.Add(record);
+            order.Stage = TailorAlterationStage.Delivered;
+            order.StageLog.Add($"day {dayIndex}: → Delivered ({spec.DisplayName}, flat fee {record.FeeCents}c)");
+            diag.Add($"TailorShopRuntime: alteration order {order.OrderId} delivered — {spec.DisplayName} for {order.CustomerPersonId}, {record.FeeCents}c (day {dayIndex}).");
+        }
+
         private void Deliver(TailorGarmentOrder order, TailorGarmentSpec spec, int dayIndex, List<string> diag)
         {
             int pieceRate = TailorGarmentCatalog.GetPieceRateCents(order.GarmentId, pieceRates);
+            // D1C: graded pricing — only when the caller opts into a Rated
+            // cloth-grade policy. The dominant grade of the order's custody
+            // cloth scales the PIECE rate only; fitting fees are labor, not cloth.
+            // Default policy is Unrated, so W1C behavior is byte-for-byte preserved.
+            if (clothGradePolicy != null && clothGradePolicy.Mode == TailorClothGradeMode.Rated && pieceRate > 0)
+            {
+                string dominantGrade = TailorClothGrades.DominantGradeLabel(order.ClothInCustody);
+                float multiplier = TailorClothGrades.GetPriceMultiplier(clothGradePolicy, dominantGrade);
+                int rated = (int)Math.Round(pieceRate * multiplier);
+                if (rated != pieceRate)
+                {
+                    diag.Add($"TailorShopRuntime: order {order.OrderId} piece rate {pieceRate}c → {rated}c " +
+                        $"(dominant cloth grade '{dominantGrade}', multiplier {multiplier}).");
+                    pieceRate = Math.Max(0, rated);
+                }
+            }
+
             int fittingFees = spec.IsMending ? 0 : pieceRates.FittingFeeCents * 2;
 
             var record = new TailorDeliveryRecord
@@ -655,6 +1029,49 @@ namespace LandLedgers.Economy.Businesses.Tailor
             }
         }
 
+        /// <summary>D1C: table claim for an alteration order's bench work (same table-day model as bespoke).</summary>
+        private bool ClaimTable(Dictionary<int, bool> tableFree, List<string> diag, TailorAlterationOrder order)
+        {
+            int best = int.MaxValue;
+            foreach (var kvp in tableFree)
+            {
+                if (kvp.Value && kvp.Key < best) best = kvp.Key;
+            }
+
+            if (best == int.MaxValue)
+            {
+                diag.Add($"TailorShopRuntime: alteration order {order.OrderId} waits on a free cutting table — all tables busy today. Stays parked.");
+                return false;
+            }
+
+            tableFree[best] = false;
+            pendingTableClaims[order.OrderId] = best;
+            return true;
+        }
+
+        /// <summary>D1C: releases the table an alteration order claimed when its stage advance fails after the claim.</summary>
+        private void ReleaseTableClaim(Dictionary<int, bool> tableFree, TailorAlterationOrder order)
+        {
+            if (pendingTableClaims.TryGetValue(order.OrderId, out int claimed))
+            {
+                tableFree[claimed] = true;
+                pendingTableClaims.Remove(order.OrderId);
+            }
+        }
+
+        private bool SpendLaborAlteration(ref int laborRemaining, int minutes, List<string> diag, TailorAlterationOrder order)
+        {
+            if (minutes <= 0) return true;
+            if (laborRemaining < minutes)
+            {
+                diag.Add($"TailorShopRuntime: alteration order {order.OrderId} needs {minutes}m, only {laborRemaining}m left today — stays parked for tomorrow.");
+                return false;
+            }
+
+            laborRemaining -= minutes;
+            return true;
+        }
+
         private void SetStage(TailorGarmentOrder order, TailorOrderStage stage, int dayIndex, string note)
         {
             order.Stage = stage;
@@ -677,6 +1094,17 @@ namespace LandLedgers.Economy.Businesses.Tailor
         {
             if (string.IsNullOrWhiteSpace(orderId)) return null;
             foreach (var order in orders)
+            {
+                if (string.Equals(order.OrderId, orderId, StringComparison.Ordinal)) return order;
+            }
+
+            return null;
+        }
+
+        private TailorAlterationOrder FindAlterationOrder(string orderId)
+        {
+            if (string.IsNullOrWhiteSpace(orderId)) return null;
+            foreach (var order in alterationOrders)
             {
                 if (string.Equals(order.OrderId, orderId, StringComparison.Ordinal)) return order;
             }
@@ -770,6 +1198,22 @@ namespace LandLedgers.Economy.Businesses.Tailor
             public List<TailorGarmentOrder> Orders = new List<TailorGarmentOrder>();
             public List<TailorDeliveryRecord> Deliveries = new List<TailorDeliveryRecord>();
             public int OrderSeq;
+
+            /// <summary>D1C: the bespoke/ready-made fork setting and policy.</summary>
+            public TailorReadyMadeMode ReadyMadeMode = TailorReadyMadeMode.Disabled;
+
+            public TailorReadyMadePolicy ReadyMadePolicy = new TailorReadyMadePolicy();
+
+            /// <summary>D1C: the cloth-grade policy (default Unrated).</summary>
+            public TailorClothGradePolicy ClothGradePolicy = new TailorClothGradePolicy();
+
+            /// <summary>D1C: per-garment cloth-grade preferences.</summary>
+            public List<TailorGarmentGradePreference> GarmentGradePreferences = new List<TailorGarmentGradePreference>();
+
+            public List<TailorReadyMadeBatch> ReadyMadeBatches = new List<TailorReadyMadeBatch>();
+            public List<TailorAlterationOrder> AlterationOrders = new List<TailorAlterationOrder>();
+            public List<TailorAlterationRecord> AlterationDeliveries = new List<TailorAlterationRecord>();
+            public int AlterationSeq;
         }
 
         public TailorShopRuntimeSaveDto CaptureSaveDto()
@@ -780,6 +1224,10 @@ namespace LandLedgers.Economy.Businesses.Tailor
                 PieceRates = pieceRates,
                 ClothStock = clothStock.CaptureSaveDto(),
                 OrderSeq = orderSeq,
+                ReadyMadeMode = readyMadeMode,
+                ReadyMadePolicy = readyMadePolicy,
+                ClothGradePolicy = clothGradePolicy,
+                AlterationSeq = alterationSeq,
             };
             dto.Tables.AddRange(tables);
             // Only live orders rehydrate; delivered/cancelled orders are history
@@ -790,6 +1238,22 @@ namespace LandLedgers.Economy.Businesses.Tailor
             }
 
             dto.Deliveries.AddRange(deliveries);
+            dto.ReadyMadeBatches.AddRange(readyMadeBatches);
+            foreach (var kvp in garmentGradePreferences)
+            {
+                if (string.IsNullOrWhiteSpace(kvp.Key)) continue;
+                dto.GarmentGradePreferences.Add(new TailorGarmentGradePreference
+                {
+                    GarmentId = kvp.Key,
+                    GradeLabel = kvp.Value ?? string.Empty,
+                });
+            }
+            foreach (var altOrder in alterationOrders)
+            {
+                if (altOrder != null && altOrder.IsActive) dto.AlterationOrders.Add(altOrder);
+            }
+
+            dto.AlterationDeliveries.AddRange(alterationDeliveries);
             return dto;
         }
 
@@ -799,6 +1263,10 @@ namespace LandLedgers.Economy.Businesses.Tailor
             clothStock.LoadFromSaveDto(dto.ClothStock);
             if (dto.PieceRates != null) pieceRates = dto.PieceRates;
             orderSeq = Math.Max(0, dto.OrderSeq);
+            readyMadeMode = dto.ReadyMadeMode;
+            if (dto.ReadyMadePolicy != null) readyMadePolicy = dto.ReadyMadePolicy;
+            if (dto.ClothGradePolicy != null) clothGradePolicy = dto.ClothGradePolicy;
+            alterationSeq = Math.Max(0, dto.AlterationSeq);
             tables.Clear();
             if (dto.Tables != null)
             {
@@ -825,6 +1293,46 @@ namespace LandLedgers.Economy.Businesses.Tailor
                 foreach (var delivery in dto.Deliveries)
                 {
                     if (delivery != null) deliveries.Add(delivery);
+                }
+            }
+
+            readyMadeBatches.Clear();
+            if (dto.ReadyMadeBatches != null)
+            {
+                foreach (var batch in dto.ReadyMadeBatches)
+                {
+                    if (batch != null) readyMadeBatches.Add(batch);
+                }
+            }
+
+            alterationOrders.Clear();
+            if (dto.AlterationOrders != null)
+            {
+                foreach (var altOrder in dto.AlterationOrders)
+                {
+                    if (altOrder != null) alterationOrders.Add(altOrder);
+                }
+            }
+
+            alterationDeliveries.Clear();
+            if (dto.AlterationDeliveries != null)
+            {
+                foreach (var altDelivery in dto.AlterationDeliveries)
+                {
+                    if (altDelivery != null) alterationDeliveries.Add(altDelivery);
+                }
+            }
+
+            garmentGradePreferences.Clear();
+            if (dto.GarmentGradePreferences != null)
+            {
+                foreach (var pref in dto.GarmentGradePreferences)
+                {
+                    if (pref == null || string.IsNullOrWhiteSpace(pref.GarmentId)) continue;
+                    if (!string.IsNullOrWhiteSpace(pref.GradeLabel))
+                    {
+                        garmentGradePreferences[pref.GarmentId] = pref.GradeLabel;
+                    }
                 }
             }
         }

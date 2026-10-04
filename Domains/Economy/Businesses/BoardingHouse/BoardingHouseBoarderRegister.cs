@@ -8,11 +8,28 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
     /// agreement (weeks-or-months boarder, billed per week, persists until
     /// checkout) versus a transient night-to-night stay (short-stay
     /// traveler, billed per night, expires when paid nights run out).
+    /// D1F adds Monthly (Canon §8.1D "weekly or longer-stay terms"; §8.1C
+    /// boarders who stay "for weeks or months before renting"): a
+    /// longer-stay agreement billed per monthly cycle, persisting until
+    /// checkout like the weekly term.
     /// </summary>
     public enum BoarderStayKind
     {
         Weekly = 0,
         Transient = 1,
+        /// <summary>D1F: longer-stay monthly agreement (Canon §8.1D).</summary>
+        Monthly = 2,
+    }
+
+    /// <summary>
+    /// D1F: boarding billing-cycle calibration. Canon §8.1D names "weekly or
+    /// longer-stay terms" without fixing the month's length; the cycle below
+    /// is TUNING (Canon Part XV), not a canon claim.
+    /// </summary>
+    public static class BoardingHouseBilling
+    {
+        /// <summary>TUNING: days per monthly billing cycle.</summary>
+        public const int MonthlyBillingDays = 30;
     }
 
     /// <summary>
@@ -31,10 +48,14 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         public BoarderStayKind StayKind = BoarderStayKind.Weekly;
         public bool BoardIncluded;
         public int WeeklyRateCents;
+        /// <summary>D1F: locked monthly rate (Canon §8.1D longer-stay terms). 0 for non-monthly agreements.</summary>
+        public int MonthlyRateCents;
         public int TransientNightlyRateCents;
         public int StartDayIndex;
         /// <summary>Transient stays: paid nights remaining (checked out when this reaches 0).</summary>
         public int TransientNightsRemaining;
+        /// <summary>D1F: the reservation this boarder checked in under (empty = walk-in).</summary>
+        public string ReservationId = string.Empty;
         public BoardingNightlyState NightlyState = BoardingNightlyState.BoardingBed;
 
         public BoarderRecord() { }
@@ -82,11 +103,14 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         /// <summary>
         /// Checks a real person into a specific open bed. The rate is locked
         /// at agreement. Transient stays need at least one paid night.
+        /// D1F: monthly agreements lock the monthly rate; a reservation id
+        /// tags the boarder to their employer's held beds (empty = walk-in).
         /// Returns the refusal, or null on success.
         /// </summary>
         public string CheckIn(int personId, string roomId, int bedIndex, BoarderStayKind stayKind,
             bool boardIncluded, int weeklyRateCents, int transientNightlyRateCents,
-            int startDayIndex, int transientNights, BoardingRoomInventory inventory, List<string> diag)
+            int startDayIndex, int transientNights, BoardingRoomInventory inventory, List<string> diag,
+            int monthlyRateCents = 0, string reservationId = null)
         {
             diag = diag ?? diagnostics;
             if (personId <= 0)
@@ -97,7 +121,7 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                 return "BoardingHouseBoarderRegister.CheckIn: no room inventory — a person cannot sleep in a ledger.";
             if (stayKind == BoarderStayKind.Transient && transientNights <= 0)
                 return "BoardingHouseBoarderRegister.CheckIn: a transient stay needs at least one paid night.";
-            if (weeklyRateCents < 0 || transientNightlyRateCents < 0)
+            if (weeklyRateCents < 0 || transientNightlyRateCents < 0 || monthlyRateCents < 0)
                 return "BoardingHouseBoarderRegister.CheckIn: rates cannot be negative.";
 
             string refusal = inventory.AssignSpecificBed(personId, roomId, bedIndex, diag);
@@ -111,19 +135,27 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                 StayKind = stayKind,
                 BoardIncluded = boardIncluded,
                 WeeklyRateCents = weeklyRateCents,
+                MonthlyRateCents = monthlyRateCents,
                 TransientNightlyRateCents = transientNightlyRateCents,
                 StartDayIndex = startDayIndex,
                 TransientNightsRemaining = stayKind == BoarderStayKind.Transient ? transientNights : 0,
+                ReservationId = reservationId ?? string.Empty,
                 NightlyState = BoardingNightlyState.BoardingBed,
             });
             string package = boardIncluded ? "room and board" : "room only";
+            string reservationNote = string.IsNullOrWhiteSpace(reservationId) ? string.Empty : $" under reservation '{reservationId}'";
             diag.Add($"BoardingHouseBoarderRegister: person {personId} checked in ({stayKind}, " +
-                $"{package}) at bed {bedIndex} in '{roomId}', day {startDayIndex}.");
+                $"{package}) at bed {bedIndex} in '{roomId}', day {startDayIndex}{reservationNote}.");
             return null;
         }
 
-        /// <summary>Checks the person out and vacates their bed.</summary>
-        public string CheckOut(int personId, BoardingRoomInventory inventory, List<string> diag)
+        /// <summary>
+        /// Checks the person out and vacates their bed. The vacated bed
+        /// soils its room (D1F: Canon §8.1E bed turnover) — chamber work must
+        /// turn the room before the bed is re-let. The load-integrity path
+        /// passes soilBed: false for beds whose assignment never survived.
+        /// </summary>
+        public string CheckOut(int personId, BoardingRoomInventory inventory, List<string> diag, bool soilBed = true)
         {
             diag = diag ?? diagnostics;
             if (personId <= 0)
@@ -132,7 +164,12 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             if (record == null)
                 return $"BoardingHouseBoarderRegister.CheckOut: person {personId} holds no boarding agreement here.";
             boarders.Remove(record);
-            if (inventory != null) inventory.ReleaseBedByPerson(personId, diag);
+            if (inventory != null)
+            {
+                inventory.ReleaseBedByPerson(personId, diag);
+                if (soilBed)
+                    inventory.MarkBedSoiled(record.RoomId, record.BedIndex, diag);
+            }
             diag.Add($"BoardingHouseBoarderRegister: person {personId} checked out (day of last stay kept as history in the ledger).");
             return null;
         }
@@ -204,6 +241,37 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         }
 
         /// <summary>
+        /// D1F: monthly agreements' rent due for one monthly cycle (Canon
+        /// §8.1D "weekly or longer-stay terms"). Rates locked at check-in;
+        /// the cycle length is <see cref="BoardingHouseBilling.MonthlyBillingDays"/>
+        /// (TUNING). The caller settles these through ledger authorities.
+        /// </summary>
+        public List<BoarderRentDue> RentDueMonthly(int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var due = new List<BoarderRentDue>();
+            for (int i = 0; i < boarders.Count; i++)
+            {
+                BoarderRecord record = boarders[i];
+                if (record == null || record.StayKind != BoarderStayKind.Monthly) continue;
+                if (record.MonthlyRateCents <= 0) continue;
+                string package = record.BoardIncluded ? "room and board" : "room only";
+                due.Add(new BoarderRentDue
+                {
+                    PersonId = record.PersonId,
+                    RoomId = record.RoomId,
+                    StayKind = BoarderStayKind.Monthly,
+                    BoardIncluded = record.BoardIncluded,
+                    NightsCovered = BoardingHouseBilling.MonthlyBillingDays,
+                    CentsDue = record.MonthlyRateCents,
+                    Label = $"monthly {package} — person {record.PersonId}, bed {record.BedIndex} '{record.RoomId}', day {dayIndex}",
+                });
+            }
+            diag.Add($"BoardingHouseBoarderRegister: monthly settlement day {dayIndex} — {due.Count} monthly boarder(s) owe rent.");
+            return due;
+        }
+
+        /// <summary>
         /// Transient nights: decrements paid nights and returns tonight's
         /// due list. Expired stays check out after their last paid night.
         /// </summary>
@@ -263,9 +331,11 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                     StayKind = record.StayKind,
                     BoardIncluded = record.BoardIncluded,
                     WeeklyRateCents = Math.Max(0, record.WeeklyRateCents),
+                    MonthlyRateCents = Math.Max(0, record.MonthlyRateCents),
                     TransientNightlyRateCents = Math.Max(0, record.TransientNightlyRateCents),
                     StartDayIndex = record.StartDayIndex,
                     TransientNightsRemaining = Math.Max(0, record.TransientNightsRemaining),
+                    ReservationId = record.ReservationId ?? string.Empty,
                     NightlyState = BoardingNightlyState.BoardingBed,
                 });
             }

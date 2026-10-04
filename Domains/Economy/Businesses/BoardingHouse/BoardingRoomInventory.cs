@@ -37,6 +37,13 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         // bedIndex -> personId. Only occupied beds are recorded.
         public List<BoardingBedAssignment> OccupiedBeds = new List<BoardingBedAssignment>();
 
+        /// <summary>
+        /// D1F: bed indexes vacated since the last turnover (Canon §8.1E bed
+        /// turnover). A soiled bed cannot be re-let until chamber work turns
+        /// the room. Empty = the room is clean and ready.
+        /// </summary>
+        public List<int> BedsNeedingTurnover = new List<int>();
+
         public BoardingRoom() { }
 
         public int OccupiedBedCount => OccupiedBeds != null ? OccupiedBeds.Count : 0;
@@ -52,12 +59,16 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             return false;
         }
 
+        /// <summary>
+        /// D1F: finds the first bed that is both unoccupied and clean. Beds
+        /// awaiting turnover are not rentable until chamber work turns them.
+        /// </summary>
         public bool TryFindOpenBed(out int bedIndex)
         {
             bedIndex = -1;
             for (int i = 0; i < BedCount; i++)
             {
-                if (!IsBedOccupied(i)) { bedIndex = i; return true; }
+                if (!IsBedOccupied(i) && !BedNeedsTurnover(i)) { bedIndex = i; return true; }
             }
             return false;
         }
@@ -79,6 +90,19 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                     return OccupiedBeds[i].PersonId;
             return 0;
         }
+
+        /// <summary>D1F: true when the bed was vacated since the last turnover and cannot be re-let yet.</summary>
+        public bool BedNeedsTurnover(int bedIndex)
+        {
+            if (BedsNeedingTurnover == null) return false;
+            for (int i = 0; i < BedsNeedingTurnover.Count; i++)
+                if (BedsNeedingTurnover[i] == bedIndex)
+                    return true;
+            return false;
+        }
+
+        /// <summary>D1F: how many beds in this room await turnover.</summary>
+        public int SoiledBedCount => BedsNeedingTurnover != null ? BedsNeedingTurnover.Count : 0;
     }
 
     /// <summary>W2C: one occupied bed — the nightly-state fact.</summary>
@@ -201,6 +225,9 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                 return $"BoardingRoomInventory.AssignSpecificBed: bed {bedIndex} does not exist in '{roomId}' ({room.BedCount} bed(s)).";
             if (room.IsBedOccupied(bedIndex))
                 return $"BoardingRoomInventory.AssignSpecificBed: bed {bedIndex} in '{roomId}' is already occupied — no double-booking.";
+            if (room.BedNeedsTurnover(bedIndex))
+                return $"BoardingRoomInventory.AssignSpecificBed: bed {bedIndex} in '{roomId}' needs turnover first — " +
+                    "chamber work turns vacated rooms before re-letting (Canon §8.1E).";
 
             room.OccupiedBeds.Add(new BoardingBedAssignment(bedIndex, personId));
             diag.Add($"BoardingRoomInventory: person {personId} takes bed {bedIndex} in '{roomId}'.");
@@ -228,14 +255,65 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             return false;
         }
 
+        /// <summary>
+        /// D1F: soils a vacated bed — the room now needs chamber turnover
+        /// before the bed is re-let (Canon §8.1E). Soiling an already-soiled
+        /// or out-of-range bed is a no-op, never an error.
+        /// </summary>
+        public void MarkBedSoiled(string roomId, int bedIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            BoardingRoom room = FindRoom(roomId);
+            if (room == null) return;
+            if (bedIndex < 0 || bedIndex >= room.BedCount) return;
+            if (room.BedNeedsTurnover(bedIndex)) return;
+            room.BedsNeedingTurnover.Add(bedIndex);
+            diag.Add($"BoardingRoomInventory: bed {bedIndex} in '{roomId}' vacated — room needs turnover before re-letting.");
+        }
+
+        /// <summary>
+        /// D1F: chamber work turns the room — every soiled bed is cleaned
+        /// and the room is ready for re-letting. Returns the number of beds
+        /// turned.
+        /// </summary>
+        public int ClearRoomTurnover(string roomId, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            BoardingRoom room = FindRoom(roomId);
+            if (room == null || room.BedsNeedingTurnover == null) return 0;
+            int turned = room.BedsNeedingTurnover.Count;
+            room.BedsNeedingTurnover.Clear();
+            if (turned > 0)
+                diag.Add($"BoardingRoomInventory: '{roomId}' turned ({turned} bed(s) cleaned) — ready for re-letting.");
+            return turned;
+        }
+
+        /// <summary>D1F: rooms with at least one bed awaiting turnover, in room order.</summary>
+        public List<BoardingRoom> RoomsNeedingTurnover()
+        {
+            var soiled = new List<BoardingRoom>();
+            for (int i = 0; i < rooms.Count; i++)
+                if (rooms[i] != null && rooms[i].SoiledBedCount > 0)
+                    soiled.Add(rooms[i]);
+            return soiled;
+        }
+
+        /// <summary>D1F: total beds across the house awaiting turnover.</summary>
+        public int SoiledBedCount()
+        {
+            int total = 0;
+            for (int i = 0; i < rooms.Count; i++)
+                if (rooms[i] != null)
+                    total += rooms[i].SoiledBedCount;
+            return total;
+        }
+
         public int TotalBeds()
         {
             int total = 0;
             for (int i = 0; i < rooms.Count; i++) total += rooms[i] != null ? rooms[i].BedCount : 0;
             return total;
-        }
-
-        public int OccupiedBeds()
+        }        public int OccupiedBeds()
         {
             int total = 0;
             for (int i = 0; i < rooms.Count; i++) total += rooms[i] != null ? rooms[i].OccupiedBedCount : 0;
@@ -274,6 +352,10 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                 if (room.OccupiedBeds != null)
                     foreach (BoardingBedAssignment a in room.OccupiedBeds)
                         if (a != null) copy.OccupiedBeds.Add(new BoardingBedAssignment(a.BedIndex, a.PersonId));
+                if (room.BedsNeedingTurnover != null)
+                    foreach (int soiled in room.BedsNeedingTurnover)
+                        if (soiled >= 0 && soiled < copy.BedCount && !copy.BedNeedsTurnover(soiled))
+                            copy.BedsNeedingTurnover.Add(soiled);
                 dto.Rooms.Add(copy);
             }
             return dto;
@@ -302,6 +384,14 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                         if (a.BedIndex < 0 || a.BedIndex >= copy.BedCount) continue;
                         if (copy.IsBedOccupied(a.BedIndex)) continue;
                         copy.OccupiedBeds.Add(new BoardingBedAssignment(a.BedIndex, a.PersonId));
+                    }
+                if (room.BedsNeedingTurnover != null)
+                    foreach (int soiled in room.BedsNeedingTurnover)
+                    {
+                        if (soiled < 0 || soiled >= copy.BedCount) continue;
+                        if (copy.IsBedOccupied(soiled)) continue;
+                        if (copy.BedNeedsTurnover(soiled)) continue;
+                        copy.BedsNeedingTurnover.Add(soiled);
                     }
                 rooms.Add(copy);
             }

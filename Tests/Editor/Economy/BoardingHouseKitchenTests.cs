@@ -21,6 +21,8 @@ namespace LandLedgers.Editor.Economy
             var registry = new EntityIdRegistry();
             var kitchen = new BoardingHouseKitchen(registry);
             BoardingHouseFoodBootstrap.ApplyBootstrapEndowment(kitchen.FoodStock, registry, dayIndex, diag);
+            kitchen.FuelStock = new BoardingHouseFuelStock();
+            BoardingHouseFuelBootstrap.ApplyBootstrapEndowment(kitchen.FuelStock, registry, dayIndex, diag);
             var inventory = new BoardingRoomInventory();
             inventory.AddRoom(BoardingRoomType.SharedBed, 2, diag);
             var register = new BoardingHouseBoarderRegister();

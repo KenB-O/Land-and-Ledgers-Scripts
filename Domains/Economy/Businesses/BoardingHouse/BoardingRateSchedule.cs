@@ -31,12 +31,27 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         private int transientNightlyRoomOnlyCents = 25;
         [SerializeField, Min(0)]
         private int transientNightlyWithBoardCents = 45;
+        [SerializeField, Min(0)]
+        private int sharedBedRoomOnlyMonthlyCents = 600;
+        [SerializeField, Min(0)]
+        private int privateRoomOnlyMonthlyCents = 1000;
+        [SerializeField, Min(0)]
+        private int familyRoomOnlyMonthlyCents = 1600;
+        [SerializeField, Min(0)]
+        private int monthlyBoardAddOnCents = 500;
 
         public BoardingRateSchedule() { }
 
+        /// <summary>
+        /// D1F: monthly rates are independent proprietor policy (Canon §8.1D
+        /// "weekly or longer-stay terms"); the defaults are 4× the weekly
+        /// defaults as TUNING calibration, not a canon ratio.
+        /// </summary>
         public BoardingRateSchedule(int sharedBedRoomOnlyWeeklyCents, int privateRoomOnlyWeeklyCents,
             int familyRoomOnlyWeeklyCents, int boardAddOnWeeklyCents,
-            int transientNightlyRoomOnlyCents, int transientNightlyWithBoardCents)
+            int transientNightlyRoomOnlyCents, int transientNightlyWithBoardCents,
+            int sharedBedRoomOnlyMonthlyCents = 600, int privateRoomOnlyMonthlyCents = 1000,
+            int familyRoomOnlyMonthlyCents = 1600, int monthlyBoardAddOnCents = 500)
         {
             this.sharedBedRoomOnlyWeeklyCents = Math.Max(0, sharedBedRoomOnlyWeeklyCents);
             this.privateRoomOnlyWeeklyCents = Math.Max(0, privateRoomOnlyWeeklyCents);
@@ -44,6 +59,10 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             this.boardAddOnWeeklyCents = Math.Max(0, boardAddOnWeeklyCents);
             this.transientNightlyRoomOnlyCents = Math.Max(0, transientNightlyRoomOnlyCents);
             this.transientNightlyWithBoardCents = Math.Max(0, transientNightlyWithBoardCents);
+            this.sharedBedRoomOnlyMonthlyCents = Math.Max(0, sharedBedRoomOnlyMonthlyCents);
+            this.privateRoomOnlyMonthlyCents = Math.Max(0, privateRoomOnlyMonthlyCents);
+            this.familyRoomOnlyMonthlyCents = Math.Max(0, familyRoomOnlyMonthlyCents);
+            this.monthlyBoardAddOnCents = Math.Max(0, monthlyBoardAddOnCents);
         }
 
         public int SharedBedRoomOnlyWeeklyCents => Math.Max(0, sharedBedRoomOnlyWeeklyCents);
@@ -52,6 +71,12 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         public int BoardAddOnWeeklyCents => Math.Max(0, boardAddOnWeeklyCents);
         public int TransientNightlyRoomOnlyCents => Math.Max(0, transientNightlyRoomOnlyCents);
         public int TransientNightlyWithBoardCents => Math.Max(0, transientNightlyWithBoardCents);
+        /// <summary>D1F: monthly room-only rates, per room type (Canon §8.1D longer-stay terms).</summary>
+        public int SharedBedRoomOnlyMonthlyCents => Math.Max(0, sharedBedRoomOnlyMonthlyCents);
+        public int PrivateRoomOnlyMonthlyCents => Math.Max(0, privateRoomOnlyMonthlyCents);
+        public int FamilyRoomOnlyMonthlyCents => Math.Max(0, familyRoomOnlyMonthlyCents);
+        /// <summary>D1F: monthly board add-on (room-and-board package, Canon §8.1D).</summary>
+        public int MonthlyBoardAddOnCents => Math.Max(0, monthlyBoardAddOnCents);
 
         /// <summary>Weekly rate for a room type, with or without the board add-on.</summary>
         public int WeeklyRateCents(BoardingRoomType roomType, bool boardIncluded)
@@ -72,6 +97,19 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             return boardIncluded ? TransientNightlyWithBoardCents : TransientNightlyRoomOnlyCents;
         }
 
+        /// <summary>D1F: monthly rate for a room type, with or without the monthly board add-on.</summary>
+        public int MonthlyRateCents(BoardingRoomType roomType, bool boardIncluded)
+        {
+            int roomOnly;
+            switch (roomType)
+            {
+                case BoardingRoomType.PrivateRoom: roomOnly = PrivateRoomOnlyMonthlyCents; break;
+                case BoardingRoomType.FamilyRoom: roomOnly = FamilyRoomOnlyMonthlyCents; break;
+                default: roomOnly = SharedBedRoomOnlyMonthlyCents; break;
+            }
+            return Math.Max(0, roomOnly + (boardIncluded ? MonthlyBoardAddOnCents : 0));
+        }
+
         #region Save / Load
         [Serializable]
         public sealed class BoardingRateScheduleSaveDto
@@ -82,6 +120,10 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             public int BoardAddOnWeeklyCents;
             public int TransientNightlyRoomOnlyCents;
             public int TransientNightlyWithBoardCents;
+            public int SharedBedRoomOnlyMonthlyCents;
+            public int PrivateRoomOnlyMonthlyCents;
+            public int FamilyRoomOnlyMonthlyCents;
+            public int MonthlyBoardAddOnCents;
         }
 
         public BoardingRateScheduleSaveDto CaptureSaveDto()
@@ -94,6 +136,10 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                 BoardAddOnWeeklyCents = BoardAddOnWeeklyCents,
                 TransientNightlyRoomOnlyCents = TransientNightlyRoomOnlyCents,
                 TransientNightlyWithBoardCents = TransientNightlyWithBoardCents,
+                SharedBedRoomOnlyMonthlyCents = SharedBedRoomOnlyMonthlyCents,
+                PrivateRoomOnlyMonthlyCents = PrivateRoomOnlyMonthlyCents,
+                FamilyRoomOnlyMonthlyCents = FamilyRoomOnlyMonthlyCents,
+                MonthlyBoardAddOnCents = MonthlyBoardAddOnCents,
             };
         }
 
@@ -106,6 +152,10 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             boardAddOnWeeklyCents = Math.Max(0, dto.BoardAddOnWeeklyCents);
             transientNightlyRoomOnlyCents = Math.Max(0, dto.TransientNightlyRoomOnlyCents);
             transientNightlyWithBoardCents = Math.Max(0, dto.TransientNightlyWithBoardCents);
+            sharedBedRoomOnlyMonthlyCents = Math.Max(0, dto.SharedBedRoomOnlyMonthlyCents);
+            privateRoomOnlyMonthlyCents = Math.Max(0, dto.PrivateRoomOnlyMonthlyCents);
+            familyRoomOnlyMonthlyCents = Math.Max(0, dto.FamilyRoomOnlyMonthlyCents);
+            monthlyBoardAddOnCents = Math.Max(0, dto.MonthlyBoardAddOnCents);
         }
         #endregion
     }

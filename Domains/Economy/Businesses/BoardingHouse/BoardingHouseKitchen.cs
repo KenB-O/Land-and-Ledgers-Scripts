@@ -298,6 +298,20 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         public IBoardingHouseMealDaySource MealDaySource => mealDayLedger;
         public BoardingHouseMealDayLedger MealLedger => mealDayLedger;
 
+        /// <summary>
+        /// D1F: the house's stove-fuel store, wired by the runtime (Canon
+        /// §8.1B: food service creates real demand for fuel). Null = no fuel
+        /// store attached.
+        /// </summary>
+        public BoardingHouseFuelStock FuelStock { get; set; }
+
+        /// <summary>
+        /// D1F: when true (default), preparing a board meal requires burning
+        /// fuel — no fuel, no cooking, loudly. Set false only to route around
+        /// unmodeled contexts (D1E precedent).
+        /// </summary>
+        public bool RequireFuel = true;
+
         public BoardingHouseKitchen(EntityIdRegistry idRegistry)
         {
             this.idRegistry = idRegistry;
@@ -404,12 +418,44 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                     break;
                 }
 
+                // D1F: the cooking fire (Canon §8.1B fuel demand). Fuel is
+                // checked before anything dispenses, so a cold stove never
+                // strands half-prepped ingredients.
+                if (RequireFuel)
+                {
+                    if (FuelStock == null)
+                    {
+                        diag.Add($"BoardingHouseKitchen: {spec.DisplayName} prep refused — no fuel store wired; the stove stays cold (day {dayIndex}).");
+                        break;
+                    }
+                    if (FuelStock.UnitsOnHand(BoardingHouseFuelSupply.FuelMaterialId) < BoardingHouseFuelSupply.FuelUnitsPerBoardMeal)
+                    {
+                        diag.Add($"BoardingHouseKitchen: {spec.DisplayName} prep refused — fuel store empty (day {dayIndex}). Boarders go short, honestly.");
+                        break;
+                    }
+                }
+
                 var dispenseLines = new List<BoardingHouseFoodDispenseLine>();
                 foreach (BoardingIngredientLine ingredient in spec.Ingredients)
                 {
                     if (ingredient == null) continue;
                     dispenseLines.AddRange(
                         foodStock.TryDispenseUnits(ingredient.FoodName, ingredient.UnitsPerMeal, dayIndex, diag));
+                }
+
+                List<BoardingHouseFuelDispenseLine> fuelLines = null;
+                if (RequireFuel)
+                {
+                    // The pre-check above guarantees this burn succeeds; the
+                    // null branch is pure defense (a burn never strands a
+                    // half-prepped meal).
+                    fuelLines = FuelStock.TryBurnUnits(BoardingHouseFuelSupply.FuelMaterialId,
+                        BoardingHouseFuelSupply.FuelUnitsPerBoardMeal, dayIndex, diag);
+                    if (fuelLines == null)
+                    {
+                        diag.Add($"BoardingHouseKitchen: {spec.DisplayName} prep refused — the fuel burn failed unexpectedly (day {dayIndex}).");
+                        break;
+                    }
                 }
 
                 laborRemaining -= spec.LaborMinutesPerMeal;
@@ -423,6 +469,9 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                 };
                 foreach (BoardingHouseFoodDispenseLine line in dispenseLines)
                     lot.InputProvenance.Add($"{line.UnitsTaken} × {line.FoodName} — {line.ProvenanceChain}");
+                if (fuelLines != null)
+                    foreach (BoardingHouseFuelDispenseLine fuelLine in fuelLines)
+                        lot.InputProvenance.Add($"fuel: {fuelLine.UnitsTaken} × {fuelLine.FuelName} — {fuelLine.ProvenanceChain}");
                 mealShelf.Add(lot);
                 prepped++;
             }

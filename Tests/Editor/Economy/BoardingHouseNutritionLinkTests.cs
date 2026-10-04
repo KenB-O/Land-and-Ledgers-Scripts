@@ -164,6 +164,7 @@ namespace LandLedgers.Editor.Economy
             var house = new BoardingHouseShopRuntime("bh-1", registry);
             var kitchenDiag = new List<string>();
             house.ApplyOpeningPantryEndowment(0, kitchenDiag);
+            house.ApplyOpeningFuelEndowment(0, kitchenDiag);
             Assert.Null(house.AddRoom(BoardingRoomType.SharedBed, 2, kitchenDiag));
             Assert.Null(house.CheckInBoarder(1, "bh-room-1", 0, BoarderStayKind.Weekly,
                 boardIncluded: true, startDayIndex: 0, transientNights: 0, diag: kitchenDiag));

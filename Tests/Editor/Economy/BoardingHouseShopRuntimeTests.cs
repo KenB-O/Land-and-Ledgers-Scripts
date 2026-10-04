@@ -19,6 +19,7 @@ namespace LandLedgers.Editor.Economy
             var registry = new EntityIdRegistry();
             var house = new BoardingHouseShopRuntime("bh-1", registry);
             house.ApplyOpeningPantryEndowment(dayIndex, diag);
+            house.ApplyOpeningFuelEndowment(dayIndex, diag);
             Assert.Null(house.AddRoom(BoardingRoomType.SharedBed, 2, diag));
             Assert.Null(house.AddRoom(BoardingRoomType.PrivateRoom, 1, diag));
             Assert.AreEqual("bh-1", house.BusinessInstanceId);

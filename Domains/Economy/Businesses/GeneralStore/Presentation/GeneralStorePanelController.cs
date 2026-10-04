@@ -1699,6 +1699,18 @@ namespace LandLedgers.FirstLedger
                 return BuildOwnedLandPropertySummary(plot);
             }
 
+            // Formation is intentionally independent from premises. Keep a
+            // formed mobile/shared-space business fully inspectable before it
+            // has a building or plot assigned.
+            if (entry.Kind == OwnedKind.Business && building == null)
+            {
+                BusinessInstanceState formedBusiness = GetBusinessForEntry(entry);
+                if (formedBusiness != null)
+                {
+                    return BuildFormedBusinessPropertySummary(formedBusiness);
+                }
+            }
+
             if (building != null)
             {
                 BusinessInstanceState business = GetBusinessForBuilding(building.id);
@@ -2035,6 +2047,15 @@ namespace LandLedgers.FirstLedger
                 return BuildOwnedLandInspectionDetail(plot);
             }
 
+            if (selected.Kind == OwnedKind.Business && building == null)
+            {
+                BusinessInstanceState formedBusiness = GetBusinessForEntry(selected);
+                if (formedBusiness != null)
+                {
+                    return BuildFormedBusinessInspectionDetail(formedBusiness);
+                }
+            }
+
             if (building != null)
             {
                 BusinessInstanceState business = GetBusinessForBuilding(building.id);
@@ -2077,6 +2098,36 @@ namespace LandLedgers.FirstLedger
             }
 
             return builder.Length == 0 ? "Property details unavailable." : builder.ToString();
+        }
+
+        private string BuildFormedBusinessPropertySummary(BusinessInstanceState business)
+        {
+            if (business == null)
+            {
+                return "Business details unavailable.";
+            }
+
+            BusinessRuntimeState runtime = business.RuntimeState;
+            string operating = runtime != null ? BuildBusinessMainProblem(business) : "Formation complete; operating runtime pending.";
+            string cash = runtime != null ? $" | Business Cash {FormatMoney(runtime.CurrentCashCents)}" : string.Empty;
+            return $"{BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)} | Formed organization | {operating}{cash}";
+        }
+
+        private string BuildFormedBusinessInspectionDetail(BusinessInstanceState business)
+        {
+            StringBuilder builder = new();
+            builder.AppendLine(business.RuntimeDisplayName);
+            builder.AppendLine($"{BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)} | Operator {GetOwnerDisplayName(business)}");
+            builder.AppendLine("Status: Formed / not operating");
+            builder.AppendLine("Premises: None assigned — choose owned space, a lease, shared space, or a mobile route when this business requires it.");
+            builder.AppendLine($"Current read: {BuildBusinessMainProblem(business)}");
+            builder.AppendLine(BuildBusinessPortfolioSummary(business).BuildLedgerLine());
+            if (business.RuntimeState != null && sharedBusinessRuntime != null)
+            {
+                builder.AppendLine(sharedBusinessRuntime.BuildBusinessInventoryText(business));
+            }
+
+            return builder.ToString();
         }
 
         private string BuildManagedBusinessPropertySummary(BusinessInstanceState business, PlacedBuilding building, TownPlot plot)

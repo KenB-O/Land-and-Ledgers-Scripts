@@ -74,7 +74,17 @@ namespace LandLedgers.Economy
         /// theft is a claim, not a harvest). Value appended, never
         /// renumbered (W4C).
         /// </summary>
-        Logging = 24
+        Logging = 24,
+        /// <summary>
+        /// W5B: the grain elevator — grain storage, grading, and forward
+        /// lots. Canon R6 §1.4: grain delivered under receipt arrangements is
+        /// a BAILMENT (physical possession is not ownership), so the
+        /// elevator keeps custody and dealer books separate; R6 §1.5: no
+        /// date unlocks an elevator, only real economic preconditions
+        /// (production, storage demand, working capital, transport).
+        /// Value appended, never renumbered (W5B).
+        /// </summary>
+        GrainElevator = 25
     }
 
     public enum BusinessCadence

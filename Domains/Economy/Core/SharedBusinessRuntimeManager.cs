@@ -2047,6 +2047,74 @@ namespace LandLedgers.Economy
             return true;
         }
 
+        /// <summary>
+        /// Creates a player-owned business entity through the canonical formation
+        /// authority. Formation deliberately starts without a premises commitment;
+        /// the player can then choose owned space, a lease, shared space, or a mobile
+        /// route through the ordinary property workflow. The returned business is
+        /// formed, not operating: commerce, capability, staffing, and working capital
+        /// still have to be established through their respective authorities.
+        /// </summary>
+        public bool TryCreatePlayerBusiness(
+            BusinessType businessType,
+            string displayName,
+            out BusinessInstanceState business,
+            out string message)
+        {
+            AutoWire();
+            EnsureProfilesLoaded();
+            business = null;
+
+            string resolvedName = string.IsNullOrWhiteSpace(displayName)
+                ? $"Player {BusinessRuntimeNaming.GetBusinessTypeDisplayName(businessType)}"
+                : displayName.Trim();
+            var authority = new BusinessCreationAuthority();
+            var intent = new CreateBusinessIntent(
+                businessType,
+                resolvedName,
+                BusinessOwnership.Sole(BusinessOwnerIdentity.Player()),
+                new PremisesRequirement(),
+                businessType == BusinessType.LiveryFreight
+                    ? PremisesPreference.PreferMobile
+                    : PremisesPreference.Auto,
+                0);
+
+            if (!authority.TryCreate(intent, new ManagerCreationContext(this), out BusinessCreationResult result)
+                || result == null
+                || !result.Success
+                || result.Business == null)
+            {
+                message = result != null && result.Diagnostics != null && result.Diagnostics.Count > 0
+                    ? string.Join("; ", result.Diagnostics)
+                    : "Business formation was refused by the economic authorities.";
+                status = message;
+                return false;
+            }
+
+            business = result.Business;
+            business.ResolveWeeklyBaselineThroughput();
+            business.ResolveDailyBaselineService();
+            businesses.Add(business);
+            if (business.AssignedBuildingId >= 0)
+            {
+                assignedBuildingIds.Add(business.AssignedBuildingId);
+            }
+
+            WireEmploymentRegistryToBusinesses();
+
+            int weekKey = GetCurrentWeekKey();
+            playerPortfolio?.ConfigureDefaultBusinessCashTransfers(
+                business,
+                GetSharedOperatingCashBufferCents(business),
+                business.RuntimeState != null ? business.RuntimeState.LastWeeklyReorderBudgetCents : 0,
+                weekKey);
+            playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(business, weekKey, true);
+
+            message = $"{resolvedName} formed as a player-owned {BusinessRuntimeNaming.GetBusinessTypeDisplayName(businessType)}. It is not operating until premises/capability, labor, funding, and real commerce are in place.";
+            status = message;
+            return true;
+        }
+
         public bool TryTransferBusinessToTown(int buildingId, string receiverDisplayName, out BusinessInstanceState business, out string message)
         {
             InitializeIfNeeded();

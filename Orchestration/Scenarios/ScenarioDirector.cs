@@ -64,6 +64,33 @@ namespace LandLedgers.Orchestration.Scenarios
         public bool HasActiveScenario => Service.HasActiveScenario;
         public string ActiveScenarioId => Service.ActiveState?.Asset.ScenarioId;
 
+        /// <summary>
+        /// Registers an authored scenario for a runtime start screen. The asset remains
+        /// the authority; this method only exposes the same registry operation that the
+        /// serialized scene list performs during Awake.
+        /// </summary>
+        public bool RegisterScenarioAsset(ScenarioAsset asset)
+        {
+            if (asset == null)
+            {
+                return false;
+            }
+
+            if (ReferenceEquals(Service.GetScenario(asset.ScenarioId), asset))
+            {
+                return true;
+            }
+
+            return Service.RegisterScenario(asset, out string rejectionReason)
+                || LogRegistrationFailure(rejectionReason);
+        }
+
+        private bool LogRegistrationFailure(string rejectionReason)
+        {
+            Debug.LogError($"[ScenarioDirector] {rejectionReason}", this);
+            return false;
+        }
+
         private void Awake()
         {
             if (Instance != null && Instance != this)

@@ -453,7 +453,7 @@ namespace LandLedgers.Economy.Creation
             if (requirement.NeedsCustomerFacingSpace) needs.Add("customer-facing space");
             if (requirement.NeedsWorkshopSpace) needs.Add("workshop space");
             if (requirement.NeedsAnimalHousing) needs.Add("animal housing");
-            if (requirement.NeedsYardStorage) needs.Add("yard storage");
+            if (requirement.NeedsYardStorage) needs.Add("yard storage (yard space)");
             if (requirement.NeedsFoodHandling) needs.Add("food-handling space");
             if (requirement.MinimumAreaSqFt > 0) needs.Add($"{requirement.MinimumAreaSqFt} sq ft");
             return needs.Count > 0 ? string.Join(", ", needs) : "site requirements";

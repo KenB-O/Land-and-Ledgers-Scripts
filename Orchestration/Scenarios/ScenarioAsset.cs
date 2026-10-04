@@ -135,7 +135,7 @@ namespace LandLedgers.Orchestration.Scenarios
             }
 
             tunables.Add(newValue);
-            auditLog?.Add($"ScenarioAsset '{scenarioId}': tunable '{key}' ADDED to asset (explicit persist).");
+            auditLog?.Add($"ScenarioAsset '{scenarioId}': tunable '{key}' written to ASSET (explicit persist; new entry).");
         }
     }
 }

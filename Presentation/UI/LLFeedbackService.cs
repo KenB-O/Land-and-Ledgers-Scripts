@@ -145,6 +145,9 @@ namespace LandLedgers.UI
 
         private void PlayInternal(LLFeedbackKind kind, string context, Canvas canvas, Vector2? anchoredPosition)
         {
+            // Retain the serialized setting for scene compatibility; the money splash
+            // is intentionally disabled for normal gameplay.
+            _ = showMoneyOverlay;
             if (!ShouldPlay(kind, context))
             {
                 return;
@@ -161,10 +164,10 @@ namespace LandLedgers.UI
                 Debug.LogWarning(warning, this);
             }
 
-            if (showMoneyOverlay && IsMoneyKind(kind))
-            {
-                EnsureOverlay(canvas)?.Show(kind, context, anchoredPosition);
-            }
+            // Money remains audibly and textually accounted for by the ledger/UI
+            // readouts, but normal transactions must not splash a floating cash
+            // graphic over the game view. Keep the overlay implementation available
+            // for legacy asset compatibility; it is intentionally not invoked.
         }
 
         private bool ShouldPlay(LLFeedbackKind kind, string context)

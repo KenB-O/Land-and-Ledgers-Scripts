@@ -60,7 +60,12 @@ namespace LandLedgers.Economy
             timeManager = newTimeManager != null ? newTimeManager : timeManager;
             generalStoreRuntime = newGeneralStoreRuntime != null ? newGeneralStoreRuntime : generalStoreRuntime;
             sharedBusinessRuntime = newSharedBusinessRuntime != null ? newSharedBusinessRuntime : sharedBusinessRuntime;
-            routePlanner = townWorld != null && pathingManager != null ? new LogisticsRoutePlanner(townWorld, pathingManager) : routePlanner;
+            // Never retain a planner built against an earlier world/pathing pair.
+            // A missing route authority must block before loading so no physical
+            // cargo can be materialized by an off-map or local shipment.
+            routePlanner = townWorld != null && pathingManager != null
+                ? new LogisticsRoutePlanner(townWorld, pathingManager)
+                : null;
             SubscribeToTime();
         }
 

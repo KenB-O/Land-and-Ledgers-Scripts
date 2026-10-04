@@ -65,18 +65,20 @@ namespace LandLedgers.FirstLedger
 
         private readonly struct OwnedEntry
         {
-            public OwnedEntry(OwnedKind kind, int buildingId, int plotId, string label)
+            public OwnedEntry(OwnedKind kind, int buildingId, int plotId, string label, string instanceId = null)
             {
                 Kind = kind;
                 BuildingId = buildingId;
                 PlotId = plotId;
                 Label = label;
+                InstanceId = instanceId ?? string.Empty;
             }
 
             public readonly OwnedKind Kind;
             public readonly int BuildingId;
             public readonly int PlotId;
             public readonly string Label;
+            public readonly string InstanceId;
             public string SelectionKey => $"{Kind}:{BuildingId}:{PlotId}";
             public string Signature => $"{SelectionKey}:{Label}";
         }
@@ -94,6 +96,8 @@ namespace LandLedgers.FirstLedger
         [SerializeField] private StrategyCameraController strategyCamera;
         [SerializeField] private OwnershipWorkflowController workflowController;
         [SerializeField] private AcquisitionSellerMeetingController sellerMeetingController;
+
+        private BusinessCreationPanelController businessCreationPanel;
 
         [Header("Persistent UI")]
         [SerializeField] private Canvas canvas;
@@ -679,6 +683,12 @@ namespace LandLedgers.FirstLedger
             view.EnsureFinanceDashboardControls(Application.isPlaying);
             view.EnsureBankLoanControls(Application.isPlaying);
             view.EnsureResourcesControls(true);
+            businessCreationPanel ??= gameObject.GetComponent<BusinessCreationPanelController>();
+            if (businessCreationPanel == null)
+            {
+                businessCreationPanel = gameObject.AddComponent<BusinessCreationPanelController>();
+            }
+            businessCreationPanel.Configure(sharedBusinessRuntime, this, view);
             return true;
         }
 
@@ -916,7 +926,7 @@ namespace LandLedgers.FirstLedger
             }
             else
             {
-                BusinessInstanceState business = selected.Kind == OwnedKind.Business ? GetBusinessForBuilding(selected.BuildingId) : null;
+                BusinessInstanceState business = selected.Kind == OwnedKind.Business ? GetBusinessForEntry(selected) : null;
                 if (business == null && IsStartableOwnedShell(selected))
                 {
                     EnsureBusinessActivationSelection(selected.BuildingId);
@@ -962,7 +972,7 @@ namespace LandLedgers.FirstLedger
             bool isStore = selected.Kind == OwnedKind.Store;
             bool isRenting = selected.Kind == OwnedKind.Renting;
             bool isLand = selected.Kind == OwnedKind.Land;
-            BusinessInstanceState sharedBusiness = selected.Kind == OwnedKind.Business ? GetBusinessForBuilding(selected.BuildingId) : null;
+            BusinessInstanceState sharedBusiness = selected.Kind == OwnedKind.Business ? GetBusinessForEntry(selected) : null;
             bool isManagedBusiness = sharedBusiness != null && sharedBusiness.Owner != null && sharedBusiness.Owner.OwnerKind == BusinessOwnerKind.Player;
             bool isVacantShell = IsStartableOwnedShell(selected);
             bool isHolding = selected.Kind == OwnedKind.Holding;
@@ -3710,7 +3720,7 @@ namespace LandLedgers.FirstLedger
             }
             else if (selected.Kind == OwnedKind.Business)
             {
-                business = GetBusinessForBuilding(selected.BuildingId);
+                business = GetBusinessForEntry(selected);
                 protectedReserveCents = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business);
             }
 
@@ -4353,7 +4363,7 @@ namespace LandLedgers.FirstLedger
 
             if (selected.Kind == OwnedKind.Business)
             {
-                BusinessInstanceState business = GetBusinessForBuilding(selected.BuildingId);
+                BusinessInstanceState business = GetBusinessForEntry(selected);
                 string marginMessage = string.Empty;
                 if (business != null && sharedBusinessRuntime != null && sharedBusinessRuntime.TryAdjustBusinessMarginPolicy(business, -1, out marginMessage))
                 {
@@ -4387,7 +4397,7 @@ namespace LandLedgers.FirstLedger
 
             if (selected.Kind == OwnedKind.Business)
             {
-                BusinessInstanceState business = GetBusinessForBuilding(selected.BuildingId);
+                BusinessInstanceState business = GetBusinessForEntry(selected);
                 string marginMessage = string.Empty;
                 if (business != null && sharedBusinessRuntime != null && sharedBusinessRuntime.TryAdjustBusinessMarginPolicy(business, 1, out marginMessage))
                 {
@@ -4540,7 +4550,7 @@ namespace LandLedgers.FirstLedger
             }
 
             string message = string.Empty;
-            BusinessInstanceState sharedBusiness = selected.Kind == OwnedKind.Business ? GetBusinessForBuilding(selected.BuildingId) : null;
+            BusinessInstanceState sharedBusiness = selected.Kind == OwnedKind.Business ? GetBusinessForEntry(selected) : null;
             if (selected.Kind == OwnedKind.Business && sharedBusiness == null)
             {
                 panelStatus = "Use Start Business to activate this owned building shell.";
@@ -4648,7 +4658,7 @@ namespace LandLedgers.FirstLedger
 
             if (selected.Kind == OwnedKind.Business)
             {
-                BusinessInstanceState activeBusiness = GetBusinessForBuilding(selected.BuildingId);
+                BusinessInstanceState activeBusiness = GetBusinessForEntry(selected);
                 if (activeBusiness != null)
                 {
                     string saleMessage = "Business sale unavailable.";
@@ -4770,7 +4780,7 @@ namespace LandLedgers.FirstLedger
 
             if (selected.Kind == OwnedKind.Business && sharedBusinessRuntime != null)
             {
-                return sharedBusinessRuntime.GetWorkerSelectionCount(GetBusinessForBuilding(selected.BuildingId));
+                return sharedBusinessRuntime.GetWorkerSelectionCount(GetBusinessForEntry(selected));
             }
 
             return GetWorkerSelectionCount();
@@ -5145,6 +5155,31 @@ namespace LandLedgers.FirstLedger
                 }
             }
 
+            // Businesses formed without dedicated premises still belong in the same
+            // Businesses/property management list. They use the real business entity
+            // identity as the selection key until the player assigns a site or route.
+            if (sharedBusinessRuntime != null && sharedBusinessRuntime.Businesses != null)
+            {
+                for (int i = 0; i < sharedBusinessRuntime.Businesses.Count; i++)
+                {
+                    BusinessInstanceState business = sharedBusinessRuntime.Businesses[i];
+                    if (business == null
+                        || business.Owner == null
+                        || business.Owner.OwnerKind != BusinessOwnerKind.Player
+                        || business.AssignedBuildingId >= 0)
+                    {
+                        continue;
+                    }
+
+                    ownedEntries.Add(new OwnedEntry(
+                        OwnedKind.Business,
+                        -1,
+                        -1,
+                        business.RuntimeDisplayName,
+                        business.InstanceId));
+                }
+            }
+
             StringBuilder signature = new();
             for (int i = 0; i < ownedEntries.Count; i++)
             {
@@ -5233,7 +5268,7 @@ namespace LandLedgers.FirstLedger
 
             TownPlot plot = GetPlot(entry.PlotId);
             PlacedBuilding building = GetBuilding(entry.BuildingId);
-            BusinessInstanceState business = GetBusinessForBuilding(entry.BuildingId);
+            BusinessInstanceState business = GetBusinessForEntry(entry);
             if (entry.Kind == OwnedKind.Land && plot != null)
             {
                 return BuildOwnedLandRowStatus(plot, entry, isSelected);
@@ -5260,6 +5295,28 @@ namespace LandLedgers.FirstLedger
             }
 
             return string.Empty;
+        }
+
+        private BusinessInstanceState GetBusinessForEntry(OwnedEntry entry)
+        {
+            if (entry.Kind != OwnedKind.Business || sharedBusinessRuntime == null)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.InstanceId))
+            {
+                for (int i = 0; i < sharedBusinessRuntime.Businesses.Count; i++)
+                {
+                    BusinessInstanceState candidate = sharedBusinessRuntime.Businesses[i];
+                    if (candidate != null && string.Equals(candidate.InstanceId, entry.InstanceId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            return GetBusinessForBuilding(entry.BuildingId);
         }
 
         private string BuildOwnedEntryRowTooltip(OwnedEntry entry, bool isSelected)

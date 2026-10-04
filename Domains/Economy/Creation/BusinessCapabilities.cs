@@ -208,6 +208,14 @@ namespace LandLedgers.Economy.Creation
     /// AddOperation: the SAME business/ledger/ownership does more.
     /// AddSeparateBusiness: a DISTINCT entity with its own cash, staff, agreements and
     /// ownership — it may share the property under a real space assignment.
+    ///
+    /// Future composition note: keep three concepts distinct as the enterprise layer
+    /// grows. Multiple operations are capabilities on one Business identity and one
+    /// ledger; an operating group is a management relationship across separate
+    /// businesses; consolidation/amalgamation is a legal/economic transaction that
+    /// creates one surviving business and preserves the predecessor history. None of
+    /// these concepts implies an arbitrary synergy bonus or a second money/inventory
+    /// authority.
     /// </summary>
     public enum BusinessExpansionKind
     {

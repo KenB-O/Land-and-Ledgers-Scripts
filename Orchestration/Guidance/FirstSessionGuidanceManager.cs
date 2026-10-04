@@ -321,9 +321,9 @@ namespace LandLedgers.FirstLedger
                     "Open the Acquisitions tab."),
                 FirstSessionObjectiveStep.CompleteFirstLandPurchase => new FirstSessionObjectiveState(
                     step,
-                    "Complete a first land purchase",
-                    "Owning land gives you the next site, and the first formal acquisition workflow teaches how expansion actually closes.",
-                    "Choose Land, inspect a live listing, then keep advancing the acquisition action until the deal closes."),
+                    "Establish your first business",
+                    "Form the business entity first. Premises and property are separate decisions made afterward when the operation requires them.",
+                    "Open Businesses, choose Create Business, then select the business type that fits your plan."),
                 FirstSessionObjectiveStep.ReturnToProperties => new FirstSessionObjectiveState(
                     step,
                     "Return to the owned parcel",

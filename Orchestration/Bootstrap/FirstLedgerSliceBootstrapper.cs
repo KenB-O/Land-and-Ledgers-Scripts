@@ -276,6 +276,13 @@ namespace LandLedgers.FirstLedger
             ConfigurePlayerPortfolioManager();
             ConfigureLogisticsRuntime();
             ConfigureStoreRuntime();
+            // First Ledger starts with a cash stake, not an automatic player business.
+            // The authored town roster remains NPC-owned; the player's first business
+            // is formed explicitly through the Businesses workflow.
+            if (storeRuntime != null && FindAnyObjectByType<ScenarioDirector>() != null)
+            {
+                storeRuntime.SetCreatePlayerBusinessOnInitialize(false);
+            }
             storeRuntime?.InitializeIfNeeded();
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);

@@ -23,12 +23,14 @@ namespace LandLedgers.FirstLedger
         private ManagementPanelView view;
         private Button createButton;
         private GameObject overlay;
-        private Button typeButton;
+        private TMP_Dropdown typeDropdown;
+        private Button clearButton;
         private BusinessType[] businessTypes = Array.Empty<BusinessType>();
         private int selectedTypeIndex;
         private TMP_InputField nameInput;
         private TMP_Text statusText;
         private bool configured;
+        private string draftName = string.Empty;
 
         public bool IsOpen => overlay != null && overlay.activeSelf;
 
@@ -44,6 +46,21 @@ namespace LandLedgers.FirstLedger
             if (configured)
             {
                 EnsureControls();
+                SetBusinessesTabActive(false);
+            }
+        }
+
+        public void SetBusinessesTabActive(bool active)
+        {
+            if (createButton != null)
+            {
+                createButton.gameObject.SetActive(active);
+            }
+
+            if (!active && overlay != null)
+            {
+                CaptureDraft();
+                overlay.SetActive(false);
             }
         }
 
@@ -61,8 +78,8 @@ namespace LandLedgers.FirstLedger
                 rect.anchorMin = new Vector2(1f, 1f);
                 rect.anchorMax = new Vector2(1f, 1f);
                 rect.pivot = new Vector2(1f, 1f);
-                rect.anchoredPosition = new Vector2(-24f, -20f);
-                rect.sizeDelta = new Vector2(190f, 38f);
+                rect.anchoredPosition = new Vector2(-18f, -16f);
+                rect.sizeDelta = new Vector2(164f, 32f);
                 createButton.onClick.AddListener(OpenForm);
             }
 
@@ -81,26 +98,34 @@ namespace LandLedgers.FirstLedger
             overlayRect.anchorMax = new Vector2(0.5f, 0.5f);
             overlayRect.pivot = new Vector2(0.5f, 0.5f);
             overlayRect.anchoredPosition = Vector2.zero;
-            overlayRect.sizeDelta = new Vector2(560f, 330f);
+            overlayRect.sizeDelta = new Vector2(460f, 270f);
             overlay.GetComponent<Image>().color = new Color(0.075f, 0.08f, 0.075f, 0.98f);
 
             VerticalLayoutGroup layout = overlay.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(24, 24, 20, 20);
-            layout.spacing = 12f;
+            layout.padding = new RectOffset(18, 18, 14, 14);
+            layout.spacing = 7f;
             layout.childControlWidth = true;
             layout.childForceExpandWidth = true;
             layout.childControlHeight = false;
 
-            CreateText(overlay.transform, "Create a business", 22f, FontStyles.Bold);
+            CreateText(overlay.transform, "Create a business", 19f, FontStyles.Bold);
             CreateText(overlay.transform,
                 "Formation creates the legal/economic business first. It does not buy land or make the business operational.",
-                14f, FontStyles.Normal);
+                12f, FontStyles.Normal);
 
             businessTypes = (BusinessType[])Enum.GetValues(typeof(BusinessType));
             selectedTypeIndex = Math.Max(0, Array.IndexOf(businessTypes, BusinessType.GeneralStore));
-            typeButton = CreateButton(overlay.transform, "BusinessTypeButton", string.Empty);
-            typeButton.onClick.AddListener(CycleBusinessType);
-            UpdateTypeButton();
+            typeDropdown = CreateDropdown(overlay.transform, "BusinessTypeDropdown");
+            typeDropdown.onValueChanged.AddListener(SelectBusinessType);
+            typeDropdown.ClearOptions();
+            var options = new List<TMP_Dropdown.OptionData>(businessTypes.Length);
+            for (int i = 0; i < businessTypes.Length; i++)
+            {
+                options.Add(new TMP_Dropdown.OptionData(BusinessRuntimeNaming.GetBusinessTypeDisplayName(businessTypes[i])));
+            }
+            typeDropdown.AddOptions(options);
+            typeDropdown.value = selectedTypeIndex;
+            typeDropdown.RefreshShownValue();
 
             nameInput = CreateInput(overlay.transform, "Business name (optional)");
             statusText = CreateText(overlay.transform, string.Empty, 13f, FontStyles.Normal);
@@ -112,8 +137,10 @@ namespace LandLedgers.FirstLedger
             buttons.childForceExpandWidth = true;
             Button confirm = CreateButton(buttons.transform, "CreateBusiness_Confirm", "FORM BUSINESS");
             Button cancel = CreateButton(buttons.transform, "CreateBusiness_Cancel", "CANCEL");
+            clearButton = CreateButton(buttons.transform, "CreateBusiness_Clear", "CLEAR");
             confirm.onClick.AddListener(Submit);
             cancel.onClick.AddListener(CloseForm);
+            clearButton.onClick.AddListener(ClearDraft);
             overlay.SetActive(false);
         }
 
@@ -124,14 +151,20 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            statusText.text = "Choose a business type. Premises, funding, labor, and commerce come afterward.";
-            nameInput.text = string.Empty;
+            statusText.text = "Formation creates ownership first. Premises, funding, labor, and commerce come afterward.";
+            if (nameInput != null)
+            {
+                nameInput.text = draftName;
+            }
+            typeDropdown.value = Mathf.Clamp(selectedTypeIndex, 0, Mathf.Max(0, businessTypes.Length - 1));
+            typeDropdown.RefreshShownValue();
             overlay.SetActive(true);
             overlay.transform.SetAsLastSibling();
         }
 
         private void CloseForm()
         {
+            CaptureDraft();
             if (overlay != null)
             {
                 overlay.SetActive(false);
@@ -140,7 +173,7 @@ namespace LandLedgers.FirstLedger
 
         private void Submit()
         {
-            if (sharedBusinessRuntime == null || typeButton == null)
+            if (sharedBusinessRuntime == null || typeDropdown == null)
             {
                 return;
             }
@@ -152,7 +185,7 @@ namespace LandLedgers.FirstLedger
             }
 
             if (!sharedBusinessRuntime.TryCreatePlayerBusiness(
-                    businessTypes[selectedTypeIndex],
+                    businessTypes[typeDropdown.value],
                     nameInput != null ? nameInput.text : string.Empty,
                     out BusinessInstanceState business,
                     out string message))
@@ -166,29 +199,107 @@ namespace LandLedgers.FirstLedger
             managementController?.Refresh();
         }
 
-        private void CycleBusinessType()
+        private void SelectBusinessType(int index)
         {
-            if (businessTypes == null || businessTypes.Length == 0)
-            {
-                return;
-            }
-
-            selectedTypeIndex = (selectedTypeIndex + 1) % businessTypes.Length;
-            UpdateTypeButton();
+            selectedTypeIndex = Mathf.Clamp(index, 0, Mathf.Max(0, businessTypes.Length - 1));
         }
 
-        private void UpdateTypeButton()
+        private void ClearDraft()
         {
-            if (typeButton == null || businessTypes == null || businessTypes.Length == 0)
+            draftName = string.Empty;
+            selectedTypeIndex = Math.Max(0, Array.IndexOf(businessTypes, BusinessType.GeneralStore));
+            if (nameInput != null)
             {
-                return;
+                nameInput.text = string.Empty;
             }
+            if (typeDropdown != null && businessTypes.Length > 0)
+            {
+                typeDropdown.value = selectedTypeIndex;
+                typeDropdown.RefreshShownValue();
+            }
+            if (statusText != null)
+            {
+                statusText.text = "Draft cleared.";
+            }
+        }
 
-            TMP_Text label = typeButton.GetComponentInChildren<TMP_Text>(true);
-            if (label != null)
+        private void CaptureDraft()
+        {
+            if (nameInput != null)
             {
-                label.text = $"BUSINESS TYPE: {BusinessRuntimeNaming.GetBusinessTypeDisplayName(businessTypes[selectedTypeIndex])} (click to change)";
+                draftName = nameInput.text ?? string.Empty;
             }
+        }
+
+        private static TMP_Dropdown CreateDropdown(Transform parent, string objectName)
+        {
+            GameObject go = new GameObject(objectName, typeof(RectTransform), typeof(Image), typeof(TMP_Dropdown));
+            go.transform.SetParent(parent, false);
+            go.GetComponent<Image>().color = new Color(0.14f, 0.15f, 0.14f, 1f);
+            TMP_Dropdown dropdown = go.GetComponent<TMP_Dropdown>();
+            TextMeshProUGUI caption = CreateText(go.transform, string.Empty, 14f, FontStyles.Normal) as TextMeshProUGUI;
+            caption.alignment = TextAlignmentOptions.MidlineLeft;
+            dropdown.captionText = caption;
+            dropdown.template = CreateDropdownTemplate(go.transform);
+            dropdown.itemText = dropdown.template.Find("Viewport/Content/Item/Item Label")?.GetComponent<TMP_Text>();
+            LayoutElement element = go.AddComponent<LayoutElement>();
+            element.minHeight = 34f;
+            element.preferredHeight = 34f;
+            return dropdown;
+        }
+
+        private static RectTransform CreateDropdownTemplate(Transform parent)
+        {
+            GameObject template = new GameObject("Template", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
+            template.transform.SetParent(parent, false);
+            RectTransform rect = template.transform as RectTransform;
+            rect.anchorMin = new Vector2(0f, 0f);
+            rect.anchorMax = new Vector2(1f, 0f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = new Vector2(0f, 2f);
+            rect.sizeDelta = new Vector2(0f, 150f);
+            template.GetComponent<Image>().color = new Color(0.10f, 0.11f, 0.10f, 1f);
+            ScrollRect scroll = template.GetComponent<ScrollRect>();
+            scroll.horizontal = false;
+            GameObject viewport = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            viewport.transform.SetParent(template.transform, false);
+            RectTransform viewportRect = viewport.transform as RectTransform;
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+            viewport.GetComponent<Image>().color = Color.clear;
+            viewport.GetComponent<Mask>().showMaskGraphic = false;
+            GameObject content = new GameObject("Content", typeof(RectTransform), typeof(ToggleGroup));
+            content.transform.SetParent(viewport.transform, false);
+            RectTransform contentRect = content.transform as RectTransform;
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.sizeDelta = new Vector2(0f, 0f);
+            scroll.viewport = viewportRect;
+            scroll.content = contentRect;
+            GameObject item = new GameObject("Item", typeof(RectTransform), typeof(Toggle));
+            item.transform.SetParent(content.transform, false);
+            RectTransform itemRect = item.transform as RectTransform;
+            itemRect.anchorMin = new Vector2(0f, 1f);
+            itemRect.anchorMax = new Vector2(1f, 1f);
+            itemRect.sizeDelta = new Vector2(0f, 30f);
+            Toggle toggle = item.GetComponent<Toggle>();
+            GameObject itemLabel = new GameObject("Item Label", typeof(RectTransform));
+            itemLabel.transform.SetParent(item.transform, false);
+            RectTransform labelRect = itemLabel.transform as RectTransform;
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(8f, 0f);
+            labelRect.offsetMax = new Vector2(-8f, 0f);
+            toggle.targetGraphic = item.AddComponent<Image>();
+            toggle.graphic = itemLabel.AddComponent<TextMeshProUGUI>();
+            ((TMP_Text)toggle.graphic).fontSize = 13f;
+            ((TMP_Text)toggle.graphic).color = Color.white;
+            ((TMP_Text)toggle.graphic).text = "Option";
+            template.gameObject.SetActive(false);
+            return rect;
         }
 
         private static TMP_Text CreateText(Transform parent, string text, float size, FontStyles style)

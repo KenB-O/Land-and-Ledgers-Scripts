@@ -95,6 +95,10 @@ namespace LandLedgers.FirstLedger
 
         [Header("Runtime")]
         [SerializeField]
+        [Tooltip("When false, the scenario begins without a player-owned General Store. The player forms one through Businesses > Create Business.")]
+        private bool createPlayerBusinessOnInitialize = true;
+
+        [SerializeField]
         private int storeBuildingId = -1;
 
         [SerializeField]
@@ -488,6 +492,12 @@ namespace LandLedgers.FirstLedger
                 townWorld.GenerateTownShell();
             }
 
+            if (!createPlayerBusinessOnInitialize)
+            {
+                status = "No player General Store has been formed yet. Use Businesses > Create Business.";
+                return true;
+            }
+
             if (!FindStoreBuilding())
             {
                 status = "No eligible generated business building found for the player General Store.";
@@ -513,6 +523,11 @@ namespace LandLedgers.FirstLedger
             string staffingSegment = !string.IsNullOrWhiteSpace(staffingMessage) ? $" {staffingMessage}" : string.Empty;
             status = $"{currentBusiness.RuntimeDisplayName} open at building {storeBuildingId}.{staffingSegment}";
             return true;
+        }
+
+        public void SetCreatePlayerBusinessOnInitialize(bool enabled)
+        {
+            createPlayerBusinessOnInitialize = enabled;
         }
 
         public bool TryOpenAtPlayerOwnedShell(int buildingId, out BusinessInstanceState business, out string message)

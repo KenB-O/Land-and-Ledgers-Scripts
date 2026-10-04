@@ -258,6 +258,11 @@ namespace LandLedgers.FirstLedger
             RefreshDynamicTooltips();
         }
 
+        public void OpenManagementPanel()
+        {
+            SetVisible(true);
+        }
+
         public void OpenOwnedBuildingManagement(int buildingId)
         {
             AutoWireSources();
@@ -331,6 +336,7 @@ namespace LandLedgers.FirstLedger
             if (ResolveView())
             {
                 view.SetVisible(visible);
+                businessCreationPanel?.SetBusinessesTabActive(visible && currentTab == ManagementPanelTab.Properties);
                 if (changed)
                 {
                     LLFeedbackService.Play(
@@ -353,6 +359,7 @@ namespace LandLedgers.FirstLedger
             if (ResolveView())
             {
                 view.ShowTab(tab);
+                businessCreationPanel?.SetBusinessesTabActive(visible && tab == ManagementPanelTab.Properties);
                 if (changed)
                 {
                     LLFeedbackService.Play(LLFeedbackKind.UISelect, $"management {tab} tab switch", canvas);
@@ -720,6 +727,7 @@ namespace LandLedgers.FirstLedger
             }
 
             view.PropertiesTabButton?.onClick.AddListener(() => SetTab(ManagementPanelTab.Properties));
+            view.CloseButton?.onClick.AddListener(() => SetVisible(false));
             view.FinancesTabButton?.onClick.AddListener(() => SetTab(ManagementPanelTab.Finances));
             view.AcquisitionsTabButton?.onClick.AddListener(() => SetTab(ManagementPanelTab.Acquisitions));
             view.GovernmentTabButton?.onClick.AddListener(() => SetTab(ManagementPanelTab.Government));
@@ -776,6 +784,7 @@ namespace LandLedgers.FirstLedger
             }
 
             view.PropertiesTabButton?.onClick.RemoveAllListeners();
+            view.CloseButton?.onClick.RemoveAllListeners();
             view.FinancesTabButton?.onClick.RemoveAllListeners();
             view.AcquisitionsTabButton?.onClick.RemoveAllListeners();
             view.GovernmentTabButton?.onClick.RemoveAllListeners();
@@ -841,9 +850,11 @@ namespace LandLedgers.FirstLedger
                 view.TitleText.text = "Management";
             }
 
+            SetButtonLabel(view.PropertiesTabButton, "Businesses");
+
             if (view.HintText != null)
             {
-                view.HintText.text = $"{managementToggleKey} or Esc close | Tab switch tabs | Arrows select rows/listings | Enter action | {focusSelectionKey} view site";
+                view.HintText.text = $"{managementToggleKey} or Esc close | Tab switch tabs | Businesses lists owned businesses | Enter action | {focusSelectionKey} view site";
             }
 
             view.SetStatusText(panelStatus);
@@ -867,14 +878,14 @@ namespace LandLedgers.FirstLedger
         {
             if (view.PropertyListTitleText != null)
             {
-                view.PropertyListTitleText.text = $"Properties ({ownedEntries.Count})";
+                view.PropertyListTitleText.text = $"Businesses ({ownedEntries.Count})";
             }
 
             ConsumePendingOwnedContinuityStatus();
 
             if (ownedEntries.Count == 0)
             {
-                SetText(view.PropertyDetailTitleText, "No Properties");
+                SetText(view.PropertyDetailTitleText, "No Businesses Yet");
                 SetText(view.PropertyDetailSummaryText, BuildPropertiesEmptyStateSummary());
                 SetText(view.RentingOverviewText, BuildRentingAndLodgingSummary());
                 SetText(view.StoreOverviewText, BuildPropertiesEmptyStateDetail());
@@ -5120,11 +5131,6 @@ namespace LandLedgers.FirstLedger
                 ownedEntries.Add(new OwnedEntry(OwnedKind.Store, buildingId, building != null ? building.plotId : -1, name));
             }
 
-            if (populationManager != null || sharedBusinessRuntime != null)
-            {
-                ownedEntries.Add(new OwnedEntry(OwnedKind.Renting, -1, -1, "Renting & Boarding"));
-            }
-
             if (townWorld != null)
             {
                 int storeBuildingId = storeRuntime != null ? storeRuntime.StoreBuildingId : -1;
@@ -5140,7 +5146,10 @@ namespace LandLedgers.FirstLedger
                     }
 
                     OwnedKind kind = GetOwnedBuildingKind(building);
-                    ownedEntries.Add(new OwnedEntry(kind, building.id, building.plotId, GetOwnedBusinessLabel(building)));
+                    if (kind == OwnedKind.Business)
+                    {
+                        ownedEntries.Add(new OwnedEntry(kind, building.id, building.plotId, GetOwnedBusinessLabel(building)));
+                    }
                 }
 
                 for (int i = 0; i < townWorld.Plots.Count; i++)

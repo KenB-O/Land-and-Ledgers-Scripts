@@ -267,7 +267,10 @@ namespace LandLedgers.UI
         public bool BindFromChildren()
         {
             Transform root = transform;
-            bool canRepairAuthoredReferences = Application.isPlaying;
+            // The management shell is also exercised by editor/startup smoke checks.
+            // Repair only missing presentation controls; runtime authorities remain
+            // untouched and the authored scene/prefab remains the source of layout truth.
+            bool canRepairAuthoredReferences = true;
             ResolveManagementFont();
             panelRoot = panelRoot != null ? panelRoot : transform as RectTransform;
             titleText = titleText != null ? titleText : FindText(root, "Panel_Title");
@@ -502,7 +505,7 @@ namespace LandLedgers.UI
 
         private void ConfigureStaticTooltips()
         {
-            UITooltipRegistry.Attach(propertiesTabButton, "Properties", "Review owned land, buildings, staffing, and property actions.");
+            UITooltipRegistry.Attach(propertiesTabButton, "Businesses", "Review owned businesses, staffing, cash, and operating actions.");
             UITooltipRegistry.Attach(financesTabButton, "Finances", "Review liquid cash, business cash, transfers, lender pressure, and formal loan applications.");
             UITooltipRegistry.Attach(acquisitionsTabButton, "Acquisitions", "Review active leads, scouting reads, funding posture, and move serious deals into formal process.");
             UITooltipRegistry.Attach(governmentTabButton, "Civic", "Review town status, civic effects, and owner-facing public pressure.");
@@ -1525,6 +1528,10 @@ namespace LandLedgers.UI
         private void ConfigureBusinessCashTransferControls()
         {
             ConfigureCashTransferRootLayout();
+            ApplyManagementFont(cashTransferTitleText);
+            ApplyManagementFont(cashTransferHelpText);
+            ApplyManagementFont(cashTransferThresholdText);
+            ApplyManagementFont(cashTransferStatusText);
             ConfigureLoanButton(cashTransferDepositOneButton, "Deposit $1", 94f);
             ConfigureLoanButton(cashTransferDepositTenButton, "$10", 58f);
             ConfigureLoanButton(cashTransferDepositHundredButton, "$100", 66f);

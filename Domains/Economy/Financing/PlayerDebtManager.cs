@@ -41,6 +41,13 @@ namespace LandLedgers.Economy.Financing
         [SerializeField] private LenderProfile lender = LenderProfile.DefaultLocalBank;
         [SerializeField] private PlayerReputationState reputation = new(0.55f, 0.58f, 0.5f, 0.5f, 0.55f);
 
+        [Header("Lender Capital")]
+        [SerializeField, Min(0), Tooltip("NX-3B: the frontier bank's own lending capital in cents. CALIBRATION fork — replace with a researched figure. New loans commit against this capital; when it is exhausted new loans are refused, never conjured.")]
+        private int lenderCapitalCents = 2500000;
+
+        /// <summary>NX-3B: the lender's finite purse. Lazily built from the serialized capital; persisted via save DTO.</summary>
+        private PrivateLenderFunds lenderFunds;
+
         [Header("Runtime")]
         [SerializeField] private int requestedAmountCents = DefaultRequestedAmountCents;
         [SerializeField] private BankLoanApplicationState application = new();
@@ -88,6 +95,7 @@ namespace LandLedgers.Economy.Financing
                 application = application,
                 activeLoan = activeLoan,
                 reputation = reputation != null ? reputation.Clone() : new PlayerReputationState(),
+                lenderFundsState = EnsureLenderFunds().CaptureSaveDto(),
                 consecutiveMissedPayments = ConsecutiveMissedPayments,
                 lifetimeMissedPayments = LifetimeMissedPayments,
                 defaultCount = DefaultCount,
@@ -109,6 +117,7 @@ namespace LandLedgers.Economy.Financing
                 application = new BankLoanApplicationState();
                 activeLoan = null;
                 reputation = new PlayerReputationState(0.55f, lender.Sanitized().trust01, 0.5f, 0.5f, 0.55f);
+                lenderFunds = null;
                 consecutiveMissedPayments = 0;
                 lifetimeMissedPayments = 0;
                 defaultCount = 0;
@@ -126,6 +135,8 @@ namespace LandLedgers.Economy.Financing
             activeLoan = dto.activeLoan;
             reputation = dto.reputation ?? new PlayerReputationState(0.55f, lender.Sanitized().trust01, 0.5f, 0.5f, 0.55f);
             reputation.Clamp();
+            lenderFunds = new PrivateLenderFunds(lender.Sanitized().displayName, Mathf.Max(0, lenderCapitalCents));
+            lenderFunds.LoadFromSaveDto(dto.lenderFundsState);
             consecutiveMissedPayments = Mathf.Max(0, dto.consecutiveMissedPayments);
             lifetimeMissedPayments = Mathf.Max(0, dto.lifetimeMissedPayments);
             defaultCount = Mathf.Max(0, dto.defaultCount);
@@ -458,6 +469,16 @@ namespace LandLedgers.Economy.Financing
                 return false;
             }
 
+            // NX-3B: the lender funds this loan from their own finite capital.
+            // When the capital is exhausted the loan is refused, never conjured.
+            if (!TryCommitLenderCapital(loanId, term.principalCents, currentDay, out string capitalRefusal))
+            {
+                message = capitalRefusal;
+                lastStatusSummary = message;
+                lastDecisionSummary = message;
+                return false;
+            }
+
             LoanPaymentSchedule schedule = scheduleBuilder.Build(
                 loanId,
                 term,
@@ -557,7 +578,64 @@ namespace LandLedgers.Economy.Financing
             string cautionSuffix = HasActiveLenderReapplyCooldown(currentDay)
                 ? $" | Cooling off {Mathf.Max(1, GetRemainingLenderCooldownDays(currentDay))}d"
                 : string.Empty;
-            return $"Lender standing: {Mathf.RoundToInt(LenderTrust01 * 100f)}%{cautionSuffix}";
+            return $"Lender standing: {Mathf.RoundToInt(LenderTrust01 * 100f)}%{cautionSuffix} | Lending capital free: {FormatMoney(LenderAvailableCapitalCents)}";
+        }
+
+        /// <summary>
+        /// NX-3B: the lender's finite purse. Built lazily from the serialized
+        /// capital; restored from the save DTO on load. Never null after this call.
+        /// </summary>
+        public PrivateLenderFunds LenderFunds => EnsureLenderFunds();
+
+        /// <summary>NX-3B: uncommitted lender capital in cents.</summary>
+        public int LenderAvailableCapitalCents => Mathf.Max(0, EnsureLenderFunds().AvailableCents());
+
+        /// <summary>
+        /// NX-3B: commits lender capital to a loan. Returns false with a refusal
+        /// reason when the lender cannot fund the principal from their own capital —
+        /// the loan must then be declined, never conjured.
+        /// </summary>
+        public bool TryCommitLenderCapital(string loanId, int principalCents, int dayIndex, out string refusal)
+        {
+            refusal = EnsureLenderFunds().CommitFunds(
+                $"lender-commit-{loanId}",
+                loanId,
+                principalCents,
+                dayIndex);
+            if (refusal != null)
+            {
+                refusal = $"The lender cannot fund this loan from their own capital ({FormatMoney(LenderAvailableCapitalCents)} free).";
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// NX-3B: releases the lender's commitment when a loan is paid off or
+        /// recovered. NOT called on default — defaulted principal is impaired
+        /// capital the lender genuinely lost, so it stays committed.
+        /// </summary>
+        public void ReleaseLenderCapital(string loanId)
+        {
+            if (string.IsNullOrWhiteSpace(loanId))
+            {
+                return;
+            }
+
+            EnsureLenderFunds().ReleaseCommitment(loanId);
+        }
+
+        private PrivateLenderFunds EnsureLenderFunds()
+        {
+            if (lenderFunds == null)
+            {
+                lenderFunds = new PrivateLenderFunds(
+                    lender.Sanitized().displayName,
+                    Mathf.Max(0, lenderCapitalCents));
+            }
+
+            return lenderFunds;
         }
 
         public string BuildPanelStatusText()
@@ -716,6 +794,19 @@ namespace LandLedgers.Economy.Financing
                 BuildDate(absoluteDayIndex),
                 FirstPaymentOffsetDays,
                 GetDaysPerMonth());
+
+            // NX-3B: the lender funds this loan from their own finite capital.
+            // When the capital is exhausted the approval is reversed, never conjured.
+            if (result.term.principalCents > 0
+                && !TryCommitLenderCapital(loanId, result.term.principalCents, absoluteDayIndex, out string capitalRefusal))
+            {
+                application.status = BankLoanApplicationStatus.Declined;
+                application.decisionSummary = "Loan Declined";
+                application.declineReason = capitalRefusal;
+                lastStatusSummary = capitalRefusal;
+                lastDecisionSummary = capitalRefusal;
+                return;
+            }
 
             activeLoan = new LoanContract
             {
@@ -933,6 +1024,7 @@ namespace LandLedgers.Economy.Financing
             }
 
             activeLoan.status = LoanStatus.Recovered;
+            ReleaseLenderCapital(activeLoan.loanId);
             consecutiveMissedPayments = 0;
             lastMissedPaymentDayIndex = -1;
             MarkUnpaidPaymentsSkipped(activeLoan);
@@ -1384,6 +1476,7 @@ namespace LandLedgers.Economy.Financing
 
             activeLoan.status = LoanStatus.PaidOff;
             activeLoan.remainingPrincipalCents = 0;
+            ReleaseLenderCapital(activeLoan.loanId);
             consecutiveMissedPayments = 0;
             lastMissedPaymentDayIndex = -1;
             lastRepaymentSummary = "Bank loan paid off.";

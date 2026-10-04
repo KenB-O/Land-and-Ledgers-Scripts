@@ -121,5 +121,38 @@ namespace LandLedgers.Economy.Financing
             diag.Add($"PrivateLenderFunds [{LenderName}]: +{amountCents}c capital ({sourceNote}) — capital now {CapitalCents}c.");
             return null;
         }
+
+        #region Save / Load
+        [Serializable]
+        public sealed class PrivateLenderFundsSaveDto
+        {
+            public string LenderName = string.Empty;
+            public int CapitalCents;
+            public List<LenderCommitment> Commitments = new List<LenderCommitment>();
+        }
+
+        public PrivateLenderFundsSaveDto CaptureSaveDto()
+        {
+            return new PrivateLenderFundsSaveDto
+            {
+                LenderName = LenderName ?? string.Empty,
+                CapitalCents = Math.Max(0, CapitalCents),
+                Commitments = new List<LenderCommitment>(commitments),
+            };
+        }
+
+        public void LoadFromSaveDto(PrivateLenderFundsSaveDto dto)
+        {
+            commitments.Clear();
+            diagnostics.Clear();
+            if (dto == null) return;
+            LenderName = dto.LenderName ?? string.Empty;
+            CapitalCents = Math.Max(0, dto.CapitalCents);
+            if (dto.Commitments != null)
+                foreach (LenderCommitment c in dto.Commitments)
+                    if (c != null && c.AmountCents > 0)
+                        commitments.Add(c);
+        }
+        #endregion
     }
 }

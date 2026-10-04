@@ -2771,6 +2771,7 @@ namespace LandLedgers.FirstLedger
             {
                 builder.AppendLine(playerPortfolio.BuildWealthBreakdownSummary());
                 builder.AppendLine(playerPortfolio.BuildWealthGoalProgressSummary());
+                builder.AppendLine(playerPortfolio.BuildOwnerCashLedgerText(5));
             }
             builder.AppendLine(BuildExpansionCashLine());
             return builder.ToString();

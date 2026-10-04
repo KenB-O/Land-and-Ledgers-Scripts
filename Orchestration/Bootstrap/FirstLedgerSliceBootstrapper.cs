@@ -3,6 +3,7 @@ using System.Text;
 using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Pathing;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -66,6 +67,10 @@ namespace LandLedgers.FirstLedger
 
         [SerializeField]
         private PlayerPortfolioManager playerPortfolioManager;
+
+        [Header("Scenario")]
+        [SerializeField, Min(0), Tooltip("P4: fallback for the First Ledger scenario's 'startingCashCents' tunable (player stake). The scenario asset declares 250000c; the asset value wins when a ScenarioDirector is present.")]
+        private int fallbackStartingCashCents = 250000;
 
         [SerializeField]
         private SaveLoadManager saveLoadManager;
@@ -275,7 +280,14 @@ namespace LandLedgers.FirstLedger
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
             ConfigurePopulationPathingDirector();
+            // P4: the scenario promises "a stake of cash" (FirstLedger.asset tunable
+            // 'startingCashCents'). Seed it once on a fresh game — never on load.
+            bool portfolioWasInitialized = playerPortfolioManager != null && playerPortfolioManager.IsInitialized;
             playerPortfolioManager?.InitializeFromLegacyBusinessCash(storeRuntime, sharedBusinessRuntime);
+            if (!portfolioWasInitialized)
+            {
+                SeedPlayerStartingStake();
+            }
             AppendStartupTiming(timing, stepTimer, "business/runtime configure");
 
             ConfigureAcquisitionMarket();
@@ -704,6 +716,49 @@ namespace LandLedgers.FirstLedger
             }
 
             playerPortfolioManager.Configure(timeManager, hudController);
+        }
+
+        /// <summary>
+        /// P4: applies the First Ledger scenario's promised "stake of cash".
+        /// The scenario asset declares it as the 'startingCashCents' tunable;
+        /// the asset value wins when a ScenarioDirector is present, otherwise
+        /// the serialized fallback (which mirrors the asset) applies. The stake
+        /// lands in owner cash with a named ledger reason — a real endowment,
+        /// never conjured mid-simulation.
+        /// </summary>
+        private void SeedPlayerStartingStake()
+        {
+            if (playerPortfolioManager == null)
+            {
+                return;
+            }
+
+            ScenarioDirector director = FindAnyObjectByType<ScenarioDirector>();
+            int stake = ResolveStartingStakeCents(
+                director != null ? director.GetTunable("startingCashCents") : null,
+                fallbackStartingCashCents);
+            if (stake <= 0)
+            {
+                return;
+            }
+
+            playerPortfolioManager.AddOwnerCash(stake, "First Ledger starting stake");
+        }
+
+        /// <summary>
+        /// P4: resolves the scenario's starting-cash tunable. The asset's int
+        /// tunable wins when present and positive; otherwise the fallback.
+        /// </summary>
+        public static int ResolveStartingStakeCents(TunableValue tunable, int fallbackCents)
+        {
+            if (tunable != null
+                && tunable.Kind == TunableValue.ValueKind.Int
+                && tunable.IntValue > 0)
+            {
+                return tunable.IntValue;
+            }
+
+            return Mathf.Max(0, fallbackCents);
         }
 
         private void ConfigureOpportunityPressureRuntime()

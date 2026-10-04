@@ -49,6 +49,43 @@ namespace LandLedgers.Economy
         UpperOnly = 1
     }
 
+    /// <summary>
+    /// P4: one owner-cash movement — the First Ledger's bookkeeping (Canon §1.2).
+    /// Every cent that enters or leaves owner cash is recorded with its day,
+    /// signed amount, reason, and the balance after. Nothing is manufactured:
+    /// entries are only written by the two internal cash choke points.
+    /// </summary>
+    [Serializable]
+    public sealed class OwnerCashMovement
+    {
+        public int dayIndex = -1;
+        public int amountCents;
+        public int balanceAfterCents;
+        public string reason = string.Empty;
+
+        public OwnerCashMovementSaveDto CaptureSaveDto()
+        {
+            return new OwnerCashMovementSaveDto
+            {
+                dayIndex = dayIndex,
+                amountCents = amountCents,
+                balanceAfterCents = Mathf.Max(0, balanceAfterCents),
+                reason = reason ?? string.Empty
+            };
+        }
+
+        public static OwnerCashMovement FromSaveDto(OwnerCashMovementSaveDto dto)
+        {
+            return new OwnerCashMovement
+            {
+                dayIndex = dto != null ? dto.dayIndex : -1,
+                amountCents = dto != null ? dto.amountCents : 0,
+                balanceAfterCents = Mathf.Max(0, dto != null ? dto.balanceAfterCents : 0),
+                reason = dto != null ? dto.reason ?? string.Empty : string.Empty
+            };
+        }
+    }
+
     public readonly struct PlayerWealthSnapshot
     {
         public PlayerWealthSnapshot(
@@ -115,6 +152,7 @@ namespace LandLedgers.Economy
         private const int DefaultNetWorthWinTargetCents = 1000000;
         private const string DefaultWealthComponentAuditSummary = "Wealth components not audited yet.";
         private const string DefaultMonthlyWealthReviewSummary = "Monthly wealth review not captured yet.";
+        private const int MaxCashMovementEntries = 500;
 
         [Header("Sources")]
         [SerializeField]
@@ -219,6 +257,10 @@ namespace LandLedgers.Economy
         [SerializeField]
         private List<OwnerDistributionCheckpoint> distributionCheckpoints = new();
 
+        [Header("Owner Cash Ledger")]
+        [SerializeField, Tooltip("P4: the First Ledger's bookkeeping — every owner-cash movement with day, amount, reason, and balance after (Canon §1.2).")]
+        private List<OwnerCashMovement> cashMovements = new();
+
         public int OwnerCashCents => Mathf.Max(0, ownerCashCents);
         public bool IsInitialized => initialized;
         public int LastWeeklyDistributionCents => Mathf.Max(0, lastWeeklyDistributionCents);
@@ -249,6 +291,7 @@ namespace LandLedgers.Economy
         public string LastMonthlyWealthReviewSummary => lastMonthlyWealthReviewSummary ?? string.Empty;
         public string LastWeeklyDistributionSummary => lastWeeklyDistributionSummary ?? string.Empty;
         public IReadOnlyList<OwnerDistributionCheckpoint> DistributionCheckpoints => distributionCheckpoints;
+        public IReadOnlyList<OwnerCashMovement> CashMovements => cashMovements;
 
         public void Configure(TimeManager newTimeManager, LandLedgersHUDController newHudController)
         {
@@ -289,12 +332,22 @@ namespace LandLedgers.Economy
                 }
             }
 
+            for (int i = 0; i < cashMovements.Count; i++)
+            {
+                OwnerCashMovement movement = cashMovements[i];
+                if (movement != null)
+                {
+                    dto.cashMovements.Add(movement.CaptureSaveDto());
+                }
+            }
+
             return dto;
         }
 
         public void LoadFromSaveDto(PlayerPortfolioSaveDto dto)
         {
             distributionCheckpoints.Clear();
+            cashMovements.Clear();
             if (dto == null || !dto.initialized)
             {
                 initialized = false;
@@ -347,6 +400,23 @@ namespace LandLedgers.Economy
                 }
             }
 
+            if (dto.cashMovements != null)
+            {
+                for (int i = 0; i < dto.cashMovements.Count; i++)
+                {
+                    OwnerCashMovement movement = OwnerCashMovement.FromSaveDto(dto.cashMovements[i]);
+                    if (movement != null)
+                    {
+                        cashMovements.Add(movement);
+                    }
+                }
+
+                while (cashMovements.Count > MaxCashMovementEntries)
+                {
+                    cashMovements.RemoveAt(0);
+                }
+            }
+
             Sanitize();
             ResetMonthlyWealthReviewFromCurrentComponents();
             PushOwnerCashToHud();
@@ -372,7 +442,7 @@ namespace LandLedgers.Economy
                 if (migratedCents > 0)
                 {
                     storeRuntime.RuntimeState.SpendCents(migratedCents);
-                    AddOwnerCashInternal(migratedCents);
+                    AddOwnerCashInternal(migratedCents, "legacy business cash migration");
                 }
             }
 
@@ -395,7 +465,7 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            TrySpendOwnerCashInternal(amount);
+            TrySpendOwnerCashInternal(amount, label);
             lastTransactionSummary = $"Spent {FormatMoney(amount)} owner cash on {label}.";
             lastStatusSummary = lastTransactionSummary;
             message = $"Purchased {label} for {FormatMoney(amount)}.";
@@ -411,7 +481,7 @@ namespace LandLedgers.Economy
                 return;
             }
 
-            AddOwnerCashInternal(amount);
+            AddOwnerCashInternal(amount, $"refund after failed {SanitizeReason(reason)}");
             lastTransactionSummary = $"Refunded {FormatMoney(amount)} owner cash after failed {SanitizeReason(reason)}.";
             lastStatusSummary = lastTransactionSummary;
             PushOwnerCashToHud();
@@ -425,7 +495,7 @@ namespace LandLedgers.Economy
                 return;
             }
 
-            AddOwnerCashInternal(amount);
+            AddOwnerCashInternal(amount, reason);
             string label = SanitizeReason(reason);
             lastTransactionSummary = $"Received {FormatMoney(amount)} owner cash from {label}.";
             lastStatusSummary = lastTransactionSummary;
@@ -464,7 +534,7 @@ namespace LandLedgers.Economy
                     return false;
                 }
 
-                TrySpendOwnerCashInternal(amount);
+                TrySpendOwnerCashInternal(amount, $"transfer into {ResolveBusinessLabel(business, "business")}");
                 business.RuntimeState.AdjustCashCents(amount);
                 business.RuntimeState.RecordWeeklyCashTransferIn(amount);
                 message = $"Deposited {FormatMoney(amount)} into {ResolveBusinessLabel(business, "business")} from owner cash.";
@@ -494,7 +564,7 @@ namespace LandLedgers.Economy
 
             business.RuntimeState.AdjustCashCents(-amount);
             business.RuntimeState.RecordWeeklyCashTransferOut(amount);
-            AddOwnerCashInternal(amount);
+            AddOwnerCashInternal(amount, $"withdrawal from {ResolveBusinessLabel(business, "business")}");
             message = $"Withdrew {FormatMoney(amount)} from {ResolveBusinessLabel(business, "business")} to owner cash.";
             CompleteBusinessCashTransfer(business, message, GetCurrentWeekKey());
             return true;
@@ -542,7 +612,7 @@ namespace LandLedgers.Economy
                     return false;
                 }
 
-                TrySpendOwnerCashInternal(amount);
+                TrySpendOwnerCashInternal(amount, $"auto top-up into {ResolveBusinessLabel(business, "business")}");
                 business.RuntimeState.AdjustCashCents(amount);
                 business.RuntimeState.RecordWeeklyCashTransferIn(amount);
                 transferredCents = amount;
@@ -568,7 +638,7 @@ namespace LandLedgers.Economy
 
             business.RuntimeState.AdjustCashCents(-withdrawal);
             business.RuntimeState.RecordWeeklyCashTransferOut(withdrawal);
-            AddOwnerCashInternal(withdrawal);
+            AddOwnerCashInternal(withdrawal, $"auto withdrawal from {ResolveBusinessLabel(business, "business")}");
             transferredCents = withdrawal;
             message = $"Auto withdrew {FormatMoney(withdrawal)} from {ResolveBusinessLabel(business, "business")} to owner cash.";
             CompleteBusinessCashTransfer(business, message, weekKey);
@@ -744,7 +814,7 @@ namespace LandLedgers.Economy
             {
                 business.RuntimeState.AdjustCashCents(-distribution);
                 business.RuntimeState.RecordWeeklyOwnerDistribution(distribution);
-                AddOwnerCashInternal(distribution);
+                AddOwnerCashInternal(distribution, $"owner draw from {businessLabel}");
                 lastWeeklyDistributionCents = ClampToNonNegativeIntCents((long)LastWeeklyDistributionCents + distribution);
                 AppendDistributionSummary($"{businessLabel} paid {FormatMoney(distribution)}; kept {FormatMoney(survivalReserve)} reserve");
                 lastTransactionSummary = $"Received {FormatMoney(distribution)} owner distribution from {businessLabel}.";
@@ -888,6 +958,40 @@ namespace LandLedgers.Economy
             UpdateMonthlyWealthReviewSnapshot(snapshot);
             lastWealthComponentAuditSummary = BuildWealthComponentAuditSummary(snapshot, businessSummaries, hasBusinessSource);
             return snapshot;
+        }
+
+        /// <summary>
+        /// P4: the player-visible First Ledger — the most recent owner-cash
+        /// movements, newest first, each with day, signed amount, reason, and
+        /// the balance after (Canon §1.2: bookkeeping records what happened).
+        /// </summary>
+        public string BuildOwnerCashLedgerText(int maxEntries = 8)
+        {
+            int count = Mathf.Max(0, maxEntries);
+            if (cashMovements.Count == 0)
+            {
+                return "Owner ledger: no movements recorded yet.";
+            }
+
+            System.Text.StringBuilder builder = new();
+            builder.AppendLine("Owner ledger (recent):");
+            int shown = 0;
+            for (int i = cashMovements.Count - 1; i >= 0 && shown < count; i--, shown++)
+            {
+                OwnerCashMovement movement = cashMovements[i];
+                if (movement == null)
+                {
+                    continue;
+                }
+
+                string day = movement.dayIndex >= 0 ? $"Day {movement.dayIndex}" : "Day ?";
+                string signed = movement.amountCents >= 0
+                    ? $"+{FormatMoney(movement.amountCents)}"
+                    : $"-{FormatMoney(-movement.amountCents)}";
+                builder.AppendLine($"{day}: {signed} — {movement.reason} (bal {FormatMoney(Mathf.Max(0, movement.balanceAfterCents))})");
+            }
+
+            return builder.ToString().TrimEnd();
         }
 
         public string BuildPortfolioFinanceText()
@@ -1662,6 +1766,7 @@ namespace LandLedgers.Economy
             lastAssetValueCents = Mathf.Max(0, lastAssetValueCents);
             lastDebtLiabilityCents = Mathf.Max(0, lastDebtLiabilityCents);
             distributionCheckpoints ??= new List<OwnerDistributionCheckpoint>();
+            cashMovements ??= new List<OwnerCashMovement>();
             for (int i = distributionCheckpoints.Count - 1; i >= 0; i--)
             {
                 OwnerDistributionCheckpoint checkpoint = distributionCheckpoints[i];
@@ -1692,7 +1797,7 @@ namespace LandLedgers.Economy
             return string.IsNullOrWhiteSpace(reason) ? "portfolio transaction" : reason.Trim();
         }
 
-        private void AddOwnerCashInternal(int cents)
+        private void AddOwnerCashInternal(int cents, string reason)
         {
             int amount = Mathf.Max(0, cents);
             if (amount <= 0)
@@ -1701,9 +1806,10 @@ namespace LandLedgers.Economy
             }
 
             ownerCashCents = ClampToNonNegativeIntCents((long)OwnerCashCents + amount);
+            RecordCashMovement(amount, reason);
         }
 
-        private bool TrySpendOwnerCashInternal(int cents)
+        private bool TrySpendOwnerCashInternal(int cents, string reason)
         {
             int amount = Mathf.Max(0, cents);
             if (amount <= 0)
@@ -1717,7 +1823,34 @@ namespace LandLedgers.Economy
             }
 
             ownerCashCents = ClampToNonNegativeIntCents((long)OwnerCashCents - amount);
+            RecordCashMovement(-amount, reason);
             return true;
+        }
+
+        /// <summary>
+        /// P4: writes one line in the First Ledger — every owner-cash movement
+        /// with its day, signed amount, reason, and balance after (Canon §1.2).
+        /// Only the two cash choke points call this, so the book cannot
+        /// manufacture an event that did not occur.
+        /// </summary>
+        private void RecordCashMovement(int signedAmountCents, string reason)
+        {
+            cashMovements.Add(new OwnerCashMovement
+            {
+                dayIndex = GetCurrentDayIndex(),
+                amountCents = signedAmountCents,
+                balanceAfterCents = OwnerCashCents,
+                reason = SanitizeReason(reason)
+            });
+            while (cashMovements.Count > MaxCashMovementEntries)
+            {
+                cashMovements.RemoveAt(0);
+            }
+        }
+
+        private int GetCurrentDayIndex()
+        {
+            return timeManager != null ? Mathf.Max(-1, timeManager.CurrentAbsoluteDayIndex) : -1;
         }
 
         private static int SafeAbsCents(int cents)

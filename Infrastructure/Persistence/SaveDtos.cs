@@ -635,6 +635,7 @@ namespace LandLedgers.Persistence
         public LoanContract activeLoan;
         public List<LoanContract> activeLoans = new();
         public PlayerReputationState reputation = new();
+        public PrivateLenderFunds.PrivateLenderFundsSaveDto lenderFundsState;
         public int consecutiveMissedPayments;
         public int lifetimeMissedPayments;
         public int defaultCount;
@@ -665,6 +666,7 @@ namespace LandLedgers.Persistence
         public int lastDebtLiabilityCents;
         public bool netWorthWinReached;
         public List<OwnerDistributionCheckpointSaveDto> distributionCheckpoints = new();
+        public List<OwnerCashMovementSaveDto> cashMovements = new();
     }
 
     [Serializable]
@@ -675,6 +677,15 @@ namespace LandLedgers.Persistence
         public int lastDistributionCents;
         public int lastDistributionWeekKey = -1;
         public int openedWeekKey = -1;
+    }
+
+    [Serializable]
+    public sealed class OwnerCashMovementSaveDto
+    {
+        public int dayIndex = -1;
+        public int amountCents;
+        public int balanceAfterCents;
+        public string reason = string.Empty;
     }
 
 

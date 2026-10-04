@@ -138,6 +138,10 @@ namespace LandLedgers.Economy.Farming.Dairy
         private readonly List<PatronMilkStatement> statements = new List<PatronMilkStatement>();
         private readonly List<MilkCheck> checks = new List<MilkCheck>();
 
+        // D3F: deliveries already covered by a built statement. A delivery settles
+        // exactly once — overlapping month ranges must not pay the patron twice.
+        private readonly List<EntityId> coveredDeliveryIds = new List<EntityId>();
+
         public IReadOnlyList<ButterfatTest> Tests => tests;
         public IReadOnlyList<PatronMilkStatement> Statements => statements;
         public IReadOnlyList<MilkCheck> Checks => checks;
@@ -281,6 +285,16 @@ namespace LandLedgers.Economy.Farming.Dairy
                 if (delivery.DayIndex < monthStartDayIndex || delivery.DayIndex > monthEndDayIndex) continue;
                 if (delivery.AcceptedUnits <= 0 && delivery.RejectedUnits <= 0) continue;
 
+                // D3F: a delivery settles exactly once. If an earlier statement already
+                // covered it (overlapping month ranges are a caller error), refuse
+                // loudly rather than paying the patron twice.
+                if (delivery.AcceptedUnits > 0 && coveredDeliveryIds.Contains(delivery.DeliveryId))
+                {
+                    diagnostics.Add($"MilkCheckService: delivery {delivery.DeliveryId} (farm '{farmId}', day {delivery.DayIndex}) " +
+                        "is already covered by an earlier statement — no double settlement. Narrow the month range or void the prior statement first.");
+                    return null;
+                }
+
                 statement.DeliveryIds.Add(delivery.DeliveryId);
                 statement.TotalAcceptedUnits += delivery.AcceptedUnits;
                 statement.TotalRejectedUnits += delivery.RejectedUnits;
@@ -329,6 +343,14 @@ namespace LandLedgers.Economy.Farming.Dairy
 
             statement.NetPayableCents = net;
             statements.Add(statement);
+
+            // D3F: mark every accepted delivery in this statement as settled so a
+            // later overlapping build refuses instead of double-paying.
+            foreach (EntityId deliveryId in statement.DeliveryIds)
+            {
+                if (deliveryId.IsValid && !coveredDeliveryIds.Contains(deliveryId))
+                    coveredDeliveryIds.Add(deliveryId);
+            }
 
             diagnostics.Add($"MilkCheckService: statement {statement.StatementId} — farm '{farmId}' month [{monthStartDayIndex}..{monthEndDayIndex}]: " +
                 $"{statement.TotalAcceptedUnits} units accepted ({statement.TestedUnits} tested, {statement.UntestedUnits} untested), " +
@@ -461,6 +483,44 @@ namespace LandLedgers.Economy.Farming.Dairy
                 $"Note: the recorded payable {check.LiabilityId} must be settled or written off through the liability ledger — voiding the check does not erase the debt.");
             return null;
         }
+
+        /// <summary>D3F: save support (CLN-1 pattern). Tests, statements, checks, and
+        /// covered-delivery ids must survive a save — otherwise a reload would let an
+        /// already-settled delivery settle again.</summary>
+        public MilkCheckServiceSaveDto CaptureSaveDto()
+        {
+            return new MilkCheckServiceSaveDto
+            {
+                tests = new List<ButterfatTest>(tests),
+                statements = new List<PatronMilkStatement>(statements),
+                checks = new List<MilkCheck>(checks),
+                coveredDeliveryIds = new List<EntityId>(coveredDeliveryIds),
+            };
+        }
+
+        /// <summary>D3F: save support (CLN-1 pattern).</summary>
+        public void LoadFromSaveDto(MilkCheckServiceSaveDto dto)
+        {
+            tests.Clear();
+            statements.Clear();
+            checks.Clear();
+            coveredDeliveryIds.Clear();
+            if (dto == null) return;
+            if (dto.tests != null) tests.AddRange(dto.tests);
+            if (dto.statements != null) statements.AddRange(dto.statements);
+            if (dto.checks != null) checks.AddRange(dto.checks);
+            if (dto.coveredDeliveryIds != null) coveredDeliveryIds.AddRange(dto.coveredDeliveryIds);
+        }
+    }
+
+    /// <summary>D3F: save DTO for the milk-check settlement service (CLN-1 pattern).</summary>
+    [Serializable]
+    public sealed class MilkCheckServiceSaveDto
+    {
+        public List<ButterfatTest> tests = new List<ButterfatTest>();
+        public List<PatronMilkStatement> statements = new List<PatronMilkStatement>();
+        public List<MilkCheck> checks = new List<MilkCheck>();
+        public List<EntityId> coveredDeliveryIds = new List<EntityId>();
     }
 
     /// <summary>

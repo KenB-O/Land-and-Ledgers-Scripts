@@ -252,6 +252,8 @@ namespace LandLedgers.Economy.Businesses.GrainMill
         private readonly GrainMillStoneState stones;
         private readonly GristMillPolicy policy = new GristMillPolicy();
         private readonly List<GristBatchRecord> batchHistory = new List<GristBatchRecord>();
+        private readonly List<GristMillPurchaseRecord> purchaseHistory = new List<GristMillPurchaseRecord>();
+        private readonly List<GristMillSaleRecord> saleHistory = new List<GristMillSaleRecord>();
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId;
@@ -261,6 +263,10 @@ namespace LandLedgers.Economy.Businesses.GrainMill
         public GrainMillStoneState Stones => stones;
         public GristMillPolicy Policy => policy;
         public IReadOnlyList<GristBatchRecord> BatchHistory => batchHistory;
+        /// <summary>D2E: the mill's merchant grain purchases (named sellers, named prices).</summary>
+        public IReadOnlyList<GristMillPurchaseRecord> PurchaseHistory => purchaseHistory;
+        /// <summary>D2E: the mill's merchant product sales (named buyers, named prices).</summary>
+        public IReadOnlyList<GristMillSaleRecord> SaleHistory => saleHistory;
 
         public GrainMillShopRuntime(string businessInstanceId, EntityIdRegistry idRegistry, string stoneId = null)
         {
@@ -268,6 +274,41 @@ namespace LandLedgers.Economy.Businesses.GrainMill
             this.idRegistry = idRegistry;
             this.stones = new GrainMillStoneState(string.IsNullOrWhiteSpace(stoneId)
                 ? this.businessInstanceId + "-stones" : stoneId);
+        }
+
+        /// <summary>
+        /// D2E: the mill buys merchant grain from a NAMED seller at a named
+        /// or policy-booked price. The purchase is recorded with full
+        /// provenance; the cost is RETURNED for the ledger authority to
+        /// post (money never moves here). -1 on refusal.
+        /// </summary>
+        public int BuyMerchantLot(CropLot lot, string sellerId, string sellerName, int dayIndex, List<string> diag, int? pricePerUnitCents = null)
+        {
+            return GristMillMerchantTrade.BuyMerchantLot(this, lot, sellerId, sellerName, dayIndex, diag ?? diagnostics, pricePerUnitCents);
+        }
+
+        /// <summary>
+        /// D2E: the mill sells mill-owned product to a NAMED buyer at a
+        /// named or policy-booked price — the flour/feed outlet channel
+        /// (Canon R6 lock). Units dispense FIFO with the grain chain intact;
+        /// the revenue is recorded for the ledger authority to post (money
+        /// never moves here). Null on refusal — shortfalls dispense nothing.
+        /// </summary>
+        public GristMillMerchantSaleResult SellProductLot(string productKind, int units, string buyerId, string buyerName, int dayIndex, List<string> diag, int? pricePerUnitCents = null)
+        {
+            return GristMillMerchantTrade.SellProductLot(this, productKind, units, buyerId, buyerName, dayIndex, diag ?? diagnostics, pricePerUnitCents);
+        }
+
+        /// <summary>D2E: appends a booked merchant purchase to the mill's books.</summary>
+        public void RecordMerchantPurchase(GristMillPurchaseRecord record)
+        {
+            if (record != null) purchaseHistory.Add(record);
+        }
+
+        /// <summary>D2E: appends a booked merchant sale to the mill's books.</summary>
+        public void RecordMerchantSale(GristMillSaleRecord record)
+        {
+            if (record != null) saleHistory.Add(record);
         }
 
         /// <summary>W5A: merchant grain intake — the mill bought this grain.</summary>
@@ -650,6 +691,8 @@ namespace LandLedgers.Economy.Businesses.GrainMill
             public GrainMillStoneState.GrainMillStoneStateSaveDto Stones = new GrainMillStoneState.GrainMillStoneStateSaveDto();
             public GristMillPolicy Policy = new GristMillPolicy();
             public List<GristBatchRecord> BatchHistory = new List<GristBatchRecord>();
+            public List<GristMillPurchaseRecord> PurchaseHistory = new List<GristMillPurchaseRecord>();
+            public List<GristMillSaleRecord> SaleHistory = new List<GristMillSaleRecord>();
         }
 
         public GrainMillShopRuntimeSaveDto CaptureSaveDto()
@@ -667,6 +710,8 @@ namespace LandLedgers.Economy.Businesses.GrainMill
                     MerchantPrices = new List<GristMillPriceRow>(policy.MerchantPrices),
                 },
                 BatchHistory = new List<GristBatchRecord>(batchHistory),
+                PurchaseHistory = new List<GristMillPurchaseRecord>(purchaseHistory),
+                SaleHistory = new List<GristMillSaleRecord>(saleHistory),
             };
             foreach (var custody in tollOutbox)
             {
@@ -714,6 +759,22 @@ namespace LandLedgers.Economy.Businesses.GrainMill
             if (dto != null && dto.BatchHistory != null)
             {
                 batchHistory.AddRange(dto.BatchHistory);
+            }
+            purchaseHistory.Clear();
+            if (dto != null && dto.PurchaseHistory != null)
+            {
+                foreach (var record in dto.PurchaseHistory)
+                {
+                    if (record != null) purchaseHistory.Add(record);
+                }
+            }
+            saleHistory.Clear();
+            if (dto != null && dto.SaleHistory != null)
+            {
+                foreach (var record in dto.SaleHistory)
+                {
+                    if (record != null) saleHistory.Add(record);
+                }
             }
         }
     }

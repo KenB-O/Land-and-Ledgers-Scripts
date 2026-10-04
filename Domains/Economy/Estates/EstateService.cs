@@ -307,6 +307,24 @@ namespace LandLedgers.Economy.Estates
         }
 
         /// <summary>
+        /// D4D: contest-freeze-aware overload. When a D4C contest is live for
+        /// the estate, the estate is frozen — the distribution is refused
+        /// loudly, never auto-completed. With no contest service (or no live
+        /// contest), this behaves exactly like the base overload.
+        /// </summary>
+        public string DistributeParcel(
+            Estate estate, string parcelId, int heirPersonId, string heirName,
+            EntityIdRegistry ids, TitleAuthority titles, int dayIndex, List<string> diag,
+            WillContestService contestService)
+        {
+            diag = diag ?? diagnostics;
+            if (estate != null && contestService != null &&
+                contestService.HasLiveContestForEstate(estate.EstateId))
+                return $"EstateService.DistributeParcel: estate {estate.EstateId} is FROZEN — an open will contest blocks distribution. It resumes only when the proceeding ends.";
+            return DistributeParcel(estate, parcelId, heirPersonId, heirName, ids, titles, dayIndex, diag);
+        }
+
+        /// <summary>
         /// Closes the estate: all debts settled, all parcels distributed.
         /// The decedent is archived via the T2H PersonArchive by the caller —
         /// this only verifies readiness and marks closure.

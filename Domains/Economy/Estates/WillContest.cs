@@ -588,6 +588,24 @@ namespace LandLedgers.Economy.Estates
             return contests.TryGetValue(contestId, out WillContest contest) ? contest : null;
         }
 
+        /// <summary>
+        /// D4D: true when the estate has a live (open or hearing-set) contest.
+        /// The D4D administration pipeline freezes the estate on this — no
+        /// distributions, disbursements, or closure while a contest is live.
+        /// Read-only.
+        /// </summary>
+        public bool HasLiveContestForEstate(string estateId)
+        {
+            if (string.IsNullOrWhiteSpace(estateId)) return false;
+            foreach (WillContest contest in contests.Values)
+            {
+                if (contest != null && string.Equals(contest.EstateId, estateId, StringComparison.Ordinal)
+                    && IsLive(contest.Status))
+                    return true;
+            }
+            return false;
+        }
+
         #region Save / Load
 
         [Serializable]

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -210,6 +211,81 @@ namespace LandLedgers.PlayMode
                 "A household sale must retain the real acting adult Person, not only an anonymous household count.");
             Assert.Greater((int)storeRuntimeType.GetProperty("LastCustomerSaleUnits")?.GetValue(storeRuntime), 0);
             Assert.Greater((int)storeRuntimeType.GetProperty("LastCustomerSaleRevenueCents")?.GetValue(storeRuntime), 0);
+        }
+
+        [UnityTest, Order(1000)]
+        public IEnumerator CampaignSaveRoundTripPreservesProductionBusinessIdentity()
+        {
+            AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);
+            Assert.NotNull(load, "Main Scene must be present in the build settings.");
+            while (!load.isDone)
+            {
+                yield return null;
+            }
+
+            yield return null;
+
+            Type saveLoadType = RuntimeType("LandLedgers.Persistence.SaveLoadManager");
+            Component saveLoad = FindComponent(saveLoadType);
+            Assert.NotNull(saveLoad, "The playable scene must own the production save/load authority.");
+            Type sharedRuntimeType = RuntimeType("LandLedgers.Economy.SharedBusinessRuntimeManager");
+            Component sharedRuntime = FindComponent(sharedRuntimeType);
+            object businesses = sharedRuntimeType.GetProperty("Businesses")?.GetValue(sharedRuntime);
+            var idsBefore = new List<string>();
+            foreach (object business in (System.Collections.IEnumerable)businesses)
+            {
+                string id = business?.GetType().GetProperty("InstanceId")?.GetValue(business) as string;
+                if (!string.IsNullOrWhiteSpace(id)) idsBefore.Add(id);
+            }
+            Component storeRuntime = FindComponent(RuntimeType("LandLedgers.FirstLedger.GeneralStoreRuntimeManager"));
+            object currentStore = storeRuntime?.GetType().GetProperty("CurrentBusiness")?.GetValue(storeRuntime);
+            string currentStoreId = currentStore?.GetType().GetProperty("InstanceId")?.GetValue(currentStore) as string;
+            if (!string.IsNullOrWhiteSpace(currentStoreId) && !idsBefore.Contains(currentStoreId)) idsBefore.Add(currentStoreId);
+            Assert.IsNotEmpty(idsBefore, "The authored opening state must contain a real business before saving.");
+
+            string path = saveLoadType.GetProperty("DefaultSlotPath")?.GetValue(saveLoad) as string;
+            string backupPath = path + ".bak";
+            string tempPath = Path.Combine(Application.temporaryCachePath, "land-ledgers-save-roundtrip-backup.json");
+            string tempBackupPath = tempPath + ".bak";
+            bool hadSave = File.Exists(path);
+            bool hadBackup = File.Exists(backupPath);
+            if (hadSave) File.Copy(path, tempPath, true);
+            if (hadBackup) File.Copy(backupPath, tempBackupPath, true);
+
+            try
+            {
+                object[] saveArgs = { null };
+                bool saved = (bool)saveLoadType.GetMethod("SaveDefaultSlot")?.Invoke(saveLoad, saveArgs);
+                Assert.IsTrue(saved, saveArgs[0] as string);
+                object[] loadArgs = { null };
+                bool loaded = (bool)saveLoadType.GetMethod("LoadDefaultSlot")?.Invoke(saveLoad, loadArgs);
+                Assert.IsTrue(loaded, loadArgs[0] as string);
+                yield return null;
+
+                sharedRuntime = FindComponent(sharedRuntimeType);
+                businesses = sharedRuntimeType.GetProperty("Businesses")?.GetValue(sharedRuntime);
+                var idsAfter = new HashSet<string>();
+                foreach (object business in (System.Collections.IEnumerable)businesses)
+                {
+                    string id = business?.GetType().GetProperty("InstanceId")?.GetValue(business) as string;
+                    if (!string.IsNullOrWhiteSpace(id)) idsAfter.Add(id);
+                }
+                storeRuntime = FindComponent(RuntimeType("LandLedgers.FirstLedger.GeneralStoreRuntimeManager"));
+                currentStore = storeRuntime?.GetType().GetProperty("CurrentBusiness")?.GetValue(storeRuntime);
+                currentStoreId = currentStore?.GetType().GetProperty("InstanceId")?.GetValue(currentStore) as string;
+                if (!string.IsNullOrWhiteSpace(currentStoreId)) idsAfter.Add(currentStoreId);
+                foreach (string id in idsBefore)
+                    Assert.IsTrue(idsAfter.Contains(id), $"Save/load must preserve business identity {id}.");
+            }
+            finally
+            {
+                if (hadSave) File.Copy(tempPath, path, true);
+                else if (File.Exists(path)) File.Delete(path);
+                if (hadBackup) File.Copy(tempBackupPath, backupPath, true);
+                else if (File.Exists(backupPath)) File.Delete(backupPath);
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+                if (File.Exists(tempBackupPath)) File.Delete(tempBackupPath);
+            }
         }
 
         private static object CreateBusiness(Component sharedRuntime, Type sharedRuntimeType, object businessType, string name)

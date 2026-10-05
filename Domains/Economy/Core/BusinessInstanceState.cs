@@ -563,6 +563,22 @@ namespace LandLedgers.Economy
         public string ProfileId => profileId ?? string.Empty;
         public BusinessType BusinessType => businessType;
         public int AssignedBuildingId => assignedBuildingId;
+
+        /// <summary>
+        /// BIZ-1: binds a formed business to a concrete premises choice. Formation
+        /// may intentionally leave this unset; the player then establishes a site
+        /// through the premises workflow before the operation can use road access.
+        /// </summary>
+        public bool TryAssignPremises(int buildingId)
+        {
+            if (assignedBuildingId >= 0 || buildingId < 0)
+            {
+                return false;
+            }
+
+            assignedBuildingId = buildingId;
+            return true;
+        }
         public string RuntimeDisplayName => string.IsNullOrWhiteSpace(runtimeDisplayName) ? BusinessRuntimeNaming.Build(owner, businessType) : runtimeDisplayName;
         public BusinessOwnerIdentity Owner => owner;
         /// <summary>P1: the explicit sale terms (Canon XXVII Part IX §9.1), if the business was sold.</summary>

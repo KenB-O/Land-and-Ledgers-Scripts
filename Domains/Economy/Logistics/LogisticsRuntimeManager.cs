@@ -1241,7 +1241,12 @@ namespace LandLedgers.Economy
                 && business.BaselineDailyServiceCapacity > 0
                 && business.OperatingEfficiency01 > 0f
                 && business.RuntimeState.ActiveRequiredWorkerCount >= business.RuntimeState.RequiredWorkerCount
-                && (sharedBusinessRuntime == null || sharedBusinessRuntime.IsBusinessAssignmentValid(business));
+                // Freight is a mobile operation: a formed, staffed carrier may
+                // serve road-connected endpoints without owning a storefront or
+                // fixed premises of its own.
+                && (business.AssignedBuildingId < 0
+                    || sharedBusinessRuntime == null
+                    || sharedBusinessRuntime.IsBusinessAssignmentValid(business));
         }
 
         private static int CalculateFreightChargeCents(

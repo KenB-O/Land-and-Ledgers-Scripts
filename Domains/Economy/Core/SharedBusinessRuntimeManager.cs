@@ -502,6 +502,11 @@ namespace LandLedgers.Economy
 
             operationCount += ResolveArchetypeRoutedWeeklyOperations(builder);
 
+            // Farm output is physical inventory first. Move it through the shared
+            // logistics authority before local-market sales consume any remainder;
+            // otherwise the crop-to-store route exists only as dead code and the
+            // player cannot form the authored vertical supply chain.
+            transferCount += TransferCropFarmOutputs(builder);
             transferCount += ResolveRecurringLocalOrders(builder);
             transferCount += ResolveOwnedBusinessTransferAgreements(builder);
             transferCount += ResolveLumberIndustryOffMapFallback(builder);
@@ -2810,6 +2815,69 @@ namespace LandLedgers.Economy
 
             PlacedBuilding building = townWorld.Buildings[business.AssignedBuildingId];
             return BusinessSiteSuitabilityEvaluator.CanOperate(profile, building, GetPlot(building != null ? building.plotId : -1));
+        }
+
+        /// <summary>
+        /// Establishes premises for an already formed player business. This keeps
+        /// entity creation separate from property/site use while ensuring the site
+        /// is genuinely compatible with the business profile and not double-booked.
+        /// </summary>
+        public bool TryAssignPlayerBusinessPremises(BusinessInstanceState business, out string message)
+        {
+            AutoWire();
+            if (business == null || business.RuntimeState == null)
+            {
+                message = "Business unavailable.";
+                return false;
+            }
+
+            if (business.Owner == null || business.Owner.OwnerKind != BusinessOwnerKind.Player)
+            {
+                message = "Only a player-owned business can establish premises here.";
+                return false;
+            }
+
+            if (business.AssignedBuildingId >= 0)
+            {
+                message = $"{business.RuntimeDisplayName} already has premises.";
+                return false;
+            }
+
+            BusinessProfileDefinition profile = FindProfile(business.BusinessType);
+            if (profile == null || townWorld == null || townWorld.Buildings == null)
+            {
+                message = "No compatible property inventory is available.";
+                return false;
+            }
+
+            for (int i = 0; i < townWorld.Buildings.Count; i++)
+            {
+                PlacedBuilding building = townWorld.Buildings[i];
+                if (building == null || assignedBuildingIds.Contains(building.id))
+                {
+                    continue;
+                }
+
+                TownPlot plot = GetPlot(building.plotId);
+                if (!BusinessSiteSuitabilityEvaluator.CanOperate(profile, building, plot))
+                {
+                    continue;
+                }
+
+                if (!business.TryAssignPremises(building.id))
+                {
+                    continue;
+                }
+
+                assignedBuildingIds.Add(building.id);
+                business.ResolveWeeklyBaselineThroughput();
+                business.ResolveDailyBaselineService();
+                message = $"{business.RuntimeDisplayName} established compatible premises at Building {building.id:000}.";
+                return true;
+            }
+
+            message = $"No compatible unassigned premises are available for {business.RuntimeDisplayName}.";
+            return false;
         }
 
         private void ResetWeeklySettlementForType(BusinessType businessType)
@@ -5821,6 +5889,12 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
+            ShipmentHaulingMode haulingMode = HasOperationalFreightCarrier(source, destination)
+                ? ShipmentHaulingMode.HiredFreight
+                : ShipmentHaulingMode.SourceDelivers;
+            string freightPayerBusinessId = haulingMode == ShipmentHaulingMode.HiredFreight
+                ? destination.InstanceId
+                : string.Empty;
             LogisticsShipmentState shipment = logisticsRuntime.CreateLocalBusinessShipment(
                 source,
                 sourceCategoryId,
@@ -5831,7 +5905,9 @@ namespace LandLedgers.Economy
                 unitPriceCents,
                 true,
                 LogisticsShipmentDeliveryMode.AddCategoryStock,
-                $"{source.RuntimeDisplayName}->{destination.RuntimeDisplayName}");
+                $"{source.RuntimeDisplayName}->{destination.RuntimeDisplayName}",
+                haulingMode,
+                freightPayerBusinessId);
             if (shipment == null
                 || shipment.RoutePlan == null
                 || shipment.RoutePlan.VisiblePath == null
@@ -5856,6 +5932,30 @@ namespace LandLedgers.Economy
             }
 
             return consumed;
+        }
+
+        private bool HasOperationalFreightCarrier(
+            BusinessInstanceState source,
+            BusinessInstanceState destination)
+        {
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState carrier = businesses[i];
+                if (carrier == null
+                    || carrier.BusinessType != BusinessType.LiveryFreight
+                    || carrier.RuntimeState == null
+                    || carrier.BaselineDailyServiceCapacity <= 0
+                    || carrier.OperatingEfficiency01 <= 0f
+                    || carrier.RuntimeState.ActiveRequiredWorkerCount < carrier.RuntimeState.RequiredWorkerCount
+                    || (carrier.AssignedBuildingId >= 0 && !IsBusinessAssignmentValid(carrier)))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
         }
 
         private int TransferToGeneralStore(
@@ -5938,6 +6038,12 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
+            ShipmentHaulingMode haulingMode = HasOperationalFreightCarrier(source, generalStoreRuntime.CurrentBusiness)
+                ? ShipmentHaulingMode.HiredFreight
+                : ShipmentHaulingMode.SourceDelivers;
+            string freightPayerBusinessId = haulingMode == ShipmentHaulingMode.HiredFreight
+                ? generalStoreRuntime.CurrentBusiness.InstanceId
+                : string.Empty;
             LogisticsShipmentState shipment = logisticsRuntime.CreateLocalBusinessShipment(
                 source,
                 sourceCategoryId,
@@ -5948,7 +6054,9 @@ namespace LandLedgers.Economy
                 unitPriceCents,
                 true,
                 LogisticsShipmentDeliveryMode.GeneralStoreLocalSupply,
-                $"{source.RuntimeDisplayName}->General Store");
+                $"{source.RuntimeDisplayName}->General Store",
+                haulingMode,
+                freightPayerBusinessId);
             if (shipment == null
                 || shipment.RoutePlan == null
                 || shipment.RoutePlan.VisiblePath == null

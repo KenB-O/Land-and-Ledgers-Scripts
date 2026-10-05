@@ -127,7 +127,6 @@ namespace LandLedgers.PlayMode
             bool hired = (bool)sharedRuntimeType.GetMethod("TryAssignCandidateToOpenSlot")
                 .Invoke(sharedRuntime, hireArguments);
             Assert.IsTrue(hired, $"The route must hire a real freight worker through the production staffing authority: {hireArguments[2]}");
-            object freightRuntimeState = freight.GetType().GetProperty("RuntimeState")?.GetValue(freight);
 
             Type storeRuntimeType = RuntimeType("LandLedgers.FirstLedger.GeneralStoreRuntimeManager");
             Component storeRuntime = FindComponent(storeRuntimeType);

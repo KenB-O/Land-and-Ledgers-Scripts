@@ -155,6 +155,22 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private int lastDailyMissedPriceUnits;
 
+        [Header("Latest Customer Sale Provenance")]
+        [SerializeField]
+        private int lastCustomerHouseholdId = -1;
+
+        [SerializeField]
+        private int lastCustomerPersonId = -1;
+
+        [SerializeField]
+        private string lastCustomerSaleCategoryId = string.Empty;
+
+        [SerializeField]
+        private int lastCustomerSaleUnits;
+
+        [SerializeField]
+        private int lastCustomerSaleRevenueCents;
+
         [SerializeField]
         private int currentWeekCustomerHouseholds;
 
@@ -241,6 +257,11 @@ namespace LandLedgers.FirstLedger
         public int LastDailyOnMapStoreSpendCents => lastDailyOnMapStoreSpendCents;
         public int LastDailyOffMapStoreUnitsSold => lastDailyOffMapStoreUnitsSold;
         public int LastDailyOffMapStoreSpendCents => lastDailyOffMapStoreSpendCents;
+        public int LastCustomerHouseholdId => lastCustomerHouseholdId;
+        public int LastCustomerPersonId => lastCustomerPersonId;
+        public string LastCustomerSaleCategoryId => lastCustomerSaleCategoryId ?? string.Empty;
+        public int LastCustomerSaleUnits => lastCustomerSaleUnits;
+        public int LastCustomerSaleRevenueCents => lastCustomerSaleRevenueCents;
         public int LastDailyReserveOffMapUnits => lastDailyReserveOffMapUnits;
         public int LastDailyReserveOffMapLostDemandCents => lastDailyReserveOffMapLostDemandCents;
         public int LastWeeklyReorderSpendCents => lastWeeklyReorderSpendCents;
@@ -314,6 +335,11 @@ namespace LandLedgers.FirstLedger
                 lastDailyReserveLocalSpendCents = lastDailyReserveLocalSpendCents,
                 lastDailyReserveOffMapUnits = lastDailyReserveOffMapUnits,
                 lastDailyReserveOffMapLostDemandCents = lastDailyReserveOffMapLostDemandCents,
+                lastCustomerHouseholdId = lastCustomerHouseholdId,
+                lastCustomerPersonId = lastCustomerPersonId,
+                lastCustomerSaleCategoryId = lastCustomerSaleCategoryId,
+                lastCustomerSaleUnits = lastCustomerSaleUnits,
+                lastCustomerSaleRevenueCents = lastCustomerSaleRevenueCents,
                 currentWeekCustomerHouseholds = currentWeekCustomerHouseholds,
                 weekToDateCostOfGoodsSoldCents = weekToDateCostOfGoodsSoldCents,
                 currentSalesWeek = currentSalesWeek,
@@ -365,6 +391,11 @@ namespace LandLedgers.FirstLedger
             lastDailyReserveLocalSpendCents = Mathf.Max(0, dto.lastDailyReserveLocalSpendCents);
             lastDailyReserveOffMapUnits = Mathf.Max(0, dto.lastDailyReserveOffMapUnits);
             lastDailyReserveOffMapLostDemandCents = Mathf.Max(0, dto.lastDailyReserveOffMapLostDemandCents);
+            lastCustomerHouseholdId = dto.lastCustomerHouseholdId;
+            lastCustomerPersonId = dto.lastCustomerPersonId;
+            lastCustomerSaleCategoryId = dto.lastCustomerSaleCategoryId ?? string.Empty;
+            lastCustomerSaleUnits = Mathf.Max(0, dto.lastCustomerSaleUnits);
+            lastCustomerSaleRevenueCents = Mathf.Max(0, dto.lastCustomerSaleRevenueCents);
             currentWeekCustomerHouseholds = dto.currentWeekCustomerHouseholds;
             weekToDateCostOfGoodsSoldCents = dto.weekToDateCostOfGoodsSoldCents;
             currentSalesWeek = dto.currentSalesWeek;
@@ -687,6 +718,11 @@ namespace LandLedgers.FirstLedger
             lastDailyOffMapStoreSpendCents = 0;
             lastDailyReserveOffMapUnits = 0;
             lastDailyReserveOffMapLostDemandCents = 0;
+            lastCustomerHouseholdId = -1;
+            lastCustomerPersonId = -1;
+            lastCustomerSaleCategoryId = string.Empty;
+            lastCustomerSaleUnits = 0;
+            lastCustomerSaleRevenueCents = 0;
             lastDailyMissedStockUnits = 0;
             lastDailyMissedServiceUnits = 0;
             lastDailyMissedPriceUnits = 0;
@@ -3339,7 +3375,7 @@ namespace LandLedgers.FirstLedger
             weekToDateCostOfGoodsSoldCents += costOfGoodsSold;
             remainingBudgetCents -= revenue;
             lastDailyUnitsSold += unitsSold;
-            RecordGeneralStoreHouseholdSaleObservation(categoryId, requestedUnits, unitsSold, unitPrice);
+            RecordGeneralStoreHouseholdSaleObservation(categoryId, householdId, requestedUnits, unitsSold, unitPrice);
             RecordGeneralStoreHouseholdAffinity(householdId, categoryId, requestedUnits, unitsSold, revenue, unitPrice);
             return new LocalReserveSale(unitsSold, revenue);
         }
@@ -3574,12 +3610,18 @@ namespace LandLedgers.FirstLedger
             return score.Eligible;
         }
 
-        private void RecordGeneralStoreHouseholdSaleObservation(string categoryId, int requestedUnits, int unitsSold, int unitPriceCents)
+        private void RecordGeneralStoreHouseholdSaleObservation(string categoryId, int householdId, int requestedUnits, int unitsSold, int unitPriceCents)
         {
             if (currentBusiness == null || runtimeState == null || unitsSold <= 0)
             {
                 return;
             }
+
+            lastCustomerHouseholdId = householdId;
+            lastCustomerPersonId = ResolveActingCustomerPersonId(householdId);
+            lastCustomerSaleCategoryId = categoryId ?? string.Empty;
+            lastCustomerSaleUnits = unitsSold;
+            lastCustomerSaleRevenueCents = unitsSold * Mathf.Max(0, unitPriceCents);
 
             CategoryStockState stock = runtimeState.GetCategoryStock(categoryId);
             currentBusiness.RecordBusinessReputationObservation(
@@ -3594,6 +3636,33 @@ namespace LandLedgers.FirstLedger
                     categoryId,
                     timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1,
                     timeManager != null ? Mathf.Max(0, timeManager.CurrentWeek) : -1));
+        }
+
+        private int ResolveActingCustomerPersonId(int householdId)
+        {
+            if (householdId < 0 || populationManager == null || populationManager.State == null)
+            {
+                return -1;
+            }
+
+            HouseholdState household = populationManager.State.GetHousehold(householdId);
+            if (household == null || household.memberIds == null)
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < household.memberIds.Count; i++)
+            {
+                PersonState person = populationManager.State.GetPerson(household.memberIds[i]);
+                if (person != null
+                    && person.ageBand == AgeBand.Adult18Plus
+                    && person.laborAccessLevel != LaborAccessLevel.None)
+                {
+                    return person.id;
+                }
+            }
+
+            return -1;
         }
 
         private BusinessReputationSellerChoiceScore ApplyHouseholdAffinityToSellerChoiceScore(

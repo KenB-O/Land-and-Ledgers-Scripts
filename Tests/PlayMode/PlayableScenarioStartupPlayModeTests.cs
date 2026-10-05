@@ -173,6 +173,45 @@ namespace LandLedgers.PlayMode
             Assert.AreEqual(freightId, carrierId, "The shipment must name the real Freight business as carrier.");
         }
 
+        [UnityTest]
+        public IEnumerator GeneralStoreDailySaleKeepsRealHouseholdAndPersonProvenance()
+        {
+            AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);
+            Assert.NotNull(load, "Main Scene must be present in the build settings.");
+            while (!load.isDone)
+            {
+                yield return null;
+            }
+
+            yield return null;
+
+            Type sharedRuntimeType = RuntimeType("LandLedgers.Economy.SharedBusinessRuntimeManager");
+            Type businessType = RuntimeType("LandLedgers.Economy.BusinessType");
+            Component sharedRuntime = FindComponent(sharedRuntimeType);
+            Component storeRuntime = FindComponent(RuntimeType("LandLedgers.FirstLedger.GeneralStoreRuntimeManager"));
+            Assert.NotNull(sharedRuntime);
+            Assert.NotNull(storeRuntime);
+
+            object[] createArguments = { Enum.Parse(businessType, "GeneralStore"), "Customer Ledger Store", null, null };
+            Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryCreatePlayerBusiness")
+                .Invoke(sharedRuntime, createArguments), createArguments[3] as string);
+
+            Type storeRuntimeType = storeRuntime.GetType();
+            object[] bindArguments = { createArguments[2], null };
+            Assert.IsTrue((bool)storeRuntimeType.GetMethod("TryBindFormedPlayerBusiness")
+                .Invoke(storeRuntime, bindArguments), bindArguments[1] as string);
+
+            storeRuntimeType.GetMethod("ResolveDailySales")?.Invoke(storeRuntime, null);
+
+            int customers = (int)storeRuntimeType.GetProperty("LastDailyCustomerHouseholds")?.GetValue(storeRuntime);
+            Assert.Greater(customers, 0, "A stocked operating store must serve an authored household customer.");
+            Assert.GreaterOrEqual((int)storeRuntimeType.GetProperty("LastCustomerHouseholdId")?.GetValue(storeRuntime), 0);
+            Assert.GreaterOrEqual((int)storeRuntimeType.GetProperty("LastCustomerPersonId")?.GetValue(storeRuntime), 0,
+                "A household sale must retain the real acting adult Person, not only an anonymous household count.");
+            Assert.Greater((int)storeRuntimeType.GetProperty("LastCustomerSaleUnits")?.GetValue(storeRuntime), 0);
+            Assert.Greater((int)storeRuntimeType.GetProperty("LastCustomerSaleRevenueCents")?.GetValue(storeRuntime), 0);
+        }
+
         private static object CreateBusiness(Component sharedRuntime, Type sharedRuntimeType, object businessType, string name)
         {
             object[] arguments = { businessType, name, null, null };

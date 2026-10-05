@@ -731,6 +731,11 @@ namespace LandLedgers.Persistence
         public int lastDailyReserveLocalSpendCents;
         public int lastDailyReserveOffMapUnits;
         public int lastDailyReserveOffMapLostDemandCents;
+        public int lastCustomerHouseholdId = -1;
+        public int lastCustomerPersonId = -1;
+        public string lastCustomerSaleCategoryId = string.Empty;
+        public int lastCustomerSaleUnits;
+        public int lastCustomerSaleRevenueCents;
         public int currentWeekCustomerHouseholds;
         public int weekToDateCostOfGoodsSoldCents;
         public int currentSalesWeek = -1;

@@ -802,6 +802,7 @@ namespace LandLedgers.FirstLedger
             float reorderThreshold01 = GetEffectiveReorderThreshold01();
             bool neededBeforeSettlement = runtimeState.HasReorderNeed(reorderThreshold01);
             int cashBeforeSettlement = runtimeState.CurrentCashCents;
+            FindAnyObjectByType<SharedBusinessRuntimeManager>()?.RecordWeeklyProfitForValuation(currentBusiness);
             runtimeState.BeginWeeklySettlementCadence(storeDefinition.Business, reorderThreshold01, false);
             ResolveAutomaticBusinessCashTransfer(BusinessCashAutoTransferMode.LowerOnly);
             runtimeState.ResolveWeeklyPayroll();
@@ -853,6 +854,12 @@ namespace LandLedgers.FirstLedger
             {
                 Debug.Log(lastWeeklySettlementDebugSummary + "\n" + lastReorderDebugSummary, this);
             }
+
+            // The valuation callback above must see the complete preceding week.
+            // Clear the completed sales bucket only after settlement so the next
+            // week starts clean without losing six days of ordinary retail trade
+            // at the calendar boundary.
+            runtimeState.ResetWeekToDateSales();
         }
 
         public string BuildStoreSummaryText()
@@ -2297,7 +2304,6 @@ namespace LandLedgers.FirstLedger
             currentSalesWeek = week;
             currentWeekCustomerHouseholds = 0;
             weekToDateCostOfGoodsSoldCents = 0;
-            runtimeState.ResetWeekToDateSales();
         }
 
         private int GetHouseholdDailyBudgetCents(HouseholdState household)

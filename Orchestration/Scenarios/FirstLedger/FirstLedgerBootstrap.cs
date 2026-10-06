@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Persistence;
 using UnityEngine;
 
 namespace LandLedgers.Orchestration.Scenarios.FirstLedger
@@ -35,6 +36,44 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
 
         public FirstLedgerGoalEvaluator Evaluator => evaluator;
 
+        /// <summary>
+        /// Runs the live evaluator immediately and returns the authoritative scenario
+        /// completion state. This is used by the HUD/save boundary and by deterministic
+        /// production playthroughs; it never mutates a goal directly.
+        /// </summary>
+        public bool EvaluateNow()
+        {
+            RunEvaluation();
+            return evaluator != null && evaluator.IsScenarioComplete;
+        }
+
+        public bool IsScenarioComplete => evaluator != null && evaluator.IsScenarioComplete;
+        public int PlayerOwnedBusinessCount => gameState != null ? gameState.PlayerOwnedBusinessCount : 0;
+        public int ActivePlayerEmployeeCount => gameState != null ? gameState.ActivePlayerEmployeeCount : 0;
+        public int PlayerOwnerEquityCents => gameState != null ? gameState.PlayerOwnerEquityCents : 0;
+
+        public ScenarioSaveDto CaptureSaveDto()
+        {
+            ScenarioSaveDto dto = scenarioDirector != null ? scenarioDirector.CaptureSaveDto() : new ScenarioSaveDto();
+            dto.completedGoalIds = evaluator != null ? new List<string>(evaluator.CompletedGoalIds) : dto.completedGoalIds;
+            return dto;
+        }
+
+        public void RestoreFromSaveDto(ScenarioSaveDto dto)
+        {
+            if (dto == null || scenarioDirector == null)
+            {
+                return;
+            }
+
+            if (!scenarioDirector.RestoreFromSaveDto(dto))
+            {
+                return;
+            }
+
+            evaluator?.RestoreCompletedGoals(dto.completedGoalIds);
+        }
+
         private void Awake()
         {
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
@@ -54,6 +93,16 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
                     : new List<BusinessInstanceState>(),
                 systemsHub.Employments,
                 systemsHub.Valuation);
+
+            // Scenario evaluation and production hiring must share the same
+            // relationship registry even when Unity awakens the business manager
+            // before SimulationDrivers. This is an authority handoff, not a second
+            // employment store.
+            if (sharedBusinessRuntime != null)
+            {
+                sharedBusinessRuntime.EmploymentRegistry = systemsHub.Employments;
+                sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
+            }
 
             evaluator = new FirstLedgerGoalEvaluator();
             evaluator.GoalCompleted += OnGoalCompleted;
@@ -86,6 +135,10 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
 
         private void RunEvaluation()
         {
+            // Unity execution order can awaken this scenario component before the
+            // runtime business manager. Resolve the existing authority lazily rather
+            // than freezing an empty closure for the lifetime of the scene.
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
             if (evaluator == null || gameState == null)
             {
                 return;

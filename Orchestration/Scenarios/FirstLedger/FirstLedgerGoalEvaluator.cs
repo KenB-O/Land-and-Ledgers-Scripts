@@ -38,6 +38,22 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
 
         public IReadOnlyCollection<string> CompletedGoalIds => completedGoalIds;
 
+        public void RestoreCompletedGoals(IEnumerable<string> goalIds)
+        {
+            if (goalIds == null)
+            {
+                return;
+            }
+
+            foreach (string goalId in goalIds)
+            {
+                if (!string.IsNullOrWhiteSpace(goalId))
+                {
+                    completedGoalIds.Add(goalId);
+                }
+            }
+        }
+
         public bool IsScenarioComplete => completedGoalIds.Contains("equity-15000");
 
         /// <summary>

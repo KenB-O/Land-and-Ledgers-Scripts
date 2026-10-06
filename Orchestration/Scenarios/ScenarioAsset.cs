@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using LandLedgers.Orchestration.Scenarios.FirstLedger;
 using UnityEngine;
 
 namespace LandLedgers.Orchestration.Scenarios
@@ -59,8 +60,39 @@ namespace LandLedgers.Orchestration.Scenarios
         public string Description => description;
         public PlayerHouseholdDeclaration PlayerHousehold => playerHousehold;
         public PopulationInclusionRules PopulationInclusion => populationInclusion;
-        public IReadOnlyList<ScenarioGoal> Goals => goals;
-        public IReadOnlyList<ScenarioObjective> Objectives => objectives;
+        public IReadOnlyList<ScenarioGoal> Goals
+        {
+            get
+            {
+                if (goals != null && goals.Count > 0)
+                {
+                    return goals;
+                }
+
+                // Compatibility for older imported FirstLedger assets that were
+                // authored before the serialized goal list was added. The asset id
+                // still selects the authored scenario; this does not create runtime
+                // completion state or mutate the asset.
+                return scenarioId == FirstLedgerScenario.ScenarioId
+                    ? FirstLedgerScenario.BuildGoals()
+                    : new List<ScenarioGoal>();
+            }
+        }
+
+        public IReadOnlyList<ScenarioObjective> Objectives
+        {
+            get
+            {
+                if (objectives != null && objectives.Count > 0)
+                {
+                    return objectives;
+                }
+
+                return scenarioId == FirstLedgerScenario.ScenarioId
+                    ? FirstLedgerScenario.BuildObjectives()
+                    : new List<ScenarioObjective>();
+            }
+        }
         public IReadOnlyList<string> StartingTaskDefinitionIds => startingTaskDefinitionIds;
         public IReadOnlyList<TunableValue> Tunables => tunables;
 

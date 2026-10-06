@@ -58,7 +58,41 @@ namespace LandLedgers.Population
         public static OccupationProfile Find(string idOrTitle)
         {
             if (string.IsNullOrWhiteSpace(idOrTitle)) return null;
-            byKey.TryGetValue(Normalize(idOrTitle), out OccupationProfile profile);
+            string key = Normalize(idOrTitle);
+            byKey.TryGetValue(key, out OccupationProfile profile);
+            if (profile != null) return profile;
+
+            // Population generation still accepts older authored profession ids. Resolve
+            // those ids to the canonical Tier-1 profile instead of creating a second
+            // occupation ontology. The profession remains the source of the display title;
+            // this is only the underlying profile projection used by capability, demand,
+            // and formation queries.
+            string[] aliases =
+            {
+                "farm", "agriculture", "crop farm", "ranch hand", "stock hand",
+                "freight", "hauling", "livery", "driver", "delivery",
+                "store clerk", "grocer", "retail", "general store",
+                "smith", "farrier", "forge", "hotel", "inn", "boarding house",
+                "schoolmaster", "school mistress", "school house"
+            };
+            string[] targets =
+            {
+                "farmer", "farmer", "farmer", "farm hand", "farm hand",
+                "teamster", "teamster", "teamster", "teamster", "teamster",
+                "merchant", "merchant", "merchant", "merchant",
+                "blacksmith_farrier", "blacksmith_farrier", "blacksmith_farrier", "blacksmith_farrier",
+                "hospitality_keeper", "hospitality_keeper", "hospitality_keeper",
+                "teacher", "teacher", "teacher"
+            };
+            for (int i = 0; i < aliases.Length; i++)
+            {
+                if (key.IndexOf(aliases[i], StringComparison.OrdinalIgnoreCase) >= 0
+                    && byKey.TryGetValue(targets[i], out profile))
+                {
+                    return profile;
+                }
+            }
+
             return profile;
         }
 

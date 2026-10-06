@@ -161,10 +161,9 @@ namespace LandLedgers.Orchestration.Scenarios
                 foreach (ScenarioGoal goal in director.Service.ActiveState.Asset.Goals)
                 {
                     bool done = director.Service.ActiveState.IsGoalCompleted(goal.GoalId);
-                    if (GUILayout.Button($"[{(done ? "x" : " ")}] {goal.GoalId}: {goal.Text}"))
-                    {
-                        director.SetGoalCompleted(goal.GoalId, !done);
-                    }
+                    GUI.enabled = false;
+                    GUILayout.Toggle(done, $"{goal.GoalId}: {goal.Text}");
+                    GUI.enabled = true;
                 }
 
                 GUILayout.Space(8);

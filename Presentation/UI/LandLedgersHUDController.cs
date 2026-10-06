@@ -461,7 +461,7 @@ namespace LandLedgers.UI
                 : $"Town Pulse: {townPulseAlertMessage.Trim()}";
             string notice = string.IsNullOrWhiteSpace(opportunityNoticeAlertMessage)
                 ? string.Empty
-                : $"Notice: {opportunityNoticeAlertMessage.Trim()}";
+                : opportunityNoticeAlertMessage.Trim();
 
             if (string.IsNullOrWhiteSpace(pulse))
             {

@@ -7,6 +7,7 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Orchestration.Scenarios.FirstLedger;
 using LandLedgers.Population;
 using LandLedgers.Time;
 using LandLedgers.UI;
@@ -79,6 +80,9 @@ namespace LandLedgers.Persistence
 
         [SerializeField, Tooltip("CLN-1: owns the standalone simulation authorities (tasks, skills, animals, ledgers, valuation, freight, butcher, farm flows).")]
         private SimulationSystemsHub systemsHub;
+
+        [SerializeField]
+        private FirstLedgerBootstrap firstLedgerBootstrap;
 
         [Header("Runtime Controls")]
         [SerializeField]
@@ -343,6 +347,8 @@ namespace LandLedgers.Persistence
 
             ConfigureFirstSessionGuidance();
             firstSessionGuidance?.LoadFromSaveDto(save.firstSessionGuidance);
+            firstLedgerBootstrap ??= FindAnyObjectByType<FirstLedgerBootstrap>();
+            firstLedgerBootstrap?.RestoreFromSaveDto(save.scenario);
             managementPanel?.Refresh();
             ConfigureFirstSessionGuidance();
 
@@ -586,6 +592,7 @@ namespace LandLedgers.Persistence
             PlayerPortfolioSaveDto portfolio = playerPortfolioManager != null ? playerPortfolioManager.CaptureSaveDto() : new PlayerPortfolioSaveDto();
             firstSessionGuidance ??= FindAnyObjectByType<FirstSessionGuidanceManager>();
             FirstSessionGuidanceSaveDto guidance = firstSessionGuidance != null ? firstSessionGuidance.CaptureSaveDto() : new FirstSessionGuidanceSaveDto();
+            firstLedgerBootstrap ??= FindAnyObjectByType<FirstLedgerBootstrap>();
 
             BusinessPortfolioSaveDto businesses = new()
             {
@@ -622,6 +629,7 @@ namespace LandLedgers.Persistence
                 debt = debt,
                 portfolio = portfolio,
                 firstSessionGuidance = guidance,
+                scenario = firstLedgerBootstrap != null ? firstLedgerBootstrap.CaptureSaveDto() : new ScenarioSaveDto(),
                 systems = systemsHub != null ? systemsHub.CaptureSaveDto() : new SystemsSaveDto(),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto

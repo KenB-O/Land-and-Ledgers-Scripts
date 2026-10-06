@@ -296,6 +296,10 @@ namespace LandLedgers.Economy
         private bool currentSnapshotInitialized;
 
         private TimeManager subscribedTimeManager;
+        // Once Configure has been called, null is an intentional dependency value.
+        // Re-autowiring on every refresh made isolated editor fixtures observe
+        // unrelated scene objects and caused order-sensitive notices.
+        private bool hasExplicitConfiguration;
 
         public OpportunityPressureSnapshot CurrentSnapshot => currentSnapshot ??= new OpportunityPressureSnapshot();
         public IReadOnlyList<OpportunityNotice> CurrentNotices => CurrentSnapshot.Notices;
@@ -308,20 +312,39 @@ namespace LandLedgers.Economy
             SharedBusinessRuntimeManager newSharedBusinessRuntime,
             TownPulseRuntimeManager newTownPulseRuntime,
             TimeManager newTimeManager,
-            LandLedgersHUDController newHudController)
+            LandLedgersHUDController newHudController,
+            AcquisitionMarketManager newAcquisitionMarket = null)
         {
             if (subscribedTimeManager != null && subscribedTimeManager != newTimeManager)
             {
                 UnsubscribeFromTime();
             }
 
-            townWorld = newTownWorld;
-            populationManager = newPopulationManager;
-            generalStoreRuntime = newGeneralStoreRuntime;
-            sharedBusinessRuntime = newSharedBusinessRuntime;
-            townPulseRuntime = newTownPulseRuntime;
-            timeManager = newTimeManager;
-            hudController = newHudController;
+            // Tests and small runtime fixtures often pass only the dependencies they
+            // own. Resolve omitted dependencies once, preferring the newest live
+            // component so a fixture cannot accidentally bind an older scene singleton.
+            // EditMode fixtures deliberately pass only the authorities they own.
+            // Autowiring those omitted values in the editor can bind an unrelated
+            // scene singleton and make the result depend on test order. Runtime
+            // bootstrap supplies its complete authority set, so it retains the
+            // convenience discovery path.
+            // PlayMode tests also run inside the editor and must remain isolated;
+            // the real runtime bootstrap passes every authority explicitly. Only a
+            // player build needs discovery for omitted optional references.
+            bool allowOmittedDiscovery = Application.isPlaying && !Application.isEditor;
+            townWorld = newTownWorld ?? (allowOmittedDiscovery ? FindNewest<TownWorldController>() : null);
+            populationManager = newPopulationManager ?? (allowOmittedDiscovery ? FindNewest<PopulationManager>() : null);
+            generalStoreRuntime = newGeneralStoreRuntime ?? (allowOmittedDiscovery ? FindNewest<GeneralStoreRuntimeManager>() : null);
+            sharedBusinessRuntime = newSharedBusinessRuntime ?? (allowOmittedDiscovery ? FindNewest<SharedBusinessRuntimeManager>() : null);
+            townPulseRuntime = newTownPulseRuntime ?? (allowOmittedDiscovery ? FindNewest<TownPulseRuntimeManager>() : null);
+            acquisitionMarket = newAcquisitionMarket ?? (allowOmittedDiscovery ? FindNewest<AcquisitionMarketManager>() : null);
+            logisticsRuntime = allowOmittedDiscovery ? FindNewest<LogisticsRuntimeManager>() : null;
+            civicFoundation = allowOmittedDiscovery ? FindNewest<CivicFoundationManager>() : null;
+            timeManager = newTimeManager ?? (allowOmittedDiscovery
+                ? (TimeManager.Instance != null ? TimeManager.Instance : FindNewest<TimeManager>())
+                : null);
+            hudController = newHudController ?? (allowOmittedDiscovery ? FindNewest<LandLedgersHUDController>() : null);
+            hasExplicitConfiguration = true;
             currentSnapshotInitialized = false;
             SubscribeToTime();
             RefreshNotices();
@@ -329,7 +352,10 @@ namespace LandLedgers.Economy
 
         public OpportunityPressureSnapshot RefreshNotices()
         {
-            AutoWire();
+            if (!hasExplicitConfiguration)
+            {
+                AutoWire();
+            }
             refreshSerial++;
             List<OpportunityNotice> notices = new();
             float retailPressure = EvaluateRetailPressure(notices);
@@ -573,6 +599,24 @@ namespace LandLedgers.Economy
             }
         }
 
+        private static T FindNewest<T>() where T : Component
+        {
+            T[] candidates = FindObjectsByType<T>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            T newest = null;
+            int newestInstanceId = int.MinValue;
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                T candidate = candidates[i];
+                if (candidate != null && candidate.GetInstanceID() > newestInstanceId)
+                {
+                    newest = candidate;
+                    newestInstanceId = candidate.GetInstanceID();
+                }
+            }
+
+            return newest;
+        }
+
         private void AutoWire()
         {
             townWorld ??= FindAnyObjectByType<TownWorldController>();
@@ -589,7 +633,10 @@ namespace LandLedgers.Economy
 
         private void SubscribeToTime()
         {
-            AutoWire();
+            if (!hasExplicitConfiguration)
+            {
+                AutoWire();
+            }
             if (timeManager == null || subscribedTimeManager == timeManager)
             {
                 return;
@@ -627,7 +674,17 @@ namespace LandLedgers.Economy
             int offMapUnits = generalStoreRuntime != null ? generalStoreRuntime.LastDailyReserveOffMapUnits : 0;
             int lostDemandCents = generalStoreRuntime != null ? generalStoreRuntime.LastDailyReserveOffMapLostDemandCents : 0;
             bool reorderNeeded = generalStoreRuntime != null && generalStoreRuntime.ReorderNeeded;
-            int pulseMissedUnits = townPulseRuntime != null ? townPulseRuntime.GetCurrentDateMissedUnits() : 0;
+            int pulseMissedUnits = 0;
+            if (townPulseRuntime != null)
+            {
+                // A clock-less isolated pulse fixture has no meaningful "today".
+                // Read its resolved day directly; live runtime still uses the
+                // authoritative current date through GetCurrentDateMissedUnits().
+                int resolvedDay = townPulseRuntime.RuntimeState.lastResolvedDayIndex;
+                pulseMissedUnits = timeManager == null && resolvedDay >= 0
+                    ? townPulseRuntime.GetMissedUnitsForDay(resolvedDay)
+                    : townPulseRuntime.GetCurrentDateMissedUnits();
+            }
             float stockGap = 0f;
             if (generalStoreRuntime != null && generalStoreRuntime.RuntimeState != null)
             {

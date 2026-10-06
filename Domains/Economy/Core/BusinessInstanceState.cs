@@ -812,9 +812,12 @@ namespace LandLedgers.Economy
 
             BusinessOwnerIdentity resolvedOwner = owner ?? BusinessOwnerIdentity.Town();
             BusinessType type = profile.Business.BusinessType;
+            string resolvedInstanceId = string.IsNullOrWhiteSpace(instanceId) ? profile.Business.BusinessId : instanceId;
+            BusinessRuntimeState runtime = profile.CreateRuntimeState();
+            runtime.BindBusinessIdentity(resolvedInstanceId);
             return new BusinessInstanceState
             {
-                instanceId = string.IsNullOrWhiteSpace(instanceId) ? profile.Business.BusinessId : instanceId,
+                instanceId = resolvedInstanceId,
                 profileId = profile.Business.BusinessId,
                 businessType = type,
                 assignedBuildingId = assignedBuildingId,
@@ -822,7 +825,7 @@ namespace LandLedgers.Economy
                 controlState = ManagerPolicyEffects.GetDefaultControlState(resolvedOwner),
                 managerPolicy = ManagerPolicyPreset.StabilityFirst,
                 runtimeDisplayName = BusinessRuntimeNaming.Build(resolvedOwner, type),
-                runtimeState = profile.CreateRuntimeState(),
+                runtimeState = runtime,
                 throughputMode = profile.ThroughputMode,
                 baselineWeeklyThroughputUnits = profile.BaselineWeeklyThroughputUnits,
                 baselineDailyServiceCapacity = profile.BaselineDailyServiceCapacity,
@@ -1004,7 +1007,7 @@ namespace LandLedgers.Economy
             }
             else if (runtimeState != null)
             {
-                repairs += runtimeState.NormalizeForStartup(template, resolvedProfileId, resolvedType, resolvedMode, resolvedWeeklyBaseline, resolvedDailyBaseline);
+                repairs += runtimeState.NormalizeForStartup(template, resolvedInstanceId, resolvedType, resolvedMode, resolvedWeeklyBaseline, resolvedDailyBaseline);
             }
 
             repairs += cashTransferRule.NormalizeForStartup(protectedReserveCents);

@@ -108,6 +108,12 @@ namespace LandLedgers.Economy
         [SerializeField] public float unloadingDurationGameSeconds = 30f;
         [SerializeField] public float stageElapsedGameSeconds;
         [SerializeField] public float totalElapsedGameSeconds;
+        [SerializeField] public string physicalWagonAssetId = string.Empty;
+        [SerializeField] public string physicalDriverPersonId = string.Empty;
+        [SerializeField] public List<string> physicalDraftAnimalIds = new();
+        [SerializeField] public bool physicalTransportBound;
+        [SerializeField] public string physicalLocationId = string.Empty;
+        [SerializeField] public float physicalProgress01;
         [SerializeField] public LogisticsRoutePlan routePlan = new();
 
         public string ShipmentId => shipmentId ?? string.Empty;
@@ -224,6 +230,12 @@ namespace LandLedgers.Economy
                 unloadingDurationGameSeconds = Mathf.Max(0f, unloadingDurationGameSeconds),
                 stageElapsedGameSeconds = Mathf.Max(0f, stageElapsedGameSeconds),
                 totalElapsedGameSeconds = Mathf.Max(0f, totalElapsedGameSeconds),
+                physicalWagonAssetId = physicalWagonAssetId ?? string.Empty,
+                physicalDriverPersonId = physicalDriverPersonId ?? string.Empty,
+                physicalDraftAnimalIds = new List<string>(physicalDraftAnimalIds ?? new List<string>()),
+                physicalTransportBound = physicalTransportBound,
+                physicalLocationId = physicalLocationId ?? string.Empty,
+                physicalProgress01 = Mathf.Clamp01(physicalProgress01),
                 routePlan = CaptureRoutePlanSaveDto(RoutePlan)
             };
         }
@@ -268,6 +280,12 @@ namespace LandLedgers.Economy
             state.unloadingDurationGameSeconds = Mathf.Max(0f, dto.unloadingDurationGameSeconds);
             state.stageElapsedGameSeconds = Mathf.Max(0f, dto.stageElapsedGameSeconds);
             state.totalElapsedGameSeconds = Mathf.Max(0f, dto.totalElapsedGameSeconds);
+            state.physicalWagonAssetId = dto.physicalWagonAssetId ?? string.Empty;
+            state.physicalDriverPersonId = dto.physicalDriverPersonId ?? string.Empty;
+            state.physicalDraftAnimalIds = new List<string>(dto.physicalDraftAnimalIds ?? new List<string>());
+            state.physicalTransportBound = dto.physicalTransportBound;
+            state.physicalLocationId = dto.physicalLocationId ?? string.Empty;
+            state.physicalProgress01 = Mathf.Clamp01(dto.physicalProgress01);
             state.routePlan = RestoreRoutePlanSaveDto(dto.routePlan);
 
             // MR-P001: Normalize legacy blocked shipment data.

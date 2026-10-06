@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using LandLedgers.Animals;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Economy.Transport;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -9,6 +12,7 @@ using LandLedgers.Primitives;
 using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.World;
+using LandLedgers.Orchestration.Systems;
 using UnityEngine;
 
 namespace LandLedgers.Economy
@@ -168,6 +172,61 @@ namespace LandLedgers.Economy
         public Action<BusinessInstanceState> PreWeeklyResetCallback { get; set; }
 
         /// <summary>
+        /// Gives business-specific weekly settlement authorities (currently the
+        /// General Store runtime) the same valuation boundary used by the shared
+        /// weekly settlement path. The callback remains the sole bridge into the
+        /// valuation read model; this does not create a second profit ledger.
+        /// </summary>
+        public void RecordWeeklyProfitForValuation(BusinessInstanceState business)
+        {
+            SyncInventoryValueForValuation(business);
+            PreWeeklyResetCallback?.Invoke(business);
+        }
+
+        /// <summary>
+        /// Inventory is a real transferable business asset. Keep its valuation
+        /// evidence synchronized from the runtime stock ledger at the same weekly
+        /// authority boundary as profit; cash remains deliberately excluded.
+        /// </summary>
+        private void SyncInventoryValueForValuation(BusinessInstanceState business)
+        {
+            if (business == null || business.RuntimeState == null || string.IsNullOrWhiteSpace(business.InstanceId))
+            {
+                return;
+            }
+
+            BusinessProfileDefinition profile = FindProfile(business.BusinessType);
+            if (profile == null)
+            {
+                return;
+            }
+
+            long inventoryValue = 0;
+            IReadOnlyList<CategoryStockState> stock = business.RuntimeState.CategoryStock;
+            if (stock != null)
+            {
+                for (int i = 0; i < stock.Count; i++)
+                {
+                    CategoryStockState category = stock[i];
+                    if (category == null || category.CurrentStockUnits <= 0)
+                    {
+                        continue;
+                    }
+
+                    int unitCost = GetAverageCategoryLandedCostCents(profile, category.CategoryId);
+                    inventoryValue += (long)category.CurrentStockUnits * Mathf.Max(0, unitCost);
+                }
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            hub?.Valuation.RegisterBusiness(
+                business.InstanceId,
+                business.Owner != null ? business.Owner.DisplayName : "player",
+                business.Owner != null && business.Owner.OwnerKind == BusinessOwnerKind.Player);
+            hub?.Valuation.RecordTransferableAssets(business.InstanceId, (int)Mathf.Min(int.MaxValue, inventoryValue));
+        }
+
+        /// <summary>
         /// P1: the PKG-6 employment authority (Canon §6 / Tech X §4.1-4.3).
         /// Assigned by bootstrap (SimulationDrivers sets this from the hub's
         /// EmploymentRelationshipRegistry). When set, every business's
@@ -177,6 +236,7 @@ namespace LandLedgers.Economy
         /// Null by default (legacy payroll behavior preserved).
         /// </summary>
         public EmploymentRelationshipRegistry EmploymentRegistry { get; set; }
+        public int EmploymentRegistryCount => EmploymentRegistry != null ? EmploymentRegistry.Count : -1;
 
         /// <summary>
         /// P1: wires the employment authority into every business runtime state
@@ -601,19 +661,21 @@ namespace LandLedgers.Economy
                 BusinessRuntimeState runtime = business.RuntimeState;
                 float efficiency01 = GetHealthAdjustedOperatingEfficiency01(business);
                 int plannedVisits = Mathf.RoundToInt(Mathf.Max(0, profile != null ? profile.BaselineDailyServiceCapacity : business.BaselineDailyServiceCapacity) * efficiency01);
-                int upkeepUnits = Mathf.Max(1, Mathf.CeilToInt(plannedVisits / 6f));
+                int serviceDays = GetWeeklyServiceOperatingDays(BusinessType.LiveryFreight);
+                int weeklyVisits = Mathf.Max(0, plannedVisits * serviceDays);
+                int upkeepUnits = Mathf.Max(1, Mathf.CeilToInt(weeklyVisits / 6f));
                 int consumed = 0;
                 List<string> blockedReasons = new();
                 SeedBlockedReasons(runtime, blockedReasons);
                 AppendStaffingBlockedReasons(runtime, blockedReasons);
 
-                if (plannedVisits <= 0)
+                if (weeklyVisits <= 0)
                 {
                     blockedReasons.Add("no staffed hauling capacity");
                 }
 
                 CategoryStockState upkeep = runtime.GetCategoryStock(CategoryLiveryFeedUpkeep);
-                if (upkeep != null && plannedVisits > 0)
+                if (upkeep != null && weeklyVisits > 0)
                 {
                     ProcureInputsForWeeklyOperation(business, profile, CategoryLiveryFeedUpkeep, upkeepUnits, 1, blockedReasons);
                     if (runtime.TryConsumeCategoryStockUnits(CategoryLiveryFeedUpkeep, upkeepUnits, out int consumedUnits))
@@ -629,9 +691,9 @@ namespace LandLedgers.Economy
 
                 int repairUnits = 0;
                 CategoryStockState repairs = runtime.GetCategoryStock(CategoryWheelwrightRepairs);
-                if (repairs != null && plannedVisits > 0 && repairs.CurrentStockUnits > 0)
+                if (repairs != null && weeklyVisits > 0 && repairs.CurrentStockUnits > 0)
                 {
-                    int desiredRepairs = Mathf.Max(1, Mathf.CeilToInt(plannedVisits / 12f));
+                    int desiredRepairs = Mathf.Max(1, Mathf.CeilToInt(weeklyVisits / 12f));
                     if (runtime.TryConsumeCategoryStockUnits(CategoryWheelwrightRepairs, desiredRepairs, out int consumedRepairs))
                     {
                         repairUnits = consumedRepairs;
@@ -639,7 +701,7 @@ namespace LandLedgers.Economy
                     }
                 }
 
-                int revenue = plannedVisits * 45;
+                int revenue = weeklyVisits * GetServiceVisitPriceCents(business, profile);
                 if (revenue > 0)
                 {
                     runtime.RecordDailyServiceRevenue(CategoryFreightService, plannedVisits, revenue);
@@ -649,8 +711,8 @@ namespace LandLedgers.Economy
                 business.ApplyDailyServiceResult(plannedVisits);
                 string blocked = BuildBlockedReason(blockedReasons);
                 string repairRead = repairs != null ? $"; wheelwright upkeep {repairUnits}" : string.Empty;
-                string result = $"livery & freight service {plannedVisits} visits/day; upkeep {consumed} {CategoryLiveryFeedUpkeep}{repairRead}; revenue {FormatMoney(revenue)}";
-                runtime.RecordWeeklyOperation(consumed, plannedVisits, result, blocked);
+                string result = $"livery & freight service {plannedVisits} visits/day ({weeklyVisits} weekly); upkeep {consumed} {CategoryLiveryFeedUpkeep}{repairRead}; revenue {FormatMoney(revenue)}";
+                runtime.RecordWeeklyOperation(consumed, weeklyVisits, result, blocked);
                 RecordOperationSummary(business, string.IsNullOrWhiteSpace(blocked) ? result : $"{result}; blocked: {blocked}");
                 AppendSummarySegment(summary, $"{business.BusinessType} service {plannedVisits} {FormatMoney(revenue)}");
                 count++;
@@ -2114,10 +2176,207 @@ namespace LandLedgers.Economy
                 business.RuntimeState != null ? business.RuntimeState.LastWeeklyReorderBudgetCents : 0,
                 weekKey);
             playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(business, weekKey, true);
+            RegisterBusinessForValuation(business);
+            SyncInventoryValueForValuation(business);
 
             message = $"{resolvedName} formed as a player-owned {BusinessRuntimeNaming.GetBusinessTypeDisplayName(businessType)}. It is not operating until premises/capability, labor, funding, and real commerce are in place.";
             status = message;
             return true;
+        }
+
+        /// <summary>
+        /// Acquires the authored opening draft pair through the ordinary business
+        /// resource path. The opening Horse and Wagon are real registry entities;
+        /// this operation moves business cash, transfers title with provenance, and
+        /// rehomes the pair so a newly formed freight business can actually work.
+        /// It is deliberately narrow: later transport markets can replace this
+        /// opening-state offer without changing the Horse/Wagon authorities.
+        /// </summary>
+        public bool TryAcquireOpeningFreightTransport(
+            BusinessInstanceState buyer,
+            out string message)
+        {
+            AutoWire();
+            message = string.Empty;
+            if (buyer == null || buyer.BusinessType != BusinessType.LiveryFreight
+                || buyer.Owner == null || buyer.Owner.OwnerKind != BusinessOwnerKind.Player
+                || buyer.RuntimeState == null)
+            {
+                message = "A player-owned Livery & Freight business is required.";
+                return false;
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            if (hub == null)
+            {
+                message = "Transport authorities are unavailable.";
+                return false;
+            }
+
+            EquipmentAsset wagon = null;
+            foreach (EquipmentAsset candidate in hub.TransportAssets.Assets)
+            {
+                if (candidate != null && candidate.IsWagon
+                    && string.Equals(candidate.OwnerKind, "business", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(candidate.OwnerId, buyer.InstanceId, StringComparison.OrdinalIgnoreCase)
+                    && !candidate.IsTransportAssigned)
+                {
+                    wagon = candidate;
+                    break;
+                }
+            }
+
+            AnimalState horse = null;
+            foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
+            {
+                if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
+                    && candidate.OwnerKind == AnimalOwnerKind.Business
+                    && !string.Equals(candidate.OwnerId, buyer.InstanceId, StringComparison.OrdinalIgnoreCase)
+                    && candidate.CurrentUse == HorseUseKind.None)
+                {
+                    horse = candidate;
+                    break;
+                }
+            }
+
+            if (wagon == null || horse == null)
+            {
+                message = "No unassigned opening Horse/Wagon pair is available for purchase.";
+                return false;
+            }
+
+            string buyerHousingId = "player-livery-yard-" + buyer.InstanceId;
+            if (hub.TransportAssets.HorseHousing.Capacity(buyerHousingId) == 0)
+            {
+                string housingError = hub.TransportAssets.HorseHousing.AddHousing(buyerHousingId, 2);
+                if (housingError != null)
+                {
+                    message = housingError;
+                    return false;
+                }
+            }
+            if (hub.TransportAssets.HorseHousing.Occupied(buyerHousingId)
+                >= hub.TransportAssets.HorseHousing.Capacity(buyerHousingId))
+            {
+                message = $"Housing '{buyerHousingId}' has no available stall.";
+                return false;
+            }
+
+            BusinessInstanceState seller = FindByInstanceId(wagon.OwnerId);
+            if (seller == null || seller.RuntimeState == null
+                || !string.Equals(seller.InstanceId, horse.OwnerId, StringComparison.OrdinalIgnoreCase))
+            {
+                message = "Opening transport ownership is not held by one valid selling business.";
+                return false;
+            }
+
+            int priceCents = OpeningTransportStock.OpeningHorseSalePriceCents
+                + OpeningTransportStock.OpeningWagonSalePriceCents;
+            if (buyer.RuntimeState.CurrentCashCents < priceCents)
+            {
+                message = $"Transport purchase requires {priceCents}c; buyer has {buyer.RuntimeState.CurrentCashCents}c.";
+                return false;
+            }
+
+            string horseOwnerError = hub.Animals.TransferOwnership(
+                horse.AnimalId,
+                AnimalOwnerKind.Business,
+                buyer.InstanceId,
+                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                $"sold opening draft horse to {buyer.RuntimeDisplayName} for {OpeningTransportStock.OpeningHorseSalePriceCents}c");
+            if (horseOwnerError != null)
+            {
+                message = horseOwnerError;
+                return false;
+            }
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            string wagonOwnerError = wagon.TransferOwnership(
+                "business",
+                buyer.InstanceId,
+                $"sold opening freight wagon to {buyer.RuntimeDisplayName} for {OpeningTransportStock.OpeningWagonSalePriceCents}c",
+                dayIndex);
+            if (wagonOwnerError != null)
+            {
+                hub.Animals.TransferOwnership(
+                    horse.AnimalId,
+                    AnimalOwnerKind.Business,
+                    seller.InstanceId,
+                    dayIndex,
+                    "reversed failed opening transport sale");
+                message = wagonOwnerError;
+                return false;
+            }
+
+            buyer.RuntimeState.AdjustCashCents(-priceCents);
+            seller.RuntimeState.AdjustCashCents(priceCents);
+
+            hub.TransportAssets.HorseHousing.Release(OpeningTransportStock.OpeningHousingId, horse.AnimalId.ToString());
+            string assignError = hub.TransportAssets.HorseHousing.Assign(buyerHousingId, horse.AnimalId.ToString());
+            if (assignError != null)
+            {
+                message = assignError;
+                return false;
+            }
+
+            string housingStateError = HorseAuthority.SetHousing(horse, buyerHousingId, buyerHousingId);
+            if (housingStateError == null)
+            {
+                housingStateError = HorseAuthority.SetCustody(horse, "business", buyer.InstanceId);
+            }
+
+            wagon.LocationId = buyerHousingId;
+            wagon.StorageLocationId = buyerHousingId;
+            hub.Valuation.RegisterBusiness(buyer.InstanceId, buyer.RuntimeDisplayName, true);
+            hub.Valuation.RecordTransferableAssets(
+                buyer.InstanceId,
+                OpeningTransportStock.OpeningHorseSalePriceCents + OpeningTransportStock.OpeningWagonSalePriceCents);
+
+            message = housingStateError == null
+                ? $"Purchased opening Horse {horse.AnimalId} and Wagon {wagon.AssetId} for {priceCents}c."
+                : $"Purchased opening Horse {horse.AnimalId} and Wagon {wagon.AssetId}, but housing update reported: {housingStateError}";
+            return true;
+        }
+
+        /// <summary>
+        /// Transfers the acquisition authority's saved diligence estimate into the
+        /// enterprise valuation evidence for the acquired going concern. This is
+        /// an asset-floor input backed by the actual acquisition record; cash and
+        /// purchase price remain excluded unless the acquisition estimate itself
+        /// contains a documented productive-asset basis.
+        /// </summary>
+        public void RecordAcquisitionValuation(BusinessInstanceState business, int estimatedValueCents)
+        {
+            if (business == null || string.IsNullOrWhiteSpace(business.InstanceId) || estimatedValueCents <= 0)
+            {
+                return;
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            hub?.Valuation.RegisterBusiness(
+                business.InstanceId,
+                business.Owner != null ? business.Owner.DisplayName : "player",
+                business.Owner != null && business.Owner.OwnerKind == BusinessOwnerKind.Player);
+            hub?.Valuation.RecordTransferableAssets(business.InstanceId, estimatedValueCents);
+        }
+
+        /// <summary>
+        /// Every durable business identity is visible to the valuation read model
+        /// as soon as it is formed. Subsequent profits, liabilities, owner labor,
+        /// and transferable assets remain event-fed by their existing authorities.
+        /// </summary>
+        private static void RegisterBusinessForValuation(BusinessInstanceState business)
+        {
+            if (business == null || string.IsNullOrWhiteSpace(business.InstanceId))
+            {
+                return;
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            hub?.Valuation.RegisterBusiness(
+                business.InstanceId,
+                business.Owner != null ? business.Owner.DisplayName : "player",
+                business.Owner != null && business.Owner.OwnerKind == BusinessOwnerKind.Player);
         }
 
         public bool TryTransferBusinessToTown(int buildingId, string receiverDisplayName, out BusinessInstanceState business, out string message)
@@ -2282,6 +2541,8 @@ namespace LandLedgers.Economy
                 business.RuntimeState.LastWeeklyReorderBudgetCents,
                 weekKey);
             playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(business, weekKey, true);
+            RegisterBusinessForValuation(business);
+            SyncInventoryValueForValuation(business);
             string staffingSegment = !string.IsNullOrWhiteSpace(staffingMessage)
                 ? $" {staffingMessage}"
                 : string.Empty;
@@ -2723,6 +2984,8 @@ namespace LandLedgers.Economy
             person.RecordVisibleWorkerRole(slot.SlotDisplayName, wageCents);
             ApprenticeshipProgressionEvaluator.RecordAssignment(person, business.BusinessType, business.AssignedBuildingId, slot);
             slot.Assign(person.id.ToString(), person.DisplayName, wageCents);
+            slot.MarkPaidActive();
+            business.RuntimeState.EnsureEmploymentRecordsFromSlots();
         }
 
         public bool TryFireWorkerFromSlot(BusinessInstanceState business, int selectedFilledSlotIndex, out string message)
@@ -4046,6 +4309,12 @@ namespace LandLedgers.Economy
                 business.RuntimeState.RecordWeeklyInputProcurement(receivedUnits, spend);
             }
 
+            if (receivedUnits > 0)
+            {
+                RemoveBlockedReason(blockedReasons, $"no recurring local supplier: {inputCategoryId}");
+                RemoveBlockedReason(blockedReasons, $"failed recurring local order: {inputCategoryId}");
+            }
+
             if (receivedUnits < desiredUnits)
             {
                 blockedReasons?.Add($"cash-limited input procurement: {inputCategoryId} (reserve {FormatMoney(reserve)})");
@@ -4320,6 +4589,22 @@ namespace LandLedgers.Economy
             }
 
             blockedReasons.Add(trimmed);
+        }
+
+        private static void RemoveBlockedReason(List<string> blockedReasons, string reason)
+        {
+            if (blockedReasons == null || string.IsNullOrWhiteSpace(reason))
+            {
+                return;
+            }
+
+            for (int i = blockedReasons.Count - 1; i >= 0; i--)
+            {
+                if (string.Equals(blockedReasons[i]?.Trim(), reason.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    blockedReasons.RemoveAt(i);
+                }
+            }
         }
 
         private static string BuildBlockedReason(List<string> blockedReasons)
@@ -7109,7 +7394,15 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
-                total += item.Pricing.GetCostPlusPriceCents(effectiveMarkup, 0f);
+                // Service items are priced from their authored customer-facing
+                // baseline.  They do not have a wholesale landed cost, so
+                // deriving their charge through GetCostPlusPriceCents applies
+                // the default wholesale-cost share to a service and
+                // systematically underprices otherwise healthy service
+                // businesses (for example the authored freight visit).
+                total += IsServiceCategory(profile, categoryId)
+                    ? item.Pricing.GetDisplayPriceCents(effectiveMarkup, 0f)
+                    : item.Pricing.GetCostPlusPriceCents(effectiveMarkup, 0f);
                 count++;
             }
 
@@ -7119,6 +7412,25 @@ namespace LandLedgers.Economy
             }
 
             return GetAverageCategoryLandedCostCents(profile, categoryId);
+        }
+
+        private static bool IsServiceCategory(BusinessProfileDefinition profile, string categoryId)
+        {
+            if (profile == null || string.IsNullOrWhiteSpace(categoryId))
+            {
+                return false;
+            }
+
+            ReadOnlySpan<string> serviceCategoryIds = profile.ServiceCategoryIds;
+            for (int i = 0; i < serviceCategoryIds.Length; i++)
+            {
+                if (string.Equals(serviceCategoryIds[i], categoryId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static float CalculateLocalMarketCapture01(
@@ -7728,6 +8040,7 @@ namespace LandLedgers.Economy
                 authority,
                 context,
                 HasBusinessOfType,
+                entry => BuildOpeningBusinessIntent(entry),
                 result =>
                 {
                     result.Business.ResolveWeeklyBaselineThroughput();
@@ -7741,12 +8054,123 @@ namespace LandLedgers.Economy
                 },
                 diagnostics);
 
-            foreach (string diagnostic in diagnostics)
+            // Opening reconciliation can be queried by daily commerce and seller
+            // scoring. Repeating the unchanged "already exists" roster diagnostics
+            // on every query produces enormous logs and turns accelerated validation
+            // into an I/O-bound loop. Emit the roster report when this call actually
+            // changed the opening set; later queries remain observationally quiet.
+            if (created > 0)
             {
-                Debug.Log($"[BIZ-1 Opening] {diagnostic}");
+                foreach (string diagnostic in diagnostics)
+                {
+                    Debug.Log($"[BIZ-1 Opening] {diagnostic}");
+                }
             }
 
             return created;
+        }
+
+        private CreateBusinessIntent BuildOpeningBusinessIntent(OpeningRosterEntry entry)
+        {
+            if (entry == null)
+            {
+                return null;
+            }
+
+            PersonState founder = FindOpeningFounder(entry.BusinessType);
+            if (founder == null)
+            {
+                return entry.ToIntent();
+            }
+
+            return entry.ToIntent(BusinessOwnerIdentity.Npc(
+                founder.id,
+                founder.DisplayName,
+                founder.lastName));
+        }
+
+        private PersonState FindOpeningFounder(BusinessType businessType)
+        {
+            PopulationState population = populationManager != null ? populationManager.State : null;
+            if (population?.people == null)
+            {
+                return null;
+            }
+
+            string expectedProfile = businessType switch
+            {
+                BusinessType.CropFarm => "farmer",
+                BusinessType.LiveryFreight => "teamster",
+                BusinessType.GeneralStore => "merchant",
+                BusinessType.Blacksmith => "blacksmith_farrier",
+                BusinessType.Hotel => "hospitality_keeper",
+                _ => string.Empty
+            };
+
+            PersonState fallback = null;
+            foreach (PersonState person in population.people)
+            {
+                if (person == null || person.deathDayIndex >= 0 || person.age < 18)
+                {
+                    continue;
+                }
+
+                OccupationProfile profile = OccupationProfileCatalog.Resolve(person);
+                if (!string.IsNullOrWhiteSpace(expectedProfile)
+                    && profile != null
+                    && string.Equals(profile.Id, expectedProfile, StringComparison.OrdinalIgnoreCase))
+                {
+                    return person;
+                }
+
+                fallback ??= person;
+            }
+
+            return fallback;
+        }
+
+        /// <summary>
+        /// Resolves the early-startup ordering seam where the authored opening roster
+        /// can be formed once before PopulationManager has generated Persons. The
+        /// fallback owner is intentionally provisional; once the real population is
+        /// available, replace only the unambiguous -1 owner with the matching Person.
+        /// No business is created, deleted, or silently reassigned to an unrelated
+        /// person here.
+        /// </summary>
+        public int ResolveProvableOpeningBusinessOwners()
+        {
+            int resolved = 0;
+            if (businesses == null || populationManager?.State?.people == null)
+            {
+                return resolved;
+            }
+
+            foreach (BusinessInstanceState business in businesses)
+            {
+                if (business?.Owner == null
+                    || business.Owner.OwnerKind != BusinessOwnerKind.Npc
+                    || business.Owner.PersonId >= 0)
+                {
+                    continue;
+                }
+
+                PersonState founder = FindOpeningFounder(business.BusinessType);
+                if (founder == null)
+                {
+                    continue;
+                }
+
+                business.SetOwner(BusinessOwnerIdentity.Npc(founder.id, founder.DisplayName, founder.lastName));
+                business.EnsureOwnerOperatorStaffing(business.Owner);
+                resolved++;
+            }
+
+            if (resolved > 0)
+            {
+                WireEmploymentRegistryToBusinesses();
+            }
+
+            return resolved;
         }
 
         /// <summary>
@@ -8229,6 +8653,11 @@ namespace LandLedgers.Economy
             generalStoreRuntime ??= FindAnyObjectByType<GeneralStoreRuntimeManager>();
             playerPortfolio ??= FindAnyObjectByType<PlayerPortfolioManager>();
             logisticsRuntime ??= FindAnyObjectByType<LogisticsRuntimeManager>();
+            if (EmploymentRegistry == null)
+            {
+                SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+                EmploymentRegistry = hub != null ? hub.Employments : null;
+            }
         }
 
         private Func<LocalRecurringOrderFulfillmentRequest, int, int, int, int> BuildRecurringOrderShipmentScheduler(
@@ -8378,6 +8807,21 @@ namespace LandLedgers.Economy
                 }
             }
 
+            // The General Store is authored on its operating runtime because its
+            // detailed retail catalogue is also consumed by embodied commerce.
+            // Reuse that same asset when the shared business authority forms or
+            // restores a store; falling back to an empty generic profile would
+            // create a shell with no stock, categories, or retail economics.
+            if (businessType == BusinessType.GeneralStore)
+            {
+                GeneralStoreRuntimeManager storeRuntime = FindAnyObjectByType<GeneralStoreRuntimeManager>();
+                BusinessProfileDefinition authoredStore = storeRuntime != null ? storeRuntime.StoreDefinition : null;
+                if (authoredStore != null && authoredStore.Business.BusinessType == BusinessType.GeneralStore)
+                {
+                    return authoredStore;
+                }
+            }
+
             return null;
         }
 
@@ -8438,6 +8882,7 @@ namespace LandLedgers.Economy
                     && person.id >= 0
                     && NewcomerSettlementEvaluator.IsAvailableForLabor(person, minimumHireLaborAccess)
                     && person.workplaceBuildingId < 0
+                    && (EmploymentRegistry == null || EmploymentRegistry.GetActiveByEmployee(person.id).Count == 0)
                     && !IsAlreadyAssignedToBusinessSlot(business, person.id))
                 {
                     person.EnsureWorkerTraitsInitialized();

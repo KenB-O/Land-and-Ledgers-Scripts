@@ -11,6 +11,7 @@ using LandLedgers.Economy.Farming.Delivery;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Liabilities;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Farming.Risk;
@@ -39,6 +40,7 @@ namespace LandLedgers.Persistence
         public WorkTimeBudgetSaveDto workTimeBudgets = new();
         public ValuationReadModelSaveDto valuation = new();
         public FreightResourcePoolSaveDto freightPool = new();
+        public TransportAssetRegistrySaveDto transportAssets = new();
         public List<ButcherRuntimeSaveDto> butcherRuntimes = new();
         public FarmFlowSaveDto farmFlows = new();
         public CapabilityRegistrySaveDto capabilities = new();
@@ -119,6 +121,13 @@ namespace LandLedgers.Persistence
     {
         public List<FreightWagon> wagons = new();
         public List<string> reservedWagonIds = new();
+    }
+
+    [Serializable]
+    public sealed class TransportAssetRegistrySaveDto
+    {
+        public List<LandLedgers.Economy.Blacksmith.EquipmentAsset> wagons = new();
+        public LandLedgers.Animals.HorseHousingSaveDto horseHousing = new();
     }
 
     [Serializable]

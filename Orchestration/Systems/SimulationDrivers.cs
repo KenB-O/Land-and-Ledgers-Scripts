@@ -77,6 +77,7 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdConsumptionPlanner consumptionPlanner;
         private SupplierDirectory supplierDirectory;
         private EmbodiedPurchaseExecutor purchaseExecutor;
+        private bool subscribedToTimeManager;
 
         /// <summary>
         /// CLN-3 hook: scenario goal evaluation runs here. Scenario bootstraps
@@ -88,6 +89,47 @@ namespace LandLedgers.Orchestration.Systems
         /// evaluator's goals entirely).
         /// </summary>
         public event Action OnScenarioTick;
+
+        /// <summary>
+        /// The bootstrap owns player identity because the Person is generated with the
+        /// opening population. Replacing the stale serialized placeholder here keeps
+        /// daily work-time and weekly owner-labor accounting on the real Person.
+        /// </summary>
+        public PlayerDirector PlayerDirector
+        {
+            get => playerDirector;
+            set
+            {
+                playerDirector = value;
+                if (scenarioDirector != null)
+                {
+                    scenarioDirector.PlayerDirector = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Rebinds the live business authority after a legacy scene bootstrap has
+        /// created/configured its managers. Dynamic bootstrap order can run this
+        /// component's Awake before the manager finishes its dependency wiring; the
+        /// explicit handoff keeps weekly valuation and employment events on the same
+        /// production authority.
+        /// </summary>
+        public void AttachBusinessRuntime(SharedBusinessRuntimeManager runtime)
+        {
+            sharedBusinessRuntime = runtime;
+            hub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
+            SubscribeToTimeManager();
+            if (sharedBusinessRuntime == null || hub == null)
+            {
+                return;
+            }
+
+            sharedBusinessRuntime.PreWeeklyResetCallback = PostWeeklyProfitToValuation;
+            sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
+            sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
+        }
 
         // CLN-4: accumulated player worked minutes for the current week (owner labor).
         private int weeklyPlayerWorkedMinutes;
@@ -128,26 +170,36 @@ namespace LandLedgers.Orchestration.Systems
                 // business runtime state so ResolveWeeklyPayroll pays agreed
                 // employment wages instead of the legacy slot-template path.
                 sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
+                sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
             }
         }
 
         private void OnEnable()
         {
-            if (timeManager != null)
+            SubscribeToTimeManager();
+        }
+
+        private void SubscribeToTimeManager()
+        {
+            if (subscribedToTimeManager || timeManager == null)
             {
-                timeManager.DayChanged += OnDayChanged;
-                timeManager.WeekChanged += OnWeekChanged;
-                timeManager.ShortTick += OnShortTick;
+                return;
             }
+
+            timeManager.DayChanged += OnDayChanged;
+            timeManager.WeekChanged += OnWeekChanged;
+            timeManager.ShortTick += OnShortTick;
+            subscribedToTimeManager = true;
         }
 
         private void OnDisable()
         {
-            if (timeManager != null)
+            if (subscribedToTimeManager && timeManager != null)
             {
                 timeManager.DayChanged -= OnDayChanged;
                 timeManager.WeekChanged -= OnWeekChanged;
                 timeManager.ShortTick -= OnShortTick;
+                subscribedToTimeManager = false;
             }
 
             if (sharedBusinessRuntime != null
@@ -223,7 +275,7 @@ namespace LandLedgers.Orchestration.Systems
 
             // CLN-4: accumulate the player's daily worked minutes for the weekly
             // owner-labor valuation post. Read BEFORE EnsureDay resets the day.
-            if (playerDirector != null)
+            if (playerDirector != null && playerDirector.PlayerPersonId.IsValid)
             {
                 var budget = hub.WorkTimeBudgets.GetOrCreate(playerDirector.PlayerPersonId);
                 weeklyPlayerWorkedMinutes += budget.MinutesWorked;

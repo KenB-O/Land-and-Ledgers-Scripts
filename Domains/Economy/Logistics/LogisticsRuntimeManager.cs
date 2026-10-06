@@ -2,8 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using LandLedgers.FirstLedger;
+using LandLedgers.Animals;
+using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Transport;
 using LandLedgers.Pathing;
 using LandLedgers.Persistence;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Time;
 using LandLedgers.World;
 using UnityEngine;
@@ -28,12 +32,61 @@ namespace LandLedgers.Economy
         [SerializeField] private SharedBusinessRuntimeManager sharedBusinessRuntime;
         [SerializeField] private string lastTownLedgerSummary = "Logistics ledger: no shipments yet.";
         [SerializeField] private List<LogisticsShipmentState> shipments = new();
+        private SimulationSystemsHub systemsHub;
 
         private bool subscribedToTime;
         private LogisticsRoutePlanner routePlanner;
 
         public static LogisticsRuntimeManager Instance { get; private set; }
         public IReadOnlyList<LogisticsShipmentState> Shipments => shipments;
+
+        /// <summary>
+        /// Binds a shipment to the real Horse/Wagon/Person resources that perform it.
+        /// Cargo lifecycle remains owned by this manager; the binding adds durable
+        /// physical identity without introducing a second shipment authority.
+        /// </summary>
+        public string BindPhysicalTransport(
+            LogisticsShipmentState shipment,
+            EquipmentAsset wagon,
+            IList<AnimalState> draftHorses,
+            string driverPersonId)
+        {
+            if (shipment == null) return "LogisticsRuntimeManager.BindPhysicalTransport: shipment is required.";
+            if (shipment.Status == LogisticsShipmentStatus.Completed || shipment.Status == LogisticsShipmentStatus.Failed)
+                return "LogisticsRuntimeManager.BindPhysicalTransport: shipment is no longer active.";
+            if (wagon == null || !wagon.IsWagon) return "LogisticsRuntimeManager.BindPhysicalTransport: a real wagon is required.";
+            string refusal = WagonAuthority.TryAssignDraftTeam(wagon, draftHorses, driverPersonId, shipment.ShipmentId);
+            if (refusal != null) return refusal;
+            shipment.physicalWagonAssetId = wagon.AssetId;
+            shipment.physicalDriverPersonId = driverPersonId ?? string.Empty;
+            shipment.physicalDraftAnimalIds = new List<string>();
+            foreach (AnimalState horse in draftHorses ?? new List<AnimalState>())
+                if (horse != null) shipment.physicalDraftAnimalIds.Add(horse.AnimalId.ToString());
+            shipment.physicalTransportBound = true;
+            shipment.physicalLocationId = ResolvePhysicalLocation(shipment);
+            shipment.physicalProgress01 = 0f;
+            return null;
+        }
+
+        public string ReleasePhysicalTransport(
+            LogisticsShipmentState shipment,
+            EquipmentAsset wagon,
+            IList<AnimalState> draftHorses,
+            float distanceMiles = 0f,
+            float loadRatio = 0f)
+        {
+            if (shipment == null || wagon == null)
+                return "LogisticsRuntimeManager.ReleasePhysicalTransport: shipment and wagon are required.";
+            WagonAuthority.ReleaseDraftTeam(wagon, draftHorses);
+            WagonAuthority.ApplyTripWear(wagon, distanceMiles, loadRatio);
+            shipment.physicalTransportBound = false;
+            shipment.physicalWagonAssetId = string.Empty;
+            shipment.physicalDriverPersonId = string.Empty;
+            shipment.physicalDraftAnimalIds.Clear();
+            shipment.physicalLocationId = string.Empty;
+            shipment.physicalProgress01 = 1f;
+            return null;
+        }
         public string LastTownLedgerSummary => string.IsNullOrWhiteSpace(lastTownLedgerSummary) ? "Logistics ledger: no shipments yet." : lastTownLedgerSummary;
 
         public static LogisticsRuntimeManager FindOrCreate()
@@ -234,8 +287,51 @@ namespace LandLedgers.Economy
             };
 
             shipments.Add(shipment);
+            TryBindOpeningPhysicalTransport(shipment);
             RefreshTownLedgerSummary();
             return shipment;
+        }
+
+        private void TryBindOpeningPhysicalTransport(LogisticsShipmentState shipment)
+        {
+            if (shipment == null || shipment.haulingMode != ShipmentHaulingMode.HiredFreight)
+                return;
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null || string.IsNullOrWhiteSpace(shipment.carrierBusinessInstanceId)) return;
+
+            EquipmentAsset wagon = null;
+            foreach (EquipmentAsset candidate in systemsHub.TransportAssets.Assets)
+            {
+                if (candidate != null && candidate.IsWagon
+                    && string.Equals(candidate.OwnerId, shipment.carrierBusinessInstanceId, StringComparison.OrdinalIgnoreCase)
+                    && !candidate.IsTransportAssigned)
+                {
+                    wagon = candidate;
+                    break;
+                }
+            }
+            if (wagon == null) return;
+
+            var horses = new List<AnimalState>();
+            foreach (AnimalState candidate in systemsHub.Animals.ActiveAnimals)
+            {
+                if (candidate != null && candidate.Species == AnimalSpecies.Horse
+                    && candidate.IsActive
+                    && string.Equals(candidate.OwnerId, shipment.carrierBusinessInstanceId, StringComparison.OrdinalIgnoreCase)
+                    && candidate.CurrentUse == HorseUseKind.None)
+                {
+                    horses.Add(candidate);
+                    break;
+                }
+            }
+            if (horses.Count == 0) return;
+
+            BusinessInstanceState carrier = FindBusinessByInstanceId(shipment.carrierBusinessInstanceId);
+            string driverId = carrier?.Owner != null && carrier.Owner.PersonId >= 0
+                ? carrier.Owner.PersonId.ToString()
+                : string.Empty;
+            if (string.IsNullOrWhiteSpace(driverId)) return;
+            BindPhysicalTransport(shipment, wagon, horses, driverId);
         }
 
         public LogisticsShipmentState CreateOffMapInboundShipment(
@@ -774,6 +870,8 @@ namespace LandLedgers.Economy
                 LogisticsShipmentStatus previousStatus = shipment.Status;
                 shipment.AdvanceGameSeconds(gameSeconds);
 
+                UpdatePhysicalTransportLocation(shipment);
+
                 if (!shipment.loadApplied && shipment.Status != LogisticsShipmentStatus.Planned)
                 {
                     if (!TryApplyLoad(shipment))
@@ -792,6 +890,11 @@ namespace LandLedgers.Economy
 
                 if (previousStatus != shipment.Status)
                 {
+                    if (shipment.Status == LogisticsShipmentStatus.Completed
+                        || shipment.Status == LogisticsShipmentStatus.Failed)
+                    {
+                        ReleasePhysicalTransportForTerminalShipment(shipment);
+                    }
                     RefreshTownLedgerSummary();
                 }
             }
@@ -808,6 +911,21 @@ namespace LandLedgers.Economy
             {
                 shipment.loadApplied = true;
                 return true;
+            }
+
+            if (shipment.physicalTransportBound)
+            {
+                systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+                EquipmentAsset wagon = systemsHub?.TransportAssets.Get(shipment.physicalWagonAssetId);
+                float estimatedMassKg = shipment.remainingQuantityUnits;
+                float estimatedVolumeM3 = shipment.remainingQuantityUnits * 0.01f;
+                if (wagon == null || !WagonAuthority.CanCarry(wagon, estimatedMassKg, estimatedVolumeM3))
+                {
+                    shipment.state = LogisticsShipmentStatus.Failed;
+                    shipment.blockedReason = "physical wagon capacity is insufficient for the cargo";
+                    shipment.remainingQuantityUnits = 0;
+                    return false;
+                }
             }
 
             BusinessInstanceState source = FindBusinessByInstanceId(shipment.sourceBusinessInstanceId);
@@ -834,6 +952,90 @@ namespace LandLedgers.Economy
             shipment.remainingQuantityUnits = consumed;
             shipment.loadApplied = true;
             return true;
+        }
+
+        private void ReleasePhysicalTransportForTerminalShipment(LogisticsShipmentState shipment)
+        {
+            if (shipment == null || !shipment.physicalTransportBound) return;
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            EquipmentAsset wagon = systemsHub?.TransportAssets.Get(shipment.physicalWagonAssetId);
+            if (wagon == null)
+            {
+                shipment.physicalTransportBound = false;
+                return;
+            }
+
+            var horses = new List<AnimalState>();
+            foreach (AnimalState candidate in systemsHub.Animals.ActiveAnimals)
+            {
+                if (candidate == null || candidate.Species != AnimalSpecies.Horse) continue;
+                string candidateId = candidate.AnimalId.ToString();
+                if (shipment.physicalDraftAnimalIds != null && shipment.physicalDraftAnimalIds.Contains(candidateId))
+                    horses.Add(candidate);
+            }
+
+            float loadRatio = wagon.PayloadMassCapacityKg > 0f
+                ? Mathf.Clamp01((float)Math.Max(0, shipment.PlannedQuantityUnits) / wagon.PayloadMassCapacityKg)
+                : 0f;
+            float routeDistance = shipment.RoutePlan != null ? shipment.RoutePlan.TotalTravelCells : 0f;
+            ReleasePhysicalTransport(shipment, wagon, horses, routeDistance, loadRatio);
+            foreach (AnimalState horse in horses)
+                HorseAuthority.ApplyWork(horse, 0.05f, 0.02f, 0f);
+        }
+
+        /// <summary>
+        /// Keeps the durable transport resources on the same physical lifecycle as the
+        /// shipment. The shipment remains the single route/time authority; these fields
+        /// are an auditable projection for the real wagon, horse team and driver and are
+        /// persisted so a reload cannot silently return a convoy to its origin.
+        /// </summary>
+        private void UpdatePhysicalTransportLocation(LogisticsShipmentState shipment)
+        {
+            if (shipment == null || !shipment.physicalTransportBound) return;
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null) return;
+
+            float total = Mathf.Max(0.01f,
+                shipment.loadingDurationGameSeconds
+                + shipment.transitDurationGameSeconds
+                + shipment.unloadingDurationGameSeconds);
+            shipment.physicalProgress01 = Mathf.Clamp01(shipment.totalElapsedGameSeconds / total);
+            string location = ResolvePhysicalLocation(shipment);
+            shipment.physicalLocationId = location;
+
+            EquipmentAsset wagon = systemsHub.TransportAssets.Get(shipment.physicalWagonAssetId);
+            if (wagon != null)
+            {
+                wagon.StorageLocationId = location;
+                wagon.CurrentShipmentId = shipment.ShipmentId;
+                wagon.CurrentDriverPersonId = shipment.physicalDriverPersonId ?? string.Empty;
+            }
+
+            foreach (AnimalState horse in systemsHub.Animals.ActiveAnimals)
+            {
+                if (horse == null || shipment.physicalDraftAnimalIds == null
+                    || !shipment.physicalDraftAnimalIds.Contains(horse.AnimalId.ToString())) continue;
+                horse.PhysicalLocationId = location;
+                horse.CurrentAssignmentId = shipment.ShipmentId;
+            }
+        }
+
+        private static string ResolvePhysicalLocation(LogisticsShipmentState shipment)
+        {
+            if (shipment == null) return string.Empty;
+            if (shipment.Status == LogisticsShipmentStatus.Completed)
+                return string.IsNullOrWhiteSpace(shipment.destinationBusinessInstanceId)
+                    ? "off-map-destination" : "business:" + shipment.destinationBusinessInstanceId;
+            if (shipment.Status == LogisticsShipmentStatus.Failed)
+                return "shipment:" + shipment.ShipmentId + ":quarantine";
+            if (shipment.Status == LogisticsShipmentStatus.Loading)
+                return string.IsNullOrWhiteSpace(shipment.sourceBusinessInstanceId)
+                    ? "off-map-origin" : "business:" + shipment.sourceBusinessInstanceId;
+            if (shipment.Status == LogisticsShipmentStatus.Unloading
+                || shipment.Status == LogisticsShipmentStatus.Arrived)
+                return string.IsNullOrWhiteSpace(shipment.destinationBusinessInstanceId)
+                    ? "off-map-destination" : "business:" + shipment.destinationBusinessInstanceId;
+            return "shipment:" + shipment.ShipmentId + ":in-transit";
         }
 
         /// <summary>
@@ -942,6 +1144,10 @@ namespace LandLedgers.Economy
                         shipment.remainingQuantityUnits = Mathf.Max(0, deliveredUnits - accepted);
                         shipment.deliveryApplied = accepted >= deliveredUnits;
                         shipment.state = shipment.remainingQuantityUnits > 0 ? LogisticsShipmentStatus.Partial : LogisticsShipmentStatus.Completed;
+                        if (shipment.deliveryApplied)
+                        {
+                            shipment.blockedReason = string.Empty;
+                        }
                         if (accepted <= 0)
                         {
                             shipment.blockedReason = "general store reorder intake failed";

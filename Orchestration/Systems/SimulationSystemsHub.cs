@@ -7,6 +7,7 @@ using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Liabilities;
 using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
@@ -76,6 +77,9 @@ namespace LandLedgers.Orchestration.Systems
         private FreightResourcePool freightPool = new FreightResourcePool();
 
         [SerializeField]
+        private TransportAssetRegistry transportAssets = new TransportAssetRegistry();
+
+        [SerializeField]
         private List<ButcherRuntime> butcherRuntimes = new List<ButcherRuntime>();
 
         [SerializeField]
@@ -104,6 +108,7 @@ namespace LandLedgers.Orchestration.Systems
         public WorkTimeBudgetStore WorkTimeBudgets => workTimeBudgets ??= new WorkTimeBudgetStore();
         public EnterpriseValuationReadModel Valuation => valuation ??= new EnterpriseValuationReadModel();
         public FreightResourcePool FreightPool => freightPool ??= new FreightResourcePool();
+        public TransportAssetRegistry TransportAssets => transportAssets ??= new TransportAssetRegistry();
         public FarmFlowLedger FarmFlows => farmFlows ??= new FarmFlowLedger();
         public BusinessCapabilityRegistry Capabilities => capabilityRegistry ??= new BusinessCapabilityRegistry();
         public BusinessOperatingLedger OperatingLedger => operatingLedger ??= new BusinessOperatingLedger();
@@ -265,6 +270,7 @@ namespace LandLedgers.Orchestration.Systems
             workTimeBudgets ??= new WorkTimeBudgetStore();
             valuation ??= new EnterpriseValuationReadModel();
             freightPool ??= new FreightResourcePool();
+            transportAssets ??= new TransportAssetRegistry();
             butcherRuntimes ??= new List<ButcherRuntime>();
             farmFlows ??= new FarmFlowLedger();
             capabilityRegistry ??= new BusinessCapabilityRegistry();
@@ -362,6 +368,7 @@ namespace LandLedgers.Orchestration.Systems
                 skills = Skills.CaptureSaveDto(),
                 valuation = Valuation.CaptureSaveDto(),
                 freightPool = FreightPool.CaptureSaveDto(),
+                transportAssets = TransportAssets.CaptureSaveDto(),
                 farmFlows = FarmFlows.CaptureSaveDto(),
                 capabilities = Capabilities.CaptureSaveDto(),
                 operatingLedger = OperatingLedger.CaptureSaveDto(),
@@ -410,6 +417,7 @@ namespace LandLedgers.Orchestration.Systems
             WorkTimeBudgets.LoadFromSaveDto(dto.workTimeBudgets, absoluteDayIndex);
             Valuation.LoadFromSaveDto(dto.valuation);
             FreightPool.LoadFromSaveDto(dto.freightPool);
+            TransportAssets.LoadFromSaveDto(dto.transportAssets);
             FarmFlows.LoadFromSaveDto(dto.farmFlows);
             Capabilities.LoadFromSaveDto(dto.capabilities, diagnostics);
             OperatingLedger.LoadFromSaveDto(dto.operatingLedger);

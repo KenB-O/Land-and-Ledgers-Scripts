@@ -150,6 +150,43 @@ namespace LandLedgers.Time
             SetPaused(!isPaused);
         }
 
+        /// <summary>
+        /// Advances the authoritative simulation clock without waiting for wall-clock
+        /// frames. This is intentionally a clock operation only: all normal ShortTick,
+        /// DayChanged and other simulation listeners still receive their ordinary events.
+        /// Development/editorial validation uses this to make long authored scenarios
+        /// repeatable without introducing a second debug clock.
+        /// </summary>
+        public void AdvanceForValidation(float gameSeconds)
+        {
+            if (settings == null)
+            {
+                return;
+            }
+
+            if (!initialized)
+            {
+                InitializeState(false);
+            }
+
+            settings.Sanitize();
+            float remainingGameSeconds = Mathf.Max(0f, gameSeconds);
+
+            // Validation acceleration is still the authoritative clock, but a large
+            // single call must not trigger the ordinary per-frame rollover cap. That
+            // cap intentionally compresses visual/runtime frames; it would otherwise
+            // skip DayChanged/WeekChanged listeners that post payroll, profit and
+            // scenario progress. Process at most one authored day per step so every
+            // ordinary calendar event is delivered in order.
+            float oneDay = Mathf.Max(1f, settings.GameSecondsPerDay);
+            while (remainingGameSeconds > 0f)
+            {
+                float step = Mathf.Min(remainingGameSeconds, oneDay);
+                AdvanceGameSeconds(step);
+                remainingGameSeconds -= step;
+            }
+        }
+
         public void ResetToStartingDate()
         {
             InitializeState(true);

@@ -4,7 +4,9 @@ using System.Text;
 using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Transport;
 using LandLedgers.Orchestration.Scenarios;
+using LandLedgers.Orchestration.Scenarios.Development;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Pathing;
@@ -238,6 +240,13 @@ namespace LandLedgers.FirstLedger
                     return;
                 }
 
+                // A loaded campaign bypasses the fresh-world setup below. Rebind
+                // scenario/player authorities here as well so development tools and
+                // the authored scenario remain usable after a continue/reload.
+                ConfigureScenarioAuthorities();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                EnsureScenarioValidationHarness();
+#endif
                 initialized = true;
                 Debug.Log($"[WorldStartup] Continue completed with fresh generation pass count {townWorld.GenerationPassCount}.", this);
                 CompleteStartupTiming(totalTimer, timing, "continue usable world");
@@ -298,6 +307,13 @@ namespace LandLedgers.FirstLedger
             storeRuntime?.InitializeIfNeeded();
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
+            FindAnyObjectByType<SimulationDrivers>()?.AttachBusinessRuntime(sharedBusinessRuntime);
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            OpeningTransportStock.Ensure(
+                systemsHub,
+                sharedBusinessRuntime != null ? sharedBusinessRuntime.Businesses : null,
+                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0);
+            RunOpeningSettlementReconciliation();
             ConfigurePopulationPathingDirector();
             // P4: the scenario promises "a stake of cash" (FirstLedger.asset tunable
             // 'startingCashCents'). Seed it once on a fresh game — never on load.
@@ -342,6 +358,10 @@ namespace LandLedgers.FirstLedger
             storePanel?.Refresh();
             AppendStartupTiming(timing, stepTimer, "ui refresh");
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            EnsureScenarioValidationHarness();
+#endif
+
             initialized = true;
             bootstrapStatus = $"Game slice ready. Buildings={townWorld.Buildings.Count}, People={(populationManager != null ? populationManager.GeneratedPersonCount : 0)}, Store={(storeRuntime != null ? storeRuntime.Status : "missing")}.";
             if (logBootstrapSummary)
@@ -352,6 +372,20 @@ namespace LandLedgers.FirstLedger
             CompleteStartupTiming(totalTimer, timing, "fresh startup");
             initializing = false;
         }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private void EnsureScenarioValidationHarness()
+        {
+            if (FindAnyObjectByType<ScenarioValidationHarness>() != null)
+            {
+                return;
+            }
+
+            GameObject harnessObject = new GameObject("Scenario Validation Harness");
+            harnessObject.AddComponent<ScenarioValidationHarness>();
+            DontDestroyOnLoad(harnessObject);
+        }
+#endif
 
         public void MarkRestoredFromSave(string persistenceSummary = "")
         {
@@ -633,10 +667,44 @@ namespace LandLedgers.FirstLedger
             populationManager.Configure(townWorld, populationSettings, false);
         }
 
+        private void RunOpeningSettlementReconciliation()
+        {
+            if (populationManager == null || sharedBusinessRuntime == null)
+            {
+                return;
+            }
+
+            sharedBusinessRuntime.ResolveProvableOpeningBusinessOwners();
+            SettlementFoundationReconciliation reconciliation = SettlementFoundationReconciliation.Check(
+                populationManager.State,
+                sharedBusinessRuntime.Businesses);
+            if (!reconciliation.IsValid)
+            {
+                Debug.LogError($"[WorldGenesis] {reconciliation.BuildSummary()}\n" +
+                    string.Join("\n", reconciliation.Errors), this);
+            }
+            else if (reconciliation.Warnings.Count > 0)
+            {
+                Debug.LogWarning($"[WorldGenesis] {reconciliation.BuildSummary()}\n" +
+                    string.Join("\n", reconciliation.Warnings), this);
+            }
+        }
+
         private void ConfigureScenarioAuthorities()
         {
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
             ScenarioDirector scenarioDirector = FindAnyObjectByType<ScenarioDirector>();
+            // The calendar/economic driver is a required runtime authority for a
+            // playable First Ledger world. Older scene snapshots did not serialize
+            // the component, which left weekly profit, owner-labor and objective
+            // refresh events disconnected even though the rest of the authorities
+            // existed. Create the one shared driver on the bootstrap object when a
+            // legacy scene is missing it; this is wiring, not a second simulation.
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                drivers = gameObject.AddComponent<SimulationDrivers>();
+            }
             PopulationState population = populationManager != null ? populationManager.State : null;
             if (systemsHub == null || scenarioDirector == null || population == null)
             {
@@ -658,9 +726,14 @@ namespace LandLedgers.FirstLedger
             PersonState firstPerson = FindFirstLivingPerson(population);
             if (firstPerson != null)
             {
-                scenarioDirector.PlayerDirector = new PlayerDirector(
+                PlayerDirector playerDirector = new PlayerDirector(
                     LandLedgers.Primitives.EntityId.For(EntityKind.Person, firstPerson.id),
                     "town-core");
+                scenarioDirector.PlayerDirector = playerDirector;
+                if (drivers != null)
+                {
+                    drivers.PlayerDirector = playerDirector;
+                }
             }
         }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Population;
+using LandLedgers.Persistence;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using UnityEngine;
@@ -64,6 +65,38 @@ namespace LandLedgers.Orchestration.Scenarios
         public bool HasActiveScenario => Service.HasActiveScenario;
         public string ActiveScenarioId => Service.ActiveState?.Asset.ScenarioId;
 
+        public ScenarioSaveDto CaptureSaveDto()
+        {
+            if (!HasActiveScenario)
+            {
+                return new ScenarioSaveDto();
+            }
+
+            return new ScenarioSaveDto
+            {
+                activeScenarioId = ActiveScenarioId ?? string.Empty,
+                completedGoalIds = Service.ActiveState.CaptureCompletedGoalIds(),
+                completedObjectiveIds = Service.ActiveState.CaptureCompletedObjectiveIds()
+            };
+        }
+
+        public bool RestoreFromSaveDto(ScenarioSaveDto dto)
+        {
+            if (dto == null || string.IsNullOrWhiteSpace(dto.activeScenarioId))
+            {
+                return false;
+            }
+
+            if (!SwitchScenario(dto.activeScenarioId))
+            {
+                return false;
+            }
+
+            Service.ActiveState.RestoreCompletedGoalIds(dto.completedGoalIds);
+            Service.ActiveState.RestoreCompletedObjectiveIds(dto.completedObjectiveIds);
+            return true;
+        }
+
         /// <summary>
         /// Registers an authored scenario for a runtime start screen. The asset remains
         /// the authority; this method only exposes the same registry operation that the
@@ -112,6 +145,18 @@ namespace LandLedgers.Orchestration.Scenarios
                 if (!Service.RegisterScenario(asset, out string rejectionReason))
                 {
                     Debug.LogError($"[ScenarioDirector] {rejectionReason}", this);
+                }
+            }
+
+            // Keep the authored registry resilient to one-scene bootstrap ordering and
+            // save/restore reloads. Serialized scene entries remain the primary source;
+            // already-loaded authored assets are added to this same registry rather than
+            // creating a second scenario catalog.
+            foreach (ScenarioAsset asset in Resources.FindObjectsOfTypeAll<ScenarioAsset>())
+            {
+                if (asset != null && !Service.ListScenarioIds().Contains(asset.ScenarioId))
+                {
+                    RegisterScenarioAsset(asset);
                 }
             }
         }

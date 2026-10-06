@@ -88,6 +88,8 @@ namespace LandLedgers.ReadModels.Valuation
         public int CapitalReplacementNeedCents => Mathf.Max(0, capitalReplacementNeedCents);
         public int TransferableAssetValueCents => Mathf.Max(0, transferableAssetValueCents);
 
+        public int RecordedWeekCount => weeklyOperatingProfitCents != null ? weeklyOperatingProfitCents.Count : 0;
+
         public ValuationEvidence(string businessInstanceId)
         {
             this.businessInstanceId = businessInstanceId ?? string.Empty;
@@ -400,6 +402,16 @@ namespace LandLedgers.ReadModels.Valuation
 
             entry.cached ??= EnterpriseValuation.Evaluate(entry.evidence, Tuning);
             return entry.cached;
+        }
+
+        /// <summary>
+        /// Development/read-model diagnostics only. The evidence remains owned by
+        /// this valuation authority; callers receive the live evidence object for
+        /// inspection, never a replacement or mutation path.
+        /// </summary>
+        public ValuationEvidence GetEvidence(string businessInstanceId)
+        {
+            return Find(businessInstanceId)?.evidence;
         }
 
         /// <summary>

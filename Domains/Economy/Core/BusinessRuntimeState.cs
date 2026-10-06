@@ -835,6 +835,19 @@ namespace LandLedgers.Economy
         public string BusinessId => businessId ?? string.Empty;
         public BusinessType BusinessType => businessType;
         public int CurrentCashCents => Mathf.Max(0, currentCashCents);
+
+        /// <summary>
+        /// Binds runtime records to the owning BusinessInstanceState identity.
+        /// Profile definitions have stable catalog ids, but live businesses need
+        /// their unique instance id for employment, payroll and valuation joins.
+        /// </summary>
+        public void BindBusinessIdentity(string authoritativeBusinessId)
+        {
+            if (!string.IsNullOrWhiteSpace(authoritativeBusinessId))
+            {
+                businessId = authoritativeBusinessId.Trim();
+            }
+        }
         public int LastDailyRevenueCents => Mathf.Max(0, lastDailyRevenueCents);
         public int LastWeeklyPayrollCents => Mathf.Max(0, lastWeeklyPayrollCents);
         public int LastWeeklyReorderBudgetCents => Mathf.Max(0, lastWeeklyReorderBudgetCents);
@@ -1099,8 +1112,14 @@ namespace LandLedgers.Economy
             int baselineDailyServiceCapacity)
         {
             int repairs = 0;
-            string resolvedBusinessId = !string.IsNullOrWhiteSpace(businessId)
-                ? businessId.Trim()
+            bool runtimeStillUsesProfileIdentity = profileTemplate != null
+                && !string.IsNullOrWhiteSpace(businessId)
+                && string.Equals(businessId.Trim(), profileTemplate.BusinessId, StringComparison.Ordinal);
+            string resolvedBusinessId = runtimeStillUsesProfileIdentity
+                && !string.IsNullOrWhiteSpace(fallbackBusinessId)
+                ? fallbackBusinessId.Trim()
+                : !string.IsNullOrWhiteSpace(businessId)
+                    ? businessId.Trim()
                 : !string.IsNullOrWhiteSpace(profileTemplate?.BusinessId)
                     ? profileTemplate.BusinessId.Trim()
                     : fallbackBusinessId ?? string.Empty;
@@ -1755,6 +1774,20 @@ namespace LandLedgers.Economy
             }
 
             RefreshWeeklyCashAfter();
+        }
+
+        /// <summary>
+        /// Projects newly filled worker slots into the authoritative employment
+        /// registry immediately. Weekly payroll remains defensive, but hiring and
+        /// scenario predicates must observe the relationship without waiting for a
+        /// calendar rollover.
+        /// </summary>
+        public void EnsureEmploymentRecordsFromSlots()
+        {
+            if (EmploymentRegistry != null)
+            {
+                EnsureEmploymentRecords(EmploymentRegistry);
+            }
         }
 
         /// <summary>

@@ -90,7 +90,9 @@ namespace LandLedgers.EditorTests.ReadModels
                 EnterpriseValuation.Evaluate(BuildEvidence(2, 1000), ValuationTuning.Default()).Confidence);
             Assert.AreEqual(ValuationConfidence.Medium,
                 EnterpriseValuation.Evaluate(BuildEvidence(8, 1000), ValuationTuning.Default()).Confidence);
-            Assert.AreEqual(ValuationConfidence.High,
+            // The default maintainable-profit window is capped at 12 weeks, so
+            // additional history beyond that window does not increase confidence.
+            Assert.AreEqual(ValuationConfidence.Medium,
                 EnterpriseValuation.Evaluate(BuildEvidence(20, 1000), ValuationTuning.Default()).Confidence);
         }
 

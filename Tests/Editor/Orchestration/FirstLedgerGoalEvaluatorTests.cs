@@ -54,7 +54,12 @@ namespace LandLedgers.EditorTests.Orchestration
         public void Evaluate_EquityGoals_UseOwnerEquityThresholds()
         {
             var evaluator = new FirstLedgerGoalEvaluator();
-            var state = new FakeState { PlayerOwnerEquityCents = 499999 };
+            var state = new FakeState
+            {
+                PlayerOwnedBusinessCount = 1,
+                ActivePlayerEmployeeCount = 1,
+                PlayerOwnerEquityCents = 499999
+            };
 
             evaluator.Evaluate(state);
             var progress = evaluator.Progress();

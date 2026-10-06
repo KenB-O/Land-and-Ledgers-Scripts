@@ -153,6 +153,23 @@ namespace LandLedgers.Animals
         public List<PedigreeClaim> PedigreeClaims = new List<PedigreeClaim>();
         public List<AnimalProductionRecord> ProductionHistory = new List<AnimalProductionRecord>();
         public string HealthNotes = string.Empty;
+
+        // Transport foundation: these fields extend the individual Animal authority rather
+        // than creating a second Horse registry. They are meaningful for Species.Horse and
+        // remain inert for other species.
+        public HorseUseCapabilities HorseCapabilities;
+        public string CustodianKind = string.Empty;
+        public string CustodianId = string.Empty;
+        public string PhysicalLocationId = string.Empty;
+        public string HousingId = string.Empty;
+        public float Health01 = 1f;
+        public float Nutrition01 = 1f;
+        public float Hydration01 = 1f;
+        public float Fatigue01;
+        public float Training01;
+        public HorseUseKind CurrentUse;
+        public string CurrentAssignmentId = string.Empty;
+        public int LastCareDayIndex = -1;
     }
 
     /// <summary>
@@ -254,6 +271,7 @@ namespace LandLedgers.Animals
         }
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+        public IReadOnlyCollection<AnimalState> ActiveAnimals => animals.Values;
 
         /// <summary>Registers a new individual animal, allocating its permanent AnimalId.</summary>
         public AnimalState RegisterAnimal(

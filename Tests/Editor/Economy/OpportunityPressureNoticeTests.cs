@@ -550,7 +550,7 @@ namespace LandLedgers.EditorTests.Economy
                 SetPrivateField(acquisition, "lastTownActionSummary", "Town action: housing pressure pushed new residential parcels toward market.");
 
                 OpportunityPressureRuntimeManager manager = CreateManager(cleanup);
-                manager.Configure(null, null, null, null, pulse, null, null);
+                manager.Configure(null, null, null, null, pulse, null, null, acquisition);
 
                 Assert.IsTrue(manager.TryGetNotice("active_town_action", out OpportunityNotice notice));
                 Assert.AreEqual(OpportunityPressureType.Expansion, notice.PressureType);
@@ -585,7 +585,7 @@ namespace LandLedgers.EditorTests.Economy
                     });
 
                 OpportunityPressureRuntimeManager manager = CreateManager(cleanup);
-                manager.Configure(null, null, null, null, null, null, null);
+                manager.Configure(null, null, null, null, null, null, null, acquisition);
 
                 Assert.IsTrue(manager.TryGetNotice("property_opening_land", out OpportunityNotice notice));
                 Assert.AreEqual(OpportunityPressureType.Expansion, notice.PressureType);

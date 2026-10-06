@@ -31,6 +31,7 @@ namespace LandLedgers.Persistence
         public PlayerDebtSaveDto debt = new();
         public PlayerPortfolioSaveDto portfolio = new();
         public FirstSessionGuidanceSaveDto firstSessionGuidance = new();
+        public ScenarioSaveDto scenario = new();
         /// <summary>
         /// HF-1: universal per-kind entity-ID cursors (EntityIdSaveAdapter). Legacy
         /// nextPersonId/nextHouseholdId/nextBuildingId fields remain the authority for
@@ -43,6 +44,14 @@ namespace LandLedgers.Persistence
         /// farm flows, capabilities, operating ledger).
         /// </summary>
         public SystemsSaveDto systems = new();
+    }
+
+    [Serializable]
+    public sealed class ScenarioSaveDto
+    {
+        public string activeScenarioId = string.Empty;
+        public List<string> completedGoalIds = new();
+        public List<string> completedObjectiveIds = new();
     }
 
     [Serializable]
@@ -522,6 +531,12 @@ namespace LandLedgers.Persistence
         public float unloadingDurationGameSeconds;
         public float stageElapsedGameSeconds;
         public float totalElapsedGameSeconds;
+        public string physicalWagonAssetId = string.Empty;
+        public string physicalDriverPersonId = string.Empty;
+        public List<string> physicalDraftAnimalIds = new();
+        public bool physicalTransportBound;
+        public string physicalLocationId = string.Empty;
+        public float physicalProgress01;
         public LogisticsRoutePlanSaveDto routePlan = new();
     }
 

@@ -46,6 +46,66 @@ namespace LandLedgers.Orchestration.Scenarios
             return objectiveCompleted.TryGetValue(objectiveId, out bool done) && done;
         }
 
+        public List<string> CaptureCompletedGoalIds()
+        {
+            var completed = new List<string>();
+            foreach (KeyValuePair<string, bool> pair in goalCompleted)
+            {
+                if (pair.Value)
+                {
+                    completed.Add(pair.Key);
+                }
+            }
+
+            return completed;
+        }
+
+        public List<string> CaptureCompletedObjectiveIds()
+        {
+            var completed = new List<string>();
+            foreach (KeyValuePair<string, bool> pair in objectiveCompleted)
+            {
+                if (pair.Value)
+                {
+                    completed.Add(pair.Key);
+                }
+            }
+
+            return completed;
+        }
+
+        internal void RestoreCompletedGoalIds(IEnumerable<string> ids)
+        {
+            if (ids == null)
+            {
+                return;
+            }
+
+            foreach (string id in ids)
+            {
+                if (!string.IsNullOrWhiteSpace(id) && goalCompleted.ContainsKey(id))
+                {
+                    goalCompleted[id] = true;
+                }
+            }
+        }
+
+        internal void RestoreCompletedObjectiveIds(IEnumerable<string> ids)
+        {
+            if (ids == null)
+            {
+                return;
+            }
+
+            foreach (string id in ids)
+            {
+                if (!string.IsNullOrWhiteSpace(id) && objectiveCompleted.ContainsKey(id))
+                {
+                    objectiveCompleted[id] = true;
+                }
+            }
+        }
+
         public string GetObjectiveText(string objectiveId)
         {
             if (objectiveTextOverrides.TryGetValue(objectiveId, out string overrideText))

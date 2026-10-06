@@ -8318,6 +8318,9 @@ namespace LandLedgers.Economy
                 listing.businessInstanceId = acquiredBusiness != null ? acquiredBusiness.InstanceId : listing.businessInstanceId;
                 listing.businessDisplayName = acquiredLabel;
                 listing.ownerDisplayName = "Player";
+                sharedBusinessRuntime.RecordAcquisitionValuation(
+                    acquiredBusiness,
+                    deal != null ? deal.estimatedValueCents : 0);
                 string openingCashMessage = ApplyPostAcquisitionOpeningCash(acquiredBusiness, deal != null ? deal.sellerMotive : GetSellerMotive(listing.reason));
                 playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(acquiredBusiness, GetCurrentWeekKey(), true);
                 string integrationBrief = BuildPostCloseIntegrationBrief(listing, deal, finalPriceCents);
@@ -8570,6 +8573,9 @@ namespace LandLedgers.Economy
                 listing.businessInstanceId = acquiredBusiness != null ? acquiredBusiness.InstanceId : listing.businessInstanceId;
                 listing.businessDisplayName = acquiredLabel;
                 listing.ownerDisplayName = "Player";
+                sharedBusinessRuntime.RecordAcquisitionValuation(
+                    acquiredBusiness,
+                    listing.askingPriceCents);
                 string openingCashMessage = ApplyPostAcquisitionOpeningCash(acquiredBusiness, GetSellerMotive(listing.reason));
                 playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(acquiredBusiness, GetCurrentWeekKey(), true);
                 lastPurchaseSummary = $"{acquiredLabel} purchased for {FormatMoney(listing.askingPriceCents)}. {transferMessage} {openingCashMessage}";

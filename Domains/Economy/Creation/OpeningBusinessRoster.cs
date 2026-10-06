@@ -50,10 +50,21 @@ namespace LandLedgers.Economy.Creation
 
         public CreateBusinessIntent ToIntent()
         {
+            return ToIntent(BusinessOwnerIdentity.Npc(-1, ownerDisplayName, ownerDisplayName));
+        }
+
+        /// <summary>
+        /// Builds the same authored formation intent with a resolved founder. The
+        /// default overload is retained for editor/tests and legacy callers; runtime
+        /// world genesis should provide a real Person-backed owner whenever one is
+        /// available.
+        /// </summary>
+        public CreateBusinessIntent ToIntent(BusinessOwnerIdentity owner)
+        {
             return new CreateBusinessIntent(
                 businessType,
                 displayName,
-                BusinessOwnership.Sole(BusinessOwnerIdentity.Npc(-1, ownerDisplayName, ownerDisplayName), startingCapitalCents),
+                BusinessOwnership.Sole(owner ?? BusinessOwnerIdentity.Npc(-1, ownerDisplayName, ownerDisplayName), startingCapitalCents),
                 premisesRequirement,
                 PremisesPreference.Auto,
                 startingCapitalCents);
@@ -108,6 +119,24 @@ namespace LandLedgers.Economy.Creation
             Action<BusinessCreationResult> onCreated,
             List<string> diagnostics)
         {
+            return EnsureViaFormationWorkflow(
+                roster, authority, context, hasBusinessOfType, null, onCreated, diagnostics);
+        }
+
+        /// <summary>
+        /// Formation entry point used by world genesis. The resolver may replace the
+        /// roster's fallback owner with a real Person-backed owner while leaving the
+        /// authored business type, premises, and capital unchanged.
+        /// </summary>
+        public static int EnsureViaFormationWorkflow(
+            List<OpeningRosterEntry> roster,
+            BusinessCreationAuthority authority,
+            IBusinessCreationContext context,
+            Func<BusinessType, bool> hasBusinessOfType,
+            Func<OpeningRosterEntry, CreateBusinessIntent> intentResolver,
+            Action<BusinessCreationResult> onCreated,
+            List<string> diagnostics)
+        {
             diagnostics ??= new List<string>();
             if (roster == null || authority == null || context == null)
             {
@@ -129,7 +158,8 @@ namespace LandLedgers.Economy.Creation
                     continue;
                 }
 
-                if (!authority.TryCreate(entry.ToIntent(), context, out BusinessCreationResult result)
+                CreateBusinessIntent intent = intentResolver != null ? intentResolver(entry) : entry.ToIntent();
+                if (!authority.TryCreate(intent, context, out BusinessCreationResult result)
                     || result == null || !result.Success)
                 {
                     diagnostics.Add($"'{entry.DisplayName}' failed formation: " +

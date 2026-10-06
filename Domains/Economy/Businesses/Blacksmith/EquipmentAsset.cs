@@ -43,6 +43,18 @@ namespace LandLedgers.Economy.Blacksmith
         // resale, confidence). Follows the animal OwnershipHistory shape.
         public List<EquipmentOwnershipRecord> OwnershipHistory = new List<EquipmentOwnershipRecord>();
 
+        // Wagon transport fields extend the durable EquipmentAsset authority. They remain
+        // unused for non-wagon equipment and persist with the asset through existing save DTOs.
+        public string WagonSubtype = string.Empty;
+        public float PayloadMassCapacityKg;
+        public float CargoVolumeCapacityM3;
+        public string StorageLocationId = string.Empty;
+        public List<string> DraftAnimalIds = new List<string>();
+        public string CurrentDriverPersonId = string.Empty;
+        public string CurrentShipmentId = string.Empty;
+        public bool IsWagon => !string.IsNullOrWhiteSpace(Kind) && Kind.IndexOf("wagon", StringComparison.OrdinalIgnoreCase) >= 0;
+        public bool IsTransportAssigned => DraftAnimalIds.Count > 0 || !string.IsNullOrWhiteSpace(CurrentDriverPersonId) || !string.IsNullOrWhiteSpace(CurrentShipmentId);
+
         public bool IsReserved => !string.IsNullOrWhiteSpace(ReservedBy);
         public bool IsUsable => Condition01 > 0.05f;
 

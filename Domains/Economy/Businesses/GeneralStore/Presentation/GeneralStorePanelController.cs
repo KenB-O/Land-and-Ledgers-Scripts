@@ -6,6 +6,7 @@ using LandLedgers.CameraSystem;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Economy.Valuation;
 using LandLedgers.Population;
 using LandLedgers.Time;
@@ -89,6 +90,7 @@ namespace LandLedgers.FirstLedger
         [SerializeField] private SharedBusinessRuntimeManager sharedBusinessRuntime;
         [SerializeField] private PlayerDebtManager playerDebtManager;
         [SerializeField] private PlayerPortfolioManager playerPortfolio;
+        [SerializeField] private SimulationSystemsHub systemsHub;
         [SerializeField] private CivicFoundationManager civicFoundation;
         [SerializeField] private PopulationManager populationManager;
         [SerializeField] private TownWorldController townWorld;
@@ -625,6 +627,7 @@ namespace LandLedgers.FirstLedger
             acquisitionMarket ??= FindAnyObjectByType<AcquisitionMarketManager>();
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
             playerDebtManager ??= FindAnyObjectByType<PlayerDebtManager>();
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
             playerPortfolio ??= FindAnyObjectByType<PlayerPortfolioManager>();
             civicFoundation ??= FindAnyObjectByType<CivicFoundationManager>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
@@ -755,6 +758,9 @@ namespace LandLedgers.FirstLedger
             view.LoanDecreaseHundredButton?.onClick.AddListener(() => AdjustLoanRequest(-100));
             view.LoanWorkflowButton?.onClick.AddListener(OpenLoanWorkflow);
             view.LoanSubmitButton?.onClick.AddListener(SubmitLoanApplication);
+            view.SharedFinanceAcceptButton?.onClick.AddListener(AcceptSelectedSharedOffer);
+            view.SharedFinanceCounterButton?.onClick.AddListener(CounterSelectedSharedOffer);
+            view.SharedFinanceDeclineButton?.onClick.AddListener(DeclineSelectedSharedOffer);
             view.CashTransferDepositOneButton?.onClick.AddListener(() => TransferSelectedBusinessCash(1));
             view.CashTransferDepositTenButton?.onClick.AddListener(() => TransferSelectedBusinessCash(10));
             view.CashTransferDepositHundredButton?.onClick.AddListener(() => TransferSelectedBusinessCash(100));
@@ -812,6 +818,9 @@ namespace LandLedgers.FirstLedger
             view.LoanDecreaseHundredButton?.onClick.RemoveAllListeners();
             view.LoanWorkflowButton?.onClick.RemoveAllListeners();
             view.LoanSubmitButton?.onClick.RemoveAllListeners();
+            view.SharedFinanceAcceptButton?.onClick.RemoveAllListeners();
+            view.SharedFinanceCounterButton?.onClick.RemoveAllListeners();
+            view.SharedFinanceDeclineButton?.onClick.RemoveAllListeners();
             view.CashTransferDepositOneButton?.onClick.RemoveAllListeners();
             view.CashTransferDepositTenButton?.onClick.RemoveAllListeners();
             view.CashTransferDepositHundredButton?.onClick.RemoveAllListeners();
@@ -949,6 +958,8 @@ namespace LandLedgers.FirstLedger
                     ? BuildConstructionInputAvailabilityText()
                     : business == null
                     ? BuildConstructionInputAvailabilityText()
+                    : business.BusinessType == BusinessType.Generic
+                    ? GenericBusinessPresentation.BuildReadout(business)
                     : sharedBusinessRuntime != null ? sharedBusinessRuntime.BuildBusinessInventoryText(business) : string.Empty);
             }
 
@@ -2712,9 +2723,92 @@ namespace LandLedgers.FirstLedger
             SetText(view.FinancesDebtPressureText, BuildFinanceDebtPressureText());
             SetText(view.FinancesDistributionText, BuildFinanceDistributionText(snapshots));
             SetText(view.FinancesAffordabilityText, BuildFinanceAffordabilityText(snapshots));
+            SetText(view.SharedFinanceText, FinancialObligationReadModel.BuildPlayerSummary(
+                systemsHub != null ? systemsHub.FinancialObligations : null,
+                "player",
+                -1,
+                systemsHub != null ? systemsHub.CreditOffers : null));
+            UpdateSharedFinanceActions();
             UpdateFinanceBusinessRows(snapshots);
             UpdateBusinessCashTransferPanel();
             UpdateBankLoanPanel();
+        }
+
+        private CreditOffer FindSelectedSharedOffer()
+        {
+            if (systemsHub == null || systemsHub.CreditOffers == null) return null;
+            foreach (CreditOffer offer in systemsHub.CreditOffers.Offers)
+            {
+                if (offer == null || offer.Status == CreditOfferStatus.Accepted
+                    || offer.Status == CreditOfferStatus.Declined || offer.Status == CreditOfferStatus.Refused
+                    || offer.Status == CreditOfferStatus.Expired) continue;
+                if (string.Equals(offer.Borrower, "player", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(offer.Lender, "player", StringComparison.OrdinalIgnoreCase)) return offer;
+            }
+            return null;
+        }
+
+        private void UpdateSharedFinanceActions()
+        {
+            CreditOffer offer = FindSelectedSharedOffer();
+            bool hasOffer = offer != null;
+            SetButtonInteractable(view.SharedFinanceCounterButton, hasOffer && offer.Status == CreditOfferStatus.Proposed);
+            SetButtonInteractable(view.SharedFinanceDeclineButton, hasOffer && offer.Status != CreditOfferStatus.CounterAccepted);
+            bool deferredClosing = hasOffer && offer.Status == CreditOfferStatus.CounterAccepted
+                && (offer.Purpose.IndexOf("acquisition", StringComparison.OrdinalIgnoreCase) >= 0
+                    || offer.Purpose.IndexOf("property", StringComparison.OrdinalIgnoreCase) >= 0
+                    || offer.Purpose.IndexOf("livestock", StringComparison.OrdinalIgnoreCase) >= 0);
+            SetButtonInteractable(view.SharedFinanceAcceptButton, deferredClosing);
+        }
+
+        private void CounterSelectedSharedOffer()
+        {
+            CreditOffer offer = FindSelectedSharedOffer();
+            if (offer == null || systemsHub == null)
+            {
+                panelStatus = "No open financing offer is available to counter.";
+                UpdateFinances();
+                return;
+            }
+            systemsHub.CreditOffers.CounterOffer(offer.OfferId, offer.OfferedAmountCents,
+                offer.AnnualInterestRateBps, offer.TermDays,
+                string.IsNullOrWhiteSpace(offer.Conditions) ? "Borrower requests the stated terms." : offer.Conditions,
+                out string message, TimeManager.Instance != null ? TimeManager.Instance.CurrentAbsoluteDayIndex : 0);
+            panelStatus = string.IsNullOrWhiteSpace(message) ? "Counteroffer sent to the lender." : message;
+            UpdateFinances();
+        }
+
+        private void DeclineSelectedSharedOffer()
+        {
+            CreditOffer offer = FindSelectedSharedOffer();
+            if (offer == null || systemsHub == null)
+            {
+                panelStatus = "No open financing offer is available to decline.";
+                UpdateFinances();
+                return;
+            }
+            systemsHub.CreditOffers.Decline(offer.OfferId, "Player declined the financing offer.");
+            panelStatus = "Financing offer declined.";
+            UpdateFinances();
+        }
+
+        private void AcceptSelectedSharedOffer()
+        {
+            CreditOffer offer = FindSelectedSharedOffer();
+            if (offer == null || systemsHub == null || offer.Status != CreditOfferStatus.CounterAccepted)
+            {
+                panelStatus = "No lender-accepted financing offer is ready to close.";
+                UpdateFinances();
+                return;
+            }
+            FinancialObligation obligation = systemsHub.CreditOffers.AcceptDeferredConsideration(
+                systemsHub.Ids, offer.OfferId, systemsHub.FinancialObligations,
+                TimeManager.Instance != null ? TimeManager.Instance.CurrentAbsoluteDayIndex : 0,
+                FinancialObligationKind.SellerFinance, offer.Purpose, offer.OriginatingDealId);
+            panelStatus = obligation != null
+                ? "Negotiated deferred consideration accepted; creditor claim recorded."
+                : "Offer could not close through the originating asset workflow.";
+            UpdateFinances();
         }
 
         private List<FinanceBusinessSnapshot> BuildFinanceBusinessSnapshots()
@@ -2851,6 +2945,12 @@ namespace LandLedgers.FirstLedger
         private string BuildFinanceDebtPressureText()
         {
             StringBuilder builder = new();
+            if (systemsHub != null)
+            {
+                int owed = systemsHub.FinancialObligations.TotalOutstandingFor("player");
+                if (owed > 0)
+                    builder.AppendLine($"Shared obligations owed: {FormatMoney(owed)} | notes, payables and calls included");
+            }
             if (playerDebtManager == null)
             {
                 builder.AppendLine("Debt records unavailable.");
@@ -3896,6 +3996,7 @@ namespace LandLedgers.FirstLedger
             builder.Append("Next move: ");
             builder.AppendLine(BuildAcquisitionActionGuidance(actionLabel));
             AppendLabeledSummaryLine(builder, readinessRaw, new[] { "Funding", "Readiness", "Commitment", "Runway", "Execution", "Liquidity" });
+            AppendRawSummaryLines(builder, acquisitionMarket.BuildSelectedLeadFinancingSummary(acquisitionSection), 3, "Consideration", "Control");
 
             ExpansionReadinessResult readiness = CreateExpansionReadinessService().BuildForSelectedAcquisition(acquisitionSection);
             string expansionSummary = readiness.BuildSummaryText();

@@ -56,7 +56,8 @@ namespace LandLedgers.Economy
     {
         AddCategoryStock = 0,
         ReceivePendingReorder = 1,
-        GeneralStoreLocalSupply = 2
+        GeneralStoreLocalSupply = 2,
+        ReceiveGenericInventory = 3
     }
 
     public enum ShipmentHaulingMode

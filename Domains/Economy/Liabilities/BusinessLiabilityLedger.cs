@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
+using LandLedgers.Economy.Financing;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Liabilities
@@ -26,6 +27,8 @@ namespace LandLedgers.Economy.Liabilities
     {
         // EntityKind.Contract: a liability is a financial agreement (HF-1).
         public EntityId LiabilityId = EntityId.Invalid;
+        /// <summary>Shared FinancialObligation identity; LiabilityId is retained for compatibility.</summary>
+        public string ObligationId = string.Empty;
         public string BusinessInstanceId = string.Empty;
         public LiabilityKind Kind;
         public string Counterparty = string.Empty; // lender / supplier name
@@ -53,11 +56,18 @@ namespace LandLedgers.Economy.Liabilities
     {
         private readonly List<BusinessLiability> liabilities = new List<BusinessLiability>();
         private EnterpriseValuationReadModel valuation;
+        private FinancialObligationAuthority financialAuthority;
 
         /// <summary>Wires the BIZ-5 read model (called by the systems hub).</summary>
         public void AttachValuation(EnterpriseValuationReadModel valuationReadModel)
         {
             valuation = valuationReadModel;
+        }
+
+        /// <summary>Routes new mutations to the shared finance authority when wired.</summary>
+        public void AttachFinancialAuthority(FinancialObligationAuthority authority)
+        {
+            financialAuthority = authority;
         }
 
         public IReadOnlyList<BusinessLiability> All => liabilities;
@@ -96,9 +106,19 @@ namespace LandLedgers.Economy.Liabilities
                 return null;
             }
 
+            FinancialObligation obligation = financialAuthority?.Create(
+                idRegistry, FinancialObligationKind.Loan, businessInstanceId, lenderName,
+                principalCents, dayIndex, terms, reason);
+            if (financialAuthority != null && obligation == null)
+            {
+                diagnostics.Add("BusinessLiabilityLedger.Borrow: shared obligation creation failed.");
+                return null;
+            }
+
             var liability = new BusinessLiability
             {
-                LiabilityId = idRegistry.Allocate(EntityKind.Contract),
+                LiabilityId = obligation != null ? obligation.ObligationEntityId : idRegistry.Allocate(EntityKind.Contract),
+                ObligationId = obligation?.ObligationId ?? string.Empty,
                 BusinessInstanceId = businessInstanceId,
                 Kind = LiabilityKind.Loan,
                 Counterparty = lenderName,
@@ -161,9 +181,19 @@ namespace LandLedgers.Economy.Liabilities
                 return null;
             }
 
+            FinancialObligation obligation = financialAuthority?.Create(
+                idRegistry, FinancialObligationKind.Payable, businessInstanceId, supplierName,
+                amountCents, dayIndex, "due on demand unless agreed otherwise", description);
+            if (financialAuthority != null && obligation == null)
+            {
+                diagnostics.Add("BusinessLiabilityLedger.BuyOnCredit: shared obligation creation failed.");
+                return null;
+            }
+
             var liability = new BusinessLiability
             {
-                LiabilityId = idRegistry.Allocate(EntityKind.Contract),
+                LiabilityId = obligation != null ? obligation.ObligationEntityId : idRegistry.Allocate(EntityKind.Contract),
+                ObligationId = obligation?.ObligationId ?? string.Empty,
                 BusinessInstanceId = businessInstanceId,
                 Kind = LiabilityKind.Payable,
                 Counterparty = supplierName,
@@ -215,7 +245,21 @@ namespace LandLedgers.Economy.Liabilities
                 return "BusinessLiabilityLedger.Repay: no payer ledger — the outflow requires provenance (Canon 13.2).";
             }
 
-            liability.BalanceCents -= amountCents;
+            if (financialAuthority != null && !string.IsNullOrWhiteSpace(liability.ObligationId))
+            {
+                FinancialPaymentRecord payment = financialAuthority.ApplyPayment(
+                    liability.ObligationId, amountCents, dayIndex,
+                    liability.BusinessInstanceId, liability.Counterparty);
+                if (payment == null)
+                {
+                    return "BusinessLiabilityLedger.Repay: shared financial obligation rejected the payment.";
+                }
+                liability.BalanceCents = financialAuthority.Find(liability.ObligationId)?.TotalOutstandingCents ?? liability.BalanceCents;
+            }
+            else
+            {
+                liability.BalanceCents -= amountCents;
+            }
             string problem = payerLedger.RecordOutflow(
                 dayIndex, amountCents,
                 $"debt repayment: {amountCents}c to {liability.Counterparty} against {liabilityId}",
@@ -249,10 +293,58 @@ namespace LandLedgers.Economy.Liabilities
                 return "BusinessLiabilityLedger.AccrueInterest: interest must be positive.";
             }
 
-            liability.BalanceCents += interestCents;
+            if (financialAuthority != null && !string.IsNullOrWhiteSpace(liability.ObligationId))
+            {
+                string problem = financialAuthority.AccrueInterest(liability.ObligationId, interestCents);
+                if (problem != null) return problem;
+                liability.BalanceCents = financialAuthority.Find(liability.ObligationId)?.TotalOutstandingCents ?? liability.BalanceCents;
+            }
+            else
+            {
+                liability.BalanceCents += interestCents;
+            }
             PostValuation(liability.BusinessInstanceId);
             diagnostics.Add($"BusinessLiabilityLedger: {interestCents}c interest accrued on {liabilityId} ({liability.Terms}).");
             return null;
+        }
+
+        /// <summary>
+        /// Restructures a received supplier payable into a formal shared note.
+        /// The payable is superseded; the compatibility list receives only a
+        /// projection of the successor obligation, never a second balance writer.
+        /// </summary>
+        public BusinessLiability ConvertPayableToNote(
+            string liabilityId, EntityIdRegistry idRegistry, string terms, int dayIndex,
+            List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            BusinessLiability payable = Find(liabilityId);
+            if (financialAuthority == null || payable == null || payable.Kind != LiabilityKind.Payable
+                || string.IsNullOrWhiteSpace(payable.ObligationId))
+            {
+                diagnostics.Add("BusinessLiabilityLedger.ConvertPayableToNote: shared payable authority is required.");
+                return null;
+            }
+            FinancialObligation note = financialAuthority.ConvertPayableToNote(
+                idRegistry, payable.ObligationId, terms, dayIndex);
+            if (note == null) return null;
+            payable.BalanceCents = 0;
+            var projection = new BusinessLiability
+            {
+                LiabilityId = note.ObligationEntityId,
+                ObligationId = note.ObligationId,
+                BusinessInstanceId = payable.BusinessInstanceId,
+                Kind = LiabilityKind.Loan,
+                Counterparty = payable.Counterparty,
+                Terms = terms ?? string.Empty,
+                Reason = "supplier payable restructured as formal note",
+                PrincipalCents = note.OriginalPrincipalCents,
+                BalanceCents = note.TotalOutstandingCents,
+                OpenedDayIndex = dayIndex,
+            };
+            liabilities.Add(projection);
+            PostValuation(payable.BusinessInstanceId);
+            return projection;
         }
 
         /// <summary>Total outstanding liabilities for a business (BIZ-5 input).</summary>
@@ -309,6 +401,11 @@ namespace LandLedgers.Economy.Liabilities
             {
                 if (liability != null && !string.IsNullOrWhiteSpace(liability.BusinessInstanceId))
                 {
+                    if (financialAuthority != null && !string.IsNullOrWhiteSpace(liability.ObligationId))
+                    {
+                        FinancialObligation obligation = financialAuthority.Find(liability.ObligationId);
+                        if (obligation != null) liability.BalanceCents = obligation.TotalOutstandingCents;
+                    }
                     touched.Add(liability.BusinessInstanceId);
                 }
             }
@@ -335,6 +432,11 @@ namespace LandLedgers.Economy.Liabilities
             {
                 if (liability == null) continue;
                 liabilities.Add(liability);
+                if (financialAuthority != null && !string.IsNullOrWhiteSpace(liability.ObligationId))
+                {
+                    FinancialObligation obligation = financialAuthority.Find(liability.ObligationId);
+                    if (obligation != null) liability.BalanceCents = obligation.TotalOutstandingCents;
+                }
                 if (!string.IsNullOrWhiteSpace(liability.BusinessInstanceId))
                 {
                     touched.Add(liability.BusinessInstanceId);

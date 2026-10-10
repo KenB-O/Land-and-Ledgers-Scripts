@@ -1651,6 +1651,26 @@ namespace LandLedgers.Economy
             RefreshStockHealth();
         }
 
+        /// <summary>
+        /// Generic Retail settlement hook. Stock custody has already been changed
+        /// by GenericRetailSaleAuthority; this records the existing cash,
+        /// bookkeeping and sales evidence without consuming the same stock again.
+        /// </summary>
+        public void RecordGenericRetailSettlement(string categoryId, int unitsSold, int revenueCents)
+        {
+            int units = Mathf.Max(0, unitsSold);
+            int revenue = Mathf.Max(0, revenueCents);
+            currentCashCents += revenue;
+            lastDailyRevenueCents += revenue;
+            weekToDateRevenueCents += revenue;
+            weekToDateUnitsSold += units;
+            RecordNetDelta(revenue);
+            CategoryStockState stock = GetCategoryStock(categoryId);
+            stock?.RecordDailySales(0, revenue);
+            RefreshStockHealth();
+            RefreshWeeklyCashAfter();
+        }
+
         public void RecordDailyServiceRevenue(string categoryId, int visitsOrUnits, int revenueCents)
         {
             int units = Mathf.Max(0, visitsOrUnits);

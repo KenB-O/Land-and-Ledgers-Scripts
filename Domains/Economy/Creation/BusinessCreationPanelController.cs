@@ -25,6 +25,7 @@ namespace LandLedgers.FirstLedger
         private Button createButton;
         private GameObject overlay;
         private TMP_Dropdown typeDropdown;
+        private TMP_Dropdown templateDropdown;
         private Button clearButton;
         private BusinessType[] businessTypes = Array.Empty<BusinessType>();
         private int selectedTypeIndex;
@@ -100,7 +101,7 @@ namespace LandLedgers.FirstLedger
             overlayRect.anchorMax = new Vector2(0.5f, 0.5f);
             overlayRect.pivot = new Vector2(0.5f, 0.5f);
             overlayRect.anchoredPosition = Vector2.zero;
-            overlayRect.sizeDelta = new Vector2(460f, 270f);
+            overlayRect.sizeDelta = new Vector2(460f, 330f);
             overlay.GetComponent<Image>().color = new Color(0.075f, 0.08f, 0.075f, 0.98f);
 
             VerticalLayoutGroup layout = overlay.AddComponent<VerticalLayoutGroup>();
@@ -115,12 +116,14 @@ namespace LandLedgers.FirstLedger
                 "Formation creates the legal/economic business first. It does not buy land or make the business operational.",
                 12f, FontStyles.Normal);
 
-            businessTypes = sharedBusinessRuntime.GetPlayerCreatableBusinessTypes();
-            if (businessTypes.Length == 0)
-            {
-                businessTypes = (BusinessType[])Enum.GetValues(typeof(BusinessType));
-            }
-            selectedTypeIndex = Math.Max(0, Array.IndexOf(businessTypes, BusinessType.GeneralStore));
+            // Formation is intentionally classless. Legacy BusinessType values remain
+            // descriptive/migration metadata, while this player-facing flow creates a
+            // generic entity first and configures its physical activities afterward.
+            businessTypes = new[] { BusinessType.Generic };
+            selectedTypeIndex = 0;
+            CreateText(overlay.transform,
+                "Trade class: none. Configure premises, equipment, people, inventory, and policies after formation.",
+                12f, FontStyles.Italic);
             typeDropdown = CreateDropdown(overlay.transform, "BusinessTypeDropdown");
             typeDropdown.onValueChanged.AddListener(SelectBusinessType);
             typeDropdown.ClearOptions();
@@ -132,6 +135,19 @@ namespace LandLedgers.FirstLedger
             typeDropdown.AddOptions(options);
             typeDropdown.value = selectedTypeIndex;
             typeDropdown.RefreshShownValue();
+            typeDropdown.gameObject.SetActive(false);
+
+            CreateText(overlay.transform, "Setup template (optional)", 12f, FontStyles.Normal);
+            templateDropdown = CreateDropdown(overlay.transform, "BusinessSetupTemplateDropdown");
+            templateDropdown.AddOptions(new List<TMP_Dropdown.OptionData>
+            {
+                new TMP_Dropdown.OptionData("Blank Business"),
+                new TMP_Dropdown.OptionData("Merchant assortment"),
+                new TMP_Dropdown.OptionData("Bakery policy"),
+                new TMP_Dropdown.OptionData("Prairie Fork smithing"),
+            });
+            templateDropdown.value = 0;
+            templateDropdown.RefreshShownValue();
 
             nameInput = CreateInput(overlay.transform, "Business name (optional)");
             statusText = CreateText(overlay.transform, string.Empty, 13f, FontStyles.Normal);
@@ -200,8 +216,10 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            statusText.text = $"{business.RuntimeDisplayName} formed. Open it in Businesses to establish the operation.";
-            if (business.BusinessType == BusinessType.GeneralStore
+            ApplySetupTemplate(business, templateDropdown != null ? templateDropdown.value : 0);
+
+            statusText.text = $"{business.RuntimeDisplayName} formed. Configure the operation in Businesses.";
+            if ((business.BusinessType == BusinessType.GeneralStore || business.BusinessType == BusinessType.Generic)
                 && storeRuntime != null
                 && storeRuntime.TryBindFormedPlayerBusiness(business, out string bindingMessage))
             {
@@ -219,7 +237,7 @@ namespace LandLedgers.FirstLedger
         private void ClearDraft()
         {
             draftName = string.Empty;
-            selectedTypeIndex = Math.Max(0, Array.IndexOf(businessTypes, BusinessType.GeneralStore));
+            selectedTypeIndex = 0;
             if (nameInput != null)
             {
                 nameInput.text = string.Empty;
@@ -228,6 +246,11 @@ namespace LandLedgers.FirstLedger
             {
                 typeDropdown.value = selectedTypeIndex;
                 typeDropdown.RefreshShownValue();
+            }
+            if (templateDropdown != null)
+            {
+                templateDropdown.value = 0;
+                templateDropdown.RefreshShownValue();
             }
             if (statusText != null)
             {
@@ -240,6 +263,24 @@ namespace LandLedgers.FirstLedger
             if (nameInput != null)
             {
                 draftName = nameInput.text ?? string.Empty;
+            }
+        }
+
+        private static void ApplySetupTemplate(BusinessInstanceState business, int templateIndex)
+        {
+            if (business == null || business.BusinessType != BusinessType.Generic) return;
+            switch (templateIndex)
+            {
+                case 1:
+                    GenericBusinessVerticalService.AddMerchantProductLine(business, "flour", 20f, 40f, 8f, 35);
+                    GenericBusinessVerticalService.AddMerchantProductLine(business, "coffee", 10f, 20f, 4f, 85);
+                    break;
+                case 2:
+                    GenericBusinessVerticalService.ConfigureBakery(business);
+                    break;
+                case 3:
+                    GenericBusinessVerticalService.ConfigurePrairieForkSmithy(business);
+                    break;
             }
         }
 

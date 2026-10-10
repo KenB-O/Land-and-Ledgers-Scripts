@@ -341,6 +341,7 @@ namespace LandLedgers.Persistence
             townPulseRuntime?.LoadFromSaveDto(save.businesses != null ? save.businesses.townPulse : null);
             acquisitionMarket?.LoadFromSaveDto(save.acquisition);
             playerDebtManager?.Configure(timeManager, storeRuntime, acquisitionMarket, sharedBusinessRuntime, playerPortfolioManager);
+            playerDebtManager?.AttachFinancialAuthority(systemsHub?.FinancialObligations, systemsHub?.Ids);
             playerDebtManager?.LoadFromSaveDto(save.debt);
             playerDebtManager?.ProcessCurrentDay();
             populationPathingDirector?.ResetForLoadedState();
@@ -819,6 +820,7 @@ namespace LandLedgers.Persistence
             townPulseRuntime.Configure(timeManager, hudController);
             ConfigurePortfolioManager();
             playerDebtManager.Configure(timeManager, storeRuntime, acquisitionMarket, sharedBusinessRuntime, playerPortfolioManager);
+            playerDebtManager.AttachFinancialAuthority(systemsHub?.FinancialObligations, systemsHub?.Ids);
         }
 
 
@@ -1394,6 +1396,7 @@ namespace LandLedgers.Persistence
             townPulseRuntime?.Configure(timeManager, hudController);
             ConfigurePortfolioManager();
             playerDebtManager?.Configure(timeManager, storeRuntime, acquisitionMarket, sharedBusinessRuntime, playerPortfolioManager);
+            playerDebtManager?.AttachFinancialAuthority(systemsHub?.FinancialObligations, systemsHub?.Ids);
             ConfigureFirstSessionGuidance();
         }
 

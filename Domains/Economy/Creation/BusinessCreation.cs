@@ -338,7 +338,7 @@ namespace LandLedgers.Economy.Creation
     public sealed class CreateBusinessIntent
     {
         [SerializeField]
-        private BusinessType businessType = BusinessType.GeneralStore;
+        private BusinessType businessType = BusinessType.Generic;
 
         [SerializeField]
         private string displayName = string.Empty;
@@ -530,7 +530,7 @@ namespace LandLedgers.Economy.Creation
             BusinessInstanceState instance;
             try
             {
-                instance = BusinessInstanceState.Create(instanceId, profile, premises.BuildingId, primaryOwner);
+                instance = BusinessInstanceState.Create(instanceId, profile, premises.BuildingId, primaryOwner, intent.BusinessType);
             }
             catch (Exception ex)
             {

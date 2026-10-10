@@ -78,15 +78,17 @@ namespace LandLedgers.Economy.Creation
     }
 
     /// <summary>
-    /// BIZ-2: authored capability registry. Capabilities are data; new ones register
-    /// without touching business code (Tech X §3.1).
+    /// BIZ-2: authored capability registry. Capabilities are descriptive data and
+    /// discovery/read-model metadata; registration never grants permission to act.
+    /// Physical possibility is evaluated by the executing activity from its actual
+    /// people, equipment, space, inputs, policies, and time.
     /// </summary>
     public sealed class BusinessCapabilityRegistry
     {
         private readonly Dictionary<string, BusinessCapability> capabilities =
             new Dictionary<string, BusinessCapability>(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>Registers a capability; duplicate ids are rejected deterministically.</summary>
+        /// <summary>Registers descriptive capability metadata; duplicate ids are rejected deterministically.</summary>
         public bool Register(BusinessCapability capability, List<string> diagnostics)
         {
             diagnostics ??= new List<string>();

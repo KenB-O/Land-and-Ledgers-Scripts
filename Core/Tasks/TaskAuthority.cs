@@ -411,6 +411,25 @@ namespace LandLedgers.Tasks
             return taskLookup.TryGetValue(taskId, out task) ? task : null;
         }
 
+        /// <summary>
+        /// Rebinds a persisted subsystem process to its existing open task after
+        /// save/load. This is intentionally a read-only lookup; it does not create
+        /// a second task or alter task state.
+        /// </summary>
+        public WorkTask FindOpenTask(string definitionId, EntityId ownerId, EntityId assigneeId)
+        {
+            for (int i = 0; i < tasks.Count; i++)
+            {
+                WorkTask task = tasks[i];
+                if (task == null || task.Status == TaskStatus.Complete
+                    || !string.Equals(task.DefinitionId, definitionId ?? string.Empty, StringComparison.Ordinal)
+                    || task.OwnerId != ownerId) continue;
+                if (assigneeId.IsValid && task.HasAssignee && task.AssigneeId != assigneeId) continue;
+                return task;
+            }
+            return null;
+        }
+
         private bool PrerequisitesComplete(WorkTask task)
         {
             foreach (EntityId prereqId in task.PrerequisiteTaskIds)

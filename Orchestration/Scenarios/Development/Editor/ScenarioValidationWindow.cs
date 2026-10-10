@@ -13,7 +13,6 @@ namespace LandLedgers.Orchestration.Scenarios.Development.Editor
         private ScenarioValidationHarness harness;
         private string selectedScenario;
         private string businessName = "Editorial Business";
-        private BusinessType businessType = BusinessType.GeneralStore;
         private int customCashCents = 100000;
 
         [MenuItem("Land & Ledgers/Scenario/Validation Harness")]
@@ -84,11 +83,11 @@ namespace LandLedgers.Orchestration.Scenarios.Development.Editor
 
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("Production business formation", EditorStyles.boldLabel);
-            businessType = (BusinessType)EditorGUILayout.EnumPopup("Type", businessType);
+            EditorGUILayout.LabelField("Entity", "Generic Business (classless)");
             businessName = EditorGUILayout.TextField("Name", businessName);
             if (GUILayout.Button("Create through production authority"))
             {
-                harness.TryCreateBusiness(businessType, businessName, out _, out _);
+                harness.TryCreateBusiness(BusinessType.Generic, businessName, out _, out _);
             }
 
             EditorGUILayout.Space(4);

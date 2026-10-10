@@ -241,7 +241,11 @@ namespace LandLedgers.Economy.Bank
                 item.Status = CollectionItemStatus.Collected;
                 item.SettlementDayIndex = dayIndex;
                 if (credit.TryGetPromissoryNote(item.InstrumentId, out PromissoryNote note) && note != null)
+                {
+                    credit.ApplyInstrumentPayment(item.InstrumentId.ToString(), item.FaceCents,
+                        dayIndex, item.MakerName, note.PayeeName, diagnostics);
                     credit.SatisfyInstrument(item.InstrumentId.ToString(), diagnostics);
+                }
                 diagnostics.Add($"BankCollectionsDesk [{bank.BusinessName}]: '{itemId}' COLLECTED — {item.FaceCents}c through '{correspondent.CorrespondentName}'; '{item.CustomerName}' is owed {item.NetProceedsCents()}c (fee {item.FeeCents}c earned).");
             }
             else

@@ -474,6 +474,13 @@ namespace LandLedgers.Economy.Financing
             LenderProfile lender,
             PurposeUnderwritingPolicy purposePolicy)
         {
+            bool materiallyDebtBurdened = applicant.existingDebtPaymentCents > 0
+                && applicant.weeklyNetCashFlowCents > 0
+                && applicant.existingDebtPaymentCents * 2 >= applicant.weeklyNetCashFlowCents;
+            if (materiallyDebtBurdened)
+            {
+                reasons.Add(FinancingReasonCode.HeavyDebtBurden);
+            }
             if (MeetsCashFlowPolicy(applicant, term, estimatedPaymentCents, lender, purposePolicy))
             {
                 reasons.Add(FinancingReasonCode.PositiveCashFlow);

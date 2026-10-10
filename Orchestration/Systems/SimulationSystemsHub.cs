@@ -9,6 +9,7 @@ using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Liabilities;
+using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Recruitment;
@@ -70,6 +71,8 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField]
         private WorkTimeBudgetStore workTimeBudgets = new WorkTimeBudgetStore();
 
+        private GenericProductionRuntimeRegistry genericProductionRuntime;
+
         [SerializeField]
         private EnterpriseValuationReadModel valuation = new EnterpriseValuationReadModel();
 
@@ -99,6 +102,9 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>SWN-3: business liabilities (loans, payables) — honest BIZ-5 inputs.</summary>
         private BusinessLiabilityLedger liabilityLedger = new BusinessLiabilityLedger();
+        private FinancialObligationAuthority financialObligationAuthority = new FinancialObligationAuthority();
+        private CreditOfferWorkflow creditOfferWorkflow = new CreditOfferWorkflow();
+        private CreditRegistry creditRegistry = new CreditRegistry();
 
         public EntityIdRegistry Ids => idRegistry ??= new EntityIdRegistry();
         public AnimalRegistry Animals => animalRegistry ??= new AnimalRegistry(Ids);
@@ -106,6 +112,8 @@ namespace LandLedgers.Orchestration.Systems
         public TaskAuthority Tasks => taskAuthority ??= new TaskAuthority();
         public SkillService Skills => skillService ??= new SkillService();
         public WorkTimeBudgetStore WorkTimeBudgets => workTimeBudgets ??= new WorkTimeBudgetStore();
+        public GenericProductionRuntimeRegistry GenericProduction =>
+            genericProductionRuntime ??= new GenericProductionRuntimeRegistry(Tasks, WorkTimeBudgets);
         public EnterpriseValuationReadModel Valuation => valuation ??= new EnterpriseValuationReadModel();
         public FreightResourcePool FreightPool => freightPool ??= new FreightResourcePool();
         public TransportAssetRegistry TransportAssets => transportAssets ??= new TransportAssetRegistry();
@@ -121,7 +129,29 @@ namespace LandLedgers.Orchestration.Systems
             {
                 liabilityLedger ??= new BusinessLiabilityLedger();
                 liabilityLedger.AttachValuation(Valuation);
+                liabilityLedger.AttachFinancialAuthority(FinancialObligations);
                 return liabilityLedger;
+            }
+        }
+
+        /// <summary>
+        /// Shared finance authority. Compatibility ledgers and instrument registries
+        /// should project into this authority rather than own a second balance.
+        /// </summary>
+        public FinancialObligationAuthority FinancialObligations =>
+            financialObligationAuthority ??= new FinancialObligationAuthority();
+
+        /// <summary>Shared request/offer negotiation workflow over the finance authority.</summary>
+        public CreditOfferWorkflow CreditOffers => creditOfferWorkflow ??= new CreditOfferWorkflow();
+
+        /// <summary>Document/instrument index bound to the shared obligation authority.</summary>
+        public CreditRegistry CreditInstruments
+        {
+            get
+            {
+                creditRegistry ??= new CreditRegistry();
+                creditRegistry.AttachFinancialAuthority(FinancialObligations);
+                return creditRegistry;
             }
         }
 
@@ -279,6 +309,12 @@ namespace LandLedgers.Orchestration.Systems
             farmSlice ??= new FarmSliceSystems();
             liabilityLedger ??= new BusinessLiabilityLedger();
             liabilityLedger.AttachValuation(valuation);
+            financialObligationAuthority ??= new FinancialObligationAuthority();
+            liabilityLedger.AttachFinancialAuthority(financialObligationAuthority);
+            creditRegistry ??= new CreditRegistry();
+            creditRegistry.AttachFinancialAuthority(financialObligationAuthority);
+            PlayerDebtManager playerDebt = FindAnyObjectByType<PlayerDebtManager>();
+            playerDebt?.AttachFinancialAuthority(financialObligationAuthority, idRegistry);
             postalService ??= new PostalService();
             // P6: travel & communication authorities. The condition provider is
             // not serialized — (re-)attachment is the hub's job, here and after
@@ -375,6 +411,9 @@ namespace LandLedgers.Orchestration.Systems
                 employments = Employments.CaptureSaveDto(),
                 farmSlice = FarmSlice.CaptureSaveDto(),
                 liabilities = Liabilities.CaptureSaveDto(),
+                financialObligations = FinancialObligations.CaptureSaveDto(),
+                creditOffers = CreditOffers.CaptureSaveDto(),
+                creditInstruments = CreditInstruments.CaptureSaveDto(),
                 postal = Postal.CaptureSaveDto(),
                 risk = Risk.CaptureSaveDto(),
                 disease = Disease.CaptureSaveDto(),
@@ -423,6 +462,10 @@ namespace LandLedgers.Orchestration.Systems
             OperatingLedger.LoadFromSaveDto(dto.operatingLedger);
             Employments.LoadFromSaveDto(dto.employments);
             FarmSlice.LoadFromSaveDto(dto.farmSlice);
+            FinancialObligations.LoadFromSaveDto(dto.financialObligations);
+            CreditOffers.LoadFromSaveDto(dto.creditOffers);
+            CreditInstruments.LoadFromSaveDto(dto.creditInstruments);
+            diagnostics.AddRange(FinancialObligations.Reconcile());
             Liabilities.LoadFromSaveDto(dto.liabilities);
             Postal.LoadFromSaveDto(dto.postal);
             Risk.LoadFromSaveDto(dto.risk);

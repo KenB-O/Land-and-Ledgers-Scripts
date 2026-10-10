@@ -378,6 +378,8 @@ namespace LandLedgers.Economy.Financing
     public sealed class LoanContract
     {
         public string loanId;
+        /// <summary>Shared FinancialObligation identity; loanId remains workflow compatibility.</summary>
+        public string obligationId;
         public string lenderId;
         public LoanPurpose purpose;
         public List<string> collateralIds = new List<string>();

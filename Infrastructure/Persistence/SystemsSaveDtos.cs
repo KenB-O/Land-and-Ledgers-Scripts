@@ -13,6 +13,7 @@ using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Liabilities;
+using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
@@ -48,6 +49,11 @@ namespace LandLedgers.Persistence
         public EmploymentRegistrySaveDto employments = new();
         public FarmSliceSaveDto farmSlice = new();
         public LiabilityLedgerSaveDto liabilities = new();
+        /// <summary>Shared credit authority: one current balance per obligation.</summary>
+        public FinancialObligationSaveDto financialObligations = new();
+        public CreditOfferWorkflowSaveDto creditOffers = new();
+        /// <summary>Instrument/document index over the shared obligations.</summary>
+        public CreditRegistry.CreditRegistrySaveDto creditInstruments = new();
         /// <summary>NX-2A: postal network (offices, mail in custody, contracts).</summary>
         public PostalServiceSaveDto postal = new();
         /// <summary>NX-2B: agricultural disasters (fireguards, drought episodes).</summary>

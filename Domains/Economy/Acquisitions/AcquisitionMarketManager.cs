@@ -13,6 +13,7 @@ using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.World;
 using LandLedgers.World.Property;
+using LandLedgers.Orchestration.Systems;
 using UnityEngine;
 
 namespace LandLedgers.Economy
@@ -358,6 +359,10 @@ namespace LandLedgers.Economy
         public AcquisitionIntegrationStance integrationStance = AcquisitionIntegrationStance.None;
         public int closingDeadlineDayIndex = -1;
         public int financingNeedCents;
+        public int sellerFinancedPrincipalCents;
+        public int sellerFinancingAnnualInterestRateBps;
+        public int sellerFinancingTermDays = -1;
+        public string sellerFinancingObligationId = string.Empty;
         public float closingRisk01;
         public bool financingContingencyPresent = true;
         public string statusText = string.Empty;
@@ -410,6 +415,10 @@ namespace LandLedgers.Economy
                 integrationStance = integrationStance,
                 closingDeadlineDayIndex = closingDeadlineDayIndex,
                 financingNeedCents = Mathf.Max(0, financingNeedCents),
+                sellerFinancedPrincipalCents = Mathf.Max(0, sellerFinancedPrincipalCents),
+                sellerFinancingAnnualInterestRateBps = Mathf.Max(0, sellerFinancingAnnualInterestRateBps),
+                sellerFinancingTermDays = sellerFinancingTermDays,
+                sellerFinancingObligationId = sellerFinancingObligationId ?? string.Empty,
                 closingRisk01 = Mathf.Clamp01(closingRisk01),
                 financingContingencyPresent = financingContingencyPresent,
                 statusText = statusText ?? string.Empty,
@@ -468,6 +477,10 @@ namespace LandLedgers.Economy
                 integrationStance = dto.integrationStance,
                 closingDeadlineDayIndex = dto.closingDeadlineDayIndex,
                 financingNeedCents = Mathf.Max(0, dto.financingNeedCents),
+                sellerFinancedPrincipalCents = Mathf.Max(0, dto.sellerFinancedPrincipalCents),
+                sellerFinancingAnnualInterestRateBps = Mathf.Max(0, dto.sellerFinancingAnnualInterestRateBps),
+                sellerFinancingTermDays = dto.sellerFinancingTermDays,
+                sellerFinancingObligationId = dto.sellerFinancingObligationId ?? string.Empty,
                 closingRisk01 = Mathf.Clamp01(dto.closingRisk01),
                 financingContingencyPresent = dto.financingContingencyPresent,
                 statusText = dto.statusText ?? string.Empty,
@@ -3507,6 +3520,30 @@ namespace LandLedgers.Economy
             builder.AppendLine($"Next step: {action}");
             builder.AppendLine(timing);
             return builder.ToString().Trim();
+        }
+
+        /// <summary>
+        /// Read-only acquisition financing projection. Consideration legs stay
+        /// explicit so seller credit is not mistaken for retained control or
+        /// for a generic financed percentage.
+        /// </summary>
+        public string BuildSelectedLeadFinancingSummary(AcquisitionMarketSection section)
+        {
+            EnsureMarket();
+            if (!TryGetSelectedListing(section, out AcquisitionListing listing) || listing == null)
+                return "Financing: no lead selected.";
+
+            AcquisitionDealState deal = FindDeal(listing.listingId);
+            int price = deal != null && deal.tentativePriceCents > 0 ? deal.tentativePriceCents : listing.askingPriceCents;
+            int sellerNote = deal != null ? Mathf.Clamp(deal.sellerFinancedPrincipalCents, 0, Mathf.Max(0, price)) : 0;
+            int cash = Mathf.Max(0, price - sellerNote);
+            string note = sellerNote > 0
+                ? $"Seller note {FormatMoney(sellerNote)} at {deal.sellerFinancingAnnualInterestRateBps / 100m:0.##}% for {Mathf.Max(0, deal.sellerFinancingTermDays)} days"
+                : "Seller note none configured";
+            string obligation = deal != null && !string.IsNullOrWhiteSpace(deal.sellerFinancingObligationId)
+                ? $"obligation {deal.sellerFinancingObligationId}"
+                : "no note obligation until close";
+            return $"Consideration: price {FormatMoney(price)} | cash at close {FormatMoney(cash)} | {note} | {obligation}.\nControl: seller financing does not retain operating control; ownership transfers only at successful close. Security and assumed debt remain deal-specific.";
         }
 
         public string BuildSelectedLeadActionChecklist(AcquisitionMarketSection section)
@@ -8085,7 +8122,8 @@ namespace LandLedgers.Economy
             }
 
             int finalPrice = Mathf.Max(1, deal.tentativePriceCents > 0 ? deal.tentativePriceCents : listing.askingPriceCents);
-            int finalDueCents = Mathf.Max(0, finalPrice - Mathf.Max(0, deal.earnestMoneyCents));
+            int finalDueCents = Mathf.Max(0, finalPrice - Mathf.Max(0, deal.earnestMoneyCents)
+                - Mathf.Clamp(deal.sellerFinancedPrincipalCents, 0, finalPrice));
             if (TryResolveClosingFailure(listing, deal, out AcquisitionClosingFailureCause failureCause, out string failureSummary))
             {
                 deal.closingFailureCause = failureCause;
@@ -8129,6 +8167,36 @@ namespace LandLedgers.Economy
             marketStatus = message;
             lastPurchaseSummary = message;
             Debug.Log($"[Acquisitions] {message}", this);
+            return true;
+        }
+
+        /// <summary>
+        /// Records a negotiated seller-finance leg on the live deal. This is a
+        /// deal structure, not a new debt authority; the note is created only
+        /// at closing after the transfer succeeds.
+        /// </summary>
+        public bool ConfigureSellerFinancing(string listingId, int principalCents,
+            int annualInterestRateBps, int termDays, out string message)
+        {
+            AcquisitionDealState deal = FindDeal(listingId);
+            if (deal == null)
+            {
+                message = "No live acquisition deal is available.";
+                return false;
+            }
+
+            int price = Mathf.Max(1, deal.tentativePriceCents);
+            int maximum = Mathf.Max(0, price - Mathf.Max(0, deal.earnestMoneyCents));
+            deal.sellerFinancedPrincipalCents = Mathf.Clamp(principalCents, 0, maximum);
+            deal.sellerFinancingAnnualInterestRateBps = Mathf.Max(0, annualInterestRateBps);
+            deal.sellerFinancingTermDays = Mathf.Max(1, termDays);
+            deal.financingNeedCents = Mathf.Max(0, price - deal.earnestMoneyCents
+                - GetAvailableCashCents() - deal.sellerFinancedPrincipalCents);
+            deal.financingContingencyPresent = deal.financingNeedCents > 0;
+            message = deal.sellerFinancedPrincipalCents > 0
+                ? $"Seller financing set at {FormatMoney(deal.sellerFinancedPrincipalCents)}; the seller remains a creditor after closing."
+                : "Seller financing removed from this deal.";
+            deal.statusText = message;
             return true;
         }
 
@@ -8188,7 +8256,10 @@ namespace LandLedgers.Economy
                 return true;
             }
 
-            int cashContribution = Mathf.Clamp(availableCash + Mathf.Max(0, deal.earnestMoneyCents), 0, finalPriceCents);
+            int cashContribution = Mathf.Clamp(
+                availableCash + Mathf.Max(0, deal.earnestMoneyCents)
+                + Mathf.Clamp(deal.sellerFinancedPrincipalCents, 0, finalPriceCents),
+                0, finalPriceCents);
             int need = Mathf.Max(0, finalPriceCents - cashContribution);
             deal.financingNeedCents = need;
             if (playerDebtManager == null)
@@ -8255,6 +8326,7 @@ namespace LandLedgers.Economy
 
             RecordTitleAcquisition(plot, listing.ownerDisplayName, deal.listingId, finalPriceCents); // P5: T2F chain
             RecordLandAppreciationPurchase(plot, null, finalPriceCents, LandAppreciationImprovementState.Empty);
+            RecordSellerFinanceAtClose(listing, deal, finalPriceCents);
             listing.playerOwned = true;
             RecordOwnershipAptitudeGain(OwnershipAptitudeSource.LandPurchased);
             developmentInventoryPressure += 1;
@@ -8334,10 +8406,59 @@ namespace LandLedgers.Economy
                     : $"{acquiredLabel} closed for {FormatMoney(finalPriceCents)}. Earnest credited: {FormatMoney(deal.earnestMoneyCents)}. {fundingMessage} Held as an improved site. {integrationBrief}".Trim();
             }
 
+            RecordSellerFinanceAtClose(listing, deal, finalPriceCents);
+
             RecordOwnershipAptitudeGain(OwnershipAptitudeSource.BusinessPurchased);
             RemoveBusinessListingForBuilding(building.id);
             RefreshOwnedBuildability();
             return true;
+        }
+
+        private void RecordSellerFinanceAtClose(AcquisitionListing listing, AcquisitionDealState deal, int finalPriceCents)
+        {
+            if (listing == null || deal == null || deal.sellerFinancedPrincipalCents <= 0
+                || !string.IsNullOrWhiteSpace(deal.sellerFinancingObligationId))
+                return;
+
+            SimulationSystemsHub systems = FindAnyObjectByType<SimulationSystemsHub>();
+            FinancialObligationAuthority authority = systems != null ? systems.FinancialObligations : null;
+            if (authority == null || systems.Ids == null)
+                return;
+
+            int currentDay = GetCurrentDayIndex();
+            int termDays = Mathf.Max(1, deal.sellerFinancingTermDays <= 0 ? 180 : deal.sellerFinancingTermDays);
+            string sellerId = string.IsNullOrWhiteSpace(listing.ownerDisplayName) ? "seller" : listing.ownerDisplayName;
+            string collateralId = listing.kind == AcquisitionListingKind.Business
+                ? $"building_{listing.buildingId:000}"
+                : $"plot_{listing.plotId:000}";
+
+            // Seller finance is a negotiated deferred-consideration offer. It
+            // does not advance cash at closing; it creates the seller's claim
+            // only after the offer terms are accepted through the shared
+            // credit workflow.
+            CreditOfferWorkflow workflow = systems.CreditOffers;
+            CreditRequest request = workflow.SubmitRequest(
+                systems.Ids, "player", sellerId, deal.sellerFinancedPrincipalCents,
+                listing.kind == AcquisitionListingKind.Business ? "business acquisition" : "property acquisition",
+                termDays, currentDay, "acquired asset/business cash flow", collateralId);
+            CreditOffer offer = workflow.Evaluate(systems.Ids, request, authority,
+                deal.sellerFinancedPrincipalCents, currentDay);
+            if (offer == null || offer.Status == CreditOfferStatus.Refused || offer.OfferedAmountCents <= 0)
+                return;
+            if (!workflow.CounterOffer(offer.OfferId, deal.sellerFinancedPrincipalCents,
+                Mathf.Max(0, deal.sellerFinancingAnnualInterestRateBps), termDays,
+                $"Seller note for acquisition at {FormatMoney(finalPriceCents)}", out _, currentDay))
+                return;
+            if (!workflow.AcceptCounterOffer(offer.OfferId, sellerId, currentDay, out _))
+                return;
+            FinancialObligation note = workflow.AcceptDeferredConsideration(
+                systems.Ids, offer.OfferId, authority, currentDay,
+                FinancialObligationKind.SellerFinance,
+                listing.kind == AcquisitionListingKind.Business ? "business acquisition" : "property acquisition",
+                deal.listingId);
+            if (note == null)
+                return;
+            deal.sellerFinancingObligationId = note.ObligationId;
         }
 
         private string BuildPostCloseIntegrationBrief(AcquisitionListing listing, AcquisitionDealState deal, int finalPriceCents)

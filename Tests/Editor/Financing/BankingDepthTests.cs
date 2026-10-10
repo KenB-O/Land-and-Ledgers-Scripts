@@ -128,7 +128,25 @@ namespace LandLedgers.Economy.Financing.Tests
                 { new ForeclosureBid { BidderName = "Buyer", AmountCents = 12000 } };
             Assert.IsNull(foreclosure.ConductSale(kase, bids, null, 500, 140, ids, titles, credit, diag));
             Assert.AreEqual(8500, kase.DeficiencyCents, "20000 owed − 11500 net proceeds.");
-            Assert.Greater(credit.InstrumentCount, 2, "The deficiency was recorded as a real instrument, not wished away.");
+            Assert.IsNotNull(credit.CaptureSaveDto().Notes.Find(
+                note => note != null && note.MakerName == "Farmer" && note.PrincipalCents == 8500),
+                "The deficiency was recorded as a real instrument, not wished away.");
+        }
+
+        [Test]
+        public void VoluntarySurrenderRecordsWhetherDebtWasActuallySatisfied()
+        {
+            var ids = new EntityIdRegistry();
+            var credit = new CreditRegistry();
+            MortgageDeed mortgage = credit.IssueMortgage(ids, "Farmer", "Bank", "p-surrender", "farm",
+                20000, "terms", 0, diag);
+            var foreclosure = new ForeclosureService();
+            ForeclosureCase caseFile = foreclosure.RecordDefault(ids, mortgage, 20000, 10, diag);
+            foreclosure.IssueNotice(caseFile, 10, diag);
+            Assert.IsNull(foreclosure.RecordVoluntarySurrender(caseFile, 15, false, diag));
+            Assert.AreEqual(ForeclosureStage.VoluntarySurrendered, caseFile.Stage);
+            Assert.IsFalse(caseFile.SurrenderSatisfiesDebt);
+            Assert.AreEqual(20000, caseFile.DebtOwedCents);
         }
     }
 }

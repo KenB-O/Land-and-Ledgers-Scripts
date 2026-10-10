@@ -805,6 +805,7 @@ namespace LandLedgers.Persistence
         public BusinessReputationSaveDto businessReputation = new();
         public BusinessRuntimeSaveDto runtime = new();
         public MineRuntimeSaveDto mine = new();
+        public GenericBusinessConfigurationSaveDto generic = new();
         /// <summary>P1: explicit sale terms (Canon XXVII Part IX §9.1) — empty until the business is sold.</summary>
         public BusinessSaleTermsSaveDto saleTerms = new();
     }
@@ -1131,6 +1132,10 @@ namespace LandLedgers.Persistence
         public AcquisitionIntegrationStance integrationStance = AcquisitionIntegrationStance.None;
         public int closingDeadlineDayIndex = -1;
         public int financingNeedCents;
+        public int sellerFinancedPrincipalCents;
+        public int sellerFinancingAnnualInterestRateBps;
+        public int sellerFinancingTermDays = -1;
+        public string sellerFinancingObligationId = string.Empty;
         public float closingRisk01;
         public bool financingContingencyPresent = true;
         public string statusText = string.Empty;

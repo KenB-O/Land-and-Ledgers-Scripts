@@ -71,6 +71,7 @@ namespace LandLedgers.Economy.Financing
     public sealed class PromissoryNote : ICreditInstrument
     {
         public EntityId InstrumentId = EntityId.Invalid;
+        public string ObligationId = string.Empty;
         public string MakerName = string.Empty;
         public string PayeeName = string.Empty;
         public int PrincipalCents;
@@ -101,6 +102,7 @@ namespace LandLedgers.Economy.Financing
     public sealed class SellerFinanceNote : ICreditInstrument
     {
         public EntityId InstrumentId = EntityId.Invalid;
+        public string ObligationId = string.Empty;
         public string SellerName = string.Empty;
         public string BuyerName = string.Empty;
         public string AssetDescription = string.Empty;
@@ -128,6 +130,7 @@ namespace LandLedgers.Economy.Financing
     public sealed class MortgageDeed : ICreditInstrument
     {
         public EntityId InstrumentId = EntityId.Invalid;
+        public string ObligationId = string.Empty;
         public string BorrowerName = string.Empty;
         public string LenderName = string.Empty;
         public string PropertyId = string.Empty; // T2F title authority reference (forward-compatible)
@@ -152,6 +155,7 @@ namespace LandLedgers.Economy.Financing
     public sealed class PropertyLien : ICreditInstrument
     {
         public EntityId InstrumentId = EntityId.Invalid;
+        public string ObligationId = string.Empty;
         public string ClaimantName = string.Empty;
         public string DebtorName = string.Empty;
         public string PropertyOrAssetId = string.Empty;
@@ -178,10 +182,12 @@ namespace LandLedgers.Economy.Financing
     public sealed class GuarantyAgreement : ICreditInstrument
     {
         public EntityId InstrumentId = EntityId.Invalid;
+        public string ObligationId = string.Empty;
         public string GuarantorName = string.Empty;
         public string CreditorName = string.Empty;
         public string DebtorName = string.Empty;
         public string CoveredInstrumentId = string.Empty; // the debt being guaranteed
+        public string FinancialGuarantyId = string.Empty;
         public int MaxExposureCents;
         public string Terms = string.Empty; // the agreement the call transitions through
         public int SignedDayIndex;

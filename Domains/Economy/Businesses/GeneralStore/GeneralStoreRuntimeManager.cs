@@ -571,9 +571,10 @@ namespace LandLedgers.FirstLedger
         public bool TryBindFormedPlayerBusiness(BusinessInstanceState business, out string message)
         {
             AutoWire();
-            if (business == null || business.BusinessType != BusinessType.GeneralStore)
+            if (business == null
+                || (business.BusinessType != BusinessType.GeneralStore && business.BusinessType != BusinessType.Generic))
             {
-                message = "Only a formed General Store can be bound to the store management runtime.";
+                message = "Only a formed merchant-capable Business can be bound to the retail management runtime.";
                 return false;
             }
 
@@ -592,12 +593,38 @@ namespace LandLedgers.FirstLedger
             currentBusiness = business;
             runtimeState = business.RuntimeState;
             storeBuildingId = business.AssignedBuildingId;
+            if (business.BusinessType == BusinessType.Generic)
+            {
+                BindExistingMerchantStockToGenericRetail(business);
+            }
             RefreshReorderState();
             RefreshCurrentBusinessCapacityState();
             PushCashToHud();
             message = $"{business.RuntimeDisplayName} is ready for operating setup. Configure premises, funding, labor, and stock before opening.";
             status = message;
             return true;
+        }
+
+        /// <summary>
+        /// Migration adapter for a formed classless merchant. Existing category
+        /// stock remains the single inventory authority; this only projects the
+        /// legacy authored assortment into generic Retail lines so sale execution
+        /// can use GenericRetailSaleAuthority.
+        /// </summary>
+        private void BindExistingMerchantStockToGenericRetail(BusinessInstanceState business)
+        {
+            if (business == null || business.RuntimeState == null) return;
+            foreach (CategoryStockState stock in business.RuntimeState.CategoryStock)
+            {
+                if (stock == null || string.IsNullOrWhiteSpace(stock.CategoryId)
+                    || business.GenericConfiguration.Retail.TryGetLine(stock.CategoryId, out _)) continue;
+                int price = Mathf.Max(0, GetAverageCategorySellingPriceCents(stock.CategoryId));
+                float capacity = Mathf.Max(1f, stock.TargetStockUnits * 2f);
+                business.TryConfigureGenericRetailLine(
+                    new GenericRetailProductLine(stock.CategoryId, "storage", stock.TargetStockUnits,
+                        Mathf.Max(stock.TargetStockUnits, capacity), stock.TargetStockUnits, price),
+                    capacity);
+            }
         }
 
         public bool TryOpenAtPlayerOwnedShell(int buildingId, out BusinessInstanceState business, out string message)
@@ -795,6 +822,20 @@ namespace LandLedgers.FirstLedger
         {
             if (!InitializeIfNeeded())
             {
+                return;
+            }
+
+            // A classless Business uses Generic Retail/Procurement. Keep this
+            // legacy manager as a presentation/compatibility adapter only; its
+            // category reorder writer must never mutate a generic entity.
+            if (currentBusiness != null && currentBusiness.BusinessType == BusinessType.Generic)
+            {
+                AssignStoreWorkersFromPopulation();
+                runtimeState.ResolveWeeklyPayroll();
+                currentBusiness.ResolveWeeklyBaselineThroughput();
+                currentBusiness.ResolveDailyBaselineService();
+                PushCashToHud();
+                status = "Generic Business weekly labor settled; procurement remains on the shared supplier/shipment authority.";
                 return;
             }
 
@@ -2119,6 +2160,11 @@ namespace LandLedgers.FirstLedger
 
         public int ResolveTownPulseCategoryDemand(string categoryId, int requestedUnits)
         {
+            // Generic Retail is embodied-only; the aggregate town pulse has no
+            // ActingPerson/BuyerPrincipal and must not bypass the shared sale
+            // authority with a legacy stock/revenue write.
+            if (currentBusiness != null && currentBusiness.BusinessType == BusinessType.Generic)
+                return 0;
             if (!CanGeneralStoreSellReserveCategory(categoryId) || requestedUnits <= 0)
             {
                 return 0;
@@ -3349,6 +3395,10 @@ namespace LandLedgers.FirstLedger
 
         private LocalReserveSale TrySellReserveCategoryFromGeneralStore(string categoryId, int householdId, int requestedUnits, ref int remainingBudgetCents)
         {
+            if (TrySellFromGenericRetail(categoryId, householdId, requestedUnits, ref remainingBudgetCents, out LocalReserveSale genericSale))
+            {
+                return genericSale;
+            }
             if (!CanGeneralStoreSellReserveCategory(categoryId) || requestedUnits <= 0 || remainingBudgetCents <= 0)
             {
                 return default;
@@ -3384,6 +3434,67 @@ namespace LandLedgers.FirstLedger
             RecordGeneralStoreHouseholdSaleObservation(categoryId, householdId, requestedUnits, unitsSold, unitPrice);
             RecordGeneralStoreHouseholdAffinity(householdId, categoryId, requestedUnits, unitsSold, revenue, unitPrice);
             return new LocalReserveSale(unitsSold, revenue);
+        }
+
+        private bool TrySellFromGenericRetail(string categoryId, int householdId, int requestedUnits,
+            ref int remainingBudgetCents, out LocalReserveSale sale)
+        {
+            sale = default;
+            if (currentBusiness == null || runtimeState == null || requestedUnits <= 0 || remainingBudgetCents <= 0)
+            {
+                return false;
+            }
+            if (!currentBusiness.GenericConfiguration.Retail.TryGetLine(categoryId, out GenericRetailProductLine line))
+            {
+                if (currentBusiness.BusinessType != BusinessType.Generic) return false;
+                BindExistingMerchantStockToGenericRetail(currentBusiness);
+                if (!currentBusiness.GenericConfiguration.Retail.TryGetLine(categoryId, out line)) return false;
+            }
+            if (!line.EnabledForSale) return false;
+
+            int actingPersonId = ResolveActingCustomerPersonId(householdId);
+            int unitPrice = Mathf.Max(0, line.SellingPriceCents);
+            int affordableUnits = unitPrice > 0 ? remainingBudgetCents / unitPrice : requestedUnits;
+            int units = Mathf.Min(requestedUnits, affordableUnits);
+            CategoryStockState stock = runtimeState.GetCategoryStock(categoryId);
+            float genericUnits = currentBusiness.GenericConfiguration.GetInventoryQuantity(categoryId);
+            // A classless Business may use the generic Inventory authority with
+            // no legacy CategoryStockState. Do not let the compatibility adapter
+            // turn that legitimate stock into zero available units.
+            float availableGenericUnits = currentBusiness.GenericConfiguration.GetAvailableInventoryQuantity(categoryId);
+            float availableUnits = stock != null ? stock.CurrentStockUnits : availableGenericUnits;
+            units = Mathf.Min(units, Mathf.FloorToInt(Mathf.Max(0f, availableUnits)));
+            if (units <= 0 || actingPersonId < 0) return true;
+
+            int revenue = units * unitPrice;
+            var context = new GenericRetailSaleContext
+            {
+                BuyerPrincipal = $"household:{householdId}",
+                ActingPersonId = actingPersonId,
+                SellerBusinessId = currentBusiness.InstanceId,
+                ProductId = categoryId,
+                Quantity = units,
+                UnitPriceCents = unitPrice,
+                LocationId = storeBuildingId >= 0 ? $"building:{storeBuildingId}" : string.Empty,
+            };
+            bool settled = GenericRetailSaleAuthority.TryExecuteSale(
+                currentBusiness,
+                context,
+                _ =>
+                {
+                    runtimeState.RecordGenericRetailSettlement(categoryId, units, revenue);
+                    RecordGeneralStoreHouseholdSaleObservation(categoryId, householdId, requestedUnits, units, unitPrice);
+                    RecordGeneralStoreHouseholdAffinity(householdId, categoryId, requestedUnits, units, revenue, unitPrice);
+                    return true;
+                },
+                out _);
+            if (!settled) return true;
+            remainingBudgetCents -= revenue;
+            lastDailyUnitsSold += units;
+            lastDailyOffMapStoreUnitsSold += units;
+            lastDailyOffMapStoreSpendCents += revenue;
+            sale = new LocalReserveSale(units, revenue);
+            return true;
         }
 
         private LocalReserveSale TrySellReserveCategoryFromSharedBusinesses(HouseholdReserveDefinition definition, int requestedUnits, ref int remainingBudgetCents)
@@ -3781,11 +3892,20 @@ namespace LandLedgers.FirstLedger
             if (runtimeState == null
                 || storeDefinition == null
                 || storeDefinition.Business == null
-                || !storeDefinition.Business.OwnsCategory(categoryId)
                 || GetHealthAdjustedOperatingEfficiency01() <= 0f)
             {
                 return false;
             }
+
+            if (currentBusiness != null && currentBusiness.BusinessType == BusinessType.Generic)
+            {
+                if (!currentBusiness.GenericConfiguration.Retail.TryGetLine(categoryId, out GenericRetailProductLine genericLine)
+                    || !genericLine.EnabledForSale) return false;
+                return currentBusiness.GenericConfiguration.GetInventoryQuantity(categoryId) > 0f
+                    || runtimeState.GetCategoryStock(categoryId)?.CurrentStockUnits > 0;
+            }
+
+            if (!storeDefinition.Business.OwnsCategory(categoryId)) return false;
 
             CategoryStockState stock = runtimeState.GetCategoryStock(categoryId);
             return stock != null && stock.CurrentStockUnits > 0;

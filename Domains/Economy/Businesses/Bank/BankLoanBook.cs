@@ -152,6 +152,7 @@ namespace LandLedgers.Economy.Bank
         public IReadOnlyList<BankLoanBookEntry> Entries => entries;
         public int PaidCapitalCents => paidCapitalCents;
         public int SurplusCents => surplusCents;
+        public int SharedReceivablesCents => credit?.FinancialAuthority?.TotalReceivableFor(bank?.BusinessName ?? string.Empty) ?? 0;
 
         public BankLoanBook(BankRuntime bank, CreditRegistry credit)
         {
@@ -276,6 +277,8 @@ namespace LandLedgers.Economy.Bank
                 return $"BankLoanBook.RegisterBorrowerNote: note '{instrumentId}' names neither payee nor holder as this bank — the book holds its own paper.";
             if (faceCents <= 0 || faceCents != note.PrincipalCents)
                 return $"BankLoanBook.RegisterBorrowerNote: face must equal the registered principal {note.PrincipalCents}c — the registry is the authority.";
+            if (credit.FinancialAuthority != null && string.IsNullOrWhiteSpace(note.ObligationId))
+                return $"BankLoanBook.RegisterBorrowerNote: note '{instrumentId}' has no shared financial obligation.";
 
             entries.Add(new BankLoanBookEntry
             {
@@ -344,6 +347,8 @@ namespace LandLedgers.Economy.Bank
                 return $"BankLoanBook.RegisterMortgageDeed: mortgage '{instrumentId}' is {found.Status}.";
             if (!string.Equals(found.LenderName, bank.BusinessName, StringComparison.Ordinal))
                 return $"BankLoanBook.RegisterMortgageDeed: mortgage '{instrumentId}' names lender '{found.LenderName}' — not this bank.";
+            if (credit.FinancialAuthority != null && string.IsNullOrWhiteSpace(found.ObligationId))
+                return $"BankLoanBook.RegisterMortgageDeed: mortgage '{instrumentId}' has no shared financial obligation.";
 
             entries.Add(new BankLoanBookEntry
             {
@@ -375,6 +380,13 @@ namespace LandLedgers.Economy.Bank
             if (entry.Status != BankLoanAssetStatus.Current)
                 return $"BankLoanBook.MarkAssetCollected: '{instrumentId}' is {entry.Status} — already resolved.";
             entry.Status = BankLoanAssetStatus.Collected;
+            if (credit.TryGetPromissoryNote(instrumentId, out PromissoryNote note) && note != null
+                && credit.FinancialAuthority != null && !string.IsNullOrWhiteSpace(note.ObligationId))
+            {
+                credit.ApplyInstrumentPayment(instrumentId.ToString(),
+                    credit.FinancialAuthority.Find(note.ObligationId)?.TotalOutstandingCents ?? 0,
+                    entry.RegisteredDayIndex, note.MakerName, note.PayeeName, diagnostics);
+            }
             diagnostics.Add($"BankLoanBook [{bank.BusinessName}]: '{instrumentId}' collected — asset retired from the books.");
             return null;
         }

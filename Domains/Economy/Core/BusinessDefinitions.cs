@@ -107,7 +107,12 @@ namespace LandLedgers.Economy
         /// through the existing T2F / NX-3C / T3D instruments (W9B).
         /// Value appended, never renumbered (W9A).
         /// </summary>
-        Lawyer = 27
+        Lawyer = 27,
+        /// <summary>
+        /// A newly formed classless Business. This is descriptive compatibility
+        /// metadata only; it grants no activity or permission.
+        /// </summary>
+        Generic = 255
     }
 
     public enum BusinessCadence

@@ -245,7 +245,7 @@ namespace LandLedgers.Economy.Creation
     public sealed class CreateBusinessFormModel
     {
         [SerializeField]
-        private BusinessType businessType = BusinessType.GeneralStore;
+        private BusinessType businessType = BusinessType.Generic;
 
         [SerializeField]
         private string displayName = string.Empty;
@@ -348,6 +348,15 @@ namespace LandLedgers.Economy.Creation
             foreach (string id in unknown)
             {
                 errors.Add($"Unknown capability '{id}' — pick from the capability list.");
+            }
+
+            // A classless entity may be formed before it has an operation or
+            // premises. Physical requirements are checked when work is configured
+            // and attempted, not by a legacy trade-class selector.
+            if (businessType == BusinessType.Generic && capabilityIds != null && capabilityIds.Count == 0
+                && (premises == null || premises.Mode == PremisesMode.Unspecified))
+            {
+                return errors;
             }
 
             // Premises mode chosen?

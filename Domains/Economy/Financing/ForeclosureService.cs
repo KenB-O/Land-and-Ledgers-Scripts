@@ -15,6 +15,7 @@ namespace LandLedgers.Economy.Financing
         Sold = 3,           // auction held, buyer took title subject to redemption
         Redeemed = 4,       // borrower redeemed within the window — title restored
         Closed = 5,         // redemption expired or surplus/deficiency settled
+        VoluntarySurrendered = 6,
     }
 
     /// <summary>NX-3B: one named bid at a foreclosure auction. No anonymous bidders.</summary>
@@ -46,6 +47,8 @@ namespace LandLedgers.Economy.Financing
         public int SurplusToBorrowerCents;
         public int DeficiencyCents;
         public int RedemptionDeadlineDayIndex = -1;
+        public int SurrenderDayIndex = -1;
+        public bool SurrenderSatisfiesDebt;
 
         public ForeclosureCase() { }
     }
@@ -79,6 +82,12 @@ namespace LandLedgers.Economy.Financing
         private readonly Dictionary<string, ForeclosureCase> cases =
             new Dictionary<string, ForeclosureCase>(StringComparer.Ordinal);
         private readonly List<string> diagnostics = new List<string>();
+        private readonly FinancialObligationAuthority financialAuthority;
+
+        public ForeclosureService(FinancialObligationAuthority financialAuthority = null)
+        {
+            this.financialAuthority = financialAuthority;
+        }
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public IReadOnlyCollection<ForeclosureCase> Cases => cases.Values;
@@ -114,6 +123,8 @@ namespace LandLedgers.Economy.Financing
                 DebtOwedCents = debtOwedCents,
             };
             cases[kase.CaseId] = kase;
+            if (financialAuthority != null && !string.IsNullOrWhiteSpace(mortgage.ObligationId))
+                financialAuthority.MarkDelinquent(mortgage.ObligationId);
             diag.Add($"ForeclosureService: case {kase.CaseId} opened — '{mortgage.LenderName}' foreclosing on '{mortgage.PropertyId}' ({debtOwedCents}c owed).");
             return kase;
         }
@@ -226,12 +237,29 @@ namespace LandLedgers.Economy.Financing
             {
                 kase.DeficiencyCents = mortgageShortfall;
                 diag.Add($"ForeclosureService: deficiency {mortgageShortfall}c against '{kase.BorrowerName}' per the instrument terms — recorded, not wished away.");
-                if (credit != null && ids != null)
+                if (financialAuthority != null && ids != null && !string.IsNullOrWhiteSpace(GetMortgageObligationId(credit, kase.MortgageInstrumentId)))
+                {
+                    FinancialObligation predecessor = financialAuthority.Find(GetMortgageObligationId(credit, kase.MortgageInstrumentId));
+                    financialAuthority.ApplyPayment(predecessor.ObligationId, toMortgage, dayIndex,
+                        kase.BorrowerName, kase.LenderName, kase.CaseId);
+                    FinancialObligation recovery = financialAuthority.Refinance(ids,
+                        new[] { predecessor.ObligationId }, kase.BorrowerName, kase.LenderName,
+                        mortgageShortfall, dayIndex, "foreclosure deficiency claim", "enforcement recovery");
+                    if (recovery != null)
+                        diag.Add($"ForeclosureService: shared recovery obligation {recovery.ObligationId} records the deficiency without duplicating the mortgage principal.");
+                }
+                else if (credit != null && ids != null)
                 {
                     credit.IssuePromissoryNote(ids, kase.BorrowerName, kase.LenderName, mortgageShortfall,
                         $"deficiency from foreclosure sale of '{kase.PropertyId}' (case {kase.CaseId})",
                         dayIndex, null, diag);
                 }
+            }
+            else if (financialAuthority != null && credit != null && !string.IsNullOrWhiteSpace(GetMortgageObligationId(credit, kase.MortgageInstrumentId)))
+            {
+                string obligationId = GetMortgageObligationId(credit, kase.MortgageInstrumentId);
+                financialAuthority.ApplyPayment(obligationId, toMortgage, dayIndex,
+                    kase.BorrowerName, kase.LenderName, kase.CaseId);
             }
 
             if (credit != null)
@@ -249,6 +277,35 @@ namespace LandLedgers.Economy.Financing
             kase.RedemptionDeadlineDayIndex = dayIndex + RedemptionWindowDays;
             diag.Add($"ForeclosureService: case {kase.CaseId} sold — redemption open to day {kase.RedemptionDeadlineDayIndex} (one-year territorial anchor).");
             return null;
+        }
+
+        /// <summary>
+        /// Records a negotiated voluntary surrender without treating delivery
+        /// of collateral as automatic full satisfaction. The agreement/law
+        /// decides whether a remaining deficiency exists.
+        /// </summary>
+        public string RecordVoluntarySurrender(ForeclosureCase kase, int dayIndex,
+            bool satisfiesDebt, List<string> diag = null)
+        {
+            diag = diag ?? diagnostics;
+            if (kase == null) return "ForeclosureService.RecordVoluntarySurrender: a case is required.";
+            if (kase.Stage != ForeclosureStage.NoticeIssued && kase.Stage != ForeclosureStage.SaleScheduled)
+                return $"ForeclosureService.RecordVoluntarySurrender: case {kase.CaseId} is {kase.Stage}.";
+            kase.Stage = ForeclosureStage.VoluntarySurrendered;
+            kase.SurrenderDayIndex = dayIndex;
+            kase.SurrenderSatisfiesDebt = satisfiesDebt;
+            if (satisfiesDebt) kase.DeficiencyCents = 0;
+            diag.Add($"ForeclosureService: voluntary surrender of '{kase.PropertyId}' day {dayIndex}; debt satisfaction {(satisfiesDebt ? "agreed in full" : "not agreed in full") }.");
+            return null;
+        }
+
+        private string GetMortgageObligationId(CreditRegistry credit, string instrumentId)
+        {
+            if (credit == null || string.IsNullOrWhiteSpace(instrumentId)) return string.Empty;
+            foreach (MortgageDeed mortgage in credit.CaptureSaveDto().Mortgages)
+                if (mortgage != null && mortgage.InstrumentId.ToString() == instrumentId)
+                    return mortgage.ObligationId;
+            return string.Empty;
         }
 
         /// <summary>

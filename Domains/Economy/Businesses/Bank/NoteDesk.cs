@@ -88,11 +88,13 @@ namespace LandLedgers.Economy.Bank
         public IReadOnlyList<IssuedBankNote> IssuedNotes => issuedNotes;
         public IReadOnlyList<DiscountedPaper> DiscountedPaper => discountedPaper;
 
-        public NoteDesk(BankRuntime bank, CreditRegistry credit, EntityIdRegistry ids)
+        public NoteDesk(BankRuntime bank, CreditRegistry credit, EntityIdRegistry ids,
+            FinancialObligationAuthority financialAuthority = null)
         {
             this.bank = bank;
             this.credit = credit;
             this.ids = ids;
+            credit?.AttachFinancialAuthority(financialAuthority);
         }
 
         public static string BankNoteTerms() => "bank note payable to bearer on demand in specie";

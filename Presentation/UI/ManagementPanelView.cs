@@ -67,6 +67,10 @@ namespace LandLedgers.UI
         [SerializeField] private TMP_Text financesDebtPressureText;
         [SerializeField] private TMP_Text financesDistributionText;
         [SerializeField] private TMP_Text financesAffordabilityText;
+        [SerializeField] private TMP_Text sharedFinanceText;
+        [SerializeField] private Button sharedFinanceAcceptButton;
+        [SerializeField] private Button sharedFinanceCounterButton;
+        [SerializeField] private Button sharedFinanceDeclineButton;
         [SerializeField] private RectTransform businessBreakdownContent;
         [SerializeField] private Button financeBusinessRowTemplate;
         [SerializeField] private RectTransform cashTransferRoot;
@@ -193,6 +197,10 @@ namespace LandLedgers.UI
         public TMP_Text FinancesDebtPressureText => financesDebtPressureText;
         public TMP_Text FinancesDistributionText => financesDistributionText;
         public TMP_Text FinancesAffordabilityText => financesAffordabilityText;
+        public TMP_Text SharedFinanceText => sharedFinanceText;
+        public Button SharedFinanceAcceptButton => sharedFinanceAcceptButton;
+        public Button SharedFinanceCounterButton => sharedFinanceCounterButton;
+        public Button SharedFinanceDeclineButton => sharedFinanceDeclineButton;
         public RectTransform BusinessBreakdownContent => businessBreakdownContent;
         public Button FinanceBusinessRowTemplate => financeBusinessRowTemplate;
         public RectTransform CashTransferRoot => cashTransferRoot;
@@ -322,6 +330,10 @@ namespace LandLedgers.UI
             financesDebtPressureText = financesDebtPressureText != null ? financesDebtPressureText : FindText(root, "FinancesDebtPressureText");
             financesDistributionText = financesDistributionText != null ? financesDistributionText : FindText(root, "FinancesDistributionText");
             financesAffordabilityText = financesAffordabilityText != null ? financesAffordabilityText : FindText(root, "FinancesAffordabilityText");
+            sharedFinanceText = sharedFinanceText != null ? sharedFinanceText : FindText(root, "SharedFinanceText");
+            sharedFinanceAcceptButton = sharedFinanceAcceptButton != null ? sharedFinanceAcceptButton : FindButton(root, "SharedFinance_AcceptButton");
+            sharedFinanceCounterButton = sharedFinanceCounterButton != null ? sharedFinanceCounterButton : FindButton(root, "SharedFinance_CounterButton");
+            sharedFinanceDeclineButton = sharedFinanceDeclineButton != null ? sharedFinanceDeclineButton : FindButton(root, "SharedFinance_DeclineButton");
             businessBreakdownContent = businessBreakdownContent != null ? businessBreakdownContent : FindRect(root, "BusinessBreakdown_Content");
             financeBusinessRowTemplate = financeBusinessRowTemplate != null ? financeBusinessRowTemplate : FindButton(root, "FinanceBusinessRow_Template");
             EnsureFinanceDashboardControls(canRepairAuthoredReferences);
@@ -1112,6 +1124,23 @@ namespace LandLedgers.UI
                 financesDistributionText = EnsureSectionBody(middleRow, "FinancesDistribution_Section", "Owner Draw / Transfers", financesDistributionText, "FinancesDistributionText", "Distribution body loads at runtime.", 112f, canCreate);
                 financesAffordabilityText = EnsureSectionBody(middleRow, "FinancesAffordability_Section", "Commitment Capacity", financesAffordabilityText, "FinancesAffordabilityText", "Commitment body loads at runtime.", 112f, canCreate);
             }
+
+            sharedFinanceText = EnsureSectionBody(financesScrollContent, "SharedFinance_Section", "Obligations, Claims & Security", sharedFinanceText, "SharedFinanceText", "Shared credit records load at runtime.", 260f, canCreate);
+            RectTransform sharedFinanceSection = FindRect(financesScrollContent, "SharedFinance_Section");
+            if (sharedFinanceSection != null && canCreate)
+            {
+                RectTransform actions = FindRect(sharedFinanceSection, "SharedFinance_Actions");
+                if (actions == null)
+                {
+                    actions = CreateButtonRow("SharedFinance_Actions", sharedFinanceSection);
+                    sharedFinanceAcceptButton = CreateLoanButton("SharedFinance_AcceptButton", actions, "Accept Offer", 120f);
+                    sharedFinanceCounterButton = CreateLoanButton("SharedFinance_CounterButton", actions, "Counter Offer", 120f);
+                    sharedFinanceDeclineButton = CreateLoanButton("SharedFinance_DeclineButton", actions, "Decline Offer", 120f);
+                }
+            }
+            ApplyButtonTypography(sharedFinanceAcceptButton, LandLedgersTypography.TextRole.ButtonLabel);
+            ApplyButtonTypography(sharedFinanceCounterButton, LandLedgersTypography.TextRole.ButtonLabel);
+            ApplyButtonTypography(sharedFinanceDeclineButton, LandLedgersTypography.TextRole.ButtonLabel);
 
             RectTransform breakdownSection = bottomRow != null ? FindRect(bottomRow, "FinancesBusinessBreakdown_Section") : null;
             if (breakdownSection == null && bottomRow != null && canCreate)

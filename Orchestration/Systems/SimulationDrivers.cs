@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
@@ -284,6 +285,12 @@ namespace LandLedgers.Orchestration.Systems
             // TTS-1: roll every person's daily work-time budget.
             hub.WorkTimeBudgets.EnsureDay(absoluteDayIndex);
 
+            // Generic production processes are persisted on their Business and
+            // advance through the same TaskAuthority on the daily simulation
+            // boundary. This is execution of an already-started physical process;
+            // it does not grant capability or create output from a policy alone.
+            DriveGenericProduction(absoluteDayIndex);
+
             // BIZ-4: age butcher lots (fresh → aging → spoiled).
             foreach (var runtime in hub.ButcherRuntimes)
             {
@@ -303,6 +310,58 @@ namespace LandLedgers.Orchestration.Systems
             // the NX-1B nutrition teeth never bit. Wire it here with the
             // work-time budgets so missed meals reduce usable minutes for real.
             DriveDailyNeeds(absoluteDayIndex);
+        }
+
+        private void DriveGenericProduction(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null) continue;
+                EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
+
+                // Policy scheduling is deliberately performed before process
+                // advancement. It selects a real employed/owner Person, then
+                // routes active work through the shared TaskAuthority. No policy
+                // call itself creates goods.
+                if (business.GenericConfiguration.ActiveProcesses.All(process => process == null || process.Completed))
+                {
+                    var workers = new List<EntityId>();
+                    if (business.Owner != null && business.Owner.PersonId >= 0)
+                    {
+                        workers.Add(EntityId.For(EntityKind.Person, business.Owner.PersonId));
+                    }
+                    if (business.RuntimeState?.EmploymentRegistry != null)
+                    {
+                        foreach (EmploymentRelationship relationship in business.RuntimeState.EmploymentRegistry.GetActiveByEmployer(business.InstanceId))
+                        {
+                            if (relationship != null && relationship.EmployeePersonId >= 0)
+                            {
+                                workers.Add(EntityId.For(EntityKind.Person, relationship.EmployeePersonId));
+                            }
+                        }
+                    }
+                    hub.GenericProduction.TryStartEligiblePolicy(business, businessId, absoluteDayIndex, workers,
+                        out _, out _);
+                }
+
+                if (business.GenericConfiguration.ActiveProcesses.Count == 0) continue;
+                hub.GenericProduction.AdvanceBusinessProcesses(
+                    business,
+                    businessId,
+                    absoluteDayIndex,
+                    24 * 60);
+            }
+        }
+
+        private static int StableBusinessRuntimeId(string value)
+        {
+            unchecked
+            {
+                int hash = 17;
+                foreach (char character in value ?? string.Empty) hash = hash * 31 + character;
+                return hash & 0x7fffffff;
+            }
         }
 
         /// <summary>

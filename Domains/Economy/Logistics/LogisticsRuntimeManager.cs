@@ -504,7 +504,9 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
-            LogisticsShipmentDeliveryMode deliveryMode = request.Buyer.BusinessType == BusinessType.GeneralStore
+            LogisticsShipmentDeliveryMode deliveryMode = UsesGenericEconomicState(request.Buyer)
+                ? LogisticsShipmentDeliveryMode.ReceiveGenericInventory
+                : request.Buyer.BusinessType == BusinessType.GeneralStore
                 ? LogisticsShipmentDeliveryMode.GeneralStoreLocalSupply
                 : LogisticsShipmentDeliveryMode.AddCategoryStock;
             ShipmentHaulingMode haulingMode = ResolveRecurringOrderHaulingMode(request.Template.HaulingResponsibility);
@@ -524,6 +526,50 @@ namespace LandLedgers.Economy
                 freightPayer);
 
             return IsAcceptedScheduledShipment(shipment) ? Mathf.Max(0, units) : 0;
+        }
+
+        /// <summary>
+        /// Generic merchant receiving path. The shipment remains the physical
+        /// custody transition; destination GenericInventory is written only by
+        /// the receiving stage after arrival.
+        /// </summary>
+        public LogisticsShipmentState ScheduleGenericInventoryShipment(
+            BusinessInstanceState source,
+            BusinessInstanceState destination,
+            string productId,
+            int units,
+            int sellerUnitRevenueCents,
+            int buyerUnitCostCents,
+            ShipmentHaulingMode haulingMode = ShipmentHaulingMode.SourceDelivers,
+            string freightPayerBusinessInstanceId = null)
+        {
+            if (source == null || destination == null || !UsesGenericEconomicState(destination)
+                || string.IsNullOrWhiteSpace(productId) || units <= 0) return null;
+            return CreateLocalBusinessShipment(
+                source,
+                productId,
+                destination,
+                productId,
+                units,
+                sellerUnitRevenueCents,
+                buyerUnitCostCents,
+                false,
+                LogisticsShipmentDeliveryMode.ReceiveGenericInventory,
+                $"{source.RuntimeDisplayName}->{destination.RuntimeDisplayName} generic receiving",
+                haulingMode,
+                freightPayerBusinessInstanceId);
+        }
+
+        private static bool UsesGenericEconomicState(BusinessInstanceState business)
+        {
+            if (business == null) return false;
+            if (business.BusinessType == BusinessType.Generic) return true;
+            GenericBusinessConfiguration configuration = business.GenericConfiguration;
+            return configuration.ProductionMethods.Count > 0
+                || configuration.ProductionPolicies.Count > 0
+                || configuration.Retail.ProductLines.Count > 0
+                || configuration.EquipmentProcurements.Count > 0
+                || configuration.Inventory.Count > 0;
         }
 
         public int ScheduleBusinessTransferAgreementShipment(
@@ -1159,6 +1205,33 @@ namespace LandLedgers.Economy
                     }
 
                     goto case LogisticsShipmentDeliveryMode.AddCategoryStock;
+                }
+
+                case LogisticsShipmentDeliveryMode.ReceiveGenericInventory:
+                {
+                    BusinessInstanceState destination = FindBusinessByInstanceId(shipment.destinationBusinessInstanceId);
+                    if (destination == null)
+                    {
+                        FailShipmentAfterLoad(shipment, "generic inventory destination unavailable");
+                        NotifyTransferAgreementDeliveryBlocked(shipment, shipment.blockedReason);
+                        return;
+                    }
+                    if (!GenericShipmentReceivingAuthority.TryReceive(destination, shipment.ShipmentId,
+                        shipment.destinationCategoryId, deliveredUnits, shipment.buyerUnitCostCents,
+                        null, timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0, out string receiveReason))
+                    {
+                        shipment.state = LogisticsShipmentStatus.Delayed;
+                        shipment.blockedReason = receiveReason;
+                        NotifyTransferAgreementDeliveryBlocked(shipment, receiveReason);
+                        return;
+                    }
+                    shipment.remainingQuantityUnits = Mathf.Max(0, shipment.remainingQuantityUnits - deliveredUnits);
+                    shipment.deliveryApplied = true;
+                    shipment.state = LogisticsShipmentStatus.Completed;
+                    CreditSellerRevenue(shipment, deliveredUnits);
+                    BookFreightCharge(shipment, deliveredUnits, destination);
+                    NotifyTransferAgreementDelivered(shipment, deliveredUnits);
+                    return;
                 }
 
                 case LogisticsShipmentDeliveryMode.AddCategoryStock:

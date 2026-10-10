@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Persistence;
+using LandLedgers.Primitives;
 using LandLedgers.Reputation;
 using LandLedgers.World;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Economy
 {
@@ -559,6 +562,10 @@ namespace LandLedgers.Economy
         [Tooltip("BIZ-2: commercial capabilities this business identity exposes (Tech X §3.1). One business, many capabilities — no synthetic subsidiaries.")]
         private List<string> capabilityIds = new List<string>();
 
+        [SerializeField]
+        [Tooltip("Generic physical/economic configuration. Activity support is derived at execution time; this is not a permission registry.")]
+        private GenericBusinessConfiguration genericConfiguration = new GenericBusinessConfiguration();
+
         public string InstanceId => instanceId ?? string.Empty;
         public string ProfileId => profileId ?? string.Empty;
         public BusinessType BusinessType => businessType;
@@ -612,6 +619,107 @@ namespace LandLedgers.Economy
 
         /// <summary>BIZ-2: capability ids this business identity exposes (Tech X §3.1).</summary>
         public IReadOnlyList<string> CapabilityIds => capabilityIds;
+        public GenericBusinessConfiguration GenericConfiguration => genericConfiguration ??= new GenericBusinessConfiguration();
+
+        /// <summary>
+        /// Adds a physical Asset reference to this Business. Templates and
+        /// capability discovery never create the Asset; acquisition/production
+        /// authorities must do that first.
+        /// </summary>
+        public void RegisterGenericEquipmentAsset(string assetId) => GenericConfiguration.AddEquipmentReference(assetId);
+
+        public void RegisterGenericEquipmentProcurement(EquipmentProcurementState procurement)
+            => GenericConfiguration.AddEquipmentProcurement(procurement);
+
+        public void RegisterGenericWorkspace(string workspaceId) => GenericConfiguration.AddWorkspaceReference(workspaceId);
+
+        public void RegisterGenericProductionMethod(ProductionMethodDefinition method) => GenericConfiguration.AddProductionMethod(method);
+
+        public void RegisterGenericProductionPolicy(GenericProductionPolicy policy) => GenericConfiguration.AddOrReplaceProductionPolicy(policy);
+
+        public void RegisterGenericProductionProcess(ProductionProcessState process) => GenericConfiguration.AddProcess(process);
+
+        /// <summary>
+        /// Configures a generic retail line on the shared Business entity. This only
+        /// records policy and capacity allocation; stock and transactions remain
+        /// authoritative in the existing Inventory/Transaction systems.
+        /// </summary>
+        public bool TryConfigureGenericRetailLine(GenericRetailProductLine line, float capacityAllocation)
+        {
+            if (line == null || string.IsNullOrWhiteSpace(line.ProductId)) return false;
+            RetailCapacityPool pool = GenericConfiguration.Retail.GetOrCreatePool(line.CapacityPoolId);
+            if (!pool.SetAllocation(Mathf.Max(pool.Allocated, capacityAllocation))) return false;
+            GenericConfiguration.Retail.AddOrReplaceLine(line);
+            return true;
+        }
+
+        public GenericProductionPlan PlanGenericProduction(
+            string methodId,
+            float currentStock,
+            float requestedQuantity,
+            Func<ProductionInputRequirement, float> availableInput,
+            Func<ProductionInputRequirement, float> reservedInput)
+        {
+            ProductionMethodDefinition method = GenericConfiguration.ProductionMethods
+                .FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.MethodId, methodId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+            GenericConfiguration.TryGetProductionPolicy(methodId, out GenericProductionPolicy policy);
+            return GenericProductionPlanner.Plan(policy, method, currentStock, requestedQuantity, availableInput, reservedInput);
+        }
+
+        /// <summary>
+        /// Production-policy adapter for runtime callers. Planning and execution
+        /// remain separate: this method only registers the process returned by the
+        /// shared TaskAuthority-backed runtime after physical checks and input
+        /// reservation have succeeded.
+        /// </summary>
+        public bool TryStartGenericProduction(
+            GenericProductionRuntime runtime,
+            GenericProductionPlan plan,
+            EntityId personId,
+            Func<string, bool> hasEquipment,
+            Func<string, bool> hasWorkspace,
+            Func<string, bool> hasInput,
+            Func<string, bool> personAvailable,
+            Func<ProductionInputRequirement, bool> consumeInput,
+            Action<ProductionInputRequirement> rollbackInput,
+            out ProductionProcessState process,
+            out string reason)
+        {
+            process = null;
+            reason = string.Empty;
+            if (runtime == null)
+            {
+                reason = "Generic production runtime is unavailable.";
+                return false;
+            }
+            if (!runtime.TryBegin(plan, personId, hasEquipment, hasWorkspace, hasInput,
+                personAvailable, consumeInput, rollbackInput, out process, out reason)) return false;
+            RegisterGenericProductionProcess(process);
+            return true;
+        }
+
+        public bool AdvanceGenericProduction(
+            GenericProductionRuntime runtime,
+            string processId,
+            EntityId personId,
+            int minutes,
+            Func<bool> createOutput,
+            out string reason)
+        {
+            reason = string.Empty;
+            ProductionProcessState process = GenericConfiguration.ActiveProcesses
+                .FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.ProcessId, processId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+            if (process == null)
+            {
+                reason = "Generic production process was not found.";
+                return false;
+            }
+            if (runtime == null || !runtime.Advance(process, personId, minutes, createOutput, out reason)) return false;
+            RegisterGenericProductionProcess(process);
+            return true;
+        }
 
         /// <summary>BIZ-2: adds a capability id if not already present.</summary>
         public void AddCapability(string capabilityId)
@@ -805,13 +913,28 @@ namespace LandLedgers.Economy
 
         public static BusinessInstanceState Create(string instanceId, BusinessProfileDefinition profile, int assignedBuildingId, BusinessOwnerIdentity owner)
         {
+            return Create(instanceId, profile, assignedBuildingId, owner, null);
+        }
+
+        /// <summary>
+        /// Creates from authored defaults while preserving the requested generic
+        /// entity identity. A profile supplies defaults/data; it does not silently
+        /// convert a classless Business back into a permission-bearing trade class.
+        /// </summary>
+        public static BusinessInstanceState Create(
+            string instanceId,
+            BusinessProfileDefinition profile,
+            int assignedBuildingId,
+            BusinessOwnerIdentity owner,
+            BusinessType? typeOverride)
+        {
             if (profile == null)
             {
                 throw new ArgumentNullException(nameof(profile));
             }
 
             BusinessOwnerIdentity resolvedOwner = owner ?? BusinessOwnerIdentity.Town();
-            BusinessType type = profile.Business.BusinessType;
+            BusinessType type = typeOverride ?? profile.Business.BusinessType;
             string resolvedInstanceId = string.IsNullOrWhiteSpace(instanceId) ? profile.Business.BusinessId : instanceId;
             BusinessRuntimeState runtime = profile.CreateRuntimeState();
             runtime.BindBusinessIdentity(resolvedInstanceId);
@@ -1080,6 +1203,7 @@ namespace LandLedgers.Economy
                 businessReputation = CaptureBusinessReputationSaveDto(BusinessReputation),
                 runtime = runtimeState != null ? runtimeState.CaptureSaveDto() : null,
                 mine = mineState != null ? mineState.CaptureSaveDto() : null,
+                generic = GenericConfiguration.CaptureSaveDto(),
                 saleTerms = (saleTerms ?? new BusinessSaleTerms()).CaptureSaveDto()
             };
         }
@@ -1112,6 +1236,7 @@ namespace LandLedgers.Economy
                 cashTransferRule = BusinessCashTransferRuleState.FromSaveDto(dto.cashTransferRule),
                 businessReputation = BusinessReputationFromSaveDto(dto.businessReputation),
                 runtimeState = BusinessRuntimeState.FromSaveDto(dto.runtime, dto.businessType),
+                genericConfiguration = GenericBusinessConfiguration.FromSaveDto(dto.generic),
                 mineState = dto.businessType == BusinessType.Mine
                     ? MineRuntimeState.FromSaveDto(dto.mine) ?? MineRuntimeState.CreateDefault(MineralResourceKind.Coal)
                     : null,

@@ -235,6 +235,8 @@ namespace LandLedgers.UI.Editor
                 TMP_Text financesDistribution = EnsureSectionPanel(financesMiddleRow, "FinancesDistribution_Section", "Owner Draw / Transfers", "FinancesDistributionText", "Distribution body loads at runtime.", 112f);
                 TMP_Text financesAffordability = EnsureSectionPanel(financesMiddleRow, "FinancesAffordability_Section", "Commitment Capacity", "FinancesAffordabilityText", "Commitment body loads at runtime.", 112f);
 
+                TMP_Text sharedFinance = EnsureSectionPanel(financesScrollContent, "SharedFinance_Section", "Obligations, Claims & Security", "SharedFinanceText", "Shared credit records load at runtime.", 260f);
+
                 RectTransform financesBottomRow = EnsureRect(financesScrollContent, "Finances_BottomRow");
                 ConfigureHorizontalLayout(financesBottomRow, 12f, new RectOffset(0, 0, 0, 0));
                 ConfigureLayoutElement(financesBottomRow, -1f, -1f, 1f, 0f);
@@ -450,6 +452,7 @@ namespace LandLedgers.UI.Editor
                 SetObject(serializedView, "financesDebtPressureText", financesDebtPressure);
                 SetObject(serializedView, "financesDistributionText", financesDistribution);
                 SetObject(serializedView, "financesAffordabilityText", financesAffordability);
+                SetObject(serializedView, "sharedFinanceText", sharedFinance);
                 SetObject(serializedView, "businessBreakdownContent", businessBreakdown);
                 SetObject(serializedView, "financeBusinessRowTemplate", financeBusinessRowTemplate);
                 SetObject(serializedView, "bankLoanRoot", bankLoanRoot);

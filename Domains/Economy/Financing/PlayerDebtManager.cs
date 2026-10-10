@@ -52,6 +52,7 @@ namespace LandLedgers.Economy.Financing
         [SerializeField] private int requestedAmountCents = DefaultRequestedAmountCents;
         [SerializeField] private BankLoanApplicationState application = new();
         [SerializeField] private LoanContract activeLoan;
+        [SerializeField] private List<LoanContract> activeLoans = new();
         [SerializeField] private int consecutiveMissedPayments;
         [SerializeField] private int lifetimeMissedPayments;
         [SerializeField] private int defaultCount;
@@ -65,6 +66,8 @@ namespace LandLedgers.Economy.Financing
         private bool subscribedToTime;
         private readonly PaymentScheduleBuilder scheduleBuilder = new();
         private readonly ReputationEventApplier reputationApplier = new();
+        private FinancialObligationAuthority financialAuthority;
+        private LandLedgers.Primitives.EntityIdRegistry financialIds;
 
         public int RequestedAmountCents => Mathf.Max(0, requestedAmountCents);
         public BankLoanApplicationState Application => application;
@@ -79,12 +82,14 @@ namespace LandLedgers.Economy.Financing
         public string LastRepaymentSummary => lastRepaymentSummary ?? string.Empty;
         public string LastRecoverySummary => lastRecoverySummary ?? string.Empty;
         public bool HasPendingApplication => application != null && application.IsPending;
-        public bool HasActiveLoan => IsUnresolvedDebt(activeLoan);
-        public bool CanEditRequestedAmount => !HasPendingApplication && !HasActiveLoan;
+        public bool HasActiveLoan => IsUnresolvedDebt(activeLoan) || HasUnresolvedAdditionalLoan();
+        // Multiple persisted obligations are reported and serviced independently;
+        // the application workflow only blocks while its active workflow loan is open.
+        public bool CanEditRequestedAmount => !HasPendingApplication && !IsUnresolvedDebt(activeLoan);
         public bool CanSubmitApplication => CanEditRequestedAmount && RequestedAmountCents > 0;
-        public int ActiveDebtPaymentCents => GetNextUnpaidPayment(activeLoan)?.totalDueCents ?? 0;
+        public int ActiveDebtPaymentCents => TotalNextUnpaidPaymentCents();
         public int ActiveDebtWeeklyEquivalentPaymentCents => GetWeeklyEquivalentDebtPaymentCents(activeLoan);
-        public int ActiveDebtPrincipalCents => HasActiveLoan && activeLoan != null ? Mathf.Max(0, activeLoan.remainingPrincipalCents) : 0;
+        public int ActiveDebtPrincipalCents => TotalActivePrincipalCents();
 
         public PlayerDebtSaveDto CaptureSaveDto()
         {
@@ -94,6 +99,7 @@ namespace LandLedgers.Economy.Financing
                 requestedAmountCents = RequestedAmountCents,
                 application = application,
                 activeLoan = activeLoan,
+                activeLoans = new List<LoanContract>(activeLoans ?? new List<LoanContract>()),
                 reputation = reputation != null ? reputation.Clone() : new PlayerReputationState(),
                 lenderFundsState = EnsureLenderFunds().CaptureSaveDto(),
                 consecutiveMissedPayments = ConsecutiveMissedPayments,
@@ -116,6 +122,7 @@ namespace LandLedgers.Economy.Financing
                 requestedAmountCents = DefaultRequestedAmountCents;
                 application = new BankLoanApplicationState();
                 activeLoan = null;
+                activeLoans = new List<LoanContract>();
                 reputation = new PlayerReputationState(0.55f, lender.Sanitized().trust01, 0.5f, 0.5f, 0.55f);
                 lenderFunds = null;
                 consecutiveMissedPayments = 0;
@@ -133,6 +140,7 @@ namespace LandLedgers.Economy.Financing
             requestedAmountCents = Mathf.Max(0, dto.requestedAmountCents <= 0 ? DefaultRequestedAmountCents : dto.requestedAmountCents);
             application = dto.application ?? new BankLoanApplicationState();
             activeLoan = dto.activeLoan;
+            activeLoans = dto.activeLoans != null ? new List<LoanContract>(dto.activeLoans) : new List<LoanContract>();
             reputation = dto.reputation ?? new PlayerReputationState(0.55f, lender.Sanitized().trust01, 0.5f, 0.5f, 0.55f);
             reputation.Clamp();
             lenderFunds = new PrivateLenderFunds(lender.Sanitized().displayName, Mathf.Max(0, lenderCapitalCents));
@@ -162,6 +170,15 @@ namespace LandLedgers.Economy.Financing
             sharedBusinessRuntime = newSharedBusinessRuntime;
             playerPortfolio = newPlayerPortfolio != null ? newPlayerPortfolio : playerPortfolio;
             SubscribeToTime();
+        }
+
+        public void AttachFinancialAuthority(FinancialObligationAuthority authority,
+            LandLedgers.Primitives.EntityIdRegistry ids)
+        {
+            financialAuthority = authority;
+            financialIds = ids;
+            if (activeLoan != null && string.IsNullOrWhiteSpace(activeLoan.obligationId))
+                LinkActiveLoanToSharedObligation(GetCurrentDayIndex(), "legacy bank loan migration");
         }
 
         public void AdjustRequestedAmountDollars(int deltaDollars)
@@ -490,7 +507,11 @@ namespace LandLedgers.Economy.Financing
             {
                 loanId = loanId,
                 lenderId = approval.Offer.lenderId,
-                purpose = LoanPurposeRules.Sanitize(approval.Offer.purpose, InferAcquisitionLoanPurpose(collateralKind)),
+                // The acquisition workflow is the purpose authority here. The
+                // underwriting offer may carry a narrower collateral label
+                // (PropertyPurchase/BusinessAcquisition), but the resulting
+                // legacy contract must retain the broad acquisition purpose.
+                purpose = LoanPurpose.Acquisition,
                 collateralIds = new List<string> { collateralId ?? string.Empty },
                 status = LoanStatus.Active,
                 termStructure = term,
@@ -500,6 +521,7 @@ namespace LandLedgers.Economy.Financing
                 workoutCount = 0,
                 lastWorkoutDayIndex = -1
             };
+            LinkActiveLoanToSharedObligation(currentDay, "acquisition financing");
 
             application = new BankLoanApplicationState
             {
@@ -821,6 +843,7 @@ namespace LandLedgers.Economy.Financing
                 workoutCount = 0,
                 lastWorkoutDayIndex = -1
             };
+            LinkActiveLoanToSharedObligation(absoluteDayIndex, "bank working capital loan");
 
             application.status = BankLoanApplicationStatus.Approved;
             application.purpose = LoanPurposeRules.Sanitize(result.purpose, LoanPurpose.WorkingCapital);
@@ -837,6 +860,50 @@ namespace LandLedgers.Economy.Financing
             lastStatusSummary = $"{application.decisionSummary}. Funds have been added to owner cash.";
             lastDecisionSummary = BuildApprovalDecisionMessage(result, activeLoan.nextPaymentDueDate);
             lastRepaymentSummary = BuildFirstPaymentSummary(activeLoan);
+        }
+
+        private void LinkActiveLoanToSharedObligation(int dayIndex, string purpose)
+        {
+            if (financialAuthority == null || financialIds == null || activeLoan == null
+                || !string.IsNullOrWhiteSpace(activeLoan.obligationId)) return;
+            FinancialObligation obligation = financialAuthority.Create(
+                financialIds, FinancialObligationKind.Loan, "player",
+                activeLoan.lenderId, activeLoan.termStructure.principalCents,
+                dayIndex, activeLoan.termStructure.annualInterestRateBps + " bps", purpose,
+                activeLoan.loanId);
+            if (obligation != null) activeLoan.obligationId = obligation.ObligationId;
+        }
+
+        private IEnumerable<LoanContract> EnumerateLoans()
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            if (activeLoan != null && seen.Add(activeLoan.loanId ?? string.Empty)) yield return activeLoan;
+            if (activeLoans == null) yield break;
+            foreach (LoanContract loan in activeLoans)
+                if (loan != null && seen.Add(loan.loanId ?? string.Empty)) yield return loan;
+        }
+
+        private bool HasUnresolvedAdditionalLoan()
+        {
+            foreach (LoanContract loan in EnumerateLoans())
+                if (loan != activeLoan && IsUnresolvedDebt(loan)) return true;
+            return false;
+        }
+
+        private int TotalActivePrincipalCents()
+        {
+            int total = 0;
+            foreach (LoanContract loan in EnumerateLoans())
+                if (IsUnresolvedDebt(loan)) total += Mathf.Max(0, loan.remainingPrincipalCents);
+            return total;
+        }
+
+        private int TotalNextUnpaidPaymentCents()
+        {
+            int total = 0;
+            foreach (LoanContract loan in EnumerateLoans())
+                if (IsUnresolvedDebt(loan)) total += GetNextUnpaidPayment(loan)?.totalDueCents ?? 0;
+            return total;
         }
 
         private void ProcessRepayment(int absoluteDayIndex)
@@ -861,6 +928,24 @@ namespace LandLedgers.Economy.Financing
                 payment.paidCents = payment.totalDueCents;
                 payment.status = LoanPaymentStatus.Paid;
                 activeLoan.remainingPrincipalCents = Mathf.Max(0, activeLoan.remainingPrincipalCents - Mathf.Max(0, payment.principalCents));
+                if (financialAuthority != null && !string.IsNullOrWhiteSpace(activeLoan.obligationId))
+                {
+                    FinancialObligation shared = financialAuthority.Find(activeLoan.obligationId);
+                    if (shared != null && shared.TotalOutstandingCents < payment.totalDueCents)
+                        financialAuthority.AccrueInterest(activeLoan.obligationId,
+                            payment.totalDueCents - shared.TotalOutstandingCents);
+                    financialAuthority.ApplyPayment(activeLoan.obligationId, payment.totalDueCents,
+                        absoluteDayIndex, "player", activeLoan.lenderId, activeLoan.loanId);
+                    FinancialObligation sharedAfterPayment = financialAuthority.Find(activeLoan.obligationId);
+                    if (sharedAfterPayment != null)
+                    {
+                        // LoanContract is only a compatibility/read surface
+                        // once the shared authority is attached.
+                        activeLoan.remainingPrincipalCents = sharedAfterPayment.OutstandingPrincipalCents;
+                        if (sharedAfterPayment.Settled)
+                            activeLoan.status = LoanStatus.PaidOff;
+                    }
+                }
                 consecutiveMissedPayments = 0;
                 lastMissedPaymentDayIndex = -1;
                 activeLoan.status = LoanStatus.Active;
@@ -886,6 +971,8 @@ namespace LandLedgers.Economy.Financing
                 lifetimeMissedPayments++;
                 lastMissedPaymentDayIndex = absoluteDayIndex;
                 activeLoan.status = LoanStatus.Delinquent;
+                if (financialAuthority != null && !string.IsNullOrWhiteSpace(activeLoan.obligationId))
+                    financialAuthority.MarkDelinquent(activeLoan.obligationId);
                 ApplyReputationEvent(ReputationEventType.LoanPaymentLate, GetLateSeverity(), "Bank loan payment missed.", absoluteDayIndex);
                 lastRepaymentSummary = BuildDelinquencySummary(payment);
                 lastStatusSummary = lastRepaymentSummary;
@@ -983,6 +1070,8 @@ namespace LandLedgers.Economy.Financing
             }
 
             activeLoan.status = LoanStatus.Defaulted;
+            if (financialAuthority != null && !string.IsNullOrWhiteSpace(activeLoan.obligationId))
+                financialAuthority.MarkDefaulted(activeLoan.obligationId);
             defaultCount++;
             priorFailedFinancingCount += 2;
             ApplyLenderSetbackMemory(absoluteDayIndex, 42, 0.58f, "Recent loan default keeps the bank in a cautious posture until the recovery dust settles.");
@@ -1462,6 +1551,15 @@ namespace LandLedgers.Economy.Financing
         private void MarkPaidOffIfComplete()
         {
             if (activeLoan == null || activeLoan.schedule == null || activeLoan.schedule.payments == null)
+            {
+                return;
+            }
+
+            // A schedule can be partial (legacy saves, staged advances, or a
+            // fixture covering only the next installment). Paying every entry
+            // in that schedule does not prove that the obligation principal is
+            // zero.
+            if (activeLoan.remainingPrincipalCents > 0)
             {
                 return;
             }
@@ -2160,6 +2258,8 @@ namespace LandLedgers.Economy.Financing
             lender = lender.Sanitized();
             application = SanitizeApplicationState(application);
             activeLoan = SanitizeLoanContract(activeLoan);
+            if (activeLoans == null) activeLoans = new List<LoanContract>();
+            for (int i = 0; i < activeLoans.Count; i++) activeLoans[i] = SanitizeLoanContract(activeLoans[i]);
             reputation ??= new PlayerReputationState(0.55f, lender.Sanitized().trust01, 0.5f, 0.5f, 0.55f);
             reputation.Clamp();
             consecutiveMissedPayments = Mathf.Max(0, consecutiveMissedPayments);
@@ -2183,6 +2283,10 @@ namespace LandLedgers.Economy.Financing
         private static LoanPurpose SanitizePurposeForDebtState(LoanPurpose purpose, LoanContract loan, BankLoanApplicationState state)
         {
             LoanPurpose sanitized = LoanPurposeRules.Sanitize(purpose, LoanPurpose.WorkingCapital);
+            if (loan != null
+                && !string.IsNullOrWhiteSpace(loan.loanId)
+                && loan.loanId.IndexOf("acquisition", StringComparison.OrdinalIgnoreCase) >= 0)
+                return LoanPurpose.Acquisition;
             bool looksLikeAcquisition = (loan != null && !string.IsNullOrWhiteSpace(loan.loanId) && loan.loanId.IndexOf("acquisition", StringComparison.OrdinalIgnoreCase) >= 0)
                 || (state != null && !string.IsNullOrWhiteSpace(state.applicationId) && state.applicationId.IndexOf("acquisition", StringComparison.OrdinalIgnoreCase) >= 0);
             bool looksLikeWorkingCapital = (loan != null && !string.IsNullOrWhiteSpace(loan.loanId) && loan.loanId.IndexOf("bank_loan", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -2267,7 +2371,13 @@ namespace LandLedgers.Economy.Financing
             loan.termStructure = loan.termStructure.Sanitized();
             loan.collateralIds = SanitizeCollateralIds(loan.collateralIds);
             loan.schedule = SanitizePaymentSchedule(loan.schedule, loan.termStructure, loan.loanId, rebuildMissing: IsRepayableDebt(loan));
-            int principalCeilingCents = Mathf.Max(loan.termStructure.principalCents, loan.schedule != null ? Mathf.Max(loan.schedule.principalCents, loan.schedule.totalPrincipalCents) : 0);
+            // A restored schedule may contain only the next installment (or a
+            // staged slice of a larger obligation). Never clamp a valid
+            // outstanding principal down to that partial schedule.
+            int principalCeilingCents = Mathf.Max(
+                loan.remainingPrincipalCents,
+                Mathf.Max(loan.termStructure.principalCents,
+                    loan.schedule != null ? Mathf.Max(loan.schedule.principalCents, loan.schedule.totalPrincipalCents) : 0));
             loan.remainingPrincipalCents = principalCeilingCents > 0
                 ? Mathf.Clamp(loan.remainingPrincipalCents, 0, principalCeilingCents)
                 : Mathf.Max(0, loan.remainingPrincipalCents);
@@ -2730,6 +2840,15 @@ namespace LandLedgers.Economy.Financing
             if (playerPortfolio == null || amountCents <= 0)
             {
                 return false;
+            }
+
+            // PlayerPortfolioManager is the authoritative owner-cash writer. Keep
+            // the reflection fallback for legacy/test doubles, but use the typed
+            // path when the real portfolio is present so out-parameter metadata
+            // cannot silently turn a valid payment into a missed installment.
+            if (playerPortfolio is PlayerPortfolioManager typedPortfolio)
+            {
+                return typedPortfolio.TrySpendOwnerCash(amountCents, reason ?? string.Empty, out _);
             }
 
             Type portfolioType = playerPortfolio.GetType();

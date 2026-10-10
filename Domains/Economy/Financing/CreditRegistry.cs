@@ -32,7 +32,30 @@ namespace LandLedgers.Economy.Financing
             new Dictionary<string, GuarantyAgreement>(StringComparer.Ordinal);
 
         private readonly List<string> diagnostics = new List<string>();
+        private FinancialObligationAuthority financialAuthority;
         public IReadOnlyList<string> Diagnostics => diagnostics;
+        public FinancialObligationAuthority FinancialAuthority => financialAuthority;
+
+        public FinancialPaymentRecord ApplyInstrumentPayment(string instrumentId, int amountCents,
+            int dayIndex, string payer, string payee, List<string> diag = null)
+        {
+            string obligationId = FindInstrumentObligationId(instrumentId);
+            if (financialAuthority == null || string.IsNullOrWhiteSpace(obligationId))
+            {
+                diag?.Add("CreditRegistry: instrument has no shared obligation for payment.");
+                return null;
+            }
+            FinancialPaymentRecord payment = financialAuthority.ApplyPayment(
+                obligationId, amountCents, dayIndex, payer, payee, instrumentId);
+            if (payment == null) diag?.Add("CreditRegistry: shared obligation rejected instrument payment.");
+            return payment;
+        }
+
+        /// <summary>Attaches the single mutable balance authority; registry remains an instrument index.</summary>
+        public void AttachFinancialAuthority(FinancialObligationAuthority authority)
+        {
+            financialAuthority = authority;
+        }
 
         private string Key(EntityId id) => id.IsValid ? id.ToString() : string.Empty;
 
@@ -67,6 +90,26 @@ namespace LandLedgers.Economy.Financing
             };
             if (collateralEquipmentAssetIds != null)
                 note.CollateralEquipmentAssetIds.AddRange(collateralEquipmentAssetIds);
+            FinancialObligation obligation = financialAuthority?.Create(
+                ids, FinancialObligationKind.Loan, makerName, payeeName, principalCents,
+                dayIndex, terms, "promissory note");
+            if (financialAuthority != null && obligation == null)
+            {
+                diag.Add("CreditRegistry: shared obligation creation failed.");
+                return null;
+            }
+            note.ObligationId = obligation?.ObligationId ?? string.Empty;
+            if (obligation != null && note.CollateralEquipmentAssetIds.Count > 0)
+            {
+                SecurityInterestRecord security = financialAuthority.AttachSecurity(
+                    ids, obligation.ObligationId, payeeName, makerName,
+                    note.CollateralEquipmentAssetIds, dayIndex, 1, true);
+                if (security == null)
+                {
+                    diag.Add("CreditRegistry: note security attachment failed.");
+                    return null;
+                }
+            }
             notes[Key(note.InstrumentId)] = note;
             diag.Add($"CreditRegistry: promissory note {note.InstrumentId} — {makerName} promises {payeeName} {principalCents}c ({terms}).");
             return note;
@@ -97,6 +140,18 @@ namespace LandLedgers.Economy.Financing
                 Terms = terms ?? string.Empty,
                 SignedDayIndex = dayIndex,
             };
+            if (note.FinancedCents > 0)
+            {
+                FinancialObligation obligation = financialAuthority?.Create(
+                    ids, FinancialObligationKind.SellerFinance, buyerName, sellerName,
+                    note.FinancedCents, dayIndex, terms, "seller finance", note.InstrumentId.ToString());
+                if (financialAuthority != null && obligation == null)
+                {
+                    diag.Add("CreditRegistry: shared seller-finance obligation creation failed.");
+                    return null;
+                }
+                note.ObligationId = obligation?.ObligationId ?? string.Empty;
+            }
             sellerNotes[Key(note.InstrumentId)] = note;
             diag.Add($"CreditRegistry: seller-finance note {note.InstrumentId} — {sellerName} carries {note.FinancedCents}c for {buyerName} on '{assetDescription}'.");
             return note;
@@ -125,6 +180,26 @@ namespace LandLedgers.Economy.Financing
                 Terms = terms ?? string.Empty,
                 SignedDayIndex = dayIndex,
             };
+            FinancialObligation obligation = financialAuthority?.Create(
+                ids, FinancialObligationKind.Loan, borrowerName, lenderName, principalCents,
+                dayIndex, terms, "property finance");
+            if (financialAuthority != null && obligation == null)
+            {
+                diag.Add("CreditRegistry: shared mortgage obligation creation failed.");
+                return null;
+            }
+            mortgage.ObligationId = obligation?.ObligationId ?? string.Empty;
+            if (obligation != null)
+            {
+                SecurityInterestRecord security = financialAuthority.AttachSecurity(
+                    ids, obligation.ObligationId, lenderName, borrowerName,
+                    new[] { propertyId }, dayIndex, 1, true);
+                if (security == null)
+                {
+                    diag.Add("CreditRegistry: mortgage security attachment failed.");
+                    return null;
+                }
+            }
             mortgages[Key(mortgage.InstrumentId)] = mortgage;
             diag.Add($"CreditRegistry: mortgage {mortgage.InstrumentId} — {borrowerName} / {lenderName}, {principalCents}c secured by '{propertyDescription}'.");
             return mortgage;
@@ -176,6 +251,23 @@ namespace LandLedgers.Economy.Financing
                 Terms = terms ?? string.Empty,
                 SignedDayIndex = dayIndex,
             };
+            if (financialAuthority != null)
+            {
+                string coveredObligationId = FindInstrumentObligationId(coveredInstrumentId);
+                if (string.IsNullOrWhiteSpace(coveredObligationId))
+                {
+                    diag.Add("CreditRegistry: guaranty requires a shared covered obligation.");
+                    return null;
+                }
+                GuarantyRecord shared = financialAuthority.AddGuaranty(
+                    ids, coveredObligationId, creditorName, debtorName, guarantorName, maxExposureCents);
+                if (shared == null)
+                {
+                    diag.Add("CreditRegistry: shared guaranty creation failed.");
+                    return null;
+                }
+                guaranty.FinancialGuarantyId = shared.GuarantyId;
+            }
             guaranties[Key(guaranty.InstrumentId)] = guaranty;
             diag.Add($"CreditRegistry: guaranty {guaranty.InstrumentId} — {guarantorName} contingently answers up to {maxExposureCents}c for {debtorName}'s debt to {creditorName}. Contingent, not principal.");
             return guaranty;
@@ -227,6 +319,9 @@ namespace LandLedgers.Economy.Financing
         {
             diag = diag ?? diagnostics;
             MarkDefaulted(coveredInstrumentId, diag);
+            string coveredObligationId = FindInstrumentObligationId(coveredInstrumentId);
+            if (financialAuthority != null && !string.IsNullOrWhiteSpace(coveredObligationId))
+                financialAuthority.MarkDelinquent(coveredObligationId);
 
             bool anyCalled = false;
             foreach (GuarantyAgreement g in guaranties.Values)
@@ -239,7 +334,14 @@ namespace LandLedgers.Economy.Financing
                 anyCalled = true;
                 diag.Add($"CreditRegistry: guaranty {g.InstrumentId} CALLED — {g.GuarantorName} now answers {g.CalledAmountCents}c to {g.CreditorName} per '{g.Terms}'.");
 
-                if (liabilityLedger != null && ids != null && !string.IsNullOrWhiteSpace(guarantorBusinessInstanceId))
+                if (financialAuthority != null && ids != null && !string.IsNullOrWhiteSpace(g.FinancialGuarantyId))
+                {
+                    FinancialObligation called = financialAuthority.CallGuaranty(
+                        ids, g.FinancialGuarantyId, g.CalledAmountCents, dayIndex);
+                    if (called == null)
+                        diag.Add($"CreditRegistry: shared guaranty call for {g.InstrumentId} was rejected.");
+                }
+                else if (liabilityLedger != null && ids != null && !string.IsNullOrWhiteSpace(guarantorBusinessInstanceId))
                 {
                     liabilityLedger.BuyOnCredit(
                         ids, guarantorBusinessInstanceId, g.CreditorName, g.CalledAmountCents,
@@ -265,6 +367,14 @@ namespace LandLedgers.Economy.Financing
             else diag.Add($"CreditRegistry: default recorded on unknown instrument '{instrumentId}'.");
         }
 
+        private string FindInstrumentObligationId(string instrumentId)
+        {
+            if (notes.TryGetValue(instrumentId ?? string.Empty, out PromissoryNote note)) return note.ObligationId;
+            if (sellerNotes.TryGetValue(instrumentId ?? string.Empty, out SellerFinanceNote seller)) return seller.ObligationId;
+            if (mortgages.TryGetValue(instrumentId ?? string.Empty, out MortgageDeed mortgage)) return mortgage.ObligationId;
+            return string.Empty;
+        }
+
         /// <summary>
         /// T2A: the underlying debt is satisfied → the guaranty is RELEASED
         /// (not silently dropped): contingent exposure returns to zero through
@@ -273,6 +383,13 @@ namespace LandLedgers.Economy.Financing
         public string SatisfyInstrument(string instrumentId, List<string> diag)
         {
             diag = diag ?? diagnostics;
+            string linkedObligationId = FindInstrumentObligationId(instrumentId);
+            if (financialAuthority != null && !string.IsNullOrWhiteSpace(linkedObligationId))
+            {
+                FinancialObligation linked = financialAuthority.Find(linkedObligationId);
+                if (linked != null && !linked.Settled)
+                    return $"CreditRegistry: instrument '{instrumentId}' cannot be satisfied while shared obligation has {linked.TotalOutstandingCents}c outstanding.";
+            }
             if (notes.TryGetValue(instrumentId, out PromissoryNote n)) n.Status = CreditInstrumentStatus.Satisfied;
             else if (sellerNotes.TryGetValue(instrumentId, out SellerFinanceNote s)) s.Status = CreditInstrumentStatus.Satisfied;
             else if (mortgages.TryGetValue(instrumentId, out MortgageDeed m)) m.Status = CreditInstrumentStatus.Satisfied;

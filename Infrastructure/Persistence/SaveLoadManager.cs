@@ -303,6 +303,26 @@ namespace LandLedgers.Persistence
                         save.population.cohorts,
                         save.population.eggBatches);
                     systemsHub.ImportHouseholdLedgers(save.population.householdLedgers);
+
+                    // Phase B (Real People): OQ-8 deterministic repair. Legacy
+                    // saves carry household cash in the retired
+                    // spendingMoneyCents wallet; book each positive balance
+                    // once as an explicit migration entry in the ledger so
+                    // money is neither duplicated nor lost. Runs after the
+                    // ledger import so saved ledgers are never overwritten.
+                    int migrationDay = save.time != null ? save.time.absoluteDayIndex : 0;
+                    var migrationDiagnostics = new System.Collections.Generic.List<string>();
+                    HouseholdLegacyCashMigrator.MigrateAll(
+                        populationManager != null && populationManager.State != null
+                            ? populationManager.State.households
+                            : null,
+                        systemsHub.HouseholdLedgers,
+                        migrationDay,
+                        migrationDiagnostics);
+                    foreach (string migrationDiagnostic in migrationDiagnostics)
+                    {
+                        Debug.Log($"[SaveLoad] {migrationDiagnostic}");
+                    }
                 }
 
                 int absoluteDayIndex = save.time != null ? save.time.absoluteDayIndex : 0;

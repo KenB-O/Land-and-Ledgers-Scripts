@@ -299,7 +299,15 @@ namespace LandLedgers.Population
             return demand;
         }
 
-        public static void ApplyWeeklySettlementEffects(HouseholdState household)
+        /// <summary>
+        /// Phase B (Real People): household-upgrade production income and upkeep
+        /// now flow through the household ledger with explicit provenance (Canon
+        /// 13.2) instead of the retired spendingMoneyCents wallet. Pass the
+        /// household's ledger (null keeps the legacy wallet write for unwired
+        /// contexts). Income and upkeep are recorded as separate entries so the
+        /// household's production economics stay auditable.
+        /// </summary>
+        public static void ApplyWeeklySettlementEffects(HouseholdState household, HouseholdLedger ledger = null, int dayIndex = -1)
         {
             if (household == null)
             {
@@ -349,10 +357,52 @@ namespace LandLedgers.Population
                 household.foodReserveUnits = resolvedReserve;
             }
 
-            int netWallet = income - upkeep;
-            household.spendingMoneyCents = Mathf.Max(0, household.spendingMoneyCents + netWallet);
-            household.lastWeeklyUpgradeIncomeCents = income;
-            household.lastWeeklyUpgradeUpkeepCents = upkeep;
+            if (ledger != null)
+            {
+                int day = Mathf.Max(0, dayIndex);
+                int incomeRecorded = 0;
+                int upkeepPaid = 0;
+                if (income > 0)
+                {
+                    string incomeRejection = ledger.RecordInflow(
+                        day,
+                        income,
+                        HouseholdIncomeSource.OtherDocumented,
+                        "household-upgrades",
+                        "household upgrade production income (garden, cellar, outbuildings)",
+                        "household production");
+                    if (incomeRejection == null)
+                    {
+                        incomeRecorded = income;
+                    }
+                }
+
+                if (upkeep > 0)
+                {
+                    string upkeepRejection = ledger.RecordOutflow(
+                        day,
+                        upkeep,
+                        "household upgrade upkeep",
+                        "household production");
+                    if (upkeepRejection == null)
+                    {
+                        upkeepPaid = upkeep;
+                    }
+                    // A rejected upkeep (insufficient funds) leaves the upkeep
+                    // unpaid and logged — never a negative balance, never fiat.
+                }
+
+                household.lastWeeklyUpgradeIncomeCents = incomeRecorded;
+                household.lastWeeklyUpgradeUpkeepCents = upkeepPaid;
+            }
+            else
+            {
+                int netWallet = income - upkeep;
+                household.spendingMoneyCents = Mathf.Max(0, household.spendingMoneyCents + netWallet);
+                household.lastWeeklyUpgradeIncomeCents = income;
+                household.lastWeeklyUpgradeUpkeepCents = upkeep;
+            }
+
             household.lastWeeklyReserveDeltaUnits = resolvedReserve - reserveBefore;
         }
 

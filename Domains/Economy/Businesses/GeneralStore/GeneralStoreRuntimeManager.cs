@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Reputation;
@@ -70,6 +71,73 @@ namespace LandLedgers.FirstLedger
 
         [SerializeField, Min(0)]
         private int weeklyHouseholdAllowanceFallbackCents = 525;
+
+        /// <summary>
+        /// Phase B (Real People): the household-cash authority. Assigned by
+        /// bootstrap (SimulationDrivers) from SimulationSystemsHub.HouseholdLedgers;
+        /// falls back to a hub lookup when unset. The Saturday shopping loop
+        /// charges households through this ledger — the single household-cash
+        /// truth (Canon 13.2). Null only when no hub exists (legacy wallet read).
+        /// </summary>
+        public HouseholdLedgerRegistry HouseholdLedgers { get; set; }
+
+        private HouseholdLedgerRegistry ResolvedHouseholdLedgers
+        {
+            get
+            {
+                if (HouseholdLedgers == null)
+                {
+                    HouseholdLedgers = FindAnyObjectByType<SimulationSystemsHub>()?.HouseholdLedgers;
+                }
+
+                return HouseholdLedgers;
+            }
+        }
+
+        /// <summary>
+        /// Phase B: spendable household cash. Reads the ledger balance (the
+        /// single truth); falls back to the legacy wallet only when no ledger
+        /// registry is available.
+        /// </summary>
+        private int GetHouseholdCashCents(HouseholdState household)
+        {
+            if (household == null)
+            {
+                return 0;
+            }
+
+            HouseholdLedgerRegistry ledgers = ResolvedHouseholdLedgers;
+            if (ledgers != null)
+            {
+                return Mathf.Max(0, ledgers.GetOrCreate(household.id).GetBalanceCents());
+            }
+
+            return Mathf.Max(0, household.spendingMoneyCents);
+        }
+
+        /// <summary>
+        /// Phase B: charges a household through its ledger. Returns the ledger
+        /// rejection (or null on success). Falls back to the legacy wallet only
+        /// when no ledger registry is available.
+        /// </summary>
+        private string ChargeHouseholdCents(HouseholdState household, int amountCents, string purpose, string counterparty)
+        {
+            if (household == null || amountCents <= 0)
+            {
+                return null;
+            }
+
+            HouseholdLedgerRegistry ledgers = ResolvedHouseholdLedgers;
+            if (ledgers != null)
+            {
+                int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
+                return ledgers.GetOrCreate(household.id)
+                    .RecordOutflow(Mathf.Max(0, dayIndex), amountCents, purpose, counterparty);
+            }
+
+            household.spendingMoneyCents = Mathf.Max(0, household.spendingMoneyCents - amountCents);
+            return null;
+        }
 
         [SerializeField, Min(1)]
         private int minimumCategoryUnitPriceCents = 5;
@@ -792,7 +860,20 @@ namespace LandLedgers.FirstLedger
 
                 if (purchase.HasNeed)
                 {
-                    household.spendingMoneyCents = Mathf.Max(0, household.spendingMoneyCents - totalHouseholdSpend);
+                    // Phase B: the household pays through its ledger (Canon 13.2).
+                    // Spend is capped by the ledger-derived budget above, so this
+                    // charge is infallible in practice; a rejection would mean
+                    // the purchase must not stand (nothing moves for free).
+                    string chargeRejection = ChargeHouseholdCents(
+                        household,
+                        totalHouseholdSpend,
+                        "general store saturday shopping",
+                        "general store and off-map sellers");
+                    if (chargeRejection != null)
+                    {
+                        continue;
+                    }
+
                     lastDailyWalletSpendCents += purchase.StoreSpendCents;
                     lastDailyOnMapStoreUnitsSold += purchase.StoreUnits;
                     lastDailyOnMapStoreSpendCents += purchase.StoreSpendCents;
@@ -849,7 +930,7 @@ namespace LandLedgers.FirstLedger
             runtimeState.ResolveWeeklyPayroll();
             ReleaseSuspendedPayrollWorkersFromPopulation();
             ApprenticeshipProgressionEvaluator.AdvancePaidWorkers(currentBusiness, populationManager != null ? populationManager.State : null);
-            DepositWeeklyHouseholdIncome();
+            ApplyWeeklyHouseholdSettlementEffects();
             populationManager?.ResolveWeeklySettlementProgression();
             lastWeeklyLocalSupplySpendCents = 0;
             lastWeeklyLocalSupplyUnitsReceived = 0;
@@ -2311,7 +2392,7 @@ namespace LandLedgers.FirstLedger
                     result.OffMapLostDemandCents += offMapValue;
                     result.OffMapWalletSpendCents += Mathf.Min(
                         offMapValue,
-                        Mathf.Max(0, household.spendingMoneyCents - result.StoreSpendCents - result.OtherLocalSpendCents - result.OffMapWalletSpendCents));
+                        Mathf.Max(0, GetHouseholdCashCents(household) - result.StoreSpendCents - result.OtherLocalSpendCents - result.OffMapWalletSpendCents));
                 }
 
                 reserve.lastLocalPurchaseUnits += storeSale.UnitsSold + otherLocalSale.UnitsSold;
@@ -2361,7 +2442,7 @@ namespace LandLedgers.FirstLedger
                 desiredBudget = Mathf.RoundToInt(desiredBudget * SaturdayHouseholdDemandMultiplier);
             }
 
-            return Mathf.Min(desiredBudget, Mathf.Max(0, household.spendingMoneyCents));
+            return Mathf.Min(desiredBudget, GetHouseholdCashCents(household));
         }
 
         private int GetSaturdayAdjustedPurchaseUnits(int requestedUnits)
@@ -2526,7 +2607,18 @@ namespace LandLedgers.FirstLedger
             person.wage = WageSnapshot.None();
         }
 
-        private void DepositWeeklyHouseholdIncome()
+        /// <summary>
+        /// Phase B (Real People): the fiat weekly top-up
+        /// (max(fallback, weeklyIncomeSnapshot*100)) is REMOVED — it violates
+        /// Canon 13.2 (no replenishment merely because a time threshold
+        /// passed). Household income now arrives only with explicit provenance:
+        /// wages via ResolveWeeklyPayroll through the employment registry, and
+        /// household-upgrade production via ApplyWeeklySettlementEffects, both
+        /// recorded in the household ledger. This method keeps the weekly
+        /// settlement-effects pass (upgrades, reserves) and is renamed to say
+        /// what it does.
+        /// </summary>
+        private void ApplyWeeklyHouseholdSettlementEffects()
         {
             PopulationState population = populationManager != null ? populationManager.State : null;
             if (population == null || population.households == null)
@@ -2534,12 +2626,13 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            HouseholdLedgerRegistry ledgers = ResolvedHouseholdLedgers;
+            int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
             for (int i = 0; i < population.households.Count; i++)
             {
                 HouseholdState household = population.households[i];
-                int deposit = Mathf.Max(weeklyHouseholdAllowanceFallbackCents, household.weeklyIncomeSnapshot * 100);
-                household.spendingMoneyCents += deposit;
-                HouseholdUpgradeEconomyEvaluator.ApplyWeeklySettlementEffects(household);
+                HouseholdLedger ledger = ledgers != null ? ledgers.GetOrCreate(household.id) : null;
+                HouseholdUpgradeEconomyEvaluator.ApplyWeeklySettlementEffects(household, ledger, Mathf.Max(0, dayIndex));
             }
         }
 
@@ -2551,7 +2644,7 @@ namespace LandLedgers.FirstLedger
             }
 
             household.EnsureHouseholdReservesInitialized();
-            if (household.spendingMoneyCents <= 0)
+            if (GetHouseholdCashCents(household) <= 0)
             {
                 household.demandSnapshot = HouseholdReserveEvaluator.BuildDemandSnapshot(household);
                 return 0;
@@ -2572,9 +2665,9 @@ namespace LandLedgers.FirstLedger
             int discretionaryScore = 0;
             if (ShouldTriggerDiscretionarySaturdayTrip(household, demand, reserveNeed))
             {
-                discretionaryScore = household.spendingMoneyCents >= weeklyHouseholdAllowanceFallbackCents
+                discretionaryScore = GetHouseholdCashCents(household) >= weeklyHouseholdAllowanceFallbackCents
                     ? 5
-                    : household.spendingMoneyCents >= fallbackHouseholdDailyBudgetCents
+                    : GetHouseholdCashCents(household) >= fallbackHouseholdDailyBudgetCents
                         ? 4
                         : 3;
             }
@@ -2587,7 +2680,7 @@ namespace LandLedgers.FirstLedger
             HouseholdDemandSnapshot demand,
             bool reserveNeed)
         {
-            if (household == null || !IsSaturdayTradeDay() || household.spendingMoneyCents <= 0)
+            if (household == null || !IsSaturdayTradeDay() || GetHouseholdCashCents(household) <= 0)
             {
                 return false;
             }
@@ -2600,9 +2693,9 @@ namespace LandLedgers.FirstLedger
                 return true;
             }
 
-            int spendBand = household.spendingMoneyCents >= weeklyHouseholdAllowanceFallbackCents
+            int spendBand = GetHouseholdCashCents(household) >= weeklyHouseholdAllowanceFallbackCents
                 ? 3
-                : household.spendingMoneyCents >= fallbackHouseholdDailyBudgetCents
+                : GetHouseholdCashCents(household) >= fallbackHouseholdDailyBudgetCents
                     ? 2
                     : 1;
             int absoluteDayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : 0;
@@ -2651,7 +2744,7 @@ namespace LandLedgers.FirstLedger
             int total = 0;
             for (int i = 0; i < population.households.Count; i++)
             {
-                total += Mathf.Max(0, population.households[i].spendingMoneyCents);
+                total += GetHouseholdCashCents(population.households[i]);
             }
 
             return total;

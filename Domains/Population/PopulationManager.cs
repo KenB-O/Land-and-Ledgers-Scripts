@@ -1,6 +1,7 @@
 using System.Text;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Time;
 using LandLedgers.World;
@@ -41,6 +42,29 @@ namespace LandLedgers.Population
         [Header("Runtime State")]
         [SerializeField]
         private PopulationState state = new();
+
+        /// <summary>
+        /// Phase B (Real People): the household-cash authority, wired by
+        /// bootstrap from SimulationSystemsHub.HouseholdLedgers. Genesis and
+        /// settlement cash is swept into ledgers through it (the single
+        /// household-cash truth, Canon 13.2).
+        /// </summary>
+        public HouseholdLedgerRegistry HouseholdLedgers { get; set; }
+
+        private HouseholdLedgerRegistry ResolvedHouseholdLedgers
+        {
+            get
+            {
+                if (HouseholdLedgers == null)
+                {
+                    HouseholdLedgers = FindAnyObjectByType<SimulationSystemsHub>()?.HouseholdLedgers;
+                }
+
+                return HouseholdLedgers;
+            }
+        }
+
+        private int CurrentDayIndex => timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : 0;
 
         [SerializeField]
         private int generatedHouseholdCount;
@@ -146,6 +170,7 @@ namespace LandLedgers.Population
             lastSettlementResolutionWeekIndex = -1;
             lastHealthSummary = "No health resolution yet.";
             RefreshSummaryFields(result.Summary);
+            SweepUnledgeredHouseholdCashToLedgers("population generation");
 
             if (!logSummary)
             {
@@ -207,6 +232,34 @@ namespace LandLedgers.Population
                 : System.Array.Empty<NewcomerSettlementBoardingOption>();
         }
 
+        /// <summary>
+        /// Phase B (Real People): sweeps any genesis/settlement cash still
+        /// sitting in the retired spendingMoneyCents field into household
+        /// ledgers with explicit provenance. Called after population generation
+        /// and after weekly settlement progression (the two paths that create
+        /// or fund households). Idempotent — only positive legacy balances move.
+        /// </summary>
+        public void SweepUnledgeredHouseholdCashToLedgers(string contextLabel)
+        {
+            HouseholdLedgerRegistry ledgers = ResolvedHouseholdLedgers;
+            if (state == null || state.households == null)
+            {
+                return;
+            }
+
+            var diagnostics = new List<string>();
+            HouseholdLegacyCashMigrator.MigrateAll(state.households, ledgers, CurrentDayIndex, diagnostics);
+            if (!string.IsNullOrWhiteSpace(contextLabel))
+            {
+                diagnostics.Insert(0, $"SweepUnledgeredHouseholdCashToLedgers ({contextLabel}).");
+            }
+
+            foreach (string diagnostic in diagnostics)
+            {
+                Debug.Log($"[Population] {diagnostic}", this);
+            }
+        }
+
         public int ResolveWeeklySettlementProgression()
         {
             AutoWireReferences();
@@ -222,6 +275,7 @@ namespace LandLedgers.Population
                     ? $"Settlement progression moved {moved} resident(s)."
                     : "Settlement progression checked.";
             RecalculateHouseholdIncomeAndSummaries(progressionSummary);
+            SweepUnledgeredHouseholdCashToLedgers("weekly settlement progression");
             return moved;
         }
 

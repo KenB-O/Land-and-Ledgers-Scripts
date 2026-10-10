@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Persistence;
+using LandLedgers.Population;
 using UnityEngine;
 
 namespace LandLedgers.Economy
@@ -726,6 +727,35 @@ namespace LandLedgers.Economy
         /// reads and disbursement fall back to the legacy slot-wage loop.
         /// </summary>
         public EmploymentRelationshipRegistry EmploymentRegistry { get; set; }
+
+        /// <summary>
+        /// Phase B (Real People): the household-cash authority. UNITY WIRING STEP:
+        /// set from SimulationSystemsHub.HouseholdLedgers (via
+        /// SharedBusinessRuntimeManager.WireHouseholdCashToBusinesses). When set,
+        /// ResolveWeeklyPayroll credits each paid worker's household ledger through
+        /// the employment record (RecordWagePayment) — business cash out ==
+        /// household ledger in, every cent traceable. Null by default (no
+        /// crediting; the wage-crediting gap is then logged, not silently kept).
+        /// </summary>
+        public HouseholdLedgerRegistry HouseholdLedgers { get; set; }
+
+        /// <summary>
+        /// Phase B: resolves a worker person id to their household id (from
+        /// PopulationState via the membership authority). Return -1 when unknown.
+        /// </summary>
+        public Func<int, int> PersonHouseholdIdLookup { get; set; }
+
+        /// <summary>
+        /// Phase B: the absolute day index stamp for wage ledger entries. Set by
+        /// the weekly payroll driver (SharedBusinessRuntimeManager) before
+        /// ResolveWeeklyPayroll runs. -1 when unknown (entries still record).
+        /// </summary>
+        public int PayrollDayIndex { get; set; } = -1;
+
+        private readonly List<string> lastWeeklyPayrollDiagnostics = new List<string>();
+
+        /// <summary>Phase B: wage-crediting diagnostics for the most recent payroll run.</summary>
+        public IReadOnlyList<string> LastWeeklyPayrollDiagnostics => lastWeeklyPayrollDiagnostics;
 
         [SerializeField]
         private BusinessType businessType;
@@ -1821,6 +1851,7 @@ namespace LandLedgers.Economy
         private void ResolveWeeklyPayrollFromEmployments(EmploymentRelationshipRegistry employments)
         {
             EnsureEmploymentRecords(employments);
+            lastWeeklyPayrollDiagnostics.Clear();
 
             foreach (EmploymentRelationship employment in employments.GetActiveByEmployer(BusinessId))
             {
@@ -1835,6 +1866,7 @@ namespace LandLedgers.Economy
                     currentCashCents -= wage;
                     lastWeeklyPayrollCents += wage;
                     RecordNetDelta(-wage);
+                    CreditWorkerHousehold(employment, wage);
                     SyncSlotPaidState(employment.EmployeePersonId, paid: true);
                     continue;
                 }
@@ -1851,6 +1883,50 @@ namespace LandLedgers.Economy
             }
 
             RefreshWeeklyCashAfter();
+        }
+
+        /// <summary>
+        /// Phase B (Real People): closes the wage-crediting gap. A paid wage is
+        /// credited to the worker's household ledger through the employment
+        /// record (the MineLaborRegister RecordWagePayment pattern): business
+        /// cash out == household ledger in, every cent traceable via the
+        /// employment id. When the household cannot be resolved, the deduction
+        /// stands and the gap is logged — never silently kept, never invented.
+        /// </summary>
+        private void CreditWorkerHousehold(EmploymentRelationship employment, int wageCents)
+        {
+            if (employment == null || wageCents <= 0)
+            {
+                return;
+            }
+
+            if (HouseholdLedgers == null || PersonHouseholdIdLookup == null)
+            {
+                lastWeeklyPayrollDiagnostics.Add(
+                    $"P{employment.EmployeePersonId} paid {wageCents}c via {employment.Id} but no household ledger/lookup is wired — wage credit skipped, business cash deducted.");
+                return;
+            }
+
+            int householdId = PersonHouseholdIdLookup(employment.EmployeePersonId);
+            if (householdId < 0)
+            {
+                lastWeeklyPayrollDiagnostics.Add(
+                    $"P{employment.EmployeePersonId} paid {wageCents}c via {employment.Id} but has no household — wage credit skipped, business cash deducted.");
+                return;
+            }
+
+            HouseholdLedger ledger = HouseholdLedgers.GetOrCreate(householdId);
+            string rejection = ledger.RecordWagePayment(
+                Mathf.Max(0, PayrollDayIndex),
+                employment.Id,
+                employment.EmployeePersonId,
+                wageCents,
+                "weekly payroll");
+            if (rejection != null)
+            {
+                lastWeeklyPayrollDiagnostics.Add(
+                    $"P{employment.EmployeePersonId} wage credit rejected for H{householdId} — {rejection}");
+            }
         }
 
         /// <summary>

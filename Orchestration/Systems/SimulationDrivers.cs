@@ -130,6 +130,7 @@ namespace LandLedgers.Orchestration.Systems
             sharedBusinessRuntime.PreWeeklyResetCallback = PostWeeklyProfitToValuation;
             sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
             sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
+            WireHouseholdCashAuthorities();
         }
 
         // CLN-4: accumulated player worked minutes for the current week (owner labor).
@@ -172,7 +173,47 @@ namespace LandLedgers.Orchestration.Systems
                 // employment wages instead of the legacy slot-template path.
                 sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
                 sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
+                WireHouseholdCashAuthorities();
             }
+        }
+
+        /// <summary>
+        /// Phase B (Real People): wires the single household-cash truth. The
+        /// hub's HouseholdLedgerRegistry flows into the shared business
+        /// runtime (doctor payments + payroll wage crediting), the population
+        /// manager (genesis/settlement cash sweeps), and every business
+        /// runtime state (per-worker household crediting). Person-to-household
+        /// resolution comes from PopulationState via the membership fields.
+        /// </summary>
+        private void WireHouseholdCashAuthorities()
+        {
+            if (hub == null)
+            {
+                return;
+            }
+
+            if (sharedBusinessRuntime != null)
+            {
+                sharedBusinessRuntime.HouseholdLedgers = hub.HouseholdLedgers;
+                sharedBusinessRuntime.PersonHouseholdIdLookup = ResolvePersonHouseholdId;
+                sharedBusinessRuntime.WireHouseholdCashToBusinesses();
+            }
+
+            if (populationManager != null)
+            {
+                populationManager.HouseholdLedgers = hub.HouseholdLedgers;
+            }
+        }
+
+        private int ResolvePersonHouseholdId(int personId)
+        {
+            if (populationManager == null || populationManager.State == null)
+            {
+                return -1;
+            }
+
+            var person = populationManager.State.GetPerson(personId);
+            return person != null ? person.householdId : -1;
         }
 
         private void OnEnable()

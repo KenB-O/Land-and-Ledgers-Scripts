@@ -36,6 +36,14 @@ namespace LandLedgers.Population
         public List<int> memberIds = new();
         public int homeBuildingId;
         public int weeklyIncomeSnapshot;
+        /// <summary>
+        /// Phase B (Real People): RETIRED as a payment wallet. HouseholdLedger
+        /// (via HouseholdLedgerRegistry) is the single household-cash truth
+        /// (Canon 13.2). This field is kept for save compatibility and legacy
+        /// balance migration only (HouseholdLegacyCashMigrator): no runtime
+        /// system may write it, and no spending decision may read it. It is
+        /// zeroed whenever a balance is migrated into the ledger.
+        /// </summary>
         public int spendingMoneyCents;
         public int lastStoreSpendCents;
         public int lifetimeStoreSpendCents;

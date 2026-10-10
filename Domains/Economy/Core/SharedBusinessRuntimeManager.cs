@@ -260,6 +260,57 @@ namespace LandLedgers.Economy
             }
         }
 
+        /// <summary>
+        /// Phase B (Real People): the household-cash authority. Assigned by
+        /// bootstrap (SimulationDrivers sets this from the hub's
+        /// HouseholdLedgerRegistry). When set, doctor-service payments and wage
+        /// crediting flow through household ledgers — the single household-cash
+        /// truth (Canon 13.2). Null by default (legacy wallet behavior preserved).
+        /// </summary>
+        public HouseholdLedgerRegistry HouseholdLedgers { get; set; }
+
+        /// <summary>
+        /// Phase B: resolves a worker person id to their household id (wired by
+        /// bootstrap from PopulationState via the membership authority).
+        /// </summary>
+        public Func<int, int> PersonHouseholdIdLookup { get; set; }
+
+        /// <summary>
+        /// Phase B: wires the household-cash authority into every business
+        /// runtime state that does not already have one, so weekly payroll can
+        /// credit worker households. Called on the weekly path alongside the
+        /// employment-registry wiring.
+        /// </summary>
+        public void WireHouseholdCashToBusinesses()
+        {
+            if (HouseholdLedgers == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business?.RuntimeState == null)
+                {
+                    continue;
+                }
+
+                if (business.RuntimeState.HouseholdLedgers == null)
+                {
+                    business.RuntimeState.HouseholdLedgers = HouseholdLedgers;
+                }
+
+                if (business.RuntimeState.PersonHouseholdIdLookup == null && PersonHouseholdIdLookup != null)
+                {
+                    business.RuntimeState.PersonHouseholdIdLookup = PersonHouseholdIdLookup;
+                }
+            }
+        }
+
+        /// <summary>Phase B: absolute day index for cash ledger entries (from the time manager).</summary>
+        private int CurrentDayIndex => timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
+
         public IReadOnlyList<LocalRecurringOrderRelationshipState> LocalOrderRelationships => localRecurringOrderManager.Relationships;
         public IReadOnlyList<BusinessTransferAgreementState> TransferAgreements => transferAgreements;
         public string LastWeeklyRecurringLocalOrderSummary => lastWeeklyRecurringLocalOrderSummary ?? string.Empty;
@@ -1977,7 +2028,16 @@ namespace LandLedgers.Economy
                 }
 
                 HouseholdState household = population.GetHousehold(person.householdId);
-                if (household == null || household.spendingMoneyCents < visitPriceCents)
+                // Phase B: doctor payments flow through the household ledger (the
+                // single household-cash truth, Canon 13.2). The legacy
+                // spendingMoneyCents wallet is retired as a payment source.
+                HouseholdLedger householdLedger = HouseholdLedgers != null && household != null
+                    ? HouseholdLedgers.GetOrCreate(household.id)
+                    : null;
+                int householdCashCents = householdLedger != null
+                    ? householdLedger.GetBalanceCents()
+                    : household != null ? Mathf.Max(0, household.spendingMoneyCents) : 0;
+                if (household == null || householdCashCents < visitPriceCents)
                 {
                     continue;
                 }
@@ -1986,7 +2046,7 @@ namespace LandLedgers.Economy
                 int totalCharge = visitPriceCents;
                 bool usedRemedy = false;
                 if (health.conditionKind == HealthConditionKind.Illness
-                    && household.spendingMoneyCents >= visitPriceCents + remedyPriceCents
+                    && householdCashCents >= visitPriceCents + remedyPriceCents
                     && runtime.TryConsumeCategoryStockUnits(CategoryMedicineRemedies, 1, out int consumedRemedies)
                     && consumedRemedies > 0)
                 {
@@ -1996,7 +2056,25 @@ namespace LandLedgers.Economy
                     totalCharge += remedyPriceCents;
                 }
 
-                household.spendingMoneyCents = Mathf.Max(0, household.spendingMoneyCents - totalCharge);
+                string paymentRejection = householdLedger != null
+                    ? householdLedger.RecordOutflow(
+                        Mathf.Max(0, absoluteDayIndex),
+                        totalCharge,
+                        usedRemedy ? "doctor visit with remedy" : "doctor visit",
+                        "doctor")
+                    : null;
+                if (paymentRejection != null)
+                {
+                    // The ledger refused (insufficient funds): no treatment, no
+                    // revenue — nothing moves when the household cannot pay.
+                    continue;
+                }
+
+                if (householdLedger == null && household != null)
+                {
+                    household.spendingMoneyCents = Mathf.Max(0, household.spendingMoneyCents - totalCharge);
+                }
+
                 household.lastDailyMedicalSpendCents += totalCharge;
                 household.lifetimeMedicalSpendCents += totalCharge;
                 runtime.RecordDailyServiceRevenue(CategoryMedicalService, 1, visitPriceCents);
@@ -3179,6 +3257,7 @@ namespace LandLedgers.Economy
 
         private void ResolvePayrollForType(BusinessType businessType)
         {
+            WireHouseholdCashToBusinesses();
             for (int i = 0; i < businesses.Count; i++)
             {
                 BusinessInstanceState business = businesses[i];
@@ -3187,6 +3266,7 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
+                business.RuntimeState.PayrollDayIndex = CurrentDayIndex;
                 business.RuntimeState.ResolveWeeklyPayroll();
                 if (business.RuntimeState.LastSuspendedPayrollWorkerIds.Count > 0)
                 {

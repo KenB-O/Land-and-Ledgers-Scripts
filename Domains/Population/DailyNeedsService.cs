@@ -70,7 +70,10 @@ namespace LandLedgers.Population
             WorkTimeBudgetStore budgetStore = null,
             IRestaurantMealDaySource restaurantMeals = null,
             IBoardingHouseMealDaySource boardingMeals = null,
-            IHotelMealDaySource hotelMeals = null)
+            IHotelMealDaySource hotelMeals = null,
+            HouseholdInventoryRegistry inventories = null,
+            HouseholdMealLogRegistry mealLog = null,
+            MealSchedulingPolicy mealPolicy = null)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -83,7 +86,7 @@ namespace LandLedgers.Population
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy);
             }
             return report;
         }
@@ -95,7 +98,10 @@ namespace LandLedgers.Population
             WorkTimeBudgetStore budgetStore,
             IRestaurantMealDaySource restaurantMeals,
             IBoardingHouseMealDaySource boardingMeals,
-            IHotelMealDaySource hotelMeals)
+            IHotelMealDaySource hotelMeals,
+            HouseholdInventoryRegistry inventories,
+            HouseholdMealLogRegistry mealLog,
+            MealSchedulingPolicy mealPolicy)
         {
             int actingPersonId = FindActingAdult(population, household);
             if (actingPersonId < 0)
@@ -114,6 +120,53 @@ namespace LandLedgers.Population
                     if (p != null) members.Add(p);
                 }
 
+            // Phase B (Real People): when the lot inventory + meal log are
+            // wired, meals consume real lots and record traceable records;
+            // otherwise the legacy reserve-unit path runs unchanged.
+            if (inventories != null && mealLog != null)
+            {
+                ExecuteLotBasedMeals(
+                    household, members, actingPersonId, dayIndex, report, diag,
+                    budgetStore, restaurantMeals, boardingMeals, hotelMeals,
+                    inventories, mealLog, mealPolicy);
+            }
+            else
+            {
+                ExecuteReserveBasedMeals(
+                    population, household, members, actingPersonId, planner, executor,
+                    dayIndex, report, diag, budgetStore,
+                    restaurantMeals, boardingMeals, hotelMeals);
+            }
+
+            // 2. The planner's remaining needs, executed through the same
+            //    embodied channel (built on post-meal reserve levels, so the
+            //    meal purchase above is never double-bought).
+            List<ProcurementNeed> plan = planner.BuildPlan(household, actingPersonId, dayIndex);
+            foreach (ProcurementNeed need in plan)
+            {
+                PurchaseExecutionResult result = executor.Execute(need, actingPersonId, dayIndex);
+                if (result != null && result.Success)
+                {
+                    report.PurchasesMade++;
+                    report.SpendCents += result.AmountPaidCents;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Legacy meal path (pre-Phase B): meals consume abstract
+        /// staple_food reserve units, with executor shortfall shopping.
+        /// Preserved exactly for unwired contexts and existing tests.
+        /// </summary>
+        private void ExecuteReserveBasedMeals(
+            PopulationState population, HouseholdState household, List<PersonState> members,
+            int actingPersonId, HouseholdConsumptionPlanner planner, IEmbodiedPurchaseExecutor executor,
+            int dayIndex, DayReport report, List<string> diag,
+            WorkTimeBudgetStore budgetStore,
+            IRestaurantMealDaySource restaurantMeals,
+            IBoardingHouseMealDaySource boardingMeals,
+            IHotelMealDaySource hotelMeals)
+        {
             // 1. Meals (GHOST-DEF-006): every member eats; each meal consumes
             //    one unit of staple_food from household reserves — EXCEPT
             //    meals already eaten at a restaurant (W2B nutrition link,
@@ -222,20 +275,104 @@ namespace LandLedgers.Population
             report.MealsFromHotels += mealsEatenAtHotels;
             if (missed > 0)
                 diag.Add($"DailyNeedsService: H{household.id} missed {missed} meals on day {dayIndex} ({undernourished} undernourished) — no supplier, no time, or no money. Logged, not faked.");
+        }
 
-            // 2. The planner's remaining needs, executed through the same
-            //    embodied channel (built on post-meal reserve levels, so the
-            //    meal purchase above is never double-bought).
-            List<ProcurementNeed> plan = planner.BuildPlan(household, actingPersonId, dayIndex);
-            foreach (ProcurementNeed need in plan)
+        /// <summary>
+        /// Phase B (Real People): lot-based meals. Persons eat from real
+        /// inventory lots; every meal records a traceable record (person fed,
+        /// item/lot consumed, quantity, source, time, adequacy, resulting
+        /// inventory). Out-of-home meals (restaurant / boarding / hotel) are
+        /// recorded with their source and consume nothing from the household.
+        /// Empty larders produce missed-meal hardship records — never faked
+        /// meals, never invisible replenishment. Shortfalls become purchasing
+        /// needs via the shortage monitor (Phase C executes them).
+        /// </summary>
+        private void ExecuteLotBasedMeals(
+            HouseholdState household, List<PersonState> members,
+            int actingPersonId, int dayIndex, DayReport report, List<string> diag,
+            WorkTimeBudgetStore budgetStore,
+            IRestaurantMealDaySource restaurantMeals,
+            IBoardingHouseMealDaySource boardingMeals,
+            IHotelMealDaySource hotelMeals,
+            HouseholdInventoryRegistry inventories,
+            HouseholdMealLogRegistry mealLog,
+            MealSchedulingPolicy mealPolicy)
+        {
+            mealPolicy ??= MealSchedulingPolicy.Default;
+            HouseholdInventory inventory = inventories.GetOrCreate(household.id);
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, dayIndex, diag);
+
+            var memberIds = new List<int>(members.Count);
+            var outOfHomeMeals = new Dictionary<int, OutOfHomeMeals>();
+            int mealsEatenAtRestaurants = 0;
+            int mealsEatenAtBoardingHouses = 0;
+            int mealsEatenAtHotels = 0;
+            foreach (PersonState member in members)
             {
-                PurchaseExecutionResult result = executor.Execute(need, actingPersonId, dayIndex);
-                if (result != null && result.Success)
+                memberIds.Add(member.id);
+                int eatenAtRestaurant = restaurantMeals != null
+                    ? restaurantMeals.MealsEatenAtRestaurant(member.id, dayIndex)
+                    : 0;
+                int eatenBoard = boardingMeals != null
+                    ? boardingMeals.MealsEatenAtBoardingHouse(member.id, dayIndex)
+                    : 0;
+                int eatenAtHotel = hotelMeals != null
+                    ? hotelMeals.MealsEatenAtHotel(member.id, dayIndex)
+                    : 0;
+                int eatenOut = Math.Max(0, Math.Min(
+                    mealPolicy.ExpectedMealsPerDay,
+                    eatenAtRestaurant + eatenBoard + eatenAtHotel));
+                mealsEatenAtRestaurants += Math.Max(0, Math.Min(mealPolicy.ExpectedMealsPerDay, eatenAtRestaurant));
+                mealsEatenAtBoardingHouses += Math.Max(0, Math.Min(mealPolicy.ExpectedMealsPerDay, eatenBoard));
+                mealsEatenAtHotels += Math.Max(0, Math.Min(mealPolicy.ExpectedMealsPerDay, eatenAtHotel));
+
+                MealSourceKind dominantSource = MealSourceKind.PurchasedMeal;
+                if (eatenBoard >= eatenAtRestaurant && eatenBoard >= eatenAtHotel && eatenBoard > 0)
                 {
-                    report.PurchasesMade++;
-                    report.SpendCents += result.AmountPaidCents;
+                    dominantSource = MealSourceKind.BoardingArrangement;
+                }
+                else if (eatenAtRestaurant > 0 || eatenAtHotel > 0)
+                {
+                    dominantSource = MealSourceKind.PurchasedMeal;
+                }
+
+                outOfHomeMeals[member.id] = new OutOfHomeMeals
+                {
+                    MealsEaten = eatenOut,
+                    SourceKind = dominantSource,
+                };
+            }
+
+            var mealService = new HouseholdMealService(mealLog);
+            MealDayResult result = mealService.ServeHouseholdDay(
+                household, memberIds, inventory, mealPolicy, dayIndex, outOfHomeMeals);
+            foreach (string serviceDiagnostic in mealService.Diagnostics)
+            {
+                diag.Add($"DailyNeedsService: {serviceDiagnostic}");
+            }
+
+            int undernourished = 0;
+            foreach (PersonState p in members)
+            {
+                int totalEaten = result.MealsServedPerPerson.TryGetValue(p.id, out int served) ? served : 0;
+                bool missedAny = p.nutrition.ApplyDay(totalEaten, mealPolicy.ExpectedMealsPerDay, dayIndex);
+                if (missedAny) undernourished++;
+
+                if (budgetStore != null)
+                {
+                    WorkTimeBudget budget = budgetStore.GetOrCreate(
+                        EntityId.For(EntityKind.Person, p.id));
+                    budget.SetCapacityMultiplier(p.nutrition.WorkCapacityMultiplier);
                 }
             }
+
+            report.MealsEaten += result.MealsServed;
+            report.MealsMissed += result.MealsMissed;
+            report.MealsFromRestaurants += mealsEatenAtRestaurants;
+            report.MealsFromBoardingHouses += mealsEatenAtBoardingHouses;
+            report.MealsFromHotels += mealsEatenAtHotels;
+            if (result.MealsMissed > 0)
+                diag.Add($"DailyNeedsService: H{household.id} missed {result.MealsMissed} meals on day {dayIndex} ({undernourished} undernourished) — larder empty. Hardship logged; shortage monitor raises purchasing needs.");
         }
 
         private int FindActingAdult(PopulationState population, HouseholdState household)

@@ -77,12 +77,14 @@ namespace LandLedgers.Population
         private readonly JourneyModel journeys;
         private readonly Func<int, string> personLocationId;
         private readonly WorkTimeBudgetStore budgets;
+        private readonly HouseholdInventoryRegistry inventories;
         private readonly Func<int, EntityId> personEntityId;
         private readonly List<string> log = new List<string>();
 
         /// <param name="personLocationId">Resolves a person's journey location id; defaults to town center.</param>
         /// <param name="budgets">Optional: travel minutes are committed against the person's TTS-1 budget.</param>
         /// <param name="personEntityId">Optional: maps legacy person int id to HF-1 EntityId for budget lookup.</param>
+        /// <param name="inventories">Optional (Phase B): purchased goods also book real lots via the reserve bridge.</param>
         public EmbodiedPurchaseExecutor(
             PopulationState population,
             HouseholdLedgerRegistry ledgers,
@@ -90,7 +92,8 @@ namespace LandLedgers.Population
             JourneyModel journeys,
             Func<int, string> personLocationId = null,
             WorkTimeBudgetStore budgets = null,
-            Func<int, EntityId> personEntityId = null)
+            Func<int, EntityId> personEntityId = null,
+            HouseholdInventoryRegistry inventories = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.ledgers = ledgers ?? throw new ArgumentNullException(nameof(ledgers));
@@ -99,6 +102,7 @@ namespace LandLedgers.Population
             this.personLocationId = personLocationId ?? (pid => "town-center");
             this.budgets = budgets;
             this.personEntityId = personEntityId;
+            this.inventories = inventories;
         }
 
         public IReadOnlyList<string> Log => log;
@@ -232,6 +236,19 @@ namespace LandLedgers.Population
                 if (!credited)
                 {
                     log.Add($"Day {dayIndex}: no reserve tracked for '{need.CategoryId}' — {sold} units held untracked by H{need.HouseholdId}.");
+                }
+
+                // Phase B: purchased goods also book real lots (the lot
+                // inventory is the consumption truth).
+                if (inventories != null && sold > 0)
+                {
+                    HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
+                        inventories.GetOrCreate(household.id),
+                        need.CategoryId,
+                        sold,
+                        dayIndex,
+                        $"embodied purchase from {chosen.SupplierName}",
+                        log);
                 }
             }
 

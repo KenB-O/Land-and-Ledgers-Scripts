@@ -77,7 +77,16 @@ namespace LandLedgers.Population
         /// Mirrors a reserve credit (e.g. General Store shopping) into a lot
         /// with purchase provenance. Categories without an item mapping
         /// (medicine, tools) credit the reserve only — no lot is invented.
+        ///
+        /// PHASE C: RETIRED from the shopping path. The Phase C shopping loop
+        /// (HouseholdShoppingLoop) resolves real items through the store's own
+        /// declared offers (IItemResolvingSupplier) and books lots directly —
+        /// the global category→item guess below is the documented transitional
+        /// approximation and must not be used for new shopping flows. Kept for
+        /// the legacy HF-4 EmbodiedPurchaseExecutor path until DailyNeedsService
+        /// migrates.
         /// </summary>
+        [Obsolete("Phase C: retired from the shopping path — the transitional category→item mapping is replaced by store-declared item resolution (IItemResolvingSupplier).")]
         public static void MirrorReserveCreditToLots(
             HouseholdInventory inventory,
             string categoryId,

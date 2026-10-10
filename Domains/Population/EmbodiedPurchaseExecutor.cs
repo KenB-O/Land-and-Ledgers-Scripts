@@ -42,6 +42,9 @@ namespace LandLedgers.Population
             if (supplier != null) suppliers.Add(supplier);
         }
 
+        /// <summary>Phase C: all registered suppliers (for legitimate-knowledge filtering).</summary>
+        public IReadOnlyList<IGoodsSupplier> All => suppliers;
+
         public IEnumerable<IGoodsSupplier> SuppliersFor(string categoryId)
         {
             foreach (var supplier in suppliers)
@@ -240,6 +243,9 @@ namespace LandLedgers.Population
 
                 // Phase B: purchased goods also book real lots (the lot
                 // inventory is the consumption truth).
+                // Phase C: this legacy HF-4 path still uses the transitional
+                // bridge until DailyNeedsService migrates to HouseholdShoppingLoop.
+#pragma warning disable 618
                 if (inventories != null && sold > 0)
                 {
                     HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
@@ -250,6 +256,7 @@ namespace LandLedgers.Population
                         $"embodied purchase from {chosen.SupplierName}",
                         log);
                 }
+#pragma warning restore 618
             }
 
             result.Success = true;

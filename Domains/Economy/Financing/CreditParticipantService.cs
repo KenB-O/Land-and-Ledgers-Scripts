@@ -80,7 +80,16 @@ namespace LandLedgers.Economy.Financing
             int availableCashCents, bool securityAvailable, bool relationshipMatters)
         {
             if (obligation == null) return CreditDelinquencyResponse.RequestPayment;
-            if (availableCashCents > 0 && relationshipMatters) return CreditDelinquencyResponse.Tolerate;
+            // Phase E: a DEFAULTED obligation carrying a live guaranty
+            // accelerates to the guaranty call — forbearance is a delinquency
+            // response, not a default response. (Defaulted + security + no
+            // guaranty still enforces security.)
+            if (obligation.Status == FinancialObligationStatus.Defaulted
+                && obligation.GuarantyIds.Count > 0)
+                return CreditDelinquencyResponse.Accelerate;
+            if (availableCashCents > 0 && relationshipMatters
+                && obligation.Status != FinancialObligationStatus.Defaulted)
+                return CreditDelinquencyResponse.Tolerate;
             if (securityAvailable && obligation.Status == FinancialObligationStatus.Defaulted)
                 return CreditDelinquencyResponse.EnforceSecurity;
             if (obligation.Status == FinancialObligationStatus.Delinquent)

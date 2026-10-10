@@ -420,6 +420,21 @@ namespace LandLedgers.World.Property
             openByHousehold.Remove(householdId);
         }
 
+        /// <summary>
+        /// Phase F: the household walks away — the need is withdrawn, not
+        /// resolved. Withdrawn needs are never re-evaluated. Mirrors
+        /// MarkResolved; no second writer.
+        /// </summary>
+        public void MarkWithdrawn(int householdId, int dayIndex)
+        {
+            HousingSearchNeed need = GetOpenNeed(householdId);
+            if (need == null) return;
+            need.Status = HousingSearchNeedStatus.Withdrawn;
+            need.LastEvaluatedDayIndex = dayIndex;
+            openByHousehold.Remove(householdId);
+            diagnostics.Add($"HousingSearchNeedRegistry: H{householdId} withdrew its search need (day {dayIndex}).");
+        }
+
         public void ExportState(List<HousingSearchNeed> outNeeds)
         {
             if (outNeeds == null) return;

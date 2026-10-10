@@ -147,6 +147,16 @@ namespace LandLedgers.Economy
             return design;
         }
 
+        /// <summary>
+        /// Phase F: read-only enumeration of registered designs, for NPC
+        /// design selection. The catalog remains the single design truth;
+        /// this adds no second writer.
+        /// </summary>
+        public List<BuildingDesign> AllDesigns()
+        {
+            return new List<BuildingDesign>(designs.Values);
+        }
+
         /// <summary>Phase D: Codex registers prefab ids that exist in the Unity project.</summary>
         public void RegisterAvailablePrefab(string prefabId, List<string> diag)
         {

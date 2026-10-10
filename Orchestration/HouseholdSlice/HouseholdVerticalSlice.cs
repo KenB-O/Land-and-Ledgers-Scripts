@@ -95,7 +95,7 @@ namespace LandLedgers.Orchestration.HouseholdSlice
     /// Deterministic and EditMode-runnable; Kennedy can also drive it from a
     /// MonoBehaviour later. All simulation-day indexes are explicit.
     /// </summary>
-    public sealed class HouseholdVerticalSlice
+    public sealed partial class HouseholdVerticalSlice
     {
         public sealed class SliceWorld
         {

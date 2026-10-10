@@ -466,7 +466,8 @@ namespace LandLedgers.Orchestration.Systems
             // person's TTS-1 work-time budget (previously always skipped).
             purchaseExecutor ??= new EmbodiedPurchaseExecutor(
                 populationManager.State, hub.HouseholdLedgers, supplierDirectory, journeys,
-                null, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid));
+                null, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid),
+                hub.HouseholdInventories);
 
             // P2: W2B/W2C/W3B nutrition links — count real prepared meals
             // served by live eating-house runtimes (Canon §2.5) so households
@@ -484,13 +485,92 @@ namespace LandLedgers.Orchestration.Systems
             DailyNeedsService.DayReport report = dailyNeedsService.ExecuteDay(
                 populationManager.State, consumptionPlanner, purchaseExecutor,
                 absoluteDayIndex, diag, hub.WorkTimeBudgets,
-                restaurantMeals, boardingMeals, hotelMeals);
+                restaurantMeals, boardingMeals, hotelMeals,
+                hub.HouseholdInventories, hub.MealLog, null);
             if (report.MealsMissed > 0 || report.PurchasesMade > 0)
             {
                 Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
                     $"{report.MealsEaten} eaten, {report.MealsMissed} missed, " +
                     $"{report.PurchasesMade} purchases ({report.SpendCents}c).");
             }
+
+            DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
+        }
+
+        /// <summary>
+        /// Phase B (Real People): shortage detection. After meals are served,
+        /// project each household's needs from actual members, current lot
+        /// inventory, expected consumption, season, and supply access. Open
+        /// needs are REAL purchasing-need objects for Phase C's shopping loop;
+        /// they carry no money and post no sales.
+        /// </summary>
+        private void DriveHouseholdShortageMonitor(int absoluteDayIndex, List<string> diag)
+        {
+            if (hub == null || populationManager == null || populationManager.State == null)
+            {
+                return;
+            }
+
+            var policy = MealSchedulingPolicy.Default;
+            var monitor = new HouseholdShortageMonitor(hub.PurchasingNeeds);
+            bool isColdSeason = IsColdSeasonMonth();
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null)
+                {
+                    continue;
+                }
+
+                HouseholdInventory inventory = hub.HouseholdInventories.GetOrCreate(household.id);
+                int members = Math.Max(1, household.ConsumptionMemberCount);
+                var expectedDailyUse = new Dictionary<string, int>();
+                foreach (string itemId in policy.MealItemPriority)
+                {
+                    HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
+                    if (definition == null || !definition.IsFood)
+                    {
+                        continue;
+                    }
+
+                    expectedDailyUse[itemId] =
+                        members * policy.GetServingUnits(itemId) * policy.ExpectedMealsPerDay;
+                }
+
+                int ledgerBalance = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
+                var supplyAccess = new HouseholdSupplyAccess
+                {
+                    HasGeneralStore = true,
+                    HasOffMapAccess = true,
+                    CanProduce = false,
+                    HasCash = ledgerBalance > 0,
+                };
+
+                monitor.Evaluate(
+                    household,
+                    inventory,
+                    expectedDailyUse,
+                    isColdSeason,
+                    supplyAccess,
+                    upcomingObligationCents: 0,
+                    expectedIncomeCents: 0,
+                    dayIndex: absoluteDayIndex);
+            }
+
+            foreach (string monitorDiagnostic in monitor.Diagnostics)
+            {
+                diag.Add($"[SimulationDrivers] {monitorDiagnostic}");
+            }
+        }
+
+        private bool IsColdSeasonMonth()
+        {
+            if (timeManager == null)
+            {
+                return false;
+            }
+
+            int month = timeManager.CurrentDate.Month;
+            return month == 11 || month == 12 || month == 1 || month == 2 || month == 3;
         }
 
         /// <summary>P6: true when the journey model has any routable location.</summary>

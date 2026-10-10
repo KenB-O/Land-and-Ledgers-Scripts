@@ -303,6 +303,13 @@ namespace LandLedgers.Persistence
                         save.population.cohorts,
                         save.population.eggBatches);
                     systemsHub.ImportHouseholdLedgers(save.population.householdLedgers);
+                    // Phase B: restore the real-consumption authorities.
+                    systemsHub.ImportHouseholdInventories(save.population.householdInventories);
+                    systemsHub.ImportMealLog(
+                        save.population.mealRecords,
+                        save.population.missedMeals,
+                        save.population.mealPreparations);
+                    systemsHub.ImportPurchasingNeeds(save.population.purchasingNeeds);
 
                     // Phase B (Real People): OQ-8 deterministic repair. Legacy
                     // saves carry household cash in the retired
@@ -739,12 +746,24 @@ namespace LandLedgers.Persistence
                     save.population.cohorts.Clear();
                     save.population.eggBatches.Clear();
                     save.population.householdLedgers.Clear();
+                    save.population.householdInventories.Clear();
+                    save.population.mealRecords.Clear();
+                    save.population.missedMeals.Clear();
+                    save.population.mealPreparations.Clear();
+                    save.population.purchasingNeeds.Clear();
                     systemsHub.ExportAnimalState(
                         save.population.animals,
                         save.population.historicalAnimals,
                         save.population.cohorts,
                         save.population.eggBatches);
                     systemsHub.ExportHouseholdLedgers(save.population.householdLedgers);
+                    // Phase B: persist the real-consumption authorities.
+                    systemsHub.ExportHouseholdInventories(save.population.householdInventories);
+                    systemsHub.ExportMealLog(
+                        save.population.mealRecords,
+                        save.population.missedMeals,
+                        save.population.mealPreparations);
+                    systemsHub.ExportPurchasingNeeds(save.population.purchasingNeeds);
                 }
             }
 

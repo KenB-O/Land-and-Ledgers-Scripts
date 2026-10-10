@@ -62,6 +62,14 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField]
         private HouseholdLedgerRegistry householdLedgers = new HouseholdLedgerRegistry();
 
+        /// <summary>Phase B: per-household real item-lot inventories.</summary>
+        private HouseholdInventoryRegistry householdInventories;
+
+        /// <summary>Phase B: per-household meal logs (served, missed, preparations).</summary>
+        private HouseholdMealLogRegistry mealLog;
+
+        /// <summary>Phase B: household purchasing needs (demand, never sales).</summary>
+        private HouseholdNeedRegistry purchasingNeeds;
         [SerializeField]
         private TaskAuthority taskAuthority = new TaskAuthority();
 
@@ -109,6 +117,12 @@ namespace LandLedgers.Orchestration.Systems
         public EntityIdRegistry Ids => idRegistry ??= new EntityIdRegistry();
         public AnimalRegistry Animals => animalRegistry ??= new AnimalRegistry(Ids);
         public HouseholdLedgerRegistry HouseholdLedgers => householdLedgers ??= new HouseholdLedgerRegistry();
+        /// <summary>Phase B: per-household real item-lot inventories.</summary>
+        public HouseholdInventoryRegistry HouseholdInventories => householdInventories ??= new HouseholdInventoryRegistry();
+        /// <summary>Phase B: per-household meal logs.</summary>
+        public HouseholdMealLogRegistry MealLog => mealLog ??= new HouseholdMealLogRegistry();
+        /// <summary>Phase B: household purchasing needs.</summary>
+        public HouseholdNeedRegistry PurchasingNeeds => purchasingNeeds ??= new HouseholdNeedRegistry();
         public TaskAuthority Tasks => taskAuthority ??= new TaskAuthority();
         public SkillService Skills => skillService ??= new SkillService();
         public WorkTimeBudgetStore WorkTimeBudgets => workTimeBudgets ??= new WorkTimeBudgetStore();
@@ -534,6 +548,48 @@ namespace LandLedgers.Orchestration.Systems
         public void ImportHouseholdLedgers(IEnumerable<HouseholdLedgerState> inStates)
         {
             HouseholdLedgers.ImportState(inStates);
+        }
+
+        /// <summary>Phase B: exports household inventories for the PopulationSaveDto section.</summary>
+        public void ExportHouseholdInventories(List<HouseholdInventoryState> outStates)
+        {
+            HouseholdInventories.ExportState(outStates);
+        }
+
+        /// <summary>Phase B: imports household inventories from the PopulationSaveDto section.</summary>
+        public void ImportHouseholdInventories(IEnumerable<HouseholdInventoryState> inStates)
+        {
+            HouseholdInventories.ImportState(inStates);
+        }
+
+        /// <summary>Phase B: exports meal records for the PopulationSaveDto section.</summary>
+        public void ExportMealLog(
+            List<HouseholdMealRecord> outMeals,
+            List<MissedMealRecord> outMissed,
+            List<MealPreparationRecord> outPreparations)
+        {
+            MealLog.ExportState(outMeals, outMissed, outPreparations);
+        }
+
+        /// <summary>Phase B: imports meal records from the PopulationSaveDto section.</summary>
+        public void ImportMealLog(
+            IEnumerable<HouseholdMealRecord> meals,
+            IEnumerable<MissedMealRecord> missed,
+            IEnumerable<MealPreparationRecord> preparations)
+        {
+            MealLog.ImportState(meals, missed, preparations);
+        }
+
+        /// <summary>Phase B: exports purchasing needs for the PopulationSaveDto section.</summary>
+        public void ExportPurchasingNeeds(List<HouseholdPurchasingNeed> outNeeds)
+        {
+            PurchasingNeeds.ExportState(outNeeds);
+        }
+
+        /// <summary>Phase B: imports purchasing needs from the PopulationSaveDto section.</summary>
+        public void ImportPurchasingNeeds(IEnumerable<HouseholdPurchasingNeed> inNeeds)
+        {
+            PurchasingNeeds.ImportState(inNeeds);
         }
     }
 }

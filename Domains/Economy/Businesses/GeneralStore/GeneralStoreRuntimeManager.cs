@@ -95,6 +95,26 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
+        /// Phase B: the household lot-inventory authority (shopping credits
+        /// book real lots through the reserve bridge). Assigned by bootstrap;
+        /// falls back to a hub lookup when unset.
+        /// </summary>
+        public HouseholdInventoryRegistry HouseholdInventories { get; set; }
+
+        private HouseholdInventoryRegistry ResolvedHouseholdInventories
+        {
+            get
+            {
+                if (HouseholdInventories == null)
+                {
+                    HouseholdInventories = FindAnyObjectByType<SimulationSystemsHub>()?.HouseholdInventories;
+                }
+
+                return HouseholdInventories;
+            }
+        }
+
+        /// <summary>
         /// Phase B: spendable household cash. Reads the ledger balance (the
         /// single truth); falls back to the legacy wallet only when no ledger
         /// registry is available.
@@ -2365,7 +2385,7 @@ namespace LandLedgers.FirstLedger
                         break;
                     }
 
-                    ApplyReservePurchase(reserve, bestSale.Sale.UnitsSold);
+                    ApplyReservePurchase(household, reserve, bestSale.Sale.UnitsSold, "general store purchase");
                     remainingUnits -= bestSale.Sale.UnitsSold;
                     if (bestSale.FromStore)
                     {
@@ -2386,7 +2406,7 @@ namespace LandLedgers.FirstLedger
                     RecordGeneralStoreHouseholdReserveMiss(household.id, need.CategoryId, requestedUnits, remainingUnits);
                     RecordGeneralStoreMissedDemand(need.CategoryId, need.PurchaseUnits, remainingUnits);
                     int offMapValue = remainingUnits * GetOffMapReserveUnitValueCents(need.CategoryId);
-                    ApplyReservePurchase(reserve, remainingUnits);
+                    ApplyReservePurchase(household, reserve, remainingUnits, "off-map purchase");
                     reserve.lastOffMapPurchaseUnits += remainingUnits;
                     result.OffMapUnits += remainingUnits;
                     result.OffMapLostDemandCents += offMapValue;
@@ -2531,12 +2551,38 @@ namespace LandLedgers.FirstLedger
 
         private void ApplyReservePurchase(HouseholdReserveState reserve, int units)
         {
+            ApplyReservePurchase(null, reserve, units, null);
+        }
+
+        /// <summary>
+        /// Phase B: reserve credits from shopping also book real item lots
+        /// (the lot inventory is the consumption truth; the bridge mapping is
+        /// a documented transitional approximation until Phase C).
+        /// </summary>
+        private void ApplyReservePurchase(HouseholdState household, HouseholdReserveState reserve, int units, string sourceLabel)
+        {
             if (reserve == null || units <= 0)
             {
                 return;
             }
 
             reserve.currentUnits = Mathf.Clamp(reserve.currentUnits + units, 0, reserve.targetUnits);
+
+            if (household != null)
+            {
+                HouseholdInventoryRegistry inventories = ResolvedHouseholdInventories;
+                if (inventories != null)
+                {
+                    int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
+                    HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
+                        inventories.GetOrCreate(household.id),
+                        reserve.categoryId,
+                        units,
+                        Mathf.Max(0, dayIndex),
+                        string.IsNullOrWhiteSpace(sourceLabel) ? "general store purchase" : sourceLabel,
+                        null);
+                }
+            }
         }
 
         private void ReleaseSuspendedPayrollWorkersFromPopulation()

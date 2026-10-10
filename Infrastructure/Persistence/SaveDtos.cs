@@ -299,6 +299,22 @@ namespace LandLedgers.Persistence
         /// entries; ID cursors persist via HF-1 entityIdCursors.
         /// </summary>
         public List<HouseholdLedgerState> householdLedgers = new();
+        /// <summary>
+        /// Phase B: per-household real item-lot inventories (actual quantities,
+        /// never abstract balances).
+        /// </summary>
+        public List<HouseholdInventoryState> householdInventories = new();
+        /// <summary>Phase B: traceable meal records (served meals).</summary>
+        public List<HouseholdMealRecord> mealRecords = new();
+        /// <summary>Phase B: missed-meal hardship records.</summary>
+        public List<MissedMealRecord> missedMeals = new();
+        /// <summary>Phase B: explicit raw-to-prepared meal preparation records.</summary>
+        public List<MealPreparationRecord> mealPreparations = new();
+        /// <summary>
+        /// Phase B: household purchasing needs (demand only — never sales,
+        /// never money).
+        /// </summary>
+        public List<HouseholdPurchasingNeed> purchasingNeeds = new();
         public List<string> validationMessages = new();
         public List<RentalPropertySaveDto> rentalProperties = new();
         public List<RentalApplicantSaveDto> rentalApplicants = new();

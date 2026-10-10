@@ -22,6 +22,13 @@ namespace LandLedgers.Population
         Building = 5,
         Sleeping = 6,
         Eating = 7,
+        /// <summary>
+        /// Phase G: time a Person spends investigating a business
+        /// opportunity (G2). Real Person time, reserved through the
+        /// schedule tracker — never double-booked. Value appended, never
+        /// renumbered.
+        /// </summary>
+        Investigation = 8,
     }
 
     /// <summary>Phase C: one reserved activity window for a Person on one day.</summary>

@@ -239,6 +239,59 @@ namespace LandLedgers.World.Property
         }
 
         /// <summary>
+        /// Phase D: every current occupancy for one person (a person holds
+        /// one bed at a time by Occupy's rule, but the read side lists what
+        /// exists rather than assuming).
+        /// </summary>
+        public List<ResidentialOccupancy> CurrentOccupanciesForPerson(int personId)
+        {
+            var result = new List<ResidentialOccupancy>();
+            foreach (ResidentialOccupancy occ in occupancies.Values)
+            {
+                if (occ.IsCurrent && occ.PersonId == personId)
+                    result.Add(occ);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Phase D: the spaces one person currently occupies (read-side for
+        /// the residential-condition registry).
+        /// </summary>
+        public List<AccommodationSpace> CurrentSpacesForPerson(int personId)
+        {
+            var result = new List<AccommodationSpace>();
+            foreach (ResidentialOccupancy occ in CurrentOccupanciesForPerson(personId))
+            {
+                AccommodationSpace space = FindSpace(occ.SpaceId);
+                if (space != null) result.Add(space);
+            }
+            return result;
+        }
+
+        /// <summary>Phase D: space lookup for suitability evaluation.</summary>
+        public AccommodationSpace FindSpace(string spaceId)
+        {
+            if (string.IsNullOrWhiteSpace(spaceId)) return null;
+            spaces.TryGetValue(spaceId, out AccommodationSpace space);
+            return space;
+        }
+
+        /// <summary>
+        /// Phase D: ends a person's current occupancies (move-out, eviction
+        /// after notice, death) — history stays in the record.
+        /// </summary>
+        public void EndOccupanciesForPerson(int personId, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            foreach (ResidentialOccupancy occ in CurrentOccupanciesForPerson(personId))
+            {
+                occ.UntilDayIndex = dayIndex;
+                diag.Add($"HousingAuthority: P{personId} occupancy '{occ.OccupancyId}' in '{occ.SpaceId}' ended (day {dayIndex}).");
+            }
+        }
+
+        /// <summary>
         /// T2F: assigns business use of a space. One active assignment per
         /// space — no double-booking. (Premises FIT is BIZ-1's job; this is
         /// the occupancy record.)

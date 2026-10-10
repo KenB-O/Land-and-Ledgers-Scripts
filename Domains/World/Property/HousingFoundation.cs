@@ -278,6 +278,23 @@ namespace LandLedgers.World.Property
         }
 
         /// <summary>
+        /// Phase D: every accommodation space defined for one building, in
+        /// definition order. The construction executor uses this to place
+        /// the commissioning household into its completed home.
+        /// </summary>
+        public List<AccommodationSpace> SpacesForBuilding(string buildingId)
+        {
+            var result = new List<AccommodationSpace>();
+            foreach (AccommodationSpace space in spaces.Values)
+            {
+                if (space != null && string.Equals(space.BuildingId, buildingId, StringComparison.Ordinal))
+                    result.Add(space);
+            }
+            result.Sort((a, b) => string.Compare(a.SpaceId, b.SpaceId, StringComparison.Ordinal));
+            return result;
+        }
+
+        /// <summary>
         /// Phase D: ends a person's current occupancies (move-out, eviction
         /// after notice, death) — history stays in the record.
         /// </summary>

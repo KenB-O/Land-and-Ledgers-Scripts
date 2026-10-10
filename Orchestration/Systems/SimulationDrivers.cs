@@ -81,6 +81,23 @@ namespace LandLedgers.Orchestration.Systems
         private bool subscribedToTimeManager;
 
         /// <summary>
+        /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
+        /// in the shared <see cref="SupplierDirectory"/>, so the embodied
+        /// shopping path is the one path (C5). Scene wiring calls this with a
+        /// <see cref="GeneralStoreTradingPort"/> built over the live
+        /// <see cref="GeneralStoreRuntimeManager"/> and the scenario's authored
+        /// category offers (Codex integrates; the store's stocking is authored,
+        /// never invented here).
+        /// </summary>
+        public void RegisterGeneralStoreSupplier(
+            LandLedgers.Economy.Businesses.GeneralStore.IGeneralStoreTradingPort storePort)
+        {
+            supplierDirectory ??= new SupplierDirectory();
+            LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter.RegisterIn(
+                supplierDirectory, storePort);
+        }
+
+        /// <summary>
         /// CLN-3 hook: scenario goal evaluation runs here. Scenario bootstraps
         /// subscribe their evaluators (e.g. FirstLedgerGoalEvaluator.Evaluate
         /// with the live game state); when no subscriber is attached, the

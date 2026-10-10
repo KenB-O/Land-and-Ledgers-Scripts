@@ -79,6 +79,9 @@ namespace LandLedgers.Economy
         InProgress = 2,
         Complete = 3,
         Cancelled = 4,
+        /// <summary>Phase F: paused by the commissioning NPC over an
+        /// unresolved overrun or funding gap — funding halts until resumed.</summary>
+        Paused = 5,
     }
 
     /// <summary>Phase D: one consumed material line with its provenance.</summary>

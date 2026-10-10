@@ -50,6 +50,12 @@ namespace LandLedgers.Economy
         Authored = 0,
         ProjectedFromWorkerSlot = 1,
         Manual = 2,
+        /// <summary>
+        /// Phase G: employment registered by the NPC business-formation
+        /// service (G3) when a Person founds a business and hires. Value
+        /// appended, never renumbered.
+        /// </summary>
+        NpcFormation = 3,
     }
 
     /// <summary>

@@ -820,6 +820,44 @@ namespace LandLedgers.World.Property
             return negotiation;
         }
 
+        /// <summary>
+        /// Phase E: the TermsAccepted handoff. Maps an accepted negotiation to
+        /// the closing terms Phase E's <c>SellerFinanceClosingService</c>
+        /// consumes — the note is issued only here, never in the book.
+        /// Returns null (with a diagnostic) unless terms were accepted.
+        /// </summary>
+        public SellerFinanceClosingTerms ToClosingTerms(
+            string negotiationId, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            SellerFinanceNegotiation negotiation = Find(negotiationId);
+            if (negotiation == null)
+            {
+                diag.Add($"SellerFinanceNegotiationBook: unknown negotiation '{negotiationId}' — no closing terms.");
+                return null;
+            }
+            if (negotiation.Status != SellerFinanceNegotiationStatus.TermsAccepted)
+            {
+                diag.Add($"SellerFinanceNegotiationBook: '{negotiationId}' is {negotiation.Status}, not TermsAccepted — no closing terms.");
+                return null;
+            }
+            var terms = new SellerFinanceClosingTerms
+            {
+                NegotiationId = negotiation.NegotiationId,
+                SellerName = negotiation.SellerName,
+                BuyerName = $"household:{negotiation.BuyerHouseholdId}",
+                AssetDescription = negotiation.TargetDescription,
+                AssetInstanceId = negotiation.TargetId,
+                SalePriceCents = negotiation.AskingPriceCents,
+                DownPaymentCents = negotiation.ProposedDownPaymentCents,
+                AnnualRateBps = negotiation.ProposedRateBps,
+                TermDays = Math.Max(1, negotiation.ProposedTermMonths * 30),
+            };
+            diag.Add($"SellerFinanceNegotiationBook: '{negotiationId}' mapped to closing terms — " +
+                $"'{terms.SellerName}' carries {terms.SalePriceCents - terms.DownPaymentCents}c for '{terms.BuyerName}'.");
+            return terms;
+        }
+
         #region Save / Load
         [Serializable]
         public sealed class SellerFinanceNegotiationBookSaveDto

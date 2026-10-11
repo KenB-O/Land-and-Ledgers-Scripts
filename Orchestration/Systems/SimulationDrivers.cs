@@ -429,6 +429,10 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             weeklyPlayerWorkedMinutes = 0;
+
+            // Autonomous Labor: weekly wage settlement per business, guarded
+            // against double-posting by the settled-week marker.
+            DriveLaborMarketWeek(absoluteDayIndex);
         }
 
         private void OnDayChanged(SimulationDateChangedContext context)
@@ -497,6 +501,11 @@ namespace LandLedgers.Orchestration.Systems
             // the NX-1B nutrition teeth never bit. Wire it here with the
             // work-time budgets so missed meals reduce usable minutes for real.
             DriveDailyNeeds(absoluteDayIndex);
+
+            // Autonomous Labor: daily labor-market drives. The hub's authority
+            // predicate needs the current day for delegation bounds.
+            hub.LaborDayIndex = absoluteDayIndex;
+            DriveLaborMarketDay(absoluteDayIndex);
         }
 
         private void DriveGenericProduction(int absoluteDayIndex)
@@ -645,6 +654,50 @@ namespace LandLedgers.Orchestration.Systems
 
             DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
             DriveEmbodiedShopping(absoluteDayIndex, diag);
+        }
+
+        /// <summary>
+        /// Autonomous Labor: daily labor-market drives. Offer expiries and
+        /// start-day activations advance here. Per-business manager and work-
+        /// scheduler cycles are assembled by game wiring (see the Codex
+        /// handoff) because they need the live business registry alongside
+        /// the hub services.
+        /// </summary>
+        private void DriveLaborMarketDay(int absoluteDayIndex)
+        {
+            if (hub == null) return;
+            var diag = new List<string>();
+            hub.EmploymentNegotiation.AdvanceDay(absoluteDayIndex, hub.Employments, diag);
+            if (diag.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] labor-market day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        /// <summary>
+        /// Autonomous Labor: weekly wage settlement per business. The
+        /// settled-week marker makes a repeated boundary in the same week
+        /// (or a load followed by a boundary) a no-op — wages are never
+        /// posted twice.
+        /// </summary>
+        private void DriveLaborMarketWeek(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            int weekIndex = absoluteDayIndex / 7;
+            var diag = new List<string>();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business?.RuntimeState == null) continue;
+                var registry = business.RuntimeState.EmploymentRegistry ?? hub.Employments;
+                hub.WageSettlement.SettleWeeklyPayroll(
+                    business.RuntimeState, registry, weekIndex, absoluteDayIndex, diag);
+            }
+            if (diag.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] labor-market week " + weekIndex + ": " +
+                    string.Join(" | ", diag));
+            }
         }
 
         /// <summary>

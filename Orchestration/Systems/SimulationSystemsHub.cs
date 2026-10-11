@@ -13,6 +13,8 @@ using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Recruitment;
+using LandLedgers.Economy.Labor;
+using LandLedgers.Economy.Delegation;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -208,6 +210,19 @@ namespace LandLedgers.Orchestration.Systems
         private CreditEventLog creditEventLog;
         private CreditCashBridge creditCashBridge;
 
+        // Autonomous Labor pass: labor-market authorities. Plain C# services
+        // owned by the hub; none owns a second cash, inventory, or debt ledger.
+        // DelegationService is an orphan rescue — it existed with tests but was
+        // never registered or driven.
+        private ContactGraphService contactGraphService;
+        private EmploymentNegotiationService employmentNegotiationService;
+        private LaborDemandAssessor laborDemandAssessor;
+        private WorkScheduler workScheduler;
+        private WageSettlementService wageSettlementService;
+        private ManagerBrain managerBrain;
+        private LaborMigrationLinker laborMigrationLinker;
+        private DelegationService delegationService;
+
         /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
         public JourneyModel Journeys => journeyModel ??= new JourneyModel();
 
@@ -248,6 +263,76 @@ namespace LandLedgers.Orchestration.Systems
         /// boot/load.
         /// </summary>
         public CreditCashBridge CreditCash => creditCashBridge ??= new CreditCashBridge();
+
+        /// <summary>
+        /// Autonomous Labor: known-contacts authority for recruitment.
+        /// Only documented links yield candidates — never an omniscient list.
+        /// </summary>
+        public ContactGraphService ContactGraph => contactGraphService ??= new ContactGraphService();
+
+        /// <summary>
+        /// Autonomous Labor: negotiated employment offers (offer/counter/
+        /// accept/refuse/withdraw/expire). Authority predicate = business owner
+        /// (via <see cref="IsBusinessOwner"/>) or HireStaff delegation.
+        /// </summary>
+        public EmploymentNegotiationService EmploymentNegotiation =>
+            employmentNegotiationService ??= new EmploymentNegotiationService(OfferAuthorityPredicate);
+
+        /// <summary>Autonomous Labor: workload-derived labor demand (read-only).</summary>
+        public LaborDemandAssessor LaborDemand => laborDemandAssessor ??= new LaborDemandAssessor();
+
+        /// <summary>Autonomous Labor: assigns queued work to employed persons.</summary>
+        public WorkScheduler WorkScheduling => workScheduler ??= new WorkScheduler();
+
+        /// <summary>Autonomous Labor: idempotency-guarded wage settlement.</summary>
+        public WageSettlementService WageSettlement => wageSettlementService ??= new WageSettlementService();
+
+        /// <summary>Autonomous Labor: delegated-manager decision loop.</summary>
+        public ManagerBrain Managers => managerBrain ??= new ManagerBrain();
+
+        /// <summary>Autonomous Labor: bounded employment-linked migration evaluation.</summary>
+        public LaborMigrationLinker MigrationLinker => laborMigrationLinker ??= new LaborMigrationLinker();
+
+        /// <summary>
+        /// Autonomous Labor: orphan rescue. DelegationService shipped with tests
+        /// but was never registered or driven; it is owned here now.
+        /// </summary>
+        public DelegationService Delegation => delegationService ??= new DelegationService();
+
+        /// <summary>
+        /// Autonomous Labor: owner lookup hook for the offer authority predicate.
+        /// Game wiring (Codex) sets this from the business registry. When unset,
+        /// offers require HireStaff delegation.
+        /// </summary>
+        [NonSerialized]
+        public Func<string, int, bool> IsBusinessOwner;
+
+        /// <summary>
+        /// Autonomous Labor: current absolute day index for authority checks.
+        /// Set daily by SimulationDrivers; defaults to 0 (delegations with
+        /// day bounds should not be evaluated before the first drive).
+        /// </summary>
+        public int LaborDayIndex { get; set; }
+
+        private bool OfferAuthorityPredicate(string businessInstanceId, int personId, string act)
+        {
+            if (IsBusinessOwner != null)
+            {
+                try
+                {
+                    if (IsBusinessOwner(businessInstanceId, personId)) return true;
+                }
+                catch (Exception)
+                {
+                    // Owner hook failed — fall through to delegation check.
+                }
+            }
+            if (!string.Equals(act, "HireStaff", StringComparison.OrdinalIgnoreCase)) return false;
+            var diag = new List<string>();
+            return Delegation.CheckAct(
+                businessInstanceId, personId, DelegatedAct.HireStaff, 0, LaborDayIndex, diag)
+                == AuthorityVerdict.Permitted;
+        }
 
         /// <summary>
         /// P6: weather seed for the route-condition service. Bootstrap-assigned
@@ -507,6 +592,11 @@ namespace LandLedgers.Orchestration.Systems
                 npcConstructionCommissioner = NpcConstructionCommissioner.CaptureSaveDto(),
                 tradeCredit = TradeCredit.CaptureSaveDto(),
                 creditEvents = CreditEvents.CaptureSaveDto(),
+                contactGraph = ContactGraph.CaptureSaveDto(),
+                employmentNegotiation = EmploymentNegotiation.CaptureSaveDto(),
+                wageSettlement = WageSettlement.CaptureSaveDto(),
+                managerBrain = Managers.CaptureSaveDto(),
+                delegation = Delegation.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -585,6 +675,11 @@ namespace LandLedgers.Orchestration.Systems
             NpcConstructionCommissioner.LoadFromSaveDto(dto.npcConstructionCommissioner, diagnostics);
             TradeCredit.LoadFromSaveDto(dto.tradeCredit);
             CreditEvents.LoadFromSaveDto(dto.creditEvents);
+            ContactGraph.LoadFromSaveDto(dto.contactGraph);
+            EmploymentNegotiation.LoadFromSaveDto(dto.employmentNegotiation);
+            WageSettlement.LoadFromSaveDto(dto.wageSettlement);
+            Managers.LoadFromSaveDto(dto.managerBrain);
+            Delegation.LoadFromSaveDto(dto.delegation);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;

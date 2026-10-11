@@ -19,6 +19,8 @@ using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Recruitment;
+using LandLedgers.Economy.Labor;
+using LandLedgers.Economy.Delegation;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
@@ -91,6 +93,13 @@ namespace LandLedgers.Persistence
         public NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto npcConstructionCommissioner = new();
         public TradeCreditBook.TradeCreditBookSaveDto tradeCredit = new();
         public CreditEventLog.CreditEventLogSaveDto creditEvents = new();
+        // Autonomous Labor pass services: contact graph, negotiated offers,
+        // wage-settlement markers, manager instructions + activity, delegation grants.
+        public ContactGraphServiceSaveDto contactGraph = new();
+        public EmploymentNegotiationSaveDto employmentNegotiation = new();
+        public WageSettlementSaveDto wageSettlement = new();
+        public ManagerBrainSaveDto managerBrain = new();
+        public DelegationService.DelegationSaveDto delegation = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

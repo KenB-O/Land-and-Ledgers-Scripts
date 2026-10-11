@@ -29,6 +29,15 @@ namespace LandLedgers.Population
         public int StartDay;
         /// <summary>Person/business/government id receiving payment.</summary>
         public string PayeeHolderId;
+        /// <summary>
+        /// Pass III Worker B (additive): the tenant household charged for this
+        /// agreement's periods. -1 = resolve from the current residential
+        /// occupancy of the agreement's space (HousingFoundation chain).
+        /// Canon XXXI Part VI: the tenancy agreement names the parties; the
+        /// occupancy record says who actually lives there. When both exist
+        /// they must agree; the explicit id wins and mismatch is diagnosed.
+        /// </summary>
+        public int TenantHouseholdId = -1;
     }
 
     public enum RentObligationStatus
@@ -47,5 +56,18 @@ namespace LandLedgers.Population
         public long AmountDueCents;
         public long PaidCents;
         public RentObligationStatus Status = RentObligationStatus.Current;
+        /// <summary>
+        /// Pass III Worker B (additive): 0-based period index within the
+        /// agreement's payment schedule. The settled-period marker is
+        /// (AgreementId, PeriodIndex) — a period is never settled twice,
+        /// including across save/load.
+        /// </summary>
+        public int PeriodIndex = -1;
+        /// <summary>
+        /// Pass III Worker B (additive): the FinancialObligationAuthority
+        /// obligation id when unpaid remainder became real arrears; empty
+        /// when the period was paid in full.
+        /// </summary>
+        public string ArrearsObligationId = string.Empty;
     }
 }

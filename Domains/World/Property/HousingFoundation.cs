@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Population;
 using UnityEngine;
 
 namespace LandLedgers.World.Property
@@ -116,6 +117,16 @@ namespace LandLedgers.World.Property
         public int StartDayIndex;
         public int EndDayIndex = -1; // -1 = open-ended
         public string LinkedInstrumentId = string.Empty; // T2A instrument, when money is secured
+        /// <summary>
+        /// Pass III Worker B (additive): payment terms for rent/board tenancies.
+        /// Null = this agreement carries no payment schedule (e.g. kin hosting,
+        /// employer lodging with no charge, owner occupation). When set, the
+        /// tenancy payment loop turns the terms into due events; money moves
+        /// only through HouseholdLedger + FinancialObligationAuthority —
+        /// there is no second rent-cash authority (Canon XXXI Rev XXIII §1.1,
+        /// one authority per consequential fact).
+        /// </summary>
+        public TenancyPaymentTerms PaymentTerms;
 
         public PropertyAgreement() { }
     }
@@ -364,6 +375,74 @@ namespace LandLedgers.World.Property
             agreements[agreement.AgreementId] = agreement;
             diag.Add($"HousingAuthority: {kind} agreement {agreement.AgreementId} — {grantorName} → {granteeName}.");
             return agreement;
+        }
+
+        /// <summary>
+        /// Pass III Worker B (additive read): building lookup for the
+        /// footprint linker and tenancy tenant resolution.
+        /// </summary>
+        public Building FindBuilding(string buildingId)
+        {
+            if (string.IsNullOrWhiteSpace(buildingId)) return null;
+            buildings.TryGetValue(buildingId, out Building building);
+            return building;
+        }
+
+        /// <summary>
+        /// Pass III Worker B (additive read): every registered building, in
+        /// registration order. Read-only view for linkers and diagnostics.
+        /// </summary>
+        public List<Building> AllBuildings()
+        {
+            return new List<Building>(buildings.Values);
+        }
+
+        /// <summary>
+        /// Pass III Worker B (additive): attaches rent/board payment terms to
+        /// an existing property agreement. The agreement stays the legal
+        /// record; the terms only add the payment schedule that the tenancy
+        /// payment loop turns into due events. Canon XXXI Part VI §§6.1–6.8:
+        /// housing/tenancy obligations are real and payable from actual cash.
+        /// Returns null on success, diagnostic on refusal.
+        /// </summary>
+        public string AttachPaymentTerms(string agreementId, TenancyPaymentTerms terms, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (string.IsNullOrWhiteSpace(agreementId) || !agreements.TryGetValue(agreementId, out PropertyAgreement agreement))
+                return $"HousingAuthority.AttachPaymentTerms: unknown agreement '{agreementId}'.";
+            if (terms == null)
+                return "HousingAuthority.AttachPaymentTerms: terms are required.";
+            if (terms.AmountCents <= 0)
+                return $"HousingAuthority.AttachPaymentTerms: amount must be positive (got {terms.AmountCents}c).";
+            if (terms.PeriodDays <= 0)
+                return $"HousingAuthority.AttachPaymentTerms: period must be positive days (got {terms.PeriodDays}).";
+            if (terms.DueDayOfPeriod < 1 || terms.DueDayOfPeriod > terms.PeriodDays)
+                return $"HousingAuthority.AttachPaymentTerms: due day {terms.DueDayOfPeriod} is outside the {terms.PeriodDays}-day period.";
+            if (terms.StartDay < 0)
+                return "HousingAuthority.AttachPaymentTerms: schedule start day cannot be negative.";
+            if (string.IsNullOrWhiteSpace(terms.PayeeHolderId))
+                return "HousingAuthority.AttachPaymentTerms: the payee (person/business/government id) must be named — rent is owed to someone real.";
+            if (agreement.PaymentTerms != null)
+                return $"HousingAuthority.AttachPaymentTerms: agreement '{agreementId}' already carries payment terms — replace via a new agreement, not a silent overwrite.";
+            agreement.PaymentTerms = terms;
+            diag.Add($"HousingAuthority: payment terms attached to '{agreementId}' — {terms.AmountCents}c every {terms.PeriodDays}d, payee '{terms.PayeeHolderId}'.");
+            return null;
+        }
+
+        /// <summary>
+        /// Pass III Worker B (additive read): every agreement carrying
+        /// payment terms — the tenancy payment loop's work list.
+        /// </summary>
+        public List<PropertyAgreement> AgreementsWithPaymentTerms()
+        {
+            var result = new List<PropertyAgreement>();
+            foreach (PropertyAgreement agreement in agreements.Values)
+            {
+                if (agreement != null && agreement.PaymentTerms != null)
+                    result.Add(agreement);
+            }
+            result.Sort((a, b) => string.Compare(a.AgreementId, b.AgreementId, StringComparison.Ordinal));
+            return result;
         }
 
         #region Save / Load

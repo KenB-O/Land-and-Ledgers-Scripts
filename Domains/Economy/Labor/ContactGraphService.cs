@@ -10,6 +10,7 @@
 // invents skills or availability.
 using System;
 using System.Collections.Generic;
+using LandLedgers.Skills;
 
 namespace LandLedgers.Economy.Labor
 {
@@ -54,6 +55,48 @@ namespace LandLedgers.Economy.Labor
             new Dictionary<string, ContactLink>(StringComparer.Ordinal);
         private readonly List<string> diagnostics = new List<string>();
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>
+        /// Pass III Worker D, ADDITIVE: optional observer-side capability
+        /// evidence (Canon XXXI §§4.4-4.5). When set, candidate evaluation can
+        /// consult what the evaluating person legitimately knows about a
+        /// candidate's capability — never the hidden capability truth, never an
+        /// omniscient skill list. Null by default: the contact graph works
+        /// without it.
+        /// </summary>
+        public ICapabilityEvidenceReader CapabilityEvidence { get; set; }
+
+        /// <summary>
+        /// Evaluates a reachable candidate's capability for a task class, from
+        /// the evaluator's legitimate evidence. Returns null when no evidence
+        /// reader is wired, the candidate is unknown, or no evidence exists
+        /// (the caller treats null as "not enough information").
+        /// Additive: ReachableCandidates and the link graph are untouched.
+        /// </summary>
+        public CapabilityEvidenceReading EvaluateCandidateCapability(
+            int candidatePersonId, string taskCapabilityId, int evaluatorPersonId)
+        {
+            if (CapabilityEvidence == null || candidatePersonId < 0 ||
+                evaluatorPersonId < 0 || string.IsNullOrEmpty(taskCapabilityId))
+            {
+                return null;
+            }
+
+            if (!HasLink(evaluatorPersonId, candidatePersonId) &&
+                !HasLink(candidatePersonId, evaluatorPersonId))
+            {
+                diagnostics.Add(
+                    "ContactGraphService.EvaluateCandidateCapability: no documented link " +
+                    "between evaluator P" + evaluatorPersonId + " and candidate P" +
+                    candidatePersonId + " — no evidence without contact.");
+                return null;
+            }
+
+            return CapabilityEvidence.ReadCapability(
+                evaluatorPersonId.ToString(),
+                candidatePersonId.ToString(),
+                taskCapabilityId);
+        }
 
         private static string EdgeKey(int personId, int linkedPersonId) =>
             personId + "->" + linkedPersonId;

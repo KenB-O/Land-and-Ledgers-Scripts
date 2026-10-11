@@ -7,8 +7,18 @@ using NUnit.Framework;
 namespace LandLedgers.EditorTests.Core
 {
     /// <summary>
-    /// TTS-3: skill registry with extension path, rudimentary XP, and skill-scaled
-    /// task durations (higher skill → fewer minutes, floored at 1 — Kennedy's rule).
+    /// Pass III Worker D: skill registry (extension path preserved), continuous
+    /// capability model, experience formation, and causal task-duration
+    /// estimation.
+    ///
+    /// CANON CORRECTION (documented per task): the XP/level ladder (1 XP/min,
+    /// 100 XP/level, max 10) and the flat "-1 minute per level" duration rule
+    /// were canon-violating — Rev VII §1.1 forbids level-up progression and
+    /// Tech XIV Part II §2.4 forbids flat SkillMultiplier shortcuts. They are
+    /// replaced by continuous capability 0..1, the experience ledger with
+    /// diminishing-returns formation, and the causal outcome resolver.
+    /// XXXI §4.5 CANON LOCK: the seven-band display is superseded (see
+    /// CapabilityPresentationTests).
     /// </summary>
     [TestFixture]
     public sealed class SkillServiceTests
@@ -19,42 +29,17 @@ namespace LandLedgers.EditorTests.Core
         }
 
         [Test]
-        public void ScaleMinutes_HigherSkill_FewerMinutes_FlooredAtOne()
-        {
-            var service = new SkillService();
-
-            Assert.AreEqual(4, service.ScaleMinutes(4, 1));
-            Assert.AreEqual(3, service.ScaleMinutes(4, 2));
-            Assert.AreEqual(1, service.ScaleMinutes(4, 4));
-            Assert.AreEqual(1, service.ScaleMinutes(4, 10)); // floor holds past the curve
-            Assert.AreEqual(1, service.ScaleMinutes(1, 10)); // base-1 task never goes below 1
-            Assert.AreEqual(28, service.ScaleMinutes(30, 3));
-        }
-
-        [Test]
-        public void GrantPractice_AccumulatesXp_AndLevelsUp()
+        public void UnknownPersonOrSkill_DefaultsToNoviceCapability()
         {
             var service = new SkillService();
             service.RegisterStarterSet();
 
-            Assert.AreEqual(1, service.GetLevel(Person(1), SkillIds.CustomerTending));
-
-            int level = service.GrantPractice(Person(1), SkillIds.CustomerTending, 100);
-            Assert.AreEqual(2, level);
-            Assert.AreEqual(2, service.GetLevel(Person(1), SkillIds.CustomerTending));
-
-            service.GrantPractice(Person(1), SkillIds.CustomerTending, 150);
-            Assert.AreEqual(3, service.GetLevel(Person(1), SkillIds.CustomerTending));
-        }
-
-        [Test]
-        public void UnknownPersonOrSkill_DefaultsToLevelOne()
-        {
-            var service = new SkillService();
-            service.RegisterStarterSet();
-
+            Assert.AreEqual(PersonCapabilityStore.NoviceCapability,
+                service.GetCapability(Person(99), SkillIds.Cooking), 1e-9);
+            Assert.AreEqual(PersonCapabilityStore.NoviceCapability,
+                service.GetCapability(Person(99), "never-registered-skill"), 1e-9);
+            // Legacy level projection: novice is level 1.
             Assert.AreEqual(1, service.GetLevel(Person(99), SkillIds.Cooking));
-            Assert.AreEqual(1, service.GetLevel(Person(99), "never-registered-skill"));
         }
 
         [Test]
@@ -68,42 +53,67 @@ namespace LandLedgers.EditorTests.Core
             Assert.IsNotNull(reason);
 
             // Extension path: a brand-new skill registers without touching existing code.
-            Assert.IsTrue(service.RegisterSkill(new SkillDefinition("blacksmithing", "Blacksmithing"), out reason), reason);
+            Assert.IsTrue(service.RegisterSkill(
+                new SkillDefinition("blacksmithing", "Blacksmithing", null, CapabilityFamily.MechanicalRepair),
+                out reason), reason);
             Assert.IsNotNull(service.GetSkill("blacksmithing"));
+            Assert.AreEqual(CapabilityFamily.MechanicalRepair,
+                service.GetSkill("blacksmithing").Family);
             Assert.AreEqual(1, service.GetLevel(Person(2), "blacksmithing"));
         }
 
         [Test]
-        public void Estimator_ScalesAssignment_ByWorkerSkill()
+        public void CausalEstimator_VariesDuration_ByWorkerCapability()
         {
             var skills = new SkillService();
             skills.RegisterStarterSet();
 
             var authority = new TaskAuthority();
             string reason;
-            var tend = new TaskDefinition("gs.tend", "Tend customer", 4);
+            var tend = new TaskDefinition("gs.tend", "Tend customer", 60);
             tend.SetRequiredSkill(SkillIds.CustomerTending, new[] { SkillIds.CustomerTending });
             Assert.IsTrue(authority.RegisterDefinition(tend, out reason), reason);
-            authority.SetDurationEstimator(new SkillTaskDurationEstimator(skills));
+            authority.SetDurationEstimator(new CausalTaskDurationEstimator(skills));
 
             var budgets = new WorkTimeBudgetStore();
             budgets.EnsureDay(1);
 
-            // Beginner: full 4 minutes.
+            // Novice (capability 0.10): slower than base.
             WorkTask novice = authority.CreateTask("gs.tend", EntityId.For(EntityKind.Business, 1), 1);
             Assert.IsTrue(authority.AssignTask(novice.TaskId, Person(10), budgets, out reason), reason);
-            Assert.AreEqual(4, novice.PlannedMinutes);
+            Assert.Greater(novice.PlannedMinutes, 60);
 
-            // Veteran (level 4 = 300 XP): floored at 1 minute.
-            skills.GrantPractice(Person(11), SkillIds.CustomerTending, 300);
-            Assert.AreEqual(4, skills.GetLevel(Person(11), SkillIds.CustomerTending));
-            WorkTask veteran = authority.CreateTask("gs.tend", EntityId.For(EntityKind.Business, 1), 1);
-            Assert.IsTrue(authority.AssignTask(veteran.TaskId, Person(11), budgets, out reason), reason);
-            Assert.AreEqual(1, veteran.PlannedMinutes);
+            // Experienced worker: real capability (0.75, Great).
+            // Set directly — this test targets the estimator, not formation
+            // speed (formation is covered in CapabilityStoresTests).
+            EntityId veteran = Person(11);
+            skills.Capabilities.SetCapability(veteran.ToString(), SkillIds.CustomerTending, 0.75, 40);
+            // And some real experience relevance.
+            for (int day = 1; day <= 25; day++)
+            {
+                var inputs = new ExperienceFormationInputs
+                {
+                    TaskCapabilityId = SkillIds.CustomerTending,
+                    Difficulty01 = 0.7,
+                    Novelty01 = 0.9,
+                    Supervised = false,
+                    Outcome = "Success",
+                    MinutesSpent = 480,
+                    Day = day,
+                };
+                skills.RecordTaskExperience(veteran, inputs);
+            }
+            double veteranCapability = skills.GetCapability(veteran, SkillIds.CustomerTending);
+            Assert.Greater(veteranCapability, 0.7);
+
+            WorkTask veteranTask = authority.CreateTask("gs.tend", EntityId.For(EntityKind.Business, 1), 1);
+            Assert.IsTrue(authority.AssignTask(veteranTask.TaskId, veteran, budgets, out reason), reason);
+            // The experienced worker is faster than the novice on the same task.
+            Assert.Less(veteranTask.PlannedMinutes, novice.PlannedMinutes);
         }
 
         [Test]
-        public void ApplyPracticeFromTask_GrantsXp_ForLearningTags()
+        public void ApplyExperienceFromTask_RecordsLedgerEntries_ForLearningTags()
         {
             var skills = new SkillService();
             skills.RegisterStarterSet();
@@ -122,10 +132,105 @@ namespace LandLedgers.EditorTests.Core
             Assert.IsTrue(authority.StartTask(task.TaskId, 1, out reason), reason);
             Assert.IsTrue(authority.RecordWork(task.TaskId, 10, budgets, 1, out reason), reason);
 
-            skills.ApplyPracticeFromTask(authority, task.TaskId, 10);
-            Assert.AreEqual(1, skills.GetLevel(Person(20), SkillIds.Cleaning)); // 10 XP < 100
-            skills.ApplyPracticeFromTask(authority, task.TaskId, 90);
-            Assert.AreEqual(2, skills.GetLevel(Person(20), SkillIds.Cleaning)); // 100 XP total
+            double before = skills.GetCapability(Person(20), SkillIds.Cleaning);
+            skills.ApplyExperienceFromTask(
+                authority, task.TaskId,
+                difficulty01: 0.4, novelty01: 0.9, supervised: false,
+                outcome: "Success", day: 1, minutesWorked: 10);
+
+            // One ledger entry for the learning tag...
+            Assert.AreEqual(1, skills.Experience.Count);
+            // ...and capability moved (no XP ladder; continuous formation).
+            Assert.Greater(skills.GetCapability(Person(20), SkillIds.Cleaning), before);
+        }
+
+        [Test]
+        public void Aptitude_AcceleratesLearning_WithoutGrantingStartingSkill()
+        {
+            var service = new SkillService();
+            service.RegisterStarterSet();
+
+            EntityId quick = Person(30);
+            EntityId slow = Person(31);
+            service.SetAptitude(quick, CapabilityFamily.FoodProcessing, 2.0, 1);
+            service.SetAptitude(slow, CapabilityFamily.FoodProcessing, 0.5, 1);
+
+            // Aptitude grants NO starting capability.
+            Assert.AreEqual(service.GetCapability(quick, SkillIds.Cooking),
+                service.GetCapability(slow, SkillIds.Cooking), 1e-9);
+
+            // Same work: the quick learner gains more.
+            for (int i = 0; i < 2; i++)
+            {
+                EntityId who = i == 0 ? quick : slow;
+                var inputs = new ExperienceFormationInputs
+                {
+                    TaskCapabilityId = SkillIds.Cooking,
+                    Difficulty01 = 0.6,
+                    Novelty01 = 1.0,
+                    Supervised = false,
+                    Outcome = "Success",
+                    MinutesSpent = 480,
+                    Day = 10 + i,
+                };
+                service.RecordTaskExperience(who, inputs);
+            }
+
+            double quickCap = service.GetCapability(quick, SkillIds.Cooking);
+            double slowCap = service.GetCapability(slow, SkillIds.Cooking);
+            Assert.Greater(quickCap, slowCap);
+        }
+
+        [Test]
+        public void SaveLoad_RoundTrips_NewStores_WithoutDoubleCredit()
+        {
+            var service = new SkillService();
+            service.RegisterStarterSet();
+
+            EntityId worker = Person(40);
+            service.SetAptitude(worker, CapabilityFamily.Agricultural, 1.5, 1);
+            var inputs = new ExperienceFormationInputs
+            {
+                TaskCapabilityId = SkillIds.CropTending,
+                Difficulty01 = 0.6,
+                Novelty01 = 0.8,
+                Supervised = true,
+                Outcome = "Success",
+                MinutesSpent = 240,
+                Day = 5,
+            };
+            Assert.IsTrue(service.RecordTaskExperience(worker, inputs));
+            var second = new ExperienceFormationInputs
+            {
+                TaskCapabilityId = SkillIds.CropTending,
+                Difficulty01 = 0.6,
+                Novelty01 = 0.8,
+                Supervised = true,
+                Outcome = "Success",
+                MinutesSpent = 240,
+                Day = 6,
+            };
+            Assert.IsTrue(service.RecordTaskExperience(worker, second));
+            Assert.AreEqual(2, service.Experience.Count);
+
+            double capabilityBefore = service.GetCapability(worker, SkillIds.CropTending);
+
+            var dto = service.CaptureSaveDto();
+            var restored = new SkillService();
+            restored.RegisterStarterSet();
+            restored.LoadFromSaveDto(dto);
+
+            Assert.AreEqual(2, restored.Experience.Count);
+            Assert.AreEqual(capabilityBefore,
+                restored.GetCapability(worker, SkillIds.CropTending), 1e-9);
+            Assert.AreEqual(1.5,
+                restored.Aptitudes.GetLearningRate(worker.ToString(), CapabilityFamily.Agricultural), 1e-9);
+
+            // Restoring the SAME dto again does not duplicate or re-credit.
+            restored.LoadFromSaveDto(dto);
+            Assert.AreEqual(2, restored.Experience.Count);
+            Assert.AreEqual(capabilityBefore,
+                restored.GetCapability(worker, SkillIds.CropTending), 1e-9);
         }
     }
 }

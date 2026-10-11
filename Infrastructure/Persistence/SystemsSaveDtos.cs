@@ -149,7 +149,18 @@ namespace LandLedgers.Persistence
     public sealed class SkillServiceSaveDto
     {
         public List<SkillDefinition> definitions = new();
-        public List<SkillService.PersonSkillEntry> skillStates = new();
+        /// <summary>
+        /// Legacy pre-Pass III entries. Read on load and deterministically
+        /// migrated into capabilities; never written by new code.
+        /// </summary>
+        public List<SkillService.PersonSkillEntry> legacySkillStates = new();
+        // Pass III Worker D: the four capability authorities + observer evidence.
+        public List<AptitudeRecord> aptitudes = new();
+        public List<ExperienceEntry> experienceEntries = new();
+        public int experienceSequence;
+        public List<DomainFamiliarity> familiarities = new();
+        public List<PersonCapabilityState> capabilities = new();
+        public List<CapabilityEvidenceItem> evidenceItems = new();
     }
 
     [Serializable]

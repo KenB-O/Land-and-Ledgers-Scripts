@@ -10,6 +10,7 @@ using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Reputation;
+using LandLedgers.Skills;
 using LandLedgers.Time;
 using LandLedgers.World;
 using LandLedgers.Orchestration.Systems;
@@ -8945,7 +8946,7 @@ namespace LandLedgers.Economy
                 WorkerRoleFitResult fit = WorkerRoleFitEvaluator.Evaluate(candidate, business.BusinessType, openSlot);
                 string readiness = ApprenticeshipProgressionEvaluator.BuildCandidateReadinessHint(candidate, business.BusinessType, openSlot);
                 string readinessSegment = string.IsNullOrWhiteSpace(readiness) ? string.Empty : $" | {readiness}";
-                CapabilityReading capability = CapabilityPresentation.FromPerson(candidate);
+                CapabilityEvidenceReading capability = CapabilityPresentation.FromPerson(candidate);
                 builder.AppendLine($"Candidate {index + 1}/{candidates.Count}: {candidate.DisplayName} | {fit.Label.ToLowerInvariant()} fit | capability {CapabilityPresentation.FormatReading(capability)} | {FormatMoney(openSlot.WeeklyWageCents)}/wk{readinessSegment}");
             }
         }

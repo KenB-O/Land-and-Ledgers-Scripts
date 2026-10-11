@@ -72,15 +72,15 @@ namespace LandLedgers.World.Property
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
         /// <summary>
-        /// Optional building-footprint source. Null = building placement cannot be
-        /// verified; validation warns instead of assuming the split is clear.
+        /// Production must provide the building-footprint source. Without it a
+        /// split is not safe to authorize because an existing structure could be
+        /// divided across legal children.
         /// </summary>
         public IParcelBuildingIndex BuildingIndex { get; set; }
 
         /// <summary>
-        /// Optional title-holder lookup (parcelId -&gt; current holder name).
-        /// When set, the requestor must hold title; when null, the authority check
-        /// is skipped (documented, for contexts without title access).
+        /// Production must provide the title-holder lookup. Without it a
+        /// subdivision cannot authorize a requester against the title chain.
         /// </summary>
         public Func<string, string> TitleHolderLookup { get; set; }
 
@@ -120,7 +120,15 @@ namespace LandLedgers.World.Property
                 validation.Errors.Add($"parcel '{parent.Id}' is retired (superseded by subdivision/consolidation) — subdivide a live parcel.");
                 return validation;
             }
-            if (TitleHolderLookup != null)
+            if (TitleHolderLookup == null)
+            {
+                validation.Errors.Add("title-holder lookup is unavailable — subdivision authorization cannot be verified.");
+            }
+            else if (string.IsNullOrWhiteSpace(request.RequestedByHolder))
+            {
+                validation.Errors.Add("subdivision requester is required — title authorization cannot be inferred.");
+            }
+            else
             {
                 string holder = TitleHolderLookup(parent.Id);
                 if (!string.Equals(holder, request.RequestedByHolder, StringComparison.Ordinal))
@@ -208,8 +216,14 @@ namespace LandLedgers.World.Property
             IParcelBuildingIndex index = BuildingIndex;
             if (index == null)
             {
-                validation.Warnings.Add("no building index provided — split-through-building check skipped; " +
-                    "wire IParcelBuildingIndex for production use.");
+                if (parent.BuildingIds != null && parent.BuildingIds.Count > 0)
+                {
+                    validation.Errors.Add("building index is unavailable — subdivision cannot verify that a live structure is not split.");
+                }
+                else
+                {
+                    validation.Warnings.Add("no building index provided for a parcel with no recorded buildings.");
+                }
                 return;
             }
             IReadOnlyList<ParcelBuildingFootprint> buildings = index.BuildingsOnParcel(parent.Id);
@@ -494,6 +508,32 @@ namespace LandLedgers.World.Property
                     IsExtinguished = interest.IsExtinguished,
                 });
             return deep;
+        }
+    }
+
+    /// <summary>Production adapter over the live TownWorld building records.</summary>
+    public sealed class TownWorldParcelBuildingIndex : IParcelBuildingIndex
+    {
+        private readonly TownWorldController world;
+
+        public TownWorldParcelBuildingIndex(TownWorldController world)
+        {
+            this.world = world;
+        }
+
+        public IReadOnlyList<ParcelBuildingFootprint> BuildingsOnParcel(string parcelId)
+        {
+            var result = new List<ParcelBuildingFootprint>();
+            if (world == null || world.Buildings == null || string.IsNullOrWhiteSpace(parcelId)) return result;
+            foreach (PlacedBuilding building in world.Buildings)
+            {
+                if (building == null || building.footprint.width <= 0 || building.footprint.depth <= 0) continue;
+                string plotKey = building.plotId.ToString();
+                if (!string.Equals(parcelId, plotKey, StringComparison.Ordinal)
+                    && !string.Equals(parcelId, "plot-" + plotKey, StringComparison.Ordinal)) continue;
+                result.Add(new ParcelBuildingFootprint(building.id.ToString(), building.footprint));
+            }
+            return result;
         }
     }
 }

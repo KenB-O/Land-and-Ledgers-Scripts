@@ -38,6 +38,7 @@ namespace LandLedgers.Population
         private readonly HousingSearchNeedRegistry housingSearchNeeds;
         private readonly FinancialObligationAuthority financialObligations;
         private readonly EntityIdRegistry ids;
+        private readonly CreditCashBridge cashBridge;
 
         private readonly HouseholdOpportunityLog opportunityLog = new HouseholdOpportunityLog();
         private readonly List<TenancyNegotiationRequest> negotiationRequests = new List<TenancyNegotiationRequest>();
@@ -55,13 +56,15 @@ namespace LandLedgers.Population
             EmploymentRelationshipRegistry employments,
             HousingSearchNeedRegistry housingSearchNeeds,
             FinancialObligationAuthority financialObligations,
-            EntityIdRegistry ids)
+            EntityIdRegistry ids,
+            CreditCashBridge cashBridge = null)
         {
             this.contactGraph = contactGraph;
             this.employments = employments;
             this.housingSearchNeeds = housingSearchNeeds;
             this.financialObligations = financialObligations;
             this.ids = ids;
+            this.cashBridge = cashBridge;
         }
 
         /// <summary>Per-call execution data: registries the driver does not own.</summary>
@@ -200,20 +203,55 @@ namespace LandLedgers.Population
             long obligations = pressure != null ? Math.Max(0, pressure.ObligationsDueCents) : 0;
             long principal = Math.Max(1, obligations - coverage);
 
+            if (cashBridge == null)
+                return NotExecuted(diag, "Borrow: real cash bridge unavailable — request remains unfunded");
+            IRealCashStore lender = cashBridge.FindStore(creditor);
+            IRealCashStore borrower = cashBridge.FindStore("household:" + householdId);
+            if (lender == null || borrower == null)
+                return NotExecuted(diag, "Borrow: lender and household cash stores must both be registered — request remains unfunded");
+            int amount = (int)Math.Min(principal, int.MaxValue);
+            string agreementId = "dec-" + householdId + "-" + decision.Day;
+            foreach (FinancialObligation existing in financialObligations.Obligations)
+            {
+                if (existing != null && string.Equals(existing.AgreementId, agreementId, StringComparison.Ordinal)
+                    && string.Equals(existing.Debtor, "household-" + householdId, StringComparison.Ordinal)
+                    && string.Equals(existing.Creditor, creditor, StringComparison.Ordinal))
+                    return NotExecuted(diag, "Borrow: this decision already has a funded obligation");
+            }
+            if (lender.ReadBalanceCents() < amount)
+                return NotExecuted(diag, "Borrow: known lender cannot fund the requested advance");
+            string debitRefusal = lender.DebitCents(dayIndex, amount, "household loan advance", "household:" + householdId);
+            if (debitRefusal != null)
+                return NotExecuted(diag, "Borrow: lender refused disbursement — " + debitRefusal);
+            string creditRefusal = borrower.CreditCents(dayIndex, amount, "LoanProceeds",
+                "dec-" + householdId + "-" + decision.Day, "household borrowing advance", creditor);
+            if (creditRefusal != null)
+            {
+                lender.CreditCents(dayIndex, amount, "LoanProceedsReversal",
+                    "dec-" + householdId + "-" + decision.Day,
+                    "reversed refused household loan advance", "household:" + householdId);
+                return NotExecuted(diag, "Borrow: household cash store refused disbursement — " + creditRefusal);
+            }
+
             FinancialObligation obligation = financialObligations.Create(
                 ids, FinancialObligationKind.Loan,
                 debtor: "household-" + householdId,
                 creditor: creditor,
-                principalCents: (int)Math.Min(principal, int.MaxValue),
+                principalCents: amount,
                 dayIndex: dayIndex,
                 terms: "household borrowing per decision " + decision.Day,
                 purpose: "cover household obligations shortfall",
-                agreementId: "dec-" + householdId + "-" + decision.Day);
+                agreementId: agreementId);
             if (obligation == null)
+            {
+                borrower.DebitCents(dayIndex, amount, "reverse refused household loan obligation", creditor);
+                lender.CreditCents(dayIndex, amount, "LoanAdvanceReversal", agreementId,
+                    "reversed loan advance because debt authority refused", "household:" + householdId);
                 return NotExecuted(diag, "Borrow: financial authority rejected the obligation");
+            }
 
             string detail = string.Format(
-                "Borrow executed: obligation {0} opened — household-{1} owes {2} {3}c (liability recorded; lender's cash payment is the lender's own action)",
+                "Borrow executed: obligation {0} opened — household-{1} received and owes {2} {3}c",
                 obligation.ObligationId, householdId, creditor, obligation.OutstandingPrincipalCents);
             if (diag != null) diag.Add(detail);
             return new DecisionExecutionResult { Executed = true, Detail = detail };

@@ -17,6 +17,7 @@ using LandLedgers.Skills;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
+using LandLedgers.World;
 using UnityEngine;
 
 namespace LandLedgers.Orchestration.Systems
@@ -158,7 +159,9 @@ namespace LandLedgers.Orchestration.Systems
                 hub.PersonSchedules,
                 sellerKnowledge,
                 hub.FinancialObligations,
-                hub.Ids);
+                hub.Ids,
+                personEntityId: null,
+                spendingPolicyProvider: householdId => hub.HouseholdDecisionDriver.GetSpendingPolicy(householdId));
 
             // The live store is an ordinary town seller. Seed only the
             // legitimate same-simulation knowledge graph; this does not grant
@@ -254,6 +257,10 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.LogWarning("[SimulationDrivers] No SimulationSystemsHub found — drivers idle.");
                 return;
             }
+
+            TownWorldController townWorld = FindAnyObjectByType<TownWorldController>();
+            AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
+            hub.AttachParcelWorld(townWorld, acquisitionMarket != null ? acquisitionMarket.Titles : null);
 
             // Pass III Worker D: causal outcome resolution replaces the flat
             // "-1 minute per skill level" rule (Tech II §2.4). Installed once;
@@ -666,6 +673,29 @@ namespace LandLedgers.Orchestration.Systems
 
             DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
             DriveEmbodiedShopping(absoluteDayIndex, diag);
+            DriveHouseholdAutonomy(absoluteDayIndex, diag);
+        }
+
+        private void DriveHouseholdAutonomy(int absoluteDayIndex, List<string> diag)
+        {
+            if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                hub.HouseholdAutonomy.EvaluateHouseholdDay(household.id, absoluteDayIndex,
+                    new HouseholdAutonomyDriver.AutonomyContext
+                    {
+                        Ledgers = hub.HouseholdLedgers,
+                        Memberships = householdMemberships,
+                        Employments = hub.Employments,
+                        ContactGraph = hub.ContactGraph,
+                        Decisions = hub.HouseholdDecisions,
+                        DecisionDriver = hub.HouseholdDecisionDriver,
+                        HousingSearchNeeds = hub.HousingSearchNeeds,
+                        FinancialObligations = hub.FinancialObligations,
+                        Ids = hub.Ids,
+                    }, diag);
+            }
         }
 
         /// <summary>
@@ -993,8 +1023,21 @@ namespace LandLedgers.Orchestration.Systems
                         }
                     }
                     if (!scheduledNow) continue;
-                    if (hub.Tasks.RecordWork(task.TaskId, wholeMinutes, hub.WorkTimeBudgets, dayIndex, out _))
+                    if (hub.Tasks.RecordWorkProgress(task.TaskId, wholeMinutes, hub.WorkTimeBudgets,
+                        dayIndex, out bool reachedCompletion, out _))
                     {
+                        if (reachedCompletion)
+                        {
+                            TaskDefinition definition = hub.Tasks.GetDefinition(task.DefinitionId);
+                            string skillId = definition != null ? definition.RequiredSkillId : string.Empty;
+                            CausalOutcomeInputs inputs = hub.Skills.BuildCausalInputs(
+                                task.AssigneeId, skillId, definition != null ? definition.BaseMinutes : wholeMinutes);
+                            TaskOutcome outcome = hub.Skills.ResolveTaskCompletion(
+                                task.AssigneeId, skillId, inputs,
+                                difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                                day: dayIndex, taskIdForDeterminism: task.TaskId.ToString());
+                            hub.Tasks.CompleteTask(task.TaskId, outcome, dayIndex, hub.WorkTimeBudgets);
+                        }
                         if (!task.IsOpen)
                         {
                             ReleaseAutonomousTaskReservation(task, dayIndex);

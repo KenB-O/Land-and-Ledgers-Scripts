@@ -28,11 +28,14 @@ namespace LandLedgers.Editor.Population
             public HousingSearchNeedRegistry HousingNeeds = new HousingSearchNeedRegistry();
             public FinancialObligationAuthority Finance = new FinancialObligationAuthority();
             public EntityIdRegistry Ids = new EntityIdRegistry();
+            public CreditCashBridge Cash = new CreditCashBridge();
             public HouseholdDecisionDriver Driver;
 
             public Fixture()
             {
-                Driver = new HouseholdDecisionDriver(Contacts, Employments, HousingNeeds, Finance, Ids);
+                Cash.Register("P9", new PurseCashStore("P9", 10000, "test lender capital"));
+                Cash.Register("household:7", new HouseholdCashStore(7, new HouseholdLedger(7)));
+                Driver = new HouseholdDecisionDriver(Contacts, Employments, HousingNeeds, Finance, Ids, Cash);
             }
 
             public void AddMember(int personId, int householdId)
@@ -324,7 +327,7 @@ namespace LandLedgers.Editor.Population
             HouseholdDecisionDriverSaveDto dto = f.Driver.CaptureSaveDto();
 
             // Fresh driver, same finance authority: restore must not re-create anything.
-            var restored = new HouseholdDecisionDriver(f.Contacts, f.Employments, f.HousingNeeds, f.Finance, f.Ids);
+            var restored = new HouseholdDecisionDriver(f.Contacts, f.Employments, f.HousingNeeds, f.Finance, f.Ids, f.Cash);
             restored.LoadFromSaveDto(dto);
 
             Assert.AreEqual(1, restored.OpportunityLog.GetForHousehold(7).Count);

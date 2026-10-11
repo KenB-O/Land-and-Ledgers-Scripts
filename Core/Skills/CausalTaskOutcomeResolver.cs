@@ -205,4 +205,42 @@ namespace LandLedgers.Skills
             return Math.Max(1, (int)Math.Round(result.DurationMinutes));
         }
     }
+
+    /// <summary>
+    /// Compatibility adapter for older trade-runtime tests and authored
+    /// fixtures. Production scheduling installs <see cref="CausalTaskDurationEstimator" />;
+    /// this type preserves the old call surface without becoming a second
+    /// capability authority.
+    /// </summary>
+    [Obsolete("Use CausalTaskDurationEstimator for new production scheduling.")]
+    public sealed class SkillTaskDurationEstimator : ITaskDurationEstimator
+    {
+        private readonly SkillService skillService;
+
+        public SkillTaskDurationEstimator(SkillService skillService)
+        {
+            this.skillService = skillService ?? throw new ArgumentNullException(nameof(skillService));
+        }
+
+        public int EstimateMinutes(TaskDefinition definition, EntityId workerId)
+        {
+            if (definition == null)
+            {
+                return 1;
+            }
+
+            return EstimateMinutesForBase(definition.BaseMinutes, definition.RequiredSkillId, workerId);
+        }
+
+        public int EstimateMinutesForBase(int baseMinutes, string skillId, EntityId workerId)
+        {
+            if (string.IsNullOrEmpty(skillId))
+            {
+                return Math.Max(1, baseMinutes);
+            }
+
+            int level = skillService.GetLevel(workerId, skillId);
+            return Math.Max(1, baseMinutes - Math.Max(0, level - 1));
+        }
+    }
 }

@@ -161,6 +161,26 @@ namespace LandLedgers.Population
             return null;
         }
 
+        /// <summary>Atomically transfers cash to another household ledger.</summary>
+        public string TryTransferTo(HouseholdLedger recipient, int dayIndex, int amountCents,
+            string purpose, HouseholdIncomeSource source, string sourceReference,
+            string reason, string counterparty)
+        {
+            if (recipient == null) return Reject("Rejected transfer: recipient ledger is required.");
+            if (amountCents <= 0) return Reject($"Rejected transfer of {amountCents}c: amount must be positive.");
+            if (string.IsNullOrWhiteSpace(purpose)) return Reject("Rejected transfer: purpose is required.");
+            if (source == HouseholdIncomeSource.Unspecified) return Reject("Rejected transfer: source class is required.");
+            if (string.IsNullOrWhiteSpace(reason)) return Reject("Rejected transfer: recipient reason is required.");
+            if (amountCents > GetBalanceCents())
+                return Reject($"Rejected transfer of {amountCents}c: household balance is {GetBalanceCents()}c.");
+
+            AddEntry(dayIndex, -amountCents, HouseholdIncomeSource.Unspecified,
+                string.Empty, string.Empty, purpose, counterparty ?? string.Empty);
+            recipient.AddEntry(dayIndex, amountCents, source, sourceReference ?? string.Empty,
+                reason, string.Empty, counterparty ?? string.Empty);
+            return null;
+        }
+
         /// <summary>Balance is derived from entries, never stored as competing truth.</summary>
         public int GetBalanceCents()
         {

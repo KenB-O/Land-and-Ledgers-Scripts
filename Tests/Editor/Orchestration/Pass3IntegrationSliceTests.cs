@@ -288,6 +288,7 @@ namespace LandLedgers.Editor.Orchestration
             Assert.IsNull(w.Negotiation.RecordCounter(offer.OfferId, 320, 528, diag));
 
             // 7. Agreement accepted; PendingStart until day 530.
+            Assert.IsNull(w.Negotiation.AcceptCounterOffer(offer.OfferId, 3, 529, diag));
             Assert.IsNull(w.Negotiation.AcceptOffer(offer.OfferId, 529, w.Employments, diag));
             Assert.AreEqual(OfferState.Accepted, offer.State);
             Assert.IsTrue(w.Employments.TryGetById("emp-" + offer.OfferId, out EmploymentRelationship rel));

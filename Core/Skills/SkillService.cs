@@ -156,6 +156,27 @@ namespace LandLedgers.Skills
         }
 
         /// <summary>
+        /// Compatibility bridge for older authored tests and trade fixtures.
+        /// New gameplay records experience through completed Tasks; this method
+        /// only translates the legacy "practice minutes" input into the
+        /// continuous capability projection used by the current model.
+        /// </summary>
+        [Obsolete("Use RecordTaskExperience from a completed Task.")]
+        public void GrantPractice(EntityId personId, string skillId, int minutes)
+        {
+            if (personId.Kind != EntityKind.Person || string.IsNullOrEmpty(skillId) || minutes <= 0)
+            {
+                return;
+            }
+
+            int legacyLevel = Math.Max(1, Math.Min(10, 1 + minutes / ExperiencePerLevel));
+            double compatibilityCapability = (legacyLevel - 1) / 9.0;
+            double current = GetCapability(personId, skillId);
+            capabilityStore.SetCapability(
+                personId.ToString(), skillId, Math.Max(current, compatibilityCapability), 0);
+        }
+
+        /// <summary>
         /// Learning-rate multiplier for a person/skill via the skill's
         /// capability family. 1.0 when no aptitude is recorded.
         /// Canon: Rev XVII §3 (aptitude accelerates; never grants skill).

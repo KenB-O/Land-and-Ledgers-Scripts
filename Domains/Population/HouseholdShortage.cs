@@ -25,6 +25,8 @@ namespace LandLedgers.Population
         public int HouseholdId;
         public string ItemId = string.Empty;
         public int UnitsNeeded;
+        /// <summary>Necessities are not reduced by discretionary economizing.</summary>
+        public bool IsNecessity = true;
         public float Urgency01;
         public string ReasonSummary = string.Empty;
         public int CreatedDayIndex;

@@ -294,6 +294,27 @@ namespace LandLedgers.Tasks
             return true;
         }
 
+        /// <summary>Records progress without assigning a default outcome.</summary>
+        public bool RecordWorkProgress(EntityId taskId, int minutes, WorkTimeBudgetStore budgetStore,
+            int currentDayIndex, out bool reachedCompletion, out string rejectionReason)
+        {
+            reachedCompletion = false;
+            rejectionReason = null;
+            WorkTask task = FindTask(taskId);
+            if (task == null) { rejectionReason = "Unknown task: " + taskId; return false; }
+            if (task.Status != TaskStatus.InProgress)
+            {
+                rejectionReason = "Task " + taskId + " is " + task.Status + ", not InProgress.";
+                return false;
+            }
+            int wholeMinutes = WorkTimeMath.ClampToWholeMinutes(minutes);
+            task.AddWorkedMinutes(wholeMinutes);
+            if (task.HasAssignee && budgetStore != null)
+                budgetStore.GetOrCreate(task.AssigneeId).RecordWorked(wholeMinutes);
+            reachedCompletion = task.MinutesRemaining <= 0;
+            return true;
+        }
+
         /// <summary>Completes a task early (or records a failure). Unused commitment is released.</summary>
         public bool CompleteTask(EntityId taskId, TaskOutcome outcome, int currentDayIndex, WorkTimeBudgetStore budgetStore)
         {

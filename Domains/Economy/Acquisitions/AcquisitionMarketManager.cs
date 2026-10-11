@@ -787,6 +787,9 @@ namespace LandLedgers.Economy
         // persisted through AcquisitionSaveDto capture/restore like the other runtime
         // books (ownershipAptitude pattern).
         private readonly TitleAuthority titleAuthority = new TitleAuthority();
+
+        /// <summary>Live title authority used by property integration adapters.</summary>
+        public TitleAuthority Titles => titleAuthority;
         private readonly List<string> titleDiagnostics = new List<string>();
         private PlayerPropertyTaxDriver propertyTaxDriver;
 
@@ -1137,6 +1140,16 @@ namespace LandLedgers.Economy
         public void LoadFromSaveDto(AcquisitionSaveDto dto)
         {
             AutoWire();
+            // A true new game must not inherit scene/runtime ownership flags
+            // from a prior session. Scenario grants and acquisitions reapply
+            // ownership through their normal authorities after this reset.
+            if (dto == null && townWorld != null)
+            {
+                foreach (TownPlot plot in townWorld.Plots)
+                    if (plot != null) plot.playerOwned = false;
+                foreach (PlacedBuilding building in townWorld.Buildings)
+                    if (building != null) building.playerOwned = false;
+            }
             landListings.Clear();
             businessListings.Clear();
             ownedPlotIds.Clear();
@@ -1152,6 +1165,7 @@ namespace LandLedgers.Economy
 
             if (dto == null)
             {
+                titleAuthority.LoadFromSaveDto(new TitleAuthority.TitleSaveDto());
                 EnsureConstructionSupportNodesLoaded();
                 marketBuilt = false;
                 RebuildMarket();
@@ -1172,7 +1186,7 @@ namespace LandLedgers.Economy
 
             // P5: restore the T2F title chain and the property-tax book (null-guarded
             // for pre-P5 saves, which simply start with an empty chain/book).
-            if (dto.titleChain != null) titleAuthority.LoadFromSaveDto(dto.titleChain);
+            titleAuthority.LoadFromSaveDto(dto.titleChain ?? new TitleAuthority.TitleSaveDto());
             if (dto.propertyTax != null) PropertyTaxes.Taxes.LoadFromSaveDto(dto.propertyTax);
             PropertyTaxes.RestoreLastProcessedDayIndex(dto.lastPropertyTaxDay);
 

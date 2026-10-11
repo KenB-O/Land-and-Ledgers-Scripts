@@ -220,14 +220,29 @@ namespace LandLedgers.World.Property
             string purpose = $"rent/board: {agreement.Kind} {agreement.AgreementId} period {periodIndex} (due day {dueDay})";
             if (paidCents > 0)
             {
-                string refusal = tenantLedger.RecordOutflow(dayIndex, (int)paidCents, purpose, payeeDisplay);
-                if (refusal != null)
+                if (payeeHouseholdId >= 0)
                 {
-                    // Defensive: paidCents was capped at the balance, so this
-                    // should not happen. Never credit what was not debited.
-                    diag.Add($"TenancyPaymentService: UNEXPECTED tenant debit refusal for H{tenantHouseholdId} " +
-                             $"({paidCents}c): {refusal} — nothing credited, full amount booked as arrears.");
-                    paidCents = 0;
+                    HouseholdLedger payeeLedger = ledgers.GetOrCreate(payeeHouseholdId);
+                    HouseholdIncomeSource source = string.Equals(agreement.Kind, "boarding", StringComparison.OrdinalIgnoreCase)
+                        ? HouseholdIncomeSource.BoardingIncome : HouseholdIncomeSource.OtherDocumented;
+                    string transferRefusal = tenantLedger.TryTransferTo(payeeLedger, dayIndex,
+                        (int)paidCents, purpose, source, agreement.AgreementId,
+                        $"rent/board received — {agreement.Kind} {agreement.AgreementId} period {periodIndex} from H{tenantHouseholdId}",
+                        $"H{tenantHouseholdId}");
+                    if (transferRefusal != null)
+                    {
+                        diag.Add($"TenancyPaymentService: household transfer refused for H{tenantHouseholdId}: {transferRefusal} — no debit or credit booked.");
+                        paidCents = 0;
+                    }
+                }
+                else
+                {
+                    string refusal = tenantLedger.RecordOutflow(dayIndex, (int)paidCents, purpose, payeeDisplay);
+                    if (refusal != null)
+                    {
+                        diag.Add($"TenancyPaymentService: tenant debit refused for H{tenantHouseholdId}: {refusal} — no credit booked.");
+                        paidCents = 0;
+                    }
                 }
             }
 
@@ -236,16 +251,7 @@ namespace LandLedgers.World.Property
             {
                 if (payeeHouseholdId >= 0)
                 {
-                    HouseholdLedger payeeLedger = ledgers.GetOrCreate(payeeHouseholdId);
-                    HouseholdIncomeSource source = string.Equals(agreement.Kind, "boarding", StringComparison.OrdinalIgnoreCase)
-                        ? HouseholdIncomeSource.BoardingIncome
-                        : HouseholdIncomeSource.OtherDocumented;
-                    string inflowRefusal = payeeLedger.RecordInflow(
-                        dayIndex, (int)paidCents, source, agreement.AgreementId,
-                        $"rent/board received — {agreement.Kind} {agreement.AgreementId} period {periodIndex} from H{tenantHouseholdId}",
-                        $"H{tenantHouseholdId}");
-                    if (inflowRefusal != null)
-                        diag.Add($"TenancyPaymentService: UNEXPECTED payee credit refusal for H{payeeHouseholdId}: {inflowRefusal}.");
+                    // Household-to-household payment was committed atomically above.
                 }
                 else
                 {

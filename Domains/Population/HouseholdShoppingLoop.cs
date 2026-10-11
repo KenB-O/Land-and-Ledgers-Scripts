@@ -56,6 +56,7 @@ namespace LandLedgers.Population
         private readonly FinancialObligationAuthority obligations;
         private readonly EntityIdRegistry entityIds;
         private readonly Func<int, EntityId> personEntityId;
+        private readonly Func<int, HouseholdSpendingPolicy> spendingPolicyProvider;
 
         private int nextEventSequence;
         private int nextBatchSequence;
@@ -90,7 +91,8 @@ namespace LandLedgers.Population
             ShopperSellerKnowledge knowledge,
             FinancialObligationAuthority obligations = null,
             EntityIdRegistry entityIds = null,
-            Func<int, EntityId> personEntityId = null)
+            Func<int, EntityId> personEntityId = null,
+            Func<int, HouseholdSpendingPolicy> spendingPolicyProvider = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.membership = membership ?? throw new ArgumentNullException(nameof(membership));
@@ -106,6 +108,7 @@ namespace LandLedgers.Population
             this.obligations = obligations;
             this.entityIds = entityIds;
             this.personEntityId = personEntityId ?? (pid => EntityId.For(EntityKind.Person, pid));
+            this.spendingPolicyProvider = spendingPolicyProvider;
         }
 
         /// <summary>Registers the TTS-2 "shopping" task definition (in-store time).</summary>
@@ -131,6 +134,15 @@ namespace LandLedgers.Population
             if (needProblem != null)
             {
                 return Fail(result, need, -1, dayIndex, needProblem, diag, options);
+            }
+
+            HouseholdSpendingPolicy spendingPolicy = spendingPolicyProvider?.Invoke(need.HouseholdId);
+            if (spendingPolicy != null && !need.IsNecessity)
+            {
+                int permitted = (int)Math.Floor(need.UnitsNeeded * Math.Max(0, spendingPolicy.DiscretionaryCapPercent) / 100.0);
+                if (permitted <= 0)
+                    return Fail(result, need, -1, dayIndex, "Discretionary purchase deferred by household spending policy.", diag, options);
+                need.UnitsNeeded = Math.Min(need.UnitsNeeded, permitted);
             }
 
             result.NeedSequence = need.NeedSequence;

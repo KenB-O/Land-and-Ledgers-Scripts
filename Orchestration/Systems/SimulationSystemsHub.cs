@@ -18,6 +18,7 @@ using LandLedgers.Economy.Delegation;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.World;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.Barber;
 using LandLedgers.Economy.Businesses.BoardingHouse;
@@ -319,6 +320,16 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public ParcelService Parcels => parcelService ??= new ParcelService();
 
+        /// <summary>Attaches the existing world grid and title authority to land services.</summary>
+        public void AttachParcelWorld(TownWorldController world, TitleAuthority titles)
+        {
+            if (world == null) return;
+            Parcels.Grid = world.Grid;
+            ParcelSubdivisions.BuildingIndex = new TownWorldParcelBuildingIndex(world);
+            if (titles != null)
+                ParcelSubdivisions.TitleHolderLookup = titles.CurrentHolder;
+        }
+
         /// <summary>
         /// Pass III Worker A: the single non-title rights store
         /// (lease/easement/charge/entry/ROW/restriction/dispute/lien).
@@ -353,7 +364,7 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public HouseholdDecisionDriver HouseholdDecisionDriver =>
             householdDecisionDriver ??= new HouseholdDecisionDriver(
-                ContactGraph, Employments, HousingSearchNeeds, FinancialObligations, Ids);
+                ContactGraph, Employments, HousingSearchNeeds, FinancialObligations, Ids, CreditCash);
 
         /// <summary>
         /// Pass III Worker C: narrow domestic labor (meal prep, fuel, animal
@@ -623,6 +634,7 @@ namespace LandLedgers.Orchestration.Systems
             JourneyTravel.RegisterTaskDefinitions(tasks);
             FreightCompanyRuntime.RegisterTaskDefinitions(tasks);
             postal?.RegisterTaskDefinitions(tasks);
+            DomesticTaskCatalog.RegisterAll(tasks, diagnostics);
 
             diagnostics.Add("RegisterTaskCatalogs: all static task catalogs registered (duplicates rejected).");
         }

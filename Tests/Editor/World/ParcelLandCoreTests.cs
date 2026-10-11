@@ -125,9 +125,9 @@ namespace LandLedgers.EditorTests.World
 
             IReadOnlyList<string> held = transfers.ParcelsHeldBy("Player");
             Assert.AreEqual(3, held.Count);
-            Assert.Contains(a.Id, held);
-            Assert.Contains(b.Id, held);
-            Assert.Contains(c.Id, held);
+            Assert.Contains(a.Id, new List<string>(held));
+            Assert.Contains(b.Id, new List<string>(held));
+            Assert.Contains(c.Id, new List<string>(held));
             Assert.AreEqual(0, transfers.ParcelsHeldBy("Nobody").Count);
         }
 
@@ -470,9 +470,9 @@ namespace LandLedgers.EditorTests.World
             Assert.Less(sw.ElapsedMilliseconds, 5000L);
 
             // Time a full-coverage subdivision validation over the same ~81k cells.
-            var request = SplitRequest(parcel.Id, null,
+            subdivisions.TitleHolderLookup = _ => "perf-holder";
+            var request = SplitRequest(parcel.Id, "perf-holder",
                 new GridRect(0, 0, size, 142), new GridRect(0, 142, size, 143));
-            subdivisions.TitleHolderLookup = null; // skip authority for the perf probe
             sw.Restart();
             SubdivisionValidation validation = subdivisions.Validate(request);
             sw.Stop();

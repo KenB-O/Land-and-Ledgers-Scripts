@@ -144,8 +144,23 @@ namespace LandLedgers.World.Property
             TownGrid grid = Grid;
             if (grid == null || !grid.IsInBounds(coord)) return null;
             int plotId = grid.GetCell(coord).plotId;
-            if (plotId < 0) return null;
-            return ParcelForPlot(plotId);
+            if (plotId >= 0)
+            {
+                ParcelRecord linked = ParcelForPlot(plotId);
+                if (linked != null && !linked.IsRetired) return linked;
+            }
+
+            // After legal subdivision the old TownPlot link may point to the
+            // retired parent. Resolve live children by their surveyed footprint
+            // while keeping TownGrid as the only physical spatial substrate.
+            foreach (ParcelRecord record in parcels.Values)
+            {
+                if (record == null || record.IsRetired) continue;
+                foreach (GridRect rect in record.Footprint)
+                    if (rect.Contains(coord)) return record;
+            }
+
+            return null;
         }
 
         public IReadOnlyList<ParcelRecord> ParcelsWithStatus(LandStatus status)

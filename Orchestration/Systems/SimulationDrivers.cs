@@ -4,6 +4,7 @@ using System.Linq;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Recruitment;
@@ -18,6 +19,7 @@ using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
 using LandLedgers.World;
+using LandLedgers.World.Property;
 using UnityEngine;
 
 namespace LandLedgers.Orchestration.Systems
@@ -88,6 +90,7 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
         private HouseholdShoppingLoop householdShoppingLoop;
+        private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
 
@@ -137,6 +140,20 @@ namespace LandLedgers.Orchestration.Systems
         public IHouseholdToolCustody CreateHouseholdToolCustody()
         {
             return hub == null ? null : new HouseholdInventoryToolCustody(hub.HouseholdInventories);
+        }
+
+        /// <summary>
+        /// Registers a scene-owned boarding-house runtime with the existing
+        /// hub. The runtime remains the detailed occupancy/custody authority;
+        /// the hub only owns its persistence and settlement scheduling.
+        /// </summary>
+        public void RegisterBoardingHouseRuntime(BoardingHouseShopRuntime runtime)
+        {
+            if (runtime == null || hub == null) return;
+            if (sharedBusinessRuntime != null && sharedBusinessRuntime.TryFindByInstanceId(runtime.BusinessInstanceId, out BusinessInstanceState business))
+                runtime.BindBusiness(business);
+            hub.RegisterBoardingHouseRuntime(runtime);
+            hub.RegisterBoardingHouseMealSource(runtime.MealDaySource);
         }
 
         private void BuildHouseholdShoppingLoop()
@@ -237,6 +254,7 @@ namespace LandLedgers.Orchestration.Systems
             sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
             WireHouseholdCashAuthorities();
             WireNpcBusinessCashStores();
+            BindNpcBusinessCreation(sharedBusinessRuntime);
         }
 
         // CLN-4: accumulated player worked minutes for the current week (owner labor).
@@ -287,7 +305,23 @@ namespace LandLedgers.Orchestration.Systems
                 sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
                 WireHouseholdCashAuthorities();
                 WireNpcBusinessCashStores();
+                BindNpcBusinessCreation(sharedBusinessRuntime);
             }
+
+        }
+
+        private void BindNpcBusinessCreation(SharedBusinessRuntimeManager runtime)
+        {
+            if (hub == null || runtime == null) return;
+            hub.NpcBusinessCreation.PremisesAssigner = kind =>
+                runtime.TryAssignNpcBusinessPremises(kind, out int buildingId) ? buildingId : -1;
+            hub.NpcBusinessCreation.BusinessCreated = business =>
+            {
+                if (!runtime.TryAdoptNpcBusiness(business, out string message))
+                    Debug.LogWarning("[SimulationDrivers] NPC Business adoption refused: " + message);
+                else
+                    WireNpcBusinessCashStores();
+            };
         }
 
         /// <summary>
@@ -451,6 +485,7 @@ namespace LandLedgers.Orchestration.Systems
             // Autonomous Labor: weekly wage settlement per business, guarded
             // against double-posting by the settled-week marker.
             DriveLaborMarketWeek(absoluteDayIndex);
+            DriveBoardingHouseWeeks(absoluteDayIndex);
         }
 
         private void OnDayChanged(SimulationDateChangedContext context)
@@ -518,13 +553,81 @@ namespace LandLedgers.Orchestration.Systems
             // NX-2C drive-by: DailyNeedsService.ExecuteDay had NO live caller —
             // the NX-1B nutrition teeth never bit. Wire it here with the
             // work-time budgets so missed meals reduce usable minutes for real.
+            DriveBoardingHouseDays(absoluteDayIndex);
             DriveDailyNeeds(absoluteDayIndex);
+            DriveTenancyPayments(absoluteDayIndex);
 
             // Autonomous Labor: daily labor-market drives. The hub's authority
             // predicate needs the current day for delegation bounds.
             hub.LaborDayIndex = absoluteDayIndex;
             DriveLaborMarketDay(absoluteDayIndex);
             DriveAutonomousLabor(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Settles agreements from the hub-owned HousingAuthority once per
+        /// simulation day. Payees resolve to the same household ledgers or
+        /// BusinessRuntimeState cash stores used everywhere else; an unknown
+        /// payee therefore refuses the payment rather than losing tenant cash.
+        /// </summary>
+        private void DriveTenancyPayments(int absoluteDayIndex)
+        {
+            if (hub == null) return;
+            tenancyPayees.Bind(populationManager, hub.HouseholdLedgers, sharedBusinessRuntime);
+            var diagnostics = new List<string>();
+            List<TenancySettlementResult> results = hub.TenancyPayments.SettleDueRents(
+                hub.Housing,
+                absoluteDayIndex,
+                hub.HouseholdLedgers,
+                tenancyPayees,
+                hub.FinancialObligations,
+                hub.Ids,
+                diagnostics);
+            if (results.Count > 0)
+            {
+                Debug.Log($"[SimulationDrivers] tenancy day {absoluteDayIndex}: " +
+                    string.Join(" | ", results.Select(result =>
+                        $"{result.AgreementId}:{result.Outcome}:{result.PaidCents}c")));
+            }
+            if (diagnostics.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] tenancy: " + string.Join(" | ", diagnostics));
+            }
+        }
+
+        private void DriveBoardingHouseDays(int absoluteDayIndex)
+        {
+            if (hub == null || hub.BoardingHouseRuntimes == null) return;
+            var diagnostics = new List<string>();
+            foreach (BoardingHouseShopRuntime runtime in hub.BoardingHouseRuntimes)
+            {
+                if (runtime == null) continue;
+                runtime.ExecuteDay(absoluteDayIndex, 0, diagnostics);
+            }
+            if (diagnostics.Count > 0)
+                Debug.Log("[SimulationDrivers] boarding-house: " + string.Join(" | ", diagnostics));
+        }
+
+        private void DriveBoardingHouseWeeks(int absoluteDayIndex)
+        {
+            if (hub == null || hub.BoardingHouseRuntimes == null) return;
+            var diagnostics = new List<string>();
+            foreach (BoardingHouseShopRuntime runtime in hub.BoardingHouseRuntimes)
+            {
+                if (runtime == null) continue;
+                List<BoarderRentDue> dues = runtime.ExecuteWeek(absoluteDayIndex, diagnostics);
+                hub.RentCollection.SettleDues(
+                    dues,
+                    runtime,
+                    hub.HouseholdLedgers,
+                    householdMemberships,
+                    hub.FinancialObligations,
+                    hub.Ids,
+                    absoluteDayIndex,
+                    diagnostics);
+            }
+            if (diagnostics.Count > 0)
+                Debug.Log("[SimulationDrivers] boarding-house weekly: " + string.Join(" | ", diagnostics));
         }
 
         private void DriveGenericProduction(int absoluteDayIndex)
@@ -1300,6 +1403,85 @@ namespace LandLedgers.Orchestration.Systems
             {
                 OnScenarioTick?.Invoke();
             }
+        }
+    }
+
+    /// <summary>
+    /// Production payee directory for the shared tenancy authority. Person
+    /// payees resolve through the current PopulationState; business payees
+    /// resolve through the existing BusinessRuntimeState cash authority.
+    /// </summary>
+    internal sealed class LiveTenancyPayeeDirectory : ITenancyPayeeDirectory
+    {
+        private PopulationManager population;
+        private HouseholdLedgerRegistry ledgers;
+        private SharedBusinessRuntimeManager businesses;
+
+        public void Bind(PopulationManager populationManager, HouseholdLedgerRegistry householdLedgers,
+            SharedBusinessRuntimeManager businessRuntime)
+        {
+            population = populationManager;
+            ledgers = householdLedgers;
+            businesses = businessRuntime;
+        }
+
+        public int FindPayeeHouseholdId(string payeeHolderId)
+        {
+            if (string.IsNullOrWhiteSpace(payeeHolderId) || population?.State?.people == null)
+                return -1;
+
+            string value = payeeHolderId.Trim();
+            if (value.StartsWith("household:", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(value.Substring("household:".Length), out int householdId))
+                return ledgers?.Get(householdId) != null ? householdId : -1;
+
+            if (value.StartsWith("person:", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(value.Substring("person:".Length), out int personId))
+            {
+                PersonState person = population.State.GetPerson(personId);
+                return person?.householdId >= 0 && ledgers?.Get(person.householdId) != null
+                    ? person.householdId
+                    : -1;
+            }
+
+            return -1;
+        }
+
+        public ITenancyPayeeCashSink FindPayeeBusinessSink(string payeeHolderId)
+        {
+            if (businesses == null || string.IsNullOrWhiteSpace(payeeHolderId)) return null;
+            string value = payeeHolderId.Trim();
+            const string prefix = "business:";
+            if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+            string businessId = value.Substring(prefix.Length);
+            for (int i = 0; i < businesses.Businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses.Businesses[i];
+                if (business?.RuntimeState != null
+                    && string.Equals(business.InstanceId, businessId, StringComparison.OrdinalIgnoreCase))
+                    return new BusinessTenancyPayeeSink(business);
+            }
+
+            return null;
+        }
+    }
+
+    internal sealed class BusinessTenancyPayeeSink : ITenancyPayeeCashSink
+    {
+        private readonly BusinessInstanceState business;
+
+        public BusinessTenancyPayeeSink(BusinessInstanceState business)
+        {
+            this.business = business;
+        }
+
+        public string PayeeHolderId => "business:" + (business?.InstanceId ?? string.Empty);
+        public string DisplayName => business?.RuntimeDisplayName ?? PayeeHolderId;
+
+        public void RecordCashInflow(int cents, string label, int dayIndex)
+        {
+            if (business?.RuntimeState == null || cents <= 0) return;
+            business.RuntimeState.AddCashCents(cents);
         }
     }
 

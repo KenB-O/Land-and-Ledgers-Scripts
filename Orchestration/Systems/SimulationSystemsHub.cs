@@ -236,6 +236,8 @@ namespace LandLedgers.Orchestration.Systems
         private DomesticLaborService domesticLaborService;
         private HouseholdAutonomyDriver householdAutonomyDriver;
         private HousingSearchNeedRegistry housingSearchNeedRegistry;
+        private HousingAuthority housingAuthority;
+        private readonly List<BoardingHouseShopRuntime> boardingHouseRuntimes = new List<BoardingHouseShopRuntime>();
 
         /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
         public JourneyModel Journeys => journeyModel ??= new JourneyModel();
@@ -386,6 +388,26 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public HousingSearchNeedRegistry HousingSearchNeeds =>
             housingSearchNeedRegistry ??= new HousingSearchNeedRegistry();
+
+        /// <summary>
+        /// Pass III property authority owned by the hub. Housing agreements,
+        /// occupancies and functional spaces are real persisted state; the
+        /// daily tenancy payment service consumes this authority rather than
+        /// maintaining a parallel rent register.
+        /// </summary>
+        public HousingAuthority Housing => housingAuthority ??= new HousingAuthority();
+        public IList<BoardingHouseShopRuntime> BoardingHouseRuntimes => boardingHouseRuntimes;
+
+        public void RegisterBoardingHouseRuntime(BoardingHouseShopRuntime runtime)
+        {
+            if (runtime == null || boardingHouseRuntimes.Contains(runtime)) return;
+            boardingHouseRuntimes.Add(runtime);
+        }
+
+        public void UnregisterBoardingHouseRuntime(BoardingHouseShopRuntime runtime)
+        {
+            if (runtime != null) boardingHouseRuntimes.Remove(runtime);
+        }
 
         /// <summary>
         /// Autonomous Labor: owner lookup hook for the offer authority predicate.
@@ -693,6 +715,8 @@ namespace LandLedgers.Orchestration.Systems
                 householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
+                housing = Housing.CaptureSaveDto(),
+                boardingHouseRuntimes = CaptureBoardingHouseRuntimes(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -778,6 +802,8 @@ namespace LandLedgers.Orchestration.Systems
             Delegation.LoadFromSaveDto(dto.delegation);
             Parcels.LoadFromSaveDto(dto.parcels);
             PropertyInterests.LoadFromSaveDto(dto.propertyInterests);
+            Housing.LoadFromSaveDto(dto.housing);
+            LoadBoardingHouseRuntimes(dto.boardingHouseRuntimes);
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
@@ -808,6 +834,38 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             return diagnostics;
+        }
+
+        private List<BoardingHouseShopRuntime.BoardingHouseShopRuntimeSaveDto> CaptureBoardingHouseRuntimes()
+        {
+            var result = new List<BoardingHouseShopRuntime.BoardingHouseShopRuntimeSaveDto>();
+            foreach (BoardingHouseShopRuntime runtime in boardingHouseRuntimes)
+                if (runtime != null) result.Add(runtime.CaptureSaveDto());
+            return result;
+        }
+
+        private void LoadBoardingHouseRuntimes(List<BoardingHouseShopRuntime.BoardingHouseShopRuntimeSaveDto> saved)
+        {
+            if (saved == null || saved.Count == 0) return;
+            foreach (BoardingHouseShopRuntime.BoardingHouseShopRuntimeSaveDto dto in saved)
+            {
+                if (dto == null || string.IsNullOrWhiteSpace(dto.BusinessInstanceId)) continue;
+                BoardingHouseShopRuntime runtime = null;
+                foreach (BoardingHouseShopRuntime existing in boardingHouseRuntimes)
+                {
+                    if (existing != null && string.Equals(existing.BusinessInstanceId, dto.BusinessInstanceId, StringComparison.Ordinal))
+                    {
+                        runtime = existing;
+                        break;
+                    }
+                }
+                if (runtime == null)
+                {
+                    runtime = new BoardingHouseShopRuntime(dto.BusinessInstanceId, Ids);
+                    boardingHouseRuntimes.Add(runtime);
+                }
+                runtime.LoadFromSaveDto(dto);
+            }
         }
 
         private List<NpcBusinessLifeRecordSaveDto> CaptureNpcBusinessLifecycle()

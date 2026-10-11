@@ -83,6 +83,7 @@ namespace LandLedgers.Persistence
         // enterprise, trade-credit, or credit-event state.
         public PersonScheduleTrackerSaveDto personSchedule = new();
         public RentCollectionService.RentCollectionServiceSaveDto rentCollection = new();
+        public List<BoardingHouseShopRuntime.BoardingHouseShopRuntimeSaveDto> boardingHouseRuntimes = new();
         public NpcFormationAssetRegisterSaveDto npcFormationAssets = new();
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();
@@ -107,6 +108,7 @@ namespace LandLedgers.Persistence
         public PropertyInterestStoreSaveDto propertyInterests = new();
         // Pass III Worker B: tenancy payment loop — rent/board obligation
         // states plus settled-period idempotency markers.
+        public HousingAuthority.HousingSaveDto housing = new();
         public TenancyPaymentService.TenancyPaymentSaveDto tenancyPayments = new();
         // Pass III Worker C: household decisions, decision-execution state,
         // domestic labor assignments, and autonomy job-loss fingerprints.

@@ -35,6 +35,9 @@ namespace LandLedgers.Economy.Creation
         /// </summary>
         public Func<PremisesKind, int> PremisesAssigner;
 
+        /// <summary>Handoff into the authoritative live Business runtime after formation.</summary>
+        public Action<BusinessInstanceState> BusinessCreated;
+
         /// <summary>
         /// Optional authored-profile lookup. When null or missing, the
         /// code fallback profile is built (any of the 28 BusinessTypes is
@@ -136,6 +139,7 @@ namespace LandLedgers.Economy.Creation
                 OwnerName = intent.FounderName,
                 FounderPersonId = intent.FounderPersonId,
             };
+            BusinessCreated?.Invoke(result.Business);
             diagnostics.Add($"Adapter: '{intent.DisplayName}' created as {created.BusinessEntityKey} " +
                 $"through the generic BIZ-1 flow with {allCapabilityIds.Count} capabilit(ies) on one identity.");
             return null;

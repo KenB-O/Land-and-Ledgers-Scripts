@@ -3134,6 +3134,12 @@ namespace LandLedgers.Economy
             return null;
         }
 
+        public bool TryFindByInstanceId(string instanceId, out BusinessInstanceState business)
+        {
+            business = FindByInstanceId(instanceId);
+            return business != null;
+        }
+
         public bool TryFindByBuildingId(int buildingId, out BusinessInstanceState business)
         {
             business = FindByBuildingId(buildingId);
@@ -3223,6 +3229,70 @@ namespace LandLedgers.Economy
 
             message = $"No compatible unassigned premises are available for {business.RuntimeDisplayName}.";
             return false;
+        }
+
+        /// <summary>
+        /// Adopts a formed NPC Business into the same runtime collection used
+        /// by player Businesses. Formation has already validated ownership and
+        /// premises; this method grants no free cash, assets or labor.
+        /// </summary>
+        public bool TryAdoptNpcBusiness(BusinessInstanceState business, out string message)
+        {
+            AutoWire();
+            if (business == null || business.RuntimeState == null)
+            {
+                message = "NPC Business is unavailable.";
+                return false;
+            }
+            if (business.Owner == null || business.Owner.OwnerKind != BusinessOwnerKind.Npc)
+            {
+                message = "Only an NPC-owned Business can enter the NPC runtime path.";
+                return false;
+            }
+            bool alreadyRegistered = false;
+            foreach (BusinessInstanceState existing in businesses)
+            {
+                if (existing != null && string.Equals(existing.InstanceId, business.InstanceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    alreadyRegistered = true;
+                    break;
+                }
+            }
+            if (alreadyRegistered)
+            {
+                message = $"NPC Business '{business.InstanceId}' is already registered.";
+                return false;
+            }
+            if (business.AssignedBuildingId >= 0 && assignedBuildingIds.Contains(business.AssignedBuildingId))
+            {
+                message = $"NPC Business premises {business.AssignedBuildingId:000} are already assigned.";
+                return false;
+            }
+
+            businesses.Add(business);
+            if (business.AssignedBuildingId >= 0) assignedBuildingIds.Add(business.AssignedBuildingId);
+            WireEmploymentRegistryToBusinesses();
+            RegisterBusinessForValuation(business);
+            SyncInventoryValueForValuation(business);
+            message = $"NPC Business '{business.RuntimeDisplayName}' entered the shared runtime.";
+            return true;
+        }
+
+        /// <summary>NPC formation uses the same live first-fit premises inventory as player formation.</summary>
+        public bool TryAssignNpcBusinessPremises(PremisesKind kind, out int buildingId)
+        {
+            AutoWire();
+            buildingId = -1;
+            if (townWorld == null || townWorld.Buildings == null) return false;
+            PlacedBuilding best = null;
+            foreach (PlacedBuilding building in townWorld.Buildings)
+            {
+                if (building == null || building.definition == null || assignedBuildingIds.Contains(building.id)) continue;
+                if (best == null || building.id < best.id) best = building;
+            }
+            if (best == null) return false;
+            buildingId = best.id;
+            return true;
         }
 
         private void ResetWeeklySettlementForType(BusinessType businessType)

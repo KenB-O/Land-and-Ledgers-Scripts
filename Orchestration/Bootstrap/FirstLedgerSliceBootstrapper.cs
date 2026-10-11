@@ -307,7 +307,15 @@ namespace LandLedgers.FirstLedger
             storeRuntime?.InitializeIfNeeded();
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
-            FindAnyObjectByType<SimulationDrivers>()?.AttachBusinessRuntime(sharedBusinessRuntime);
+            SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
+            simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
+            // Register the live store with the shared supplier directory. The
+            // household membership binding remains an explicit scenario/world
+            // concern; registering the seller alone cannot execute a purchase.
+            if (simulationDrivers != null && storeRuntime != null)
+            {
+                simulationDrivers.RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort());
+            }
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
             OpeningTransportStock.Ensure(
                 systemsHub,

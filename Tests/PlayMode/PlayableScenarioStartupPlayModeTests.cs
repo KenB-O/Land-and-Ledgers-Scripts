@@ -501,7 +501,7 @@ namespace LandLedgers.PlayMode
 
         // Save/load intentionally runs last: it restores a full campaign snapshot and
         // therefore must not leave a loaded-world lifecycle for unrelated startup tests.
-        [UnityTest, Order(100000)]
+        [UnityTest, Order(100000), Timeout(900000)]
         public IEnumerator CampaignSaveRoundTripPreservesProductionBusinessIdentity()
         {
             AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);

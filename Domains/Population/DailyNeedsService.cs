@@ -77,7 +77,8 @@ namespace LandLedgers.Population
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
-            if (population == null || planner == null || executor == null)
+            bool lotBackedConsumption = inventories != null && mealLog != null;
+            if (population == null || planner == null || (!lotBackedConsumption && executor == null))
             {
                 diag.Add("DailyNeedsService.ExecuteDay: missing population, planner, or executor — no needs executed.");
                 return report;
@@ -142,6 +143,15 @@ namespace LandLedgers.Population
             //    embodied channel (built on post-meal reserve levels, so the
             //    meal purchase above is never double-bought).
             List<ProcurementNeed> plan = planner.BuildPlan(household, actingPersonId, dayIndex);
+            if (executor == null)
+            {
+                // When the production HouseholdShoppingLoop is bound, its
+                // purchasing-need registry is the sole purchase authority.
+                // Lot-backed meal consumption still runs here; the caller
+                // executes the resulting open needs through that loop.
+                return;
+            }
+
             foreach (ProcurementNeed need in plan)
             {
                 PurchaseExecutionResult result = executor.Execute(need, actingPersonId, dayIndex);

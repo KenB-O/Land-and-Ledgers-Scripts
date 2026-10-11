@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
+using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 
 namespace LandLedgers.Economy.Businesses.GeneralStore

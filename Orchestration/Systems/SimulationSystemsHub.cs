@@ -35,6 +35,7 @@ using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.FirstLedger;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.World.Journeys;
+using LandLedgers.World.Property;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -186,6 +187,27 @@ namespace LandLedgers.Orchestration.Systems
         private RecruitmentService recruitmentService;
         private int weatherSeed;
 
+        // Real People / shared-credit authorities introduced by the Muse
+        // integration. They live here so runtime wiring and persistence use
+        // the same instances; none of these services owns a second cash,
+        // inventory, or debt ledger.
+        private PersonScheduleTracker personScheduleTracker;
+        private RentCollectionService rentCollectionService;
+        private NpcFormationAssetRegister npcFormationAssetRegister;
+        private NpcBusinessLifecycleService npcBusinessLifecycle;
+        private NpcBusinessCreationAdapter npcBusinessCreation;
+        private readonly List<NpcBusinessLifeRecord> npcBusinessLifeRecords = new List<NpcBusinessLifeRecord>();
+        private NpcBusinessInvestigation npcBusinessInvestigation;
+        private NpcOpportunityObservationLog npcOpportunityObservation;
+        private NpcBusinessEventLog npcBusinessEvents;
+        private NpcPropertyLifeService npcPropertyLife;
+        private ConstructionProjectExecutor constructionProjectExecutor;
+        private readonly List<ConstructionProject> constructionProjects = new List<ConstructionProject>();
+        private NpcConstructionCommissioner npcConstructionCommissioner;
+        private TradeCreditBook tradeCreditBook;
+        private CreditEventLog creditEventLog;
+        private CreditCashBridge creditCashBridge;
+
         /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
         public JourneyModel Journeys => journeyModel ??= new JourneyModel();
 
@@ -204,6 +226,28 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>P6: T2B recruitment workflows (efforts, inquiries, letters).</summary>
         public RecruitmentService Recruiting => recruitmentService ??= new RecruitmentService();
+
+        public PersonScheduleTracker PersonSchedules => personScheduleTracker ??= new PersonScheduleTracker();
+        public RentCollectionService RentCollection => rentCollectionService ??= new RentCollectionService();
+        public NpcFormationAssetRegister NpcFormationAssets => npcFormationAssetRegister ??= new NpcFormationAssetRegister();
+        public NpcBusinessLifecycleService NpcBusinessLifecycle => npcBusinessLifecycle ??= new NpcBusinessLifecycleService();
+        public NpcBusinessCreationAdapter NpcBusinessCreation => npcBusinessCreation ??= new NpcBusinessCreationAdapter(Ids, Capabilities);
+        public IList<NpcBusinessLifeRecord> NpcBusinessLifeRecords => npcBusinessLifeRecords;
+        public NpcBusinessInvestigation NpcBusinessInvestigation => npcBusinessInvestigation ??= new NpcBusinessInvestigation();
+        public NpcOpportunityObservationLog NpcOpportunityObservation => npcOpportunityObservation ??= new NpcOpportunityObservationLog();
+        public NpcBusinessEventLog NpcBusinessEvents => npcBusinessEvents ??= new NpcBusinessEventLog();
+        public NpcPropertyLifeService NpcPropertyLife => npcPropertyLife ??= new NpcPropertyLifeService();
+        public ConstructionProjectExecutor ConstructionExecutor => constructionProjectExecutor ??= new ConstructionProjectExecutor();
+        public IList<ConstructionProject> ConstructionProjects => constructionProjects;
+        public NpcConstructionCommissioner NpcConstructionCommissioner => npcConstructionCommissioner ??= new NpcConstructionCommissioner();
+        public TradeCreditBook TradeCredit => tradeCreditBook ??= new TradeCreditBook();
+        public CreditEventLog CreditEvents => creditEventLog ??= new CreditEventLog();
+        /// <summary>
+        /// Transient binding layer for finance workflows. The bridge never owns
+        /// balances; it is repopulated from the authoritative cash stores after
+        /// boot/load.
+        /// </summary>
+        public CreditCashBridge CreditCash => creditCashBridge ??= new CreditCashBridge();
 
         /// <summary>
         /// P6: weather seed for the route-condition service. Bootstrap-assigned
@@ -341,6 +385,20 @@ namespace LandLedgers.Orchestration.Systems
             recruitmentService ??= new RecruitmentService();
             riskService ??= new AgriculturalRiskService();
             diseaseService ??= new LivestockDiseaseService();
+            personScheduleTracker ??= new PersonScheduleTracker();
+            rentCollectionService ??= new RentCollectionService();
+            npcFormationAssetRegister ??= new NpcFormationAssetRegister();
+            npcBusinessLifecycle ??= new NpcBusinessLifecycleService();
+            npcBusinessCreation ??= new NpcBusinessCreationAdapter(Ids, Capabilities);
+            npcBusinessInvestigation ??= new NpcBusinessInvestigation();
+            npcOpportunityObservation ??= new NpcOpportunityObservationLog();
+            npcBusinessEvents ??= new NpcBusinessEventLog();
+            npcPropertyLife ??= new NpcPropertyLifeService();
+            constructionProjectExecutor ??= new ConstructionProjectExecutor();
+            npcConstructionCommissioner ??= new NpcConstructionCommissioner();
+            tradeCreditBook ??= new TradeCreditBook();
+            creditEventLog ??= new CreditEventLog();
+            creditCashBridge ??= new CreditCashBridge();
             liabilityLedger.SyncAllToValuation(null);
 
             // P1: boot-time task-definition registration. Every static task catalog
@@ -437,6 +495,18 @@ namespace LandLedgers.Orchestration.Systems
                 registeredMail = RegisteredMail.CaptureSaveDto(),
                 recruiting = Recruiting.CaptureSaveDto(),
                 weatherSeed = weatherSeed,
+                personSchedule = PersonSchedules.CaptureSaveDto(),
+                rentCollection = RentCollection.CaptureSaveDto(),
+                npcFormationAssets = NpcFormationAssets.CaptureSaveDto(),
+                npcBusinessLifecycle = CaptureNpcBusinessLifecycle(),
+                npcBusinessInvestigation = NpcBusinessInvestigation.CaptureSaveDto(),
+                npcOpportunityObservation = NpcOpportunityObservation.CaptureSaveDto(),
+                npcBusinessEvents = NpcBusinessEvents.CaptureSaveDto(),
+                npcPropertyLife = NpcPropertyLife.CaptureSaveDto(),
+                constructionProjects = ConstructionExecutor.CaptureSaveDto(new List<ConstructionProject>(ConstructionProjects)),
+                npcConstructionCommissioner = NpcConstructionCommissioner.CaptureSaveDto(),
+                tradeCredit = TradeCredit.CaptureSaveDto(),
+                creditEvents = CreditEvents.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -489,6 +559,32 @@ namespace LandLedgers.Orchestration.Systems
             MoneyOrders.LoadFromSaveDto(dto.moneyOrders);
             RegisteredMail.LoadFromSaveDto(dto.registeredMail);
             Recruiting.LoadFromSaveDto(dto.recruiting);
+            PersonSchedules.LoadFromSaveDto(dto.personSchedule);
+            RentCollection.LoadFromSaveDto(dto.rentCollection);
+            NpcFormationAssets.LoadFromSaveDto(dto.npcFormationAssets);
+            npcBusinessLifeRecords.Clear();
+            if (dto.npcBusinessLifecycle != null)
+            {
+                foreach (NpcBusinessLifeRecordSaveDto recordDto in dto.npcBusinessLifecycle)
+                {
+                    if (recordDto == null || string.IsNullOrWhiteSpace(recordDto.BusinessInstanceId)) continue;
+                    var record = new NpcBusinessLifeRecord();
+                    record.LoadFromSaveDto(recordDto);
+                    npcBusinessLifeRecords.Add(record);
+                }
+            }
+            NpcBusinessInvestigation.LoadFromSaveDto(dto.npcBusinessInvestigation);
+            NpcOpportunityObservation.LoadFromSaveDto(dto.npcOpportunityObservation);
+            NpcBusinessEvents.LoadFromSaveDto(dto.npcBusinessEvents);
+            NpcPropertyLife.LoadFromSaveDto(dto.npcPropertyLife, diagnostics);
+            ConstructionProjects.Clear();
+            foreach (ConstructionProject project in ConstructionExecutor.LoadFromSaveDto(dto.constructionProjects, diagnostics))
+            {
+                if (project != null) ConstructionProjects.Add(project);
+            }
+            NpcConstructionCommissioner.LoadFromSaveDto(dto.npcConstructionCommissioner, diagnostics);
+            TradeCredit.LoadFromSaveDto(dto.tradeCredit);
+            CreditEvents.LoadFromSaveDto(dto.creditEvents);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;
@@ -514,6 +610,19 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             return diagnostics;
+        }
+
+        private List<NpcBusinessLifeRecordSaveDto> CaptureNpcBusinessLifecycle()
+        {
+            var saved = new List<NpcBusinessLifeRecordSaveDto>();
+            foreach (NpcBusinessLifeRecord record in npcBusinessLifeRecords)
+            {
+                if (record != null && !string.IsNullOrWhiteSpace(record.BusinessInstanceId))
+                {
+                    saved.Add(record.CaptureSaveDto());
+                }
+            }
+            return saved;
         }
 
         /// <summary>

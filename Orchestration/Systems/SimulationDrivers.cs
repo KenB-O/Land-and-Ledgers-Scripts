@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Creation;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Population;
@@ -78,6 +80,9 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdConsumptionPlanner consumptionPlanner;
         private SupplierDirectory supplierDirectory;
         private EmbodiedPurchaseExecutor purchaseExecutor;
+        private HouseholdMembershipRegistry householdMemberships;
+        private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
+        private HouseholdShoppingLoop householdShoppingLoop;
         private bool subscribedToTimeManager;
 
         /// <summary>
@@ -93,8 +98,83 @@ namespace LandLedgers.Orchestration.Systems
             LandLedgers.Economy.Businesses.GeneralStore.IGeneralStoreTradingPort storePort)
         {
             supplierDirectory ??= new SupplierDirectory();
+            if (hub != null)
+            {
+                HouseholdShoppingLoop.RegisterTaskDefinitions(hub.Tasks);
+            }
             LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter.RegisterIn(
                 supplierDirectory, storePort);
+            BuildHouseholdShoppingLoop();
+        }
+
+        /// <summary>Attaches the scenario's real membership authority for the production shopping loop.</summary>
+        public void AttachHouseholdMemberships(HouseholdMembershipRegistry memberships, ShopperSellerKnowledge knowledge = null)
+        {
+            householdMemberships = memberships;
+            if (knowledge != null) sellerKnowledge = knowledge;
+            BuildHouseholdShoppingLoop();
+        }
+
+        /// <summary>
+        /// Returns the production construction-material adapter for a real
+        /// commissioning household. The adapter is intentionally scoped to
+        /// that household's existing inventory; it does not create stock.
+        /// </summary>
+        public IConstructionMaterialSource CreateHouseholdConstructionMaterialSource(int householdId)
+        {
+            if (hub == null) return null;
+            HouseholdInventory inventory = hub.HouseholdInventories.Get(householdId);
+            return inventory == null ? null : new HouseholdConstructionMaterialSource(inventory);
+        }
+
+        /// <summary>Returns the production tool-custody adapter over hub inventories.</summary>
+        public IHouseholdToolCustody CreateHouseholdToolCustody()
+        {
+            return hub == null ? null : new HouseholdInventoryToolCustody(hub.HouseholdInventories);
+        }
+
+        private void BuildHouseholdShoppingLoop()
+        {
+            if (hub == null || populationManager?.State == null || householdMemberships == null || supplierDirectory == null)
+            {
+                return;
+            }
+
+            householdShoppingLoop ??= new HouseholdShoppingLoop(
+                populationManager.State,
+                householdMemberships,
+                hub.HouseholdLedgers,
+                hub.HouseholdInventories,
+                hub.PurchasingNeeds,
+                supplierDirectory,
+                Journeys ?? hub.Journeys,
+                hub.Tasks,
+                hub.WorkTimeBudgets,
+                hub.PersonSchedules,
+                sellerKnowledge,
+                hub.FinancialObligations,
+                hub.Ids);
+
+            // The live store is an ordinary town seller. Seed only the
+            // legitimate same-simulation knowledge graph; this does not grant
+            // omniscient access to suppliers that are not registered here.
+            if (populationManager.State.people != null)
+            {
+                foreach (PersonState person in populationManager.State.people)
+                {
+                    if (person != null && person.deathDayIndex < 0)
+                    {
+                        foreach (IGoodsSupplier supplier in supplierDirectory.All)
+                        {
+                            sellerKnowledge.LearnSupplier(
+                                person.id,
+                                supplier.SupplierBusinessId,
+                                "opening-town merchant knowledge",
+                                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0);
+                        }
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -148,6 +228,7 @@ namespace LandLedgers.Orchestration.Systems
             sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
             sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
             WireHouseholdCashAuthorities();
+            WireNpcBusinessCashStores();
         }
 
         // CLN-4: accumulated player worked minutes for the current week (owner labor).
@@ -191,6 +272,7 @@ namespace LandLedgers.Orchestration.Systems
                 sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
                 sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
                 WireHouseholdCashAuthorities();
+                WireNpcBusinessCashStores();
             }
         }
 
@@ -219,6 +301,32 @@ namespace LandLedgers.Orchestration.Systems
             if (populationManager != null)
             {
                 populationManager.HouseholdLedgers = hub.HouseholdLedgers;
+            }
+        }
+
+        /// <summary>
+        /// Phase G: binds every live NPC Business to the shared credit cash
+        /// bridge. The bridge is only a workflow adapter; BusinessRuntimeState
+        /// remains the single business-cash authority.
+        /// </summary>
+        private void WireNpcBusinessCashStores()
+        {
+            if (hub == null || sharedBusinessRuntime == null)
+            {
+                return;
+            }
+
+            NpcBusinessRuntimeCashPort port = new NpcBusinessRuntimeCashPort(sharedBusinessRuntime);
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || business.Owner == null || business.Owner.OwnerKind == BusinessOwnerKind.Player)
+                {
+                    continue;
+                }
+
+                hub.CreditCash.Register(
+                    "business:" + business.InstanceId,
+                    new NpcBusinessCashStore(business.InstanceId, port));
             }
         }
 
@@ -332,6 +440,11 @@ namespace LandLedgers.Orchestration.Systems
 
             int absoluteDayIndex = timeManager.CurrentAbsoluteDayIndex;
 
+            // Population may be generated after Awake; bind the now-real
+            // household ledgers before any daily finance workflow can open a
+            // cash window.
+            RefreshHouseholdCashBindings();
+
             // CLN-4: accumulate the player's daily worked minutes for the weekly
             // owner-labor valuation post. Read BEFORE EnsureDay resets the day.
             if (playerDirector != null && playerDirector.PlayerPersonId.IsValid)
@@ -348,6 +461,22 @@ namespace LandLedgers.Orchestration.Systems
             // boundary. This is execution of an already-started physical process;
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
+
+            // Muse Phase I: trade-credit aging is a daily read/transition over
+            // the shared FinancialObligationAuthority. It never creates cash
+            // or principal; it only advances registered invoice terms and
+            // records the resulting credit events.
+            var creditDiagnostics = new List<string>();
+            hub.TradeCredit.EvaluateDay(
+                hub.FinancialObligations,
+                absoluteDayIndex,
+                hub.CreditEvents,
+                creditDiagnostics);
+            if (creditDiagnostics.Count > 0)
+            {
+                Debug.LogWarning($"[SimulationDrivers] trade-credit aging day {absoluteDayIndex}: " +
+                    string.Join(" | ", creditDiagnostics));
+            }
 
             // BIZ-4: age butcher lots (fresh → aging → spoiled).
             foreach (var runtime in hub.ButcherRuntimes)
@@ -499,8 +628,11 @@ namespace LandLedgers.Orchestration.Systems
                 out var hotelMeals);
 
             var diag = new List<string>();
+            IEmbodiedPurchaseExecutor dailyPurchaseExecutor = householdShoppingLoop == null
+                ? purchaseExecutor
+                : null;
             DailyNeedsService.DayReport report = dailyNeedsService.ExecuteDay(
-                populationManager.State, consumptionPlanner, purchaseExecutor,
+                populationManager.State, consumptionPlanner, dailyPurchaseExecutor,
                 absoluteDayIndex, diag, hub.WorkTimeBudgets,
                 restaurantMeals, boardingMeals, hotelMeals,
                 hub.HouseholdInventories, hub.MealLog, null);
@@ -512,6 +644,81 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
+            DriveEmbodiedShopping(absoluteDayIndex, diag);
+        }
+
+        /// <summary>
+        /// Executes open purchasing needs only after the real household loop
+        /// has been explicitly bound to a scenario's membership and supplier
+        /// authorities. DailyNeedsService is then lot-consumption only, so
+        /// this is the one production purchase writer for that scenario.
+        /// </summary>
+        private void DriveEmbodiedShopping(int absoluteDayIndex, List<string> diagnostics)
+        {
+            if (householdShoppingLoop == null || populationManager?.State?.households == null || hub == null)
+            {
+                return;
+            }
+
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null)
+                {
+                    continue;
+                }
+
+                // One need per household per day keeps the production driver
+                // bounded while preserving the registry's open-need state for
+                // the next day when a trip is refused or only partly filled.
+                List<HouseholdPurchasingNeed> openNeeds = hub.PurchasingNeeds.GetOpenNeeds(household.id);
+                if (openNeeds == null || openNeeds.Count == 0)
+                {
+                    continue;
+                }
+
+                ShoppingTripResult result = householdShoppingLoop.ExecuteNeed(
+                    openNeeds[0],
+                    absoluteDayIndex,
+                    new ShoppingLoopOptions { DepartureMinuteOfDay = 8 * 60, Diagnostics = diagnostics });
+                if (result != null && !result.Success && !string.IsNullOrWhiteSpace(result.FailureReason))
+                {
+                    diagnostics.Add($"[SimulationDrivers] household shopping H{household.id}: {result.FailureReason}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Rebinds finance windows to the current household ledgers after
+        /// population generation or save restore. This is explicit because
+        /// PopulationManager may not have populated its state during Awake.
+        /// </summary>
+        public void RefreshHouseholdCashBindings()
+        {
+            if (hub == null || populationManager == null || populationManager.State?.households == null)
+            {
+                return;
+            }
+
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null || household.id < 0)
+                {
+                    continue;
+                }
+
+                // Do not create a ledger merely to expose a finance window:
+                // legacy/new-game cash migration may still be pending, and
+                // manufacturing an empty ledger here would disable the
+                // deliberate fallback path. Bind only ledgers that already
+                // exist in the authoritative registry.
+                HouseholdLedger ledger = hub.HouseholdLedgers.Get(household.id);
+                if (ledger != null)
+                {
+                    hub.CreditCash.Register(
+                        "household:" + household.id,
+                        new HouseholdCashStore(household.id, ledger));
+                }
+            }
         }
 
         /// <summary>
@@ -621,6 +828,57 @@ namespace LandLedgers.Orchestration.Systems
             {
                 OnScenarioTick?.Invoke();
             }
+        }
+    }
+
+    /// <summary>Production cash adapter for NPC Business credit workflows.</summary>
+    internal sealed class NpcBusinessRuntimeCashPort : INpcBusinessCashPort
+    {
+        private readonly SharedBusinessRuntimeManager runtime;
+
+        public NpcBusinessRuntimeCashPort(SharedBusinessRuntimeManager runtime)
+        {
+            this.runtime = runtime;
+        }
+
+        private BusinessInstanceState Find(string businessInstanceId)
+        {
+            if (runtime == null || string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            for (int i = 0; i < runtime.Businesses.Count; i++)
+            {
+                BusinessInstanceState business = runtime.Businesses[i];
+                if (business != null && string.Equals(business.InstanceId, businessInstanceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return business;
+                }
+            }
+
+            return null;
+        }
+
+        public int ReadCashCents(string businessInstanceId) => Find(businessInstanceId)?.RuntimeState?.CurrentCashCents ?? 0;
+
+        public string Spend(string businessInstanceId, int dayIndex, int amountCents, string purpose)
+        {
+            BusinessInstanceState business = Find(businessInstanceId);
+            if (business?.RuntimeState == null) return $"NPC business '{businessInstanceId}' is unavailable.";
+            if (amountCents <= 0) return "NPC business cash spend must be positive.";
+            if (business.RuntimeState.CurrentCashCents < amountCents)
+            {
+                return $"NPC business '{businessInstanceId}' has only {business.RuntimeState.CurrentCashCents}c; {amountCents}c refused.";
+            }
+
+            business.RuntimeState.SpendCents(amountCents);
+            return null;
+        }
+
+        public string Receive(string businessInstanceId, int dayIndex, int amountCents, string reason)
+        {
+            BusinessInstanceState business = Find(businessInstanceId);
+            if (business?.RuntimeState == null) return $"NPC business '{businessInstanceId}' is unavailable.";
+            if (amountCents <= 0) return "NPC business cash receipt must be positive.";
+            business.RuntimeState.AddCashCents(amountCents);
+            return null;
         }
     }
 }

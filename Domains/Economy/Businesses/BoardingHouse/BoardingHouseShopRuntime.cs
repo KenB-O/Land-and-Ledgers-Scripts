@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.World.Property;
 
 namespace LandLedgers.Economy.Businesses.BoardingHouse
 {
@@ -34,7 +36,7 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
     /// by ledger authorities, never collected here. Money moves only
     /// through ledger authorities.
     /// </summary>
-    public sealed class BoardingHouseShopRuntime
+    public sealed class BoardingHouseShopRuntime : IRentCashSink, IBoarderCheckInPort
     {
         /// <summary>D1F TUNING: chamber-work minutes one housekeeper gives per day (Canon Part XV).</summary>
         public const int HousekeeperMinutesPerDay = 240;
@@ -52,9 +54,12 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         private readonly BoardingHouseFuelStock fuelStock = new BoardingHouseFuelStock();
         private readonly BoardingHouseStandingOrders standingOrders = new BoardingHouseStandingOrders();
         private readonly EntityIdRegistry idRegistry;
+        private BusinessInstanceState business;
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId;
+        public string BusinessName => business?.RuntimeDisplayName ?? businessInstanceId;
+        public int CashCents => business?.RuntimeState?.CurrentCashCents ?? 0;
         public BoardingRoomInventory RoomInventory => roomInventory;
         public BoardingRateSchedule RateSchedule => rateSchedule;
         public BoardingHouseBoarderRegister BoarderRegister => boarderRegister;
@@ -92,6 +97,52 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             this.idRegistry = idRegistry;
             this.kitchen = new BoardingHouseKitchen(idRegistry);
             this.kitchen.FuelStock = this.fuelStock;
+        }
+
+        /// <summary>
+        /// Binds this detailed boarding-house runtime to the existing generic
+        /// Business cash authority. The shop runtime never owns a second cash
+        /// balance.
+        /// </summary>
+        public void BindBusiness(BusinessInstanceState businessInstance)
+        {
+            business = businessInstance;
+        }
+
+        public void RecordCashInflow(int cents, string label, int dayIndex)
+        {
+            if (business?.RuntimeState == null || cents <= 0)
+            {
+                diagnostics.Add($"BoardingHouseShopRuntime: rent inflow refused for {cents}c — no bound Business authority.");
+                return;
+            }
+
+            business.RuntimeState.AddCashCents(cents);
+        }
+
+        /// <summary>HousingSearch production adapter over the real rooms/register.</summary>
+        public string CheckIn(int personId, int dayIndex, List<string> diagnosticsOut)
+        {
+            List<string> diag = diagnosticsOut ?? diagnostics;
+            for (int i = 0; i < roomInventory.Rooms.Count; i++)
+            {
+                BoardingRoom room = roomInventory.Rooms[i];
+                if (room == null || WalkInOpenBeds(room.RoomType, dayIndex) <= 0) continue;
+                if (!room.TryFindOpenBed(out int bedIndex)) continue;
+
+                string refusal = CheckInBoarder(
+                    personId,
+                    room.RoomId,
+                    bedIndex,
+                    BoarderStayKind.Weekly,
+                    false,
+                    dayIndex,
+                    0,
+                    diag);
+                if (refusal == null) return null;
+            }
+
+            return $"BoardingHouseShopRuntime: no suitable open boarding bed for person {personId}.";
         }
 
         /// <summary>One-time opening pantry endowment — explicit, flagged, never auto-replenished.</summary>

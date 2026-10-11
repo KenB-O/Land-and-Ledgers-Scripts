@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Farming;
@@ -25,6 +26,7 @@ using LandLedgers.Skills;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
+using LandLedgers.World.Property;
 
 namespace LandLedgers.Persistence
 {
@@ -72,6 +74,23 @@ namespace LandLedgers.Persistence
         public RecruitmentServiceSaveDto recruiting = new();
         /// <summary>P6: weather seed for the route-condition service (bootstrap-assigned from the world seed).</summary>
         public int weatherSeed;
+
+        // Real People / shared-credit Phase I services. These are kept under
+        // the same hub boundary as the older authorities so one save cannot
+        // silently omit an active household, housing, construction, NPC
+        // enterprise, trade-credit, or credit-event state.
+        public PersonScheduleTrackerSaveDto personSchedule = new();
+        public RentCollectionService.RentCollectionServiceSaveDto rentCollection = new();
+        public NpcFormationAssetRegisterSaveDto npcFormationAssets = new();
+        public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
+        public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();
+        public NpcOpportunityObservationLogSaveDto npcOpportunityObservation = new();
+        public NpcBusinessEventLogSaveDto npcBusinessEvents = new();
+        public NpcPropertyLifeService.NpcPropertyLifeSaveDto npcPropertyLife = new();
+        public ConstructionProjectExecutor.ConstructionProjectSaveDto constructionProjects = new();
+        public NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto npcConstructionCommissioner = new();
+        public TradeCreditBook.TradeCreditBookSaveDto tradeCredit = new();
+        public CreditEventLog.CreditEventLogSaveDto creditEvents = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

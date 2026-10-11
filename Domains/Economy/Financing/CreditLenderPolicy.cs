@@ -296,6 +296,21 @@ namespace LandLedgers.Economy.Financing
             Policy = policy ?? CreditLenderPolicy.ForFormalBank();
         }
 
+        /// <summary>
+        /// Binds the reserve calculation to the bank's authoritative deposit
+        /// ledger. The participant keeps only a read-model snapshot because
+        /// underwriting may be evaluated between bank-runtime operations;
+        /// callers refresh it immediately before evaluating or accepting an
+        /// offer. This prevents a copied deposit balance from becoming a
+        /// second deposit authority.
+        /// </summary>
+        public void RefreshDepositsFrom(BankDepositLedger depositLedger)
+        {
+            DepositsOwedCents = depositLedger == null
+                ? 0
+                : Math.Max(0, depositLedger.DepositsOwedCents());
+        }
+
         public int ReserveFloorCents() =>
             (int)(Math.Max(0, DepositsOwedCents) * Math.Clamp(Policy.ReserveRequirement01, 0f, 1f));
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -337,6 +338,62 @@ namespace LandLedgers.FirstLedger
         public BusinessInstanceState CurrentBusiness => currentBusiness;
         public GeneralStoreBusinessDefinition StoreDefinition => storeDefinition;
         public int StoreBuildingId => storeBuildingId;
+
+        /// <summary>
+        /// Builds the production household-trading port over this live store.
+        /// The offer list is an explicit translation from the store's existing
+        /// category stock to the household item catalog; it does not create
+        /// stock or a second settlement path.
+        /// </summary>
+        public GeneralStoreTradingPort BuildHouseholdTradingPort()
+        {
+            var offers = new List<GeneralStoreCategoryOffer>();
+            IReadOnlyList<CategoryStockState> stocks = RuntimeState != null
+                ? RuntimeState.CategoryStock
+                : Array.Empty<CategoryStockState>();
+
+            for (int i = 0; i < stocks.Count; i++)
+            {
+                CategoryStockState stock = stocks[i];
+                if (stock == null)
+                {
+                    continue;
+                }
+
+                string itemId = HouseholdItemForStoreCategory(stock.CategoryId);
+                if (string.IsNullOrWhiteSpace(itemId))
+                {
+                    continue;
+                }
+
+                offers.Add(new GeneralStoreCategoryOffer
+                {
+                    CategoryId = stock.CategoryId,
+                    OfferedItemIds = new List<string> { itemId },
+                    StoreUnitsPerItemUnit = 1,
+                });
+            }
+
+            var capability = new StoreTradingCapability
+            {
+                Staffed = FilledWorkerSlotCount > 0,
+            };
+            return new GeneralStoreTradingPort(this, offers, capability);
+        }
+
+        private static string HouseholdItemForStoreCategory(string categoryId)
+        {
+            switch (categoryId ?? string.Empty)
+            {
+                case "staple_food": return HouseholdItemCatalog.FlourId;
+                case "crop_food": return HouseholdItemCatalog.PotatoesId;
+                case "meat": return HouseholdItemCatalog.PreservedMeatId;
+                case "fuel_wood": return HouseholdItemCatalog.FuelWoodId;
+                case "clothing": return HouseholdItemCatalog.ClothingTextilesId;
+                case "meal_inputs": return HouseholdItemCatalog.FlourId;
+                default: return string.Empty;
+            }
+        }
         public int LastDailyCustomerHouseholds => lastDailyCustomerHouseholds;
         public int LastDailyUnitsSold => lastDailyUnitsSold;
         public int LastDailyReserveLocalUnits => lastDailyReserveLocalUnits;
@@ -2405,14 +2462,21 @@ namespace LandLedgers.FirstLedger
                 {
                     RecordGeneralStoreHouseholdReserveMiss(household.id, need.CategoryId, requestedUnits, remainingUnits);
                     RecordGeneralStoreMissedDemand(need.CategoryId, need.PurchaseUnits, remainingUnits);
-                    int offMapValue = remainingUnits * GetOffMapReserveUnitValueCents(need.CategoryId);
-                    ApplyReservePurchase(household, reserve, remainingUnits, "off-map purchase");
-                    reserve.lastOffMapPurchaseUnits += remainingUnits;
-                    result.OffMapUnits += remainingUnits;
-                    result.OffMapLostDemandCents += offMapValue;
-                    result.OffMapWalletSpendCents += Mathf.Min(
-                        offMapValue,
-                        Mathf.Max(0, GetHouseholdCashCents(household) - result.StoreSpendCents - result.OtherLocalSpendCents - result.OffMapWalletSpendCents));
+                    int offMapUnitValue = GetOffMapReserveUnitValueCents(need.CategoryId);
+                    int affordableOffMapUnits = offMapUnitValue > 0
+                        ? Mathf.Min(remainingUnits, remainingBudget / offMapUnitValue)
+                        : 0;
+                    if (affordableOffMapUnits > 0)
+                    {
+                        int offMapValue = affordableOffMapUnits * offMapUnitValue;
+                        ApplyReservePurchase(household, reserve, affordableOffMapUnits, "off-map purchase");
+                        remainingBudget -= offMapValue;
+                        reserve.lastOffMapPurchaseUnits += affordableOffMapUnits;
+                        result.OffMapUnits += affordableOffMapUnits;
+                        result.OffMapWalletSpendCents += offMapValue;
+                    }
+
+                    result.OffMapLostDemandCents += Mathf.Max(0, remainingUnits - affordableOffMapUnits) * offMapUnitValue;
                 }
 
                 reserve.lastLocalPurchaseUnits += storeSale.UnitsSold + otherLocalSale.UnitsSold;

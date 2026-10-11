@@ -1886,7 +1886,10 @@ namespace LandLedgers.Economy
             out int spendCents)
         {
             AutoWire();
-            InitializeIfNeeded(generalStoreRuntime != null ? generalStoreRuntime.CurrentBusiness : null);
+            if (businesses.Count == 0)
+            {
+                InitializeIfNeeded(generalStoreRuntime != null ? generalStoreRuntime.CurrentBusiness : null);
+            }
 
             spendCents = 0;
             int remainingUnits = Mathf.Max(0, requestedUnits);
@@ -6824,10 +6827,16 @@ namespace LandLedgers.Economy
 
         private bool CanSellHouseholdReserveUnits(BusinessInstanceState business)
         {
-            return business != null
-                && business.BusinessType != BusinessType.GeneralStore
-                && business.RuntimeState != null
-                && GetHealthAdjustedOperatingEfficiency01(business) > 0f;
+            if (business == null
+                || business.BusinessType == BusinessType.GeneralStore
+                || business.RuntimeState == null)
+            {
+                return false;
+            }
+
+            BusinessRoleCoverageSnapshot coverage = business.BuildRoleCoverageSnapshot();
+            return coverage.Status == BusinessRoleCoverageStatus.Covered
+                && coverage.OperatingEfficiency01 > 0f;
         }
 
         private BusinessInstanceState FindBestOperationalDoctor()

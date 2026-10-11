@@ -230,6 +230,11 @@ namespace LandLedgers.Orchestration.Systems
         private ParcelService parcelService;
         private PropertyInterestStore propertyInterestStore;
         private ParcelSubdivisionService parcelSubdivisionService;
+        private HouseholdDecisionService householdDecisionService;
+        private HouseholdDecisionDriver householdDecisionDriver;
+        private DomesticLaborService domesticLaborService;
+        private HouseholdAutonomyDriver householdAutonomyDriver;
+        private HousingSearchNeedRegistry housingSearchNeedRegistry;
 
         /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
         public JourneyModel Journeys => journeyModel ??= new JourneyModel();
@@ -335,6 +340,41 @@ namespace LandLedgers.Orchestration.Systems
         /// the ITenancyPayeeDirectory.
         /// </summary>
         public TenancyPaymentService TenancyPayments => tenancyPaymentService ??= new TenancyPaymentService();
+        /// Pass III Worker C: household financial pressure -> bounded decision
+        /// (pure evaluator; the autonomy driver maps real state onto its input).
+        /// </summary>
+        public HouseholdDecisionService HouseholdDecisions =>
+            householdDecisionService ??= new HouseholdDecisionService();
+
+        /// <summary>
+        /// Pass III Worker C: turns household decisions into real operations
+        /// (opportunity discovery, housing search, obligations, negotiation
+        /// requests, spending policies). Owns the opportunity log.
+        /// </summary>
+        public HouseholdDecisionDriver HouseholdDecisionDriver =>
+            householdDecisionDriver ??= new HouseholdDecisionDriver(
+                ContactGraph, Employments, HousingSearchNeeds, FinancialObligations, Ids);
+
+        /// <summary>
+        /// Pass III Worker C: narrow domestic labor (meal prep, fuel, animal
+        /// care, chores) on the existing TaskAuthority + person-time.
+        /// </summary>
+        public DomesticLaborService DomesticLabor =>
+            domesticLaborService ??= new DomesticLaborService();
+
+        /// <summary>
+        /// Pass III Worker C: NPC autonomous household responses (brief §13) —
+        /// declining reserves, rent due, job loss, housing change.
+        /// </summary>
+        public HouseholdAutonomyDriver HouseholdAutonomy =>
+            householdAutonomyDriver ??= new HouseholdAutonomyDriver();
+
+        /// <summary>
+        /// Pass III Worker C: hub-owned housing-search registry used by the
+        /// RelocateCheaper decision path.
+        /// </summary>
+        public HousingSearchNeedRegistry HousingSearchNeeds =>
+            housingSearchNeedRegistry ??= new HousingSearchNeedRegistry();
 
         /// <summary>
         /// Autonomous Labor: owner lookup hook for the offer authority predicate.
@@ -637,6 +677,10 @@ namespace LandLedgers.Orchestration.Systems
                 parcels = Parcels.CaptureSaveDto(),
                 propertyInterests = PropertyInterests.CaptureSaveDto(),
                 tenancyPayments = TenancyPayments.CaptureSaveDto(),
+                householdDecisions = HouseholdDecisions.CaptureSaveDto(),
+                householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
+                domesticLabor = DomesticLabor.CaptureSaveDto(),
+                householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -723,6 +767,10 @@ namespace LandLedgers.Orchestration.Systems
             Parcels.LoadFromSaveDto(dto.parcels);
             PropertyInterests.LoadFromSaveDto(dto.propertyInterests);
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
+            HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
+            HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
+            DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
+            HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;

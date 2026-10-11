@@ -27,6 +27,32 @@ namespace LandLedgers.Population
         public int Dependents;
         public int KnownOpportunityCount;
         public bool HasShelterRisk;
+        /// <summary>
+        /// Pass III Worker C (additive): legitimate available credit the household
+        /// can draw, in cents. 0 = none known. Never invented by the evaluator.
+        /// </summary>
+        public long AvailableCreditCents;
+        /// <summary>
+        /// Pass III Worker C (additive): a legitimate known lender
+        /// (person/business id) the household could borrow from. Empty = none
+        /// known; the decision driver will not invent a counterparty.
+        /// </summary>
+        public string KnownCreditorId = string.Empty;
+        /// <summary>
+        /// Pass III Worker C (additive): a household member's employment ended
+        /// recently. A real circumstance the evaluator weighs — not a timer.
+        /// </summary>
+        public bool RecentJobLoss;
+        /// <summary>Pass III Worker C (additive): which employment ended, e.g.
+        /// "P3 dismissed from store-1". Empty when unknown.</summary>
+        public string JobLossNote = string.Empty;
+        /// <summary>
+        /// Pass III Worker C (additive): any household member has documented
+        /// contact links worth searching for work (contact graph, one-hop).
+        /// Searching is itself the legitimate action — the household need not
+        /// already know of an opening to look through its own contacts.
+        /// </summary>
+        public bool HasSearchableContacts;
     }
 
     public enum HouseholdDecisionKind

@@ -173,7 +173,7 @@ namespace LandLedgers.Population
 
             string bandText = reading.Bands.Count == 1
                 ? Label(reading.Bands[0])
-                : Label(reading.Bands[0]) + "–" + Label(reading.Bands[reading.Bands.Count - 1];
+                : Label(reading.Bands[0]) + "–" + Label(reading.Bands[reading.Bands.Count - 1]);
             return bandText + " (" + ConfidenceLabel(reading.Confidence) + ")";
         }
     }

@@ -215,10 +215,9 @@ namespace LandLedgers.Skills
 
             string personKey = personId.ToString();
             inputs.PersonId = personKey;
-            if (inputs.AptitudeMultiplier <= 0)
-            {
-                inputs.AptitudeMultiplier = GetLearningRate(personId, inputs.TaskCapabilityId);
-            }
+            // Aptitude always resolves from the store (the authority on
+            // learning-rate tendency); the caller does not smuggle it in.
+            inputs.AptitudeMultiplier = GetLearningRate(personId, inputs.TaskCapabilityId);
 
             var entry = new ExperienceEntry
             {

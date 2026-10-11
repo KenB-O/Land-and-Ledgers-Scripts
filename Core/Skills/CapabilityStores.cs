@@ -479,14 +479,19 @@ namespace LandLedgers.Skills
     ///   un-learn from one bad day; atrophy is out of scope for this pass).
     /// - Supervised practice (mentorship) teaches faster.
     /// - Gains approach an asymptote: delta scales with (1 - capability), so
-    ///   Mastered stays exceptional (Rev VII §1.3 anti-inflation).
+    ///   Mastered stays exceptional (Rev VII §1.3 anti-inflation; Rev XVII
+    ///   §1.3: ~20+ years meaningful relevant work necessary, never sufficient).
     /// - CALENDAR TIME ALONE CONTRIBUTES NOTHING: this service only runs on
     ///   recorded task episodes. There is no daily tick, no passive accrual.
     /// </summary>
     public sealed class ExperienceFormationService
     {
-        /// <summary>Base capability gain per hour of fully-novel, well-matched work.</summary>
-        public const double BaseGainPerHour = 0.0003;
+        /// <summary>
+        /// Base capability gain per hour of fully-novel, well-matched work.
+        /// Calibrated so sustained novel work reaches Great in ~6 years,
+        /// Excellent in ~10, Mastered in ~16+ (Rev XVII §1.3).
+        /// </summary>
+        public const double BaseGainPerHour = 0.0001;
 
         /// <summary>
         /// Computes the capability delta for one task episode. Pure function of

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using UnityEngine;
 
 namespace LandLedgers.Economy
@@ -751,6 +752,89 @@ namespace LandLedgers.Economy
         /// ResolveWeeklyPayroll runs. -1 when unknown (entries still record).
         /// </summary>
         public int PayrollDayIndex { get; set; } = -1;
+
+        /// <summary>
+        /// Worker D (Autonomous Labor, Phase F): settled-week marker for the
+        /// idempotency-guarded payroll driver. -1 = no week settled yet. The
+        /// WageSettlementService sets this after a successful weekly settlement;
+        /// the weekly driver consults it before running ResolveWeeklyPayroll so a
+        /// week is never posted twice (save/load included). Additive only.
+        /// </summary>
+        public int LastPayrollSettledWeekIndex = -1;
+
+        /// <summary>
+        /// Worker D (Autonomous Labor, Phase F): pays one agreed wage amount for a
+        /// single employment (partial period, mid-week start, final settlement on
+        /// departure). Uses the SAME single-writer cash path as ResolveWeeklyPayroll
+        /// (currentCashCents / RecordNetDelta / RefreshWeeklyCashAfter), the same
+        /// worker-household crediting (CreditWorkerHousehold), and the same
+        /// shortfall treatment (employment suspended, operating liability accrued
+        /// via AccrueOperatingLiabilityCents). Wages pay ONLY through
+        /// EmploymentRelationship records; family-labor/operator/non-wage kinds
+        /// are refused via the read-only WorkRelationshipGuard taxonomy check.
+        /// Returns null on success, or a diagnostic string naming the refusal.
+        /// </summary>
+        public string PayAgreedWage(string employmentId, int amountCents, string periodLabel, int dayIndex, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (string.IsNullOrWhiteSpace(employmentId))
+            {
+                return "PayAgreedWage: an employment id is required - wages pay through EmploymentRelationship records only, never from status alone.";
+            }
+
+            if (EmploymentRegistry == null || !EmploymentRegistry.TryGetById(employmentId, out EmploymentRelationship employment))
+            {
+                return $"PayAgreedWage: unknown employment '{employmentId}' - no wage is invented without an employment record.";
+            }
+
+            // PL-04: family labor, operators and contract work never carry payroll
+            // wage terms. Read-only guard - refused, never reclassified here.
+            string taxonomyViolation = WorkRelationshipGuard.ValidateNoWageForNonWageKind(
+                employment.ToWorkRelationshipKind(), amountCents);
+            if (taxonomyViolation != null)
+            {
+                return "PayAgreedWage refused: " + taxonomyViolation;
+            }
+
+            if (employment.LifecycleState != EmploymentLifecycleState.Active
+                && employment.LifecycleState != EmploymentLifecycleState.OnLeave
+                && employment.LifecycleState != EmploymentLifecycleState.Ended)
+            {
+                return $"PayAgreedWage: employment '{employmentId}' is {employment.LifecycleState} - partial-period wages pay only for Active/OnLeave service or Ended final settlement.";
+            }
+
+            int wage = Mathf.Max(0, amountCents);
+            if (wage <= 0)
+            {
+                diagnostics.Add($"PayAgreedWage: employment {employmentId} owes nothing for '{periodLabel}' - nothing paid.");
+                return null;
+            }
+
+            if (currentCashCents >= wage)
+            {
+                currentCashCents -= wage;
+                RecordNetDelta(-wage);
+                CreditWorkerHousehold(employment, wage);
+                SyncSlotPaidState(employment.EmployeePersonId, paid: true);
+                RefreshWeeklyCashAfter();
+                return null;
+            }
+
+            // Shortfall: the SAME treatment as weekly payroll - suspend and accrue
+            // an operating liability. No second payment path exists.
+            employment.LifecycleState = EmploymentLifecycleState.Suspended;
+            employment.SuspensionReason = EmploymentSuspensionReason.EmployerPaymentDefault;
+            AccrueOperatingLiabilityCents(wage, $"partial-period wage default: '{periodLabel}' for {employment.RoleDisplayName} (employment {employment.Id})");
+            SyncSlotPaidState(employment.EmployeePersonId, paid: false);
+            string workerId = employment.EmployeePersonId.ToString();
+            if (!lastSuspendedPayrollWorkerIds.Contains(workerId))
+            {
+                lastSuspendedPayrollWorkerIds.Add(workerId);
+            }
+
+            RefreshWeeklyCashAfter();
+            return $"PayAgreedWage: insufficient cash - {wage}c owed for '{periodLabel}' (employment {employmentId}) accrued as operating liability; employment suspended.";
+        }
 
         private readonly List<string> lastWeeklyPayrollDiagnostics = new List<string>();
 

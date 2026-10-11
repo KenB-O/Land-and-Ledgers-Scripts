@@ -52,6 +52,9 @@ namespace LandLedgers.Economy.Labor
         public string DeliveryChannel; // InPerson, Letter, Handbill, Newspaper, WordOfMouth
         public string HowHeard; // relationship provenance chain, e.g. "spouse-of:P3>referred-by:P7"
         public int CounterWageCentsPerWeek; // latest counter terms, 0 when none
+        // A worker counteroffer is not binding until the offering employer (or
+        // an authorized manager) accepts the revised terms.
+        public bool EmployerAcceptedCounterOffer;
         public string LastNote;
     }
 

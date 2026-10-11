@@ -49,8 +49,8 @@ namespace LandLedgers.Economy.Labor
         /// <param name="offerAuthorityPredicate">
         /// (businessInstanceId, offeringPersonId, actName) → true when the offering
         /// person may extend offers for the business (owner, or delegated HireStaff
-        /// scope). Null means "no authority wiring" — offers are then made with a
-        /// diagnostic warning; the integrator must wire this for production use.
+        /// scope). Null means "no authority wiring" — offers are refused. A
+        /// missing authority cannot silently authorize a binding offer.
         /// </param>
         public EmploymentNegotiationService(Func<string, int, string, bool> offerAuthorityPredicate = null)
         {
@@ -117,7 +117,8 @@ namespace LandLedgers.Economy.Labor
             }
             else
             {
-                diag.Add("EmploymentNegotiationService.MakeOffer: no authority predicate wired — offer made without an authority check (integrator must wire one).");
+                diag.Add("EmploymentNegotiationService.MakeOffer: no authority predicate wired — offer refused.");
+                return null;
             }
 
             var offer = new EmploymentOffer
@@ -174,9 +175,52 @@ namespace LandLedgers.Economy.Labor
             }
 
             offer.CounterWageCentsPerWeek = counterWageCentsPerWeek;
+            offer.EmployerAcceptedCounterOffer = false;
             offer.State = OfferState.Countered;
             offer.LastNote = $"day {dayIndex}: candidate countered at {counterWageCentsPerWeek}c/week.";
             diag.Add($"EmploymentNegotiationService: offer '{offerId}' countered at {counterWageCentsPerWeek}c/week.");
+            return null;
+        }
+
+        /// <summary>
+        /// Accepts the candidate's revised terms on behalf of the employer.
+        /// A counteroffer is only eligible for candidate acceptance after this
+        /// authority-checked step; a worker cannot unilaterally bind the
+        /// Business to a higher wage.
+        /// </summary>
+        public string AcceptCounterOffer(string offerId, int acceptingEmployerPersonId,
+            int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!offers.TryGetValue(offerId, out EmploymentOffer offer))
+                return $"EmploymentNegotiationService.AcceptCounterOffer: unknown offer '{offerId}'.";
+            if (offer.State != OfferState.Countered)
+                return $"EmploymentNegotiationService.AcceptCounterOffer: offer '{offerId}' is {offer.State} — only a countered offer can be employer-accepted.";
+            if (dayIndex > offer.ExpiresDayIndex)
+            {
+                offer.State = OfferState.Expired;
+                return $"EmploymentNegotiationService.AcceptCounterOffer: offer '{offerId}' expired on day {offer.ExpiresDayIndex}.";
+            }
+            if (acceptingEmployerPersonId != offer.OfferingPersonId)
+                return "EmploymentNegotiationService.AcceptCounterOffer: only the offering employer or its delegated authority may accept revised terms.";
+            if (offerAuthorityPredicate == null)
+                return "EmploymentNegotiationService.AcceptCounterOffer: no authority predicate wired — revised terms refused.";
+
+            bool permitted;
+            try
+            {
+                permitted = offerAuthorityPredicate(offer.BusinessInstanceId, acceptingEmployerPersonId, HireStaffAct);
+            }
+            catch (Exception ex)
+            {
+                return $"EmploymentNegotiationService.AcceptCounterOffer: authority check threw ({ex.GetType().Name}) — revised terms refused.";
+            }
+            if (!permitted)
+                return $"EmploymentNegotiationService.AcceptCounterOffer: P{acceptingEmployerPersonId} lacks hiring authority for '{offer.BusinessInstanceId}'.";
+
+            offer.EmployerAcceptedCounterOffer = true;
+            offer.LastNote = $"day {dayIndex}: employer accepted candidate counter at {offer.CounterWageCentsPerWeek}c/week.";
+            diag.Add($"EmploymentNegotiationService: employer accepted counter for '{offerId}' at {offer.CounterWageCentsPerWeek}c/week.");
             return null;
         }
 
@@ -231,6 +275,8 @@ namespace LandLedgers.Economy.Labor
                 return $"EmploymentNegotiationService.AcceptOffer: unknown offer '{offerId}'.";
             if (offer.State != OfferState.Offered && offer.State != OfferState.Countered)
                 return $"EmploymentNegotiationService.AcceptOffer: offer '{offerId}' is {offer.State} — only an open offer can be accepted.";
+            if (offer.State == OfferState.Countered && !offer.EmployerAcceptedCounterOffer)
+                return "EmploymentNegotiationService.AcceptOffer: employer has not accepted the candidate counteroffer; revised terms are not binding.";
             if (dayIndex > offer.ExpiresDayIndex)
             {
                 offer.State = OfferState.Expired;

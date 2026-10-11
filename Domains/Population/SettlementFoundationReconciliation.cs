@@ -60,7 +60,8 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                if (household.memberIds == null || household.memberIds.Count == 0)
+                if ((household.memberIds == null || household.memberIds.Count == 0)
+                    && !household.isBoardingHouseGuestHousehold)
                 {
                     errors.Add($"Household {household.id} has no members.");
                     continue;

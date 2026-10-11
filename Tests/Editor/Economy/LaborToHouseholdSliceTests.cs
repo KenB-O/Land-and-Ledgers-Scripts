@@ -147,6 +147,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(w.Negotiation.RecordCounter(offer.OfferId, 320, 403, diag));
 
             // 8. Agreement accepted: PendingStart until day 404, full terms kept.
+            Assert.IsNull(w.Negotiation.AcceptCounterOffer(offer.OfferId, 3, 403, diag));
             Assert.IsNull(w.Negotiation.AcceptOffer(offer.OfferId, 403, w.Employments, diag));
             Assert.AreEqual(OfferState.Accepted, offer.State);
             Assert.IsTrue(w.Employments.TryGetById("emp-" + offer.OfferId, out EmploymentRelationship rel));

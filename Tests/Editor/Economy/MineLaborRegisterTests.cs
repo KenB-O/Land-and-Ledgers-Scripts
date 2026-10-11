@@ -110,13 +110,21 @@ namespace LandLedgers.Editor.Economy
             EntityId person = PersonId(registry);
             register.AssignMiner(EmploymentId(registry), person, MineRole.HardRockMiner, MineShift.Day, 200, 400, diag);
 
-            var businessCash = new HouseholdLedger(50);
+            // The authoritative household/business ledger refuses an
+            // outflow that would create negative cash. Fund the mine for the
+            // wage being tested so this fixture exercises settlement rather
+            // than an intentionally insolvent payroll attempt.
+            var businessCash = new HouseholdLedger(250);
+            string fundingRejection = businessCash.RecordInflow(
+                409, 250, HouseholdIncomeSource.OwnerContribution,
+                "mine-test-capital", "test capital for payroll fixture", "owner");
+            Assert.IsNull(fundingRejection, "test fixture funding must use the ledger authority");
             var workerLedger = new HouseholdLedger(51);
             var settleDiag = new List<string>();
             int paid = register.SettleShiftWages(businessCash, pid => workerLedger, 410, "week 58", settleDiag);
 
             Assert.AreEqual(1, paid);
-            Assert.AreEqual(-200, businessCash.GetBalanceCents(), "business outflow recorded");
+            Assert.AreEqual(50, businessCash.GetBalanceCents(), "business outflow recorded");
             Assert.AreEqual(200, workerLedger.GetBalanceCents(), "worker wage inflow recorded with employment provenance");
         }
 

@@ -138,6 +138,11 @@ namespace LandLedgers.Economy.Labor
         public IReadOnlyList<ManagerActivityRecord> Records => records;
         public int Count => records.Count;
 
+        public void Clear()
+        {
+            records.Clear();
+        }
+
         public void Append(ManagerActivityRecord record)
         {
             if (record == null || !record.IsSignificant)
@@ -162,7 +167,10 @@ namespace LandLedgers.Economy.Labor
                 return;
             }
 
-            // Append-only: reload appends, never rewrites.
+            // The save DTO is the authoritative snapshot. Re-appending its
+            // records to an already initialized service would duplicate every
+            // historical decision on repeated restore.
+            records.Clear();
             records.AddRange(dto.Records);
         }
     }
@@ -775,7 +783,7 @@ namespace LandLedgers.Economy.Labor
             };
         }
 
-        /// <summary>Clear-then-load for instructions; the activity log appends (never rewrites).</summary>
+        /// <summary>Restores the saved manager snapshot without duplicating history.</summary>
         public void LoadFromSaveDto(ManagerBrainSaveDto dto)
         {
             if (dto == null)

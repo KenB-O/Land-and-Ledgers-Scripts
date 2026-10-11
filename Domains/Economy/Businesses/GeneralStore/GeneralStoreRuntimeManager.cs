@@ -988,12 +988,14 @@ namespace LandLedgers.FirstLedger
             // category reorder writer must never mutate a generic entity.
             if (currentBusiness != null && currentBusiness.BusinessType == BusinessType.Generic)
             {
+                // Generic Businesses settle wages through the hub-owned
+                // WageSettlementService. This compatibility runtime must not
+                // post a second payroll debit on the same week.
                 AssignStoreWorkersFromPopulation();
-                runtimeState.ResolveWeeklyPayroll();
                 currentBusiness.ResolveWeeklyBaselineThroughput();
                 currentBusiness.ResolveDailyBaselineService();
                 PushCashToHud();
-                status = "Generic Business weekly labor settled; procurement remains on the shared supplier/shipment authority.";
+                status = "Generic Business weekly operations refreshed; labor settlement remains on the shared wage authority.";
                 return;
             }
 

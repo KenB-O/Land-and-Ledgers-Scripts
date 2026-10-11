@@ -2,8 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Economy.Labor;
+using LandLedgers.Economy.Recruitment;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Population;
@@ -11,6 +14,7 @@ using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Skills;
+using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
 using UnityEngine;
@@ -83,6 +87,7 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
         private HouseholdShoppingLoop householdShoppingLoop;
+        private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
 
         /// <summary>
@@ -397,6 +402,10 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            int absoluteDayIndex = timeManager != null
+                ? timeManager.CurrentAbsoluteDayIndex
+                : hub.LaborDayIndex;
+
             // P1: SWN-3 liability ledger -> BIZ-5 valuation. Liabilities change
             // during the week (loans drawn, payables accrued); re-sync weekly so
             // the valuation read model reflects real balances, not boot-time ones.
@@ -506,6 +515,7 @@ namespace LandLedgers.Orchestration.Systems
             // predicate needs the current day for delegation bounds.
             hub.LaborDayIndex = absoluteDayIndex;
             DriveLaborMarketDay(absoluteDayIndex);
+            DriveAutonomousLabor(absoluteDayIndex);
         }
 
         private void DriveGenericProduction(int absoluteDayIndex)
@@ -676,6 +686,351 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Runs the labor services against the real business task queues. The
+        /// labor DTOs are read models and decision inputs; TaskAuthority and
+        /// PersonScheduleTracker remain the only writers for work assignment,
+        /// Person time, and task state.
+        /// </summary>
+        private void DriveAutonomousLabor(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null)
+            {
+                return;
+            }
+
+            var diagnostics = new List<string>();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || string.IsNullOrWhiteSpace(business.InstanceId))
+                {
+                    continue;
+                }
+
+                EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
+                List<WorkTask> openTasks = hub.Tasks.GetOpenTasks(businessId);
+                if (openTasks == null || openTasks.Count == 0)
+                {
+                    continue;
+                }
+
+                var demandInputs = new LaborDemandInputs
+                {
+                    BusinessInstanceId = business.InstanceId,
+                    DayIndex = absoluteDayIndex,
+                };
+                var workers = new List<SchedulerAvailableWorker>();
+                var seenWorkers = new HashSet<int>();
+                EmploymentRelationshipRegistry registry = business.RuntimeState?.EmploymentRegistry ?? hub.Employments;
+
+                if (registry != null)
+                {
+                    foreach (EmploymentRelationship relationship in registry.GetActiveByEmployer(business.InstanceId))
+                    {
+                        AddLaborWorker(relationship?.EmployeePersonId ?? -1, seenWorkers, workers, absoluteDayIndex);
+                    }
+                }
+
+                if (business.Owner != null && business.Owner.PersonId >= 0)
+                {
+                    AddLaborWorker(business.Owner.PersonId, seenWorkers, workers, absoluteDayIndex);
+                }
+
+                var schedulerWork = new List<SchedulerOpenWorkItem>();
+                var taskByTextId = new Dictionary<string, WorkTask>(StringComparer.Ordinal);
+                foreach (WorkTask task in openTasks)
+                {
+                    if (task == null || !task.IsOpen)
+                    {
+                        continue;
+                    }
+
+                    TaskDefinition definition = hub.Tasks.GetDefinition(task.DefinitionId);
+                    string family = definition?.DisplayName;
+                    if (string.IsNullOrWhiteSpace(family)) family = task.DefinitionId;
+                    int minutes = Math.Max(1, task.MinutesRemaining);
+                    if (task.Status == TaskStatus.Queued)
+                    {
+                        schedulerWork.Add(new SchedulerOpenWorkItem
+                        {
+                            TaskId = task.TaskId.ToString(),
+                            Family = family,
+                            MinutesRequired = minutes,
+                            RequiredEquipment = definition != null && definition.EquipmentClasses.Count > 0
+                                ? definition.EquipmentClasses[0] : string.Empty,
+                            LocationId = task.LocationId,
+                        });
+                        taskByTextId[task.TaskId.ToString()] = task;
+                    }
+
+                    if (!demandInputs.OpenTaskMinutesByFamily.ContainsKey(family))
+                    {
+                        demandInputs.OpenTaskMinutesByFamily[family] = 0;
+                    }
+                    demandInputs.OpenTaskMinutesByFamily[family] += minutes;
+                }
+
+                demandInputs.ActiveEmployeeCount = workers.Count;
+                demandInputs.AvailableEmployeeMinutes = workers.Sum(worker => worker.AvailableMinutes);
+                LaborDemandReport demand = hub.LaborDemand.Assess(demandInputs, diagnostics);
+
+                // A delegated manager is a real Person with a persisted grant.
+                // No manager is synthesized for an owner or for an unconfigured
+                // business; absent authority remains a visible non-operation.
+                ManagerDecisionResult managerDecision = null;
+                foreach (SchedulerAvailableWorker worker in workers)
+                {
+                    DelegatedAuthority authority = hub.Delegation.GetActiveAuthority(
+                        business.InstanceId, worker.PersonId, absoluteDayIndex);
+                    if (authority == null)
+                    {
+                        continue;
+                    }
+
+                    managerDecision = hub.Managers.DailyCycle(new ManagerCycleInputs
+                    {
+                        BusinessInstanceId = business.InstanceId,
+                        ManagerPersonId = worker.PersonId,
+                        CashCents = business.RuntimeState?.CurrentCashCents ?? 0,
+                        DemandReport = demand,
+                        Instructions = hub.Managers.Instructions.ForBusiness(business.InstanceId),
+                        DelegatedScopes = ScopeNames(authority.Scopes),
+                        DayIndex = absoluteDayIndex,
+                        JudgmentSeed = absoluteDayIndex ^ StableBusinessRuntimeId(business.InstanceId),
+                        JudgmentQuality01 = 0.8f,
+                        PurchaseLimitCents = authority.PurchaseLimitCents,
+                        MaxBorrowingCents = 0,
+                    }, diagnostics);
+                    ExecuteManagerRecruitment(business, demand, managerDecision, absoluteDayIndex, diagnostics);
+                    break;
+                }
+
+                if (schedulerWork.Count == 0 || workers.Count == 0)
+                {
+                    continue;
+                }
+
+                WorkAssignmentReport assignments = hub.WorkScheduling.AssignDailyWork(
+                    new SchedulerInputs
+                    {
+                        BusinessInstanceId = business.InstanceId,
+                        DayIndex = absoluteDayIndex,
+                        OpenWork = schedulerWork,
+                        Workers = workers,
+                    }, diagnostics);
+                StartAssignedBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
+            }
+
+            if (diagnostics.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] autonomous labor: " + string.Join(" | ", diagnostics));
+            }
+        }
+
+        private void AddLaborWorker(int personId, HashSet<int> seen, List<SchedulerAvailableWorker> workers, int dayIndex)
+        {
+            if (personId < 0 || !seen.Add(personId)) return;
+            EntityId personEntity = EntityId.For(EntityKind.Person, personId);
+            WorkTimeBudget budget = hub.WorkTimeBudgets.GetOrCreate(personEntity);
+            workers.Add(new SchedulerAvailableWorker
+            {
+                PersonId = personId,
+                AvailableMinutes = budget.MinutesRemaining,
+                SkillEvidence = new Dictionary<string, float>(),
+            });
+        }
+
+        private void StartAssignedBusinessTasks(WorkAssignmentReport report, Dictionary<string, WorkTask> tasks, int dayIndex, List<string> diagnostics)
+        {
+            if (report == null || tasks == null) return;
+            var nextStartByPerson = new Dictionary<int, int>();
+            foreach (WorkAssignment assignment in report.Assignments)
+            {
+                if (assignment == null || assignment.PersonId < 0 || !tasks.TryGetValue(assignment.TaskId, out WorkTask task)) continue;
+                int startMinute = nextStartByPerson.TryGetValue(assignment.PersonId, out int prior)
+                    ? prior : 8 * 60;
+                string reservation = hub.PersonSchedules.TryReserve(
+                    assignment.PersonId, PersonActivityKind.Work, dayIndex, startMinute,
+                    assignment.MinutesCommitted, TaskReservationLabel(task));
+                if (reservation != null)
+                {
+                    diagnostics.Add($"task {task.TaskId}: {reservation}");
+                    continue;
+                }
+
+                // PersonScheduleTracker returns null on success (the return
+                // value is reserved for a refusal reason). Resolve the real
+                // persisted reservation that was just created so completion
+                // can release it through the same authority.
+                string reservationId = null;
+                List<PersonActivityReservation> activeReservations =
+                    hub.PersonSchedules.ActiveFor(assignment.PersonId, dayIndex);
+                for (int i = activeReservations.Count - 1; i >= 0; i--)
+                {
+                    PersonActivityReservation candidate = activeReservations[i];
+                    if (candidate != null &&
+                        candidate.Activity == PersonActivityKind.Work &&
+                        string.Equals(candidate.Label, TaskReservationLabel(task), StringComparison.Ordinal))
+                    {
+                        reservationId = candidate.ReservationId;
+                        break;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(reservationId))
+                {
+                    diagnostics.Add($"task {task.TaskId}: schedule reservation was not materialized");
+                    continue;
+                }
+
+                EntityId person = EntityId.For(EntityKind.Person, assignment.PersonId);
+                string assignReason = null;
+                string startReason = null;
+                bool assigned = hub.Tasks.AssignTask(task.TaskId, person, hub.WorkTimeBudgets, out assignReason);
+                bool started = assigned && hub.Tasks.StartTask(task.TaskId, dayIndex, out startReason);
+                if (!assigned || !started)
+                {
+                    hub.PersonSchedules.Release(reservationId);
+                    diagnostics.Add($"task {task.TaskId}: assignment refused ({assignReason ?? startReason})");
+                    continue;
+                }
+
+                autonomousTaskReservations[task.TaskId] = reservationId;
+                nextStartByPerson[assignment.PersonId] = startMinute + Math.Max(1, assignment.MinutesCommitted);
+            }
+        }
+
+        private static List<string> ScopeNames(DelegationScope scopes)
+        {
+            var names = new List<string>();
+            if (scopes.HasFlag(DelegationScope.Purchasing)) names.Add(ManagerScopeNames.Purchasing);
+            if (scopes.HasFlag(DelegationScope.Scheduling)) names.Add(ManagerScopeNames.Scheduling);
+            if (scopes.HasFlag(DelegationScope.Maintenance)) names.Add(ManagerScopeNames.Maintenance);
+            if (scopes.HasFlag(DelegationScope.CashHandling)) names.Add(ManagerScopeNames.CashHandling);
+            if (scopes.HasFlag(DelegationScope.Inventory)) names.Add(ManagerScopeNames.Inventory);
+            if (scopes.HasFlag(DelegationScope.Staffing)) names.Add(ManagerScopeNames.Staffing);
+            return names;
+        }
+
+        private static string TaskReservationLabel(WorkTask task)
+        {
+            return task == null
+                ? string.Empty
+                : $"task:{task.TaskId}|{task.DefinitionId}";
+        }
+
+        private void ExecuteManagerRecruitment(
+            BusinessInstanceState business,
+            LaborDemandReport demand,
+            ManagerDecisionResult decision,
+            int dayIndex,
+            List<string> diagnostics)
+        {
+            if (business == null || demand == null || decision == null ||
+                !decision.Acted || !string.Equals(decision.ActionKind, ManagerActKinds.OpenRecruitment, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string role = "general labor";
+            if (demand.Lines != null)
+            {
+                for (int i = 0; i < demand.Lines.Count; i++)
+                {
+                    LaborDemandLine line = demand.Lines[i];
+                    if (line != null && !string.IsNullOrWhiteSpace(line.TaskFamily) && line.OpenMinutes > 0)
+                    {
+                        role = line.TaskFamily;
+                        break;
+                    }
+                }
+            }
+
+            RecruitmentEffort effort = hub.Recruiting.OpenEffort(
+                business.InstanceId,
+                role,
+                RecruitmentChannel.WordOfMouth,
+                dayIndex,
+                dayIndex ^ StableBusinessRuntimeId(business.InstanceId),
+                diagnostics);
+            if (effort == null)
+            {
+                diagnostics.Add($"manager recruitment for {business.InstanceId}: RecruitmentService refused the effort");
+                return;
+            }
+
+            // The activity record is an immutable historical read model from
+            // ManagerBrain; the real effort id is still surfaced in runtime
+            // diagnostics and remains save-persisted by RecruitmentService.
+            diagnostics.Add($"manager recruitment for {business.InstanceId}: opened {effort.EffortId} for {role}");
+        }
+
+        private void AdvanceAutonomousWork(int wholeMinutes, int dayIndex, int minuteOfDay)
+        {
+            if (hub == null || wholeMinutes <= 0 || sharedBusinessRuntime == null) return;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null) continue;
+                EntityId owner = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
+                foreach (WorkTask task in hub.Tasks.GetOpenTasks(owner))
+                {
+                    if (task == null || task.Status != TaskStatus.InProgress || !task.HasAssignee) continue;
+                    List<PersonActivityReservation> activeReservations =
+                        hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex);
+                    bool scheduledNow = false;
+                    for (int i = 0; i < activeReservations.Count; i++)
+                    {
+                        PersonActivityReservation reservation = activeReservations[i];
+                        if (reservation != null &&
+                            reservation.Activity == PersonActivityKind.Work &&
+                            string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal) &&
+                            minuteOfDay >= reservation.StartMinuteOfDay &&
+                            minuteOfDay < reservation.EndMinuteOfDay)
+                        {
+                            scheduledNow = true;
+                            break;
+                        }
+                    }
+                    if (!scheduledNow) continue;
+                    if (hub.Tasks.RecordWork(task.TaskId, wholeMinutes, hub.WorkTimeBudgets, dayIndex, out _))
+                    {
+                        if (!task.IsOpen)
+                        {
+                            ReleaseAutonomousTaskReservation(task, dayIndex);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void ReleaseAutonomousTaskReservation(WorkTask task, int dayIndex)
+        {
+            if (task == null || hub == null) return;
+
+            if (autonomousTaskReservations.TryGetValue(task.TaskId, out string trackedReservation))
+            {
+                hub.PersonSchedules.Release(trackedReservation);
+                autonomousTaskReservations.Remove(task.TaskId);
+                return;
+            }
+
+            // The dictionary is intentionally transient. After save/load the
+            // TaskAuthority and PersonScheduleTracker are authoritative; find
+            // the persisted reservation by its stable task label.
+            List<PersonActivityReservation> active =
+                hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex);
+            for (int i = 0; i < active.Count; i++)
+            {
+                PersonActivityReservation reservation = active[i];
+                if (reservation != null &&
+                    string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal))
+                {
+                    hub.PersonSchedules.Release(reservation.ReservationId);
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
         /// Autonomous Labor: weekly wage settlement per business. The
         /// settled-week marker makes a repeated boundary in the same week
         /// (or a load followed by a boundary) a no-op — wages are never
@@ -688,7 +1043,15 @@ namespace LandLedgers.Orchestration.Systems
             var diag = new List<string>();
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
-                if (business?.RuntimeState == null) continue;
+                if (business?.RuntimeState == null || business.BusinessType != BusinessType.Generic)
+                {
+                    // Specialized domains retain their existing weekly
+                    // settlement writer in SharedBusinessRuntimeManager. The
+                    // shared labor writer owns Generic Businesses only, so a
+                    // business can never receive two payroll passes at one
+                    // calendar boundary.
+                    continue;
+                }
                 var registry = business.RuntimeState.EmploymentRegistry ?? hub.Employments;
                 hub.WageSettlement.SettleWeeklyPayroll(
                     business.RuntimeState, registry, weekIndex, absoluteDayIndex, diag);
@@ -873,6 +1236,17 @@ namespace LandLedgers.Orchestration.Systems
                 if (wholeMinutes > 0)
                 {
                     playerDirector.RecordMovementProgress(wholeMinutes, hub.WorkTimeBudgets);
+                    AdvanceAutonomousWork(wholeMinutes, context.Date.AbsoluteDayIndex,
+                        Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
+                }
+            }
+            else
+            {
+                int wholeMinutes = Mathf.FloorToInt(context.TickIntervalGameSeconds / 60f);
+                if (wholeMinutes > 0)
+                {
+                    AdvanceAutonomousWork(wholeMinutes, context.Date.AbsoluteDayIndex,
+                        Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
                 }
             }
 

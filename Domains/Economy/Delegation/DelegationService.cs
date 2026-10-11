@@ -105,6 +105,12 @@ namespace LandLedgers.Economy.Delegation
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public IReadOnlyList<DelegateDecision> Decisions => decisions;
 
+        /// <summary>Reads an existing active grant without creating or widening authority.</summary>
+        public DelegatedAuthority GetActiveAuthority(string businessInstanceId, int personId, int dayIndex)
+        {
+            return FindActive(businessInstanceId, personId, dayIndex);
+        }
+
         /// <param name="hasSkill">Qualification gate: (personId, skillId) → true when the person is qualified.</param>
         public DelegatedAuthority GrantAuthority(
             EntityIdRegistry ids, string businessInstanceId, int delegatePersonId,

@@ -128,6 +128,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(OfferState.Countered, offer.State);
             Assert.AreEqual(340, offer.CounterWageCentsPerWeek);
 
+            Assert.IsNull(service.AcceptCounterOffer(offer.OfferId, OwnerId, 402, diag));
+
             Assert.IsNull(service.AcceptOffer(offer.OfferId, 402, registry, diag));
             Assert.AreEqual(OfferState.Accepted, offer.State);
 
@@ -284,6 +286,7 @@ namespace LandLedgers.Editor.Economy
 
             EmploymentOffer offer = MakeStandardOffer(serviceA, 400, diag);
             serviceA.RecordCounter(offer.OfferId, 320, 401, diag);
+            Assert.IsNull(serviceA.AcceptCounterOffer(offer.OfferId, OwnerId, 402, diag));
             serviceA.AcceptOffer(offer.OfferId, 402, registry, diag);
             Assert.AreEqual(1, registry.Count);
 

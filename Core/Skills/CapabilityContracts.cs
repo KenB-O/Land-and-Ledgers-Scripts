@@ -84,12 +84,6 @@ namespace LandLedgers.Skills
     [Serializable]
     public class ExperienceEntry
     {
-        /// <summary>
-        /// Deterministic idempotency key (assigned by ExperienceLedger when empty).
-        /// Save/load restore keys on this — the same entry can NEVER double-credit.
-        /// Canon: no experience from save restores or re-polled events (Rev VII §1.2).
-        /// </summary>
-        public string EntryId;
         public string PersonId;
         public string TaskCapabilityId;
         /// <summary>0..1 task difficulty relative to the worker.</summary>

@@ -250,10 +250,8 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            // Pass III Worker D: causal outcome resolution replaces the flat
-            // "-1 minute per skill level" rule (Tech II §2.4). Installed once;
-            // the authority owns it after. TaskAuthority itself is untouched.
-            hub.Tasks.SetDurationEstimator(new CausalTaskDurationEstimator(hub.Skills));
+            // TTS-3: skill shaves task time. Installed once; the authority owns it after.
+            hub.Tasks.SetDurationEstimator(new SkillTaskDurationEstimator(hub.Skills));
 
             if (scenarioDirector != null)
             {

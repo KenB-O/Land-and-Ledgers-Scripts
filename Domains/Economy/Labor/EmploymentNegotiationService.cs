@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Skills;
 
 namespace LandLedgers.Economy.Labor
 {
@@ -45,6 +46,35 @@ namespace LandLedgers.Economy.Labor
         private readonly Func<string, int, string, bool> offerAuthorityPredicate;
         private readonly List<string> diagnostics = new List<string>();
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>
+        /// Pass III Worker D, ADDITIVE: optional observer-side capability
+        /// evidence (Canon XXXI §§4.4-4.5). Lets the offering side consult what
+        /// it legitimately knows about a candidate before/during negotiation.
+        /// Null by default: the offer lifecycle works without it.
+        /// </summary>
+        public ICapabilityEvidenceReader CapabilityEvidence { get; set; }
+
+        /// <summary>
+        /// Reads what the offering person legitimately knows about a
+        /// candidate's capability for a task class. Returns null when no
+        /// evidence reader is wired or no evidence exists.
+        /// Additive: the offer lifecycle is untouched.
+        /// </summary>
+        public CapabilityEvidenceReading GetCandidateEvidence(
+            int candidatePersonId, string taskCapabilityId, int offeringPersonId)
+        {
+            if (CapabilityEvidence == null || candidatePersonId < 0 ||
+                offeringPersonId < 0 || string.IsNullOrEmpty(taskCapabilityId))
+            {
+                return null;
+            }
+
+            return CapabilityEvidence.ReadCapability(
+                offeringPersonId.ToString(),
+                candidatePersonId.ToString(),
+                taskCapabilityId);
+        }
 
         /// <param name="offerAuthorityPredicate">
         /// (businessInstanceId, offeringPersonId, actName) → true when the offering

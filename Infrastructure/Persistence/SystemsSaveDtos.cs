@@ -100,6 +100,12 @@ namespace LandLedgers.Persistence
         public WageSettlementSaveDto wageSettlement = new();
         public ManagerBrainSaveDto managerBrain = new();
         public DelegationService.DelegationSaveDto delegation = new();
+        // Pass III Worker C: household decisions, decision-execution state,
+        // domestic labor assignments, and autonomy job-loss fingerprints.
+        public HouseholdDecisionServiceSaveDto householdDecisions = new();
+        public HouseholdDecisionDriverSaveDto householdDecisionDriver = new();
+        public DomesticLaborServiceSaveDto domesticLabor = new();
+        public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

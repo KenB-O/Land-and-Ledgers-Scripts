@@ -100,6 +100,11 @@ namespace LandLedgers.Persistence
         public WageSettlementSaveDto wageSettlement = new();
         public ManagerBrainSaveDto managerBrain = new();
         public DelegationService.DelegationSaveDto delegation = new();
+        // Pass III Worker A: legal parcel/holding registry and the single
+        // non-title rights store. Title chain itself persists via
+        // AcquisitionSaveDto.titleChain.
+        public ParcelServiceSaveDto parcels = new();
+        public PropertyInterestStoreSaveDto propertyInterests = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

@@ -56,8 +56,14 @@ namespace LandLedgers.World.Property
     /// real events — purchase, claim, inheritance, grant, court order. There
     /// is no title without provenance, and a parcel's current holder is always
     /// the last link, never a separate mutable field that can drift.
+    ///
+    /// Pass III: implements IOwnershipTransferService — the single
+    /// ownership-transfer function. New ownership changes route through
+    /// TransferTitle(parcelId, fromHolder, toHolder, instrumentId, day);
+    /// the full chain API below is unchanged (additive only).
+    /// Canon: Rev XXIII §1.1 (one authority per consequential fact).
     /// </summary>
-    public sealed class TitleAuthority
+    public sealed class TitleAuthority : IOwnershipTransferService
     {
         private readonly Dictionary<string, Parcel> parcels =
             new Dictionary<string, Parcel>(StringComparer.Ordinal);
@@ -66,6 +72,13 @@ namespace LandLedgers.World.Property
         private readonly List<string> diagnostics = new List<string>();
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>
+        /// Pass III: optional id allocator for transfer records created through
+        /// the IOwnershipTransferService entry point. When null, transfer links
+        /// are recorded with EntityId.Invalid (same as the legacy null-registry path).
+        /// </summary>
+        public EntityIdRegistry IdAllocator { get; set; }
 
         public Parcel RegisterParcel(string parcelId, string description, float acres,
             string initialHolder, TitleBasis basis, int dayIndex, List<string> diag)
@@ -145,6 +158,84 @@ namespace LandLedgers.World.Property
         public string CurrentHolder(string parcelId)
         {
             return parcels.TryGetValue(parcelId, out Parcel parcel) ? parcel.CurrentHolderName : null;
+        }
+
+        /// <summary>
+        /// Pass III: the single ownership-transfer function (IOwnershipTransferService).
+        /// Appends one transfer link to the append-only chain and returns the
+        /// transfer record id. Returns null on failure (diagnosed, never thrown).
+        ///
+        /// Recorded design decision: the 5-parameter contract carries no TitleBasis,
+        /// but the chain requires one ("title never moves for no reason"). A
+        /// supplied conveyance instrument maps to TitleBasis.Purchase (the chain's
+        /// purchase rule); without an instrument the basis defaults to Grant with an
+        /// explicit diagnostic. Callers needing a specific basis (inheritance, court
+        /// order, homestead claim) must use the full TransferTitle overload below.
+        /// The from-holder must match the recorded current holder — a mismatch is
+        /// refused rather than silently reordered, so competing writers cannot fork
+        /// the chain.
+        /// </summary>
+        public string TransferTitle(string parcelId, string fromHolder, string toHolder, string instrumentId, int dayIndex)
+        {
+            if (string.IsNullOrWhiteSpace(parcelId))
+            {
+                diagnostics.Add("TitleAuthority.TransferTitle: a parcel id is required.");
+                return null;
+            }
+            if (!parcels.TryGetValue(parcelId, out Parcel parcel))
+            {
+                diagnostics.Add($"TitleAuthority.TransferTitle: unknown parcel '{parcelId}'.");
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(toHolder))
+            {
+                diagnostics.Add("TitleAuthority.TransferTitle: the new holder must be named.");
+                return null;
+            }
+            if (!string.Equals(parcel.CurrentHolderName, fromHolder, StringComparison.Ordinal))
+            {
+                diagnostics.Add($"TitleAuthority.TransferTitle: '{parcelId}' is held by '{parcel.CurrentHolderName}', " +
+                    $"not '{fromHolder ?? "unknown"}' — transfer refused.");
+                return null;
+            }
+            if (string.Equals(fromHolder, toHolder, StringComparison.Ordinal))
+            {
+                diagnostics.Add($"TitleAuthority.TransferTitle: '{parcelId}' already held by '{toHolder}' — no-op, no link appended.");
+                return null;
+            }
+
+            TitleBasis basis = string.IsNullOrWhiteSpace(instrumentId) ? TitleBasis.Grant : TitleBasis.Purchase;
+            if (basis == TitleBasis.Grant)
+                diagnostics.Add($"TitleAuthority.TransferTitle: no conveyance instrument supplied for '{parcelId}' — basis defaulted to Grant.");
+
+            var record = new TitleRecord
+            {
+                RecordId = IdAllocator != null ? IdAllocator.Allocate(EntityKind.Contract) : EntityId.Invalid,
+                ParcelId = parcelId,
+                HolderName = toHolder,
+                Basis = basis,
+                InstrumentId = instrumentId ?? string.Empty,
+                DayIndex = dayIndex,
+                Note = "Pass III transfer via IOwnershipTransferService",
+            };
+            chains[parcelId].Add(record);
+            parcel.CurrentHolderName = toHolder;
+            diagnostics.Add($"TitleAuthority: '{parcelId}' → {toHolder} by {basis} on day {dayIndex} (transfer function).");
+            return record.RecordId.ToString();
+        }
+
+        /// <summary>
+        /// Pass III: all parcel ids whose chain currently ends with the named holder
+        /// (IOwnershipTransferService). Backs the ownedPlotIds → chain-query migration.
+        /// </summary>
+        public IReadOnlyList<string> ParcelsHeldBy(string holderName)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrWhiteSpace(holderName)) return result;
+            foreach (Parcel parcel in parcels.Values)
+                if (string.Equals(parcel.CurrentHolderName, holderName, StringComparison.Ordinal))
+                    result.Add(parcel.ParcelId);
+            return result;
         }
 
         public IReadOnlyList<TitleRecord> ChainOf(string parcelId)

@@ -100,6 +100,20 @@ namespace LandLedgers.Persistence
         public WageSettlementSaveDto wageSettlement = new();
         public ManagerBrainSaveDto managerBrain = new();
         public DelegationService.DelegationSaveDto delegation = new();
+        // Pass III Worker A: legal parcel/holding registry and the single
+        // non-title rights store. Title chain itself persists via
+        // AcquisitionSaveDto.titleChain.
+        public ParcelServiceSaveDto parcels = new();
+        public PropertyInterestStoreSaveDto propertyInterests = new();
+        // Pass III Worker B: tenancy payment loop — rent/board obligation
+        // states plus settled-period idempotency markers.
+        public TenancyPaymentService.TenancyPaymentSaveDto tenancyPayments = new();
+        // Pass III Worker C: household decisions, decision-execution state,
+        // domestic labor assignments, and autonomy job-loss fingerprints.
+        public HouseholdDecisionServiceSaveDto householdDecisions = new();
+        public HouseholdDecisionDriverSaveDto householdDecisionDriver = new();
+        public DomesticLaborServiceSaveDto domesticLabor = new();
+        public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>
@@ -135,7 +149,18 @@ namespace LandLedgers.Persistence
     public sealed class SkillServiceSaveDto
     {
         public List<SkillDefinition> definitions = new();
-        public List<SkillService.PersonSkillEntry> skillStates = new();
+        /// <summary>
+        /// Legacy pre-Pass III entries. Read on load and deterministically
+        /// migrated into capabilities; never written by new code.
+        /// </summary>
+        public List<SkillService.PersonSkillEntry> legacySkillStates = new();
+        // Pass III Worker D: the four capability authorities + observer evidence.
+        public List<AptitudeRecord> aptitudes = new();
+        public List<ExperienceEntry> experienceEntries = new();
+        public int experienceSequence;
+        public List<DomainFamiliarity> familiarities = new();
+        public List<PersonCapabilityState> capabilities = new();
+        public List<CapabilityEvidenceItem> evidenceItems = new();
     }
 
     [Serializable]

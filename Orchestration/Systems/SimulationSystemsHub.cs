@@ -222,6 +222,19 @@ namespace LandLedgers.Orchestration.Systems
         private ManagerBrain managerBrain;
         private LaborMigrationLinker laborMigrationLinker;
         private DelegationService delegationService;
+        private TenancyPaymentService tenancyPaymentService;
+
+        // Pass III land core (Worker A): legal parcel/holding identity, the single
+        // non-title rights store, and the atomic subdivision coordinator. None owns
+        // a second cash, debt, or title ledger — title stays in TitleAuthority.
+        private ParcelService parcelService;
+        private PropertyInterestStore propertyInterestStore;
+        private ParcelSubdivisionService parcelSubdivisionService;
+        private HouseholdDecisionService householdDecisionService;
+        private HouseholdDecisionDriver householdDecisionDriver;
+        private DomesticLaborService domesticLaborService;
+        private HouseholdAutonomyDriver householdAutonomyDriver;
+        private HousingSearchNeedRegistry housingSearchNeedRegistry;
 
         /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
         public JourneyModel Journeys => journeyModel ??= new JourneyModel();
@@ -298,6 +311,70 @@ namespace LandLedgers.Orchestration.Systems
         /// but was never registered or driven; it is owned here now.
         /// </summary>
         public DelegationService Delegation => delegationService ??= new DelegationService();
+
+        /// <summary>
+        /// Pass III Worker A: legal parcel/holding identity + plot linkage
+        /// (ParcelRecord/HoldingRecord). Ownership truth stays in TitleAuthority;
+        /// this service never answers "who owns it".
+        /// </summary>
+        public ParcelService Parcels => parcelService ??= new ParcelService();
+
+        /// <summary>
+        /// Pass III Worker A: the single non-title rights store
+        /// (lease/easement/charge/entry/ROW/restriction/dispute/lien).
+        /// </summary>
+        public PropertyInterestStore PropertyInterests => propertyInterestStore ??= new PropertyInterestStore();
+
+        /// <summary>
+        /// Pass III Worker A: atomic subdivision coordinator, wired to the parcel
+        /// and interest authorities. Game wiring (Codex) sets BuildingIndex from
+        /// PlacedBuilding footprints and TitleHolderLookup from the title chain.
+        /// </summary>
+        public ParcelSubdivisionService ParcelSubdivisions =>
+            parcelSubdivisionService ??= new ParcelSubdivisionService(Parcels, PropertyInterests);
+
+        /// <summary>
+        /// Pass III Worker B: the general rent/board payment loop. Owned by
+        /// the hub like the other Pass II/III plain-C# services; game wiring
+        /// (Codex) drives SettleDueRents once per simulated day and supplies
+        /// the ITenancyPayeeDirectory.
+        /// </summary>
+        public TenancyPaymentService TenancyPayments => tenancyPaymentService ??= new TenancyPaymentService();
+        /// Pass III Worker C: household financial pressure -> bounded decision
+        /// (pure evaluator; the autonomy driver maps real state onto its input).
+        /// </summary>
+        public HouseholdDecisionService HouseholdDecisions =>
+            householdDecisionService ??= new HouseholdDecisionService();
+
+        /// <summary>
+        /// Pass III Worker C: turns household decisions into real operations
+        /// (opportunity discovery, housing search, obligations, negotiation
+        /// requests, spending policies). Owns the opportunity log.
+        /// </summary>
+        public HouseholdDecisionDriver HouseholdDecisionDriver =>
+            householdDecisionDriver ??= new HouseholdDecisionDriver(
+                ContactGraph, Employments, HousingSearchNeeds, FinancialObligations, Ids);
+
+        /// <summary>
+        /// Pass III Worker C: narrow domestic labor (meal prep, fuel, animal
+        /// care, chores) on the existing TaskAuthority + person-time.
+        /// </summary>
+        public DomesticLaborService DomesticLabor =>
+            domesticLaborService ??= new DomesticLaborService();
+
+        /// <summary>
+        /// Pass III Worker C: NPC autonomous household responses (brief §13) —
+        /// declining reserves, rent due, job loss, housing change.
+        /// </summary>
+        public HouseholdAutonomyDriver HouseholdAutonomy =>
+            householdAutonomyDriver ??= new HouseholdAutonomyDriver();
+
+        /// <summary>
+        /// Pass III Worker C: hub-owned housing-search registry used by the
+        /// RelocateCheaper decision path.
+        /// </summary>
+        public HousingSearchNeedRegistry HousingSearchNeeds =>
+            housingSearchNeedRegistry ??= new HousingSearchNeedRegistry();
 
         /// <summary>
         /// Autonomous Labor: owner lookup hook for the offer authority predicate.
@@ -597,6 +674,13 @@ namespace LandLedgers.Orchestration.Systems
                 wageSettlement = WageSettlement.CaptureSaveDto(),
                 managerBrain = Managers.CaptureSaveDto(),
                 delegation = Delegation.CaptureSaveDto(),
+                parcels = Parcels.CaptureSaveDto(),
+                propertyInterests = PropertyInterests.CaptureSaveDto(),
+                tenancyPayments = TenancyPayments.CaptureSaveDto(),
+                householdDecisions = HouseholdDecisions.CaptureSaveDto(),
+                householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
+                domesticLabor = DomesticLabor.CaptureSaveDto(),
+                householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -680,6 +764,13 @@ namespace LandLedgers.Orchestration.Systems
             WageSettlement.LoadFromSaveDto(dto.wageSettlement);
             Managers.LoadFromSaveDto(dto.managerBrain);
             Delegation.LoadFromSaveDto(dto.delegation);
+            Parcels.LoadFromSaveDto(dto.parcels);
+            PropertyInterests.LoadFromSaveDto(dto.propertyInterests);
+            TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
+            HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
+            HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
+            DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
+            HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;

@@ -10988,7 +10988,16 @@ namespace LandLedgers.Economy
 
         private bool IsPlayerOwnedPlot(TownPlot plot)
         {
-            return plot != null && (plot.playerOwned || ownedPlotIds.Contains(plot.id));
+            if (plot == null) return false;
+            // Pass III: the title chain is the ownership authority for parcel-linked
+            // plots (Rev XXIII §1.1, one authority per consequential fact). The legacy
+            // OR-merge stays as the fallback until every writer migrates through
+            // IOwnershipTransferService — plots the chain has never seen (e.g. the
+            // ownedPlotIds-only construction flows) keep their legacy answer.
+            string chainHolder = titleAuthority.CurrentHolder(PlayerTitleBridge.ParcelKeyForPlot(plot.id));
+            if (chainHolder != null)
+                return string.Equals(chainHolder, PlayerTitleBridge.PlayerHolderName, StringComparison.Ordinal);
+            return plot.playerOwned || ownedPlotIds.Contains(plot.id);
         }
 
         private bool IsPlayerOwnedBusiness(PlacedBuilding building)

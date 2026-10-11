@@ -105,6 +105,9 @@ namespace LandLedgers.Persistence
         // AcquisitionSaveDto.titleChain.
         public ParcelServiceSaveDto parcels = new();
         public PropertyInterestStoreSaveDto propertyInterests = new();
+        // Pass III Worker B: tenancy payment loop — rent/board obligation
+        // states plus settled-period idempotency markers.
+        public TenancyPaymentService.TenancyPaymentSaveDto tenancyPayments = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

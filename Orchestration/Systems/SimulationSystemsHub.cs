@@ -222,6 +222,7 @@ namespace LandLedgers.Orchestration.Systems
         private ManagerBrain managerBrain;
         private LaborMigrationLinker laborMigrationLinker;
         private DelegationService delegationService;
+        private TenancyPaymentService tenancyPaymentService;
 
         // Pass III land core (Worker A): legal parcel/holding identity, the single
         // non-title rights store, and the atomic subdivision coordinator. None owns
@@ -326,6 +327,14 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public ParcelSubdivisionService ParcelSubdivisions =>
             parcelSubdivisionService ??= new ParcelSubdivisionService(Parcels, PropertyInterests);
+
+        /// <summary>
+        /// Pass III Worker B: the general rent/board payment loop. Owned by
+        /// the hub like the other Pass II/III plain-C# services; game wiring
+        /// (Codex) drives SettleDueRents once per simulated day and supplies
+        /// the ITenancyPayeeDirectory.
+        /// </summary>
+        public TenancyPaymentService TenancyPayments => tenancyPaymentService ??= new TenancyPaymentService();
 
         /// <summary>
         /// Autonomous Labor: owner lookup hook for the offer authority predicate.
@@ -627,6 +636,7 @@ namespace LandLedgers.Orchestration.Systems
                 delegation = Delegation.CaptureSaveDto(),
                 parcels = Parcels.CaptureSaveDto(),
                 propertyInterests = PropertyInterests.CaptureSaveDto(),
+                tenancyPayments = TenancyPayments.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -712,6 +722,7 @@ namespace LandLedgers.Orchestration.Systems
             Delegation.LoadFromSaveDto(dto.delegation);
             Parcels.LoadFromSaveDto(dto.parcels);
             PropertyInterests.LoadFromSaveDto(dto.propertyInterests);
+            TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;

@@ -222,6 +222,14 @@ namespace LandLedgers.Orchestration.Systems
         private ManagerBrain managerBrain;
         private LaborMigrationLinker laborMigrationLinker;
         private DelegationService delegationService;
+        private TenancyPaymentService tenancyPaymentService;
+
+        // Pass III land core (Worker A): legal parcel/holding identity, the single
+        // non-title rights store, and the atomic subdivision coordinator. None owns
+        // a second cash, debt, or title ledger — title stays in TitleAuthority.
+        private ParcelService parcelService;
+        private PropertyInterestStore propertyInterestStore;
+        private ParcelSubdivisionService parcelSubdivisionService;
 
         /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
         public JourneyModel Journeys => journeyModel ??= new JourneyModel();
@@ -298,6 +306,35 @@ namespace LandLedgers.Orchestration.Systems
         /// but was never registered or driven; it is owned here now.
         /// </summary>
         public DelegationService Delegation => delegationService ??= new DelegationService();
+
+        /// <summary>
+        /// Pass III Worker B: the general rent/board payment loop. Owned by
+        /// the hub like the other Pass II/III plain-C# services; game wiring
+        /// (Codex) drives SettleDueRents once per simulated day and supplies
+        /// the ITenancyPayeeDirectory.
+        /// </summary>
+        public TenancyPaymentService TenancyPayments => tenancyPaymentService ??= new TenancyPaymentService();
+
+        /// <summary>
+        /// Pass III Worker A: legal parcel/holding identity + plot linkage
+        /// (ParcelRecord/HoldingRecord). Ownership truth stays in TitleAuthority;
+        /// this service never answers "who owns it".
+        /// </summary>
+        public ParcelService Parcels => parcelService ??= new ParcelService();
+
+        /// <summary>
+        /// Pass III Worker A: the single non-title rights store
+        /// (lease/easement/charge/entry/ROW/restriction/dispute/lien).
+        /// </summary>
+        public PropertyInterestStore PropertyInterests => propertyInterestStore ??= new PropertyInterestStore();
+
+        /// <summary>
+        /// Pass III Worker A: atomic subdivision coordinator, wired to the parcel
+        /// and interest authorities. Game wiring (Codex) sets BuildingIndex from
+        /// PlacedBuilding footprints and TitleHolderLookup from the title chain.
+        /// </summary>
+        public ParcelSubdivisionService ParcelSubdivisions =>
+            parcelSubdivisionService ??= new ParcelSubdivisionService(Parcels, PropertyInterests);
 
         /// <summary>
         /// Autonomous Labor: owner lookup hook for the offer authority predicate.
@@ -597,6 +634,9 @@ namespace LandLedgers.Orchestration.Systems
                 wageSettlement = WageSettlement.CaptureSaveDto(),
                 managerBrain = Managers.CaptureSaveDto(),
                 delegation = Delegation.CaptureSaveDto(),
+                tenancyPayments = TenancyPayments.CaptureSaveDto(),
+                parcels = Parcels.CaptureSaveDto(),
+                propertyInterests = PropertyInterests.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -680,6 +720,9 @@ namespace LandLedgers.Orchestration.Systems
             WageSettlement.LoadFromSaveDto(dto.wageSettlement);
             Managers.LoadFromSaveDto(dto.managerBrain);
             Delegation.LoadFromSaveDto(dto.delegation);
+            TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
+            Parcels.LoadFromSaveDto(dto.parcels);
+            PropertyInterests.LoadFromSaveDto(dto.propertyInterests);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;

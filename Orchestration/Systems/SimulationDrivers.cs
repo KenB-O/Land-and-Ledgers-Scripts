@@ -267,6 +267,14 @@ namespace LandLedgers.Orchestration.Systems
             // the authority owns it after. TaskAuthority itself is untouched.
             hub.Tasks.SetDurationEstimator(new CausalTaskDurationEstimator(hub.Skills));
 
+            // Pass IV Worker 2: install the equipment execution gate (Canon 4.1)
+            // on the production TaskAuthority. Tasks with equipment, motive-
+            // power, or workspace requirements are refused loudly when no
+            // usable, unreserved instance exists — one plow cannot satisfy N
+            // simultaneous tasks. Suppliers are hub-owned truth (unified
+            // reservation authority + asset registry); nothing is assumed.
+            hub.InstallEquipmentTaskGate(AbsoluteNowGameSeconds);
+
             if (scenarioDirector != null)
             {
                 scenarioDirector.TaskAuthority = hub.Tasks;
@@ -288,6 +296,16 @@ namespace LandLedgers.Orchestration.Systems
                 WireHouseholdCashAuthorities();
                 WireNpcBusinessCashStores();
             }
+        }
+
+        /// <summary>
+        /// Pass IV Worker 2: absolute game seconds on the TimeManager timeline
+        /// for reservation overlap checks in the equipment task gate.
+        /// </summary>
+        private float AbsoluteNowGameSeconds()
+        {
+            if (timeManager == null) return 0f;
+            return timeManager.CurrentAbsoluteDayIndex * 86400f + timeManager.GameSecondsIntoDay;
         }
 
         /// <summary>

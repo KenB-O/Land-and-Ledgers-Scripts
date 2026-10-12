@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Butcher;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Economy.DraftPower;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
@@ -135,6 +138,95 @@ namespace LandLedgers.Orchestration.Systems
         public EnterpriseValuationReadModel Valuation => valuation ??= new EnterpriseValuationReadModel();
         public FreightResourcePool FreightPool => freightPool ??= new FreightResourcePool();
         public TransportAssetRegistry TransportAssets => transportAssets ??= new TransportAssetRegistry();
+
+        // Pass IV Worker 2: the unified reservation authority (persisted),
+        // the hub-owned draft-power service (reserves through the authority),
+        // and the equipment capacity service (6 capacity models).
+        private EquipmentReservationService reservations;
+        private DraftPowerService draftPower;
+        private EquipmentCapacityService equipmentCapacities;
+
+        /// <summary>
+        /// Pass IV: the ONE reservation authority — person time, equipment,
+        /// workstations, workspaces, lots, motive power, animals, capacity.
+        /// Persisted via the save pipeline.
+        /// </summary>
+        public EquipmentReservationService Reservations => reservations ??= new EquipmentReservationService();
+
+        /// <summary>Pass IV: the unified authority as its contract interface.</summary>
+        public IUnifiedReservationAuthority ReservationAuthority => Reservations;
+
+        /// <summary>
+        /// Pass IV: the hub-owned draft-power service. It reserves animals and
+        /// drivers through <see cref="Reservations"/>; its hold index persists
+        /// alongside the authority's holds.
+        /// </summary>
+        public DraftPowerService DraftPower => draftPower ??= new DraftPowerService(Reservations);
+
+        /// <summary>
+        /// Pass IV: equipment capacity semantics (6 models). Seeded with the
+        /// authored kind profiles; instance lookups fall back through kinds.
+        /// </summary>
+        public EquipmentCapacityService EquipmentCapacities =>
+            equipmentCapacities ??= CreateEquipmentCapacityService();
+
+        private EquipmentCapacityService CreateEquipmentCapacityService()
+        {
+            var service = new EquipmentCapacityService(Reservations);
+            EquipmentConditionProfiles.RegisterAll(service);
+            service.KindLookup = ResolveEquipmentKind;
+            return service;
+        }
+
+        /// <summary>Pass IV: resolves an equipment key to its kind for kind-level profile fallback.</summary>
+        private string ResolveEquipmentKind(string equipmentKey)
+        {
+            if (string.IsNullOrWhiteSpace(equipmentKey)) return null;
+            if (equipmentKey.StartsWith(ReservationKeyConventions.AssetPrefix, StringComparison.Ordinal))
+            {
+                string assetId = equipmentKey.Substring(ReservationKeyConventions.AssetPrefix.Length);
+                var asset = TransportAssets.Get(assetId);
+                return asset?.Kind;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Pass IV: installs the equipment execution gate (Canon 4.1) on the
+        /// hub's TaskAuthority. Suppliers are wired to hub-owned truth — the
+        /// unified reservation authority, the wagon asset registry, and the
+        /// TimeManager timeline when a clock is supplied. No phantom equipment:
+        /// kinds with no production register refuse loudly until provisioned.
+        /// Called by SimulationDrivers in the production driver path.
+        /// </summary>
+        public void InstallEquipmentTaskGate(Func<float> nowGameSeconds = null)
+        {
+            var gate = new EquipmentTaskGate
+            {
+                AssetsSupplier = CollectGateAssets,
+                KitsSupplier = CollectGateKits,
+                AccessResolver = new EquipmentAccessResolver(),
+                ReservationsSupplier = () => Reservations,
+                NowGameSecondsSupplier = nowGameSeconds,
+            };
+            Tasks.SetExecutionGate(gate);
+        }
+
+        /// <summary>Pass IV: production equipment assets visible to the task gate.</summary>
+        private List<EquipmentAsset> CollectGateAssets()
+        {
+            var assets = new List<EquipmentAsset>();
+            foreach (var asset in TransportAssets.Assets)
+                if (asset != null) assets.Add(asset);
+            return assets;
+        }
+
+        /// <summary>
+        /// Pass IV: production toolkits visible to the task gate. No production
+        /// kit register exists yet (BusinessEquipmentRegister has no production
+        /// holders) — kit requirements refuse loudly until kits are provisioned.
+        /// </summary>
+        private List<ToolKitInstance> CollectGateKits() => new List<ToolKitInstance>();
         public FarmFlowLedger FarmFlows => farmFlows ??= new FarmFlowLedger();
         public BusinessCapabilityRegistry Capabilities => capabilityRegistry ??= new BusinessCapabilityRegistry();
         public BusinessOperatingLedger OperatingLedger => operatingLedger ??= new BusinessOperatingLedger();
@@ -532,6 +624,17 @@ namespace LandLedgers.Orchestration.Systems
             valuation ??= new EnterpriseValuationReadModel();
             freightPool ??= new FreightResourcePool();
             transportAssets ??= new TransportAssetRegistry();
+            // Pass IV Worker 2: hub-owned reservation + capacity authorities.
+            // The freight pool shares the hub's draft-power service (one animal/
+            // driver truth) and reconciles its wagons onto the asset registry
+            // (one wagon condition/reservation truth).
+            reservations ??= new EquipmentReservationService();
+            draftPower ??= new DraftPowerService(reservations);
+            equipmentCapacities ??= CreateEquipmentCapacityService();
+            freightPool.AttachDraftPower(draftPower);
+            freightPool.AttachWagonRegistry(transportAssets);
+            var wagonDiag = new List<string>();
+            freightPool.MigrateWagonsToRegistry(wagonDiag);
             butcherRuntimes ??= new List<ButcherRuntime>();
             farmFlows ??= new FarmFlowLedger();
             capabilityRegistry ??= new BusinessCapabilityRegistry();
@@ -693,6 +796,10 @@ namespace LandLedgers.Orchestration.Systems
                 householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
+                // Pass IV Worker 2: unified reservations, draft holds, capacity registrations.
+                reservations = Reservations.CaptureSaveDto(),
+                draftPower = DraftPower.CaptureSaveDto(),
+                equipmentCapacities = EquipmentCapacities.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -725,6 +832,9 @@ namespace LandLedgers.Orchestration.Systems
             Skills.LoadFromSaveDto(dto.skills);
             WorkTimeBudgets.LoadFromSaveDto(dto.workTimeBudgets, absoluteDayIndex);
             Valuation.LoadFromSaveDto(dto.valuation);
+            // Pass IV Worker 2: restore the reservation authority BEFORE the
+            // draft-power hold index (the index verifies against the authority).
+            Reservations.LoadFromSaveDto(dto.reservations);
             FreightPool.LoadFromSaveDto(dto.freightPool);
             TransportAssets.LoadFromSaveDto(dto.transportAssets);
             FarmFlows.LoadFromSaveDto(dto.farmFlows);
@@ -783,6 +893,15 @@ namespace LandLedgers.Orchestration.Systems
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
             DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
             HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
+            // Pass IV Worker 2: draft-power hold index verifies against the
+            // restored authority; capacity registrations restore in step with
+            // authority capacity limits. The freight pool re-attaches to the
+            // hub-owned services and migrates legacy wagons (idempotent).
+            DraftPower.LoadFromSaveDto(dto.draftPower);
+            EquipmentCapacities.LoadFromSaveDto(dto.equipmentCapacities);
+            FreightPool.AttachDraftPower(DraftPower);
+            FreightPool.AttachWagonRegistry(TransportAssets);
+            FreightPool.MigrateWagonsToRegistry(diagnostics);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;

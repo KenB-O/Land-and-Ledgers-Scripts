@@ -1639,7 +1639,7 @@ namespace LandLedgers.Orchestration.Systems
             string firstName, string lastName, int day)
         {
             CurrentDate(out int y, out int m, out int d);
-            var birthDate = new BirthDate(y, m, d, BirthDateProvenance.Exact, "simulated birth");
+            var birthDate = new BirthDate(y, m, d, BirthDateProvenance.GeneratedExact, "simulated birth");
             PersonState child = lifecycle.RecordBirth(householdId, motherId, fatherId, firstName, lastName, day, birthDate);
             if (child == null)
             {

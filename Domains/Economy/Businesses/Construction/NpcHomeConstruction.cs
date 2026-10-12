@@ -352,6 +352,7 @@ namespace LandLedgers.Economy
             int committed = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
             if (tasks != null && budgets != null)
             {
+                budgets.EnsureDay(dayIndex);
                 string definitionId = $"construction-labor:{package.PhaseName}";
                 if (tasks.GetDefinition(definitionId) == null)
                 {

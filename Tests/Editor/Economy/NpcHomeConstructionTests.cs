@@ -310,12 +310,12 @@ namespace LandLedgers.EditorTests.Economy
             string drainRegistration;
             Assert.IsTrue(drainTasks.RegisterDefinition(new TaskDefinition("drain", "Drain worker budget", 1440), out drainRegistration), drainRegistration);
             WorkTask drainTask = drainTasks.CreateTaskWithPlannedMinutes(
-                "drain", EntityId.For(EntityKind.Household, 1), 11, 1440);
+                "drain", EntityId.For(EntityKind.Household, 1), 11, 600);
             string drainFailure;
             Assert.IsTrue(drainTasks.AssignTask(drainTask.TaskId, EntityId.For(EntityKind.Person, 6), emptyBudgets, out drainFailure), drainFailure);
             Assert.IsTrue(drainTasks.StartTask(drainTask.TaskId, 11, out drainFailure), drainFailure);
             bool drainComplete;
-            Assert.IsTrue(drainTasks.RecordWorkProgress(drainTask.TaskId, 1440, emptyBudgets, 11, out drainComplete, out drainFailure), drainFailure);
+            Assert.IsTrue(drainTasks.RecordWorkProgress(drainTask.TaskId, 600, emptyBudgets, 11, out drainComplete, out drainFailure), drainFailure);
 
             var project2 = executor.CreateProject(catalog, 1, "cabin-a", "parcel-9", 10, diag);
             executor.CreateWorkPackages(project2, catalog.FindDesign("cabin-a"), 10, diag);

@@ -508,7 +508,7 @@ namespace LandLedgers.Economy.Businesses.Blacksmith
             public bool ReworkNeeded;
             public bool IsComplete;
             public string FailureNote = string.Empty;
-            public StagedProductionProcessSaveDto Process;
+            public StagedProductionProcess.StagedProductionProcessSaveDto Process;
         }
 
         public ForgeRepairChainSaveDto CaptureSaveDto()
@@ -565,7 +565,6 @@ namespace LandLedgers.Economy.Businesses.Blacksmith
                     AssetDescription = od.AssetDescription,
                     SmithId = od.SmithId,
                     SmithCapability01 = od.SmithCapability01,
-                    Method = BuildRepairMethod(),
                     IronUnitsDispensed = od.IronUnitsDispensed,
                     CoalUnitsDispensed = od.CoalUnitsDispensed,
                     ResolvedRepairMinutes = od.ResolvedRepairMinutes,
@@ -578,6 +577,7 @@ namespace LandLedgers.Economy.Businesses.Blacksmith
                     IsComplete = od.IsComplete,
                     FailureNote = od.FailureNote ?? string.Empty,
                 };
+                order.Method = BuildSixStepMethod(order);
                 var process = new StagedProductionProcess();
                 process.LoadFromSaveDto(od.Process);
                 order.Process = process;

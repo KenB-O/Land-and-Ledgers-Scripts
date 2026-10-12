@@ -367,7 +367,7 @@ namespace LandLedgers.Editor.Economy
             int guard = 0;
             while (rOrder.Process.CurrentStageIndex != ForgeRepairChain.StageReturn && guard++ < 20)
             {
-                Assert.IsNull(restored.AdvanceRepair(rOrder, smith, tasks, budgets, ctx2, 5, out reason), "advance: " + reason);
+                Assert.IsTrue(restored.WorkOrder(rOrder, 5, ctx2, out reason), "advance: " + reason);
             }
             Assert.AreEqual(ForgeRepairChain.StageReturn, rOrder.Process.CurrentStageIndex);
         }

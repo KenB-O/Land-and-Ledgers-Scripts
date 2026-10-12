@@ -447,7 +447,7 @@ namespace LandLedgers.Economy.Generic
                     EntityId tender = workerId.IsValid ? workerId : hooks.TendingWorkerId;
                     bool ok = handoffDriver.TryResumeForTending(
                         hooks.Tasks, task.TaskId, tender, hooks.Budgets, hooks.DayIndex,
-                        out string resumeReason, out _);
+                        out string resumeReason);
                     Note("stage " + stageIndex + ": tending resume — " + resumeReason);
                     if (!ok) { reason = resumeReason; return false; }
                     task = hooks.Tasks.FindTask(task.TaskId);
@@ -615,7 +615,7 @@ namespace LandLedgers.Economy.Generic
             {
                 bool ok = handoffDriver.TryEnterPassiveWait(
                     hooks.Tasks, task.TaskId, hooks.Budgets, hooks.DayIndex,
-                    out string handoffReason, out _);
+                    DueEventIdFor(DueEventKind.TendingDue), out string handoffReason);
                 Note("stage " + CurrentStageIndex + ": passive handoff — " + handoffReason);
                 if (!ok) { reason = handoffReason; return false; }
                 WaitingLaborTaskDefinitionId = StageTaskDefinitionId(CurrentStageIndex);
@@ -808,7 +808,7 @@ namespace LandLedgers.Economy.Generic
                 EntityId tender = workerId.IsValid ? workerId : hooks.TendingWorkerId;
                 bool ok = handoffDriver.TryResumeForTending(
                     hooks.Tasks, task.TaskId, tender, hooks.Budgets, hooks.DayIndex,
-                    out string resumeReason, out _);
+                    out string resumeReason);
                 Note("stage " + CurrentStageIndex + ": tending resume — " + resumeReason);
                 if (ok)
                 {
@@ -820,7 +820,7 @@ namespace LandLedgers.Economy.Generic
                     // Back to waiting for the rest of the passive stretch.
                     handoffDriver.TryEnterPassiveWait(
                         hooks.Tasks, task.TaskId, hooks.Budgets, hooks.DayIndex,
-                        out string waitReason, out _);
+                        DueEventIdFor(DueEventKind.TendingDue), out string waitReason);
                     Note("stage " + CurrentStageIndex + ": tending check-in done (" + minutes + "m) — " + waitReason);
                 }
                 else

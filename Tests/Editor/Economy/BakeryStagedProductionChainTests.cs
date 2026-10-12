@@ -345,10 +345,10 @@ namespace LandLedgers.Editor.Economy
 
             // The load task waited: worker released while the oven is held.
             StagedProductionProcess process = batch.Process;
-            bool emulated = false;
+            bool enteredPassiveWait = false;
             foreach (string line in process.EventLog)
-                if (line.Contains("EMULATED passive handoff")) emulated = true;
-            Assert.IsTrue(emulated, "expected the foundation-fallback handoff to be named loudly; log:\n"
+                if (line.Contains("passive handoff") || line.Contains("WaitingOnPassiveProcess")) enteredPassiveWait = true;
+            Assert.IsTrue(enteredPassiveWait, "expected the passive handoff to be recorded; log:\n"
                 + string.Join("\n", process.EventLog));
 
             // Bake (passive): the baker does other work meanwhile — prove it by working

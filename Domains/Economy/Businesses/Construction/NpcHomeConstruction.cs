@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Population;
+using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Property;
 
@@ -116,6 +117,12 @@ namespace LandLedgers.Economy
         public List<ConsumedMaterialLine> MaterialsConsumed = new List<ConsumedMaterialLine>();
         public int TotalLaborMinutesCommitted;
         public List<string> LaborReservationIds = new List<string>();
+        /// <summary>
+        /// Pass IV Worker 3: real WorkTask ids for committed construction labor.
+        /// Labor is worked through TaskAuthority; minutes are credited to the
+        /// package only as the task is worked (never at reserve time).
+        /// </summary>
+        public List<string> LaborTaskIds = new List<string>();
         /// <summary>
         /// True when the design needs a Unity prefab unavailable in this
         /// repo — the data construction is real, but visual placement is
@@ -287,11 +294,16 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
-        /// Phase D: commits person-time to a package. The
-        /// <see cref="PersonScheduleTracker"/> owns the simultaneity guard —
-        /// a double-booked person is refused LOUDLY here, never silently
-        /// overlapped. The commissioning household must hold the phase's
-        /// required tools.
+        /// Phase D (Pass IV Worker 3): commits person-time to a package via a
+        /// real <see cref="WorkTask"/>. The <see cref="PersonScheduleTracker"/>
+        /// owns the simultaneity guard — a double-booked person is refused
+        /// LOUDLY here, never silently overlapped. The commissioning household
+        /// must hold the phase's required tools. The task is assigned through
+        /// <see cref="TaskAuthority"/>, which books the person's
+        /// <see cref="WorkTimeBudgetStore"/> — a worker with no budget left is
+        /// refused LOUDLY. Labor minutes are credited to the package ONLY as
+        /// the task is worked (see <see cref="WorkCommittedLabor"/>), never at
+        /// reserve time.
         /// </summary>
         public string CommitLabor(
             ConstructionProject project,
@@ -299,6 +311,8 @@ namespace LandLedgers.Economy
             int personId,
             PersonScheduleTracker scheduleTracker,
             IHouseholdToolCustody toolCustody,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
             int dayIndex,
             int startMinuteOfDay,
             int durationMinutes,
@@ -310,6 +324,10 @@ namespace LandLedgers.Economy
                 return "ConstructionProjectExecutor.CommitLabor: project and package required.";
             if (scheduleTracker == null)
                 return "ConstructionProjectExecutor.CommitLabor: no schedule tracker — person time is authoritative.";
+            if (tasks == null)
+                return "ConstructionProjectExecutor.CommitLabor: no TaskAuthority — labor must be a real WorkTask.";
+            if (budgets == null)
+                return "ConstructionProjectExecutor.CommitLabor: no WorkTimeBudgetStore — labor must respect the work budget.";
             if (package.Status != WorkPackageStatus.MaterialsStaged && package.Status != WorkPackageStatus.InProgress)
                 return $"ConstructionProjectExecutor.CommitLabor: package '{package.PackageId}' is {package.Status} — stage materials before labor.";
             if (toolCustody != null)
@@ -330,10 +348,38 @@ namespace LandLedgers.Economy
                 return $"ConstructionProjectExecutor.CommitLabor refused: {refusal}";
             }
 
-            int committed = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
-            package.LaborMinutesCommitted += committed;
-            project.TotalLaborMinutesCommitted += committed;
+            // Real WorkTask through TaskAuthority; assignment books the work budget.
+            int planned = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
+            string taskId = $"construction:labor:{project.ProjectId}:{package.PackageId}:p{personId}:d{dayIndex}";
+            WorkTask task = new WorkTask
+            {
+                TaskId = taskId,
+                Kind = WorkTaskKind.Building,
+                DefinitionId = $"construction-labor:{package.PhaseName}",
+                DisplayName = $"{label} — {package.PhaseName} ({project.ProjectId}/{package.PackageId})",
+                AssignedPersonId = personId,
+                Origin = WorkTaskOrigin.Player,
+                PlannedMinutes = planned,
+                Status = WorkTaskStatus.Created,
+                DayIndex = dayIndex,
+            };
+            string taskProblem = tasks.CreateTask(task);
+            if (taskProblem != null)
+            {
+                diag.Add($"ConstructionProjectExecutor: labor task refused — {taskProblem}");
+                return $"ConstructionProjectExecutor.CommitLabor refused: {taskProblem}";
+            }
+            string assignProblem = tasks.AssignTask(taskId, personId, budgets, dayIndex);
+            if (assignProblem != null)
+            {
+                tasks.CancelTask(taskId, "budget exhausted", dayIndex);
+                diag.Add($"ConstructionProjectExecutor: labor refused — {assignProblem}");
+                return $"ConstructionProjectExecutor.CommitLabor refused: {assignProblem}";
+            }
+            tasks.StartTask(taskId, dayIndex);
+
             package.Status = WorkPackageStatus.InProgress;
+            project.LaborTaskIds.Add(taskId);
 
             foreach (PersonActivityReservation reservation in scheduleTracker.ActiveFor(personId, dayIndex))
             {
@@ -344,7 +390,47 @@ namespace LandLedgers.Economy
                     break;
                 }
             }
-            diag.Add($"ConstructionProjectExecutor: P{personId} committed {committed} min to package '{package.PackageId}' (day {dayIndex}).");
+            diag.Add($"ConstructionProjectExecutor: P{personId} labor task '{taskId}' started for package '{package.PackageId}' (day {dayIndex}, {planned} min planned — credited as worked, not at reserve).");
+            return null;
+        }
+
+        /// <summary>
+        /// Pass IV Worker 3: works a committed construction labor task and
+        /// credits the minutes actually worked to the package and project.
+        /// This is the ONLY path by which <see cref="WorkPackage.LaborMinutesCommitted"/>
+        /// increases — reserve-time crediting is gone.
+        /// </summary>
+        public string WorkCommittedLabor(
+            ConstructionProject project,
+            WorkPackage package,
+            string laborTaskId,
+            int minutesToWork,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (project == null || package == null)
+                return "ConstructionProjectExecutor.WorkCommittedLabor: project and package required.";
+            if (string.IsNullOrWhiteSpace(laborTaskId))
+                return "ConstructionProjectExecutor.WorkCommittedLabor: labor task id required.";
+            if (tasks == null || budgets == null)
+                return "ConstructionProjectExecutor.WorkCommittedLabor: TaskAuthority and WorkTimeBudgetStore required.";
+            WorkTask task = tasks.FindTask(laborTaskId);
+            if (task == null)
+                return $"ConstructionProjectExecutor.WorkCommittedLabor: no labor task '{laborTaskId}' — labor is real tasks, not phantom minutes.";
+            int before = task.MinutesWorked;
+            string problem = tasks.RecordWorkProgress(laborTaskId, minutesToWork, budgets, dayIndex);
+            if (problem != null)
+            {
+                diag.Add($"ConstructionProjectExecutor: labor work refused — {problem}");
+                return $"ConstructionProjectExecutor.WorkCommittedLabor refused: {problem}";
+            }
+            int worked = Math.Max(0, task.MinutesWorked - before);
+            package.LaborMinutesCommitted += worked;
+            project.TotalLaborMinutesCommitted += worked;
+            diag.Add($"ConstructionProjectExecutor: P{task.AssignedPersonId} worked {worked} min on package '{package.PackageId}' ({package.LaborMinutesCommitted}/{package.LaborMinutesRequired}).");
             return null;
         }
 

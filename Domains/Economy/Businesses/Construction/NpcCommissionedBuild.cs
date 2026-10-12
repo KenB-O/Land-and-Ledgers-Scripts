@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Tasks;
 using LandLedgers.Time;
 
 namespace LandLedgers.Economy
@@ -412,6 +413,8 @@ namespace LandLedgers.Economy
             int personId,
             PersonScheduleTracker tracker,
             IHouseholdToolCustody custody,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
             int dayIndex,
             int startMinuteOfDay,
             int durationMinutes,
@@ -420,7 +423,7 @@ namespace LandLedgers.Economy
             diag = diag ?? diagnostics;
             if (executor == null || project == null || record == null || package == null)
                 return "NpcCommissioner.CommitOwnLabor: executor, project, record and package required.";
-            string problem = executor.CommitLabor(project, package, personId, tracker, custody,
+            string problem = executor.CommitLabor(project, package, personId, tracker, custody, tasks, budgets,
                 dayIndex, startMinuteOfDay, durationMinutes, "own labor", diag);
             if (problem != null) return problem;
             NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
@@ -453,6 +456,8 @@ namespace LandLedgers.Economy
             int agreedWeeklyWageCents,
             PersonScheduleTracker tracker,
             IHouseholdToolCustody custody,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
             int dayIndex,
             int startMinuteOfDay,
             int durationMinutes,
@@ -477,7 +482,7 @@ namespace LandLedgers.Economy
             string regProblem = employments.Register(relationship);
             if (regProblem != null) return "NpcCommissioner.HireWorker: " + regProblem;
 
-            string commitProblem = executor.CommitLabor(project, package, workerPersonId, tracker, custody,
+            string commitProblem = executor.CommitLabor(project, package, workerPersonId, tracker, custody, tasks, budgets,
                 dayIndex, startMinuteOfDay, durationMinutes, $"hired labor {relationship.Id}", diag);
             if (commitProblem != null)
             {

@@ -20,9 +20,16 @@ namespace LandLedgers.Economy.Equipment
         public const string KitPrefix = "kit:";
         public const string AssetPrefix = "asset:";
         public const string WorkstationPrefix = "workstation:";
+        /// <summary>
+        /// Pass IV: motive-power requirement. Satisfied when the motive source
+        /// is not reserved at task time (Tech X §3.6: motive power is a genuine
+        /// constraint — one team cannot pull two implements at once).
+        /// </summary>
+        public const string MotivePrefix = "motive:";
         public static string Kit(string kitId) => KitPrefix + kitId;
         public static string Asset(string kind) => AssetPrefix + kind;
         public static string Workstation(string workstationId) => WorkstationPrefix + workstationId;
+        public static string Motive(string motiveId) => MotivePrefix + motiveId;
     }
 
     /// <summary>
@@ -47,6 +54,17 @@ namespace LandLedgers.Economy.Equipment
         /// requirements with no context refuse per Supportability.Evaluate.
         /// </summary>
         public SupportContext Support; // may be null
+        /// <summary>
+        /// Pass IV: the unified reservation authority for instance-level
+        /// availability. May be null — without it the evaluator falls back to
+        /// the asset/kit-level ReservedBy flags (kind+condition+asset-reserved).
+        /// </summary>
+        public IUnifiedReservationAuthority Reservations; // may be null
+        /// <summary>
+        /// Pass IV: absolute game seconds at which reservation overlap is
+        /// checked (TimeManager timeline). Used only when Reservations is set.
+        /// </summary>
+        public float ReservationAtGameSeconds;
     }
 
     /// <summary>
@@ -163,16 +181,60 @@ namespace LandLedgers.Economy.Equipment
             if (code.StartsWith(EquipmentRequirementCodes.KitPrefix, StringComparison.Ordinal))
             {
                 string kitId = code.Substring(EquipmentRequirementCodes.KitPrefix.Length);
+                ToolKitInstance held = null;
+                string heldBy = null;
+                bool anyUsable = false;
                 foreach (var kit in availability.Kits)
-                    if (kit.KitId == kitId && kit.IsUsable) return null;
-                return $"Task needs tool kit '{kitId}' usable — none available to {availability.HolderId} (Tech X §3.4, §3.9).";
+                {
+                    if (kit == null || kit.KitId != kitId || !kit.IsUsable) continue;
+                    anyUsable = true;
+                    string holder = InstanceHolder(availability,
+                        ReservationKeyConventions.Kit(kit.InstanceId), kit.ReservedBy, kit.ReservedFor);
+                    if (holder == null) return null; // a free, usable kit satisfies the task
+                    if (held == null) { held = kit; heldBy = holder; }
+                }
+                if (!anyUsable)
+                    return $"Task needs tool kit '{kitId}' usable — none available to {availability.HolderId} (Tech X §3.4, §3.9).";
+                return $"Task needs tool kit '{kitId}' — every usable kit is reserved " +
+                       $"({held.InstanceId} held by {heldBy}) — no double-booking (Tech X §3.8).";
             }
             if (code.StartsWith(EquipmentRequirementCodes.AssetPrefix, StringComparison.Ordinal))
             {
                 string kind = code.Substring(EquipmentRequirementCodes.AssetPrefix.Length);
+                EquipmentAsset held = null;
+                string heldBy = null;
+                bool anyUsable = false;
                 foreach (var asset in availability.Assets)
-                    if (asset.Kind == kind && asset.IsUsable) return null;
-                return $"Task needs equipment '{kind}' usable — none available to {availability.HolderId} (Tech X §3.3, §3.9).";
+                {
+                    if (asset == null || asset.Kind != kind || !asset.IsUsable) continue;
+                    anyUsable = true;
+                    // Pass IV: instance availability, not kind availability — one
+                    // plow cannot satisfy N simultaneous tasks. The asset-level
+                    // ReservedBy flag and the unified authority are both honored.
+                    string holder = InstanceHolder(availability,
+                        ReservationKeyConventions.Asset(asset.AssetId), asset.ReservedBy, asset.ReservedFor);
+                    if (holder == null) return null; // a free, usable instance satisfies the task
+                    if (held == null) { held = asset; heldBy = holder; }
+                }
+                if (!anyUsable)
+                    return $"Task needs equipment '{kind}' usable — none available to {availability.HolderId} (Tech X §3.3, §3.9).";
+                return $"Task needs equipment '{kind}' — every usable instance is reserved " +
+                       $"({held.AssetId} held by {heldBy}) — no double-booking (Tech X §3.8).";
+            }
+            if (code.StartsWith(EquipmentRequirementCodes.MotivePrefix, StringComparison.Ordinal))
+            {
+                string motiveId = code.Substring(EquipmentRequirementCodes.MotivePrefix.Length);
+                var authority = availability.Reservations;
+                if (authority == null)
+                    return $"Task needs motive power '{motiveId}' — no reservation authority to verify " +
+                           $"availability — refused, never assumed (Tech X §3.10).";
+                string key = ReservationKeyConventions.MotivePower(motiveId);
+                if (authority.IsReserved(key, availability.ReservationAtGameSeconds))
+                {
+                    string holder = DescribeAuthorityHolder(authority, key, availability.ReservationAtGameSeconds);
+                    return $"Task needs motive power '{motiveId}' — in use by {holder} — no double-booking (Tech X §3.8).";
+                }
+                return null;
             }
             if (code.StartsWith(EquipmentRequirementCodes.WorkstationPrefix, StringComparison.Ordinal))
             {
@@ -198,9 +260,47 @@ namespace LandLedgers.Economy.Equipment
                         return $"Task needs workstation '{wsId}' supportable — " +
                                string.Join(" ", support.Reasons) + " (Canon 5.2).";
                 }
+                // Pass IV: workstation instances are exclusive — a batch in the
+                // oven blocks a second batch's task.
+                if (availability.Reservations != null)
+                {
+                    string wsKey = ReservationKeyConventions.Workstation(wsId);
+                    if (availability.Reservations.IsReserved(wsKey, availability.ReservationAtGameSeconds))
+                    {
+                        string holder = DescribeAuthorityHolder(availability.Reservations, wsKey, availability.ReservationAtGameSeconds);
+                        return $"Task needs workstation '{wsId}' — reserved by {holder} — no double-booking (Tech X §3.8).";
+                    }
+                }
                 return null;
             }
             return $"Task equipment class '{code}' has an unknown prefix — refused, never assumed (Tech X §3.10).";
+        }
+
+        /// <summary>
+        /// Pass IV: names the holder of one instance — the asset/kit-level
+        /// ReservedBy flag first, then the unified authority. Null when free.
+        /// </summary>
+        private static string InstanceHolder(
+            EquipmentAvailability availability, string resourceKey, string reservedBy, string reservedFor)
+        {
+            if (!string.IsNullOrWhiteSpace(reservedBy))
+                return $"{reservedBy} for '{reservedFor}'";
+            var authority = availability.Reservations;
+            if (authority != null && authority.IsReserved(resourceKey, availability.ReservationAtGameSeconds))
+                return DescribeAuthorityHolder(authority, resourceKey, availability.ReservationAtGameSeconds);
+            return null;
+        }
+
+        private static string DescribeAuthorityHolder(
+            IUnifiedReservationAuthority authority, string resourceKey, float atGameSeconds)
+        {
+            var concrete = authority as EquipmentReservationService;
+            if (concrete != null)
+            {
+                string described = concrete.DescribeHold(resourceKey, atGameSeconds);
+                if (!string.IsNullOrWhiteSpace(described)) return described;
+            }
+            return "another task";
         }
     }
 }

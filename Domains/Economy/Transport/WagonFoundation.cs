@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Persistence;
 
 namespace LandLedgers.Economy.Transport
@@ -101,7 +102,12 @@ namespace LandLedgers.Economy.Transport
         public static void ApplyTripWear(EquipmentAsset wagon, float distanceMiles, float loadRatio)
         {
             if (wagon == null || !wagon.IsWagon) return;
-            float wear = Math.Max(0f, distanceMiles) * 0.0005f + Math.Max(0f, Math.Min(1f, loadRatio)) * 0.01f;
+            // Pass IV: profile-driven per-mile rate (wagon wears per mile; the
+            // load term is a trip property, not a clock rate). Falls back to
+            // the legacy calibration when no profile is authored for the kind.
+            float perMile = EquipmentConditionProfiles.GetProfile(wagon.Kind)?.WearPerMile01 ?? 0.0005f;
+            float wear = Math.Max(0f, distanceMiles) * perMile
+                + Math.Max(0f, Math.Min(1f, loadRatio)) * 0.01f;
             wagon.ApplyWear(wear);
             wagon.RecordMaintenance($"Transport wear recorded for {distanceMiles:F1} miles at {loadRatio:P0} load.", -1);
         }

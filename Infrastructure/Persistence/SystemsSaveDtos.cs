@@ -114,6 +114,11 @@ namespace LandLedgers.Persistence
         public HouseholdDecisionDriverSaveDto householdDecisionDriver = new();
         public DomesticLaborServiceSaveDto domesticLabor = new();
         public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
+        /// <summary>
+        /// Pass IV (Worker 1): deterministic due-event schedule (task completions,
+        /// passive processes, deadlines). Owned by SimulationSystemsHub.DueEvents.
+        /// </summary>
+        public DueEventSchedulerSaveDto dueEvents = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

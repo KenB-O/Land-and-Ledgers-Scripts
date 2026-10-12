@@ -105,6 +105,25 @@ namespace LandLedgers.Economy.Equipment
         {
             this.model = model;
         }
+
+        /// <summary>
+        /// Pass IV: full authored construction (Worker 2 condition-profile
+        /// catalog). Additive — the parameterless ctor and field layout are
+        /// unchanged, so Unity serialization is unaffected.
+        /// </summary>
+        public EquipmentCapacityDescriptor(
+            EquipmentCapacityModel model,
+            int stationCount,
+            CapacityEnvelope envelope,
+            float ratePerGameHour,
+            string requiredMotivePowerId)
+        {
+            this.model = model;
+            this.stationCount = stationCount;
+            this.envelope = envelope;
+            this.ratePerGameHour = ratePerGameHour;
+            this.requiredMotivePowerId = requiredMotivePowerId ?? string.Empty;
+        }
     }
 
     /// <summary>
@@ -148,6 +167,27 @@ namespace LandLedgers.Economy.Equipment
 
         public EquipmentConditionProfile()
         {
+        }
+
+        /// <summary>
+        /// Pass IV: full authored construction (Worker 2 condition-profile
+        /// catalog). Additive — the parameterless ctor and field layout are
+        /// unchanged, so Unity serialization is unaffected.
+        /// </summary>
+        public EquipmentConditionProfile(
+            float wearPerActiveHour01,
+            float wearPerPassiveHour01,
+            float wearPerMile01,
+            float unusableBelow01,
+            float degradedBelow01,
+            float degradedCapacityFraction01)
+        {
+            this.wearPerActiveHour01 = wearPerActiveHour01;
+            this.wearPerPassiveHour01 = wearPerPassiveHour01;
+            this.wearPerMile01 = wearPerMile01;
+            this.unusableBelow01 = unusableBelow01;
+            this.degradedBelow01 = degradedBelow01;
+            this.degradedCapacityFraction01 = degradedCapacityFraction01;
         }
     }
 

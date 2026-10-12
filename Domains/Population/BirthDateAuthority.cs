@@ -15,6 +15,7 @@ namespace LandLedgers.Population
         GeneratedExact = 1, // Internally determined at generation; scenario provenance recorded.
         Estimated = 2,      // Estimated from an age or partial record (e.g. save migration).
         Partial = 3,        // Partial historical information (year-only, etc.).
+        Unknown = 4,        // No birth-date information available.
     }
 
     /// <summary>

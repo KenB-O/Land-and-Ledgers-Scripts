@@ -193,6 +193,33 @@ namespace LandLedgers.Orchestration.Systems
         public int GetBizCash(string bizId) => businesses.ContainsKey(bizId) ? businesses[bizId].CurrentCashCents : -999;
         public int GetHouseholdLedgerEntryCount(int householdId)
             => ledgers.ContainsKey(householdId) ? ledgers[householdId].Entries.Count : -1;
+
+        /// <summary>
+        /// P3-1: builds the developer-facing causal profile for a person from
+        /// the authorities. Age is derived from the simulation date and the
+        /// birth-date authority; nothing is cached.
+        /// </summary>
+        public LandLedgers.Reporting.PersonCausalProfile BuildCausalProfile(int personId)
+        {
+            PersonState person = FindPerson(personId);
+            if (person == null)
+            {
+                return new LandLedgers.Reporting.PersonCausalProfile();
+            }
+            BirthDate? birth = null;
+            BirthDate bd;
+            if (birthDates.TryGetValue(personId, out bd))
+            {
+                birth = bd;
+            }
+            CurrentDate(out int y, out int m, out int d);
+            string origin = birth.HasValue && birth.Value.ProvenanceNote == "simulated birth"
+                ? "simulated birth"
+                : "authored scenario";
+            return LandLedgers.Reporting.PersonCausalProfileBuilder.Build(
+                person, birth, y, m, d, absoluteDayIndex, origin,
+                memberships, population, employments, obligations);
+        }
         public int HouseholdCount => population != null ? population.households.Count : 0;
         public bool P11Hired => p11Hired;
         public bool IsPersonOffMap(int personId) => offMap.IsOffMapPerson(personId);

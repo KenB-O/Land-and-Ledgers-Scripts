@@ -125,6 +125,18 @@ namespace LandLedgers.Orchestration.Systems
         private bool birthDone;
         private bool migrationDone;
         private bool deathDone;
+        // Multi-year arc (section 41): years 2-3 of the same continuous run.
+        private bool birth2Done;
+        private bool p6Promoted;
+        private bool h6Formed;
+        private int h6Id = -1;
+        private bool birth3Done;
+        private bool p11DeathDone;
+        private bool birth4Done;
+        private bool p3ForgeHired;
+        private bool p8LongHaulDone;
+        private bool p6BakeryHired;
+        private int eligibilityReviewsDone;
         private string h5CreditObligationId = string.Empty;
         private int nextMembershipId = 1000;
 
@@ -149,6 +161,7 @@ namespace LandLedgers.Orchestration.Systems
         private int wagesPaidCents;
         private int birthsRecorded;
         private int deathsRecorded;
+        private int birthdaysProcessed;
 
         private readonly List<string> eventLog = new List<string>();
         private readonly List<string> diag = new List<string>();
@@ -166,6 +179,21 @@ namespace LandLedgers.Orchestration.Systems
         public int PersonCount => population != null ? population.people.Count : 0;
         public int BirthsRecorded => birthsRecorded;
         public int DeathsRecorded => deathsRecorded;
+        public int BirthdaysProcessed => birthdaysProcessed;
+        public int EligibilityReviewsDone => eligibilityReviewsDone;
+        public int H6HouseholdId => h6Id;
+        public int GetActiveHouseholdId(int personId) => memberships.GetActiveHouseholdId(personId);
+        public EmploymentLifecycleState GetEmploymentState(string employmentId)
+        {
+            EmploymentRelationship rel;
+            return employments.TryGetById(employmentId, out rel) && rel != null
+                ? rel.LifecycleState
+                : EmploymentLifecycleState.Ended;
+        }
+        public int GetBizCash(string bizId) => businesses.ContainsKey(bizId) ? businesses[bizId].CurrentCashCents : -999;
+        public int GetHouseholdLedgerEntryCount(int householdId)
+            => ledgers.ContainsKey(householdId) ? ledgers[householdId].Entries.Count : -1;
+        public int HouseholdCount => population != null ? population.households.Count : 0;
         public bool P11Hired => p11Hired;
         public bool IsPersonOffMap(int personId) => offMap.IsOffMapPerson(personId);
         public PersonState GetPerson(int personId) => FindPerson(personId);
@@ -219,6 +247,10 @@ namespace LandLedgers.Orchestration.Systems
             budgets = new WorkTimeBudgetStore();
             obligations = new FinancialObligationAuthority();
             equipment = new EquipmentReservationService();
+            // The shared assets must be registered before anyone reserves them:
+            // an unregistered asset reads as "missing usable equipment".
+            equipment.RegisterResourceCapacity(OvenAssetKey, 1f);
+            equipment.RegisterResourceCapacity(WagonAssetKey, 1f);
             dueEvents = new DueEventScheduler();
             estates = new EstateService();
             titles = new TitleAuthority();
@@ -233,6 +265,11 @@ namespace LandLedgers.Orchestration.Systems
             JourneyTravel.RegisterTaskDefinitions(tasks);
 
             BuildHouseholdsAndPersons();
+            // The authored persons/households use ids 1-13 / 1-5 directly, so
+            // the population allocators must start past them: otherwise
+            // RecordBirth/FormHousehold reuses live ids (duplicate persons).
+            population.RestorePersonIdAllocator(14);
+            population.RestoreHouseholdIdAllocator(6);
             BuildBusinesses();
             BuildEmployments();
             BuildCredit();
@@ -379,7 +416,7 @@ namespace LandLedgers.Orchestration.Systems
             {
                 MethodId = "mill-wheat-flour",
                 OutputProductId = "flour",
-                OutputQuantity = 80f,
+                OutputQuantity = 90f,
                 InputRequirements = new List<ProductionInputRequirement>
                 {
                     new ProductionInputRequirement { ProductId = "wheat", Quantity = 100f },
@@ -513,11 +550,11 @@ namespace LandLedgers.Orchestration.Systems
 
         private void BuildEmployments()
         {
-            AddEmployment("emp-p1-mill", P1Miller, MillId, "miller", 1500);
-            AddEmployment("emp-p8-mill", P8Teamster, MillId, "teamster", 1300);
-            AddEmployment("emp-p5-bakery", P5Baker, BakeryId, "baker", 1400);
-            AddEmployment("emp-p6-store", P6Clerk, StoreId, "clerk and delegated manager", 1200);
-            AddEmployment("emp-p9-forge", P9Smith, ForgeId, "blacksmith", 1600);
+            AddEmployment("emp-p1-mill", P1Miller, MillId, "miller", 750);
+            AddEmployment("emp-p8-mill", P8Teamster, MillId, "teamster", 500);
+            AddEmployment("emp-p5-bakery", P5Baker, BakeryId, "baker", 700);
+            AddEmployment("emp-p6-store", P6Clerk, StoreId, "clerk and delegated manager", 600);
+            AddEmployment("emp-p9-forge", P9Smith, ForgeId, "blacksmith", 800);
             // P11 (widow) starts unemployed: the bad outcome. Hired on day 15.
         }
 
@@ -647,6 +684,7 @@ namespace LandLedgers.Orchestration.Systems
                     CurrentYear(), CurrentMonth(), CurrentDay());
                 person.age = newAge; // mirror of the birth-date authority until P0-2 lands the derived read
                 person.ageBand = HouseholdLifecycleManager.AgeBandForAge(newAge);
+                birthdaysProcessed++;
                 Log($"P{personId} ({person.DisplayName}) turned {newAge}.");
                 // Chain the next birthday from the day after the one that just fired:
                 // exactly one pending event per living person, never a same-day echo.
@@ -708,6 +746,17 @@ namespace LandLedgers.Orchestration.Systems
             {
                 equipment.Release(WagonAssetKey);
                 Log($"{DescribeJourney(record)} returned; wagon-1 released.");
+                if (record.TravelerKind == OffMapTravelerKind.Person && record.PersonId == P3Jonas)
+                {
+                    if (memberships.GetActiveHouseholdId(P3Jonas) < 0)
+                    {
+                        string refusal = lifecycle.AddMember(H1Miller, P3Jonas, day,
+                            HouseholdMembershipSource.Manual, "returned from off-map work");
+                        Log(refusal == null
+                            ? $"P{P3Jonas} (Jonas Miller) returned home to H{H1Miller}: the same person, membership restored."
+                            : $"P{P3Jonas} return: membership re-registration refused: {refusal}");
+                    }
+                }
             }
         }
 
@@ -784,7 +833,7 @@ namespace LandLedgers.Orchestration.Systems
         private void DepartForgeIronRun(int day)
         {
             const int units = 100;
-            const int priceCents = 20;
+            const int priceCents = 10;
             int cost = units * priceCents;
             BusinessRuntimeState forge = businesses[ForgeId];
             if (forge.CurrentCashCents < cost)
@@ -821,7 +870,7 @@ namespace LandLedgers.Orchestration.Systems
         private void DepartMillWheatRun(int day)
         {
             const int units = 400;
-            const int priceCents = 4;
+            const int priceCents = 2;
             int cost = units * priceCents;
             BusinessRuntimeState mill = businesses[MillId];
             if (mill.CurrentCashCents < cost)
@@ -935,6 +984,10 @@ namespace LandLedgers.Orchestration.Systems
         private void RunWorkTasks(int day)
         {
             // Employed persons work their shift unless dead or legitimately off-map.
+            // Production workers (miller, baker, smith) do their work through
+            // RunBusinessProduction instead: their person-time is exclusive, so
+            // they must not also consume a separate work-shift task.
+            var productionWorkers = new HashSet<int> { P1Miller, P5Baker, P9Smith };
             var seenWorkers = new HashSet<int>();
             foreach (string bizId in businesses.Keys)
             {
@@ -948,6 +1001,10 @@ namespace LandLedgers.Orchestration.Systems
                     if (IsDead(personId) || IsOffMap(personId))
                     {
                         continue;
+                    }
+                    if (productionWorkers.Contains(personId))
+                    {
+                        continue; // time is spent in production, not a duplicate shift
                     }
                     DoTask(personId, "work-shift", WorkShiftMinutes, day,
                         $"{employment.RoleDisplayName} at {employment.EmployerBusinessId}");
@@ -1005,7 +1062,7 @@ namespace LandLedgers.Orchestration.Systems
                 Log("bakery cannot buy flour: the mill is short (supply-chain shortage).");
                 return;
             }
-            const int priceCents = 6;
+            const int priceCents = 9;
             int cost = Mathf.RoundToInt(need * priceCents);
             BusinessRuntimeState bakery = businesses[BakeryId];
             if (bakery.CurrentCashCents < cost)
@@ -1071,7 +1128,8 @@ namespace LandLedgers.Orchestration.Systems
             ProductionProcessState process;
             string reason;
             bool begun = productionRuntimes[bizId].TryBegin(plan, worker,
-                equipmentId => !equipment.IsReserved(equipmentId),
+                // Usable if free, or if it is the oven WE just reserved above.
+                equipmentId => !equipment.IsReserved(equipmentId) || (ovenHeld && equipmentId == OvenAssetKey),
                 workspaceId => true,
                 inputProductId =>
                 {
@@ -1421,36 +1479,121 @@ namespace LandLedgers.Orchestration.Systems
             if (day == 15 && !p11Hired)
             {
                 p11Hired = true;
-                AddEmployment("emp-p11-store", P11Widow, StoreId, "seamstress (mending)", 900);
+                AddEmployment("emp-p11-store", P11Widow, StoreId, "seamstress (mending)", 450);
                 Log($"P{P11Widow} (widow) hired by the general store at 900c/week: unemployment ends.");
             }
             if (day == 40 && !birthDone)
             {
                 birthDone = true;
-                CurrentDate(out int y, out int m, out int d);
-                PersonState child = lifecycle.RecordBirth(H1Miller, P2Anna, P1Miller, "Ruth", "Miller", day);
-                if (child != null)
-                {
-                    birthDates[child.id] = new BirthDate(y, m, d,
-                        BirthDateProvenance.GeneratedExact, "simulated birth");
-                    personMinutesWorked[child.id] = 0;
-                    BirthdayScheduling.ScheduleNextBirthday(dueEvents, child.id, birthDates[child.id], day,
-                        AnchorYear, AnchorMonth, AnchorDay, diag);
-                    birthsRecorded++;
-                    Log($"P{child.id} (Ruth Miller) born to H{H1Miller}: the same-person record will age from this birth date.");
-                }
+                RecordScriptedBirth(H1Miller, P2Anna, P1Miller, "Ruth", "Miller", day);
             }
             if (day == 45 && !migrationDone)
             {
                 migrationDone = true;
+                // A long round trip, not a one-way migration: Jonas returns on
+                // day 450. The same entity comes home; membership is restored.
                 OffMapJourneyRecord journey = offMap.DepartPerson(
-                    P3Jonas, "mill-site", "uncle's farm two counties over", 5, -1,
+                    P3Jonas, "mill-site", "uncle's farm two counties over", 5, 405,
                     "seeking mill work", null, null, day, item => 0, null, diag);
                 if (journey != null)
                 {
                     memberships.EndMembership(P3Jonas, day, "migration off-map");
-                    Log($"P{P3Jonas} (Jonas Miller) left H{H1Miller} for work off-map: same person, membership ended, kinship kept.");
+                    Log($"P{P3Jonas} (Jonas Miller) left H{H1Miller} for work off-map: same person, membership ended, kinship kept; due back day 450.");
                 }
+            }
+            // ---- Year 2: the households grow and change -------------------
+            if (day == 200 && !birth2Done)
+            {
+                birth2Done = true;
+                RecordScriptedBirth(H2Baker, P5Baker, P6Clerk, "Jozef", "Baker", day);
+            }
+            if (day == 100 && !p6Promoted)
+            {
+                p6Promoted = true;
+                // The general store cannot carry staff on staples alone: Mara
+                // retires and Elena is laid off. The shop continues staffless
+                // on its capital (a marginal business, an honest bad outcome).
+                EndEmployment("emp-p11-store", day, EmploymentEndReason.EndedByAgreement,
+                    "retirement at 52");
+                EndEmployment("emp-p6-store", day, EmploymentEndReason.Dismissed,
+                    "store cannot afford staff");
+                Log($"P{P11Widow} (Mara Voss) retired; P{P6Clerk} (Elena Baker) laid off: the store goes staffless.");
+            }
+            if (day == 110 && !p6BakeryHired)
+            {
+                p6BakeryHired = true;
+                // The profitable forge hires Elena as its clerk: the employment
+                // change is recorded, and her wages follow her to H6 for years.
+                AddEmployment("emp-p6-forge", P6Clerk, ForgeId, "forge clerk", 300);
+                Log($"P{P6Clerk} (Elena Baker) hired by the forge as clerk at 300c/week.");
+            }
+            if (day == 365 && eligibilityReviewsDone < 1)
+            {
+                eligibilityReviewsDone = 1;
+                RunAnnualEligibilityReview(day);
+            }
+            if (day == 180 && !h6Formed)
+            {
+                h6Formed = true;
+                HouseholdState h6 = lifecycle.FormHousehold(
+                    "Elena's household", "Baker", P6Clerk, day, HouseholdMembershipSource.Manual);
+                if (h6 != null)
+                {
+                    h6Id = h6.id;
+                    EnsureHouseholdEconomics(h6Id);
+                    string refusal = lifecycle.TransferMember(P6Clerk, h6Id, day);
+                    Log(refusal == null
+                        ? $"H{h6Id} formed: P{P6Clerk} (Elena) leaves H{H2Baker}; her forge wages now credit H{h6Id}."
+                        : $"H{h6Id} formed but transfer refused: {refusal}");
+                }
+            }
+            if (day == 550 && !birth3Done)
+            {
+                birth3Done = true;
+                RecordScriptedBirth(H1Miller, P2Anna, P1Miller, "Pavel", "Miller", day);
+            }
+            if (day == 650 && !p11DeathDone)
+            {
+                p11DeathDone = true;
+                if (lifecycle.RecordDeath(P11Widow, day, "illness"))
+                {
+                    deathsRecorded++;
+                    BirthdayScheduling.CancelBirthday(dueEvents, P11Widow);
+                    OpenAndSettleEstate(P11Widow, day);
+                    Log($"P{P11Widow} (Mara Voss) died: record kept, birthday cancelled, estate opened.");
+                }
+            }
+            // ---- Year 3 ----------------------------------------------------
+            if (day == 730 && eligibilityReviewsDone < 2)
+            {
+                eligibilityReviewsDone = 2;
+                RunAnnualEligibilityReview(day);
+            }
+            if (day == 800 && !birth4Done)
+            {
+                birth4Done = true;
+                RecordScriptedBirth(H4Smith, P9Smith, P10Ingrid, "Sofia", "Forge", day);
+            }
+            if (day == 900 && !p3ForgeHired)
+            {
+                p3ForgeHired = true;
+                AddEmployment("emp-p3-forge", P3Jonas, ForgeId, "forge help", 400);
+                Log($"P{P3Jonas} (Jonas Miller) hired by the forge at 800c/week after his return.");
+            }
+            if (day == 1000 && !p8LongHaulDone)
+            {
+                p8LongHaulDone = true;
+                OffMapJourneyRecord journey = offMap.DepartPerson(
+                    P8Teamster, "mill-site", "distant grain markets", 10, 80,
+                    "long freight contract", null, null, day, item => 0, null, diag);
+                Log(journey != null
+                    ? $"P{P8Teamster} (Samuel Reyes) left on a long freight contract; due back day 1080."
+                    : $"P{P8Teamster} long freight contract refused.");
+            }
+            if (day == 1095 && eligibilityReviewsDone < 3)
+            {
+                eligibilityReviewsDone = 3;
+                RunAnnualEligibilityReview(day);
             }
             if (day == 60 && !deathDone)
             {
@@ -1463,6 +1606,88 @@ namespace LandLedgers.Orchestration.Systems
                     Log($"P{P13Elder} (Old Tomas Forge) died: record kept, birthday cancelled, estate opened.");
                 }
             }
+        }
+
+        private void RecordScriptedBirth(int householdId, int motherId, int fatherId,
+            string firstName, string lastName, int day)
+        {
+            CurrentDate(out int y, out int m, out int d);
+            PersonState child = lifecycle.RecordBirth(householdId, motherId, fatherId, firstName, lastName, day);
+            if (child == null)
+            {
+                diag.Add($"society: scripted birth refused on day {day}.");
+                return;
+            }
+            birthDates[child.id] = new BirthDate(y, m, d,
+                BirthDateProvenance.GeneratedExact, "simulated birth");
+            personMinutesWorked[child.id] = 0;
+            BirthdayScheduling.ScheduleNextBirthday(dueEvents, child.id, birthDates[child.id], day,
+                AnchorYear, AnchorMonth, AnchorDay, diag);
+            birthsRecorded++;
+            Log($"P{child.id} ({firstName} {lastName}) born to H{householdId}: the same-person record will age from this birth date.");
+        }
+
+        private void EndEmployment(string employmentId, int day, EmploymentEndReason reason, string note)
+        {
+            if (employments.TryGetById(employmentId, out EmploymentRelationship rel) && rel != null)
+            {
+                rel.LifecycleState = EmploymentLifecycleState.Ended;
+                rel.EndDayIndex = day;
+                rel.EndReason = reason;
+                rel.LegacyNotes = note ?? string.Empty;
+                Log($"employment {employmentId} ended on day {day}: {note} (kept as history).");
+            }
+        }
+
+        /// <summary>
+        /// Creates the ledger and inventory for a dynamically formed household
+        /// (H6). Opening cash is zero: formation moves no cash, so conservation
+        /// holds by construction.
+        /// </summary>
+        private void EnsureHouseholdEconomics(int householdId)
+        {
+            if (!ledgers.ContainsKey(householdId))
+            {
+                HouseholdLedger ledger = ledgerRegistry.GetOrCreate(householdId);
+                ledgers[householdId] = ledger;
+            }
+            if (!inventories.ContainsKey(householdId))
+            {
+                inventories[householdId] = new HouseholdInventory(householdId);
+            }
+        }
+
+        /// <summary>
+        /// Annual eligibility review (section 41): every active employment is
+        /// checked against the birth-date authority (working age 14+). A review
+        /// records findings; it changes nothing.
+        /// </summary>
+        private void RunAnnualEligibilityReview(int day)
+        {
+            int reviewed = 0;
+            int flagged = 0;
+            CurrentDate(out int y, out int m, out int d);
+            foreach (string bizId in businesses.Keys)
+            {
+                foreach (EmploymentRelationship emp in employments.GetActiveByEmployer(bizId))
+                {
+                    reviewed++;
+                    PersonState worker = FindPerson(emp.EmployeePersonId);
+                    if (worker == null || worker.deathDayIndex >= 0)
+                    {
+                        flagged++;
+                        continue;
+                    }
+                    if (birthDates.TryGetValue(worker.id, out BirthDate birth))
+                    {
+                        if (AgeAuthority.CompletedYears(birth, y, m, d) < 14)
+                        {
+                            flagged++;
+                        }
+                    }
+                }
+            }
+            Log($"annual eligibility review (day {day}): {reviewed} employments reviewed, {flagged} flagged.");
         }
 
         private void OpenAndSettleEstate(int decedentId, int day)
@@ -1760,6 +1985,7 @@ namespace LandLedgers.Orchestration.Systems
                 wagesPaidCents = wagesPaidCents,
                 birthsRecorded = birthsRecorded,
                 deathsRecorded = deathsRecorded,
+                birthdaysProcessed = birthdaysProcessed,
                 people = new List<PersonState>(population.people),
                 households = new List<HouseholdState>(population.households),
                 nextPersonId = population.NextPersonId,
@@ -1901,6 +2127,8 @@ namespace LandLedgers.Orchestration.Systems
             fresh.obligations = new FinancialObligationAuthority();
             fresh.obligations.LoadFromSaveDto(dto.obligations);
             fresh.equipment = new EquipmentReservationService();
+            fresh.equipment.RegisterResourceCapacity(OvenAssetKey, 1f);
+            fresh.equipment.RegisterResourceCapacity(WagonAssetKey, 1f);
             fresh.equipment.LoadFromSaveDto(dto.equipment);
             fresh.dueEvents = new DueEventScheduler();
             fresh.dueEvents.LoadFromSaveDto(dto.dueEvents);
@@ -2027,6 +2255,7 @@ namespace LandLedgers.Orchestration.Systems
             fresh.wagesPaidCents = dto.wagesPaidCents;
             fresh.birthsRecorded = dto.birthsRecorded;
             fresh.deathsRecorded = dto.deathsRecorded;
+            fresh.birthdaysProcessed = dto.birthdaysProcessed;
             fresh.eventLog.Clear();
             if (dto.eventLog != null)
             {
@@ -2051,7 +2280,7 @@ namespace LandLedgers.Orchestration.Systems
             {
                 MethodId = "mill-wheat-flour",
                 OutputProductId = "flour",
-                OutputQuantity = 80f,
+                OutputQuantity = 90f,
                 InputRequirements = new List<ProductionInputRequirement>
                 {
                     new ProductionInputRequirement { ProductId = "wheat", Quantity = 100f },
@@ -2213,6 +2442,7 @@ namespace LandLedgers.Orchestration.Systems
             wagesPaidCents = fresh.wagesPaidCents;
             birthsRecorded = fresh.birthsRecorded;
             deathsRecorded = fresh.deathsRecorded;
+            birthdaysProcessed = fresh.birthdaysProcessed;
             eventLog.Clear();
             eventLog.AddRange(fresh.eventLog);
         }
@@ -2398,6 +2628,18 @@ namespace LandLedgers.Orchestration.Systems
         public bool birthDone;
         public bool migrationDone;
         public bool deathDone;
+        public bool birth2Done;
+        public bool p6Promoted;
+        public bool h6Formed;
+        public int h6Id = -1;
+        public bool birth3Done;
+        public bool p11DeathDone;
+        public bool birth4Done;
+        public bool p3ForgeHired;
+        public bool p8LongHaulDone;
+        public bool p6BakeryHired;
+        public int eligibilityReviewsDone;
+        public int birthdaysProcessed;
         public string h5CreditObligationId = string.Empty;
         public int nextMembershipId;
         public long initialCashCents;

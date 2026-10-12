@@ -374,7 +374,15 @@ namespace LandLedgers.Economy
         public bool TryOccupyProductSpace(string productId, float amount)
         {
             if (!TryGetLine(productId, out GenericRetailProductLine line)) return false;
-            return GetOrCreatePool(line.CapacityPoolId).TryOccupy(amount);
+            // A capacity pool that was never configured imposes no constraint.
+            // Minting a zero-allocation pool here would false-block legitimate
+            // stock movements; only an explicitly allocated pool constrains.
+            RetailCapacityPool pool = capacityPools != null
+                ? capacityPools.FirstOrDefault(p =>
+                    string.Equals(p.PoolId, line.CapacityPoolId, StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (pool == null) return true;
+            return pool.TryOccupy(amount);
         }
 
         public void ReleaseProductSpace(string productId, float amount)

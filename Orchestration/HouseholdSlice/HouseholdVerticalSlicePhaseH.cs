@@ -1520,7 +1520,8 @@ namespace LandLedgers.Orchestration.HouseholdSlice
                 if (fundProblem != null) throw new InvalidOperationException("construction: fund: " + fundProblem);
                 string laborProblem = w.Commissioner.CommitOwnLabor(
                     w.ProjectExecutor, project, record, package,
-                    P_Emil, w.Schedule, w.ToolCustody, day, 360, package.LaborMinutesRequired, w.Diagnostics);
+                    P_Emil, w.Schedule, w.ToolCustody, w.Tasks, w.Budgets,
+                    day, 360, package.LaborMinutesRequired, w.Diagnostics);
                 if (laborProblem != null) throw new InvalidOperationException("construction: labor: " + laborProblem);
                 string advanceProblem = w.ProjectExecutor.AdvancePackage(project, package, day, w.Diagnostics);
                 if (advanceProblem != null) throw new InvalidOperationException("construction: advance: " + advanceProblem);

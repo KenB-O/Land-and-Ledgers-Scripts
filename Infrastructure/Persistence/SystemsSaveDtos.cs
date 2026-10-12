@@ -21,6 +21,7 @@ using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Recruitment;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Delegation;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
@@ -116,6 +117,17 @@ namespace LandLedgers.Persistence
         public HouseholdDecisionDriverSaveDto householdDecisionDriver = new();
         public DomesticLaborServiceSaveDto domesticLabor = new();
         public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
+        /// <summary>
+        /// Pass IV (Worker 1): deterministic due-event schedule (task completions,
+        /// passive processes, deadlines). Owned by SimulationSystemsHub.DueEvents.
+        /// </summary>
+        public DueEventSchedulerSaveDto dueEvents = new();
+        // Pass IV Worker 2: the unified reservation authority (all live
+        // reservations across every domain key space), draft-power hold index,
+        // and equipment capacity registrations. Additive sections.
+        public EquipmentReservationAuthoritySaveDto reservations = new();
+        public DraftPowerServiceSaveDto draftPower = new();
+        public EquipmentCapacityServiceSaveDto equipmentCapacities = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>
@@ -225,5 +237,65 @@ namespace LandLedgers.Persistence
     public sealed class EmploymentRegistrySaveDto
     {
         public List<EmploymentRelationship> relationships = new();
+    }
+
+    /// <summary>
+    /// Pass IV Worker 2: persisted state of the unified reservation authority —
+    /// every live reservation across all domain key spaces, plus per-key
+    /// capacity limits for partial-capacity resources.
+    /// </summary>
+    [Serializable]
+    public sealed class EquipmentReservationAuthoritySaveDto
+    {
+        public List<ReservationHandle> handles = new();
+        public List<ResourceCapacityEntry> capacities = new();
+    }
+
+    /// <summary>Pass IV Worker 2: one per-key capacity limit entry.</summary>
+    [Serializable]
+    public sealed class ResourceCapacityEntry
+    {
+        public string resourceKey = string.Empty;
+        public float capacity;
+    }
+
+    /// <summary>
+    /// Pass IV Worker 2: persisted draft-power hold index. The holds themselves
+    /// live in <see cref="EquipmentReservationAuthoritySaveDto"/>; this index
+    /// lets animal/driver release paths find them after a load.
+    /// </summary>
+    [Serializable]
+    public sealed class DraftPowerServiceSaveDto
+    {
+        public List<DraftPowerHoldEntry> holds = new();
+    }
+
+    /// <summary>Pass IV Worker 2: one draft hold index entry.</summary>
+    [Serializable]
+    public sealed class DraftPowerHoldEntry
+    {
+        public string resourceKey = string.Empty;
+        public string reservationId = string.Empty;
+        public string ownerTaskId = string.Empty;
+        public string ownerLabel = string.Empty;
+    }
+
+    /// <summary>
+    /// Pass IV Worker 2: persisted equipment capacity registrations
+    /// (descriptor + condition profile per equipment key).
+    /// </summary>
+    [Serializable]
+    public sealed class EquipmentCapacityServiceSaveDto
+    {
+        public List<CapacityRegistrationEntry> registrations = new();
+    }
+
+    /// <summary>Pass IV Worker 2: one capacity registration entry.</summary>
+    [Serializable]
+    public sealed class CapacityRegistrationEntry
+    {
+        public string equipmentKey = string.Empty;
+        public EquipmentCapacityDescriptor descriptor;
+        public EquipmentConditionProfile profile;
     }
 }

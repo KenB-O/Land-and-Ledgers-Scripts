@@ -280,10 +280,44 @@ namespace LandLedgers.Orchestration.Systems
             AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
             hub.AttachParcelWorld(townWorld, acquisitionMarket != null ? acquisitionMarket.Titles : null);
 
-            // Pass III Worker D: causal outcome resolution replaces the flat
-            // "-1 minute per skill level" rule (Tech II §2.4). Installed once;
-            // the authority owns it after. TaskAuthority itself is untouched.
-            hub.Tasks.SetDurationEstimator(new CausalTaskDurationEstimator(hub.Skills));
+            // Pass IV (Worker 1): the universal V2 duration estimator. Method estimators
+            // own their definition ids (handling, travel); everything else falls back
+            // to the causal skill estimator, preserving pre-Pass IV behavior exactly.
+            // Worker capability for method estimators comes from the Pass III stores.
+            var causalEstimator = new CausalTaskDurationEstimator(hub.Skills);
+            Func<TaskDurationInputs, DurationEstimate> legacyFallback = inputs =>
+            {
+                int baseMinutes = Math.Max(1, inputs != null ? inputs.BaseMinutes : 1);
+                string skillId = inputs != null ? inputs.SkillId ?? string.Empty : string.Empty;
+                EntityId worker = inputs != null && inputs.WorkerPersonId >= 0
+                    ? EntityId.For(EntityKind.Person, inputs.WorkerPersonId)
+                    : default(EntityId);
+                int minutes = causalEstimator.EstimateMinutesForBase(baseMinutes, skillId, worker);
+                return DurationEstimate.FromGameSeconds(
+                    minutes * DurationConventions.SecondsPerMinute, "fallback:causal-v1");
+            };
+            var universalEstimator = new UniversalTaskDurationEstimator(
+                new ITaskDurationEstimatorV2[]
+                {
+                    new HandlingDurationEstimator(HandlingDurationEstimator.DefaultDefinitionIds),
+                    new TravelDurationEstimator(TravelDurationEstimator.DefaultDefinitionIds),
+                },
+                legacyFallback);
+            hub.Tasks.SetDurationEstimatorV2(universalEstimator,
+                (workerId, skillId) => (float)hub.Skills.GetCapability(workerId, skillId));
+
+            // Pass IV (Worker 1): ambient budget store so the new lifecycle states keep
+            // worker commitments truthful (WaitingOnPassiveProcess releases the worker;
+            // ResumeTask re-commits).
+            hub.Tasks.SetWorkTimeBudgetStore(hub.WorkTimeBudgets);
+
+            // Pass IV Worker 2: install the equipment execution gate (Canon 4.1)
+            // on the production TaskAuthority. Tasks with equipment, motive-
+            // power, or workspace requirements are refused loudly when no
+            // usable, unreserved instance exists — one plow cannot satisfy N
+            // simultaneous tasks. Suppliers are hub-owned truth (unified
+            // reservation authority + asset registry); nothing is assumed.
+            hub.InstallEquipmentTaskGate(AbsoluteNowGameSeconds);
 
             if (scenarioDirector != null)
             {
@@ -322,6 +356,16 @@ namespace LandLedgers.Orchestration.Systems
                 else
                     WireNpcBusinessCashStores();
             };
+        }
+
+        /// <summary>
+        /// Pass IV Worker 2: absolute game seconds on the TimeManager timeline
+        /// for reservation overlap checks in the equipment task gate.
+        /// </summary>
+        private float AbsoluteNowGameSeconds()
+        {
+            if (timeManager == null) return 0f;
+            return timeManager.CurrentAbsoluteDayIndex * 86400f + timeManager.GameSecondsIntoDay;
         }
 
         /// <summary>
@@ -496,6 +540,10 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             int absoluteDayIndex = timeManager.CurrentAbsoluteDayIndex;
+
+            // Pass IV (Worker 1): drain due events due at the day boundary before the
+            // daily drivers advance.
+            ProcessDueEvents();
 
             // Population may be generated after Awake; bind the now-real
             // household ledgers before any daily finance workflow can open a
@@ -1099,6 +1147,234 @@ namespace LandLedgers.Orchestration.Systems
             diagnostics.Add($"manager recruitment for {business.InstanceId}: opened {effort.EffortId} for {role}");
         }
 
+        /// <summary>
+        /// Pass IV (Worker 1): later workers (production, household) register handlers
+        /// for their due-event kinds here. The driver owns TaskCompletionDue,
+        /// PassiveProcessComplete and ResourceReleaseDue; unhandled kinds are logged
+        /// loudly — never silently skipped.
+        /// </summary>
+        public void RegisterDueEventHandler(DueEventKind kind, Action<DueEvent> handler)
+        {
+            if (handler == null)
+            {
+                dueEventHandlers.Remove(kind);
+            }
+            else
+            {
+                dueEventHandlers[kind] = handler;
+            }
+        }
+
+        private readonly Dictionary<DueEventKind, Action<DueEvent>> dueEventHandlers =
+            new Dictionary<DueEventKind, Action<DueEvent>>();
+
+        /// <summary>
+        /// Pass IV (Worker 1): pops all due events up to the current clock time in due
+        /// order and dispatches them before any further advancement.
+        /// </summary>
+        private void ProcessDueEvents()
+        {
+            if (hub == null || timeManager == null)
+            {
+                return;
+            }
+
+            List<DueEvent> due = hub.DueEvents.PopDue(timeManager.AbsoluteGameSeconds);
+            if (due.Count == 0)
+            {
+                return;
+            }
+
+            int dayIndex = timeManager.CurrentAbsoluteDayIndex;
+            var diag = new List<string>();
+            foreach (DueEvent dueEvent in due)
+            {
+                DispatchDueEvent(dueEvent, dayIndex, diag);
+            }
+
+            if (diag.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] due events: " + string.Join(" | ", diag));
+            }
+        }
+
+        private void DispatchDueEvent(DueEvent dueEvent, int dayIndex, List<string> diag)
+        {
+            Action<DueEvent> handler;
+            if (dueEventHandlers.TryGetValue(dueEvent.Kind, out handler) && handler != null)
+            {
+                handler(dueEvent);
+                return;
+            }
+
+            switch (dueEvent.Kind)
+            {
+                case DueEventKind.TaskCompletionDue:
+                    CompleteTaskAtDueEvent(dueEvent, dayIndex, diag);
+                    break;
+                case DueEventKind.PassiveProcessComplete:
+                    ResumeTaskAfterPassiveProcess(dueEvent, diag);
+                    break;
+                case DueEventKind.ResourceReleaseDue:
+                    ReleaseReservationAtDueEvent(dueEvent, diag);
+                    break;
+                default:
+                    diag.Add("due event " + dueEvent.EventId + " (" + dueEvent.Kind +
+                        ", payload '" + dueEvent.PayloadRef + "') has no registered handler — consumed without effect");
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Pass IV (Worker 1): every InProgress task with an assignee carries a
+        /// TaskCompletionDue backstop (idempotent reschedule by stable id), so
+        /// accelerated ticks cannot skip completions for tasks outside the per-tick
+        /// drivers. Completion cancels the event; the per-tick path usually wins.
+        /// </summary>
+        private void SyncTaskCompletionDueEvents()
+        {
+            if (hub == null || timeManager == null)
+            {
+                return;
+            }
+
+            float now = timeManager.AbsoluteGameSeconds;
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task == null || task.Status != TaskStatus.InProgress || !task.HasAssignee)
+                {
+                    continue;
+                }
+
+                string eventId;
+                hub.DueEvents.Schedule(
+                    DueEventKind.TaskCompletionDue,
+                    now + Math.Max(0, task.MinutesRemaining) * DurationConventions.SecondsPerMinute,
+                    task.TaskId.ToString(),
+                    out eventId);
+            }
+        }
+
+        private void CompleteTaskAtDueEvent(DueEvent dueEvent, int dayIndex, List<string> diag)
+        {
+            WorkTask task = hub.Tasks.FindTaskByIdString(dueEvent.PayloadRef);
+            if (task == null)
+            {
+                diag.Add("TaskCompletionDue for unknown task '" + dueEvent.PayloadRef + "' — ignored");
+                return;
+            }
+
+            if (task.Status != TaskStatus.InProgress)
+            {
+                return; // already handled; completion cancels its events
+            }
+
+            // Top up any unrecorded minutes so budget accounting stays truthful,
+            // then resolve the outcome exactly like the per-tick driver.
+            if (task.MinutesRemaining > 0)
+            {
+                string progressReason;
+                bool reached;
+                hub.Tasks.RecordWorkProgress(task.TaskId, task.MinutesRemaining, hub.WorkTimeBudgets,
+                    dayIndex, out reached, out progressReason);
+            }
+
+            CompleteTaskWithCausalOutcome(task, dayIndex, 1);
+            if (task.IsOpen)
+            {
+                diag.Add("TaskCompletionDue could not complete task " + task.TaskId);
+            }
+            else
+            {
+                ReleaseAutonomousTaskReservation(task, dayIndex);
+            }
+        }
+
+        private void ResumeTaskAfterPassiveProcess(DueEvent dueEvent, List<string> diag)
+        {
+            WorkTask task = hub.Tasks.FindTaskByIdString(dueEvent.PayloadRef);
+            if (task == null)
+            {
+                diag.Add("PassiveProcessComplete for unknown task '" + dueEvent.PayloadRef + "' — ignored");
+                return;
+            }
+
+            if (task.Status != TaskStatus.WaitingOnPassiveProcess)
+            {
+                return;
+            }
+
+            string reason;
+            if (!hub.Tasks.ResumeTask(task.TaskId, "passive process complete", out reason))
+            {
+                diag.Add("PassiveProcessComplete could not resume task " + task.TaskId + ": " + reason);
+            }
+        }
+
+        private void ReleaseReservationAtDueEvent(DueEvent dueEvent, List<string> diag)
+        {
+            var authority = hub.Tasks.ReservationAuthority;
+            if (authority == null)
+            {
+                diag.Add("ResourceReleaseDue " + dueEvent.EventId +
+                    ": no reservation authority installed — reservation '" + dueEvent.PayloadRef + "' NOT released");
+                return;
+            }
+
+            authority.Release(dueEvent.PayloadRef);
+        }
+
+        /// <summary>
+        /// Pass IV (Worker 1): resolves a finished task's outcome through the causal
+        /// resolver and completes it — the single completion path shared by the
+        /// per-tick driver, the due-event drain, and player work.
+        /// </summary>
+        private void CompleteTaskWithCausalOutcome(WorkTask task, int dayIndex, int baseMinutesFallback)
+        {
+            hub.Tasks.CompleteTask(task.TaskId, ResolveCausalOutcome(task, dayIndex, baseMinutesFallback), dayIndex, hub.WorkTimeBudgets);
+        }
+
+        private TaskOutcome ResolveCausalOutcome(WorkTask task, int dayIndex, int baseMinutesFallback = 1)
+        {
+            TaskDefinition definition = hub.Tasks.GetDefinition(task.DefinitionId);
+            string skillId = definition != null ? definition.RequiredSkillId : string.Empty;
+            CausalOutcomeInputs inputs = hub.Skills.BuildCausalInputs(
+                task.AssigneeId, skillId, definition != null ? definition.BaseMinutes : baseMinutesFallback);
+            return hub.Skills.ResolveTaskCompletion(
+                task.AssigneeId, skillId, inputs,
+                difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                day: dayIndex, taskIdForDeterminism: task.TaskId.ToString());
+        }
+
+        private PlayerTaskProgressDriver playerWorkDriver;
+
+        /// <summary>
+        /// Pass IV (Worker 1): advances player-issued tasks in real time (they
+        /// previously stalled in InProgress with no per-tick driver).
+        /// </summary>
+        private void AdvancePlayerWork(int wholeMinutes, int dayIndex)
+        {
+            if (hub == null || playerDirector == null || wholeMinutes <= 0)
+            {
+                return;
+            }
+
+            if (!playerDirector.PlayerPersonId.IsValid)
+            {
+                return;
+            }
+
+            playerWorkDriver ??= new PlayerTaskProgressDriver(hub.Tasks, hub.WorkTimeBudgets);
+            var diag = new List<string>();
+            playerWorkDriver.AdvancePlayerTasks(
+                playerDirector.PlayerPersonId, wholeMinutes, dayIndex,
+                (task, d) => ResolveCausalOutcome(task, d), diag);
+            if (diag.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] player work: " + string.Join(" | ", diag));
+            }
+        }
+
         private void AdvanceAutonomousWork(int wholeMinutes, int dayIndex, int minuteOfDay)
         {
             if (hub == null || wholeMinutes <= 0 || sharedBusinessRuntime == null) return;
@@ -1131,15 +1407,7 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         if (reachedCompletion)
                         {
-                            TaskDefinition definition = hub.Tasks.GetDefinition(task.DefinitionId);
-                            string skillId = definition != null ? definition.RequiredSkillId : string.Empty;
-                            CausalOutcomeInputs inputs = hub.Skills.BuildCausalInputs(
-                                task.AssigneeId, skillId, definition != null ? definition.BaseMinutes : wholeMinutes);
-                            TaskOutcome outcome = hub.Skills.ResolveTaskCompletion(
-                                task.AssigneeId, skillId, inputs,
-                                difficulty01: 0.5, novelty01: 0.25, supervised: false,
-                                day: dayIndex, taskIdForDeterminism: task.TaskId.ToString());
-                            hub.Tasks.CompleteTask(task.TaskId, outcome, dayIndex, hub.WorkTimeBudgets);
+                            CompleteTaskWithCausalOutcome(task, dayIndex, wholeMinutes);
                         }
                         if (!task.IsOpen)
                         {
@@ -1377,6 +1645,12 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Pass IV (Worker 1): due events pop in due order BEFORE any further
+            // advancement, so accelerated ticks cannot skip task completions,
+            // passive completions, or deadlines.
+            ProcessDueEvents();
+            SyncTaskCompletionDueEvents();
+
             // Player travel advances with the clock (whole minutes only).
             if (playerDirector != null)
             {
@@ -1396,6 +1670,14 @@ namespace LandLedgers.Orchestration.Systems
                     AdvanceAutonomousWork(wholeMinutes, context.Date.AbsoluteDayIndex,
                         Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
                 }
+            }
+
+            // Pass IV (Worker 1): player-issued tasks progress in real time instead of
+            // stalling in InProgress (extends the AdvanceAutonomousWork pattern).
+            int playerWholeMinutes = Mathf.FloorToInt(context.TickIntervalGameSeconds / 60f);
+            if (playerWholeMinutes > 0)
+            {
+                AdvancePlayerWork(playerWholeMinutes, context.Date.AbsoluteDayIndex);
             }
 
             // Scenario goal evaluation (CLN-3 bootstraps subscribe OnScenarioTick).

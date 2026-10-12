@@ -46,6 +46,21 @@ namespace LandLedgers.Economy.Equipment
         /// <summary>Support context supplier (fuel, consumables, skills...). May be null.</summary>
         public Func<SupportContext> SupportSupplier;
 
+        /// <summary>
+        /// Pass IV: the unified reservation authority for instance-level
+        /// availability checks (one plow cannot satisfy N simultaneous tasks).
+        /// May be null — without it the gate falls back to the asset/kit-level
+        /// ReservedBy flags (kind+condition+asset-reserved).
+        /// </summary>
+        public Func<IUnifiedReservationAuthority> ReservationsSupplier;
+
+        /// <summary>
+        /// Pass IV: absolute game seconds (TimeManager timeline) for reservation
+        /// overlap checks. May be null — the gate then uses
+        /// dayIndex × 86400 (start of the task's day).
+        /// </summary>
+        public Func<float> NowGameSecondsSupplier;
+
         /// <summary>TaskAuthority (or any definition lookup) for resolving ids. May be null if definitions are passed directly.</summary>
         public Func<string, TaskDefinition> FindDefinition;
 
@@ -76,6 +91,7 @@ namespace LandLedgers.Economy.Equipment
                 availability.Workstations = WorkstationsFor(holderKind, holderId);
             availability.FindWorkstationDefinition = FindWorkstationDefinition;
             availability.FindComponent = FindComponent;
+            WireReservations(availability, dayIndex);
 
             // Build a lightweight definition carrying just the codes.
             var stub = new TaskDefinition("nx1a-direct-check", "direct equipment check", 1);
@@ -118,6 +134,7 @@ namespace LandLedgers.Economy.Equipment
                 availability.Workstations = WorkstationsFor(holderKind, holderId);
             availability.FindWorkstationDefinition = FindWorkstationDefinition;
             availability.FindComponent = FindComponent;
+            WireReservations(availability, dayIndex);
 
             string refusal = EquipmentRequirements.CheckTaskRequirements(definition, availability, diagnostics);
 
@@ -139,6 +156,19 @@ namespace LandLedgers.Economy.Equipment
             }
 
             return refusal;
+        }
+
+        /// <summary>
+        /// Pass IV: wires the unified reservation authority into an availability
+        /// context. Absolute game seconds come from NowGameSecondsSupplier when
+        /// set, else from the task's day index (start of day).
+        /// </summary>
+        private void WireReservations(EquipmentAvailability availability, int dayIndex)
+        {
+            availability.Reservations = ReservationsSupplier != null ? ReservationsSupplier() : null;
+            availability.ReservationAtGameSeconds = NowGameSecondsSupplier != null
+                ? NowGameSecondsSupplier()
+                : (float)dayIndex * 86400f;
         }
 
         /// <summary>

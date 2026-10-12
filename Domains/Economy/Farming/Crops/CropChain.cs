@@ -200,8 +200,14 @@ namespace LandLedgers.Economy.Farming.Crops
             string problem = authority.CompleteOperation(fieldId, CropGrowthState.Prepared, diagnostics);
             if (problem != null) return problem;
 
-            // Plowing wears the share (Tech X §3.9) — calibration rate.
-            unit.Implement.ApplyWear(0.04f);
+            // Plowing wears the share (Tech X §3.9) — profile-driven rate: the
+            // implement kind's wear-per-active-hour times a standard plowing
+            // session (EquipmentConditionProfiles.DefaultImplementSessionHours).
+            // No universal wear-per-minute; a plow wears with use, a shelf does
+            // not wear at all.
+            float sessionWear = EquipmentConditionProfiles.WearForActiveHours(
+                unit.Implement.Kind, EquipmentConditionProfiles.DefaultImplementSessionHours);
+            unit.Implement.ApplyWear(sessionWear);
             diagnostics.Add(
                 $"CropChain: plowed field '{fieldId}' with unit {unit.UnitId} " +
                 $"({unit.TeamAnimalIds.Count} horses, driver {unit.DriverPersonId}) — " +

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Primitives;
 using LandLedgers.Population;
+using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Property;
 
@@ -116,6 +118,12 @@ namespace LandLedgers.Economy
         public List<ConsumedMaterialLine> MaterialsConsumed = new List<ConsumedMaterialLine>();
         public int TotalLaborMinutesCommitted;
         public List<string> LaborReservationIds = new List<string>();
+        /// <summary>
+        /// Pass IV Worker 3: real WorkTask ids for committed construction labor.
+        /// Labor is worked through TaskAuthority; minutes are credited to the
+        /// package only as the task is worked (never at reserve time).
+        /// </summary>
+        public List<string> LaborTaskIds = new List<string>();
         /// <summary>
         /// True when the design needs a Unity prefab unavailable in this
         /// repo — the data construction is real, but visual placement is
@@ -287,11 +295,16 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
-        /// Phase D: commits person-time to a package. The
-        /// <see cref="PersonScheduleTracker"/> owns the simultaneity guard —
-        /// a double-booked person is refused LOUDLY here, never silently
-        /// overlapped. The commissioning household must hold the phase's
-        /// required tools.
+        /// Phase D (Pass IV Worker 3): commits person-time to a package via a
+        /// real <see cref="WorkTask"/>. The <see cref="PersonScheduleTracker"/>
+        /// owns the simultaneity guard — a double-booked person is refused
+        /// LOUDLY here, never silently overlapped. The commissioning household
+        /// must hold the phase's required tools. The task is assigned through
+        /// <see cref="TaskAuthority"/>, which books the person's
+        /// <see cref="WorkTimeBudgetStore"/> — a worker with no budget left is
+        /// refused LOUDLY. Labor minutes are credited to the package ONLY as
+        /// the task is worked (see <see cref="WorkCommittedLabor"/>), never at
+        /// reserve time.
         /// </summary>
         public string CommitLabor(
             ConstructionProject project,
@@ -299,6 +312,8 @@ namespace LandLedgers.Economy
             int personId,
             PersonScheduleTracker scheduleTracker,
             IHouseholdToolCustody toolCustody,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
             int dayIndex,
             int startMinuteOfDay,
             int durationMinutes,
@@ -310,6 +325,10 @@ namespace LandLedgers.Economy
                 return "ConstructionProjectExecutor.CommitLabor: project and package required.";
             if (scheduleTracker == null)
                 return "ConstructionProjectExecutor.CommitLabor: no schedule tracker — person time is authoritative.";
+            if (tasks == null)
+                return "ConstructionProjectExecutor.CommitLabor: no TaskAuthority — labor must be a real WorkTask.";
+            if (budgets == null)
+                return "ConstructionProjectExecutor.CommitLabor: no WorkTimeBudgetStore — labor must respect the work budget.";
             if (package.Status != WorkPackageStatus.MaterialsStaged && package.Status != WorkPackageStatus.InProgress)
                 return $"ConstructionProjectExecutor.CommitLabor: package '{package.PackageId}' is {package.Status} — stage materials before labor.";
             if (toolCustody != null)
@@ -331,8 +350,37 @@ namespace LandLedgers.Economy
             }
 
             int committed = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
-            package.LaborMinutesCommitted += committed;
-            project.TotalLaborMinutesCommitted += committed;
+            if (tasks != null && budgets != null)
+            {
+                string definitionId = $"construction-labor:{package.PhaseName}";
+                if (tasks.GetDefinition(definitionId) == null)
+                {
+                    string registrationFailure;
+                    if (!tasks.RegisterDefinition(new TaskDefinition(definitionId, $"Construction — {package.PhaseName}", committed), out registrationFailure))
+                        return $"ConstructionProjectExecutor.CommitLabor refused: {registrationFailure}";
+                }
+
+                WorkTask task = tasks.CreateTaskWithPlannedMinutes(
+                    definitionId,
+                    EntityId.For(EntityKind.Household, Math.Max(0, project.HouseholdId)),
+                    dayIndex,
+                    committed);
+                string assignFailure;
+                if (!tasks.AssignTask(task.TaskId, EntityId.For(EntityKind.Person, personId), budgets, out assignFailure))
+                    return $"ConstructionProjectExecutor.CommitLabor refused: {assignFailure}";
+                string startFailure;
+                if (!tasks.StartTask(task.TaskId, dayIndex, out startFailure))
+                    return $"ConstructionProjectExecutor.CommitLabor refused: {startFailure}";
+
+                string taskId = task.TaskId.ToString();
+                project.LaborTaskIds.Add(taskId);
+            }
+            else
+            {
+                // Compatibility path for older authored construction fixtures.
+                package.LaborMinutesCommitted += committed;
+                project.TotalLaborMinutesCommitted += committed;
+            }
             package.Status = WorkPackageStatus.InProgress;
 
             foreach (PersonActivityReservation reservation in scheduleTracker.ActiveFor(personId, dayIndex))
@@ -345,6 +393,57 @@ namespace LandLedgers.Economy
                 }
             }
             diag.Add($"ConstructionProjectExecutor: P{personId} committed {committed} min to package '{package.PackageId}' (day {dayIndex}).");
+            return null;
+        }
+
+        /// <summary>Compatibility overload for pre-Pass-IV callers.</summary>
+        public string CommitLabor(
+            ConstructionProject project,
+            WorkPackage package,
+            int personId,
+            PersonScheduleTracker scheduleTracker,
+            IHouseholdToolCustody toolCustody,
+            int dayIndex,
+            int startMinuteOfDay,
+            int durationMinutes,
+            string label,
+            List<string> diag)
+        {
+            return CommitLabor(project, package, personId, scheduleTracker, toolCustody,
+                null, null, dayIndex, startMinuteOfDay, durationMinutes, label, diag);
+        }
+
+        /// <summary>
+        /// Applies worked minutes through the universal TaskAuthority. This is
+        /// intentionally separate from reservation so construction cannot receive
+        /// labor credit before the worker actually advances the task.
+        /// </summary>
+        public string WorkCommittedLabor(
+            ConstructionProject project,
+            WorkPackage package,
+            string laborTaskId,
+            int minutesToWork,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (project == null || package == null || tasks == null || budgets == null)
+                return "ConstructionProjectExecutor.WorkCommittedLabor: project, package, TaskAuthority and budgets required.";
+            WorkTask task = tasks.FindTask(laborTaskId);
+            if (task == null)
+                return $"ConstructionProjectExecutor.WorkCommittedLabor: no labor task '{laborTaskId}'.";
+            int before = task.MinutesWorked;
+            bool completed;
+            string refusal;
+            if (!tasks.RecordWorkProgress(task.TaskId, minutesToWork, budgets, dayIndex, out completed, out refusal))
+                return refusal;
+            int worked = Math.Max(0, task.MinutesWorked - before);
+            package.LaborMinutesCommitted += worked;
+            project.TotalLaborMinutesCommitted += worked;
+            if (completed)
+                tasks.CompleteTask(task.TaskId, TaskOutcome.Success, dayIndex, budgets);
             return null;
         }
 

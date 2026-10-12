@@ -1,6 +1,9 @@
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Primitives;
 using LandLedgers.Population;
+using LandLedgers.Tasks;
+using LandLedgers.Time;
 using LandLedgers.World.Property;
 using NUnit.Framework;
 
@@ -127,6 +130,8 @@ namespace LandLedgers.EditorTests.Economy
             var source = StockedSource();
             var tracker = new PersonScheduleTracker();
             var custody = EquippedCustody();
+            var tasks = new TaskAuthority();
+            var budgets = new WorkTimeBudgetStore();
             WorkPackage foundation = project.WorkPackages[0];
             WorkPackage framing = project.WorkPackages[1];
 
@@ -134,13 +139,19 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(WorkPackageStatus.MaterialsStaged, foundation.Status);
             Assert.AreEqual(60, source.Stock["fieldstone"]); // 100 - 40 consumed, real lots
 
-            Assert.IsNull(executor.CommitLabor(project, foundation, 5, tracker, custody, 11, 360, 240, "build", diag));
+            Assert.IsNull(executor.CommitLabor(project, foundation, 5, tracker, custody, tasks, budgets, 11, 360, 240, "build", diag));
             Assert.AreEqual(WorkPackageStatus.InProgress, foundation.Status);
+            Assert.AreEqual(0, foundation.LaborMinutesCommitted); // credited as worked, not at reserve
+            string foundationTask = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+            Assert.IsNull(executor.WorkCommittedLabor(project, foundation, foundationTask, 240, tasks, budgets, 11, diag));
+            Assert.AreEqual(240, foundation.LaborMinutesCommitted);
             Assert.IsNull(executor.AdvancePackage(project, foundation, 11, diag));
             Assert.AreEqual(WorkPackageStatus.Complete, foundation.Status);
 
             Assert.IsNull(executor.StagePackageMaterials(project, framing, source, 12, diag));
-            Assert.IsNull(executor.CommitLabor(project, framing, 5, tracker, custody, 12, 360, 480, "build", diag));
+            Assert.IsNull(executor.CommitLabor(project, framing, 5, tracker, custody, tasks, budgets, 12, 360, 480, "build", diag));
+            string framingTask = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+            Assert.IsNull(executor.WorkCommittedLabor(project, framing, framingTask, 480, tasks, budgets, 12, diag));
             Assert.IsNull(executor.AdvancePackage(project, framing, 12, diag));
 
             var housing = new HousingAuthority();
@@ -182,7 +193,7 @@ namespace LandLedgers.EditorTests.Economy
 
             WorkPackage framing = project.WorkPackages[1];
             executor.StagePackageMaterials(project, framing, source, 11, diag);
-            executor.CommitLabor(project, framing, 5, tracker, custody, 11, 360, 480, "build", diag);
+            executor.CommitLabor(project, framing, 5, tracker, custody, new TaskAuthority(), new WorkTimeBudgetStore(), 11, 360, 480, "build", diag);
 
             // Foundation is not complete — framing must wait.
             string refusal = executor.AdvancePackage(project, framing, 11, diag);
@@ -227,7 +238,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNull(tracker.TryReserve(5, PersonActivityKind.Work, 11, 360, 480, "day job"));
 
             string refusal = executor.CommitLabor(project, project.WorkPackages[0], 5, tracker,
-                EquippedCustody(), 11, 420, 240, "build", diag);
+                EquippedCustody(), new TaskAuthority(), new WorkTimeBudgetStore(), 11, 420, 240, "build", diag);
             Assert.IsNotNull(refusal);
             StringAssert.Contains("already", refusal);
             Assert.AreEqual(0, project.TotalLaborMinutesCommitted);
@@ -246,9 +257,74 @@ namespace LandLedgers.EditorTests.Economy
 
             var custody = new FakeToolCustody(); // holds nothing
             string refusal = executor.CommitLabor(project, project.WorkPackages[0], 5,
-                new PersonScheduleTracker(), custody, 11, 360, 240, "build", diag);
+                new PersonScheduleTracker(), custody, new TaskAuthority(), new WorkTimeBudgetStore(), 11, 360, 240, "build", diag);
             Assert.IsNotNull(refusal);
             StringAssert.Contains("shovel", refusal);
+        }
+
+        [Test]
+        public void LaborCreatesRealTask_CreditedAsWorked_BudgetEnforced()
+        {
+            // Pass IV Worker 3: construction labor goes through TaskAuthority +
+            // WorkTimeBudgetStore. Minutes are credited ONLY as the task is
+            // worked (never at reserve time); an exhausted budget refuses loudly.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            ConstructionProject project = executor.CreateProject(catalog, 1, "cabin-a", "parcel-9", 10, diag);
+            executor.CreateWorkPackages(project, catalog.FindDesign("cabin-a"), 10, diag);
+            executor.StagePackageMaterials(project, project.WorkPackages[0], StockedSource(), 11, diag);
+
+            var tasks = new TaskAuthority();
+            var budgets = new WorkTimeBudgetStore();
+            WorkPackage package = project.WorkPackages[0];
+
+            // Commit: creates a real task, books the budget, credits NOTHING yet.
+            Assert.IsNull(executor.CommitLabor(project, package, 5, new PersonScheduleTracker(),
+                EquippedCustody(), tasks, budgets, 11, 360, 240, "build", diag));
+            Assert.AreEqual(1, project.LaborTaskIds.Count);
+            string taskId = project.LaborTaskIds[0];
+            WorkTask task = tasks.FindTask(taskId);
+            Assert.IsNotNull(task);
+            Assert.AreEqual(5, task.AssigneeId.Id);
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.AreEqual(0, package.LaborMinutesCommitted);
+            Assert.AreEqual(0, project.TotalLaborMinutesCommitted);
+
+            // Work half: half the minutes are credited.
+            Assert.IsNull(executor.WorkCommittedLabor(project, package, taskId, 120, tasks, budgets, 11, diag));
+            Assert.AreEqual(120, package.LaborMinutesCommitted);
+            Assert.AreEqual(120, project.TotalLaborMinutesCommitted);
+            Assert.AreNotEqual(TaskStatus.Complete, tasks.FindTask(taskId).Status);
+
+            // Work the rest: full credit, task completes.
+            Assert.IsNull(executor.WorkCommittedLabor(project, package, taskId, 120, tasks, budgets, 11, diag));
+            Assert.AreEqual(240, package.LaborMinutesCommitted);
+            Assert.AreEqual(240, project.TotalLaborMinutesCommitted);
+
+            // Budget exhaustion: a worker with no budget left is refused loudly.
+            var emptyBudgets = new WorkTimeBudgetStore();
+            // Drain P6's budget by booking a full day elsewhere.
+            var drainTasks = new TaskAuthority();
+            string drainRegistration;
+            Assert.IsTrue(drainTasks.RegisterDefinition(new TaskDefinition("drain", "Drain worker budget", 1440), out drainRegistration), drainRegistration);
+            WorkTask drainTask = drainTasks.CreateTaskWithPlannedMinutes(
+                "drain", EntityId.For(EntityKind.Household, 1), 11, 1440);
+            string drainFailure;
+            Assert.IsTrue(drainTasks.AssignTask(drainTask.TaskId, EntityId.For(EntityKind.Person, 6), emptyBudgets, out drainFailure), drainFailure);
+            Assert.IsTrue(drainTasks.StartTask(drainTask.TaskId, 11, out drainFailure), drainFailure);
+            bool drainComplete;
+            Assert.IsTrue(drainTasks.RecordWorkProgress(drainTask.TaskId, 1440, emptyBudgets, 11, out drainComplete, out drainFailure), drainFailure);
+
+            var project2 = executor.CreateProject(catalog, 1, "cabin-a", "parcel-9", 10, diag);
+            executor.CreateWorkPackages(project2, catalog.FindDesign("cabin-a"), 10, diag);
+            executor.StagePackageMaterials(project2, project2.WorkPackages[0], StockedSource(), 11, diag);
+            string refusal = executor.CommitLabor(project2, project2.WorkPackages[0], 6,
+                new PersonScheduleTracker(), EquippedCustody(), new TaskAuthority(), emptyBudgets,
+                11, 360, 240, "build", diag);
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(0, project2.TotalLaborMinutesCommitted);
         }
 
         [Test]
@@ -277,7 +353,7 @@ namespace LandLedgers.EditorTests.Economy
             var tracker = new PersonScheduleTracker();
             var custody = EquippedCustody();
             Assert.IsNull(executor.StagePackageMaterials(project, project.WorkPackages[0], source, 11, diag));
-            Assert.IsNull(executor.CommitLabor(project, project.WorkPackages[0], 5, tracker, custody, 11, 360, 240, "build", diag));
+            Assert.IsNull(executor.CommitLabor(project, project.WorkPackages[0], 5, tracker, custody, new TaskAuthority(), new WorkTimeBudgetStore(), 11, 360, 240, "build", diag));
             Assert.IsNull(executor.AdvancePackage(project, project.WorkPackages[0], 11, diag));
             Assert.IsNull(executor.StagePackageMaterials(project, project.WorkPackages[1], source, 12, diag));
             Assert.IsNull(executor.CommitLabor(project, project.WorkPackages[1], 5, tracker, custody, 12, 360, 480, "build", diag));

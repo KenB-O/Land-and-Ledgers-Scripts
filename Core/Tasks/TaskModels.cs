@@ -471,6 +471,16 @@ namespace LandLedgers.Tasks
             status = TaskStatus.Queued;
         }
 
+        /// <summary>
+        /// Pass IV (Worker 4): lets need-driven generation set per-instance
+        /// queue priority (e.g. an urgent repair request). The definition's
+        /// DefaultPriority still applies when this is never called.
+        /// </summary>
+        internal void SetPriority(TaskPriority value)
+        {
+            priority = value;
+        }
+
         internal void MarkCancelled()
         {
             status = TaskStatus.Cancelled;

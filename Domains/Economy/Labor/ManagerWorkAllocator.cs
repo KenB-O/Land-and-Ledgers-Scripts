@@ -403,7 +403,7 @@ namespace LandLedgers.Economy.Labor
                 }
             }
 
-            // Equipment: reserve through the unified authority when wired.
+            // Equipment keys this task needs (unified key space).
             List<string> equipmentKeys = null;
             if (inputs.EquipmentKeysFor != null)
             {
@@ -418,39 +418,13 @@ namespace LandLedgers.Economy.Labor
                 }
             }
 
-            string reservationId = null;
-            if (equipmentKeys != null && equipmentKeys.Count > 0)
-            {
-                if (inputs.Reservations == null)
-                {
-                    report.Notes.Add($"Task {task.TaskId} needs equipment [{string.Join(",", equipmentKeys)}] — no reservation authority wired, check honestly skipped.");
-                }
-                else
-                {
-                    var request = new ReservationRequest("task:" + task.TaskId, $"alloc:{inputs.BusinessInstanceId}");
-                    float start = inputs.NowGameSeconds;
-                    float end = start + Math.Max(1, task.PlannedMinutes) * 60f;
-                    foreach (string key in equipmentKeys)
-                    {
-                        if (!string.IsNullOrWhiteSpace(key))
-                        {
-                            request.Items.Add(new ReservationItem(key, 1f, start, end));
-                        }
-                    }
-
-                    ReservationHandle handle;
-                    string refusal = inputs.Reservations.TryReserveAll(request, out handle);
-                    if (refusal != null)
-                    {
-                        Defer(report, task, "equipment: " + refusal, diag);
-                        return;
-                    }
-
-                    reservationId = handle != null ? handle.ReservationId : string.Empty;
-                }
-            }
+            bool needsEquipment = equipmentKeys != null && equipmentKeys.Count > 0;
+            bool equipmentNoteAdded = false;
+            string lastRefusal = null;
 
             // Worker: employed here, free window covering the task, budget left.
+            // Equipment is reserved per candidate window (the window the work
+            // actually occupies), and every window is tried before deferring.
             foreach (WorkerAvailability worker in inputs.Workers)
             {
                 if (worker == null || worker.PersonId < 0)
@@ -470,16 +444,56 @@ namespace LandLedgers.Economy.Labor
                         continue;
                     }
 
+                    string reservationId = null;
+                    if (needsEquipment)
+                    {
+                        if (inputs.Reservations == null)
+                        {
+                            if (!equipmentNoteAdded)
+                            {
+                                report.Notes.Add($"Task {task.TaskId} needs equipment [{string.Join(",", equipmentKeys)}] — no reservation authority wired, check honestly skipped.");
+                                equipmentNoteAdded = true;
+                            }
+                        }
+                        else
+                        {
+                            var request = new ReservationRequest("task:" + task.TaskId, $"alloc:{inputs.BusinessInstanceId}");
+                            float start = inputs.DayIndex * 86400f + window.StartMinuteOfDay * 60f;
+                            float end = start + Math.Max(1, task.PlannedMinutes) * 60f;
+                            foreach (string key in equipmentKeys)
+                            {
+                                if (!string.IsNullOrWhiteSpace(key))
+                                {
+                                    request.Items.Add(new ReservationItem(key, 1f, start, end));
+                                }
+                            }
+
+                            ReservationHandle handle;
+                            string refusal = inputs.Reservations.TryReserveAll(request, out handle);
+                            if (refusal != null)
+                            {
+                                lastRefusal = "equipment: " + refusal;
+                                continue; // try the next window
+                            }
+
+                            reservationId = handle != null ? handle.ReservationId : string.Empty;
+                        }
+                    }
+
                     EntityId workerId = EntityId.For(EntityKind.Person, worker.PersonId);
                     WorkTimeBudget budget = inputs.Budgets.GetOrCreate(workerId);
                     if (budget.MinutesRemaining < task.PlannedMinutes)
                     {
+                        ReleaseQuietly(inputs, reservationId);
+                        lastRefusal = $"P{worker.PersonId} budget holds {budget.MinutesRemaining} min, needs {task.PlannedMinutes}";
                         continue;
                     }
 
                     string rejection;
                     if (!inputs.Tasks.AssignTask(task.TaskId, workerId, inputs.Budgets, out rejection))
                     {
+                        ReleaseQuietly(inputs, reservationId);
+                        lastRefusal = "assign refused: " + rejection;
                         continue; // try the next worker/window
                     }
 
@@ -491,13 +505,9 @@ namespace LandLedgers.Economy.Labor
                         // Roll back the assignment — half-allocated work is a lie.
                         string ignore;
                         inputs.Tasks.InterruptTask(task.TaskId, inputs.Budgets, out ignore);
-                        if (!string.IsNullOrEmpty(reservationId) && inputs.Reservations != null)
-                        {
-                            inputs.Reservations.Release(reservationId);
-                        }
-
-                        Defer(report, task, $"P{worker.PersonId} time: {windowRefusal}", diag);
-                        return;
+                        ReleaseQuietly(inputs, reservationId);
+                        lastRefusal = $"P{worker.PersonId} time: {windowRefusal}";
+                        continue; // try the next window
                     }
 
                     report.AssignedTaskIds.Add(task.TaskId.ToString());
@@ -524,13 +534,16 @@ namespace LandLedgers.Economy.Labor
                 }
             }
 
-            // No worker could take it: release the equipment hold.
+            Defer(report, task, lastRefusal ??
+                "no employed worker with a free window and budget for " + task.PlannedMinutes + " min", diag);
+        }
+
+        private static void ReleaseQuietly(AllocationInputs inputs, string reservationId)
+        {
             if (!string.IsNullOrEmpty(reservationId) && inputs.Reservations != null)
             {
                 inputs.Reservations.Release(reservationId);
             }
-
-            Defer(report, task, "no employed worker with a free window and budget for " + task.PlannedMinutes + " min", diag);
         }
 
         private static string LastReservationId(AllocationInputs inputs, int personId, int startMinuteOfDay)

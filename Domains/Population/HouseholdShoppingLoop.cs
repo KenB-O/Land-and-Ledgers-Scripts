@@ -1311,6 +1311,12 @@ namespace LandLedgers.Population
                 }
 
                 int units = Math.Min(need.UnitsNeeded, stock);
+                if (units <= 0)
+                {
+                    Reject(result, need, supplier, dayIndex, "no stock to sell", price, stock, route.TotalMinutes, diag);
+                    continue;
+                }
+
                 int goodsCost = units * price;
 
                 // Carry vs delivery: a person on foot can only carry so much —
@@ -1333,6 +1339,34 @@ namespace LandLedgers.Population
                     supplier is IOffersTradeCredit credit && credit.OffersTradeCredit && total <= credit.TradeCreditLimitCents)
                 {
                     mode = ShoppingSettlementMode.TradeCreditObligation;
+                }
+                else if (price > 0 && ledgerBalance >= price)
+                {
+                    // Honest downsizing: the household cannot cover the full
+                    // need, so it buys what its ledger can actually cover —
+                    // a smaller real trip, not a rejected need and never debt.
+                    units = Math.Min(ledgerBalance / price, stock);
+                    useDelivery = deliveryOffered && units > Math.Max(1, options.CarryCapacityUnits);
+                    if (useDelivery)
+                    {
+                        // Freight on a shoestring budget: carry what fits.
+                        units = Math.Min(units, Math.Max(1, options.CarryCapacityUnits));
+                        useDelivery = false;
+                    }
+
+                    goodsCost = units * price;
+                    total = goodsCost;
+                    if (units <= 0 || total > ledgerBalance)
+                    {
+                        string why = $"unaffordable even downsized: {total}c > ledger balance {ledgerBalance}c, no valid credit available";
+                        Reject(result, need, supplier, dayIndex, why, price, stock, route.TotalMinutes, diag);
+                        continue;
+                    }
+
+                    mode = ShoppingSettlementMode.CashFromLedger;
+                    AddEvent(result, dayIndex, ShoppingEventKind.Decision, shopperId, need,
+                        $"Downsized '{need.ItemId}' to {units}u — the household ledger covers {ledgerBalance}c, not the full need. No debt manufactured.",
+                        "affordability is a planning constraint, not a refusal.");
                 }
                 else
                 {

@@ -42,6 +42,10 @@ namespace LandLedgers.Population
             public const string MaintenanceWorkOrderId = "work.maintenance";
             public const string FieldWorkId = "work.field-work";
             public const string ProductionWorkOrderId = "work.production-order";
+            /// <summary>Thresh grain at shared equipment (10 grain → 8 flour).</summary>
+            public const string ThreshGrainId = "work.thresh-grain";
+            /// <summary>Mill grain at the farm mill (10 grain → 9 flour).</summary>
+            public const string MillGrainId = "work.mill-grain";
 
             public static void RegisterAll(TaskAuthority tasks, List<string> diagnostics)
             {
@@ -57,6 +61,8 @@ namespace LandLedgers.Population
                 Register(tasks, diagnostics, MaintenanceWorkOrderId, "Maintenance work order", 90);
                 Register(tasks, diagnostics, FieldWorkId, "Field work", 240);
                 Register(tasks, diagnostics, ProductionWorkOrderId, "Production work order", 120);
+                Register(tasks, diagnostics, ThreshGrainId, "Thresh grain (shared thresher)", 180);
+                Register(tasks, diagnostics, MillGrainId, "Mill grain", 150);
             }
 
             private static void Register(TaskAuthority tasks, List<string> diagnostics,

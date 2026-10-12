@@ -165,10 +165,59 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(2, need.RequiredSleepingPlaces);
         }
 
+        private sealed class FakeCreditFacility : IHouseholdCreditFacility
+        {
+            private readonly FinancialObligationAuthority finance;
+            private readonly EntityIdRegistry ids;
+            private readonly HouseholdLedger borrowerLedger;
+
+            public string LenderName = "P9";
+            public int LendableCentsValue = 100000;
+            public bool Refuse;
+            public int RequestedAmountCents = -1;
+
+            public FakeCreditFacility(FinancialObligationAuthority finance, EntityIdRegistry ids,
+                HouseholdLedger borrowerLedger)
+            {
+                this.finance = finance;
+                this.ids = ids;
+                this.borrowerLedger = borrowerLedger;
+            }
+
+            public string CreditorName => LenderName;
+            public int LendableCents() => LendableCentsValue;
+
+            public FinancialObligation RequestLoan(int borrowerHouseholdId, int amountCents,
+                int dayIndex, List<string> diagnostics)
+            {
+                RequestedAmountCents = amountCents;
+                if (Refuse)
+                {
+                    if (diagnostics != null) diagnostics.Add("FakeCreditFacility: lender refused the request");
+                    return null;
+                }
+
+                // Test double for the lender facility: real obligation through
+                // the single debt authority, real cash into the ledger.
+                FinancialObligation obligation = finance.Create(ids, FinancialObligationKind.Loan,
+                    "household:" + borrowerHouseholdId, LenderName, amountCents, dayIndex,
+                    "test facility loan", "cover household obligations shortfall", "test-facility");
+                if (obligation == null) return null;
+                if (borrowerLedger != null)
+                {
+                    borrowerLedger.RecordInflow(dayIndex, amountCents, HouseholdIncomeSource.LoanProceeds,
+                        obligation.ObligationId, "test facility loan advance", LenderName);
+                }
+
+                return obligation;
+            }
+        }
+
         [Test]
         public void Borrow_WithKnownLender_CreatesRealObligation()
         {
             var f = new Fixture();
+            var borrowerLedger = new HouseholdLedger(7);
             var decision = new HouseholdDecision
             {
                 HouseholdId = "7",
@@ -185,19 +234,24 @@ namespace LandLedgers.Editor.Population
                 ExpectedIncomeCentsPerDay = 100,
                 KnownCreditorId = "P9",
             };
+            var ctx = new HouseholdDecisionDriver.ExecutionContext
+            {
+                CreditFacility = new FakeCreditFacility(f.Finance, f.Ids, borrowerLedger),
+            };
 
             HouseholdDecisionDriver.DecisionExecutionResult result =
-                f.Driver.Execute(decision, pressure, null, 100, null);
+                f.Driver.Execute(decision, pressure, ctx, 100, null);
 
             Assert.IsTrue(result.Executed, result.Detail);
             Assert.AreEqual(1, f.Finance.Obligations.Count);
             foreach (FinancialObligation o in f.Finance.Obligations)
             {
-                Assert.AreEqual("household-7", o.Debtor);
+                Assert.AreEqual("household:7", o.Debtor);
                 Assert.AreEqual("P9", o.Creditor);
                 Assert.AreEqual(2600, o.OutstandingPrincipalCents); // 6000 - (400 + 3000)
                 Assert.AreEqual(FinancialObligationKind.Loan, o.Kind);
             }
+            Assert.AreEqual(2600, borrowerLedger.GetBalanceCents());
         }
 
         [Test]
@@ -220,12 +274,47 @@ namespace LandLedgers.Editor.Population
                 ExpectedIncomeCentsPerDay = 100,
                 KnownCreditorId = string.Empty, // no legitimate lender known
             };
+            // No facility on the context: no known lender.
+            var ctx = new HouseholdDecisionDriver.ExecutionContext();
 
             HouseholdDecisionDriver.DecisionExecutionResult result =
-                f.Driver.Execute(decision, pressure, null, 100, null);
+                f.Driver.Execute(decision, pressure, ctx, 100, null);
 
             Assert.IsFalse(result.Executed);
             Assert.AreEqual(0, f.Finance.Obligations.Count);
+        }
+
+        [Test]
+        public void Borrow_LenderRefuses_CreatesNothing()
+        {
+            var f = new Fixture();
+            var borrowerLedger = new HouseholdLedger(7);
+            var decision = new HouseholdDecision
+            {
+                HouseholdId = "7",
+                Day = 100,
+                Kind = HouseholdDecisionKind.Borrow,
+                Reason = "test",
+            };
+            var pressure = new HouseholdPressureInput
+            {
+                HouseholdId = "7",
+                Day = 100,
+                ReservesCents = 400,
+                ObligationsDueCents = 6000,
+                ExpectedIncomeCentsPerDay = 100,
+                KnownCreditorId = "P9",
+            };
+            var facility = new FakeCreditFacility(f.Finance, f.Ids, borrowerLedger) { Refuse = true };
+            var ctx = new HouseholdDecisionDriver.ExecutionContext { CreditFacility = facility };
+
+            HouseholdDecisionDriver.DecisionExecutionResult result =
+                f.Driver.Execute(decision, pressure, ctx, 100, null);
+
+            Assert.IsFalse(result.Executed);
+            Assert.AreEqual(0, f.Finance.Obligations.Count, "refusal must not record debt");
+            Assert.AreEqual(0, borrowerLedger.GetBalanceCents(), "refusal must not create money");
+            Assert.AreEqual(2600, facility.RequestedAmountCents, "the shortfall was still requested");
         }
 
         [Test]
@@ -316,7 +405,12 @@ namespace LandLedgers.Editor.Population
                 HouseholdId = "7", Day = 100, ReservesCents = 400,
                 ObligationsDueCents = 6000, ExpectedIncomeCentsPerDay = 100, KnownCreditorId = "P9",
             };
-            f.Driver.Execute(borrowDecision, pressure, null, 100, null);
+            var borrowCtx = new HouseholdDecisionDriver.ExecutionContext
+            {
+                Memberships = f.Memberships,
+                CreditFacility = new FakeCreditFacility(f.Finance, f.Ids, new HouseholdLedger(7)),
+            };
+            f.Driver.Execute(borrowDecision, pressure, borrowCtx, 100, null);
 
             var negCtx = new HouseholdDecisionDriver.ExecutionContext();
             negCtx.Params.AgreementId = "agree-1";

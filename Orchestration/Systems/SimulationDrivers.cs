@@ -830,6 +830,36 @@ namespace LandLedgers.Orchestration.Systems
         private void DriveHouseholdAutonomy(int absoluteDayIndex, List<string> diag)
         {
             if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            // Pass V P2-2: the hardship asset-sale channel (household surplus
+            // sold to real buyer households; no guaranteed buyer).
+            var assetSaleService = new HouseholdAssetSaleService(
+                hub.HouseholdLedgers,
+                hub.HouseholdInventories,
+                hub.PurchasingNeeds,
+                householdId => populationManager.State.households.Exists(h => h != null && h.id == householdId),
+                () =>
+                {
+                    var ids = new List<int>();
+                    foreach (HouseholdState h in populationManager.State.households)
+                        if (h != null) ids.Add(h.id);
+                    return ids;
+                },
+                itemId =>
+                {
+                    int best = 0;
+                    if (supplierDirectory != null)
+                    {
+                        foreach (IGoodsSupplier supplier in supplierDirectory.All)
+                        {
+                            if (supplier == null || !supplier.OffersItem(itemId)) continue;
+                            int price = supplier.ItemPricePerUnitCents(itemId);
+                            if (price > 0 && (best == 0 || price < best)) best = price;
+                        }
+                    }
+
+                    return best;
+                });
+            var assetSalePort = new HouseholdToHouseholdAssetSalePort(assetSaleService);
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null) continue;
@@ -845,6 +875,17 @@ namespace LandLedgers.Orchestration.Systems
                         HousingSearchNeeds = hub.HousingSearchNeeds,
                         FinancialObligations = hub.FinancialObligations,
                         Ids = hub.Ids,
+                        Lenders = hub.HouseholdLenders,
+                        PersonNameOf = personId =>
+                        {
+                            PersonState person = populationManager.State.FindPerson(personId);
+                            return person != null
+                                ? (person.firstName + " " + person.lastName).Trim()
+                                : string.Empty;
+                        },
+                        AssetSale = assetSalePort,
+                        SaleableSurplusValueFor = householdId =>
+                            assetSaleService.EvaluateSaleableValue(householdId, null),
                     }, diag);
             }
         }

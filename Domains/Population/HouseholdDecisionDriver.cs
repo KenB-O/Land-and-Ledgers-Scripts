@@ -20,10 +20,12 @@ namespace LandLedgers.Population
     ///   RelocateCheaper -> opens a real HousingSearchNeed.
     ///   Borrow          -> a real FinancialObligation via
     ///                      FinancialObligationAuthority with a LEGITIMATE known
-    ///                      lender; never an invented counterparty. The liability
-    ///                      is recorded here; the lender's actual cash payment is
-    ///                      the lender's own action through HouseholdLedger —
-    ///                      never synthesized.
+    ///                      lender's facility (judgment + finite funds); never
+    ///                      an invented counterparty. A refusal creates nothing.
+    ///   SellAssets      -> surplus non-essential goods sold to real buyer
+    ///                      households through the asset-sale port (goods and
+    ///                      cash both move, nothing created); falls back to
+    ///                      economizing when nothing can be sold.
     ///   NegotiateTerms  -> a real pending TenancyNegotiationRequest against the
     ///                      tenancy agreement (Worker B's terms). The landlord's
     ///                      response is a separate legitimate action.
@@ -74,6 +76,17 @@ namespace LandLedgers.Population
             public HouseholdMembershipRegistry Memberships;
             /// <summary>Negotiation target for NegotiateTerms; null fields = cannot execute.</summary>
             public DecisionExecutionParams Params = new DecisionExecutionParams();
+            /// <summary>
+            /// The household's real credit facility for Borrow decisions (a
+            /// known lender with finite funds and judgment). Null means no
+            /// known lender: borrowing is refused and creates nothing.
+            /// </summary>
+            public IHouseholdCreditFacility CreditFacility;
+            /// <summary>
+            /// The hardship asset-sale port for SellAssets decisions. Null
+            /// means no sale channel: the sale is skipped.
+            /// </summary>
+            public IHardshipAssetSalePort AssetSale;
         }
 
         public sealed class DecisionExecutionParams
@@ -104,7 +117,9 @@ namespace LandLedgers.Population
                 case HouseholdDecisionKind.RelocateCheaper:
                     return ExecuteRelocateCheaper(decision, ctx, dayIndex, diag);
                 case HouseholdDecisionKind.Borrow:
-                    return ExecuteBorrow(decision, pressure, dayIndex, diag);
+                    return ExecuteBorrow(decision, pressure, ctx, dayIndex, diag);
+                case HouseholdDecisionKind.SellAssets:
+                    return ExecuteSellAssets(decision, pressure, ctx, dayIndex, diag);
                 case HouseholdDecisionKind.NegotiateTerms:
                     return ExecuteNegotiateTerms(decision, ctx, dayIndex, diag);
                 case HouseholdDecisionKind.Economize:
@@ -183,18 +198,18 @@ namespace LandLedgers.Population
         }
 
         private DecisionExecutionResult ExecuteBorrow(HouseholdDecision decision,
-            HouseholdPressureInput pressure, int dayIndex, List<string> diag)
+            HouseholdPressureInput pressure, ExecutionContext ctx, int dayIndex, List<string> diag)
         {
             if (!int.TryParse(decision.HouseholdId, out int householdId))
                 return NotExecuted(diag, "Borrow: household id '" + decision.HouseholdId + "' is not numeric");
             if (financialObligations == null || ids == null)
                 return NotExecuted(diag, "Borrow: financial authority or id registry unavailable");
 
-            string creditor = pressure != null ? (pressure.KnownCreditorId ?? string.Empty).Trim() : string.Empty;
-            if (string.IsNullOrEmpty(creditor))
+            IHouseholdCreditFacility facility = ctx != null ? ctx.CreditFacility : null;
+            if (facility == null || string.IsNullOrWhiteSpace(facility.CreditorName))
             {
-                // Honest refusal: a loan needs a real counterparty. The decision
-                // stands as intent; the integrator must supply a known lender.
+                // Honest refusal: a loan needs a real known lender. Nothing is
+                // invented, no money is created.
                 return NotExecuted(diag, "Borrow: no legitimate known lender — will not invent a counterparty");
             }
 
@@ -202,59 +217,78 @@ namespace LandLedgers.Population
                 + (long)HouseholdDecisionService.CoverageDays * Math.Max(0, pressure != null ? pressure.ExpectedIncomeCentsPerDay : 0);
             long obligations = pressure != null ? Math.Max(0, pressure.ObligationsDueCents) : 0;
             long principal = Math.Max(1, obligations - coverage);
-
-            if (cashBridge == null)
-                return NotExecuted(diag, "Borrow: real cash bridge unavailable — request remains unfunded");
-            IRealCashStore lender = cashBridge.FindStore(creditor);
-            IRealCashStore borrower = cashBridge.FindStore("household:" + householdId);
-            if (lender == null || borrower == null)
-                return NotExecuted(diag, "Borrow: lender and household cash stores must both be registered — request remains unfunded");
             int amount = (int)Math.Min(principal, int.MaxValue);
-            string agreementId = "dec-" + householdId + "-" + decision.Day;
+
+            // Idempotency: one funded loan per lender per day.
             foreach (FinancialObligation existing in financialObligations.Obligations)
             {
-                if (existing != null && string.Equals(existing.AgreementId, agreementId, StringComparison.Ordinal)
-                    && string.Equals(existing.Debtor, "household-" + householdId, StringComparison.Ordinal)
-                    && string.Equals(existing.Creditor, creditor, StringComparison.Ordinal))
-                    return NotExecuted(diag, "Borrow: this decision already has a funded obligation");
-            }
-            if (lender.ReadBalanceCents() < amount)
-                return NotExecuted(diag, "Borrow: known lender cannot fund the requested advance");
-            string debitRefusal = lender.DebitCents(dayIndex, amount, "household loan advance", "household:" + householdId);
-            if (debitRefusal != null)
-                return NotExecuted(diag, "Borrow: lender refused disbursement — " + debitRefusal);
-            string creditRefusal = borrower.CreditCents(dayIndex, amount, "LoanProceeds",
-                "dec-" + householdId + "-" + decision.Day, "household borrowing advance", creditor);
-            if (creditRefusal != null)
-            {
-                lender.CreditCents(dayIndex, amount, "LoanProceedsReversal",
-                    "dec-" + householdId + "-" + decision.Day,
-                    "reversed refused household loan advance", "household:" + householdId);
-                return NotExecuted(diag, "Borrow: household cash store refused disbursement — " + creditRefusal);
+                if (existing == null || existing.Settled) continue;
+                if (existing.Kind != FinancialObligationKind.Loan) continue;
+                if (existing.IssuedDayIndex != dayIndex) continue;
+                if (string.Equals(existing.Debtor, "household:" + householdId, StringComparison.Ordinal)
+                    && string.Equals(existing.Creditor, facility.CreditorName, StringComparison.Ordinal))
+                    return NotExecuted(diag, "Borrow: this household already borrowed from "
+                        + facility.CreditorName + " today");
             }
 
-            FinancialObligation obligation = financialObligations.Create(
-                ids, FinancialObligationKind.Loan,
-                debtor: "household-" + householdId,
-                creditor: creditor,
-                principalCents: amount,
-                dayIndex: dayIndex,
-                terms: "household borrowing per decision " + decision.Day,
-                purpose: "cover household obligations shortfall",
-                agreementId: agreementId);
+            // The facility runs real lender judgment (evidence/policy/limits)
+            // and advances real cash against a real obligation. A refusal
+            // returns null and creates nothing.
+            FinancialObligation obligation = facility.RequestLoan(householdId, amount, dayIndex, diag);
             if (obligation == null)
-            {
-                borrower.DebitCents(dayIndex, amount, "reverse refused household loan obligation", creditor);
-                lender.CreditCents(dayIndex, amount, "LoanAdvanceReversal", agreementId,
-                    "reversed loan advance because debt authority refused", "household:" + householdId);
-                return NotExecuted(diag, "Borrow: financial authority rejected the obligation");
-            }
+                return NotExecuted(diag, "Borrow: lender " + facility.CreditorName
+                    + " refused or the advance failed — no debt recorded, no cash moved");
 
             string detail = string.Format(
-                "Borrow executed: obligation {0} opened — household-{1} received and owes {2} {3}c",
-                obligation.ObligationId, householdId, creditor, obligation.OutstandingPrincipalCents);
+                "Borrow executed: obligation {0} opened — household {1} received and owes {2} {3}c",
+                obligation.ObligationId, householdId, facility.CreditorName, obligation.OutstandingPrincipalCents);
             if (diag != null) diag.Add(detail);
             return new DecisionExecutionResult { Executed = true, Detail = detail };
+        }
+
+        private DecisionExecutionResult ExecuteSellAssets(HouseholdDecision decision,
+            HouseholdPressureInput pressure, ExecutionContext ctx, int dayIndex, List<string> diag)
+        {
+            if (!int.TryParse(decision.HouseholdId, out int householdId))
+                return NotExecuted(diag, "SellAssets: household id '" + decision.HouseholdId + "' is not numeric");
+
+            IHardshipAssetSalePort port = ctx != null ? ctx.AssetSale : null;
+            if (port == null)
+                return NotExecuted(diag, "SellAssets: no asset-sale channel wired — nothing sold");
+
+            long coverage = (pressure != null ? pressure.ReservesCents : 0)
+                + (long)HouseholdDecisionService.CoverageDays * Math.Max(0, pressure != null ? pressure.ExpectedIncomeCentsPerDay : 0);
+            long obligations = pressure != null ? Math.Max(0, pressure.ObligationsDueCents) : 0;
+            long shortfall = Math.Max(0, obligations - coverage);
+
+            int proceeds = port.TrySellSurplus(householdId, dayIndex, diag);
+            if (proceeds <= 0)
+            {
+                // No buyer, no saleable surplus: fall back to economizing for
+                // the whole shortfall rather than leaving the household idle.
+                DecisionExecutionResult fallback = ExecuteEconomize(decision, dayIndex, diag);
+                return new DecisionExecutionResult
+                {
+                    Executed = fallback.Executed,
+                    Detail = "SellAssets: no sale possible (" + fallback.Detail + ")",
+                };
+            }
+
+            if (proceeds < shortfall)
+            {
+                // Sold what could be sold; economize for the remainder.
+                DecisionExecutionResult remainder = ExecuteEconomize(decision, dayIndex, diag);
+                string detail = string.Format(
+                    "SellAssets executed: {0}c raised against {1}c shortfall; economizing for the remainder ({2})",
+                    proceeds, shortfall, remainder.Detail);
+                if (diag != null) diag.Add(detail);
+                return new DecisionExecutionResult { Executed = true, Detail = detail };
+            }
+
+            string done = string.Format(
+                "SellAssets executed: {0}c raised, covering the {1}c shortfall", proceeds, shortfall);
+            if (diag != null) diag.Add(done);
+            return new DecisionExecutionResult { Executed = true, Detail = done };
         }
 
         private DecisionExecutionResult ExecuteNegotiateTerms(HouseholdDecision decision,

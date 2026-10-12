@@ -117,6 +117,8 @@ namespace LandLedgers.Persistence
         public HouseholdDecisionDriverSaveDto householdDecisionDriver = new();
         public DomesticLaborServiceSaveDto domesticLabor = new();
         public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
+        // Pass V P2-2: durable registry of private household lenders.
+        public HouseholdLenderDirectory.HouseholdLenderDirectorySaveDto householdLenders = new();
         /// <summary>
         /// Pass IV (Worker 1): deterministic due-event schedule (task completions,
         /// passive processes, deadlines). Owned by SimulationSystemsHub.DueEvents.

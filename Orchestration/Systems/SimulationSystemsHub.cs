@@ -332,6 +332,7 @@ namespace LandLedgers.Orchestration.Systems
         private ParcelSubdivisionService parcelSubdivisionService;
         private HouseholdDecisionService householdDecisionService;
         private HouseholdDecisionDriver householdDecisionDriver;
+        private HouseholdLenderDirectory householdLenderDirectory;
         private DomesticLaborService domesticLaborService;
         private HouseholdAutonomyDriver householdAutonomyDriver;
         private HousingSearchNeedRegistry housingSearchNeedRegistry;
@@ -472,6 +473,27 @@ namespace LandLedgers.Orchestration.Systems
         public HouseholdDecisionDriver HouseholdDecisionDriver =>
             householdDecisionDriver ??= new HouseholdDecisionDriver(
                 ContactGraph, Employments, HousingSearchNeeds, FinancialObligations, Ids, CreditCash);
+
+        /// <summary>
+        /// Pass V P2-2: durable registry of private individuals willing to
+        /// lend to households. World generation registers wealthy NPCs here
+        /// with documented capital; the autonomy driver resolves per-household
+        /// facilities from it. Empty by default: no guaranteed credit.
+        /// </summary>
+        public HouseholdLenderDirectory HouseholdLenders
+        {
+            get
+            {
+                if (householdLenderDirectory == null)
+                {
+                    householdLenderDirectory = new HouseholdLenderDirectory();
+                    householdLenderDirectory.BindHubServices(
+                        CreditOffers, FinancialObligations, CreditCash, Ids, CreditEvents);
+                }
+
+                return householdLenderDirectory;
+            }
+        }
 
         /// <summary>
         /// Pass III Worker C: narrow domestic labor (meal prep, fuel, animal
@@ -830,6 +852,7 @@ namespace LandLedgers.Orchestration.Systems
                 tenancyPayments = TenancyPayments.CaptureSaveDto(),
                 householdDecisions = HouseholdDecisions.CaptureSaveDto(),
                 householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
+                householdLenders = HouseholdLenders.CaptureSaveDto(),
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
                 housing = Housing.CaptureSaveDto(),
@@ -933,6 +956,7 @@ namespace LandLedgers.Orchestration.Systems
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
+            HouseholdLenders.LoadFromSaveDto(dto.householdLenders);
             DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
             HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
             // Pass IV (Worker 1): due-event schedule (clear-then-load, idempotent).

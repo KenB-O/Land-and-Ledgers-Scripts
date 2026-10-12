@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using LandLedgers.Animals;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Financing;
@@ -530,6 +531,97 @@ namespace LandLedgers.Orchestration.Systems
             // against double-posting by the settled-week marker.
             DriveLaborMarketWeek(absoluteDayIndex);
             DriveBoardingHouseWeeks(absoluteDayIndex);
+            // Pass V P2-3: autonomous entrepreneurship — observation to
+            // formation, no quotas.
+            DriveEntrepreneurshipWeek(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Pass V P2-3: runs the entrepreneurship driver once per week. Every
+        /// evidence source is real: unfulfilled needs from the purchasing
+        /// registry, suppliers from the supplier directory, premises from the
+        /// runtime's unassigned buildings (query only — claiming happens at
+        /// formation), equipment provenance from a live smithy, financing
+        /// from the founder household's own ledger. Formation goes through
+        /// the same adapter the player uses.
+        /// </summary>
+        private void DriveEntrepreneurshipWeek(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State == null || householdMemberships == null) return;
+            var diag = new List<string>();
+            hub.NpcEntrepreneurship.EvaluateWeek(absoluteDayIndex,
+                new NpcEntrepreneurshipDriver.EntrepreneurshipContext
+                {
+                    Population = populationManager.State,
+                    Memberships = householdMemberships,
+                    Ledgers = hub.HouseholdLedgers,
+                    Needs = hub.PurchasingNeeds,
+                    Schedules = hub.PersonSchedules,
+                    Events = hub.NpcBusinessEvents,
+                    CreationPort = hub.NpcBusinessCreation,
+                    Suppliers = supplierDirectory,
+                    PersonAlreadyOwnsBusiness = PersonOwnsBusiness,
+                    PremisesFinder = opportunity =>
+                    {
+                        if (sharedBusinessRuntime == null || opportunity == null) return null;
+                        if (!sharedBusinessRuntime.TryAssignNpcBusinessPremises(
+                            PremisesKind.DedicatedStorefront, out int buildingId))
+                            return null;
+                        return new NpcPremisesOption
+                        {
+                            Description = "unassigned storefront identified for the opportunity",
+                            Tenure = NpcPremisesTenure.Rented,
+                            ParcelOrBuildingRef = "bldg-" + buildingId,
+                            UpfrontCostCents = 3000,
+                            RecurringCostCents = 500,
+                        };
+                    },
+                    EquipmentFinder = opportunity =>
+                    {
+                        string smithyId = FindCraftBusinessId();
+                        if (string.IsNullOrWhiteSpace(smithyId)) return null;
+                        return new NpcEquipmentOption
+                        {
+                            Description = "shop fittings (counter, scales, shelves)",
+                            ItemId = "shop_fittings",
+                            CostCents = 1500,
+                            Provenance = "purchase:" + smithyId,
+                        };
+                    },
+                }, diag);
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] entrepreneurship week " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        private bool PersonOwnsBusiness(int personId)
+        {
+            if (sharedBusinessRuntime == null) return false;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business?.Owner == null) continue;
+                if (business.Owner.OwnerKind == BusinessOwnerKind.Npc
+                    && business.Owner.PersonId == personId)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private string FindCraftBusinessId()
+        {
+            if (sharedBusinessRuntime == null) return null;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Blacksmith
+                    && !string.IsNullOrWhiteSpace(business.InstanceId))
+                    return business.InstanceId;
+            }
+
+            return null;
         }
 
         private void OnDayChanged(SimulationDateChangedContext context)
@@ -609,6 +701,11 @@ namespace LandLedgers.Orchestration.Systems
             DriveBoardingHouseDays(absoluteDayIndex);
             DriveDailyNeeds(absoluteDayIndex);
             DriveTenancyPayments(absoluteDayIndex);
+            // Pass V drive-by: DomesticLaborDriver had NO live caller (tests
+            // only). Wire it here: need-driven domestic tasks (meals, fuel,
+            // animals, chores) scheduled on real person time through the real
+            // TaskAuthority, budgets, schedule tracker, and due events.
+            DriveDomesticLaborDay(absoluteDayIndex);
 
             // Autonomous Labor: daily labor-market drives. The hub's authority
             // predicate needs the current day for delegation bounds.
@@ -623,6 +720,71 @@ namespace LandLedgers.Orchestration.Systems
         /// BusinessRuntimeState cash stores used everywhere else; an unknown
         /// payee therefore refuses the payment rather than losing tenant cash.
         /// </summary>
+        /// <summary>
+        /// Pass V drive-by: daily domestic labor. Each household's
+        /// need-driven tasks (meals for members at home, fuel in cold season,
+        /// animal care when the household owns animals, baseline chores) are
+        /// planned by DomesticLaborDriver and scheduled on real person time.
+        /// </summary>
+        private void DriveDomesticLaborDay(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            var diag = new List<string>();
+            // Register once: re-registering daily would spam duplicate
+            // rejections into the diagnostics.
+            if (hub.Tasks.GetDefinition(DomesticTaskCatalog.MealPrepId) == null)
+                DomesticTaskCatalog.RegisterAll(hub.Tasks, diag);
+            bool coldSeason = IsColdSeasonMonth();
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                List<int> members = householdMemberships.GetActiveMembers(household.id);
+                if (members.Count == 0) continue;
+                var inputs = new DomesticLaborDriver.DomesticDayInputs
+                {
+                    HouseholdId = household.id,
+                    MemberIds = members,
+                    AgeBandFor = personId =>
+                    {
+                        PersonState person = populationManager.State.FindPerson(personId);
+                        return person != null ? person.ageBand : AgeBand.Adult18Plus;
+                    },
+                    MealsAtHomeCount = members.Count,
+                    ColdSeason = coldSeason,
+                    HasAnimals = HouseholdOwnsAnimals(household.id, members),
+                };
+                hub.DomesticLaborDriver.DriveDay(inputs, absoluteDayIndex, hub.Tasks,
+                    hub.WorkTimeBudgets, hub.PersonSchedules, hub.DomesticLabor,
+                    hub.DueEvents, diag);
+            }
+
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] domestic labor day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        private bool HouseholdOwnsAnimals(int householdId, List<int> memberIds)
+        {
+            if (hub?.Animals == null) return false;
+            string householdKey = householdId.ToString();
+            var memberKeys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (int memberId in memberIds) memberKeys.Add(memberId.ToString());
+            foreach (AnimalState animal in hub.Animals.ActiveAnimals)
+            {
+                if (animal == null) continue;
+                if (animal.OwnerKind == AnimalOwnerKind.Household
+                    && string.Equals(animal.OwnerId, householdKey, StringComparison.Ordinal))
+                    return true;
+                if (animal.OwnerKind == AnimalOwnerKind.Person
+                    && memberKeys.Contains(animal.OwnerId ?? string.Empty))
+                    return true;
+            }
+
+            return false;
+        }
+
         private void DriveTenancyPayments(int absoluteDayIndex)
         {
             if (hub == null) return;
@@ -835,6 +997,37 @@ namespace LandLedgers.Orchestration.Systems
         private void DriveHouseholdAutonomy(int absoluteDayIndex, List<string> diag)
         {
             if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            // Pass V P2-2: the hardship asset-sale channel (household surplus
+            // sold to real buyer households; no guaranteed buyer).
+            var assetSaleService = new HouseholdAssetSaleService(
+                hub.HouseholdLedgers,
+                hub.HouseholdInventories,
+                hub.PurchasingNeeds,
+                householdId => populationManager.State.households.Exists(h => h != null && h.id == householdId),
+                () =>
+                {
+                    var ids = new List<int>();
+                    foreach (HouseholdState h in populationManager.State.households)
+                        if (h != null) ids.Add(h.id);
+                    return ids;
+                },
+                itemId =>
+                {
+                    int best = 0;
+                    if (supplierDirectory != null)
+                    {
+                        foreach (IGoodsSupplier supplier in supplierDirectory.All)
+                        {
+                            var resolving = supplier as IItemResolvingSupplier;
+                            if (resolving == null || !resolving.OffersItem(itemId)) continue;
+                            int price = resolving.ItemPricePerUnitCents(itemId);
+                            if (price > 0 && (best == 0 || price < best)) best = price;
+                        }
+                    }
+
+                    return best;
+                });
+            var assetSalePort = new HouseholdToHouseholdAssetSalePort(assetSaleService);
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null) continue;
@@ -850,6 +1043,17 @@ namespace LandLedgers.Orchestration.Systems
                         HousingSearchNeeds = hub.HousingSearchNeeds,
                         FinancialObligations = hub.FinancialObligations,
                         Ids = hub.Ids,
+                        Lenders = hub.HouseholdLenders,
+                        PersonNameOf = personId =>
+                        {
+                            PersonState person = populationManager.State.FindPerson(personId);
+                            return person != null
+                                ? (person.firstName + " " + person.lastName).Trim()
+                                : string.Empty;
+                        },
+                        AssetSale = assetSalePort,
+                        SaleableSurplusValueFor = householdId =>
+                            assetSaleService.EvaluateSaleableValue(householdId, null),
                     }, diag);
             }
         }
@@ -1529,22 +1733,39 @@ namespace LandLedgers.Orchestration.Systems
                     continue;
                 }
 
-                // One need per household per day keeps the production driver
-                // bounded while preserving the registry's open-need state for
-                // the next day when a trip is refused or only partly filled.
-                List<HouseholdPurchasingNeed> openNeeds = hub.PurchasingNeeds.GetOpenNeeds(household.id);
-                if (openNeeds == null || openNeeds.Count == 0)
+                // Pass V P2-1: batch the household's open needs into one
+                // planned errand through the hub-owned coordinator (one trip
+                // serving several needs, one shopper, one person-time window,
+                // claims so no need is ever bought twice). Needs the trip
+                // cannot serve stay open and unclaimed for a later day.
+                var errandCtx = new HouseholdErrandCoordinator.CoordinatorContext
                 {
-                    continue;
-                }
-
-                ShoppingTripResult result = householdShoppingLoop.ExecuteNeed(
-                    openNeeds[0],
-                    absoluteDayIndex,
-                    new ShoppingLoopOptions { DepartureMinuteOfDay = 8 * 60, Diagnostics = diagnostics });
-                if (result != null && !result.Success && !string.IsNullOrWhiteSpace(result.FailureReason))
+                    Population = populationManager.State,
+                    Memberships = householdMemberships,
+                    Ledgers = hub.HouseholdLedgers,
+                    Inventories = hub.HouseholdInventories,
+                    Needs = hub.PurchasingNeeds,
+                    Schedules = hub.PersonSchedules,
+                    Tasks = hub.Tasks,
+                    Budgets = hub.WorkTimeBudgets,
+                    PersonEntityId = id => EntityId.For(EntityKind.Person, id),
+                };
+                List<HouseholdErrandPlan> plans = hub.HouseholdErrands.PlanDay(
+                    household.id, absoluteDayIndex, errandCtx, diagnostics);
+                foreach (HouseholdErrandPlan plan in plans)
                 {
-                    diagnostics.Add($"[SimulationDrivers] household shopping H{household.id}: {result.FailureReason}");
+                    if (plan == null) continue;
+                    HouseholdShoppingLoop.BatchShoppingResult batch = hub.HouseholdErrands.ExecutePlan(
+                        plan,
+                        absoluteDayIndex,
+                        errandCtx,
+                        householdShoppingLoop,
+                        new ShoppingLoopOptions { DepartureMinuteOfDay = 8 * 60, Diagnostics = diagnostics },
+                        diagnostics);
+                    if (batch != null && !batch.TripExecuted && !string.IsNullOrWhiteSpace(batch.FailureReason))
+                    {
+                        diagnostics.Add($"[SimulationDrivers] household errands H{household.id}: {batch.FailureReason}");
+                    }
                 }
             }
         }

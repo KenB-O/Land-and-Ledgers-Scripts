@@ -608,6 +608,9 @@ namespace LandLedgers.Economy
         public int Quantity;
         public int UnitPriceCents;
         public string LocationId = string.Empty;
+        /// <summary>Pass V P1-4: day index used for inventory-consolidation
+        /// provenance. Defaults to 0 (unknown day) when the caller does not set it.</summary>
+        public int DayIndex;
     }
 
     /// <summary>
@@ -645,20 +648,44 @@ namespace LandLedgers.Economy
                 reason = "Retail sale blocked: a real BuyerPrincipal and ActingPerson are required.";
                 return false;
             }
-            bool genericInventorySale = business.GenericConfiguration.GetAvailableInventoryQuantity(context.ProductId)
-                >= context.Quantity - 0.001f;
+
+            // Pass V P1-4: ONE inventory truth per business. The production path
+            // decides the stock source — never "whichever has units". A business
+            // whose stock has drifted onto the wrong source is consolidated
+            // first (conserved, 1:1, with provenance); the sale then reads only
+            // the authoritative source.
+            ProductionPathRegistry.ConsolidateInventory(business, context.DayIndex, null);
+            ProductionPath path = ProductionPathRegistry.GetPath(business);
+            bool genericInventorySale = path == ProductionPath.GenericPath;
             int genericInventoryCost = genericInventorySale
                 ? business.GenericConfiguration.GetInventoryAverageUnitCostCents(context.ProductId)
                 : 0;
             int consumed = 0;
             float consumedGeneric = 0f;
-            bool consumedSuccessfully = genericInventorySale
-                ? business.GenericConfiguration.TryConsumeInventory(context.ProductId, context.Quantity, out consumedGeneric)
-                : business.RuntimeState.TryConsumeCategoryStockUnits(context.ProductId, context.Quantity, out consumed);
-            if (!consumedSuccessfully || (genericInventorySale ? consumedGeneric < context.Quantity - 0.001f : consumed != context.Quantity))
+            bool consumedSuccessfully;
+            if (genericInventorySale)
             {
-                reason = $"Retail sale blocked: '{context.ProductId}' stock is insufficient.";
-                return false;
+                consumedSuccessfully =
+                    business.GenericConfiguration.TryConsumeInventory(context.ProductId, context.Quantity, out consumedGeneric)
+                    && consumedGeneric >= context.Quantity - 0.001f;
+                if (!consumedSuccessfully)
+                {
+                    reason = $"Retail sale blocked: '{context.ProductId}' generic inventory is insufficient " +
+                        "(generic path — category stock is not a second truth).";
+                    return false;
+                }
+            }
+            else
+            {
+                consumedSuccessfully =
+                    business.RuntimeState.TryConsumeCategoryStockUnits(context.ProductId, context.Quantity, out consumed)
+                    && consumed == context.Quantity;
+                if (!consumedSuccessfully)
+                {
+                    reason = $"Retail sale blocked: '{context.ProductId}' category stock is insufficient " +
+                        "(legacy path — generic positions are not a second truth).";
+                    return false;
+                }
             }
 
             if (!(settleTransaction?.Invoke(context) ?? false))
@@ -686,6 +713,15 @@ namespace LandLedgers.Economy
                 || string.IsNullOrWhiteSpace(context.BuyerPrincipal) || context.ActingPersonId < 0)
             {
                 reason = "Reserved sale requires a real buyer, acting Person, and quantity.";
+                return false;
+            }
+            // Pass V P1-4: reservations exist only on the generic path. A legacy
+            // business has no reserved-inventory concept — refuse loudly rather
+            // than silently reading the wrong stock truth.
+            if (ProductionPathRegistry.GetPath(business) != ProductionPath.GenericPath)
+            {
+                reason = $"Reserved sale refused: '{business.InstanceId}' is on the legacy production path, " +
+                    "which holds no reserved inventory.";
                 return false;
             }
             if (!business.GenericConfiguration.Retail.TryGetLine(context.ProductId, out GenericRetailProductLine line)

@@ -53,6 +53,12 @@ namespace LandLedgers.Population
         /// already know of an opening to look through its own contacts.
         /// </summary>
         public bool HasSearchableContacts;
+        /// <summary>
+        /// Pass V P2-2 (additive): distress value (cents) of the household's
+        /// saleable surplus non-essential goods, from HouseholdAssetSaleService.
+        /// Zero when there is nothing saleable or the service is unwired.
+        /// </summary>
+        public int SaleableSurplusValueCents;
     }
 
     public enum HouseholdDecisionKind
@@ -63,6 +69,13 @@ namespace LandLedgers.Population
         Borrow = 3,
         RelocateCheaper = 4,
         NegotiateTerms = 5,
+        /// <summary>
+        /// Pass V P2-2 (append-only): sell surplus non-essential goods to real
+        /// buyer households before relocating. The sale is a real operation
+        /// (goods and cash move); when it cannot cover the shortfall the
+        /// driver falls back to economizing for the remainder.
+        /// </summary>
+        SellAssets = 6,
     }
 
     [Serializable]

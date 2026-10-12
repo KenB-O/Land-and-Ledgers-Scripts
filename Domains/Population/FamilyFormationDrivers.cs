@@ -285,7 +285,9 @@ namespace LandLedgers.Population
             double sexDraw = DemographicRng.Draw01(ctx.WorldSeed, ctx.CurrentDayIndex, -3, "migrant-sex");
             bool isFemale = sexDraw < 0.5;
             double monthDraw = DemographicRng.Draw01(ctx.WorldSeed, ctx.CurrentDayIndex, -4, "migrant-birthmonth");
-            int birthMonth = 1 + (int)(monthDraw * 12d) % 12;
+            // Birth month on or before the current month so the re-derived age
+            // reproduces the drawn age (birth-date authority coherence).
+            int birthMonth = 1 + (int)(monthDraw * month) % month;
             var person = new PersonState
             {
                 id = ctx.Population.AllocateNextPersonId(),

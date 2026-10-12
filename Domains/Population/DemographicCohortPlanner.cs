@@ -98,7 +98,95 @@ namespace LandLedgers.Population
                 }
             }
 
+            TopUpToTarget(units, targetResidents, random);
             return units;
+        }
+
+        /// <summary>
+        /// Tops the cohort up to the resident target: extra children join
+        /// couple-led units with room (age-coherent), otherwise a single adult
+        /// joins the roomiest unit. Keeps the 55-95 calibration honest without
+        /// inventing households beyond the accommodation envelope.
+        /// </summary>
+        private static void TopUpToTarget(List<FamilyUnitPlan> units, int targetResidents, Random random)
+        {
+            int total = 0;
+            foreach (FamilyUnitPlan unit in units)
+            {
+                total += unit.members.Count;
+            }
+
+            int guard = 0;
+            while (total < targetResidents && guard < 1000)
+            {
+                guard++;
+                FamilyUnitPlan best = null;
+                int bestRoom = 0;
+                foreach (FamilyUnitPlan unit in units)
+                {
+                    int room = 6 - unit.members.Count;
+                    if (room > bestRoom)
+                    {
+                        best = unit;
+                        bestRoom = room;
+                    }
+                }
+
+                if (best == null)
+                {
+                    break;
+                }
+
+                PlannedPerson head = null;
+                PlannedPerson spouse = null;
+                foreach (PlannedPerson p in best.members)
+                {
+                    if (p.role == PlannedPersonRole.Head)
+                    {
+                        head = p;
+                    }
+
+                    if (p.role == PlannedPersonRole.Spouse && p.spousePlanIndex >= 0)
+                    {
+                        spouse = p;
+                    }
+                }
+
+                if (head != null && spouse != null)
+                {
+                    PlannedPerson mother = head.isFemale ? head : spouse;
+                    PlannedPerson father = head.isFemale ? spouse : head;
+                    // Coherent against the younger parent: spouses may differ
+                    // by up to 12 years.
+                    int youngestParentAge = Math.Min(mother.age, father.age);
+                    int oldestParentAge = Math.Max(mother.age, father.age);
+                    int maxChildAge = Math.Min(17, youngestParentAge - MinParentChildGapYears);
+                    int minChildAge = Math.Max(0, oldestParentAge - MaxParentChildGapYears);
+                    if (maxChildAge >= minChildAge)
+                    {
+                        best.members.Add(new PlannedPerson
+                        {
+                            age = random.Next(minChildAge, maxChildAge + 1),
+                            isFemale = random.NextDouble() < 0.5,
+                            familyUnitIndex = head.familyUnitIndex,
+                            role = PlannedPersonRole.Child,
+                            motherPlanIndex = best.members.IndexOf(mother),
+                            fatherPlanIndex = best.members.IndexOf(father),
+                        });
+                        total++;
+                        continue;
+                    }
+                }
+
+                best.members.Add(new PlannedPerson
+                {
+                    age = random.Next(18, 71),
+                    isFemale = random.NextDouble() < 0.5,
+                    familyUnitIndex = best.members[0].familyUnitIndex,
+                    role = PlannedPersonRole.Single,
+                });
+                total++;
+            }
         }
 
         /// <summary>Flattens planned units to a person list (birth-date assignment).</summary>
@@ -141,8 +229,19 @@ namespace LandLedgers.Population
             for (int i = 0; i < plan.Count; i++)
             {
                 int birthYear = startYear - Math.Max(0, plan[i].age);
-                int birthMonth = 1 + random.Next(0, 12);
-                int birthDay = 1 + random.Next(0, GregorianDateMath.DaysInMonth(birthYear, birthMonth));
+
+                // The anniversary in the start year must fall on or before the
+                // start date so the derived age reproduces the planned age:
+                // draw the month in [1, startMonth], and when the month equals
+                // the start month cap the day at the start day of month.
+                int birthMonth = 1 + random.Next(0, startMonth);
+                int maxDay = GregorianDateMath.DaysInMonth(birthYear, birthMonth);
+                if (birthMonth == startMonth)
+                {
+                    maxDay = Math.Min(maxDay, startDay);
+                }
+
+                int birthDay = 1 + random.Next(0, maxDay);
                 dates.Add(new BirthDate(
                     birthYear, birthMonth, birthDay,
                     BirthDateProvenance.GeneratedExact,
@@ -150,6 +249,53 @@ namespace LandLedgers.Population
             }
 
             return dates;
+        }
+
+        /// <summary>
+        /// Stamps GeneratedExact birth dates on every person still missing one
+        /// (e.g. newcomer arrivals created without a date). The anniversary in
+        /// the reference year falls on or before the reference date so the
+        /// re-derived age reproduces the assigned age. Deterministic in the seed.
+        /// </summary>
+        public static int AssignMissingBirthDates(
+            List<PersonState> people,
+            int year, int month, int day,
+            int seed,
+            string provenanceNote)
+        {
+            if (people == null)
+            {
+                return 0;
+            }
+
+            var random = new Random(seed ^ 0xB17DA7E);
+            int stamped = 0;
+            for (int i = 0; i < people.Count; i++)
+            {
+                PersonState person = people[i];
+                if (person == null || person.birthDate.IsValid)
+                {
+                    continue;
+                }
+
+                int birthYear = year - Math.Max(0, person.age);
+                int birthMonth = 1 + random.Next(0, month);
+                int maxDay = GregorianDateMath.DaysInMonth(birthYear, birthMonth);
+                if (birthMonth == month)
+                {
+                    maxDay = Math.Max(1, Math.Min(maxDay, day));
+                }
+
+                int birthDay = 1 + random.Next(0, maxDay);
+                person.birthDate = new BirthDate(
+                    birthYear, birthMonth, birthDay,
+                    BirthDateProvenance.GeneratedExact,
+                    provenanceNote ?? string.Empty);
+                person.RefreshDerivedAge(year, month, day);
+                stamped++;
+            }
+
+            return stamped;
         }
 
         private static List<PlannedPerson> PlanFamilyUnit(int unitIndex, int maxMembers, Random random)
@@ -200,13 +346,16 @@ namespace LandLedgers.Population
             int childCount = Math.Min(childSlots, 1 + random.Next(0, 4));
             for (int c = 0; c < childCount; c++)
             {
-                int maxChildAge = Math.Min(17, motherAge - MinParentChildGapYears);
-                if (maxChildAge < 0)
+                // Coherent against the YOUNGER parent: the father may be up to
+                // two years younger than the mother.
+                int maxChildAge = Math.Min(17, Math.Min(motherAge, fatherAge) - MinParentChildGapYears);
+                int minChildAge = Math.Max(0, Math.Max(motherAge, fatherAge) - MaxParentChildGapYears);
+                if (maxChildAge < minChildAge)
                 {
                     break;
                 }
 
-                int childAge = random.Next(0, maxChildAge + 1);
+                int childAge = random.Next(minChildAge, maxChildAge + 1);
                 members.Add(new PlannedPerson
                 {
                     age = childAge, isFemale = random.NextDouble() < 0.5, familyUnitIndex = unitIndex,
@@ -256,12 +405,13 @@ namespace LandLedgers.Population
             for (int c = 0; c < childCount; c++)
             {
                 int maxChildAge = Math.Min(17, parentAge - MinParentChildGapYears);
-                if (maxChildAge < 0)
+                int minChildAge = Math.Max(0, parentAge - MaxParentChildGapYears);
+                if (maxChildAge < minChildAge)
                 {
                     break;
                 }
 
-                int childAge = random.Next(0, maxChildAge + 1);
+                int childAge = random.Next(minChildAge, maxChildAge + 1);
                 var child = new PlannedPerson
                 {
                     age = childAge, isFemale = random.NextDouble() < 0.5, familyUnitIndex = unitIndex,

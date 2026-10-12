@@ -431,6 +431,7 @@ namespace LandLedgers.Population
         /// <summary>
         /// Pass V P0-2/P1-3: assigns GeneratedExact birth dates to anyone still
         /// missing one (e.g. newcomer arrivals created without a date).
+        /// Delegates to the cohort planner's birth-date authority.
         /// </summary>
         private void AssignGeneratedBirthDates(string provenanceNote)
         {
@@ -441,20 +442,10 @@ namespace LandLedgers.Population
 
             CalendarAnchor anchor = ResolveAnchor();
             anchor.FromAbsoluteDay(CurrentDayIndex, out int year, out int month, out int day);
-            var random = new System.Random(demographicWorldSeed ^ 0x5EED);
-            foreach (PersonState person in state.people)
-            {
-                if (person == null || person.birthDate.IsValid)
-                {
-                    continue;
-                }
-
-                int birthYear = year - Mathf.Max(0, person.age);
-                int birthMonth = 1 + random.Next(0, 12);
-                int birthDay = 1 + random.Next(0, GregorianDateMath.DaysInMonth(birthYear, birthMonth));
-                person.birthDate = new BirthDate(birthYear, birthMonth, birthDay, BirthDateProvenance.GeneratedExact, provenanceNote ?? string.Empty);
-                person.RefreshDerivedAge(year, month, day);
-            }
+            DemographicCohortPlanner.AssignMissingBirthDates(
+                state.people, year, month, day,
+                demographicWorldSeed ^ 0x5EED,
+                provenanceNote);
         }
 
         private void RefreshAllDerivedAges()

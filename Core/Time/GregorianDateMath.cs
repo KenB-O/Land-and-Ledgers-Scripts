@@ -62,10 +62,14 @@ namespace LandLedgers.Time
             year = month <= 2 ? y + 1 : y;
         }
 
-        /// <summary>Monday-zero weekday index for a Gregorian date.</summary>
+        /// <summary>
+        /// Monday-zero weekday index for a Gregorian date.
+        /// DaysFromCivil counts from 1970-01-01, which was a Thursday
+        /// (Monday-zero index 3); the +3 offset aligns the epoch to Monday.
+        /// </summary>
         public static int DayOfWeekMondayZero(int year, int month, int day)
         {
-            int n = DaysFromCivil(year, month, day) % 7;
+            int n = (DaysFromCivil(year, month, day) + 3) % 7;
             return n < 0 ? n + 7 : n;
         }
 

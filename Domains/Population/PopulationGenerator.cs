@@ -113,6 +113,14 @@ namespace LandLedgers.Population
 
             List<NewcomerSettlementHomeOption> settlementHomes = NewcomerSettlementPlanner.BuildHomeOptions(townWorld, settings);
             NewcomerSettlementPlanner.GenerateNewcomerArrivals(state, settings, random, settlementHomes, boardingHouseOptions);
+
+            // Pass V P0-2: newcomer arrivals are created without birth dates;
+            // stamp GeneratedExact dates (birth-date authority) before
+            // validation so every person has a valid date.
+            DemographicCohortPlanner.AssignMissingBirthDates(
+                state.people, startYear, startMonth, startDay, seed ^ 0x5EED,
+                $"World generation (seed {seed}); newcomer arrivals, documented as generated.");
+
             AssignProfessionsAndWorkplaces(state, settings.GetProfessionDefinitions(), workplaces, random, settings);
             RecalculateHouseholdIncome(state);
             NewcomerSettlementPlanner.RefreshSettlementMetrics(state, settlementHomes, boardingHouseOptions);

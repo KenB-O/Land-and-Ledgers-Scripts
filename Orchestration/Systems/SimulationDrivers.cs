@@ -1703,22 +1703,39 @@ namespace LandLedgers.Orchestration.Systems
                     continue;
                 }
 
-                // One need per household per day keeps the production driver
-                // bounded while preserving the registry's open-need state for
-                // the next day when a trip is refused or only partly filled.
-                List<HouseholdPurchasingNeed> openNeeds = hub.PurchasingNeeds.GetOpenNeeds(household.id);
-                if (openNeeds == null || openNeeds.Count == 0)
+                // Pass V P2-1: batch the household's open needs into one
+                // planned errand through the hub-owned coordinator (one trip
+                // serving several needs, one shopper, one person-time window,
+                // claims so no need is ever bought twice). Needs the trip
+                // cannot serve stay open and unclaimed for a later day.
+                var errandCtx = new HouseholdErrandCoordinator.CoordinatorContext
                 {
-                    continue;
-                }
-
-                ShoppingTripResult result = householdShoppingLoop.ExecuteNeed(
-                    openNeeds[0],
-                    absoluteDayIndex,
-                    new ShoppingLoopOptions { DepartureMinuteOfDay = 8 * 60, Diagnostics = diagnostics });
-                if (result != null && !result.Success && !string.IsNullOrWhiteSpace(result.FailureReason))
+                    Population = populationManager.State,
+                    Memberships = householdMemberships,
+                    Ledgers = hub.HouseholdLedgers,
+                    Inventories = hub.HouseholdInventories,
+                    Needs = hub.PurchasingNeeds,
+                    Schedules = hub.PersonSchedules,
+                    Tasks = hub.Tasks,
+                    Budgets = hub.WorkTimeBudgets,
+                    PersonEntityId = id => EntityId.For(EntityKind.Person, id),
+                };
+                List<HouseholdErrandPlan> plans = hub.HouseholdErrands.PlanDay(
+                    household.id, absoluteDayIndex, errandCtx, diagnostics);
+                foreach (HouseholdErrandPlan plan in plans)
                 {
-                    diagnostics.Add($"[SimulationDrivers] household shopping H{household.id}: {result.FailureReason}");
+                    if (plan == null) continue;
+                    HouseholdShoppingLoop.BatchShoppingResult batch = hub.HouseholdErrands.ExecutePlan(
+                        plan,
+                        absoluteDayIndex,
+                        errandCtx,
+                        householdShoppingLoop,
+                        new ShoppingLoopOptions { DepartureMinuteOfDay = 8 * 60, Diagnostics = diagnostics },
+                        diagnostics);
+                    if (batch != null && !batch.TripExecuted && !string.IsNullOrWhiteSpace(batch.FailureReason))
+                    {
+                        diagnostics.Add($"[SimulationDrivers] household errands H{household.id}: {batch.FailureReason}");
+                    }
                 }
             }
         }

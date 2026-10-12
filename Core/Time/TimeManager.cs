@@ -92,6 +92,15 @@ namespace LandLedgers.Time
         public int CurrentYear => currentDate.Year;
         public float TimeOfDay01 => timeOfDay01;
         public float GameSecondsIntoDay => gameSecondsIntoDay;
+
+        /// <summary>
+        /// Pass IV (Worker 1): absolute game seconds on the authoritative timeline —
+        /// the time base for the due-event schedule. Never a second clock.
+        /// </summary>
+        public float AbsoluteGameSeconds =>
+            settings != null
+                ? (float)((double)absoluteDayIndex * settings.GameSecondsPerDay + gameSecondsIntoDay)
+                : gameSecondsIntoDay;
         public int ShortTickIndex => shortTickIndex;
         public bool IsPaused => isPaused;
         public float CurrentSpeedMultiplier => ResolveSpeedMultiplier(currentSpeed);
@@ -453,40 +462,29 @@ namespace LandLedgers.Time
                 return;
             }
 
-            SimulationDate previousDate = currentDate;
             int remainingIntSpace = int.MaxValue - absoluteDayIndex;
             daysToAdvance = Mathf.Min(daysToAdvance, Mathf.Max(0, remainingIntSpace));
-            double finalSecondsIntoDay = totalSecondsToPlace - (daysToAdvance * secondsPerDay);
-
-            absoluteDayIndex += daysToAdvance;
-            currentDate = settings.BuildDateFromAbsoluteDay(absoluteDayIndex);
-            ApplyTimeOfDay((float)finalSecondsIntoDay);
-            ResetShortTickStateForCurrentTimeOfDay();
 
             collapsedDayRolloversLastFrame = daysToAdvance;
             cappedDayRolloverFrames++;
             RecordCollapsedShortTickCompression(remainingGameSeconds);
 
-            // A hitch or test fast-forward can cross more days than subscribers should
-            // process in one frame. Keep the calendar truthful and emit one collapsed
-            // date-change signal instead of silently wrapping time-of-day backward.
-            DayChanged?.Invoke(new SimulationDateChangedContext(previousDate, currentDate));
-
-            if (previousDate.Week != currentDate.Week)
+            // Pass IV (Worker 1): every crossed day runs its daily drivers. DayChanged
+            // (and WeekChanged/MonthChanged as crossed) fires PER DAY through
+            // ProcessDayRollover, so payroll weeks and production days are never
+            // silently skipped by a collapsed rollover.
+            for (int day = 0; day < daysToAdvance; day++)
             {
-                WeekChanged?.Invoke(new SimulationDateChangedContext(previousDate, currentDate));
+                ProcessDayRollover();
             }
 
-            if (previousDate.Month != currentDate.Month || previousDate.Year != currentDate.Year)
-            {
-                MonthChanged?.Invoke(new SimulationDateChangedContext(previousDate, currentDate));
-            }
+            RefreshTimeOfDay01FromCurrentSeconds();
 
             if (logMajorTicks)
             {
                 RefreshDebugState();
                 Debug.Log(
-                    $"Simulation date advanced to {GetReadableDate()} after collapsing {daysToAdvance} capped day rollover(s).",
+                    $"Simulation date advanced to {GetReadableDate()} after processing {daysToAdvance} capped day rollover(s) individually.",
                     this);
             }
         }
@@ -513,7 +511,9 @@ namespace LandLedgers.Time
             if (ticksProcessed >= settings.maxShortTicksPerFrame)
             {
                 RecordShortTickCompression(interval);
-                shortTickAccumulatorGameSeconds = Mathf.Min(shortTickAccumulatorGameSeconds, interval);
+                // Pass IV (Worker 1): DEFERRAL, not discard. The leftover accumulator
+                // carries into later frames so accelerated time never loses simulated
+                // seconds; the per-frame cap still bounds work per frame.
             }
         }
 

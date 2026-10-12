@@ -89,6 +89,9 @@ namespace LandLedgers.Persistence
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();
         public NpcOpportunityObservationLogSaveDto npcOpportunityObservation = new();
+        // Pass V P2-3: autonomous entrepreneurship driver state (per-person
+        // observation logs and investigations).
+        public NpcEntrepreneurshipDriver.NpcEntrepreneurshipDriverSaveDto npcEntrepreneurship = new();
         public NpcBusinessEventLogSaveDto npcBusinessEvents = new();
         public NpcPropertyLifeService.NpcPropertyLifeSaveDto npcPropertyLife = new();
         public ConstructionProjectExecutor.ConstructionProjectSaveDto constructionProjects = new();

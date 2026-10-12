@@ -530,6 +530,97 @@ namespace LandLedgers.Orchestration.Systems
             // against double-posting by the settled-week marker.
             DriveLaborMarketWeek(absoluteDayIndex);
             DriveBoardingHouseWeeks(absoluteDayIndex);
+            // Pass V P2-3: autonomous entrepreneurship — observation to
+            // formation, no quotas.
+            DriveEntrepreneurshipWeek(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Pass V P2-3: runs the entrepreneurship driver once per week. Every
+        /// evidence source is real: unfulfilled needs from the purchasing
+        /// registry, suppliers from the supplier directory, premises from the
+        /// runtime's unassigned buildings (query only — claiming happens at
+        /// formation), equipment provenance from a live smithy, financing
+        /// from the founder household's own ledger. Formation goes through
+        /// the same adapter the player uses.
+        /// </summary>
+        private void DriveEntrepreneurshipWeek(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State == null || householdMemberships == null) return;
+            var diag = new List<string>();
+            hub.NpcEntrepreneurship.EvaluateWeek(absoluteDayIndex,
+                new NpcEntrepreneurshipDriver.EntrepreneurshipContext
+                {
+                    Population = populationManager.State,
+                    Memberships = householdMemberships,
+                    Ledgers = hub.HouseholdLedgers,
+                    Needs = hub.PurchasingNeeds,
+                    Schedules = hub.PersonSchedules,
+                    Events = hub.NpcBusinessEvents,
+                    CreationPort = hub.NpcBusinessCreation,
+                    Suppliers = supplierDirectory,
+                    PersonAlreadyOwnsBusiness = PersonOwnsBusiness,
+                    PremisesFinder = opportunity =>
+                    {
+                        if (sharedBusinessRuntime == null || opportunity == null) return null;
+                        if (!sharedBusinessRuntime.TryAssignNpcBusinessPremises(
+                            PremisesKind.DedicatedStorefront, out int buildingId))
+                            return null;
+                        return new NpcPremisesOption
+                        {
+                            Description = "unassigned storefront identified for the opportunity",
+                            Tenure = NpcPremisesTenure.Rented,
+                            ParcelOrBuildingRef = "bldg-" + buildingId,
+                            UpfrontCostCents = 3000,
+                            RecurringCostCents = 500,
+                        };
+                    },
+                    EquipmentFinder = opportunity =>
+                    {
+                        string smithyId = FindCraftBusinessId();
+                        if (string.IsNullOrWhiteSpace(smithyId)) return null;
+                        return new NpcEquipmentOption
+                        {
+                            Description = "shop fittings (counter, scales, shelves)",
+                            ItemId = "shop_fittings",
+                            CostCents = 1500,
+                            Provenance = "purchase:" + smithyId,
+                        };
+                    },
+                }, diag);
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] entrepreneurship week " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        private bool PersonOwnsBusiness(int personId)
+        {
+            if (sharedBusinessRuntime == null) return false;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business?.Owner == null) continue;
+                if (business.Owner.OwnerKind == BusinessOwnerKind.Npc
+                    && business.Owner.PersonId == personId)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private string FindCraftBusinessId()
+        {
+            if (sharedBusinessRuntime == null) return null;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Blacksmith
+                    && !string.IsNullOrWhiteSpace(business.InstanceId))
+                    return business.InstanceId;
+            }
+
+            return null;
         }
 
         private void OnDayChanged(SimulationDateChangedContext context)

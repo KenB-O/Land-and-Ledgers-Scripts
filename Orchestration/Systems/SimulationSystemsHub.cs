@@ -294,6 +294,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly List<NpcBusinessLifeRecord> npcBusinessLifeRecords = new List<NpcBusinessLifeRecord>();
         private NpcBusinessInvestigation npcBusinessInvestigation;
         private NpcOpportunityObservationLog npcOpportunityObservation;
+        private NpcEntrepreneurshipDriver npcEntrepreneurshipDriver;
         private NpcBusinessEventLog npcBusinessEvents;
         private NpcPropertyLifeService npcPropertyLife;
         private ConstructionProjectExecutor constructionProjectExecutor;
@@ -366,6 +367,14 @@ namespace LandLedgers.Orchestration.Systems
         public IList<NpcBusinessLifeRecord> NpcBusinessLifeRecords => npcBusinessLifeRecords;
         public NpcBusinessInvestigation NpcBusinessInvestigation => npcBusinessInvestigation ??= new NpcBusinessInvestigation();
         public NpcOpportunityObservationLog NpcOpportunityObservation => npcOpportunityObservation ??= new NpcOpportunityObservationLog();
+
+        /// <summary>
+        /// Pass V P2-3: the autonomous opportunity-evaluation driver —
+        /// observation -> recognition -> investigation -> formation, no quotas.
+        /// Owns the per-person observation logs and investigations.
+        /// </summary>
+        public NpcEntrepreneurshipDriver NpcEntrepreneurship =>
+            npcEntrepreneurshipDriver ??= new NpcEntrepreneurshipDriver();
         public NpcBusinessEventLog NpcBusinessEvents => npcBusinessEvents ??= new NpcBusinessEventLog();
         public NpcPropertyLifeService NpcPropertyLife => npcPropertyLife ??= new NpcPropertyLifeService();
         public ConstructionProjectExecutor ConstructionExecutor => constructionProjectExecutor ??= new ConstructionProjectExecutor();
@@ -836,6 +845,7 @@ namespace LandLedgers.Orchestration.Systems
                 npcBusinessLifecycle = CaptureNpcBusinessLifecycle(),
                 npcBusinessInvestigation = NpcBusinessInvestigation.CaptureSaveDto(),
                 npcOpportunityObservation = NpcOpportunityObservation.CaptureSaveDto(),
+                npcEntrepreneurship = NpcEntrepreneurship.CaptureSaveDto(),
                 npcBusinessEvents = NpcBusinessEvents.CaptureSaveDto(),
                 npcPropertyLife = NpcPropertyLife.CaptureSaveDto(),
                 constructionProjects = ConstructionExecutor.CaptureSaveDto(new List<ConstructionProject>(ConstructionProjects)),
@@ -934,6 +944,7 @@ namespace LandLedgers.Orchestration.Systems
             }
             NpcBusinessInvestigation.LoadFromSaveDto(dto.npcBusinessInvestigation);
             NpcOpportunityObservation.LoadFromSaveDto(dto.npcOpportunityObservation);
+            NpcEntrepreneurship.LoadFromSaveDto(dto.npcEntrepreneurship);
             NpcBusinessEvents.LoadFromSaveDto(dto.npcBusinessEvents);
             NpcPropertyLife.LoadFromSaveDto(dto.npcPropertyLife, diagnostics);
             ConstructionProjects.Clear();

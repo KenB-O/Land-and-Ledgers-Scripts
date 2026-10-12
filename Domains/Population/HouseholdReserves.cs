@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Time;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -342,7 +343,6 @@ namespace LandLedgers.Population
 
     public static class HouseholdHeatingEvaluator
     {
-        private const int DaysPerMonth = 28;
         private const float ShoulderSeasonStrain01 = 0.45f;
 
         public static bool IsFuelReserve(string categoryId)
@@ -434,9 +434,21 @@ namespace LandLedgers.Population
             };
         }
 
+        /// <summary>
+        /// Pass V P0-1: true Gregorian month for an absolute day index. The
+        /// 28-day-month fiction is removed; heating seasons now follow the real
+        /// calendar through <paramref name="anchor"/>.
+        /// </summary>
+        public static int GetMonthFromAbsoluteDay(int absoluteDayIndex, CalendarAnchor anchor)
+        {
+            CalendarAnchor safeAnchor = anchor.IsValid ? anchor : CalendarAnchor.Default;
+            safeAnchor.FromAbsoluteDay(Mathf.Max(0, absoluteDayIndex), out _, out int month, out _);
+            return month;
+        }
+
         public static int GetMonthFromAbsoluteDay(int absoluteDayIndex)
         {
-            return Mathf.Max(0, absoluteDayIndex) / DaysPerMonth % 12 + 1;
+            return GetMonthFromAbsoluteDay(absoluteDayIndex, CalendarAnchor.Default);
         }
 
         private static float CalculateHeatingPressure01(

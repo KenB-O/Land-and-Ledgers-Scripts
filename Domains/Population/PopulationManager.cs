@@ -1,8 +1,10 @@
 using System.Text;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Estates;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
+using LandLedgers.Primitives;
 using LandLedgers.Time;
 using LandLedgers.World;
 using UnityEngine;
@@ -95,6 +97,29 @@ namespace LandLedgers.Population
 
         private bool subscribedToTime;
 
+        // Pass V (P0-2/P1-2/P1-3): the population-wide demographic lifecycle
+        // stack. Kinship edges live here (separate from membership, Tech X
+        // §2.2); the lifecycle manager routes every birth/death/transfer
+        // through the membership authority; the estate service opens estates
+        // for the dead; pregnancies are birth-driver state.
+        private KinshipRegistry kinshipRegistry;
+        private HouseholdMembershipRegistry membershipRegistry;
+        private EntityIdRegistry entityIds;
+        private HouseholdLifecycleManager lifecycleManager;
+        private EstateService estateService;
+        private List<PregnancyRecord> pregnancies = new List<PregnancyRecord>();
+        private readonly List<string> demographicDiagnostics = new List<string>();
+        private int demographicWorldSeed;
+
+        /// <summary>Pass V P1-3: the population-wide kinship authority.</summary>
+        public KinshipRegistry Kinship => kinshipRegistry;
+
+        /// <summary>Pass V P0-2: the household lifecycle authority (birth/death/transfer).</summary>
+        public HouseholdLifecycleManager Lifecycle => lifecycleManager;
+
+        /// <summary>Pass V P1-2: the estate/succession authority.</summary>
+        public EstateService Estates => estateService;
+
         public PopulationState State => state;
         public int GeneratedHouseholdCount => generatedHouseholdCount;
         public int GeneratedPersonCount => generatedPersonCount;
@@ -159,11 +184,24 @@ namespace LandLedgers.Population
             AutoWireReferences();
 
             sharedBusinessRuntime?.InitializeIfNeeded();
+            EnsureDemographicStack(freshKinship: true);
+            CalendarAnchor anchor = ResolveAnchor();
+            int scenarioStartDay = ResolveScenarioStartDay();
+            anchor.FromAbsoluteDay(scenarioStartDay, out int startYear, out int startMonth, out int startDay);
             PopulationGenerationResult result = PopulationGenerator.Generate(
                 townWorld,
                 settings,
-                BuildBoardingHouseSettlementOptions());
+                BuildBoardingHouseSettlementOptions(),
+                kinshipRegistry,
+                startYear,
+                startMonth,
+                startDay);
             state = result.State;
+            RebuildLifecycleManager();
+            RebuildMembershipRegistry();
+            AssignGeneratedBirthDates("World generation; scenario provenance, documented as generated.");
+            RefreshAllDerivedAges();
+            EnsureBirthdayScheduling("population generation");
             InitializeHealthDefaults();
             RefreshSettlementMetrics(result.Summary);
             lastHealthResolutionDayIndex = -1;
@@ -193,6 +231,9 @@ namespace LandLedgers.Population
         public void ClearPopulationSnapshot()
         {
             state.Clear();
+            EnsureDemographicStack(freshKinship: true);
+            estateService.Clear();
+            pregnancies.Clear();
             lastHealthResolutionDayIndex = -1;
             lastSettlementResolutionWeekIndex = -1;
             lastHealthSummary = "No health resolution yet.";
@@ -278,6 +319,226 @@ namespace LandLedgers.Population
             SweepUnledgeredHouseholdCashToLedgers("weekly settlement progression");
             return moved;
         }
+
+        #region Pass V demographic lifecycle (P0-2/P1-2/P1-3)
+
+        /// <summary>
+        /// Builds the population-wide demographic stack (kinship, membership
+        /// registry, id registry, lifecycle manager, estates). The lifecycle
+        /// manager is rebound whenever PopulationState is swapped.
+        /// </summary>
+        private void EnsureDemographicStack(bool freshKinship = false)
+        {
+            if (freshKinship || kinshipRegistry == null)
+            {
+                kinshipRegistry = new KinshipRegistry();
+            }
+
+            membershipRegistry ??= new HouseholdMembershipRegistry();
+            entityIds ??= new EntityIdRegistry();
+            estateService ??= new EstateService();
+            pregnancies ??= new List<PregnancyRecord>();
+            if (state == null)
+            {
+                state = new PopulationState();
+            }
+
+            if (demographicWorldSeed == 0)
+            {
+                demographicWorldSeed = (townWorld != null && townWorld.Settings != null ? townWorld.Settings.seed : 0) + 777001;
+            }
+
+            RebuildLifecycleManager();
+        }
+
+        private void RebuildLifecycleManager()
+        {
+            if (state == null || membershipRegistry == null || kinshipRegistry == null || entityIds == null)
+            {
+                return;
+            }
+
+            lifecycleManager = new HouseholdLifecycleManager(state, membershipRegistry, kinshipRegistry, entityIds);
+        }
+
+        /// <summary>
+        /// Rebuilds the membership registry from the household member lists
+        /// (the persisted form). Clear-then-load: the registry is fresh, so no
+        /// stale membership survives.
+        /// </summary>
+        private void RebuildMembershipRegistry()
+        {
+            EnsureDemographicStack();
+            membershipRegistry = new HouseholdMembershipRegistry();
+            RebuildLifecycleManager();
+            if (state == null || state.households == null)
+            {
+                return;
+            }
+
+            for (int h = 0; h < state.households.Count; h++)
+            {
+                HouseholdState household = state.households[h];
+                if (household == null || household.memberIds == null)
+                {
+                    continue;
+                }
+
+                for (int m = 0; m < household.memberIds.Count; m++)
+                {
+                    int personId = household.memberIds[m];
+                    if (membershipRegistry.GetActiveHouseholdId(personId) >= 0)
+                    {
+                        continue;
+                    }
+
+                    var membership = new HouseholdMembership
+                    {
+                        MembershipId = entityIds.Allocate(EntityKind.Membership).Id,
+                        PersonId = personId,
+                        HouseholdId = household.id,
+                        Lifecycle = HouseholdMembershipLifecycle.Active,
+                        StartDayIndex = CurrentDayIndex,
+                        EndDayIndex = -1,
+                        Source = HouseholdMembershipSource.Authored,
+                        LegacyDiagnostic = "rebuilt from household member list",
+                    };
+                    membershipRegistry.Register(membership);
+                }
+            }
+        }
+
+        private CalendarAnchor ResolveAnchor()
+        {
+            if (timeManager != null && timeManager.Settings != null)
+            {
+                return timeManager.Settings.Anchor;
+            }
+
+            return CalendarAnchor.Default;
+        }
+
+        private int ResolveScenarioStartDay()
+        {
+            if (timeManager != null && timeManager.Settings != null)
+            {
+                return timeManager.Settings.GetScenarioStartAbsoluteDayIndex();
+            }
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Pass V P0-2/P1-3: assigns GeneratedExact birth dates to anyone still
+        /// missing one (e.g. newcomer arrivals created without a date).
+        /// Delegates to the cohort planner's birth-date authority.
+        /// </summary>
+        private void AssignGeneratedBirthDates(string provenanceNote)
+        {
+            if (state == null || state.people == null)
+            {
+                return;
+            }
+
+            CalendarAnchor anchor = ResolveAnchor();
+            anchor.FromAbsoluteDay(CurrentDayIndex, out int year, out int month, out int day);
+            DemographicCohortPlanner.AssignMissingBirthDates(
+                state.people, year, month, day,
+                demographicWorldSeed ^ 0x5EED,
+                provenanceNote);
+        }
+
+        private void RefreshAllDerivedAges()
+        {
+            if (state == null || state.people == null)
+            {
+                return;
+            }
+
+            CalendarAnchor anchor = ResolveAnchor();
+            anchor.FromAbsoluteDay(CurrentDayIndex, out int year, out int month, out int day);
+            foreach (PersonState person in state.people)
+            {
+                person?.RefreshDerivedAge(year, month, day);
+            }
+        }
+
+        private void EnsureBirthdayScheduling(string contextLabel)
+        {
+            EnsureDemographicStack();
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            if (hub == null)
+            {
+                return;
+            }
+
+            CalendarAnchor anchor = ResolveAnchor();
+            float secondsPerDay = timeManager != null && timeManager.Settings != null
+                ? timeManager.Settings.GameSecondsPerDay
+                : 86400f;
+            BirthdayService.EnsureScheduledForPopulation(
+                state, hub.DueEvents, anchor, CurrentDayIndex, secondsPerDay, demographicDiagnostics);
+            FlushDemographicDiagnostics(contextLabel);
+        }
+
+        private void FlushDemographicDiagnostics(string contextLabel)
+        {
+            if (demographicDiagnostics.Count == 0)
+            {
+                return;
+            }
+
+            Debug.Log($"[Population] demographics ({contextLabel}): " + string.Join(" | ", demographicDiagnostics), this);
+            demographicDiagnostics.Clear();
+        }
+
+        /// <summary>
+        /// Pass V P1-2: drives the demographic day — births due, mortality,
+        /// birthday scheduling, and (on the monthly day) conceptions, marriage,
+        /// migration, and household splits. Called by SimulationDrivers on the
+        /// daily boundary; idempotent per day via deterministic draws.
+        /// </summary>
+        public void DriveDemographicDay(int absoluteDayIndex)
+        {
+            EnsureDemographicStack();
+            if (state == null)
+            {
+                return;
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            CalendarAnchor anchor = ResolveAnchor();
+            float secondsPerDay = timeManager != null && timeManager.Settings != null
+                ? timeManager.Settings.GameSecondsPerDay
+                : 86400f;
+            var ctx = new DemographicDriverContext
+            {
+                Population = state,
+                Kinship = kinshipRegistry,
+                Lifecycle = lifecycleManager,
+                Memberships = membershipRegistry,
+                Estates = estateService,
+                Ids = entityIds,
+                Scheduler = hub != null ? hub.DueEvents : null,
+                Ledgers = ResolvedHouseholdLedgers,
+                Anchor = anchor,
+                CurrentDate = anchor.BuildDate(absoluteDayIndex),
+                CurrentDayIndex = absoluteDayIndex,
+                WorldSeed = demographicWorldSeed,
+                MaleNames = settings != null ? settings.maleFirstNames : null,
+                FemaleNames = settings != null ? settings.femaleFirstNames : null,
+                Pregnancies = pregnancies,
+                Diagnostics = demographicDiagnostics,
+                GameSecondsPerDay = secondsPerDay,
+            };
+            DemographicDriverSchedule.EvaluateDay(ctx);
+            DemographicDriverSchedule.EvaluateMonth(ctx);
+            BirthdayService.EnsureScheduledForPopulation(
+                state, ctx.Scheduler, anchor, absoluteDayIndex, secondsPerDay, demographicDiagnostics);
+            FlushDemographicDiagnostics($"day {absoluteDayIndex}");
+        }
+
+        #endregion
 
         public string BuildTownSettlementHeadline()
         {
@@ -560,7 +821,10 @@ namespace LandLedgers.Population
                         preferredProfessionBias = person.preferredProfessionBias,
                         settlementDifficulty = person.settlementDifficulty,
                         hostHouseholdId = person.hostHouseholdId,
-                        nutrition = person.nutrition != null ? person.nutrition.Clone() : new PersonNutritionState()
+                        nutrition = person.nutrition != null ? person.nutrition.Clone() : new PersonNutritionState(),
+                        birthDate = person.birthDate,
+                        isFemale = person.isFemale,
+                        isOffMap = person.isOffMap
                     });
                 }
             }
@@ -791,6 +1055,61 @@ namespace LandLedgers.Population
             dto.lastRentalSummary = state.lastRentalSummary ?? string.Empty;
             dto.nextPersonId = state.NextPersonId;
             dto.nextHouseholdId = state.NextHouseholdId;
+
+            // Pass V P0-2/P1-2: persist the kinship graph, in-flight
+            // pregnancies, and opened estates (clear-then-load restores them).
+            EnsureDemographicStack();
+            if (kinshipRegistry != null)
+            {
+                foreach (KinshipEdge edge in kinshipRegistry.AllEdges)
+                {
+                    if (edge == null)
+                    {
+                        continue;
+                    }
+
+                    dto.kinshipEdges.Add(new KinshipEdge
+                    {
+                        FromPersonId = edge.FromPersonId,
+                        ToPersonId = edge.ToPersonId,
+                        Relation = edge.Relation,
+                        Source = edge.Source,
+                        Notes = edge.Notes,
+                    });
+                }
+            }
+
+            if (pregnancies != null)
+            {
+                foreach (PregnancyRecord pregnancy in pregnancies)
+                {
+                    if (pregnancy == null)
+                    {
+                        continue;
+                    }
+
+                    dto.pregnancies.Add(new PregnancyRecord
+                    {
+                        motherPersonId = pregnancy.motherPersonId,
+                        fatherPersonId = pregnancy.fatherPersonId,
+                        householdId = pregnancy.householdId,
+                        conceptionDayIndex = pregnancy.conceptionDayIndex,
+                        dueDayIndex = pregnancy.dueDayIndex,
+                    });
+                }
+            }
+
+            if (estateService != null)
+            {
+                foreach (LandLedgers.Economy.Estates.Estate estate in estateService.AllEstates())
+                {
+                    if (estate != null)
+                    {
+                        dto.estates.Add(estate);
+                    }
+                }
+            }
+
             return dto;
         }
 
@@ -822,6 +1141,9 @@ namespace LandLedgers.Population
                         lastName = personDto.lastName,
                         age = personDto.age,
                         ageBand = personDto.ageBand,
+                        birthDate = personDto.birthDate,
+                        isFemale = personDto.isFemale,
+                        isOffMap = personDto.isOffMap,
                         laborAccessLevel = personDto.laborAccessLevel,
                         householdId = personDto.householdId,
                         professionId = personDto.professionId,
@@ -1013,10 +1335,70 @@ namespace LandLedgers.Population
             lastHealthSummary = string.IsNullOrWhiteSpace(dto.lastHealthSummary)
                 ? "No health resolution yet."
                 : dto.lastHealthSummary;
+
+            // Pass V P0-2/P1-2: restore the demographic stack (clear-then-load),
+            // migrate birth dates for pre-authority saves, rebuild memberships,
+            // and re-establish idempotent birthday scheduling.
+            RestoreDemographicStackFromSaveDto(dto);
             NormalizeTransientScheduleStates();
             RecalculateHouseholdIncomeSnapshots();
             ApplySettlementMetricsFromSaveDto(dto);
             RefreshSummaryFields("Population restored from save.");
+        }
+
+        /// <summary>
+        /// Pass V P0-2/P1-2: restores kinship edges, pregnancies, and estates
+        /// from the save DTO; assigns estimated birth dates where the save
+        /// predates the birth-date authority; rebuilds the membership registry;
+        /// re-establishes birthday scheduling (idempotent across save/load).
+        /// </summary>
+        private void RestoreDemographicStackFromSaveDto(PopulationSaveDto dto)
+        {
+            EnsureDemographicStack(freshKinship: true);
+            estateService.Clear();
+            pregnancies.Clear();
+
+            if (dto.kinshipEdges != null)
+            {
+                foreach (KinshipEdge edge in dto.kinshipEdges)
+                {
+                    if (edge == null)
+                    {
+                        continue;
+                    }
+
+                    kinshipRegistry.AddEdge(edge.FromPersonId, edge.ToPersonId, edge.Relation, edge.Source);
+                }
+            }
+
+            if (dto.pregnancies != null)
+            {
+                foreach (PregnancyRecord pregnancy in dto.pregnancies)
+                {
+                    if (pregnancy != null)
+                    {
+                        pregnancies.Add(pregnancy);
+                    }
+                }
+            }
+
+            if (dto.estates != null)
+            {
+                foreach (LandLedgers.Economy.Estates.Estate estate in dto.estates)
+                {
+                    estateService.ImportEstate(estate);
+                }
+            }
+
+            var migrationDiagnostics = new List<string>();
+            PopulationSaveMigration.EnsureBirthDates(state, ResolveAnchor(), CurrentDayIndex, migrationDiagnostics);
+            foreach (string diagnostic in migrationDiagnostics)
+            {
+                Debug.Log($"[Population] {diagnostic}", this);
+            }
+
+            RebuildMembershipRegistry();
+            EnsureBirthdayScheduling("save load");
         }
 
         public int NormalizeTransientScheduleStates()

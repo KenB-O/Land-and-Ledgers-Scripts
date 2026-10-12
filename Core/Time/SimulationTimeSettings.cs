@@ -12,11 +12,27 @@ namespace LandLedgers.Time
         [Min(1)]
         public int daysPerWeek = 7;
 
+        /// <summary>
+        /// Pass V P0-1 LEGACY: the 336-day fiction (4 weeks x 28 days per month)
+        /// is removed. Real month lengths come from <see cref="GregorianDateMath"/>
+        /// via the anchor below. Kept serialized so older settings assets still
+        /// load; no longer read by any calendar derivation.
+        /// </summary>
         [Min(1)]
         public int weeksPerMonth = 4;
 
         [Min(1)]
         public int monthsPerYear = 12;
+
+        [Header("Gregorian Anchor")]
+        [Tooltip("Pass V P0-1: the real Gregorian date that absoluteDayIndex 0 maps to. Default 1880-03-01 (a Monday). All Y/M/D derivation is true Gregorian math from this anchor: real month lengths, leap years, weekday alignment to history.")]
+        public int anchorYear = CalendarAnchor.DefaultAnchorYear;
+
+        [Tooltip("Pass V P0-1: anchor month (1-12).")]
+        public int anchorMonth = CalendarAnchor.DefaultAnchorMonth;
+
+        [Tooltip("Pass V P0-1: anchor day of month.")]
+        public int anchorDay = CalendarAnchor.DefaultAnchorDay;
 
         [Tooltip("Editor-facing day labels. If the array is empty or too short, fallback names are used.")]
         public string[] dayNames =
@@ -64,8 +80,21 @@ namespace LandLedgers.Time
         public int startingMonth = 3;
 
         [Min(1)]
+        [Tooltip("Pass V P0-1: scenario start day-of-month on the true Gregorian calendar. Replaces the 336-day week/day-of-week start fields below.")]
+        public int startingDayOfMonth = 1;
+
+        /// <summary>
+        /// Pass V P0-1 LEGACY: week-of-month start belonged to the 336-day
+        /// calendar. Kept serialized so older settings assets still load;
+        /// the scenario start now uses <see cref="startingDayOfMonth"/>.
+        /// </summary>
+        [Min(1)]
         public int startingWeekOfMonth = 1;
 
+        /// <summary>
+        /// Pass V P0-1 LEGACY: day-of-week start belonged to the 336-day
+        /// calendar. Kept serialized so older settings assets still load.
+        /// </summary>
         [Min(1)]
         public int startingDayOfWeek = 1;
 
@@ -122,7 +151,25 @@ namespace LandLedgers.Time
         [Min(1)]
         public int maxDayRolloversPerFrame = 7;
 
-        public int DaysPerMonth => Mathf.Max(1, daysPerWeek) * Mathf.Max(1, weeksPerMonth);
+        /// <summary>
+        /// Pass V P0-1: the explicit Gregorian anchor. absoluteDayIndex 0 maps to
+        /// this date (default 1880-03-01, a Monday).
+        /// </summary>
+        public CalendarAnchor Anchor => new CalendarAnchor(anchorYear, anchorMonth, anchorDay);
+
+        /// <summary>
+        /// Pass V P0-1: the scenario start as an absolute day index, derived from
+        /// the Gregorian anchor. The canon March start is preserved (default
+        /// 1892-03-01): only the calendar math changed, not the start date.
+        /// </summary>
+        public int GetScenarioStartAbsoluteDayIndex()
+        {
+            CalendarAnchor anchor = Anchor;
+            int month = Mathf.Clamp(startingMonth, 1, 12);
+            int day = Mathf.Clamp(startingDayOfMonth, 1, GregorianDateMath.DaysInMonth(Mathf.Max(1, startingYear), month));
+            return Mathf.Max(0, anchor.ToAbsoluteDay(Mathf.Max(1, startingYear), month, day));
+        }
+
         public float GameSecondsPerDay => 24f * 60f * 60f;
         public float ShortTickIntervalGameSeconds => Mathf.Max(1f, shortTickIntervalGameMinutes) * 60f;
 
@@ -227,36 +274,15 @@ namespace LandLedgers.Time
             };
         }
 
+        /// <summary>
+        /// Pass V P0-1: true Gregorian derivation from the anchor. Real month
+        /// lengths, leap years (1880 leap, 1900 not, 1904 leap), weekday
+        /// alignment to real history. absoluteDayIndex stays the persisted truth;
+        /// every other field is derived (additive migration: old saves recompute).
+        /// </summary>
         public SimulationDate BuildDateFromAbsoluteDay(int absoluteDayIndex)
         {
-            int safeAbsoluteDay = Mathf.Max(0, absoluteDayIndex);
-            int safeDaysPerWeek = Mathf.Max(1, daysPerWeek);
-            int safeWeeksPerMonth = Mathf.Max(1, weeksPerMonth);
-            int daysPerMonthSafe = Mathf.Max(1, safeDaysPerWeek * safeWeeksPerMonth);
-            int monthsPerYearSafe = Mathf.Max(1, monthsPerYear);
-            int startDayOfWeekZeroBased = Mathf.Clamp(startingDayOfWeek - 1, 0, safeDaysPerWeek - 1);
-            int startDayOfMonthZeroBased =
-                (Mathf.Clamp(startingWeekOfMonth, 1, safeWeeksPerMonth) - 1) * safeDaysPerWeek
-                + startDayOfWeekZeroBased;
-
-            int totalDayOfMonthZeroBased = startDayOfMonthZeroBased + safeAbsoluteDay;
-            int monthOffset = totalDayOfMonthZeroBased / daysPerMonthSafe;
-            int dayOfMonthZeroBased = totalDayOfMonthZeroBased % daysPerMonthSafe;
-            int totalMonthZeroBased = Mathf.Max(0, startingMonth - 1) + monthOffset;
-            int year = Mathf.Max(1, startingYear) + totalMonthZeroBased / monthsPerYearSafe;
-            int month = totalMonthZeroBased % monthsPerYearSafe + 1;
-            int dayOfWeekIndex = dayOfMonthZeroBased % safeDaysPerWeek;
-            int weekOfMonth = dayOfMonthZeroBased / safeDaysPerWeek + 1;
-            int globalWeek = (startDayOfMonthZeroBased + safeAbsoluteDay) / safeDaysPerWeek + 1;
-
-            return new SimulationDate(
-                safeAbsoluteDay,
-                dayOfWeekIndex,
-                dayOfMonthZeroBased + 1,
-                globalWeek,
-                weekOfMonth,
-                month,
-                year);
+            return Anchor.BuildDate(absoluteDayIndex);
         }
 
         public void Sanitize()
@@ -264,8 +290,19 @@ namespace LandLedgers.Time
             daysPerWeek = Mathf.Max(1, daysPerWeek);
             weeksPerMonth = Mathf.Max(1, weeksPerMonth);
             monthsPerYear = Mathf.Max(1, monthsPerYear);
+            // New anchor fields on older settings assets deserialize as 0; repair
+            // to the documented default rather than deriving from a broken anchor.
+            if (anchorYear < 1 || anchorMonth < 1 || anchorMonth > 12 || anchorDay < 1)
+            {
+                anchorYear = CalendarAnchor.DefaultAnchorYear;
+                anchorMonth = CalendarAnchor.DefaultAnchorMonth;
+                anchorDay = CalendarAnchor.DefaultAnchorDay;
+            }
+
+            anchorDay = Mathf.Clamp(anchorDay, 1, GregorianDateMath.DaysInMonth(anchorYear, anchorMonth));
             startingYear = Mathf.Max(1, startingYear);
             startingMonth = Mathf.Clamp(startingMonth, 1, monthsPerYear);
+            startingDayOfMonth = Mathf.Clamp(startingDayOfMonth, 1, GregorianDateMath.DaysInMonth(startingYear, startingMonth));
             startingWeekOfMonth = Mathf.Clamp(startingWeekOfMonth, 1, weeksPerMonth);
             startingDayOfWeek = Mathf.Clamp(startingDayOfWeek, 1, daysPerWeek);
             startingTimeOfDay01 = Mathf.Clamp(startingTimeOfDay01, 0f, 0.999f);

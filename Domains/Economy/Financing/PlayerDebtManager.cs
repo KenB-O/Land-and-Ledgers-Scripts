@@ -232,7 +232,7 @@ namespace LandLedgers.Economy.Financing
                 submittedDate = GetCurrentDate(),
                 decisionDate = expectedDecisionDate,
                 estimatedTerm = term,
-                estimatedSchedule = scheduleBuilder.Build(BuildLoanId("estimate", currentDay), term, GetCurrentDate(), FirstPaymentOffsetDays, GetDaysPerMonth()),
+                estimatedSchedule = scheduleBuilder.Build(BuildLoanId("estimate", currentDay), term, GetCurrentDate(), FirstPaymentOffsetDays, GetCalendarAnchor()),
                 decision = FinancingDecision.EstimateOnly,
                 reasonCodes = new List<FinancingReasonCode>(),
                 decisionSummary = "Loan Application Submitted",
@@ -313,7 +313,7 @@ namespace LandLedgers.Economy.Financing
                 collateral = BuildDefaultCollateralProfile(collateralValueCents, collateralKind, collateralId),
                 requestedTerm = BuildAcquisitionRequestedTerm(),
                 approvalDate = GetCurrentDate(),
-                daysPerMonth = GetDaysPerMonth()
+                daysPerMonth = 0 /* Pass V P0-1: inert; Gregorian anchor drives dates now */
             };
 
             return new FinancingEvaluator().EvaluateApproval(request);
@@ -501,7 +501,7 @@ namespace LandLedgers.Economy.Financing
                 term,
                 GetCurrentDate(),
                 FirstPaymentOffsetDays,
-                GetDaysPerMonth());
+                GetCalendarAnchor());
 
             activeLoan = new LoanContract
             {
@@ -815,7 +815,7 @@ namespace LandLedgers.Economy.Financing
                 result.term,
                 BuildDate(absoluteDayIndex),
                 FirstPaymentOffsetDays,
-                GetDaysPerMonth());
+                GetCalendarAnchor());
 
             // NX-3B: the lender funds this loan from their own finite capital.
             // When the capital is exhausted the approval is reversed, never conjured.
@@ -1037,7 +1037,7 @@ namespace LandLedgers.Economy.Financing
                 revisedTerm,
                 BuildDate(absoluteDayIndex),
                 FirstPaymentOffsetDays,
-                GetDaysPerMonth());
+                GetCalendarAnchor());
             if (revisedSchedule == null || revisedSchedule.payments == null || revisedSchedule.payments.Count == 0)
             {
                 return false;
@@ -1181,7 +1181,8 @@ namespace LandLedgers.Economy.Financing
                 "bank_loan_estimate",
                 term,
                 new SimulationDate(0, 0, 1, 1, 1, 1, 1),
-                FirstPaymentOffsetDays);
+                FirstPaymentOffsetDays,
+                GetCalendarAnchor());
 
             int safeCash = Mathf.Max(0, cashCents);
             int safeAssetValue = Mathf.Max(0, ownedAssetValueCents);
@@ -1323,7 +1324,7 @@ namespace LandLedgers.Economy.Financing
                 term,
                 GetCurrentDate(),
                 FirstPaymentOffsetDays,
-                GetDaysPerMonth());
+                GetCalendarAnchor());
         }
 
         private LoanTermStructure BuildTerm(int principalCents)
@@ -2418,7 +2419,7 @@ namespace LandLedgers.Economy.Financing
             if (schedule == null)
             {
                 return rebuildMissing && sanitizedTerm.principalCents > 0
-                    ? scheduleBuilder.Build(string.IsNullOrWhiteSpace(loanId) ? BuildLoanId("restored_schedule", GetCurrentDayIndex()) : loanId, sanitizedTerm, GetCurrentDate(), FirstPaymentOffsetDays, GetDaysPerMonth())
+                    ? scheduleBuilder.Build(string.IsNullOrWhiteSpace(loanId) ? BuildLoanId("restored_schedule", GetCurrentDayIndex()) : loanId, sanitizedTerm, GetCurrentDate(), FirstPaymentOffsetDays, GetCalendarAnchor())
                     : null;
             }
 
@@ -2430,7 +2431,7 @@ namespace LandLedgers.Economy.Financing
             schedule.payments ??= new List<LoanPaymentDue>();
             if (rebuildMissing && schedule.payments.Count == 0 && sanitizedTerm.principalCents > 0)
             {
-                return scheduleBuilder.Build(schedule.loanId, sanitizedTerm, GetCurrentDate(), FirstPaymentOffsetDays, GetDaysPerMonth());
+                return scheduleBuilder.Build(schedule.loanId, sanitizedTerm, GetCurrentDate(), FirstPaymentOffsetDays, GetCalendarAnchor());
             }
 
             for (int i = schedule.payments.Count - 1; i >= 0; i--)
@@ -2693,16 +2694,26 @@ namespace LandLedgers.Economy.Financing
             return currentDate is SimulationDate simulationDate ? simulationDate : BuildDate(0);
         }
 
-        private int GetDaysPerMonth()
+        /// <summary>
+        /// Pass V P0-1: the Gregorian anchor from the time settings. Replaces
+        /// the 336-day GetDaysPerMonth fiction; payment schedules are built on
+        /// true calendar-month anniversaries now.
+        /// </summary>
+        private CalendarAnchor GetCalendarAnchor()
         {
             object settings = GetTimeSettingsObject();
             if (settings == null)
             {
-                return 28;
+                return CalendarAnchor.Default;
             }
 
-            int daysPerMonth = GetIntMemberValue(settings, "DaysPerMonth", "daysPerMonth");
-            return daysPerMonth > 0 ? daysPerMonth : 28;
+            object anchor = GetMemberValue(settings, "Anchor", "anchor");
+            if (anchor is CalendarAnchor calendarAnchor && calendarAnchor.IsValid)
+            {
+                return calendarAnchor;
+            }
+
+            return CalendarAnchor.Default;
         }
 
         private SimulationDate BuildDate(int absoluteDayIndex)
@@ -2722,14 +2733,9 @@ namespace LandLedgers.Economy.Financing
             }
 
             int clampedDay = Mathf.Max(0, absoluteDayIndex);
-            int dayOfWeekIndex = clampedDay % 7;
-            int monthIndex = clampedDay / 28;
-            int dayOfMonth = clampedDay % 28 + 1;
-            int week = clampedDay / 7 + 1;
-            int weekOfMonth = (dayOfMonth - 1) / 7 + 1;
-            int month = monthIndex % 12 + 1;
-            int year = monthIndex / 12 + 1;
-            return new SimulationDate(clampedDay, dayOfWeekIndex, dayOfMonth, week, weekOfMonth, month, year);
+            // Pass V P0-1: fallback date when no settings are bound. True
+            // Gregorian from the default anchor (was a 28-day-month fiction).
+            return CalendarAnchor.Default.BuildDate(clampedDay);
         }
 
         private object GetTimeSettingsObject()

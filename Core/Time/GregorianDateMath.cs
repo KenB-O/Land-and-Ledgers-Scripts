@@ -62,23 +62,31 @@ namespace LandLedgers.Time
             year = month <= 2 ? y + 1 : y;
         }
 
-        /// <summary>Monday-zero weekday index for a Gregorian date.</summary>
+        /// <summary>
+        /// Monday-zero weekday index for a Gregorian date.
+        /// DaysFromCivil counts from 1970-01-01, which was a Thursday
+        /// (Monday-zero index 3); the +3 offset aligns the epoch to Monday.
+        /// </summary>
         public static int DayOfWeekMondayZero(int year, int month, int day)
         {
-            int n = DaysFromCivil(year, month, day) % 7;
+            int n = (DaysFromCivil(year, month, day) + 3) % 7;
             return n < 0 ? n + 7 : n;
         }
 
         /// <summary>
         /// Completed calendar years between a birth date and a current date.
         /// A person born 1860-03-15 is 19 on 1880-03-14 and 20 on 1880-03-15.
+        /// Uses the project-wide leap-day convention: a Feb 29 birth observes
+        /// Feb 28 in non-leap years, so the anniversary comparison always uses
+        /// <see cref="AnniversaryDay"/> — one convention, used everywhere.
         /// </summary>
         public static int CompletedYears(
             int birthYear, int birthMonth, int birthDay,
             int currentYear, int currentMonth, int currentDay)
         {
             int years = currentYear - birthYear;
-            if (currentMonth < birthMonth || (currentMonth == birthMonth && currentDay < birthDay))
+            int anniversaryDay = AnniversaryDay(birthMonth, birthDay, currentYear);
+            if (currentMonth < birthMonth || (currentMonth == birthMonth && currentDay < anniversaryDay))
             {
                 years--;
             }

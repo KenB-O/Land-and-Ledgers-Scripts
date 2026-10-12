@@ -85,29 +85,46 @@ Worker 3's code did not compile. Fixed:
 
 ## 5. Test Results
 
-Roslyn harness: 680 passed, 6 failed.
+Roslyn harness: 682 passed, 4 failed.
 
-Failures:
+Failures (all 4 pre-existing in the baseline at a38c6aa):
 - `MoneyOrderServiceTests.IndorseOrder_AllowsSingleIndorsement` (pre-existing)
 - `MoneyOrderServiceTests.IssueDuplicate_ReplacesLostOrderFree` (pre-existing)
 - `MoneyOrderServiceTests.RunSettlementCycle_NetsAndSettlesInFull` (pre-existing)
 - `P5PropertyLegalJourneyTests.Driver_LeviesAnnualAssessmentOncePerTaxYear` (pre-existing)
-- `ForgeRepairChainTests.SaveLoad_MidRepair_ResumesWithoutDuplication` (Worker 3,
-  untested code; save/load stage index not restoring)
-- `RetailServiceDeskTests.AcceptDelivery_BooksInventoryWithProvenance_NoDuplicates`
-  (Worker 3, untested code; inventory duplicate detection)
 
-The 4 pre-existing failures were in the baseline at a38c6aa (534 passed, 4 failed).
-The 2 Worker 3 failures are from code that never compiled before the coordinator fix;
-they represent incomplete Worker 3 implementation, not regressions.
+The 2 Worker 3 failures are FIXED (post-pass fix commits d2542d2 and 83854b7,
+see section 6). Baseline at a38c6aa was 534 passed, 4 failed.
 
 ## 6. Known Issues for Codex
 
-- `ForgeRepairChain.LoadFromSaveDto`: restored `Process.CurrentStageIndex` is 0
-  instead of the saved value. The DTO captures it correctly; the restore path
-  needs investigation.
-- `RetailServiceDesk`: delivery acceptance refused as duplicate. May be test
-  isolation or inventory authority state leakage.
+Post-pass fixes (both Worker 3 failures resolved; tests unmodified):
+
+- Forge save/load (FIXED at d2542d2). Root cause: Worker 3's fixture expected
+  `BeginRepair` to leave the order at the repair stage (3), but
+  `StagedProductionProcess.Begin` only enters stage 0 — the DTO restore path
+  itself was correct. Fix: `BeginRepair` now drives the synchronous intake
+  stages (receive, inspect, prepare) to completion so the order rests at the
+  repair stage; a parked stage (forge contention) does not fail begin.
+  Additionally, `WorkOrder` could not advance the passive cooling stage, which
+  the fixture's completion loop requires: new
+  `StagedProductionProcess.AdvancePassiveByMinutes` advances passive process
+  time by minutes and completes through the normal stage path (stable due-event
+  id cancelled so it cannot fire stale); stages needing clock-driven
+  tending/deadlines are refused. `ProductionStageState` gains a persisted
+  `PassiveMinutesElapsed` field (additive). Success now returns a null reason
+  (the fixture's begin-ok contract). Repeated restore is clear-then-load;
+  no duplicated work, reservations, or inputs.
+- Retail delivery false rejection (FIXED at 83854b7). Root cause: not a
+  duplicate — `TryReceiveInventoryShipment("ship-77", ...)` was *blocked*.
+  `TryAddInventory` → `Retail.TryOccupyProductSpace` → `GetOrCreatePool`
+  minted a zero-allocation pool for the never-configured "shelf-a" pool, so
+  `TryOccupy(10)` failed and the legitimate first delivery was refused as
+  "duplicate or blocked". Fix: a capacity pool that was never explicitly
+  configured now imposes no constraint; only an allocated pool constrains.
+  Shipment-id idempotency (`receivedShipmentIds`) is untouched: a genuine
+  duplicate delivery id is still refused, and re-booking the same shipment id
+  is still refused exactly once.
 - `RegisteredMailServiceTests`: 3 tests flaky (pass/fail varies by run order).
   Files untouched by Pass IV; pre-existing timing issue.
 - Unpublished Codex checkpoint `0d7b8d9` was never pushed. It is a later
@@ -129,7 +146,9 @@ they represent incomplete Worker 3 implementation, not regressions.
 - Coordinator reflection fix: `af25101`
 - Worker 3 merge: (tip `ee98377`)
 - Worker 4 merge: (tip `6048e7f`)
-- Coordinator harness fixes: `f7a7601` (current HEAD)
+- Coordinator harness fixes: `f7a7601` (previous HEAD)
+- Post-pass regression fixes: `d2542d2` (forge save/load), `83854b7` (retail
+  delivery) — current HEAD
 
 ## 9. Files Changed by Coordinator
 

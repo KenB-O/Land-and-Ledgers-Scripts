@@ -251,6 +251,18 @@ namespace LandLedgers.Population
             return ledgers.TryGetValue(householdId, out HouseholdLedger ledger) ? ledger : null;
         }
 
+        /// <summary>
+        /// Pass V P1-5 (Worker 1): purges every household ledger for a New Game /
+        /// Restart / Replay so the fresh world cannot inherit prior-run cash
+        /// state. Called only by the scenario reset path; the save/load
+        /// clear-then-load path is unaffected.
+        /// </summary>
+        public void ClearForNewGame(string reason)
+        {
+            ledgers.Clear();
+            diagnostics.Add($"ClearForNewGame: all household ledgers purged ({reason ?? "new game reset"}).");
+        }
+
         public void ExportState(List<HouseholdLedgerState> outStates)
         {
             if (outStates == null)

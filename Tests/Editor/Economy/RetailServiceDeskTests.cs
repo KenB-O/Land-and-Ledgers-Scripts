@@ -74,6 +74,13 @@ namespace LandLedgers.Editor.Economy
             FieldInfo f = typeof(BusinessInstanceState).GetField("instanceId",
                 BindingFlags.NonPublic | BindingFlags.Instance);
             f.SetValue(b, id);
+            // Pass V P1-4: production routes sales by business type. This desk
+            // is the generic-path desk, so the fixture business must be
+            // Generic-typed (a GeneralStore-typed business sells from category
+            // stock, which this fixture intentionally does not stock).
+            FieldInfo t = typeof(BusinessInstanceState).GetField("businessType",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            t.SetValue(b, BusinessType.Generic);
             // The shared retail authority requires a non-null RuntimeState; real
             // businesses get one from BusinessInstanceState.Create. In tests we
             // attach a blank one (no category stock — the generic inventory path).

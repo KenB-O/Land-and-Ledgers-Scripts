@@ -119,7 +119,10 @@ namespace LandLedgers.Persistence
         public HouseholdDecisionServiceSaveDto householdDecisions = new();
         public HouseholdDecisionDriverSaveDto householdDecisionDriver = new();
         public DomesticLaborServiceSaveDto domesticLabor = new();
+        public DomesticLaborDriver.DomesticLaborDriverSaveDto domesticLaborDriver = new();
         public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
+        // Pass V P2-1: batched errand plans with claims and reservations.
+        public HouseholdErrandPlanRegistrySaveDto householdErrandPlans = new();
         // Pass V P2-2: durable registry of private household lenders.
         public HouseholdLenderDirectory.HouseholdLenderDirectorySaveDto householdLenders = new();
         /// <summary>

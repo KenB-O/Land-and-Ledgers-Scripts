@@ -336,6 +336,8 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdLenderDirectory householdLenderDirectory;
         private DomesticLaborService domesticLaborService;
         private HouseholdAutonomyDriver householdAutonomyDriver;
+        private DomesticLaborDriver domesticLaborDriver;
+        private HouseholdErrandCoordinator householdErrandCoordinator;
         private HousingSearchNeedRegistry housingSearchNeedRegistry;
         private HousingAuthority housingAuthority;
         private readonly List<BoardingHouseShopRuntime> boardingHouseRuntimes = new List<BoardingHouseShopRuntime>();
@@ -517,6 +519,22 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public HouseholdAutonomyDriver HouseholdAutonomy =>
             householdAutonomyDriver ??= new HouseholdAutonomyDriver();
+
+        /// <summary>
+        /// Pass V drive-by: the domestic labor day driver (meal prep, fuel,
+        /// animal care, chores) — previously tests-only. Hub-owned and
+        /// persisted; SimulationDrivers runs it daily.
+        /// </summary>
+        public DomesticLaborDriver DomesticLaborDriver =>
+            domesticLaborDriver ??= new DomesticLaborDriver();
+
+        /// <summary>
+        /// Pass V P2-1: the household errand coordinator — batched shopping
+        /// plans (HouseholdErrandPlan) with claims, reservations, and
+        /// reassignment. Hub-owned and persisted.
+        /// </summary>
+        public HouseholdErrandCoordinator HouseholdErrands =>
+            householdErrandCoordinator ??= new HouseholdErrandCoordinator();
 
         /// <summary>
         /// Pass III Worker C: hub-owned housing-search registry used by the
@@ -864,6 +882,8 @@ namespace LandLedgers.Orchestration.Systems
                 householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
                 householdLenders = HouseholdLenders.CaptureSaveDto(),
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
+                domesticLaborDriver = DomesticLaborDriver.CaptureSaveDto(),
+                householdErrandPlans = HouseholdErrands.Plans.CaptureSaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
                 housing = Housing.CaptureSaveDto(),
                 boardingHouseRuntimes = CaptureBoardingHouseRuntimes(),
@@ -969,6 +989,8 @@ namespace LandLedgers.Orchestration.Systems
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
             HouseholdLenders.LoadFromSaveDto(dto.householdLenders);
             DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
+            DomesticLaborDriver.LoadFromSaveDto(dto.domesticLaborDriver);
+            HouseholdErrands.Plans.LoadFromSaveDto(dto.householdErrandPlans);
             HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
             // Pass IV (Worker 1): due-event schedule (clear-then-load, idempotent).
             DueEvents.LoadFromSaveDto(dto.dueEvents);

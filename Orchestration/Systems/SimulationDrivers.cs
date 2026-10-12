@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using LandLedgers.Animals;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Financing;
@@ -695,6 +696,11 @@ namespace LandLedgers.Orchestration.Systems
             DriveBoardingHouseDays(absoluteDayIndex);
             DriveDailyNeeds(absoluteDayIndex);
             DriveTenancyPayments(absoluteDayIndex);
+            // Pass V drive-by: DomesticLaborDriver had NO live caller (tests
+            // only). Wire it here: need-driven domestic tasks (meals, fuel,
+            // animals, chores) scheduled on real person time through the real
+            // TaskAuthority, budgets, schedule tracker, and due events.
+            DriveDomesticLaborDay(absoluteDayIndex);
 
             // Autonomous Labor: daily labor-market drives. The hub's authority
             // predicate needs the current day for delegation bounds.
@@ -709,6 +715,68 @@ namespace LandLedgers.Orchestration.Systems
         /// BusinessRuntimeState cash stores used everywhere else; an unknown
         /// payee therefore refuses the payment rather than losing tenant cash.
         /// </summary>
+        /// <summary>
+        /// Pass V drive-by: daily domestic labor. Each household's
+        /// need-driven tasks (meals for members at home, fuel in cold season,
+        /// animal care when the household owns animals, baseline chores) are
+        /// planned by DomesticLaborDriver and scheduled on real person time.
+        /// </summary>
+        private void DriveDomesticLaborDay(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            var diag = new List<string>();
+            DomesticTaskCatalog.RegisterAll(hub.Tasks, diag);
+            bool coldSeason = IsColdSeasonMonth();
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                List<int> members = householdMemberships.GetActiveMembers(household.id);
+                if (members.Count == 0) continue;
+                var inputs = new DomesticLaborDriver.DomesticDayInputs
+                {
+                    HouseholdId = household.id,
+                    MemberIds = members,
+                    AgeBandFor = personId =>
+                    {
+                        PersonState person = populationManager.State.FindPerson(personId);
+                        return person != null ? person.ageBand : AgeBand.Adult18Plus;
+                    },
+                    MealsAtHomeCount = members.Count,
+                    ColdSeason = coldSeason,
+                    HasAnimals = HouseholdOwnsAnimals(household.id, members),
+                };
+                hub.DomesticLaborDriver.DriveDay(inputs, absoluteDayIndex, hub.Tasks,
+                    hub.WorkTimeBudgets, hub.PersonSchedules, hub.DomesticLabor,
+                    hub.DueEvents, diag);
+            }
+
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] domestic labor day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        private bool HouseholdOwnsAnimals(int householdId, List<int> memberIds)
+        {
+            if (hub?.Animals == null) return false;
+            string householdKey = householdId.ToString();
+            var memberKeys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (int memberId in memberIds) memberKeys.Add(memberId.ToString());
+            foreach (AnimalState animal in hub.Animals.ActiveAnimals)
+            {
+                if (animal == null) continue;
+                if (animal.OwnerKind == AnimalOwnerKind.Household
+                    && string.Equals(animal.OwnerId, householdKey, StringComparison.Ordinal))
+                    return true;
+                if (animal.OwnerKind == AnimalOwnerKind.Person
+                    && memberKeys.Contains(animal.OwnerId ?? string.Empty))
+                    return true;
+            }
+
+            return false;
+        }
+
         private void DriveTenancyPayments(int absoluteDayIndex)
         {
             if (hub == null) return;

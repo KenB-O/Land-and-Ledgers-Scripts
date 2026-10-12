@@ -111,6 +111,33 @@ namespace LandLedgers.Economy.Generic
             this.kind = kind;
             this.durationGameSeconds = Math.Max(0f, durationGameSeconds);
         }
+
+        /// <summary>
+        /// Pass IV (Worker 3, additive): full authoring path for slice methods. The
+        /// contract declares these fields "authored per method" but previously offered
+        /// no code path to set them; this overload fills that gap without changing
+        /// any existing constructor or caller.
+        /// </summary>
+        public ProductionStageDefinition(
+            ProductionStageKind kind,
+            float durationGameSeconds,
+            float tendingIntervalGameSeconds,
+            float tendingGraceGameSeconds,
+            MissedDeadlineConsequence missedConsequence,
+            float wasteFraction01 = 0f,
+            string laborTaskDefinitionId = null,
+            List<string> stageReservationKeys = null)
+        {
+            this.kind = kind;
+            this.durationGameSeconds = Math.Max(0f, durationGameSeconds);
+            this.tendingIntervalGameSeconds = Math.Max(0f, tendingIntervalGameSeconds);
+            this.tendingGraceGameSeconds = Math.Max(0f, tendingGraceGameSeconds);
+            this.missedConsequence = missedConsequence;
+            this.wasteFraction01 = Mathf.Clamp01(wasteFraction01);
+            this.laborTaskDefinitionId = laborTaskDefinitionId ?? string.Empty;
+            if (stageReservationKeys != null)
+                this.stageReservationKeys = new List<string>(stageReservationKeys);
+        }
     }
 
     /// <summary>

@@ -12,6 +12,9 @@ namespace LandLedgers.Tasks
     /// Complete. Interrupted returns a task to Queued (work preserved, assignment
     /// released). Failed is terminal; recoverable failures generate rework tasks via
     /// <see cref="WorkTask.FollowUpTaskIds"/> (Tech II §2.7).
+    ///
+    /// Pass IV appends five states (7-11); values are NEVER renumbered. See
+    /// TaskLifecyclePolicy (TaskLifecycleContracts.cs) for the transition table.
     /// </summary>
     public enum TaskStatus
     {
@@ -22,6 +25,32 @@ namespace LandLedgers.Tasks
         Interrupted = 4,
         Failed = 5,
         Cancelled = 6,
+        /// <summary>
+        /// Pass IV: work suspended with assignment and reservations held (distinct from
+        /// Interrupted, which releases the assignment). Resumes to InProgress.
+        /// </summary>
+        Paused = 7,
+        /// <summary>
+        /// Pass IV: passive process running (proofing, baking, drying). The worker is
+        /// released for other work; equipment, workspace and materials stay occupied
+        /// until the due event fires (tending/unload) or the deadline is missed.
+        /// </summary>
+        WaitingOnPassiveProcess = 8,
+        /// <summary>
+        /// Pass IV: blocked on another task, a delivery, or a person. Distinct from
+        /// Queued-with-prerequisites (pre-assignment); the assignment is held.
+        /// </summary>
+        WaitingOnDependency = 9,
+        /// <summary>
+        /// Pass IV: worker assigned AND equipment/workspace/materials reserved, but
+        /// active work has not started. Between Assigned and InProgress.
+        /// </summary>
+        ResourcesReserved = 10,
+        /// <summary>
+        /// Pass IV: failed work that needs a corrective task. Terminal for this
+        /// instance; the corrective task is linked via FollowUpTaskIds.
+        /// </summary>
+        ReworkRequired = 11,
     }
 
     /// <summary>How a task finished. Quality variation and rework are domain concerns; the authority records the outcome.</summary>

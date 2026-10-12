@@ -29,6 +29,32 @@ namespace LandLedgers.Population
         /// renumbered.
         /// </summary>
         Investigation = 8,
+        /// <summary>
+        /// Pass IV: rest (not sleep). Interruptible. Does not consume the
+        /// work-time budget. Value appended, never renumbered.
+        /// </summary>
+        Resting = 9,
+        /// <summary>
+        /// Pass IV: seeking work (job search). Real person time; consumes
+        /// the work-time budget. Value appended, never renumbered.
+        /// </summary>
+        JobSeeking = 10,
+        /// <summary>
+        /// Pass IV: social activities. Interruptible; no budget consumed.
+        /// Value appended, never renumbered.
+        /// </summary>
+        Socializing = 11,
+        /// <summary>
+        /// Pass IV: management responsibilities (delegated managers, owners).
+        /// Consumes the work-time budget. Value appended, never renumbered.
+        /// </summary>
+        Managing = 12,
+        /// <summary>
+        /// Pass IV: unpaid family work and household chores. Real time,
+        /// consumes the work-time budget, creates no wages. Value appended,
+        /// never renumbered.
+        /// </summary>
+        FamilyWork = 13,
     }
 
     /// <summary>Phase C: one reserved activity window for a Person on one day.</summary>

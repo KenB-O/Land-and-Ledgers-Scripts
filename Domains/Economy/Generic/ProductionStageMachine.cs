@@ -486,6 +486,8 @@ namespace LandLedgers.Economy.Generic
                     {
                         reason = "Stage " + stageIndex + " refused: resource reservation failed — " + refusal;
                         Note(reason);
+                        // The stage was not entered — restore the index before refusing.
+                        CurrentStageIndex = savedStageIndex;
                         return false;
                     }
                     reservationId = handle != null ? handle.ReservationId : string.Empty;
@@ -810,6 +812,10 @@ namespace LandLedgers.Economy.Generic
                 PhaseState.RemainingPhaseMinutes = savedRemaining;
                 PhaseState.Completed = savedCompleted;
                 PhaseState.ApplyCurrentPhaseReservations(hooks.Method);
+                // Atomic park: the stage was NOT entered — the process still sits
+                // on the completed stage (EnterStage may have advanced the index
+                // before refusing, e.g. on a reservation refusal).
+                CurrentStageIndex = completedStageIndex;
                 ParkedReason = "Stage " + next + " entry refused (" + reason + ") — parked after stage "
                     + completedStageIndex + ".";
                 Note(ParkedReason);

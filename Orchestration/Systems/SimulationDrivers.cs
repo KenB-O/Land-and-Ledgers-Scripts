@@ -725,7 +725,10 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
             var diag = new List<string>();
-            DomesticTaskCatalog.RegisterAll(hub.Tasks, diag);
+            // Register once: re-registering daily would spam duplicate
+            // rejections into the diagnostics.
+            if (hub.Tasks.GetDefinition(DomesticTaskCatalog.MealPrepId) == null)
+                DomesticTaskCatalog.RegisterAll(hub.Tasks, diag);
             bool coldSeason = IsColdSeasonMonth();
             foreach (HouseholdState household in populationManager.State.households)
             {
@@ -1010,8 +1013,9 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         foreach (IGoodsSupplier supplier in supplierDirectory.All)
                         {
-                            if (supplier == null || !supplier.OffersItem(itemId)) continue;
-                            int price = supplier.ItemPricePerUnitCents(itemId);
+                            var resolving = supplier as IItemResolvingSupplier;
+                            if (resolving == null || !resolving.OffersItem(itemId)) continue;
+                            int price = resolving.ItemPricePerUnitCents(itemId);
                             if (price > 0 && (best == 0 || price < best)) best = price;
                         }
                     }

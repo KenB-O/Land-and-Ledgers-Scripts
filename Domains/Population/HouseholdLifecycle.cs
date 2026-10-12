@@ -145,6 +145,48 @@ namespace LandLedgers.Population
                 Source = source ?? string.Empty,
             });
         }
+
+        /// <summary>
+        /// Pass V (W4, additive): all kinship edges for save capture. Read-only
+        /// view; the registry remains the sole mutator.
+        /// </summary>
+        public List<KinshipEdge> AllEdges()
+        {
+            return new List<KinshipEdge>(edges);
+        }
+
+        /// <summary>Save support (CLN-1 pattern): capture.</summary>
+        public KinshipRegistrySaveDto CaptureSaveDto()
+        {
+            return new KinshipRegistrySaveDto
+            {
+                edges = AllEdges(),
+            };
+        }
+
+        /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
+        public void LoadFromSaveDto(KinshipRegistrySaveDto dto)
+        {
+            edges.Clear();
+            if (dto == null || dto.edges == null)
+            {
+                return;
+            }
+            foreach (KinshipEdge edge in dto.edges)
+            {
+                if (edge != null)
+                {
+                    edges.Add(edge);
+                }
+            }
+        }
+    }
+
+    /// <summary>Save DTO for the kinship registry (CLN-1 pattern).</summary>
+    [Serializable]
+    public sealed class KinshipRegistrySaveDto
+    {
+        public List<KinshipEdge> edges = new List<KinshipEdge>();
     }
 
     /// <summary>

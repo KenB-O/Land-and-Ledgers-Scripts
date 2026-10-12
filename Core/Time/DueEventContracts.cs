@@ -44,6 +44,13 @@ namespace LandLedgers.Time
         JourneyStageDue = 8,
         /// <summary>A scheduled activity window starts or ends.</summary>
         ActivityWindowDue = 9,
+        /// <summary>
+        /// Pass V: a person's birthday is due. Payload convention is
+        /// "birthday:{personId}" (see AgeAuthority.BirthdayEventId); the
+        /// scheduler-level event id is "due-BirthdayDue-birthday:{personId}".
+        /// Append-only addition; existing values untouched.
+        /// </summary>
+        BirthdayDue = 10,
     }
 
     /// <summary>Pass IV: one scheduled consequential event. Plain data; persisted.</summary>

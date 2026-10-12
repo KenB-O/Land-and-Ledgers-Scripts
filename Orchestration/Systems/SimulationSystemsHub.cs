@@ -225,6 +225,13 @@ namespace LandLedgers.Orchestration.Systems
         private DelegationService delegationService;
         private TenancyPaymentService tenancyPaymentService;
 
+        /// <summary>
+        /// Pass IV (Worker 1): deterministic due-event scheduler (task completions,
+        /// passive processes, deadlines). Absolute game seconds on the TimeManager
+        /// timeline; no second clock. Save-persisted.
+        /// </summary>
+        private DueEventScheduler dueEventScheduler;
+
         // Pass III land core (Worker A): legal parcel/holding identity, the single
         // non-title rights store, and the atomic subdivision coordinator. None owns
         // a second cash, debt, or title ledger — title stays in TitleAuthority.
@@ -351,6 +358,12 @@ namespace LandLedgers.Orchestration.Systems
         /// the ITenancyPayeeDirectory.
         /// </summary>
         public TenancyPaymentService TenancyPayments => tenancyPaymentService ??= new TenancyPaymentService();
+
+        /// <summary>
+        /// Pass IV (Worker 1): the deterministic due-event scheduler. Drivers pop due
+        /// events in due order before advancing; the schedule is save-persisted.
+        /// </summary>
+        public DueEventScheduler DueEvents => dueEventScheduler ??= new DueEventScheduler();
         /// Pass III Worker C: household financial pressure -> bounded decision
         /// (pure evaluator; the autonomy driver maps real state onto its input).
         /// </summary>
@@ -559,6 +572,7 @@ namespace LandLedgers.Orchestration.Systems
             riskService ??= new AgriculturalRiskService();
             diseaseService ??= new LivestockDiseaseService();
             personScheduleTracker ??= new PersonScheduleTracker();
+            dueEventScheduler ??= new DueEventScheduler();
             rentCollectionService ??= new RentCollectionService();
             npcFormationAssetRegister ??= new NpcFormationAssetRegister();
             npcBusinessLifecycle ??= new NpcBusinessLifecycleService();
@@ -693,6 +707,8 @@ namespace LandLedgers.Orchestration.Systems
                 householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
+                // Pass IV (Worker 1): deterministic due-event schedule.
+                dueEvents = DueEvents.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -783,6 +799,8 @@ namespace LandLedgers.Orchestration.Systems
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
             DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
             HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
+            // Pass IV (Worker 1): due-event schedule (clear-then-load, idempotent).
+            DueEvents.LoadFromSaveDto(dto.dueEvents);
             weatherSeed = Math.Max(0, dto.weatherSeed);
             // The condition provider is not serialized — re-attach after load.
             Journeys.ConditionProvider = RouteConditions;

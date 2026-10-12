@@ -149,7 +149,7 @@ namespace LandLedgers.EditorTests.Financing
             weeklyTerm.amortizationMonths = 12;
             weeklyTerm.repaymentFrequency = RepaymentFrequency.Weekly;
 
-            LoanPaymentSchedule weekly = new PaymentScheduleBuilder().Build("weekly", weeklyTerm, CreateStartDate());
+            LoanPaymentSchedule weekly = new PaymentScheduleBuilder().Build("weekly", weeklyTerm, CreateStartDate(), 7, CalendarAnchor.Default);
 
             Assert.Greater(weekly.payments.Count, 0);
             Assert.AreEqual(weeklyTerm.principalCents, weekly.totalPrincipalCents);
@@ -158,7 +158,7 @@ namespace LandLedgers.EditorTests.Financing
 
             LoanTermStructure monthlyTerm = weeklyTerm;
             monthlyTerm.repaymentFrequency = RepaymentFrequency.Monthly;
-            LoanPaymentSchedule monthly = new PaymentScheduleBuilder().Build("monthly", monthlyTerm, CreateStartDate(), 28, 28);
+            LoanPaymentSchedule monthly = new PaymentScheduleBuilder().Build("monthly", monthlyTerm, CreateStartDate(), 28, CalendarAnchor.Default);
 
             Assert.AreEqual(monthlyTerm.termMonths, monthly.payments.Count);
             Assert.AreEqual(monthlyTerm.principalCents, monthly.totalPrincipalCents);

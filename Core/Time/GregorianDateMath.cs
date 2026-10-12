@@ -72,13 +72,17 @@ namespace LandLedgers.Time
         /// <summary>
         /// Completed calendar years between a birth date and a current date.
         /// A person born 1860-03-15 is 19 on 1880-03-14 and 20 on 1880-03-15.
+        /// Uses the project-wide leap-day convention: a Feb 29 birth observes
+        /// Feb 28 in non-leap years, so the anniversary comparison always uses
+        /// <see cref="AnniversaryDay"/> — one convention, used everywhere.
         /// </summary>
         public static int CompletedYears(
             int birthYear, int birthMonth, int birthDay,
             int currentYear, int currentMonth, int currentDay)
         {
             int years = currentYear - birthYear;
-            if (currentMonth < birthMonth || (currentMonth == birthMonth && currentDay < birthDay))
+            int anniversaryDay = AnniversaryDay(birthMonth, birthDay, currentYear);
+            if (currentMonth < birthMonth || (currentMonth == birthMonth && currentDay < anniversaryDay))
             {
                 years--;
             }

@@ -44,6 +44,13 @@ namespace LandLedgers.Time
         JourneyStageDue = 8,
         /// <summary>A scheduled activity window starts or ends.</summary>
         ActivityWindowDue = 9,
+        /// <summary>
+        /// Pass V P0-2: a person's birthday. Event id convention is
+        /// "birthday:{personId}" (see <see cref="DueEventIdConventions.ForBirthday"/>),
+        /// scheduled with an explicit id so rescheduling the same person is
+        /// idempotent and never duplicates. APPEND-ONLY: never renumber.
+        /// </summary>
+        Birthday = 10,
     }
 
     /// <summary>Pass IV: one scheduled consequential event. Plain data; persisted.</summary>
@@ -102,6 +109,14 @@ namespace LandLedgers.Time
         /// </summary>
         string Schedule(DueEventKind kind, float dueGameSeconds, string payloadRef, out string eventId);
 
+        /// <summary>
+        /// Pass V P0-2: schedules an event under a caller-chosen stable id
+        /// (e.g. "birthday:{personId}"). Returns null on success, or a refusal
+        /// reason. Scheduling an existing eventId replaces it (idempotent,
+        /// never duplicates).
+        /// </summary>
+        string ScheduleWithEventId(string eventId, DueEventKind kind, float dueGameSeconds, string payloadRef);
+
         /// <summary>Cancels a scheduled event. No-op when the id is unknown.</summary>
         void Cancel(string eventId);
 
@@ -140,6 +155,15 @@ namespace LandLedgers.Time
         public static string ForReservation(string reservationId)
         {
             return "due-ResourceReleaseDue-resv-" + (reservationId ?? string.Empty);
+        }
+
+        /// <summary>
+        /// Pass V P0-2: stable birthday event id for a person. Delegates to the
+        /// birth-date authority so the convention lives in exactly one place.
+        /// </summary>
+        public static string ForBirthday(int personId)
+        {
+            return LandLedgers.Population.AgeAuthority.BirthdayEventId(personId);
         }
     }
 }

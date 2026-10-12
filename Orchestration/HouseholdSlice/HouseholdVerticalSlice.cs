@@ -6,6 +6,7 @@ using LandLedgers.Economy;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Time;
 using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Orchestration.HouseholdSlice
@@ -327,8 +328,13 @@ namespace LandLedgers.Orchestration.HouseholdSlice
         /// <summary>Beat 4: a membership change mid-slice — a birth.</summary>
         public PersonState RunBirth(int dayIndex)
         {
+            // Pass V P0-2: the birth stamps the authoritative birth date (Exact
+            // provenance for a live-recorded birth) derived from the day index.
+            CalendarAnchor anchor = CalendarAnchor.Default;
+            anchor.FromAbsoluteDay(dayIndex, out int birthYear, out int birthMonth, out int birthDay);
             PersonState child = world.Lifecycle.RecordBirth(
-                PlayerHouseholdId, SpouseId, FounderId, "Petra", "Morrow", dayIndex);
+                PlayerHouseholdId, SpouseId, FounderId, "Petra", "Morrow", dayIndex,
+                new BirthDate(birthYear, birthMonth, birthDay, BirthDateProvenance.Exact, "HouseholdVerticalSlice beat 4 live birth"));
 
             Beat($"Day {dayIndex}: P{child.id} born to P{SpouseId} and P{FounderId}; " +
                  $"kinship edges recorded separately from membership; household now has " +

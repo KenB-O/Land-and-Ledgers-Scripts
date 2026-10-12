@@ -110,6 +110,34 @@ namespace LandLedgers.Time
             }
         }
 
+        /// <summary>
+        /// Pass V P0-2: explicit-id scheduling for the simple scheduler.
+        /// Same validation and replace semantics as <see cref="Schedule"/>.
+        /// </summary>
+        public string ScheduleWithEventId(string eventId, DueEventKind kind, float dueGameSeconds, string payloadRef)
+        {
+            if (string.IsNullOrWhiteSpace(eventId))
+            {
+                return "eventId must be non-empty.";
+            }
+
+            if (float.IsNaN(dueGameSeconds) || float.IsInfinity(dueGameSeconds) || dueGameSeconds < 0f)
+            {
+                return "dueGameSeconds must be finite and >= 0 (got " + dueGameSeconds + ").";
+            }
+
+            for (int i = events.Count - 1; i >= 0; i--)
+            {
+                if (string.Equals(events[i].EventId, eventId, StringComparison.Ordinal))
+                {
+                    events.RemoveAt(i);
+                }
+            }
+
+            events.Add(new DueEvent(eventId, kind, dueGameSeconds, payloadRef ?? string.Empty, nextSequence++));
+            return null;
+        }
+
         /// <summary>Save: captures the pending event queue (owning runtime class holds its DTO).</summary>
         public SimpleDueEventSchedulerSaveDto CaptureSaveDto()
         {

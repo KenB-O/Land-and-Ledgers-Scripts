@@ -67,7 +67,8 @@ namespace LandLedgers.EditorTests.Population
             HouseholdState household = lifecycle.FormHousehold("Morrow Household", "Morrow", mother.id, 100, HouseholdMembershipSource.Authored);
             lifecycle.AddMember(household.id, father.id, 100, HouseholdMembershipSource.Authored, "spouse");
 
-            PersonState child = lifecycle.RecordBirth(household.id, mother.id, father.id, "Petra", "Morrow", 200);
+            PersonState child = lifecycle.RecordBirth(household.id, mother.id, father.id, "Petra", "Morrow", 200,
+                new BirthDate(1892, 3, 1, BirthDateProvenance.Exact, "test birth"));
 
             Assert.IsNotNull(child);
             Assert.AreEqual(0, child.age);

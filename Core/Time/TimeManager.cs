@@ -209,19 +209,18 @@ namespace LandLedgers.Time
             }
 
             settings.Sanitize();
+            // Pass V P0-1: true Gregorian jump. weekOfMonth/dayOfWeek select the
+            // day-of-month within the real month (clamped to its length).
             int clampedYear = Mathf.Max(1, year);
-            int clampedMonth = Mathf.Clamp(month, 1, settings.monthsPerYear);
-            int clampedWeek = Mathf.Clamp(weekOfMonth, 1, settings.weeksPerMonth);
-            int clampedDay = Mathf.Clamp(dayOfWeek, 1, settings.daysPerWeek);
+            int clampedMonth = Mathf.Clamp(month, 1, 12);
+            int clampedWeek = Mathf.Max(1, weekOfMonth);
+            int clampedDay = Mathf.Clamp(dayOfWeek, 1, 7);
+            int dayOfMonth = Mathf.Clamp(
+                (clampedWeek - 1) * 7 + clampedDay,
+                1,
+                GregorianDateMath.DaysInMonth(clampedYear, clampedMonth));
 
-            int yearsSinceStart = Mathf.Max(0, clampedYear - settings.startingYear);
-            int monthOffset = yearsSinceStart * settings.monthsPerYear + (clampedMonth - settings.startingMonth);
-            int dayOffset =
-                monthOffset * settings.DaysPerMonth
-                + (clampedWeek - settings.startingWeekOfMonth) * settings.daysPerWeek
-                + (clampedDay - settings.startingDayOfWeek);
-
-            absoluteDayIndex = Mathf.Max(0, dayOffset);
+            absoluteDayIndex = Mathf.Max(0, settings.Anchor.ToAbsoluteDay(clampedYear, clampedMonth, dayOfMonth));
             currentDate = settings.BuildDateFromAbsoluteDay(absoluteDayIndex);
             ApplyTimeOfDay(Mathf.Clamp(newTimeOfDay01, 0f, 0.999f) * settings.GameSecondsPerDay);
             ResetShortTickStateForCurrentTimeOfDay();
@@ -397,7 +396,10 @@ namespace LandLedgers.Time
             }
 
             settings.Sanitize();
-            absoluteDayIndex = 0;
+            // Pass V P0-1: the clock starts on the scenario start date derived
+            // from the Gregorian anchor (default 1892-03-01). absoluteDayIndex
+            // remains the persisted truth; the start is an anchor offset now.
+            absoluteDayIndex = settings.GetScenarioStartAbsoluteDayIndex();
             currentDate = settings.BuildDateFromAbsoluteDay(absoluteDayIndex);
             ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
             ResetShortTickStateForCurrentTimeOfDay();

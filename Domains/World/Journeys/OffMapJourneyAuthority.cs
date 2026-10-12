@@ -45,6 +45,13 @@ namespace LandLedgers.World.Journeys
         public int DueReturnDayIndex = -1; // -1 = one-way (migration); no return expected
         public int ActualReturnDayIndex = -1;
         public Dictionary<string, int> CargoUnits = new Dictionary<string, int>();
+        /// <summary>
+        /// Goods bought off-map during the journey (the purchase manifest).
+        /// Unlike taken cargo, these were never in the origin inventory: they
+        /// are delivered on successful return, and DROPPED (not returned) on
+        /// cancellation, since the cash already left the system off-map.
+        /// </summary>
+        public Dictionary<string, int> PurchaseManifestUnits = new Dictionary<string, int>();
         public List<string> ObligationIds = new List<string>();
         public string Purpose = string.Empty;
         public OffMapJourneyState State = OffMapJourneyState.Unspecified;
@@ -72,6 +79,9 @@ namespace LandLedgers.World.Journeys
     /// - Cargo: verified sufficient BEFORE departure (all-or-nothing), taken once
     ///   via the caller's take-callback, delivered once via the caller's
     ///   deliver-callback on return (or back to origin on cancel).
+    /// - Purchase manifest: goods bought off-map are recorded as a manifest
+    ///   (never taken from origin stock), delivered once on return, dropped
+    ///   on cancel.
     /// - Time: a journey completes only when its due return day arrives; early
     ///   completion is refused (no teleporting).
     /// - No double completion: CompleteDueJourneys flips Departed to Returned
@@ -414,11 +424,15 @@ namespace LandLedgers.World.Journeys
                     {
                         deliverCargo(kv.Key, kv.Value);
                     }
+                    foreach (var kv in record.PurchaseManifestUnits)
+                    {
+                        deliverCargo(kv.Key, kv.Value);
+                    }
                 }
                 completed.Add(record);
                 diag.Add($"OffMapJourneyAuthority: {DescribeTraveler(record)} returned from " +
                     $"'{record.DestinationLabel}' on day {dayIndex} (due day {record.DueReturnDayIndex}); " +
-                    $"cargo delivered once, same entity.");
+                    $"cargo and purchase manifest delivered once, same entity.");
             }
             return completed;
         }
@@ -448,7 +462,15 @@ namespace LandLedgers.World.Journeys
                     returnCargo(kv.Key, kv.Value);
                 }
             }
-            diag.Add($"OffMapJourneyAuthority: journey '{journeyId}' cancelled ({record.CancelReason}); cargo returned to origin once.");
+            int droppedManifest = 0;
+            foreach (var kv in record.PurchaseManifestUnits)
+            {
+                droppedManifest += kv.Value;
+            }
+            record.PurchaseManifestUnits.Clear();
+            diag.Add($"OffMapJourneyAuthority: journey '{journeyId}' cancelled ({record.CancelReason}); " +
+                $"taken cargo returned to origin once, {droppedManifest}u of off-map purchase manifest dropped " +
+                "(the cash already left the system off-map).");
             return null;
         }
 
@@ -470,6 +492,7 @@ namespace LandLedgers.World.Journeys
             {
                 if (record == null || string.IsNullOrEmpty(record.JourneyId)) continue;
                 record.CargoUnits = record.CargoUnits ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                record.PurchaseManifestUnits = record.PurchaseManifestUnits ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 record.ObligationIds = record.ObligationIds ?? new List<string>();
                 record.RouteLegLocationIds = record.RouteLegLocationIds ?? new List<string>();
                 byId[record.JourneyId] = record;

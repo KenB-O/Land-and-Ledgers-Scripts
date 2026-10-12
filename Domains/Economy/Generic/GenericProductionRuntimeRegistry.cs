@@ -54,6 +54,10 @@ namespace LandLedgers.Economy
         public void AdvanceBusinessProcesses(BusinessInstanceState business, EntityId businessId, int dayIndex, int elapsedMinutes)
         {
             if (business == null || elapsedMinutes <= 0) return;
+            // Pass V P1-4: generic production advances ONLY businesses routed to
+            // the generic path. Legacy businesses produce through their archetype
+            // runtimes; advancing generic processes here would double-produce.
+            if (ProductionPathRegistry.GetPath(business) != ProductionPath.GenericPath) return;
             GenericProductionRuntime runtime = ForBusiness(business, businessId, dayIndex);
             foreach (ProductionProcessState process in new List<ProductionProcessState>(business.GenericConfiguration.ActiveProcesses))
             {
@@ -92,6 +96,12 @@ namespace LandLedgers.Economy
             process = null;
             reason = string.Empty;
             if (business == null || workerIds == null) return false;
+            // Pass V P1-4: policy scheduling is a generic-path operation only.
+            if (ProductionPathRegistry.GetPath(business) != ProductionPath.GenericPath)
+            {
+                reason = $"Policy scheduling refused: '{business.InstanceId}' is on the legacy production path.";
+                return false;
+            }
 
             GenericProductionRuntime runtime = ForBusiness(business, businessId, dayIndex);
             var plans = new List<GenericProductionPlan>();

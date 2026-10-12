@@ -358,10 +358,14 @@ namespace LandLedgers.EditorTests.Economy
                 LocationId = "shop-1"
             };
             Assert.IsFalse(GenericRetailSaleAuthority.TryExecuteSale(business, context, _ => false, out _));
-            Assert.AreEqual(5, business.RuntimeState.GetCategoryStock("flour").CurrentStockUnits);
+            // Pass V P1-4: a Generic business holds ONE stock truth (generic
+            // positions). The 5 stray category-stock units consolidate into
+            // positions on the first sale; the rolled-back sale leaves 5u there.
+            Assert.AreEqual(0, business.RuntimeState.GetCategoryStock("flour").CurrentStockUnits);
+            Assert.AreEqual(5f, business.GenericConfiguration.GetInventoryQuantity("flour"));
             Assert.IsTrue(GenericRetailSaleAuthority.TryExecuteSale(business, context, sale =>
                 sale.BuyerPrincipal == "household:7" && sale.ActingPersonId == 42, out _));
-            Assert.AreEqual(3, business.RuntimeState.GetCategoryStock("flour").CurrentStockUnits);
+            Assert.AreEqual(3f, business.GenericConfiguration.GetInventoryQuantity("flour"));
         }
 
         [Test]

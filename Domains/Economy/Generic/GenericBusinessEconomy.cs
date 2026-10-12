@@ -196,7 +196,7 @@ namespace LandLedgers.Economy
         public GenericInventoryPosition(string productId) { this.productId = productId ?? string.Empty; }
 
         public void Add(float amount, int unitCostCents, GenericProductDefinition definition,
-            string provenance = "", int dayIndex = -1)
+            string provenance = "", int dayIndex = -1, string deterministicLotId = null)
         {
             if (amount <= 0f) return;
             float previousValue = Quantity * AverageUnitCostCents;
@@ -205,7 +205,12 @@ namespace LandLedgers.Economy
             if (definition != null && definition.RequiresLotIdentity)
             {
                 lots ??= new List<GenericInventoryLot>();
-                lots.Add(new GenericInventoryLot($"lot-{Guid.NewGuid():N}", ProductId, amount, unitCostCents, provenance, dayIndex));
+                // Pass V P1-5: scenario-authored generation needs deterministic lot
+                // ids for exact reproducibility; runtime callers keep the Guid default.
+                string lotId = !string.IsNullOrWhiteSpace(deterministicLotId)
+                    ? deterministicLotId
+                    : $"lot-{Guid.NewGuid():N}";
+                lots.Add(new GenericInventoryLot(lotId, ProductId, amount, unitCostCents, provenance, dayIndex));
             }
         }
 

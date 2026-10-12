@@ -80,6 +80,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
         }
 
         private static void CopyStartingWorld(StartingWorldConfiguration source, StartingWorldConfiguration target)
+        {
             if (source == null || target == null)
             {
                 return;

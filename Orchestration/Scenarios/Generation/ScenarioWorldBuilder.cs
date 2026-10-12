@@ -67,6 +67,9 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
 
         public int GenerationCalls => generationCalls;
 
+        /// <summary>Most recent accepted draft (test/diagnostics observability).</summary>
+        internal ScenarioSeedPopulation LastDraft { get; private set; }
+
         public ScenarioWorldBuilder(
             ScenarioEconomyAuthorityPorts economyPorts,
             IScenarioInventoryPort inventoryPort = null,
@@ -134,6 +137,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             ScenarioEconomySeeder.SeedReport seedReport = ScenarioEconomySeeder.Seed(
                 draft, preset, economyPorts, inventoryPort, propertyPort, attemptRng,
                 startDayIndex, diagnostics);
+            LastDraft = draft;
 
             string fingerprint = ComputeWorldFingerprint(draft, seedReport, preset, seed, startDayIndex);
             var outcome = new ScenarioGenerationOutcome

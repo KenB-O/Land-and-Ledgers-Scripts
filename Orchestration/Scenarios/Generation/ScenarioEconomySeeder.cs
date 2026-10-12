@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -243,33 +243,51 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             // ---- Inventory: authored opening stock with provenance lots. ----
             if (inventoryPort != null)
             {
+                int businessIndex = 0;
                 foreach (ScenarioSeedBusiness business in population.Businesses)
                 {
                     if (business?.InventoryGrants == null)
                     {
+                        businessIndex++;
                         continue;
                     }
 
+                    int grantIndex = 0;
                     foreach (ScenarioInventoryGrant grant in business.InventoryGrants)
                     {
                         if (grant == null || string.IsNullOrWhiteSpace(grant.ProductId) || grant.Quantity <= 0f)
                         {
+                            grantIndex++;
                             continue;
                         }
 
-                        LandLedgers.Economy.Generic.GenericInventoryPosition position =
+                        LandLedgers.Economy.GenericInventoryPosition position =
                             inventoryPort.GetOrCreatePosition(business.BusinessId, grant.ProductId);
                         if (position == null)
                         {
+                            grantIndex++;
                             continue;
                         }
 
-                        // Deterministic lot identity: the grant order within the
-                        // business, not Guid.NewGuid, so regeneration is identical.
-                        position.Add(grant.Quantity, grant.UnitCostCents, null,
-                            $"scenario-authored:{provenanceTag}", startDayIndex);
+                        // Deterministic lot identity: derived from the seed and the
+                        // grant's position in the draft, never Guid.NewGuid, so a
+                        // regenerated world is lot-for-lot identical.
+                        var definition = new LandLedgers.Economy.GenericProductDefinition(
+                            grant.ProductId, grant.ProductId,
+                            LandLedgers.Economy.ProductQuantityUnit.Each,
+                            requiresLotIdentity: true);
+                        position.Add(
+                            grant.Quantity,
+                            grant.UnitCostCents,
+                            definition,
+                            $"scenario-authored:{provenanceTag}",
+                            startDayIndex,
+                            deterministicLotId: $"scnlot-{rng.Seed}-{businessIndex}-{grantIndex}");
                         report.InventoryGrantCount++;
+                        grantIndex++;
                     }
+
+                    businessIndex++;
                 }
             }
 

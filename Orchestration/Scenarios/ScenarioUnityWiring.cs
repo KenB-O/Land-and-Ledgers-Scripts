@@ -19,7 +19,7 @@
 
 using System;
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Orchestration.Scenarios.Generation;

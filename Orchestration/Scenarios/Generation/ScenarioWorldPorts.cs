@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LandLedgers.Economy.Core;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -100,7 +100,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
     /// </summary>
     public interface IScenarioInventoryPort
     {
-        LandLedgers.Economy.Generic.GenericInventoryPosition GetOrCreatePosition(string businessId, string productId);
+        LandLedgers.Economy.GenericInventoryPosition GetOrCreatePosition(string businessId, string productId);
     }
 
     /// <summary>

@@ -346,5 +346,32 @@ namespace LandLedgers.Economy.Estates
         {
             return estates.TryGetValue(estateId, out Estate estate) ? estate : null;
         }
+
+        /// <summary>
+        /// Pass V P1-2: all opened estates (estate continuity across save/load).
+        /// </summary>
+        public IReadOnlyList<Estate> AllEstates()
+        {
+            return new List<Estate>(estates.Values);
+        }
+
+        /// <summary>
+        /// Pass V P1-2: restores one estate from save data (clear-then-load;
+        /// duplicate ids are replaced, never duplicated).
+        /// </summary>
+        public void ImportEstate(Estate estate)
+        {
+            if (estate == null || string.IsNullOrWhiteSpace(estate.EstateId))
+            {
+                return;
+            }
+
+            estates[estate.EstateId] = estate;
+        }
+
+        public void Clear()
+        {
+            estates.Clear();
+        }
     }
 }

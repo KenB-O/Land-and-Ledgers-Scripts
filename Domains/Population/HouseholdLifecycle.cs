@@ -49,6 +49,12 @@ namespace LandLedgers.Population
         public int EdgeCount => edges.Count;
 
         /// <summary>
+        /// Pass V P1-2: all directed edges (persistence restores these;
+        /// AddEdge dedupes exact duplicates on re-import).
+        /// </summary>
+        public IReadOnlyList<KinshipEdge> AllEdges => edges;
+
+        /// <summary>
         /// Adds a kinship edge. Symmetric relations (Spouse, Sibling) and the Parent/Child
         /// inverse are recorded automatically; exact duplicates are ignored.
         /// </summary>

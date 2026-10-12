@@ -545,6 +545,11 @@ namespace LandLedgers.Orchestration.Systems
             // daily drivers advance.
             ProcessDueEvents();
 
+            // Pass V (P0-2/P1-2): demographic day — births due, mortality,
+            // birthday scheduling, and monthly conceptions/marriages/migration/
+            // household splits. Idempotent per day via deterministic draws.
+            populationManager?.DriveDemographicDay(absoluteDayIndex);
+
             // Population may be generated after Awake; bind the now-real
             // household ledgers before any daily finance workflow can open a
             // cash window.
@@ -1218,11 +1223,36 @@ namespace LandLedgers.Orchestration.Systems
                 case DueEventKind.ResourceReleaseDue:
                     ReleaseReservationAtDueEvent(dueEvent, diag);
                     break;
+                case DueEventKind.Birthday:
+                    // Pass V P0-2: birthday due-events re-derive the person's
+                    // age from the birth-date authority (never increment) and
+                    // reschedule next year's event.
+                    HandleBirthdayDueEvent(dueEvent, dayIndex, diag);
+                    break;
                 default:
                     diag.Add("due event " + dueEvent.EventId + " (" + dueEvent.Kind +
                         ", payload '" + dueEvent.PayloadRef + "') has no registered handler — consumed without effect");
                     break;
             }
+        }
+
+        /// <summary>
+        /// Pass V P0-2: handles a fired birthday due-event through the
+        /// birth-date authority (age is re-derived, never incremented) and
+        /// reschedules next year's event on the hub scheduler.
+        /// </summary>
+        private void HandleBirthdayDueEvent(DueEvent dueEvent, int dayIndex, List<string> diag)
+        {
+            if (hub == null || populationManager == null || populationManager.State == null || timeManager == null)
+            {
+                diag.Add("birthday event " + dueEvent.EventId + " skipped: population or clock unavailable");
+                return;
+            }
+
+            CalendarAnchor anchor = timeManager.Settings != null ? timeManager.Settings.Anchor : CalendarAnchor.Default;
+            float secondsPerDay = timeManager.Settings != null ? timeManager.Settings.GameSecondsPerDay : 86400f;
+            BirthdayService.HandleBirthdayDueEvent(
+                dueEvent, populationManager.State, hub.DueEvents, anchor, dayIndex, secondsPerDay, diag);
         }
 
         /// <summary>

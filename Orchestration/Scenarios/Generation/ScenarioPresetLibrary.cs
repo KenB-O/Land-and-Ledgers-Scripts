@@ -69,8 +69,17 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             return copy;
         }
 
-        private static void CopyStartingWorld(StartingWorldConfiguration source, StartingWorldConfiguration target)
+        /// <summary>
+        /// Copies one starting-world configuration into another. Used by the
+        /// ScenarioAsset preset bridge so asset conversion never aliases the
+        /// authored asset's configuration.
+        /// </summary>
+        public static void DeepCopyIntoStartingWorld(StartingWorldConfiguration source, StartingWorldConfiguration target)
         {
+            CopyStartingWorld(source, target);
+        }
+
+        private static void CopyStartingWorld(StartingWorldConfiguration source, StartingWorldConfiguration target)
             if (source == null || target == null)
             {
                 return;

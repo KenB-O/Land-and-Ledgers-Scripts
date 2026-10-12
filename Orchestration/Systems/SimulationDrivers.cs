@@ -262,10 +262,36 @@ namespace LandLedgers.Orchestration.Systems
             AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
             hub.AttachParcelWorld(townWorld, acquisitionMarket != null ? acquisitionMarket.Titles : null);
 
-            // Pass III Worker D: causal outcome resolution replaces the flat
-            // "-1 minute per skill level" rule (Tech II §2.4). Installed once;
-            // the authority owns it after. TaskAuthority itself is untouched.
-            hub.Tasks.SetDurationEstimator(new CausalTaskDurationEstimator(hub.Skills));
+            // Pass IV (Worker 1): the universal V2 duration estimator. Method estimators
+            // own their definition ids (handling, travel); everything else falls back
+            // to the causal skill estimator, preserving pre-Pass IV behavior exactly.
+            // Worker capability for method estimators comes from the Pass III stores.
+            var causalEstimator = new CausalTaskDurationEstimator(hub.Skills);
+            Func<TaskDurationInputs, DurationEstimate> legacyFallback = inputs =>
+            {
+                int baseMinutes = Math.Max(1, inputs != null ? inputs.BaseMinutes : 1);
+                string skillId = inputs != null ? inputs.SkillId ?? string.Empty : string.Empty;
+                EntityId worker = inputs != null && inputs.WorkerPersonId >= 0
+                    ? EntityId.For(EntityKind.Person, inputs.WorkerPersonId)
+                    : default(EntityId);
+                int minutes = causalEstimator.EstimateMinutesForBase(baseMinutes, skillId, worker);
+                return DurationEstimate.FromGameSeconds(
+                    minutes * DurationConventions.SecondsPerMinute, "fallback:causal-v1");
+            };
+            var universalEstimator = new UniversalTaskDurationEstimator(
+                new ITaskDurationEstimatorV2[]
+                {
+                    new HandlingDurationEstimator(HandlingDurationEstimator.DefaultDefinitionIds),
+                    new TravelDurationEstimator(TravelDurationEstimator.DefaultDefinitionIds),
+                },
+                legacyFallback);
+            hub.Tasks.SetDurationEstimatorV2(universalEstimator,
+                (workerId, skillId) => (float)hub.Skills.GetCapability(workerId, skillId));
+
+            // Pass IV (Worker 1): ambient budget store so the new lifecycle states keep
+            // worker commitments truthful (WaitingOnPassiveProcess releases the worker;
+            // ResumeTask re-commits).
+            hub.Tasks.SetWorkTimeBudgetStore(hub.WorkTimeBudgets);
 
             if (scenarioDirector != null)
             {

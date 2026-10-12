@@ -101,6 +101,25 @@ namespace LandLedgers.Time
 
         /// <summary>Material condition 0..1 (1 = ideal).</summary>
         public float MaterialCondition01 = 1f;
+
+        /// <summary>
+        /// Pass IV (Worker 1): definition base minutes in the whole-minute booking
+        /// quantum. Lets the fallback estimator scale the authored base without a
+        /// definition lookup inside the estimator.
+        /// </summary>
+        public int BaseMinutes = 1;
+
+        /// <summary>
+        /// Pass IV (Worker 1): skill id scaling this task's duration (empty = unskilled
+        /// timing). Carried so legacy V1 estimators keep their skill behavior.
+        /// </summary>
+        public string SkillId = string.Empty;
+
+        /// <summary>
+        /// Pass IV (Worker 1): worker person id (-1 = unknown). Lets estimators that
+        /// bridge to worker-aware services reconstruct the worker identity.
+        /// </summary>
+        public int WorkerPersonId = -1;
     }
 
     /// <summary>Pass IV: a duration estimate. GameSeconds is precise; WholeMinutes is the booking quantum.</summary>

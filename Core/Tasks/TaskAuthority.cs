@@ -201,18 +201,7 @@ namespace LandLedgers.Tasks
             }
 
             TaskDefinition definition = GetDefinition(task.DefinitionId);
-            int plannedMinutes;
-            if (task.HasPlannedMinutesOverride)
-            {
-                plannedMinutes = durationEstimator.EstimateMinutesForBase(
-                    task.PlannedMinutes,
-                    definition != null ? definition.RequiredSkillId : null,
-                    workerId);
-            }
-            else
-            {
-                plannedMinutes = durationEstimator.EstimateMinutes(definition, workerId);
-            }
+            int plannedMinutes = EstimatePlannedMinutes(task, definition, workerId);
 
             task.SetPlannedMinutes(plannedMinutes);
 

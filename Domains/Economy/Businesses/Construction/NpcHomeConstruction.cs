@@ -352,7 +352,8 @@ namespace LandLedgers.Economy
             int committed = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
             if (tasks != null && budgets != null)
             {
-                budgets.EnsureDay(dayIndex);
+                if (budgets.CurrentAbsoluteDayIndex >= 0)
+                    budgets.EnsureDay(dayIndex);
                 string definitionId = $"construction-labor:{package.PhaseName}";
                 if (tasks.GetDefinition(definitionId) == null)
                 {
@@ -367,7 +368,7 @@ namespace LandLedgers.Economy
                     dayIndex,
                     committed);
                 string assignFailure;
-                if (!tasks.AssignTask(task.TaskId, EntityId.For(EntityKind.Person, personId), budgets, out assignFailure))
+                if (!tasks.AssignTask(task.TaskId, EntityId.For(EntityKind.Person, personId), budgets, dayIndex, out assignFailure))
                     return $"ConstructionProjectExecutor.CommitLabor refused: {assignFailure}";
                 string startFailure;
                 if (!tasks.StartTask(task.TaskId, dayIndex, out startFailure))

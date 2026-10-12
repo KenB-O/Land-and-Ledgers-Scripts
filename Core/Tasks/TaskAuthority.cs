@@ -175,6 +175,13 @@ namespace LandLedgers.Tasks
         /// </summary>
         public bool AssignTask(EntityId taskId, EntityId workerId, WorkTimeBudgetStore budgetStore, out string rejectionReason)
         {
+            return AssignTask(taskId, workerId, budgetStore, -1, out rejectionReason);
+        }
+
+        /// <summary>Assigns a task while explicitly advancing the shared work-day budget.</summary>
+        public bool AssignTask(EntityId taskId, EntityId workerId, WorkTimeBudgetStore budgetStore,
+            int currentDayIndex, out string rejectionReason)
+        {
             rejectionReason = null;
             WorkTask task = FindTask(taskId);
             if (task == null)
@@ -207,6 +214,10 @@ namespace LandLedgers.Tasks
             task.SetPlannedMinutes(plannedMinutes);
 
             string budgetReason;
+            if (budgetStore != null && currentDayIndex >= 0)
+            {
+                budgetStore.EnsureDay(currentDayIndex);
+            }
             if (budgetStore != null && !budgetStore.TryCommitTask(workerId, plannedMinutes, out budgetReason))
             {
                 rejectionReason = "Cannot assign " + taskId + ": " + budgetReason;

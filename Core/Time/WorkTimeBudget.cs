@@ -239,6 +239,16 @@ namespace LandLedgers.Time
                 return;
             }
 
+            // A freshly constructed store may already contain commitments created
+            // by a legacy caller before the simulation clock was attached. Adopt
+            // that first day without erasing those real reservations; subsequent
+            // day changes reset normally.
+            if (currentAbsoluteDayIndex < 0)
+            {
+                currentAbsoluteDayIndex = absoluteDayIndex;
+                return;
+            }
+
             currentAbsoluteDayIndex = absoluteDayIndex;
             RebuildLookupIfNeeded();
             foreach (WorkTimeBudget budget in budgets)

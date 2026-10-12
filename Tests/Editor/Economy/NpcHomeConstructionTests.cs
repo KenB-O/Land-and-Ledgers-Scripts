@@ -353,10 +353,16 @@ namespace LandLedgers.EditorTests.Economy
             var tracker = new PersonScheduleTracker();
             var custody = EquippedCustody();
             Assert.IsNull(executor.StagePackageMaterials(project, project.WorkPackages[0], source, 11, diag));
-            Assert.IsNull(executor.CommitLabor(project, project.WorkPackages[0], 5, tracker, custody, new TaskAuthority(), new WorkTimeBudgetStore(), 11, 360, 240, "build", diag));
+            var foundationTasks = new TaskAuthority();
+            var foundationBudgets = new WorkTimeBudgetStore();
+            Assert.IsNull(executor.CommitLabor(project, project.WorkPackages[0], 5, tracker, custody, foundationTasks, foundationBudgets, 11, 360, 240, "build", diag));
+            Assert.IsNull(executor.WorkCommittedLabor(project, project.WorkPackages[0], project.LaborTaskIds[project.LaborTaskIds.Count - 1], 240, foundationTasks, foundationBudgets, 11, diag));
             Assert.IsNull(executor.AdvancePackage(project, project.WorkPackages[0], 11, diag));
             Assert.IsNull(executor.StagePackageMaterials(project, project.WorkPackages[1], source, 12, diag));
-            Assert.IsNull(executor.CommitLabor(project, project.WorkPackages[1], 5, tracker, custody, 12, 360, 480, "build", diag));
+            var framingTasks = new TaskAuthority();
+            var framingBudgets = new WorkTimeBudgetStore();
+            Assert.IsNull(executor.CommitLabor(project, project.WorkPackages[1], 5, tracker, custody, framingTasks, framingBudgets, 12, 360, 480, "build", diag));
+            Assert.IsNull(executor.WorkCommittedLabor(project, project.WorkPackages[1], project.LaborTaskIds[project.LaborTaskIds.Count - 1], 480, framingTasks, framingBudgets, 12, diag));
             Assert.IsNull(executor.AdvancePackage(project, project.WorkPackages[1], 12, diag));
             var housing = new HousingAuthority();
             Assert.IsNull(executor.CompleteProject(project, catalog.FindDesign("cabin-b"), housing, 12, diag));

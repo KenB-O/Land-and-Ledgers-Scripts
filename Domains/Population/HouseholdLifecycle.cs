@@ -146,21 +146,12 @@ namespace LandLedgers.Population
             });
         }
 
-        /// <summary>
-        /// Pass V (W4, additive): all kinship edges for save capture. Read-only
-        /// view; the registry remains the sole mutator.
-        /// </summary>
-        public List<KinshipEdge> AllEdges()
-        {
-            return new List<KinshipEdge>(edges);
-        }
-
         /// <summary>Save support (CLN-1 pattern): capture.</summary>
         public KinshipRegistrySaveDto CaptureSaveDto()
         {
             return new KinshipRegistrySaveDto
             {
-                edges = AllEdges(),
+                edges = new List<KinshipEdge>(AllEdges),
             };
         }
 

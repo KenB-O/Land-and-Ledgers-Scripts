@@ -236,7 +236,8 @@ namespace LandLedgers.EditorTests.PassV
             });
 
             // Birth: the child is a NEW person; parents keep their ids.
-            PersonState child = lifecycle.RecordBirth(1, 2, 1, "Ruth", "Miller", 100);
+            PersonState child = lifecycle.RecordBirth(1, 2, 1, "Ruth", "Miller", 100,
+                new BirthDate(1880, 3, 1, BirthDateProvenance.Exact, "test birth"));
             Assert.IsNotNull(child);
             int childId = child.id;
             Assert.AreNotEqual(1, childId);
@@ -257,7 +258,8 @@ namespace LandLedgers.EditorTests.PassV
             Assert.IsTrue(lifecycle.RecordDeath(1, 300, "test cause"));
             Assert.AreEqual(300, population.GetPerson(1).deathDayIndex);
             Assert.AreEqual(-1, memberships.GetActiveHouseholdId(1), "membership ended by death");
-            PersonState childAfter = lifecycle.RecordBirth(newHousehold.id, -1, -1, "Anna", "Miller", 400);
+            PersonState childAfter = lifecycle.RecordBirth(newHousehold.id, -1, -1, "Anna", "Miller", 400,
+                new BirthDate(1881, 4, 15, BirthDateProvenance.Exact, "test birth"));
             Assert.AreNotEqual(1, childAfter.id, "the decedent's id is never reused");
 
             // No duplicates anywhere.

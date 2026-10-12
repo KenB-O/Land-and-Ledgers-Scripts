@@ -1639,14 +1639,14 @@ namespace LandLedgers.Orchestration.Systems
             string firstName, string lastName, int day)
         {
             CurrentDate(out int y, out int m, out int d);
-            PersonState child = lifecycle.RecordBirth(householdId, motherId, fatherId, firstName, lastName, day);
+            var birthDate = new BirthDate(y, m, d, BirthDateProvenance.Exact, "simulated birth");
+            PersonState child = lifecycle.RecordBirth(householdId, motherId, fatherId, firstName, lastName, day, birthDate);
             if (child == null)
             {
                 diag.Add($"society: scripted birth refused on day {day}.");
                 return;
             }
-            birthDates[child.id] = new BirthDate(y, m, d,
-                BirthDateProvenance.GeneratedExact, "simulated birth");
+            birthDates[child.id] = birthDate;
             personMinutesWorked[child.id] = 0;
             BirthdayScheduling.ScheduleNextBirthday(dueEvents, child.id, birthDates[child.id], day,
                 AnchorYear, AnchorMonth, AnchorDay, diag);

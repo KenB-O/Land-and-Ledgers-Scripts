@@ -96,8 +96,8 @@ namespace LandLedgers.Time
         public const float EmptyWalkMetersPerSecond = 1.4f;
         /// <summary>Mass (kg) above which rigging/setup applies (straps, hand truck, levers).</summary>
         public const float HeavyItemThresholdKg = 50f;
-        /// <summary>Extra setup seconds per heavy item (rigging the lift).</summary>
-        public const float HeavyItemSetupSeconds = 240f;
+        /// <summary>Extra setup seconds per heavy item (rigging the lift: straps, hand truck, levers).</summary>
+        public const float HeavyItemSetupSeconds = 600f;
 
         private readonly HashSet<string> definitionIds;
 

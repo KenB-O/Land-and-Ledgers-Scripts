@@ -163,6 +163,7 @@ namespace LandLedgers.Tasks
             RebuildLookupsIfNeeded();
             tasks.Add(task);
             taskLookup[task.TaskId] = task;
+            taskLookupByIdString[task.TaskId.ToString()] = task;
             GetOrCreateQueue(ownerId).Add(task);
             return task;
         }
@@ -561,7 +562,9 @@ namespace LandLedgers.Tasks
 
         private void RebuildLookupsIfNeeded()
         {
-            if (definitionLookup.Count == definitions.Count && taskLookup.Count == tasks.Count)
+            if (definitionLookup.Count == definitions.Count
+                && taskLookup.Count == tasks.Count
+                && taskLookupByIdString.Count == tasks.Count)
             {
                 return;
             }
@@ -601,6 +604,12 @@ namespace LandLedgers.Tasks
         {
             definitions.Clear();
             tasks.Clear();
+            // Clear-then-load: drop every lookup so a coincidentally equal count can
+            // never leave stale entries behind (idempotent restore).
+            definitionLookup.Clear();
+            taskLookup.Clear();
+            taskLookupByIdString.Clear();
+            queueByOwner.Clear();
             if (dto == null)
             {
                 return;

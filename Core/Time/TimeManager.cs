@@ -475,10 +475,12 @@ namespace LandLedgers.Time
             // silently skipped by a collapsed rollover.
             for (int day = 0; day < daysToAdvance; day++)
             {
+                // Normalize: each iteration rolls exactly one pending day.
+                gameSecondsIntoDay = settings.GameSecondsPerDay;
                 ProcessDayRollover();
             }
 
-            RefreshTimeOfDay01FromCurrentSeconds();
+            ApplyTimeOfDay((float)(totalSecondsToPlace - daysToAdvance * secondsPerDay));
 
             if (logMajorTicks)
             {

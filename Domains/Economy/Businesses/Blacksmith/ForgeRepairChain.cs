@@ -477,5 +477,113 @@ namespace LandLedgers.Economy.Businesses.Blacksmith
                 Diagnostics = ctx.Diagnostics,
             };
         }
+
+        /// <summary>Save/load: mid-repair persistence. Materials are dispensed
+        /// at begin and recorded on the order; a restore never re-dispenses.</summary>
+        [Serializable]
+        public sealed class ForgeRepairChainSaveDto
+        {
+            public int Sequence;
+            public float CoalUnitsOnHand;
+            public float IronUnitsOnHand;
+            public List<ForgeRepairOrderSaveDto> Orders = new List<ForgeRepairOrderSaveDto>();
+        }
+
+        [Serializable]
+        public sealed class ForgeRepairOrderSaveDto
+        {
+            public string OrderId = string.Empty;
+            public string AssetId = string.Empty;
+            public string AssetDescription = string.Empty;
+            public EntityId SmithId = EntityId.Invalid;
+            public double SmithCapability01;
+            public float IronUnitsDispensed;
+            public float CoalUnitsDispensed;
+            public double ResolvedRepairMinutes;
+            public double ResolvedQualityDelta;
+            public double ResolvedWasteFactor;
+            public double ResolvedFailureRisk01;
+            public TaskOutcome ResolvedOutcome = TaskOutcome.Success;
+            public EntityId ReworkTaskId = EntityId.Invalid;
+            public bool ReworkNeeded;
+            public bool IsComplete;
+            public string FailureNote = string.Empty;
+            public StagedProductionProcessSaveDto Process;
+        }
+
+        public ForgeRepairChainSaveDto CaptureSaveDto()
+        {
+            var dto = new ForgeRepairChainSaveDto
+            {
+                Sequence = sequence,
+                CoalUnitsOnHand = CoalUnitsOnHand,
+                IronUnitsOnHand = IronUnitsOnHand,
+            };
+            foreach (ForgeRepairOrder order in orders)
+            {
+                if (order == null) continue;
+                dto.Orders.Add(new ForgeRepairOrderSaveDto
+                {
+                    OrderId = order.OrderId,
+                    AssetId = order.AssetId,
+                    AssetDescription = order.AssetDescription,
+                    SmithId = order.SmithId,
+                    SmithCapability01 = order.SmithCapability01,
+                    IronUnitsDispensed = order.IronUnitsDispensed,
+                    CoalUnitsDispensed = order.CoalUnitsDispensed,
+                    ResolvedRepairMinutes = order.ResolvedRepairMinutes,
+                    ResolvedQualityDelta = order.ResolvedQualityDelta,
+                    ResolvedWasteFactor = order.ResolvedWasteFactor,
+                    ResolvedFailureRisk01 = order.ResolvedFailureRisk01,
+                    ResolvedOutcome = order.ResolvedOutcome,
+                    ReworkTaskId = order.ReworkTaskId,
+                    ReworkNeeded = order.ReworkNeeded,
+                    IsComplete = order.IsComplete,
+                    FailureNote = order.FailureNote,
+                    Process = order.Process != null ? order.Process.CaptureSaveDto() : null,
+                });
+            }
+            return dto;
+        }
+
+        public void LoadFromSaveDto(ForgeRepairChainSaveDto dto, ForgeChainContext ctx)
+        {
+            orders.Clear();
+            nailRuns.Clear();
+            if (dto == null) return;
+            sequence = dto.Sequence;
+            CoalUnitsOnHand = dto.CoalUnitsOnHand;
+            IronUnitsOnHand = dto.IronUnitsOnHand;
+            if (dto.Orders == null) return;
+            foreach (ForgeRepairOrderSaveDto od in dto.Orders)
+            {
+                if (od == null) continue;
+                var order = new ForgeRepairOrder
+                {
+                    OrderId = od.OrderId,
+                    AssetId = od.AssetId,
+                    AssetDescription = od.AssetDescription,
+                    SmithId = od.SmithId,
+                    SmithCapability01 = od.SmithCapability01,
+                    Method = BuildRepairMethod(),
+                    IronUnitsDispensed = od.IronUnitsDispensed,
+                    CoalUnitsDispensed = od.CoalUnitsDispensed,
+                    ResolvedRepairMinutes = od.ResolvedRepairMinutes,
+                    ResolvedQualityDelta = od.ResolvedQualityDelta,
+                    ResolvedWasteFactor = od.ResolvedWasteFactor,
+                    ResolvedFailureRisk01 = od.ResolvedFailureRisk01,
+                    ResolvedOutcome = od.ResolvedOutcome,
+                    ReworkTaskId = od.ReworkTaskId,
+                    ReworkNeeded = od.ReworkNeeded,
+                    IsComplete = od.IsComplete,
+                    FailureNote = od.FailureNote ?? string.Empty,
+                };
+                var process = new StagedProductionProcess();
+                process.LoadFromSaveDto(od.Process);
+                order.Process = process;
+                order.Hooks = BuildHooks(order, ctx);
+                orders.Add(order);
+            }
+        }
     }
 }

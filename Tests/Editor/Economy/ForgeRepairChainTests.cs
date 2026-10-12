@@ -324,5 +324,52 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(order, "refused without an asset");
             StringAssert.Contains("phantom", reason.ToLowerInvariant(), "reason names phantom: " + reason);
         }
+
+        [Test]
+        public void SaveLoad_MidRepair_ResumesWithoutDuplication()
+        {
+            // Save/load during the repair stage: the restored order resumes
+            // from the same stage with materials already dispensed (no double
+            // dispense) and completes exactly once.
+            EquipmentAsset plow = NewPlow();
+            ForgeRepairOrder order = chain.BeginRepair(plow, smith, 0.9, ctx, out string reason);
+            Assert.IsNull(reason, "begin ok: " + reason);
+            Assert.AreEqual(ForgeRepairChain.StageRepair, order.Process.CurrentStageIndex);
+
+            // Save mid-repair; restore into a fresh chain.
+            ForgeRepairChain.ForgeRepairChainSaveDto dto = chain.CaptureSaveDto();
+            var restored = new ForgeRepairChain();
+            var ctx2 = new ForgeChainContext
+            {
+                Tasks = tasks,
+                Budgets = budgets,
+                DueEvents = ctx.DueEvents,
+                Reservations = ctx.Reservations,
+                ClockGameSeconds = ctx.ClockGameSeconds,
+                DayIndex = ctx.DayIndex,
+                BusinessId = ctx.BusinessId,
+                ForgeId = ctx.ForgeId,
+                Diagnostics = new List<string>(),
+            };
+            restored.LoadFromSaveDto(dto, ctx2);
+
+            Assert.AreEqual(1, restored.Orders.Count);
+            ForgeRepairOrder rOrder = restored.Orders[0];
+            Assert.AreEqual(order.OrderId, rOrder.OrderId);
+            Assert.AreEqual(ForgeRepairChain.StageRepair, rOrder.Process.CurrentStageIndex);
+            Assert.AreEqual(2f, rOrder.IronUnitsDispensed);
+            Assert.AreEqual(5f, rOrder.CoalUnitsDispensed);
+            // The restored chain does not re-dispense: stock matches the original.
+            Assert.AreEqual(chain.CoalUnitsOnHand, restored.CoalUnitsOnHand);
+            Assert.AreEqual(chain.IronUnitsOnHand, restored.IronUnitsOnHand);
+
+            // Complete the repair on the restored chain.
+            int guard = 0;
+            while (rOrder.Process.CurrentStageIndex != ForgeRepairChain.StageReturn && guard++ < 20)
+            {
+                Assert.IsNull(restored.AdvanceRepair(rOrder, smith, tasks, budgets, ctx2, 5, out reason), "advance: " + reason);
+            }
+            Assert.AreEqual(ForgeRepairChain.StageReturn, rOrder.Process.CurrentStageIndex);
+        }
     }
 }

@@ -441,6 +441,46 @@ namespace LandLedgers.Editor.Economy
             Assert.IsFalse(process.TryCreateOutputOnce(batch.Hooks, out _), "failed batch cannot produce output");
         }
 
+        [Test]
+        public void SaveLoad_AfterMissedDeadline_FailurePersists_NoResurrection()
+        {
+            // Save/load after a missed deadline: the failure (batch-failed,
+            // waste recorded, no output possible) survives the round trip.
+            chain.BakeMissedConsequence = MissedDeadlineConsequence.BatchFailed;
+            StagedBakeryBatch batch = BeginBatch();
+            AdvanceToStage(batch, BakeryStagedProductionChain.StageBake);
+            StagedProductionProcess process = batch.Process;
+            float bakeDue = process.StageStates[BakeryStagedProductionChain.StageBake].DueGameSeconds;
+            AdvanceClockAndPump(bakeDue + 1f);
+            float deadline = process.StageStates[BakeryStagedProductionChain.StageBake].DeadlineGameSeconds;
+            AdvanceClockAndPump(deadline + 1f); // missed -> batch failed
+            Assert.IsTrue(process.Failed, "batch failed before save");
+
+            BakeryStagedProductionChain.BakeryChainSaveDto dto = chain.CaptureSaveDto();
+            var chain2 = new BakeryStagedProductionChain();
+            var ctx2 = new BakeryChainContext
+            {
+                Tasks = tasks,
+                Budgets = budgets,
+                DueEvents = new TestDueEventScheduler(),
+                Reservations = reservations,
+                ClockGameSeconds = () => clock,
+                DayIndex = 42,
+                BusinessId = business,
+                BakerId = baker,
+                Diagnostics = new List<string>(),
+            };
+            chain2.LoadFromSaveDto(dto, ctx2);
+
+            Assert.AreEqual(1, chain2.Batches.Count);
+            StagedBakeryBatch loaded = chain2.Batches[0];
+            Assert.IsTrue(loaded.Process.Failed, "failure persists after load");
+            Assert.AreEqual(0, loaded.BreadUnitsOut, "no output after load");
+            Assert.AreEqual(1, chain2.WasteLedger.Count, "waste record persists");
+            Assert.AreEqual(24, chain2.WasteLedger[0].BreadUnitsWasted);
+            Assert.IsFalse(loaded.Process.TryCreateOutputOnce(loaded.Hooks, out _), "failed batch cannot resurrect output after load");
+        }
+
         // ---------- oven capacity: multiple compatible batches ----------
 
         [Test]

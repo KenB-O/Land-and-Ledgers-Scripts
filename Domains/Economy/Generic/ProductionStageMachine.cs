@@ -2,7 +2,6 @@ using EntityId = LandLedgers.Primitives.EntityId;
 
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -92,32 +91,17 @@ namespace LandLedgers.Economy.Generic
     }
 
     /// <summary>
-    /// Pass IV (Worker 3): the WaitingOnPassiveProcess handoff seam.
+    /// Pass IV (Worker 3, wired to Worker 1 at merge): the WaitingOnPassiveProcess handoff.
     ///
-    /// Worker 1 owns TaskAuthority.MarkWaitingOnPassiveProcess (merge order 1 before
-    /// 3). This driver probes for it via reflection and delegates when present.
-    /// On foundation-only builds the transition is emulated through the closest
-    /// existing public API — TaskAuthority.InterruptTask, which releases the worker's
-    /// remaining budget commitment, preserves worked minutes, and re-queues the task.
-    /// The emulation is named LOUDLY in the reason string and in diagnostics so tests
-    /// and the coordinator can tell the two paths apart.
+    /// Moves an InProgress labor task to passive waiting via
+    /// TaskAuthority.MarkWaitingOnPassiveProcess: the worker is released, the task stays
+    /// open against the passive stage, and equipment/workspace/materials stay reserved.
+    /// Resume for tending goes through TaskAuthority.ResumeTask.
     ///
     /// Nothing here bypasses TaskAuthority: both paths go through its public API.
-    /// Expected Worker-1 signature (coordinator: verify at merge):
-    ///   bool MarkWaitingOnPassiveProcess(EntityId taskId, int dayIndex, out string reason)
     /// </summary>
     public sealed class ProductionTaskHandoffDriver
     {
-        private static readonly MethodInfo markWaitingMethod = typeof(TaskAuthority).GetMethod(
-            "MarkWaitingOnPassiveProcess", BindingFlags.Public | BindingFlags.Instance);
-
-        private static readonly string[] resumeMethodNames =
-        {
-            "ResumeFromPassiveProcess",
-            "ResumePassiveProcess",
-            "ResumeWaitingTask",
-        };
-
         /// <summary>
         /// Moves an InProgress labor task to passive waiting: the worker is released,
         /// the task stays open against the passive stage. Returns false with a loud
@@ -125,10 +109,9 @@ namespace LandLedgers.Economy.Generic
         /// </summary>
         public bool TryEnterPassiveWait(
             TaskAuthority authority, EntityId taskId, WorkTimeBudgetStore budgets, int dayIndex,
-            out string reason, out bool usedWorker1Api)
+            string dueEventId, out string reason)
         {
             reason = string.Empty;
-            usedWorker1Api = false;
             if (authority == null) { reason = "ProductionTaskHandoffDriver: no TaskAuthority."; return false; }
             WorkTask task = authority.FindTask(taskId);
             if (task == null) { reason = "ProductionTaskHandoffDriver: unknown task " + taskId + "."; return false; }
@@ -139,144 +122,38 @@ namespace LandLedgers.Economy.Generic
                 return false;
             }
 
-            if (markWaitingMethod != null)
-            {
-                try
-                {
-                    ParameterInfo[] ps = markWaitingMethod.GetParameters();
-                    object result;
-                    if (ps.Length == 3)
-                    {
-                        object[] args = { taskId, dayIndex, null };
-                        result = markWaitingMethod.Invoke(authority, args);
-                        reason = args[2] as string ?? string.Empty;
-                    }
-                    else if (ps.Length == 2)
-                    {
-                        object[] args = { taskId, null };
-                        result = markWaitingMethod.Invoke(authority, args);
-                        reason = args[1] as string ?? string.Empty;
-                    }
-                    else
-                    {
-                        reason = "ProductionTaskHandoffDriver: Worker-1 MarkWaitingOnPassiveProcess has an "
-                            + "unrecognized signature (" + ps.Length + " parameters) — refusing loudly.";
-                        return false;
-                    }
-                    usedWorker1Api = true;
-                    return result is bool b && b;
-                }
-                catch (Exception ex)
-                {
-                    reason = "ProductionTaskHandoffDriver: Worker-1 handoff threw: "
-                        + (ex.InnerException ?? ex).Message;
-                    return false;
-                }
-            }
-
-            // Foundation fallback: closest existing public API. InterruptTask releases the
-            // worker's remaining budget commitment and preserves worked minutes; the task
-            // re-queues and the stage machine re-acquires it when tending is due.
-            if (!task.Interruptible)
-            {
-                reason = "ProductionTaskHandoffDriver: task " + taskId
-                    + " is not interruptible — EMULATED passive handoff refused (Worker-1 "
-                    + "MarkWaitingOnPassiveProcess absent in this build).";
-                return false;
-            }
-            if (!authority.InterruptTask(taskId, budgets, out string interruptReason))
-            {
-                reason = "ProductionTaskHandoffDriver: EMULATED passive handoff failed — " + interruptReason;
-                return false;
-            }
-            reason = "EMULATED passive handoff via TaskAuthority.InterruptTask (Worker-1 "
-                + "MarkWaitingOnPassiveProcess absent in this build): worker released, "
-                + "worked minutes preserved, task re-queued for tending re-acquire.";
-            return true;
+            return authority.MarkWaitingOnPassiveProcess(
+                taskId,
+                dueEventId ?? string.Empty,
+                "ProductionTaskHandoffDriver: entering passive wait for stage.",
+                out reason);
         }
 
         /// <summary>
         /// Returns a passively-waiting task to InProgress for tending/unload work.
-        /// Real path delegates to Worker-1's resume API when present; the foundation
-        /// fallback re-acquires the re-queued task (AssignTask + StartTask) for an
-        /// explicit worker.
+        /// Delegates to TaskAuthority.ResumeTask.
         /// </summary>
         public bool TryResumeForTending(
             TaskAuthority authority, EntityId taskId, EntityId workerId,
             WorkTimeBudgetStore budgets, int dayIndex,
-            out string reason, out bool usedWorker1Api)
+            out string reason)
         {
             reason = string.Empty;
-            usedWorker1Api = false;
             if (authority == null) { reason = "ProductionTaskHandoffDriver: no TaskAuthority."; return false; }
             WorkTask task = authority.FindTask(taskId);
             if (task == null) { reason = "ProductionTaskHandoffDriver: unknown task " + taskId + "."; return false; }
 
-            if (task.Status == TaskStatus.WaitingOnPassiveProcess)
-            {
-                MethodInfo resume = FindResumeMethod();
-                if (resume == null)
-                {
-                    reason = "ProductionTaskHandoffDriver: task is WaitingOnPassiveProcess but no "
-                        + "Worker-1 resume API found (probed: " + string.Join("/", resumeMethodNames)
-                        + ") — refusing loudly; coordinator must wire the resume path.";
-                    return false;
-                }
-                try
-                {
-                    ParameterInfo[] ps = resume.GetParameters();
-                    object[] args = ps.Length == 3
-                        ? new object[] { taskId, dayIndex, null }
-                        : new object[] { taskId, null };
-                    object result = resume.Invoke(authority, args);
-                    reason = (ps.Length == 3 ? args[2] : args[1]) as string ?? string.Empty;
-                    usedWorker1Api = true;
-                    return result is bool b && b;
-                }
-                catch (Exception ex)
-                {
-                    reason = "ProductionTaskHandoffDriver: Worker-1 resume threw: "
-                        + (ex.InnerException ?? ex).Message;
-                    return false;
-                }
-            }
-
-            // Foundation fallback: the emulated handoff left the task Queued; re-acquire it.
-            if (task.Status != TaskStatus.Queued)
+            if (task.Status != TaskStatus.WaitingOnPassiveProcess)
             {
                 reason = "ProductionTaskHandoffDriver: cannot resume tending — task is " + task.Status
-                    + " (expected Queued after emulated handoff).";
+                    + " (expected WaitingOnPassiveProcess).";
                 return false;
             }
-            if (!workerId.IsValid)
-            {
-                reason = "ProductionTaskHandoffDriver: tending needs a real worker — none supplied.";
-                return false;
-            }
-            if (!authority.AssignTask(taskId, workerId, budgets, out string assignReason))
-            {
-                reason = "ProductionTaskHandoffDriver: tending re-assign failed — " + assignReason;
-                return false;
-            }
-            if (!authority.StartTask(taskId, dayIndex, out string startReason))
-            {
-                reason = "ProductionTaskHandoffDriver: tending re-start failed — " + startReason;
-                return false;
-            }
-            reason = "EMULATED tending resume (Worker-1 resume API absent): re-queued task "
-                + "re-acquired by " + workerId + " via AssignTask+StartTask.";
-            return true;
-        }
 
-        private static MethodInfo FindResumeMethod()
-        {
-            foreach (string name in resumeMethodNames)
-            {
-                MethodInfo m = typeof(TaskAuthority).GetMethod(name,
-                    BindingFlags.Public | BindingFlags.Instance);
-                if (m != null && m.ReturnType == typeof(bool)) return m;
-            }
-            return null;
+            return authority.ResumeTask(
+                taskId,
+                "ProductionTaskHandoffDriver: resuming for tending/unload.",
+                out reason);
         }
     }
 

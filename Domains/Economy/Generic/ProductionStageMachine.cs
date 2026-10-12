@@ -639,6 +639,50 @@ namespace LandLedgers.Economy.Generic
         }
 
         /// <summary>
+        /// Advances a passive stage by the given minutes of process time — the
+        /// "work the order" semantic for stages that need no active labor.
+        /// When the stage's duration elapses it completes through the normal
+        /// stage path (reservation released, advance/parking as usual). Stages
+        /// that need clock-driven tending or deadlines are refused; they must
+        /// use the due-event path.
+        /// </summary>
+        public bool AdvancePassiveByMinutes(StagedProcessHooks hooks, EntityId workerId, int minutes, out string reason)
+        {
+            reason = string.Empty;
+            if (!IsActive) { reason = "Process is not active."; return false; }
+            ProductionStageDefinition def = CurrentStageDefinition;
+            ProductionStageState state = CurrentStageState;
+            if (def == null || state == null) { reason = "No current stage."; return false; }
+            if (def.Kind == ProductionStageKind.ActiveLabor)
+            { reason = "Current stage is ActiveLabor — use WorkActiveStage."; return false; }
+            if (def.Kind == ProductionStageKind.BlockingDependency)
+            { reason = "Current stage waits on an external dependency — cannot advance by minutes."; return false; }
+            if (def.Kind == ProductionStageKind.PeriodicTending
+                || def.TendingGraceGameSeconds > 0f
+                || def.MissedConsequence != MissedDeadlineConsequence.None)
+            {
+                reason = "Current stage needs clock-driven tending/deadlines — cannot advance by minutes.";
+                return false;
+            }
+            state.AdvancePassiveMinutes(Math.Max(0, minutes));
+            float durationMinutes = def.DurationGameSeconds / 60f;
+            if (state.PassiveMinutesElapsed + 0.001f < durationMinutes)
+            {
+                Note("stage " + CurrentStageIndex + ": passive +" + minutes + "m ("
+                    + state.PassiveMinutesElapsed.ToString("0") + "/"
+                    + durationMinutes.ToString("0") + "m elapsed).");
+                return true;
+            }
+            // Duration elapsed: the minutes-driven path replaces the clock-driven
+            // due event. Cancel this stage's pending completion event (stable id)
+            // so it cannot fire stale after the stage advances.
+            if (hooks != null && hooks.DueEvents != null)
+                hooks.DueEvents.Cancel(DueEventIdFor(DueEventKind.PassiveProcessComplete));
+            Note("stage " + CurrentStageIndex + ": passive duration elapsed — completing.");
+            return CompleteStage(CurrentStageIndex, hooks, workerId, out reason);
+        }
+
+        /// <summary>
         /// Completes a stage: releases its reservation and advances to the next stage
         /// (or finishes). Stage entry is atomic with the phase-machine advance: if the
         /// next stage refuses entry (e.g. its resource reservation fails), the phase

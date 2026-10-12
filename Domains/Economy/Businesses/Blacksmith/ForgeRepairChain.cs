@@ -198,6 +198,27 @@ namespace LandLedgers.Economy.Businesses.Blacksmith
                 return null;
             }
 
+            // Intake is synchronous: receiving the item, inspecting it, and
+            // preparing it are part of beginning the repair. Drive these stages
+            // to completion so the order rests at the repair stage, where the
+            // substantive scheduled work begins. If a stage parks (e.g. the
+            // forge is held by competing work), begin still succeeds; the order
+            // waits for RetryParked.
+            int intakeGuard = 0;
+            while (process.IsActive && process.CurrentStageIndex < StageRepair
+                && string.IsNullOrWhiteSpace(process.ParkedReason) && intakeGuard++ < 10)
+            {
+                if (!WorkOrder(order, 10000, ctx, out reason))
+                {
+                    CoalUnitsOnHand += CoalPerRepair;
+                    IronUnitsOnHand += IronPerRepair;
+                    reason = "ForgeRepairChain: repair begin failed during intake — " + reason;
+                    return null;
+                }
+            }
+            // Success: null reason (the fixture's "begin ok" contract).
+            reason = null;
+
             orders.Add(order);
             dueDriver.Register(process, order.Hooks, smithId);
             ctx.Log("order " + order.OrderId + " began for '" + asset.AssetId + "' (" + asset.DisplayName
@@ -227,8 +248,18 @@ namespace LandLedgers.Economy.Businesses.Blacksmith
             if (order.Process.CurrentStageIndex == StageRepair)
                 return WorkRepairStage(order, minutes, ctx, out reason);
 
-            if (!order.Process.WorkActiveStage(order.Hooks, order.SmithId, minutes, out reason))
+            ProductionStageDefinition def = order.Process.CurrentStageDefinition;
+            if (def != null && def.Kind != ProductionStageKind.ActiveLabor)
+            {
+                // Passive process (e.g. cooling): the minutes advance the process
+                // itself — no active labor required.
+                if (!order.Process.AdvancePassiveByMinutes(order.Hooks, order.SmithId, minutes, out reason))
+                    return false;
+            }
+            else if (!order.Process.WorkActiveStage(order.Hooks, order.SmithId, minutes, out reason))
+            {
                 return false;
+            }
             // After non-repair stages, check for process completion (return stage done).
             if (order.Process.IsComplete && !order.IsComplete)
             {

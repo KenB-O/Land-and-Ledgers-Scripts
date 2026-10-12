@@ -179,6 +179,13 @@ namespace LandLedgers.Economy.Generic
         [SerializeField]
         private string reservationId = string.Empty;
 
+        /// <summary>
+        /// Minutes of passive process time advanced via the minutes-driven path
+        /// (WorkOrder on a passive stage). Persisted with the stage.
+        /// </summary>
+        [SerializeField]
+        private float passiveMinutesElapsed;
+
         public int StageIndex => stageIndex;
         public ProductionStageKind Kind => kind;
         public float StartGameSeconds => startGameSeconds;
@@ -188,6 +195,7 @@ namespace LandLedgers.Economy.Generic
         public bool ConsequenceApplied => consequenceApplied;
         public string LaborTaskId => laborTaskId;
         public string ReservationId => reservationId;
+        public float PassiveMinutesElapsed => Mathf.Max(0f, passiveMinutesElapsed);
 
         public ProductionStageState()
         {
@@ -210,5 +218,11 @@ namespace LandLedgers.Economy.Generic
         public void MarkConsequenceApplied() { consequenceApplied = true; }
         public void SetLaborTask(string taskId) { laborTaskId = taskId ?? string.Empty; }
         public void SetReservation(string reservationId) { this.reservationId = reservationId ?? string.Empty; }
+
+        /// <summary>Advances the minutes-driven passive clock for this stage.</summary>
+        public void AdvancePassiveMinutes(float minutes)
+        {
+            passiveMinutesElapsed = Mathf.Max(0f, passiveMinutesElapsed + Mathf.Max(0f, minutes));
+        }
     }
 }

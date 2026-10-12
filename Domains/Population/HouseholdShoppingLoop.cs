@@ -321,22 +321,54 @@ namespace LandLedgers.Population
             SetScheduleState(shopper, PopulationScheduleState.ReturningHome);
 
             // ---- Step 16: physical receipt ONLY — household inventory grows here. ----
-            HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
-            string lotRejection = inventory.AddLot(
-                need.ItemId, sold, dayIndex,
-                batch.Provenance + (chosen.UseDelivery ? " → delivered" : " → carried home"));
-            if (lotRejection != null)
+            string receiptProblem = ReceiveSettledGoods(
+                result, need, batch, sold, chosen.UseDelivery, chosen.Supplier.SupplierName,
+                shopperId, dayIndex, diag, options);
+            if (receiptProblem != null)
             {
                 SetScheduleState(shopper, PopulationScheduleState.AtHome);
                 scheduleTracker.Release(reservationId);
-                return Fail(result, need, shopperId, dayIndex,
-                    $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}",
-                    diag, options);
+                return Fail(result, need, shopperId, dayIndex, receiptProblem, diag, options);
+            }
+
+            SetScheduleState(shopper, PopulationScheduleState.AtHome);
+            scheduleTracker.Release(reservationId);
+            diag.Add($"Day {dayIndex}: shopping trip complete — P{shopperId} bought {sold}u {need.ItemId} from '{chosen.Supplier.SupplierName}'.");
+            tripHistory.Add(result);
+            return result;
+        }
+
+        /// <summary>
+        /// Pass V P2-1: step 16 as a reusable unit — physical receipt ONLY.
+        /// Household inventory grows here, and only here, for carried goods.
+        /// Updates the need (fulfilled when nothing remains) and the per-need
+        /// result. Returns null on success, else a loud inconsistency reason.
+        /// Shared by the single-need path and the batched multi-need trip.
+        /// </summary>
+        private string ReceiveSettledGoods(
+            ShoppingTripResult result,
+            HouseholdPurchasingNeed need,
+            CarriedGoodsBatch batch,
+            int unitsSold,
+            bool useDelivery,
+            string supplierName,
+            int shopperId,
+            int dayIndex,
+            List<string> diag,
+            ShoppingLoopOptions options)
+        {
+            HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
+            string lotRejection = inventory.AddLot(
+                need.ItemId, unitsSold, dayIndex,
+                batch.Provenance + (useDelivery ? " → delivered" : " → carried home"));
+            if (lotRejection != null)
+            {
+                return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
             }
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
-            need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - sold);
+            need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsSold);
             need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
             if (need.UnitsNeeded <= 0)
             {
@@ -344,17 +376,436 @@ namespace LandLedgers.Population
             }
 
             result.Success = true;
-            result.UnitsAcquired = sold;
+            result.UnitsAcquired = unitsSold;
             result.UnitsStillNeeded = need.UnitsNeeded;
             AddEvent(result, dayIndex, ShoppingEventKind.Receipt, shopperId, need,
-                $"H{need.HouseholdId} received {sold}u {need.ItemId} into real lots (physical receipt).",
+                $"H{need.HouseholdId} received {unitsSold}u {need.ItemId} into real lots (physical receipt).",
                 batch.Provenance + (need.Status == PurchasingNeedStatus.Fulfilled ? " Need fulfilled." : $" {need.UnitsNeeded}u still needed."));
+            diag.Add($"Day {dayIndex}: P{shopperId} delivered {unitsSold}u {need.ItemId} to H{need.HouseholdId} " +
+                $"from '{supplierName}' (batch {batch.BatchId}).");
+            return null;
+        }
+
+        /// <summary>
+        /// Pass V P2-1: executes a BATCH of needs as ONE trip. The needs are
+        /// grouped by winnable supplier (largest single-supplier subset goes
+        /// this trip; the rest stay open for a later plan — never duplicated).
+        /// Exactly one real member shops; one person-time window is reserved;
+        /// each need settles at the counter through the shared settlement unit
+        /// (no duplicate purchases: each need's units decrement once, and the
+        /// need registry's one-open-need-per-item invariant is preserved).
+        /// </summary>
+        public BatchShoppingResult ExecuteBatch(
+            IReadOnlyList<HouseholdPurchasingNeed> needs,
+            int dayIndex,
+            ShoppingLoopOptions options,
+            string planId = null)
+        {
+            var batch = new BatchShoppingResult { PlanId = planId ?? string.Empty, DayIndex = Math.Max(0, dayIndex) };
+            options ??= new ShoppingLoopOptions();
+            var diag = options.Diagnostics ?? new List<string>();
+
+            if (needs == null || needs.Count == 0)
+            {
+                batch.FailureReason = "Batch has no needs.";
+                return batch;
+            }
+
+            int householdId = needs[0].HouseholdId;
+            batch.HouseholdId = householdId;
+            HouseholdState household = population.GetHousehold(householdId);
+            if (household == null)
+            {
+                batch.FailureReason = $"H{householdId} is not a known household.";
+                return batch;
+            }
+
+            // ---- Validate every need; spending policy applies per need. ----
+            var valid = new List<HouseholdPurchasingNeed>();
+            foreach (HouseholdPurchasingNeed need in needs)
+            {
+                if (need == null || need.HouseholdId != householdId) continue;
+                var result = NewBatchNeedResult(batch, need);
+                string needProblem = ValidateNeed(need);
+                if (needProblem != null)
+                {
+                    Fail(result, need, -1, dayIndex, needProblem, diag, options);
+                    continue;
+                }
+
+                HouseholdSpendingPolicy spendingPolicy = spendingPolicyProvider?.Invoke(householdId);
+                if (spendingPolicy != null && !need.IsNecessity)
+                {
+                    int permitted = (int)Math.Floor(need.UnitsNeeded * Math.Max(0, spendingPolicy.DiscretionaryCapPercent) / 100.0);
+                    if (permitted <= 0)
+                    {
+                        Fail(result, need, -1, dayIndex, "Discretionary purchase deferred by household spending policy.", diag, options);
+                        continue;
+                    }
+
+                    need.UnitsNeeded = Math.Min(need.UnitsNeeded, permitted);
+                }
+
+                result.UnitsStillNeeded = need.UnitsNeeded;
+                valid.Add(need);
+            }
+
+            if (valid.Count == 0)
+            {
+                batch.FailureReason = "No valid open needs in the batch.";
+                return batch;
+            }
+
+            List<int> memberIds = membership.GetActiveMembers(householdId);
+            if (memberIds == null || memberIds.Count == 0)
+            {
+                batch.FailureReason = $"H{householdId} has no active members — nobody can shop.";
+                return batch;
+            }
+
+            string homeLocation = ResolvePersonLocation(memberIds[0], options);
+
+            // ---- Light viability pre-check per (need, supplier): groups needs
+            // by winnable supplier WITHOUT recording choice events yet. ----
+            var viableBySupplier = new Dictionary<string, List<HouseholdPurchasingNeed>>(StringComparer.OrdinalIgnoreCase);
+            var viableSuppliers = new Dictionary<string, IGoodsSupplier>(StringComparer.OrdinalIgnoreCase);
+            foreach (HouseholdPurchasingNeed need in valid)
+            {
+                ShoppingTripResult result = FindBatchNeedResult(batch, need);
+                List<IGoodsSupplier> knownOffering = FindKnownItemSuppliers(memberIds, need.ItemId, dayIndex, result, diag, options);
+                bool anyViable = false;
+                foreach (IGoodsSupplier supplier in knownOffering)
+                {
+                    if (supplier == null) continue;
+                    var itemSupplier = supplier as IItemResolvingSupplier;
+                    if (itemSupplier == null || !itemSupplier.OffersItem(need.ItemId)) continue;
+                    if (itemSupplier.ItemStockUnits(need.ItemId) <= 0) continue;
+                    if (itemSupplier.ItemPricePerUnitCents(need.ItemId) <= 0) continue;
+                    JourneyRoute route = journeys.FindRoute(homeLocation, supplier.LocationId, TravelMode.Foot);
+                    if (!route.Found) continue;
+                    int arrivalMinute = options.DepartureMinuteOfDay + Math.Max(1, route.TotalMinutes);
+                    if (itemSupplier.CheckTradingCapability(dayIndex, arrivalMinute) != null) continue;
+                    anyViable = true;
+                    if (!viableBySupplier.TryGetValue(supplier.SupplierBusinessId, out List<HouseholdPurchasingNeed> group))
+                    {
+                        group = new List<HouseholdPurchasingNeed>();
+                        viableBySupplier[supplier.SupplierBusinessId] = group;
+                        viableSuppliers[supplier.SupplierBusinessId] = supplier;
+                    }
+
+                    group.Add(need);
+                }
+
+                if (!anyViable)
+                {
+                    Fail(result, need, -1, dayIndex,
+                        $"No viable seller for '{need.ItemId}' — need stays open.", diag, options);
+                }
+            }
+
+            // Winner: the supplier serving the most needs (fewer trips);
+            // tie-break on fewest total units to keep the trip small.
+            string winnerId = null;
+            List<HouseholdPurchasingNeed> batchNeeds = null;
+            foreach (KeyValuePair<string, List<HouseholdPurchasingNeed>> entry in viableBySupplier)
+            {
+                if (batchNeeds == null || entry.Value.Count > batchNeeds.Count)
+                {
+                    winnerId = entry.Key;
+                    batchNeeds = entry.Value;
+                }
+            }
+
+            if (batchNeeds == null || batchNeeds.Count == 0)
+            {
+                batch.FailureReason = "No supplier can serve any need in the batch — needs stay open.";
+                return batch;
+            }
+
+            IGoodsSupplier winner = viableSuppliers[winnerId];
+            foreach (HouseholdPurchasingNeed need in valid)
+            {
+                if (!batchNeeds.Contains(need))
+                {
+                    batch.UnbatchedNeeds.Add(need);
+                }
+            }
+
+            // Most urgent first: the shared ledger budget is claimed in order.
+            batchNeeds.Sort((a, b) => b.Urgency01.CompareTo(a.Urgency01));
+
+            // ---- One shopper for the whole trip. ----
+            int estimateMinutes = EstimateTripMinutes(homeLocation,
+                new List<IGoodsSupplier> { winner }, options)
+                + Math.Max(0, batchNeeds.Count - 1) * Math.Max(1, options.InStoreMinutes);
+            batch.EstimatedMinutes = estimateMinutes;
+            string shopperReason = null;
+            int shopperId = options.ShopperPersonIdOverride >= 0
+                ? options.ShopperPersonIdOverride
+                : ShopperAssignmentPolicy.ChooseShopper(
+                    population, memberIds, dayIndex, options.DepartureMinuteOfDay, estimateMinutes,
+                    scheduleTracker, budgets, personEntityId, out shopperReason);
+            if (shopperId < 0)
+            {
+                batch.FailureReason = $"Unavailable shopper: {shopperReason ?? "nobody can shop today."} Needs stay open.";
+                diag.Add($"Day {dayIndex}: batch {batch.PlanId} — {batch.FailureReason}");
+                return batch;
+            }
+
+            PersonState shopper = population.GetPerson(shopperId);
+            if (shopper == null)
+            {
+                batch.FailureReason = $"P{shopperId} is not a known person.";
+                return batch;
+            }
+
+            if (options.ShopperPersonIdOverride >= 0)
+            {
+                string overrideProblem = ValidateShopper(shopper);
+                if (overrideProblem != null)
+                {
+                    batch.FailureReason = $"Shopper override rejected: {overrideProblem}";
+                    return batch;
+                }
+            }
+
+            batch.ShopperPersonId = shopperId;
+            string shopperHome = ResolvePersonLocation(shopperId, options);
+
+            // ---- Full candidate evaluation per need, sharing one ledger
+            // budget in urgency order (no double-spent cash). ----
+            var candidates = new Dictionary<HouseholdPurchasingNeed, ShoppingCandidate>();
+            int remainingBudget = ledgers.GetOrCreate(householdId).GetBalanceCents();
+            foreach (HouseholdPurchasingNeed need in batchNeeds)
+            {
+                ShoppingTripResult result = FindBatchNeedResult(batch, need);
+                result.ShopperPersonId = shopperId;
+                ShoppingCandidate candidate = EvaluateCandidates(
+                    result, need, shopperId, shopperHome,
+                    new List<IGoodsSupplier> { winner }, dayIndex, options, diag, remainingBudget);
+                if (candidate == null)
+                {
+                    batch.UnbatchedNeeds.Add(need);
+                    continue;
+                }
+
+                candidates[need] = candidate;
+                remainingBudget = Math.Max(0, remainingBudget - candidate.TotalCostCents);
+            }
+
+            if (candidates.Count == 0)
+            {
+                batch.FailureReason = "No need in the batch is affordable or servable — needs stay open.";
+                return batch;
+            }
+
+            // ---- One reservation for the whole trip (person-time is exclusive). ----
+            var windowResult = new ShoppingTripResult { HouseholdId = householdId };
+            string reservationId = ReserveShoppingWindow(shopperId, dayIndex, options, estimateMinutes, windowResult, diag);
+            if (reservationId == null)
+            {
+                batch.FailureReason = windowResult.FailureReason ?? "Trip window reservation refused.";
+                diag.Add($"Day {dayIndex}: batch {batch.PlanId} — {batch.FailureReason}");
+                FailBatchNeeds(batch, candidates.Keys, shopperId, dayIndex, batch.FailureReason, diag, options);
+                return batch;
+            }
+
+            // ---- One set of legs, to the winning supplier. ----
+            EntityId shopperEid = personEntityId(shopperId);
+            var trip = new PlannedTrip();
+            HouseholdPurchasingNeed firstNeed = null;
+            ShoppingCandidate firstCandidate = null;
+            foreach (KeyValuePair<HouseholdPurchasingNeed, ShoppingCandidate> entry in candidates)
+            {
+                firstNeed = entry.Key;
+                firstCandidate = entry.Value;
+                break;
+            }
+
+            var legsResult = new ShoppingTripResult { HouseholdId = householdId, ShopperPersonId = shopperId };
+            if (!PlanTripLegs(trip, legsResult, firstNeed, shopperId, shopperEid, shopperHome, firstCandidate, dayIndex, options, diag))
+            {
+                scheduleTracker.Release(reservationId);
+                batch.ReservationId = string.Empty;
+                batch.FailureReason = legsResult.FailureReason ?? "Trip leg planning failed.";
+                FailBatchNeeds(batch, candidates.Keys, shopperId, dayIndex, batch.FailureReason, diag, options);
+                return batch;
+            }
+
+            SetScheduleState(shopper, PopulationScheduleState.GoingShopping);
+            if (!ExecuteTaskLeg(trip.Outbound, legsResult, firstNeed, shopperId, dayIndex, "outbound", diag, options))
+            {
+                scheduleTracker.Release(reservationId);
+                batch.ReservationId = string.Empty;
+                batch.FailureReason = legsResult.FailureReason ?? "Outbound leg failed.";
+                FailBatchNeeds(batch, candidates.Keys, shopperId, dayIndex, batch.FailureReason, diag, options);
+                return batch;
+            }
+
+            int storeArrivalMinute = options.DepartureMinuteOfDay + trip.OutboundMinutes;
+            SetPersonLocation(shopperId, winner.LocationId, options);
+            SetScheduleState(shopper, PopulationScheduleState.AtStore);
+
+            string tradingProblem = firstCandidate.ItemSupplier.CheckTradingCapability(dayIndex, storeArrivalMinute);
+            if (tradingProblem != null)
+            {
+                ExecuteTaskLeg(trip.Return, legsResult, firstNeed, shopperId, dayIndex, "return-empty", diag, options);
+                SetPersonLocation(shopperId, shopperHome, options);
+                SetScheduleState(shopper, PopulationScheduleState.AtHome);
+                scheduleTracker.Release(reservationId);
+                batch.ReservationId = string.Empty;
+                batch.FailureReason = $"'{winner.SupplierName}' cannot trade at arrival: {tradingProblem}. Shopper returned empty-handed.";
+                diag.Add($"Day {dayIndex}: batch {batch.PlanId} — {batch.FailureReason}");
+                FailBatchNeeds(batch, candidates.Keys, shopperId, dayIndex, batch.FailureReason, diag, options);
+                return batch;
+            }
+
+            if (!ExecuteTaskLeg(trip.InStore, legsResult, firstNeed, shopperId, dayIndex, "in-store", diag, options))
+            {
+                scheduleTracker.Release(reservationId);
+                batch.ReservationId = string.Empty;
+                batch.FailureReason = legsResult.FailureReason ?? "In-store leg failed.";
+                FailBatchNeeds(batch, candidates.Keys, shopperId, dayIndex, batch.FailureReason, diag, options);
+                return batch;
+            }
+
+            // ---- Settle each need at the counter (shared settlement unit). ----
+            var settled = new List<(HouseholdPurchasingNeed need, ShoppingCandidate candidate, CarriedGoodsBatch batch, int units)>();
+            foreach (KeyValuePair<HouseholdPurchasingNeed, ShoppingCandidate> entry in candidates)
+            {
+                HouseholdPurchasingNeed need = entry.Key;
+                ShoppingCandidate candidate = entry.Value;
+                ShoppingTripResult result = FindBatchNeedResult(batch, need);
+                SettlementOutcome counter = SettleAtCounter(result, trip, need, candidate, shopperId, dayIndex, diag, options);
+                if (!counter.Success)
+                {
+                    diag.Add($"Day {dayIndex}: batch {batch.PlanId} — '{need.ItemId}' unsettled: {counter.FailureReason} Need stays open.");
+                    batch.UnbatchedNeeds.Add(need);
+                    continue;
+                }
+
+                if (candidate.UseDelivery)
+                {
+                    ExecuteDelivery(counter.Batch, candidate, result, need, shopperId, dayIndex, diag, options);
+                }
+
+                settled.Add((need, candidate, counter.Batch, counter.UnitsSold));
+            }
+
+            if (!ExecuteTaskLeg(trip.Return, legsResult, firstNeed, shopperId, dayIndex, "return", diag, options))
+            {
+                scheduleTracker.Release(reservationId);
+                batch.ReservationId = string.Empty;
+                batch.FailureReason = legsResult.FailureReason ?? "Return leg failed — goods remain in custody, needs stay open.";
+                var custodyNeeds = new List<HouseholdPurchasingNeed>();
+                foreach (var entry in settled) custodyNeeds.Add(entry.need);
+                FailBatchNeeds(batch, custodyNeeds, shopperId, dayIndex, batch.FailureReason, diag, options);
+                return batch;
+            }
+
+            SetPersonLocation(shopperId, shopperHome, options);
+            SetScheduleState(shopper, PopulationScheduleState.ReturningHome);
+
+            // ---- Physical receipt per need — household inventory grows here. ----
+            foreach (var entry in settled)
+            {
+                ShoppingTripResult result = FindBatchNeedResult(batch, entry.need);
+                string receiptProblem = ReceiveSettledGoods(
+                    result, entry.need, entry.batch, entry.units, entry.candidate.UseDelivery,
+                    winner.SupplierName, shopperId, dayIndex, diag, options);
+                if (receiptProblem != null)
+                {
+                    batch.FailureReason = receiptProblem;
+                    diag.Add($"Day {dayIndex}: batch {batch.PlanId} — {receiptProblem}");
+                    continue;
+                }
+
+                batch.UnitsAcquiredTotal += entry.units;
+            }
 
             SetScheduleState(shopper, PopulationScheduleState.AtHome);
             scheduleTracker.Release(reservationId);
-            diag.Add($"Day {dayIndex}: shopping trip complete — P{shopperId} bought {sold}u {need.ItemId} from '{chosen.Supplier.SupplierName}'.");
+            batch.ReservationId = string.Empty;
+            batch.TripExecuted = true;
+            batch.ServedNeedCount = settled.Count;
+            diag.Add($"Day {dayIndex}: batch {batch.PlanId} complete — P{shopperId} served {settled.Count} need(s), " +
+                $"{batch.UnitsAcquiredTotal}u acquired, {batch.UnbatchedNeeds.Count} need(s) unbatched.");
+            return batch;
+        }
+
+        /// <summary>
+        /// Pass V P2-1: records a trip-level failure on every batched need's
+        /// own result so the §26 audit trail stays per-need. The needs stay open.
+        /// </summary>
+        private void FailBatchNeeds(
+            BatchShoppingResult batch,
+            IEnumerable<HouseholdPurchasingNeed> needs,
+            int shopperId,
+            int dayIndex,
+            string reason,
+            List<string> diag,
+            ShoppingLoopOptions options)
+        {
+            if (needs == null) return;
+            foreach (HouseholdPurchasingNeed need in needs)
+            {
+                if (need == null) continue;
+                ShoppingTripResult result = FindBatchNeedResult(batch, need);
+                if (!result.Success)
+                {
+                    Fail(result, need, shopperId, dayIndex, reason, diag, options);
+                }
+            }
+        }
+
+        private ShoppingTripResult NewBatchNeedResult(BatchShoppingResult batch, HouseholdPurchasingNeed need)
+        {
+            var result = new ShoppingTripResult
+            {
+                NeedSequence = need.NeedSequence,
+                HouseholdId = need.HouseholdId,
+                ItemId = need.ItemId,
+                UnitsStillNeeded = need.UnitsNeeded,
+            };
+            batch.NeedResults.Add(result);
             tripHistory.Add(result);
             return result;
+        }
+
+        private ShoppingTripResult FindBatchNeedResult(BatchShoppingResult batch, HouseholdPurchasingNeed need)
+        {
+            foreach (ShoppingTripResult result in batch.NeedResults)
+            {
+                if (result != null && result.NeedSequence == need.NeedSequence)
+                {
+                    return result;
+                }
+            }
+
+            return NewBatchNeedResult(batch, need);
+        }
+
+        /// <summary>
+        /// Pass V P2-1: the outcome of one batched multi-need trip. Per-need
+        /// results keep the §26 audit trail; unbatched needs stay open without
+        /// ever being double-planned.
+        /// </summary>
+        public sealed class BatchShoppingResult
+        {
+            public string PlanId = string.Empty;
+            public int HouseholdId = -1;
+            public int DayIndex;
+            public int ShopperPersonId = -1;
+            public string ReservationId = string.Empty;
+            public int EstimatedMinutes;
+            public List<ShoppingTripResult> NeedResults = new List<ShoppingTripResult>();
+            public List<HouseholdPurchasingNeed> UnbatchedNeeds = new List<HouseholdPurchasingNeed>();
+            public bool TripExecuted;
+            public int ServedNeedCount;
+            public int UnitsAcquiredTotal;
+            public string FailureReason = string.Empty;
+
+            public bool Success => TripExecuted && string.IsNullOrEmpty(FailureReason) && ServedNeedCount > 0;
         }
 
         /// <summary>
@@ -1266,10 +1717,14 @@ namespace LandLedgers.Population
             List<IGoodsSupplier> candidates,
             int dayIndex,
             ShoppingLoopOptions options,
-            List<string> diag)
+            List<string> diag,
+            int? budgetOverrideCents = null)
         {
             ShoppingCandidate best = null;
-            int ledgerBalance = ledgers.GetOrCreate(need.HouseholdId).GetBalanceCents();
+            // Pass V P2-1: batched trips plan several needs against one ledger.
+            // The override lets the batch planner shrink the affordable budget
+            // as earlier needs claim their share — never double-spending cash.
+            int ledgerBalance = budgetOverrideCents ?? ledgers.GetOrCreate(need.HouseholdId).GetBalanceCents();
 
             foreach (IGoodsSupplier supplier in candidates)
             {

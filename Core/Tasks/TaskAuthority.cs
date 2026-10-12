@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using LandLedgers.Persistence;
 using LandLedgers.Primitives;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Time;
 
 namespace LandLedgers.Tasks
@@ -58,7 +59,7 @@ namespace LandLedgers.Tasks
     /// labor is a real constraint, not a slot count.
     /// </summary>
     [Serializable]
-    public sealed class TaskAuthority
+    public sealed partial class TaskAuthority
     {
         [SerializeField]
         private List<TaskDefinition> definitions = new List<TaskDefinition>();
@@ -68,6 +69,7 @@ namespace LandLedgers.Tasks
 
         private readonly Dictionary<string, TaskDefinition> definitionLookup = new Dictionary<string, TaskDefinition>(StringComparer.Ordinal);
         private readonly Dictionary<EntityId, WorkTask> taskLookup = new Dictionary<EntityId, WorkTask>();
+        private readonly Dictionary<string, WorkTask> taskLookupByIdString = new Dictionary<string, WorkTask>(StringComparer.Ordinal);
         private readonly Dictionary<EntityId, List<WorkTask>> queueByOwner = new Dictionary<EntityId, List<WorkTask>>();
 
         private EntityIdRegistry idRegistry = new EntityIdRegistry();
@@ -225,7 +227,14 @@ namespace LandLedgers.Tasks
             return true;
         }
 
-        /// <summary>Assigned -&gt; InProgress. Work actually begins.</summary>
+        /// <summary>
+        /// Assigned -&gt; InProgress (or ResourcesReserved -&gt; InProgress). Work actually begins.
+        ///
+        /// Pass IV: when a reservation authority AND a request builder are installed, an
+        /// Assigned task reserves its resources atomically via TryReserveAll before work
+        /// begins (Assigned -&gt; ResourcesReserved -&gt; InProgress); a refused reservation
+        /// refuses the start loudly. Without the seams, behavior is unchanged.
+        /// </summary>
         public bool StartTask(EntityId taskId, int currentDayIndex, out string rejectionReason)
         {
             rejectionReason = null;
@@ -236,9 +245,11 @@ namespace LandLedgers.Tasks
                 return false;
             }
 
-            if (task.Status != TaskStatus.Assigned)
+            bool fromAssigned = task.Status == TaskStatus.Assigned;
+            bool fromReserved = task.Status == TaskStatus.ResourcesReserved;
+            if (!fromAssigned && !fromReserved)
             {
-                rejectionReason = "Task " + taskId + " is " + task.Status + ", not Assigned.";
+                rejectionReason = "Task " + taskId + " is " + task.Status + ", not Assigned or ResourcesReserved.";
                 return false;
             }
 
@@ -253,6 +264,43 @@ namespace LandLedgers.Tasks
                     rejectionReason = gateRefusal;
                     return false;
                 }
+            }
+
+            // Pass IV: atomic resource reservation before work begins.
+            if (fromAssigned && reservationAuthority != null && reservationRequestBuilder != null)
+            {
+                ReservationRequest request;
+                try
+                {
+                    request = reservationRequestBuilder(task, GetDefinition(task.DefinitionId));
+                }
+                catch (Exception builderFailure)
+                {
+                    rejectionReason = "Task " + taskId + ": reservation request builder failed: " + builderFailure.Message;
+                    return false;
+                }
+
+                if (request == null)
+                {
+                    rejectionReason = "Task " + taskId + ": reservation request builder returned no request.";
+                    return false;
+                }
+
+                string reservationRefusal = reservationAuthority.TryReserveAll(request, out ReservationHandle handle);
+                if (reservationRefusal != null)
+                {
+                    rejectionReason = "Task " + taskId + ": resource reservation refused: " + reservationRefusal;
+                    return false;
+                }
+
+                task.SetReservationHandleId(handle != null ? handle.ReservationId : string.Empty);
+                task.MarkResourcesReserved();
+            }
+
+            if (!TaskLifecyclePolicy.CanTransition(task.Status, TaskStatus.InProgress))
+            {
+                rejectionReason = "Task " + taskId + ": " + task.Status + " -> InProgress is not a legal lifecycle transition.";
+                return false;
             }
 
             task.MarkStarted(currentDayIndex);
@@ -315,7 +363,13 @@ namespace LandLedgers.Tasks
             return true;
         }
 
-        /// <summary>Completes a task early (or records a failure). Unused commitment is released.</summary>
+        /// <summary>
+        /// Completes a task early (or records a failure). Unused commitment is released.
+        ///
+        /// Pass IV: transitions from the new lifecycle states are validated against
+        /// TaskLifecyclePolicy (legacy states keep their existing behavior); terminal
+        /// transitions release reservations and cancel the task's due events.
+        /// </summary>
         public bool CompleteTask(EntityId taskId, TaskOutcome outcome, int currentDayIndex, WorkTimeBudgetStore budgetStore)
         {
             WorkTask task = FindTask(taskId);
@@ -324,7 +378,18 @@ namespace LandLedgers.Tasks
                 return false;
             }
 
+            TaskStatus target = outcome == TaskOutcome.RecoverableFailure || outcome == TaskOutcome.SeriousFailure
+                ? TaskStatus.Failed
+                : TaskStatus.Complete;
+            if (IsPass4LifecycleState(task.Status) && !TaskLifecyclePolicy.CanTransition(task.Status, target))
+            {
+                Debug.LogWarning("[TaskAuthority] CompleteTask refused: Task " + taskId + ": " +
+                    task.Status + " -> " + target + " is not a legal lifecycle transition.");
+                return false;
+            }
+
             ReleaseUnusedCommitment(task, budgetStore);
+            ReleaseTaskResources(task);
             if (outcome == TaskOutcome.RecoverableFailure || outcome == TaskOutcome.SeriousFailure)
             {
                 task.MarkFailed(outcome, currentDayIndex);
@@ -364,7 +429,19 @@ namespace LandLedgers.Tasks
                 return false;
             }
 
+            // Pass IV: interruption from the new lifecycle states follows the policy
+            // table (Paused -> Interrupted is legal; the waiting/reserved states are
+            // not). Legacy states keep their existing behavior.
+            if (IsPass4LifecycleState(task.Status)
+                && !TaskLifecyclePolicy.CanTransition(task.Status, TaskStatus.Interrupted))
+            {
+                rejectionReason = "Task " + taskId + ": " + task.Status +
+                    " cannot be interrupted (TaskLifecyclePolicy).";
+                return false;
+            }
+
             ReleaseUnusedCommitment(task, budgetStore);
+            ReleaseTaskResources(task);
             task.MarkInterrupted();
             task.Requeue();
             return true;
@@ -379,6 +456,7 @@ namespace LandLedgers.Tasks
             }
 
             ReleaseUnusedCommitment(task, budgetStore);
+            ReleaseTaskResources(task);
             task.MarkCancelled();
             return true;
         }
@@ -506,10 +584,12 @@ namespace LandLedgers.Tasks
             }
 
             taskLookup.Clear();
+            taskLookupByIdString.Clear();
             queueByOwner.Clear();
             foreach (WorkTask task in tasks)
             {
                 taskLookup[task.TaskId] = task;
+                taskLookupByIdString[task.TaskId.ToString()] = task;
                 GetOrCreateQueue(task.OwnerId).Add(task);
             }
         }

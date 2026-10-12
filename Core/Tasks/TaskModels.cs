@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using LandLedgers.Primitives;
+using LandLedgers.Time;
 
 namespace LandLedgers.Tasks
 {
@@ -301,6 +302,35 @@ namespace LandLedgers.Tasks
         [SerializeField]
         private int interruptionCount;
 
+        /// <summary>
+        /// Pass IV: id of the granted unified-reservation handle held by this task
+        /// (empty = none). Set by TaskAuthority.MarkResourcesReserved / StartTask when
+        /// a reservation authority is installed; released on terminal transitions.
+        /// </summary>
+        [SerializeField]
+        private string reservationHandleId = string.Empty;
+
+        /// <summary>
+        /// Pass IV: id of the due event this task is waiting on while in
+        /// WaitingOnPassiveProcess (empty = none). Fired by the due-event drain.
+        /// </summary>
+        [SerializeField]
+        private string dueEventId = string.Empty;
+
+        /// <summary>
+        /// Pass IV: what this task is blocked on while in WaitingOnDependency
+        /// (task id string, delivery ref, or person ref). Empty = none recorded.
+        /// </summary>
+        [SerializeField]
+        private string dependencyDescription = string.Empty;
+
+        /// <summary>
+        /// Pass IV: per-instance physical inputs for method duration estimators
+        /// (mass, distance, crew...). Null = definition defaults apply.
+        /// </summary>
+        [SerializeField]
+        private TaskDurationInputs durationInputsOverride;
+
         public EntityId TaskId => taskId;
         public string DefinitionId => definitionId;
         public EntityId OwnerId => ownerId;
@@ -326,7 +356,17 @@ namespace LandLedgers.Tasks
         public int StartedDayIndex => startedDayIndex;
         public int CompletedDayIndex => completedDayIndex;
         public int InterruptionCount => interruptionCount;
-        public bool IsOpen => status == TaskStatus.Queued || status == TaskStatus.Assigned || status == TaskStatus.InProgress;
+        /// <summary>Pass IV: granted reservation handle id, or empty when none is held.</summary>
+        public string ReservationHandleId => reservationHandleId ?? string.Empty;
+        /// <summary>Pass IV: due event id awaited in WaitingOnPassiveProcess, or empty.</summary>
+        public string DueEventId => dueEventId ?? string.Empty;
+        /// <summary>Pass IV: dependency description for WaitingOnDependency, or empty.</summary>
+        public string DependencyDescription => dependencyDescription ?? string.Empty;
+        /// <summary>Pass IV: per-instance estimator inputs, or null when defaults apply.</summary>
+        public TaskDurationInputs DurationInputsOverride => durationInputsOverride;
+        public bool IsOpen => status == TaskStatus.Queued || status == TaskStatus.Assigned || status == TaskStatus.InProgress
+            || status == TaskStatus.Paused || status == TaskStatus.WaitingOnPassiveProcess
+            || status == TaskStatus.WaitingOnDependency || status == TaskStatus.ResourcesReserved;
 
         public WorkTask()
         {
@@ -434,6 +474,75 @@ namespace LandLedgers.Tasks
         internal void MarkCancelled()
         {
             status = TaskStatus.Cancelled;
+        }
+
+        /// <summary>Pass IV: records the granted reservation handle id (empty clears).</summary>
+        internal void SetReservationHandleId(string handleId)
+        {
+            reservationHandleId = handleId ?? string.Empty;
+        }
+
+        /// <summary>Pass IV: records the due event awaited in WaitingOnPassiveProcess.</summary>
+        internal void SetDueEventId(string eventId)
+        {
+            dueEventId = eventId ?? string.Empty;
+        }
+
+        /// <summary>Pass IV: records what blocks the task in WaitingOnDependency.</summary>
+        internal void SetDependencyDescription(string description)
+        {
+            dependencyDescription = description ?? string.Empty;
+        }
+
+        /// <summary>Pass IV: per-instance physical inputs for method duration estimators.</summary>
+        internal void SetDurationInputsOverride(TaskDurationInputs inputs)
+        {
+            durationInputsOverride = inputs;
+        }
+
+        /// <summary>Pass IV: links a corrective follow-up task (rework chain).</summary>
+        internal void AddFollowUpTask(EntityId followUpTaskId)
+        {
+            if (followUpTaskId.IsValid && !followUpTaskIds.Contains(followUpTaskId))
+            {
+                followUpTaskIds.Add(followUpTaskId);
+            }
+        }
+
+        /// <summary>Pass IV: Assigned -&gt; ResourcesReserved. Validated by the authority.</summary>
+        internal void MarkResourcesReserved()
+        {
+            status = TaskStatus.ResourcesReserved;
+        }
+
+        /// <summary>Pass IV: InProgress -&gt; Paused. Assignment and reservations held.</summary>
+        internal void MarkPaused()
+        {
+            status = TaskStatus.Paused;
+        }
+
+        /// <summary>Pass IV: Paused / WaitingOnPassiveProcess / WaitingOnDependency -&gt; InProgress.</summary>
+        internal void MarkResumed()
+        {
+            status = TaskStatus.InProgress;
+        }
+
+        /// <summary>Pass IV: InProgress -&gt; WaitingOnPassiveProcess. Worker released.</summary>
+        internal void MarkWaitingOnPassiveProcess()
+        {
+            status = TaskStatus.WaitingOnPassiveProcess;
+        }
+
+        /// <summary>Pass IV: InProgress -&gt; WaitingOnDependency.</summary>
+        internal void MarkWaitingOnDependency()
+        {
+            status = TaskStatus.WaitingOnDependency;
+        }
+
+        /// <summary>Pass IV: Failed -&gt; ReworkRequired. Terminal for this instance.</summary>
+        internal void MarkReworkRequired()
+        {
+            status = TaskStatus.ReworkRequired;
         }
     }
 }

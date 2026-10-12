@@ -617,6 +617,10 @@ namespace LandLedgers.Orchestration.Systems
             RunDelegatedManagement(day);
             RunScriptedEvents(day);
             ReleaseDayReservations(day);
+            // Presentation is told AFTER the day's outcomes are committed; the
+            // sink cannot change anything (section 25A/B).
+            SimulationPresentationBridge.Notify(ObservationMode.FullyRepresented,
+                "society-day-completed", "day " + day);
         }
 
         private void ProcessBirthdays(int day)
@@ -644,8 +648,9 @@ namespace LandLedgers.Orchestration.Systems
                 person.age = newAge; // mirror of the birth-date authority until P0-2 lands the derived read
                 person.ageBand = HouseholdLifecycleManager.AgeBandForAge(newAge);
                 Log($"P{personId} ({person.DisplayName}) turned {newAge}.");
-                // Chain the next birthday: exactly one pending event per living person.
-                BirthdayScheduling.ScheduleNextBirthday(dueEvents, personId, birth, day,
+                // Chain the next birthday from the day after the one that just fired:
+                // exactly one pending event per living person, never a same-day echo.
+                BirthdayScheduling.ScheduleNextBirthday(dueEvents, personId, birth, day + 1,
                     AnchorYear, AnchorMonth, AnchorDay, diag);
             }
         }

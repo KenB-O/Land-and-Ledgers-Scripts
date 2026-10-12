@@ -89,6 +89,50 @@ namespace LandLedgers.EditorTests.PassV
         }
 
         [Test]
+        public void Perf_BirthdaySchedulingAndQueries()
+        {
+            // Birthday scheduling and birth-date queries at scale.
+            var scheduler = new DueEventScheduler();
+            var diag = new System.Collections.Generic.List<string>();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 1; i <= 2000; i++)
+            {
+                var birth = new BirthDate(1850 + (i % 30), 1 + (i % 12), 1 + (i % 28),
+                    BirthDateProvenance.GeneratedExact, "perf");
+                BirthdayScheduling.ScheduleNextBirthday(scheduler, i, birth, 0, 1880, 3, 1, diag);
+            }
+            sw.Stop();
+            Console.WriteLine($"Scheduled 2000 birthdays in {sw.Elapsed.TotalMilliseconds:F0} ms");
+
+            sw.Restart();
+            int totalAge = 0;
+            for (int i = 1; i <= 2000; i++)
+            {
+                var birth = new BirthDate(1850 + (i % 30), 1 + (i % 12), 1 + (i % 28),
+                    BirthDateProvenance.GeneratedExact, "perf");
+                totalAge += AgeAuthority.CompletedYears(birth, 1883, 3, 1);
+            }
+            sw.Stop();
+            Console.WriteLine($"2000 birth-date age queries in {sw.Elapsed.TotalMilliseconds:F0} ms (sum={totalAge})");
+        }
+
+        [Test]
+        public void Perf_SimWallTime()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var d30 = AutonomousSocietyDriver.BuildStandard(demographicEvents: true);
+            d30.AdvanceDays(30);
+            sw.Stop();
+            Console.WriteLine($"30-day sim wall time: {sw.Elapsed.TotalMilliseconds:F0} ms");
+
+            sw.Restart();
+            var d90 = AutonomousSocietyDriver.BuildStandard(demographicEvents: true);
+            d90.AdvanceDays(90);
+            sw.Stop();
+            Console.WriteLine($"90-day sim wall time: {sw.Elapsed.TotalMilliseconds:F0} ms");
+        }
+
+        [Test]
         public void ThreeYearRun_EstateContinuity_ParcelAndRecordKept()
         {
             var driver = AutonomousSocietyDriver.BuildStandard(demographicEvents: true);

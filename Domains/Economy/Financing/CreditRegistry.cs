@@ -36,6 +36,22 @@ namespace LandLedgers.Economy.Financing
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public FinancialObligationAuthority FinancialAuthority => financialAuthority;
 
+        /// <summary>
+        /// Pass VII Workstream C (additive): every recorded instrument as the
+        /// ICreditInstrument surface, for estate discovery. The registry stays
+        /// the index; this only enumerates it.
+        /// </summary>
+        public List<ICreditInstrument> AllInstruments()
+        {
+            var all = new List<ICreditInstrument>();
+            foreach (PromissoryNote note in notes.Values) all.Add(note);
+            foreach (SellerFinanceNote note in sellerNotes.Values) all.Add(note);
+            foreach (MortgageDeed mortgage in mortgages.Values) all.Add(mortgage);
+            foreach (PropertyLien lien in liens.Values) all.Add(lien);
+            foreach (GuarantyAgreement guaranty in guaranties.Values) all.Add(guaranty);
+            return all;
+        }
+
         public FinancialPaymentRecord ApplyInstrumentPayment(string instrumentId, int amountCents,
             int dayIndex, string payer, string payee, List<string> diag = null)
         {

@@ -103,11 +103,13 @@ namespace LandLedgers.Economy.Estates
                 Status = EstateStatus.Open,
             };
 
-            // Heirs: real kin only.
+            // Heirs: real kin only. Note: KinshipRelation.Child edges run
+            // child -> parent, so the decedent's children come from
+            // GetChildren (edges decedent -> child with relation Parent).
             List<int> spouses = kinship != null
                 ? kinship.GetRelated(decedentPersonId, KinshipRelation.Spouse) : new List<int>();
             List<int> children = kinship != null
-                ? kinship.GetRelated(decedentPersonId, KinshipRelation.Child) : new List<int>();
+                ? kinship.GetChildren(decedentPersonId) : new List<int>();
             ComputeIntestateShares(estate, spouses, children, diag);
 
             // Assets: parcels are inventoried via RegisterDecedentParcel (the

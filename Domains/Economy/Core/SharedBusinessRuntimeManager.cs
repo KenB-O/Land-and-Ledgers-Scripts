@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using LandLedgers.Animals;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Transport;
 using LandLedgers.FirstLedger;
@@ -275,6 +276,145 @@ namespace LandLedgers.Economy
         /// bootstrap from PopulationState via the membership authority).
         /// </summary>
         public Func<int, int> PersonHouseholdIdLookup { get; set; }
+
+        /// <summary>
+        /// Pass VII Workstream A: the registry of real household purchasing
+        /// needs (written by the HouseholdShortageMonitor). Assigned by
+        /// bootstrap. When set, <see cref="CollectRealDemand"/> reads actual
+        /// needs instead of manufacturing demand.
+        /// </summary>
+        public HouseholdNeedRegistry HouseholdNeedRegistry { get; set; }
+
+        /// <summary>
+        /// Pass VII Workstream A: buyer-knowledge check for the real-demand
+        /// source — (householdId, supplierBusinessId) -> known. Assigned by
+        /// bootstrap; defaults to general-store-only public knowledge.
+        /// </summary>
+        public Func<int, string, bool> HouseholdKnowsSupplier { get; set; }
+
+        private RealDemandSource realDemandSource;
+        private SupplierDirectory realDemandSuppliers;
+
+        /// <summary>
+        /// Pass VII Workstream A: collects real demand from live state. This is
+        /// the replacement for the retired town-pulse revenue path: it returns
+        /// <see cref="PurchaseIntent"/>s from actual household needs and
+        /// registered business input requirements, each naming a real buyer, a
+        /// real stocked supplier at a valid price, and documented provenance.
+        /// Collection never moves money or goods; execution goes through the
+        /// production sale authorities.
+        /// </summary>
+        public List<PurchaseIntent> CollectRealDemand(int dayIndex, List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            AutoWire();
+            if (populationManager == null || populationManager.State == null)
+            {
+                diagnostics.Add("CollectRealDemand: no population — no demand collected.");
+                return new List<PurchaseIntent>();
+            }
+
+            if (realDemandSuppliers == null)
+            {
+                realDemandSuppliers = new SupplierDirectory();
+                RefreshRealDemandSuppliers();
+            }
+
+            realDemandSource ??= new RealDemandSource(
+                populationManager.State,
+                HouseholdLedgers,
+                HouseholdNeedRegistry,
+                realDemandSuppliers,
+                HouseholdKnowsSupplier,
+                businessCashCents: id => FindBusiness(id)?.RuntimeState?.CurrentCashCents ?? 0,
+                generalStoreSupplierId: FindGeneralStoreSupplierId());
+
+            return realDemandSource.CollectDemand(dayIndex, diagnostics);
+        }
+
+        /// <summary>
+        /// Pass VII Workstream A: registers a real business input requirement
+        /// for demand collection (e.g. a bakery's flour need). Production
+        /// runtimes call this; the source never invents business needs.
+        /// </summary>
+        public void RegisterBusinessInputNeed(BusinessInputNeed need)
+        {
+            if (need == null)
+            {
+                return;
+            }
+
+            AutoWire();
+            if (realDemandSuppliers == null)
+            {
+                realDemandSuppliers = new SupplierDirectory();
+                RefreshRealDemandSuppliers();
+            }
+
+            realDemandSource ??= new RealDemandSource(
+                populationManager != null ? populationManager.State : null,
+                HouseholdLedgers,
+                HouseholdNeedRegistry,
+                realDemandSuppliers,
+                HouseholdKnowsSupplier,
+                businessCashCents: id => FindBusiness(id)?.RuntimeState?.CurrentCashCents ?? 0,
+                generalStoreSupplierId: FindGeneralStoreSupplierId());
+            realDemandSource.RegisterBusinessInputNeed(need);
+        }
+
+        private void RefreshRealDemandSuppliers()
+        {
+            if (realDemandSuppliers == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null || business.RuntimeState == null)
+                {
+                    continue;
+                }
+
+                BusinessInstanceState captured = business;
+                realDemandSuppliers.Register(new BusinessInstanceSellerAdapter(
+                    captured,
+                    categoryId => GetAverageCategoryTransferPriceCents(
+                        captured, FindProfile(captured.BusinessType), categoryId)));
+            }
+        }
+
+        private BusinessInstanceState FindBusiness(string instanceId)
+        {
+            if (string.IsNullOrWhiteSpace(instanceId))
+            {
+                return null;
+            }
+
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                if (businesses[i] != null && string.Equals(businesses[i].InstanceId, instanceId, StringComparison.Ordinal))
+                {
+                    return businesses[i];
+                }
+            }
+
+            return null;
+        }
+
+        private string FindGeneralStoreSupplierId()
+        {
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                if (businesses[i] != null && businesses[i].BusinessType == BusinessType.GeneralStore)
+                {
+                    return businesses[i].InstanceId;
+                }
+            }
+
+            return string.Empty;
+        }
 
         /// <summary>
         /// Phase B: wires the household-cash authority into every business
@@ -753,20 +893,21 @@ namespace LandLedgers.Economy
                     }
                 }
 
-                int revenue = weeklyVisits * GetServiceVisitPriceCents(business, profile);
-                if (revenue > 0)
-                {
-                    runtime.RecordDailyServiceRevenue(CategoryFreightService, plannedVisits, revenue);
-                }
-
+                // Pass VII Workstream A: freight service visits were priced and
+                // booked as revenue with no customer (planned capacity is not
+                // demand). A service business is paid only for legitimate
+                // fulfillment, and no live freight-customer path exists, so no
+                // service revenue is recorded here. The upkeep consumption above
+                // (feed, repairs) is real and stays: the business still spends
+                // to stay ready, which is a valid operating loss.
                 business.ApplyWeeklyOperationResult(0);
-                business.ApplyDailyServiceResult(plannedVisits);
+                business.ApplyDailyServiceResult(0);
                 string blocked = BuildBlockedReason(blockedReasons);
                 string repairRead = repairs != null ? $"; wheelwright upkeep {repairUnits}" : string.Empty;
-                string result = $"livery & freight service {plannedVisits} visits/day ({weeklyVisits} weekly); upkeep {consumed} {CategoryLiveryFeedUpkeep}{repairRead}; revenue {FormatMoney(revenue)}";
-                runtime.RecordWeeklyOperation(consumed, weeklyVisits, result, blocked);
+                string result = $"livery & freight service {plannedVisits} visits/day ({weeklyVisits} weekly) capacity ready; upkeep {consumed} {CategoryLiveryFeedUpkeep}{repairRead}; no service customers, no revenue";
+                runtime.RecordWeeklyOperation(consumed, 0, result, blocked);
                 RecordOperationSummary(business, string.IsNullOrWhiteSpace(blocked) ? result : $"{result}; blocked: {blocked}");
-                AppendSummarySegment(summary, $"{business.BusinessType} service {plannedVisits} {FormatMoney(revenue)}");
+                AppendSummarySegment(summary, $"{business.BusinessType} service {plannedVisits} {FormatMoney(0)} (no customers)");
                 count++;
             }
 
@@ -1930,6 +2071,15 @@ namespace LandLedgers.Economy
             return soldUnits;
         }
 
+        /// <summary>
+        /// Pass VII Workstream A: the town pulse is not a buyer, so it can no
+        /// longer produce sales. This entry point is retained for the demand
+        /// signal (eligible sellers are still matched and the unfulfilled demand
+        /// is recorded for manager response), but it mutates no financial state
+        /// and always reports zero units sold and zero revenue. Real demand
+        /// flows through <see cref="LandLedgers.Economy.Core.IRealDemandSource"/>
+        /// and settles through the production sale authorities.
+        /// </summary>
         public int TrySellTownPulseDemand(
             string reserveCategoryId,
             IReadOnlyList<string> sellerCategoryIds,
@@ -1946,7 +2096,6 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
-            int soldUnits = 0;
             List<HouseholdReserveSellerCandidate> candidates = BuildHouseholdReserveSellerCandidates(
                 reserveCategoryId,
                 sellerCategoryIds,
@@ -1956,23 +2105,15 @@ namespace LandLedgers.Economy
             for (int i = 0; i < candidates.Count && remainingUnits > 0; i++)
             {
                 HouseholdReserveSellerCandidate candidate = candidates[i];
-                int sold = TrySellTownPulseDemandFromBusiness(
+                TrySellTownPulseDemandFromBusiness(
                     candidate.business,
                     string.IsNullOrWhiteSpace(reserveCategoryId) ? candidate.sellerCategoryId : reserveCategoryId,
                     candidate.sellerCategoryId,
                     remainingUnits,
-                    out int categoryRevenue);
-                if (sold <= 0)
-                {
-                    continue;
-                }
-
-                soldUnits += sold;
-                revenueCents += categoryRevenue;
-                remainingUnits -= sold;
+                    out _);
             }
 
-            return soldUnits;
+            return 0;
         }
 
         public PopulationHealthDailySnapshot ResolveDailyDoctorTreatments(PopulationState population, int absoluteDayIndex)
@@ -7067,7 +7208,17 @@ namespace LandLedgers.Economy
             }
 
             int revenue = unitsSold * unitPriceCents;
-            seller.RuntimeState.ResolveDailySalesPlaceholder(sellerCategoryId, unitsSold, revenue);
+            // Pass VII Workstream A: this is a REAL household purchase (the
+            // caller debits the household ledger via ChargeHouseholdCents with
+            // a budget capped by actual household cash). Settle with the buyer
+            // named; a missing buyer refuses the sale outright.
+            bool settled = seller.RuntimeState.ResolveSettledSale(
+                sellerCategoryId, unitsSold, revenue, $"household:{householdId}");
+            if (!settled)
+            {
+                return 0;
+            }
+
             remainingBudgetCents -= revenue;
             spendCents = revenue;
             seller.RefreshCapacityState();
@@ -7090,6 +7241,15 @@ namespace LandLedgers.Economy
             return unitsSold;
         }
 
+        /// <summary>
+        /// Pass VII Workstream A: the town pulse is an aggregate demand signal,
+        /// not a buyer. This method matches eligible sellers (the valid
+        /// operation) but records the demand as UNFULFILLED: it mutates no
+        /// financial state, moves no stock, and posts no revenue. Real sales
+        /// require a real buyer through <see cref="TrySellHouseholdReserveUnits"/>
+        /// or the <see cref="LandLedgers.Economy.Core.IRealDemandSource"/>.
+        /// Always returns 0.
+        /// </summary>
         private int TrySellTownPulseDemandFromBusiness(
             BusinessInstanceState seller,
             string reserveCategoryId,
@@ -7125,31 +7285,18 @@ namespace LandLedgers.Economy
             }
 
             int staffedUnits = ScaleHouseholdSaleUnitsByOperatingEfficiency(seller, requestedUnits);
-            int unitsSold = Mathf.Min(Mathf.Max(0, requestedUnits), staffedUnits, stock.CurrentStockUnits);
-            if (unitsSold <= 0)
+            int fulfillableUnits = Mathf.Min(Mathf.Max(0, requestedUnits), staffedUnits, stock.CurrentStockUnits);
+            if (fulfillableUnits <= 0)
             {
                 return 0;
             }
 
-            revenueCents = unitsSold * unitPriceCents;
-            seller.RuntimeState.ResolveDailySalesPlaceholder(sellerCategoryId, unitsSold, revenueCents);
-            seller.RefreshCapacityState();
-            seller.RecordBusinessReputationObservation(
-                new BusinessReputationObservation(
-                    requestedUnits,
-                    unitsSold,
-                    unitPriceCents,
-                    GetAverageCategoryLandedCostCents(profile, sellerCategoryId),
-                    stock.StockHealth01,
-                    seller.RuntimeState.Reliability01,
-                    GetHealthAdjustedOperatingEfficiency01(seller),
-                    sellerCategoryId,
-                    timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1,
-                    GetCurrentWeekKey()));
+            // No buyer, no sale: record the buyerless demand as unfulfilled so
+            // managers can respond to it, without manufacturing revenue.
             AppendTransferToOperationSummary(
                 seller,
-                $"; sold {unitsSold} {reserveCategoryId} to town pulse for {FormatMoney(revenueCents)}");
-            return unitsSold;
+                $"; town-pulse demand for {fulfillableUnits} {reserveCategoryId} unfulfilled (no buyer)");
+            return 0;
         }
 
         private BusinessReputationSellerChoiceScore ApplyHouseholdAffinityToSellerChoiceScore(

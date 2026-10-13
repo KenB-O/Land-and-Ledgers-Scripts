@@ -237,6 +237,13 @@ namespace LandLedgers.Economy.Equipment
         }
 
         /// <inheritdoc />
+        public void ReleaseAllForResource(string resourceKey)
+        {
+            if (string.IsNullOrWhiteSpace(resourceKey)) return;
+            liveReservations.RemoveAll(r => r != null && HoldsKey(r, resourceKey));
+        }
+
+        /// <inheritdoc />
         public bool IsReserved(string resourceKey, float atGameSeconds)
         {
             if (string.IsNullOrWhiteSpace(resourceKey)) return false;

@@ -61,6 +61,23 @@ namespace LandLedgers.EditorTests.Tasks
                 }
             }
 
+            public void ReleaseAllForResource(string resourceKey)
+            {
+                var ids = new List<string>();
+                foreach (var entry in live)
+                {
+                    foreach (var item in entry.Value.Items)
+                    {
+                        if (item.ResourceKey == resourceKey) { ids.Add(entry.Key); break; }
+                    }
+                }
+
+                foreach (string id in ids)
+                {
+                    live.Remove(id);
+                }
+            }
+
             public bool IsReserved(string resourceKey, float atGameSeconds)
             {
                 return false;

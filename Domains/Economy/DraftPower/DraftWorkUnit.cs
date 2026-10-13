@@ -123,11 +123,16 @@ namespace LandLedgers.Economy.DraftPower
 
         /// <summary>
         /// Works one plow session with the unit: wears the implement (Tech X §3.9)
-        /// and reports the working horses so the caller feeds them honestly —
-        /// working horses eat more than idle ones.
+        /// and accrues REAL condition cost on every team horse (Pass VII P1-5).
+        /// The cost derives from the acres actually plowed and each horse's
+        /// current state — no universal wear constants, no zero-cost work.
+        /// A horse worked to near-exhaustion can break down (causal overwork,
+        /// recorded on its health notes by the caller-visible condition drop).
         /// </summary>
         public static string WorkPlowSession(
             DraftWorkUnit unit,
+            AnimalRegistry registry,
+            float acresPlowed,
             float implementWear01,
             List<string> diagnostics)
         {
@@ -137,8 +142,37 @@ namespace LandLedgers.Economy.DraftPower
             diagnostics.Add(
                 $"DraftWorkUnitService: unit {unit.UnitId} worked — {unit.Implement.DisplayName} " +
                 $"condition now {unit.Implement.Condition01:0.00}.");
+
+            // Real horse cost: intensity from acres plowed (calibration), state
+            // from the horse itself. Working horses eat more than idle ones —
+            // the feed loop charges the higher working ration.
+            float intensity = Math.Max(0f, acresPlowed) * HorseWorkFatiguePerAcre01;
+            foreach (EntityId horseId in unit.TeamAnimalIds)
+            {
+                AnimalState horse = registry != null ? registry.GetAnimal(horseId) : null;
+                if (horse == null) continue;
+                float healthBefore = horse.Health01;
+                HorseAuthority.ComputeWorkCost(horse, intensity,
+                    out float fatigue01, out float nutritionCost01, out float conditionCost01);
+                HorseAuthority.ApplyWork(horse, fatigue01, nutritionCost01, conditionCost01);
+                if (conditionCost01 > 0f && horse.Health01 < healthBefore)
+                {
+                    string note = $"Overwork breakdown plowing {acresPlowed:F1} acres (unit {unit.UnitId}).";
+                    horse.HealthNotes = string.IsNullOrWhiteSpace(horse.HealthNotes)
+                        ? note : $"{horse.HealthNotes} | {note}";
+                    diagnostics.Add(
+                        $"DraftWorkUnitService: horse {horseId} broke down from overwork — " +
+                        $"health {healthBefore:0.00} -> {horse.Health01:0.00}.");
+                }
+            }
+            diagnostics.Add(
+                $"DraftWorkUnitService: team of {unit.TeamAnimalIds.Count} horses worked " +
+                $"{acresPlowed:F1} acres — real fatigue and feed cost accrued.");
             return null;
         }
+
+        /// <summary>Calibration: fatigue intensity per acre plowed by a standard team.</summary>
+        public const float HorseWorkFatiguePerAcre01 = 0.03f;
 
         /// <summary>Releases every reservation the unit holds.</summary>
         public static void ReleaseUnit(DraftWorkUnit unit, DraftPowerService draftPower)

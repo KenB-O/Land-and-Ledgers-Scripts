@@ -48,11 +48,21 @@ namespace LandLedgers.Economy.Transport
                 && volumeM3 <= wagon.CargoVolumeCapacityM3;
         }
 
+        /// <summary>
+        /// Pass VII Workstream B (P1-4): assigns a draft team through the shared
+        /// animal availability authority — a horse already committed to plowing,
+        /// rental, or another shipment refuses here on the SAME reservation
+        /// record. Suitability stays with HorseAuthority; this method never
+        /// overrides a live reservation.
+        /// </summary>
         public static string TryAssignDraftTeam(
             EquipmentAsset wagon,
             IList<AnimalState> horses,
             string driverPersonId,
-            string shipmentId)
+            string shipmentId,
+            IAnimalAvailabilityAuthority availability,
+            float fromGameSeconds,
+            float toGameSeconds)
         {
             if (wagon == null || !wagon.IsWagon) return "WagonAuthority: a configured wagon is required.";
             if (!wagon.IsUsable) return $"WagonAuthority: wagon {wagon.AssetId} is not roadworthy.";
@@ -60,20 +70,23 @@ namespace LandLedgers.Economy.Transport
             if (horses == null || horses.Count == 0) return "WagonAuthority: at least one draft horse is required.";
             if (string.IsNullOrWhiteSpace(driverPersonId)) return "WagonAuthority: a real driver PersonId is required.";
             if (string.IsNullOrWhiteSpace(shipmentId)) return "WagonAuthority: shipment id is required.";
+            if (availability == null) return "WagonAuthority: no availability authority — the team cannot be reserved.";
 
             var assigned = new List<string>();
             foreach (AnimalState horse in horses)
             {
                 if (horse == null || assigned.Contains(horse.AnimalId.ToString()))
                 {
-                    ReleaseDraftTeam(horses, assigned.Count);
+                    ReleaseDraftTeam(horses, assigned.Count, availability);
                     return "WagonAuthority: draft team contains an invalid or duplicate horse.";
                 }
-                string refusal = HorseAuthority.TryReserveUse(horse, HorseUseKind.Draft, shipmentId);
+                string refusal = HorseAuthority.TryReserveUse(
+                    horse, HorseUseKind.Draft, shipmentId, availability,
+                    fromGameSeconds, toGameSeconds, out _);
                 if (refusal != null)
                 {
                     foreach (AnimalState prior in horses)
-                        if (prior != null && assigned.Contains(prior.AnimalId.ToString())) HorseAuthority.ReleaseUse(prior);
+                        if (prior != null && assigned.Contains(prior.AnimalId.ToString())) HorseAuthority.ReleaseUse(prior, availability);
                     return refusal;
                 }
                 assigned.Add(horse.AnimalId.ToString());
@@ -84,19 +97,21 @@ namespace LandLedgers.Economy.Transport
             return null;
         }
 
-        public static string ReleaseDraftTeam(EquipmentAsset wagon, IList<AnimalState> horses)
+        public static string ReleaseDraftTeam(
+            EquipmentAsset wagon, IList<AnimalState> horses, IAnimalAvailabilityAuthority availability)
         {
             if (wagon == null) return "WagonAuthority: no wagon supplied.";
-            if (horses != null) foreach (AnimalState horse in horses) HorseAuthority.ReleaseUse(horse);
+            if (horses != null) foreach (AnimalState horse in horses) HorseAuthority.ReleaseUse(horse, availability);
             wagon.DraftAnimalIds.Clear();
             wagon.CurrentDriverPersonId = string.Empty;
             wagon.CurrentShipmentId = string.Empty;
             return null;
         }
 
-        private static void ReleaseDraftTeam(IList<AnimalState> horses, int count)
+        private static void ReleaseDraftTeam(
+            IList<AnimalState> horses, int count, IAnimalAvailabilityAuthority availability)
         {
-            for (int i = 0; i < Math.Min(count, horses.Count); i++) HorseAuthority.ReleaseUse(horses[i]);
+            for (int i = 0; i < Math.Min(count, horses.Count); i++) HorseAuthority.ReleaseUse(horses[i], availability);
         }
 
         public static void ApplyTripWear(EquipmentAsset wagon, float distanceMiles, float loadRatio)

@@ -70,12 +70,34 @@ namespace LandLedgers.Animals
             return null;
         }
 
-        public static string TryReserveUse(AnimalState horse, HorseUseKind use, string assignmentId)
+        /// <summary>
+        /// Pass VII Workstream B (P1-4): the mount/draft-team reservation path.
+        /// Suitability (capability, fitness) is evaluated here; availability is
+        /// decided ONLY by the availability authority on the shared "animal:"
+        /// reservation record — the draft path (DraftPowerService), the rental
+        /// path, and travel all contend on that same record, so one horse can
+        /// never work two jobs at once. This method never overrides a live
+        /// reservation. On success the horse mirrors the assignment locally and
+        /// the reservation id is stored for release.
+        /// </summary>
+        public static string TryReserveUse(
+            AnimalState horse,
+            HorseUseKind use,
+            string assignmentId,
+            IAnimalAvailabilityAuthority availability,
+            float fromGameSeconds,
+            float toGameSeconds,
+            out string reservationId)
         {
+            reservationId = null;
             string error = ValidateHorse(horse);
             if (error != null) return error;
             if (string.IsNullOrWhiteSpace(assignmentId))
                 return "HorseAuthority.TryReserveUse: assignment id is required.";
+            if (availability == null)
+                return "HorseAuthority.TryReserveUse: no availability authority — the horse cannot be reserved.";
+            if (!(toGameSeconds > fromGameSeconds))
+                return $"HorseAuthority.TryReserveUse: the reservation window for horse {horse.AnimalId} ends before it starts.";
             if (horse.CurrentUse != HorseUseKind.None || !string.IsNullOrWhiteSpace(horse.CurrentAssignmentId))
                 return $"HorseAuthority.TryReserveUse: horse {horse.AnimalId} is already assigned.";
 
@@ -87,24 +109,99 @@ namespace LandLedgers.Animals
             if (!IsWorkReady(horse))
                 return $"HorseAuthority.TryReserveUse: horse {horse.AnimalId} is not fit for work.";
 
+            string refusal = availability.TryReserve(
+                horse.AnimalId.ToString(), use.ToString(), assignmentId,
+                fromGameSeconds, toGameSeconds, out reservationId);
+            if (refusal != null)
+                return $"HorseAuthority.TryReserveUse: {refusal}";
+
             horse.CurrentUse = use;
             horse.CurrentAssignmentId = assignmentId;
+            horse.CurrentReservationId = reservationId ?? string.Empty;
             return null;
         }
 
-        public static void ReleaseUse(AnimalState horse)
+        /// <summary>
+        /// Releases a reservation made by TryReserveUse: the live reservation
+        /// is released through the availability authority (no leaked holds) and
+        /// the local mirror is cleared.
+        /// </summary>
+        public static void ReleaseUse(AnimalState horse, IAnimalAvailabilityAuthority availability)
         {
             if (horse == null) return;
+            if (availability != null && !string.IsNullOrWhiteSpace(horse.CurrentReservationId))
+                availability.Release(horse.CurrentReservationId);
             horse.CurrentUse = HorseUseKind.None;
             horse.CurrentAssignmentId = string.Empty;
+            horse.CurrentReservationId = string.Empty;
+        }
+
+        /// <summary>
+        /// The condition gate shared by work-readiness and draft capability:
+        /// health, nutrition, and hydration above the fit threshold, fatigue
+        /// below it. An injured, starved, or exhausted animal fails here no
+        /// matter its species or training.
+        /// </summary>
+        public static bool MeetsWorkCondition(AnimalState animal)
+        {
+            return animal != null
+                && animal.Health01 >= 0.35f && animal.Nutrition01 >= 0.35f
+                && animal.Hydration01 >= 0.35f && animal.Fatigue01 <= 0.85f;
         }
 
         public static bool IsWorkReady(AnimalState horse)
         {
             return horse != null && horse.IsActive && horse.Species == AnimalSpecies.Horse
-                && horse.Health01 >= 0.35f && horse.Nutrition01 >= 0.35f
-                && horse.Hydration01 >= 0.35f && horse.Fatigue01 <= 0.85f
+                && MeetsWorkCondition(horse)
                 && !string.IsNullOrWhiteSpace(horse.HousingId);
+        }
+
+        /// <summary>
+        /// Records a named injury on a horse: a real health cost with a stated
+        /// cause and day, appended to the health notes. There are no
+        /// probability rolls here — the caller owns the causal channel
+        /// (overwork breakdown, accident, disease) and supplies the severity.
+        /// An injured horse fails the condition gate, so incompatible work is
+        /// refused downstream with real consequences.
+        /// </summary>
+        public static string RecordInjury(AnimalState horse, string cause, float severity01, int dayIndex)
+        {
+            string error = ValidateHorse(horse);
+            if (error != null) return error;
+            if (string.IsNullOrWhiteSpace(cause))
+                return "HorseAuthority.RecordInjury: a cause is required — injuries are never anonymous.";
+            float severity = Math.Max(0f, Math.Min(1f, severity01));
+            horse.Health01 = Clamp01(horse.Health01 - severity);
+            string note = $"Injured day {dayIndex}: {cause} (severity {severity:0.00}).";
+            horse.HealthNotes = string.IsNullOrWhiteSpace(horse.HealthNotes)
+                ? note
+                : $"{horse.HealthNotes} | {note}";
+            return null;
+        }
+
+        /// <summary>
+        /// Computes work costs from the REAL work (intensity01 from the task:
+        /// acres plowed, miles times load hauled) and the horse's CURRENT
+        /// state — never a universal wear constant. Fatigue compounds: a tired
+        /// horse pays more for the same work than a fresh one. Pushing a horse
+        /// that is already near exhaustion damages health: a causal overwork
+        /// breakdown, never a random roll.
+        /// Calibration (tuning, not canon): the 0.5 nutrition share of strain.
+        /// </summary>
+        public static void ComputeWorkCost(
+            AnimalState horse, float workIntensity01,
+            out float fatigue01, out float nutritionCost01, out float conditionCost01)
+        {
+            fatigue01 = 0f;
+            nutritionCost01 = 0f;
+            conditionCost01 = 0f;
+            if (horse == null || horse.Species != AnimalSpecies.Horse) return;
+            float intensity = Math.Max(0f, workIntensity01);
+            if (intensity <= 0f) return;
+            float strain = intensity * (1f + horse.Fatigue01);
+            fatigue01 = strain;
+            nutritionCost01 = strain * 0.5f;
+            conditionCost01 = horse.Fatigue01 >= 0.95f ? strain * 0.5f : 0f;
         }
 
         public static void ApplyCare(AnimalState horse, float feed01, float water01, float rest01, int dayIndex)

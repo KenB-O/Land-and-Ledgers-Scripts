@@ -190,6 +190,19 @@ namespace LandLedgers.Economy.Farming.Integration
         }
 
         /// <summary>
+        /// Pass VII Workstream B (P1-5): takes up to requestedUnits from the
+        /// finite stock (horse rations). Returns the units actually taken —
+        /// the stock only shrinks by what it holds, so upkeep is a real cost.
+        /// </summary>
+        public int TakeFeedUnits(int requestedUnits)
+        {
+            if (requestedUnits <= 0) return 0;
+            int taken = Math.Min(requestedUnits, FeedStockUnits);
+            FeedStockUnits -= taken;
+            return taken;
+        }
+
+        /// <summary>
         /// One day of feeding. Returns shortfall units (0 = fully fed).
         /// Grazing covers part of cattle/sheep need in non-winter seasons
         /// (FarmSeasons.PastureGrazingShare); the rest must come from stock.

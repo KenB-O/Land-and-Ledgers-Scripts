@@ -335,7 +335,8 @@ namespace LandLedgers.Economy.Farming
             if (activeUnits.TryGetValue(order.OrderId, out DraftWorkUnit unit))
             {
                 var diagnostics = new List<string>();
-                DraftWorkUnitService.WorkPlowSession(unit, order.Acres * WearPerAcre01, diagnostics);
+                DraftWorkUnitService.WorkPlowSession(
+                    unit, hooks.AnimalRegistry, order.Acres, order.Acres * WearPerAcre01, diagnostics);
                 DraftWorkUnitService.ReleaseUnit(unit, hooks.DraftPower);
                 activeUnits.Remove(order.OrderId);
                 foreach (string d in diagnostics) Log(hooks, d);

@@ -38,6 +38,8 @@ namespace LandLedgers.Economy.Postal
         public string MailId = string.Empty;
         public MailKind Kind;
         public string SenderName = string.Empty;
+        /// <summary>Pass VII: the sender's person id when the sender is a simulated person (-1 = unknown/off-map).</summary>
+        public int SenderPersonId = -1;
         public int RecipientPersonId = -1; // -1 = named off-map recipient
         public string RecipientName = string.Empty;
         public string FromOfficeId = string.Empty;

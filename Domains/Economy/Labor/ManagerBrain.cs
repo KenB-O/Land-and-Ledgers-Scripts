@@ -281,6 +281,19 @@ namespace LandLedgers.Economy.Labor
                 // All candidates refused/escalated - those are already recorded.
                 result.Escalated = true;
                 result.EscalationReason = string.Join("; ", escalationReasons.ToArray());
+                // Name the blocked act so the execution layer can route it to
+                // a pending request or escalation handler. The first candidate
+                // is the strongest-evidenced blocked act.
+                if (candidates != null && candidates.Count > 0 && candidates[0] != null)
+                {
+                    result.ActionKind = candidates[0].Kind ?? string.Empty;
+                    // Preserve the amount in the reference so the executor can
+                    // size the pending request. Format matches ExecuteAct.
+                    if (candidates[0].AmountCents > 0)
+                    {
+                        result.ResultingReference = $"intent:{candidates[0].Kind.ToLowerInvariant()}-request:{inputs.BusinessInstanceId}:d{inputs.DayIndex}:{candidates[0].AmountCents}c";
+                    }
+                }
                 return result;
             }
 

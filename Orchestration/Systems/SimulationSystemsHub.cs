@@ -287,6 +287,7 @@ namespace LandLedgers.Orchestration.Systems
         // the same instances; none of these services owns a second cash,
         // inventory, or debt ledger.
         private PersonScheduleTracker personScheduleTracker;
+        private KnowledgeTransmissionStore knowledgeTransmissions;
         private RentCollectionService rentCollectionService;
         private NpcFormationAssetRegister npcFormationAssetRegister;
         private NpcBusinessLifecycleService npcBusinessLifecycle;
@@ -314,6 +315,7 @@ namespace LandLedgers.Orchestration.Systems
         private WorkScheduler workScheduler;
         private WageSettlementService wageSettlementService;
         private ManagerBrain managerBrain;
+        private ManagerDecisionExecutionService managerDecisionExecution;
         private LaborMigrationLinker laborMigrationLinker;
         private DelegationService delegationService;
         private TenancyPaymentService tenancyPaymentService;
@@ -362,6 +364,15 @@ namespace LandLedgers.Orchestration.Systems
         public RecruitmentService Recruiting => recruitmentService ??= new RecruitmentService();
 
         public PersonScheduleTracker PersonSchedules => personScheduleTracker ??= new PersonScheduleTracker();
+
+        /// <summary>
+        /// Pass VII Workstream E: the minimal person belief/knowledge store.
+        /// Only transmitted packets are knowable; rumors stay uncertain.
+        /// Save-persisted.
+        /// </summary>
+        public KnowledgeTransmissionStore KnowledgeTransmissions =>
+            knowledgeTransmissions ??= new KnowledgeTransmissionStore();
+
         public RentCollectionService RentCollection => rentCollectionService ??= new RentCollectionService();
         public NpcFormationAssetRegister NpcFormationAssets => npcFormationAssetRegister ??= new NpcFormationAssetRegister();
         public NpcBusinessLifecycleService NpcBusinessLifecycle => npcBusinessLifecycle ??= new NpcBusinessLifecycleService();
@@ -416,6 +427,14 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>Autonomous Labor: delegated-manager decision loop.</summary>
         public ManagerBrain Managers => managerBrain ??= new ManagerBrain();
+
+        /// <summary>
+        /// Pass VII Workstream D: executes manager decisions through real
+        /// production authorities. Configured by the driver with the hub's
+        /// authorities; the ledger is save-persisted.
+        /// </summary>
+        public ManagerDecisionExecutionService ManagerDecisionExecution =>
+            managerDecisionExecution ??= new ManagerDecisionExecutionService();
 
         /// <summary>Autonomous Labor: bounded employment-linked migration evaluation.</summary>
         public LaborMigrationLinker MigrationLinker => laborMigrationLinker ??= new LaborMigrationLinker();
@@ -871,9 +890,11 @@ namespace LandLedgers.Orchestration.Systems
                 tradeCredit = TradeCredit.CaptureSaveDto(),
                 creditEvents = CreditEvents.CaptureSaveDto(),
                 contactGraph = ContactGraph.CaptureSaveDto(),
+                knowledgeTransmissions = KnowledgeTransmissions.CaptureSaveDto(),
                 employmentNegotiation = EmploymentNegotiation.CaptureSaveDto(),
                 wageSettlement = WageSettlement.CaptureSaveDto(),
                 managerBrain = Managers.CaptureSaveDto(),
+                managerDecisionExecution = ManagerDecisionExecution.CaptureSaveDto(),
                 delegation = Delegation.CaptureSaveDto(),
                 parcels = Parcels.CaptureSaveDto(),
                 propertyInterests = PropertyInterests.CaptureSaveDto(),
@@ -976,9 +997,11 @@ namespace LandLedgers.Orchestration.Systems
             TradeCredit.LoadFromSaveDto(dto.tradeCredit);
             CreditEvents.LoadFromSaveDto(dto.creditEvents);
             ContactGraph.LoadFromSaveDto(dto.contactGraph);
+            KnowledgeTransmissions.LoadFromSaveDto(dto.knowledgeTransmissions);
             EmploymentNegotiation.LoadFromSaveDto(dto.employmentNegotiation);
             WageSettlement.LoadFromSaveDto(dto.wageSettlement);
             Managers.LoadFromSaveDto(dto.managerBrain);
+            ManagerDecisionExecution.LoadFromSaveDto(dto.managerDecisionExecution);
             Delegation.LoadFromSaveDto(dto.delegation);
             Parcels.LoadFromSaveDto(dto.parcels);
             PropertyInterests.LoadFromSaveDto(dto.propertyInterests);

@@ -8901,33 +8901,29 @@ namespace LandLedgers.Economy
             return BuildLandQuickDiligenceLine(listing, seed, kind);
         }
 
+        /// <summary>
+        /// Pass VII P1-6: quick-diligence clues READ business state. Every
+        /// clue line is computed from the business's real runtime state or the
+        /// listing's real fields; nothing is seeded or invented. When the
+        /// business state is unavailable the clue says so honestly.
+        /// </summary>
         private string BuildBusinessQuickDiligenceLine(AcquisitionListing listing, int seed, AcquisitionDiligenceClueKind kind)
         {
             BusinessInstanceState business = sharedBusinessRuntime != null ? sharedBusinessRuntime.FindByBuildingId(listing.buildingId) : null;
             switch (kind)
             {
                 case AcquisitionDiligenceClueKind.VisibleCondition:
-                    return (seed % 3) switch
-                    {
-                        0 => "Visible condition: storefront and yard read serviceable, with ordinary wear.",
-                        1 => "Visible condition: deferred repair is visible around the work areas.",
-                        _ => "Visible condition: public face is tidy, but rear service condition is uncertain."
-                    };
+                    return business != null
+                        ? business.BuildDiligenceConditionLine()
+                        : "Visible condition: the business could not be located; no field note could be taken.";
                 case AcquisitionDiligenceClueKind.Staffing:
-                    if (business != null)
-                    {
-                        return $"Staffing clue: {business.RuntimeDisplayName} appears staffed enough to trade, but role depth still needs formal review.";
-                    }
-                    return (seed % 2) == 0
-                        ? "Staffing clue: the counter is covered, but peak-hour help looks thin."
-                        : "Staffing clue: work rhythm suggests an owner-operator is carrying too much of the load.";
+                    return business != null
+                        ? business.BuildDiligenceStaffingLine()
+                        : "Staffing clue: the business could not be located; no field note could be taken.";
                 case AcquisitionDiligenceClueKind.SupplierWeakness:
-                    return (seed % 3) switch
-                    {
-                        0 => "Supplier weakness: stock movement suggests a reliable but narrow supply line.",
-                        1 => "Supplier weakness: visible stock gaps point to freight or local sourcing pressure.",
-                        _ => "Supplier weakness: supply looks adequate today, but resilience is not proven."
-                    };
+                    return business != null
+                        ? business.BuildDiligenceSupplyLine()
+                        : "Supplier weakness: the business could not be located; no field note could be taken.";
                 case AcquisitionDiligenceClueKind.DemandFit:
                     return !string.IsNullOrWhiteSpace(listing.detail)
                         ? $"Demand-fit clue: {listing.detail}"
@@ -8935,17 +8931,18 @@ namespace LandLedgers.Economy
                 case AcquisitionDiligenceClueKind.RoughValue:
                     return $"Rough value clue: asking price is {FormatMoney(listing.askingPriceCents)}; a formal diligence pass should verify the earning base.";
                 case AcquisitionDiligenceClueKind.Reliability:
-                    return (seed % 3) switch
-                    {
-                        0 => "Reliability clue: trade cadence looks steady enough for a cautious process.",
-                        1 => "Reliability clue: operating rhythm looks uneven; insist on stronger terms.",
-                        _ => "Reliability clue: the public floor looks orderly, but back-room dependability is still unknown."
-                    };
+                    return business != null
+                        ? business.BuildDiligenceReliabilityLine()
+                        : "Reliability clue: the business could not be located; no field note could be taken.";
                 default:
                     return "Field note: no specific clue was recorded.";
             }
         }
 
+        /// <summary>
+        /// Pass VII P1-6: land clues read the listing's real fields. No seeded
+        /// variation: the same parcel always yields the same honest note.
+        /// </summary>
         private string BuildLandQuickDiligenceLine(AcquisitionListing listing, int seed, AcquisitionDiligenceClueKind kind)
         {
             switch (kind)
@@ -8953,9 +8950,7 @@ namespace LandLedgers.Economy
                 case AcquisitionDiligenceClueKind.VisibleCondition:
                     return listing.improved
                         ? "Visible condition: improved ground needs title and structure checks before commitment."
-                        : (seed % 2) == 0
-                            ? "Visible condition: ground reads practical with no obvious obstruction."
-                            : "Visible condition: ground is usable, but prep work may eat into the first project budget.";
+                        : $"Visible condition: unimproved {listing.plotZone} ground ({listing.siteSizeCells.x}x{listing.siteSizeCells.y}); prep work needs a site survey before budgeting.";
                 case AcquisitionDiligenceClueKind.Staffing:
                     return "Staffing clue: no direct staff transfers with bare land; future use will need separate hiring capacity.";
                 case AcquisitionDiligenceClueKind.SupplierWeakness:
@@ -8969,12 +8964,7 @@ namespace LandLedgers.Economy
                     }
                     return $"Rough value clue: asking price is {FormatMoney(listing.askingPriceCents)}; valuation needs a cleaner site read.";
                 case AcquisitionDiligenceClueKind.Reliability:
-                    return (seed % 3) switch
-                    {
-                        0 => "Reliability clue: access and frontage look dependable for routine development.",
-                        1 => "Reliability clue: site use looks sensitive to project choice and input timing.",
-                        _ => "Reliability clue: parcel reads promising, but utility and service pressure remain open questions."
-                    };
+                    return $"Reliability clue: {listing.plotZone} frontage reads workable for routine development, but utility and service pressure remain open questions.";
                 default:
                     return "Field note: no specific clue was recorded.";
             }

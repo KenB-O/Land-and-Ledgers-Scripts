@@ -9431,15 +9431,24 @@ namespace LandLedgers.Economy
             return $"Storage {capacity.CurrentStoredUnits}/{capacity.StorageCapacityUnits} | {capacity.StorageHealth01:P0}";
         }
 
+        /// <summary>
+        /// Pass VII P1-6: hidden mine state (richness, deposit confidence) is
+        /// diligence-gated. Public inspection defaults to unqualified; the
+        /// owner/manager view passes qualified=true.
+        /// </summary>
         private static string BuildMineInspectionLine(BusinessInstanceState business)
         {
-            MineRuntimeState mine = business != null ? business.MineState : null;
-            if (mine == null)
+            return BuildMineInspectionLine(business, diligenceQualified: false);
+        }
+
+        private static string BuildMineInspectionLine(BusinessInstanceState business, bool diligenceQualified)
+        {
+            if (business == null)
             {
                 return string.Empty;
             }
 
-            return $"Deposit: {MineRuntimeState.GetMineralDisplayName(mine.MineralKind)} | confidence {mine.DepositConfidence01:P0} | stage {MineRuntimeState.GetDevelopmentStageDisplayName(mine.DevelopmentStage)} | safety {mine.SafetyRisk01:P0} | richness {mine.RemainingRichness01:P0} | camp pressure {mine.CampPressure01:P0}";
+            return business.BuildMineInspectionLine(diligenceQualified);
         }
 
         private static void AppendMineManagementLines(StringBuilder builder, BusinessInstanceState business)
@@ -9450,7 +9459,9 @@ namespace LandLedgers.Economy
                 return;
             }
 
-            builder.AppendLine(BuildMineInspectionLine(business));
+            // The management view serves the owner/manager, who are qualified
+            // for hidden state.
+            builder.AppendLine(BuildMineInspectionLine(business, diligenceQualified: true));
             builder.AppendLine($"Last cut: {mine.LastWeeklyOutputUnits} units | stockpile {mine.StockpileCategoryId}");
             builder.AppendLine($"Mine ledger: {mine.LastWeeklyOutputSummary}");
         }

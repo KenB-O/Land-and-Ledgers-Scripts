@@ -70,18 +70,34 @@ Preserved exactly as listed. The Muse Pass VI pass does not consume Codex usage 
 
 These are findings from the Pass VI cohesion audit that are registered for future work, not fixed in this pass. See Document E for full detail and prioritization.
 
-- PASS6-001: Town-pulse demand manufactures business revenue with no buyer (P1). Integration path designed, ranked in Document E. Not fixed in Pass VI (gameplay-policy decision required).
-- PASS6-002: Estate administration has no runtime driver; business ownership is OwnerKind-keyed (P1). Ranked in Document E.
-- PASS6-003: Remarriage impossible through real relationships (P2). Ranked in Document E.
-- PASS6-004: Horse reservation split, two disjoint availability truths (P1). Integration path designed, ranked in Document E.
-- PASS6-005: Horse condition has no production lifecycle (P1). Ranked in Document E.
-- PASS6-006: Person-level water and hydration missing (P2). Narrow implementation pathway documented, ranked in Document E.
-- PASS6-007: No NPC-to-NPC conversation system; Socializing never planned (P1). Ranked in Document E.
-- PASS6-008: Quick-diligence clues invented; inspection leaks hidden state (P1). Ranked in Document E.
-- PASS6-009: Mine closure and business failure are source-only (P2). Ranked in Document E.
-- PASS6-010: Farm harvest cycle never executes at runtime (P2). Ranked in Document E.
-- PASS6-011: Illness is economically inert (P2). Ranked in Document E.
+- PASS6-001: Town-pulse demand manufactures business revenue with no buyer (P1). Integration path designed, ranked in Document E. FIXED in Pass VII Workstream A, see below.
+- PASS6-002: Estate administration has no runtime driver; business ownership is OwnerKind-keyed (P1). Ranked in Document E. FIXED in Pass VII Workstream C (runtime lifecycle driver), see below. Runtime auto-advancement remains open, see PASS7-001.
+- PASS6-003: Remarriage impossible through real relationships (P2). Ranked in Document E. Still open.
+- PASS6-004: Horse reservation split, two disjoint availability truths (P1). Integration path designed, ranked in Document E. FIXED in Pass VII Workstream B, see below.
+- PASS6-005: Horse condition has no production lifecycle (P1). Ranked in Document E. FIXED in Pass VII Workstream B, see below.
+- PASS6-006: Person-level water and hydration missing (P2). Narrow implementation pathway documented, ranked in Document E. Design completed in Pass VII, implementation deferred, see PASS7-002.
+- PASS6-007: No NPC-to-NPC conversation system; Socializing never planned (P1). Ranked in Document E. FIXED in Pass VII Workstream E (minimal production foundation), see below.
+- PASS6-008: Quick-diligence clues invented; inspection leaks hidden state (P1). Ranked in Document E. Still open.
+- PASS6-009: Mine closure and business failure are source-only (P2). Ranked in Document E. Still open.
+- PASS6-010: Farm harvest cycle never executes at runtime (P2). Ranked in Document E. Still open.
+- PASS6-011: Illness is economically inert (P2). Ranked in Document E. Still open.
 - PASS6-012: Sim-born labor access, death ends employment, ghost split, recruitment dead check (P1). FIXED in Pass VI, see Document E and the fix commits.
+
+## Pass VII resolutions (2026-10-13)
+
+- PASS7-FIX-001: Town-pulse manufactured revenue retired. TrySellTownPulseDemand and TrySellTownPulseDemandFromBusiness in SharedBusinessRuntimeManager.cs now return zero revenue and record buyerless demand as unfulfilled in the operation summary for manager response. RealDemandSource connects Household and Business needs to actual purchases through the 10-step legitimate purchase path. ExternalMarketAuthority provides modeled external counterparties with bounded budgets and provenance. Verified by RealDemandTests (18 passed, includes SliceA) and ExternalTradeTests (10 passed, includes SliceB). Full harness 948 passed, 4 failed (historical).
+- PASS7-FIX-002: Horse availability unified. IAnimalAvailabilityAuthority (thin gateway over the Pass IV IUnifiedReservationAuthority) is now the single availability truth. HorseAuthority.TryReserveUse and DraftPowerService contend on the same "animal:" reservation record. Condition lifecycle: work accrues real condition cost, care recovers, injury blocks incompatible work. Rental changes custody and prevents conflicting owner use. Sale terminates active rental. Verified by Pass7AnimalAvailabilityTests (25 passed, includes SliceC and SliceD).
+- PASS7-FIX-003: Estate lifecycle driver implemented. EstateLifecycleDriver advances Opened to Inventoried to ClaimsAdjudicated to Distributing to Closed through the ordinary authorities (TitleAuthority, FinancialObligationAuthority, CreditRegistry, AnimalRegistry). Insolvent estates invent no funds. Beneficiaries not personally liable. Secured creditors ranked before unsecured. Save/load idempotent. Verified by EstateLifecycleDriverTests (20 passed, includes SliceE and SliceF).
+- PASS7-FIX-004: Manager decision execution wired. All seven ManagerActKinds (OpenRecruitment, Schedule, Procure, PriceChange, OrderMaintenance, Borrow, SellAsset) now execute through real production authorities with delegation-scope enforcement (Do Once, Manager Judgment, Owner Locked). Failed actions produce legitimate pending states, not silent drops. Verified by ManagerDecisionExecutionTests (20 passed) and ManagerExecutionSliceTests (2 passed, includes SliceG and SliceH).
+- PASS7-FIX-005: NPC conversation and information foundation. KnowledgeTransmissionStore records transmissions with full provenance (source, speaker, recipient, time, subject, confidence, chain). IndependentSourceCount prevents fabricated corroboration. ConversationOpportunity requires legitimate co-location and time. SocialPlanning drives social motives. The foreman chain (mine conditions to foreman knowledge to saloon conversation to bartender knowledge to downstream decision) is proven end to end. Social activity without economic gain is proven. Verified by ForemanInformationSliceTests (2 passed, includes SliceI) and SocialInformationTests (15 passed, includes SliceJ).
+
+## New deferred items discovered in Pass VII
+
+- PASS7-001: Estate runtime auto-advancement. The EstateLifecycleDriver is complete and tested but has no daily runtime caller; estates advance only when driven by tests or the scripted AutonomousSocietyDriver.OpenAndSettleEstate demo. A daily estate-processing step in the demographic driver is the designed path. Severity P1. Owner: Muse source pass.
+- PASS7-002: Person-level water system. Full design and authority map completed in Pass VII (see re-audit). Existing: horse care water scalar, regional watercourse geography, infrastructure capability flags. Missing: physical water goods, wells, hauling, household reserves, person hydration, livestock consumption, commercial demand, sanitation, firefighting. Implementation deferred pending Canon policy decisions on requirement rates and health effects. Severity P2. Owner: Muse source pass with design review.
+- PASS7-003: Mine closure lifecycle runtime wiring (PASS6-009 carried forward). Still source-only. Severity P2. Owner: Muse source pass.
+- PASS7-004: Farm harvest cycle runtime driver (PASS6-010 carried forward). Still no production callers for HarvestField, TendField, PlantField. Severity P2. Owner: Muse source pass.
+- PASS7-005: Illness economic integration (PASS6-011 carried forward). laborCapacityPercent and HealthWorkImpactBand still have no consumers. Severity P2. Owner: Muse source pass.
 
 ## Fixed in Pass VI (retained with evidence)
 

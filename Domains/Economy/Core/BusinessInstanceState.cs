@@ -1155,6 +1155,95 @@ namespace LandLedgers.Economy
             return runtimeState != null ? runtimeState.BuildStockReadinessLine() : "Stock readiness: runtime unavailable.";
         }
 
+        /// <summary>
+        /// Pass VII P1-6: quick-diligence clue lines read REAL business state.
+        /// Every line below is computed from observed runtime state; nothing is
+        /// seeded or invented. When the runtime is unavailable the line says
+        /// so honestly instead of fabricating a clue.
+        /// </summary>
+        public string BuildDiligenceStaffingLine()
+        {
+            if (runtimeState == null)
+                return "Staffing clue: no staffing record is available; formal review is required.";
+            int filled = runtimeState.FilledWorkerCount;
+            int target = runtimeState.TargetWorkerCount;
+            if (target <= 0)
+                return $"Staffing clue: {RuntimeDisplayName} runs with no staffed roles on record.";
+            if (filled >= target)
+                return $"Staffing clue: {RuntimeDisplayName} is fully staffed ({filled}/{target} roles filled).";
+            if (filled == 0)
+                return $"Staffing clue: {RuntimeDisplayName} has no filled roles ({filled}/{target}) — coverage depends on the owner or hiring.";
+            return $"Staffing clue: {RuntimeDisplayName} is short-staffed ({filled}/{target} roles filled); peak coverage still needs formal review.";
+        }
+
+        /// <summary>Pass VII P1-6: visible condition read from real facility health.</summary>
+        public string BuildDiligenceConditionLine()
+        {
+            if (runtimeState == null || runtimeState.Capacity == null)
+                return "Visible condition: no facility record is available; formal review is required.";
+            float storage = runtimeState.Capacity.StorageHealth01;
+            float processing = runtimeState.Capacity.ProcessingHealth01;
+            float service = runtimeState.Capacity.ServiceHealth01;
+            float worst = Math.Min(storage, Math.Min(processing, service));
+            if (worst >= 0.8f)
+                return $"Visible condition: storage, processing and service areas read sound (worst {worst:P0}).";
+            if (worst >= 0.5f)
+                return $"Visible condition: ordinary wear is visible (worst area {worst:P0}); budget for upkeep.";
+            return $"Visible condition: deferred upkeep is visible (worst area {worst:P0}); repair burden needs formal review.";
+        }
+
+        /// <summary>Pass VII P1-6: supply posture read from real stock health.</summary>
+        public string BuildDiligenceSupplyLine()
+        {
+            if (runtimeState == null)
+                return "Supply clue: no stock record is available; formal review is required.";
+            float health = runtimeState.StockHealth01;
+            if (health >= 0.8f)
+                return $"Supply clue: stock reads healthy ({health:P0} of target); supply line looks adequate today.";
+            if (health >= 0.5f)
+                return $"Supply clue: stock is middling ({health:P0} of target); watch for freight or sourcing pressure.";
+            return $"Supply clue: stock is thin ({health:P0} of target); visible gaps point to supply pressure.";
+        }
+
+        /// <summary>Pass VII P1-6: operating reliability read from the real reliability record.</summary>
+        public string BuildDiligenceReliabilityLine()
+        {
+            if (runtimeState == null)
+                return "Reliability clue: no operating record is available; formal review is required.";
+            float reliability = runtimeState.Reliability01;
+            if (reliability >= 0.8f)
+                return $"Reliability clue: operating rhythm reads steady ({reliability:P0}).";
+            if (reliability >= 0.5f)
+                return $"Reliability clue: operating rhythm reads uneven ({reliability:P0}); insist on stronger terms.";
+            return $"Reliability clue: operating rhythm reads fragile ({reliability:P0}); formal diligence is essential.";
+        }
+
+        /// <summary>
+        /// Pass VII P1-6: the mine inspection line with diligence gating. Mine
+        /// richness and deposit confidence are HIDDEN state: they appear only
+        /// when the observer completed formal diligence (or owns/manages the
+        /// mine). Unqualified observers get the public line with an honest
+        /// "undisclosed" marker — never the hidden numbers.
+        /// </summary>
+        public string BuildMineInspectionLine(bool diligenceQualifiedForHiddenState)
+        {
+            if (MineState == null)
+                return string.Empty;
+            string publicLine = $"Deposit: {MineRuntimeState.GetMineralDisplayName(MineState.MineralKind)}" +
+                                $" | stage {MineRuntimeState.GetDevelopmentStageDisplayName(MineState.DevelopmentStage)}" +
+                                $" | safety {MineState.SafetyRisk01:P0}" +
+                                $" | last cut {MineState.LastWeeklyOutputUnits} units";
+            if (!diligenceQualifiedForHiddenState)
+            {
+                return publicLine + " | richness: undisclosed without diligence" +
+                       " | confidence: undisclosed without diligence";
+            }
+            return publicLine +
+                   $" | richness {MineState.RemainingRichness01:P0}" +
+                   $" | confidence {MineState.DepositConfidence01:P0}" +
+                   $" | camp pressure {MineState.CampPressure01:P0}";
+        }
+
         public void EnsureBusinessReputationInitializedFromRuntime()
         {
             BusinessReputationState reputation = BusinessReputation;

@@ -101,10 +101,14 @@ namespace LandLedgers.Persistence
         // Autonomous Labor pass services: contact graph, negotiated offers,
         // wage-settlement markers, manager instructions + activity, delegation grants.
         public ContactGraphServiceSaveDto contactGraph = new();
-        public EmploymentNegotiationSaveDto employmentNegotiation = new();
+        // Pass VII Workstream E: transmitted information packets with provenance.
+        public KnowledgeTransmissionSaveDto knowledgeTransmissions = new();        public EmploymentNegotiationSaveDto employmentNegotiation = new();
         public WageSettlementSaveDto wageSettlement = new();
         public ManagerBrainSaveDto managerBrain = new();
         public DelegationService.DelegationSaveDto delegation = new();
+        // Pass VII Workstream D: manager decision execution ledger (idempotency
+        // keys, owner-approval pending requests, in-transit shipments).
+        public ManagerDecisionExecutionSaveDto managerDecisionExecution = new();
         // Pass III Worker A: legal parcel/holding registry and the single
         // non-title rights store. Title chain itself persists via
         // AcquisitionSaveDto.titleChain.

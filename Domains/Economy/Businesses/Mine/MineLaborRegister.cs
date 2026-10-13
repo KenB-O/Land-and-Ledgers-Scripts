@@ -25,6 +25,12 @@ namespace LandLedgers.Economy.Businesses.Mine
         PumpOperator = 5,
         OreMillWorker = 6,
         Assayer = 7,
+        /// <summary>
+        /// Pass VII: the foreman — the crew lead who legitimately observes
+        /// mine conditions firsthand through employment. Value appended,
+        /// never renumbered.
+        /// </summary>
+        Foreman = 8,
     }
 
     /// <summary>W8C: shift structure as scheduling data (day / night). No invented consequences.</summary>
@@ -156,6 +162,7 @@ namespace LandLedgers.Economy.Businesses.Mine
                 MineRole.PumpOperator => "Pump operator",
                 MineRole.OreMillWorker => "Ore / stamp-mill worker",
                 MineRole.Assayer => "Assayer",
+                MineRole.Foreman => "Foreman",
                 _ => "Mine worker",
             };
         }

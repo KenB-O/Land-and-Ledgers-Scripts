@@ -90,6 +90,9 @@ namespace LandLedgers.Orchestration.Systems
         private EmbodiedPurchaseExecutor purchaseExecutor;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
+        private readonly Dictionary<string, LaborDemandReport> latestDemandByBusiness =
+            new Dictionary<string, LaborDemandReport>(StringComparer.Ordinal);
+        private bool managerExecutionConfigured;
         private HouseholdShoppingLoop householdShoppingLoop;
         private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
@@ -251,6 +254,7 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             sharedBusinessRuntime.PreWeeklyResetCallback = PostWeeklyProfitToValuation;
+            ConfigureManagerExecution();
             sharedBusinessRuntime.EmploymentRegistry = hub.Employments;
             sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
             WireHouseholdCashAuthorities();
@@ -1078,6 +1082,51 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Pass VII Workstream D: wires the manager decision execution service
+        /// to the hub's real production authorities. The recruitment callback
+        /// is the existing ExecuteManagerRecruitment path, preserved verbatim.
+        /// No production business lender is arranged: non-escalated borrowing
+        /// fails honestly, and the brain escalates all borrowing to a pending
+        /// owner-approval request.
+        /// </summary>
+        private void ConfigureManagerExecution()
+        {
+            if (managerExecutionConfigured || hub == null || sharedBusinessRuntime == null)
+            {
+                return;
+            }
+
+            hub.ManagerDecisionExecution.Configure(new ManagerExecutionServices
+            {
+                FindBusiness = id =>
+                {
+                    BusinessInstanceState found;
+                    return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found : null;
+                },
+                AllBusinesses = () => sharedBusinessRuntime.Businesses,
+                DemandFor = id =>
+                {
+                    LaborDemandReport report;
+                    return latestDemandByBusiness.TryGetValue(id, out report) ? report : null;
+                },
+                BusinessEntityFor = id => EntityId.For(EntityKind.Business, StableBusinessRuntimeId(id)),
+                Tasks = hub.Tasks,
+                WorkScheduling = hub.WorkScheduling,
+                PersonSchedules = hub.PersonSchedules,
+                WorkTimeBudgets = hub.WorkTimeBudgets,
+                Employments = hub.Employments,
+                FinancialObligations = hub.FinancialObligations,
+                Ids = hub.Ids,
+                Recruiting = hub.Recruiting,
+                SupplierKnowledge = sellerKnowledge,
+                BusinessLender = null,
+                OpenRecruitment = (business, demand, decision, day, diag) =>
+                    ExecuteManagerRecruitment(business, demand, decision, day, diag),
+            });
+            managerExecutionConfigured = true;
+        }
+
+        /// <summary>
         /// Runs the labor services against the real business task queues. The
         /// labor DTOs are read models and decision inputs; TaskAuthority and
         /// PersonScheduleTracker remain the only writers for work assignment,
@@ -1090,7 +1139,9 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            ConfigureManagerExecution();
             var diagnostics = new List<string>();
+            hub.ManagerDecisionExecution.AdvanceShipments(absoluteDayIndex, diagnostics);
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
                 if (business == null || string.IsNullOrWhiteSpace(business.InstanceId))
@@ -1192,7 +1243,51 @@ namespace LandLedgers.Orchestration.Systems
                         PurchaseLimitCents = authority.PurchaseLimitCents,
                         MaxBorrowingCents = 0,
                     }, diagnostics);
-                    ExecuteManagerRecruitment(business, demand, managerDecision, absoluteDayIndex, diagnostics);
+                    // Pass VII Workstream D: every decision kind executes
+                    // through a real production authority (or becomes a
+                    // legitimate pending request, or fails with a reason).
+                    // The OpenRecruitment executor calls back into the
+                    // existing ExecuteManagerRecruitment path, preserved.
+                    latestDemandByBusiness[business.InstanceId] = demand;
+                    ManagerExecutionOutcome executionOutcome = hub.ManagerDecisionExecution.ExecuteDecision(
+                        business, authority, worker.PersonId, demand, managerDecision,
+                        absoluteDayIndex, diagnostics);
+                    if (executionOutcome != null && !string.IsNullOrWhiteSpace(executionOutcome.Reason))
+                    {
+                        diagnostics.Add($"manager execution for {business.InstanceId}: {executionOutcome.Reason}.");
+                    }
+                    if (managerDecision != null && managerDecision.Acted &&
+                        string.Equals(managerDecision.ActionKind, ManagerActKinds.Schedule, StringComparison.Ordinal))
+                    {
+                        // The manager's Schedule execution starts tasks through
+                        // the real scheduler; rebuild from fresh task state so
+                        // the blanket pass below never double-schedules work
+                        // the manager already placed.
+                        openTasks = hub.Tasks.GetOpenTasks(businessId);
+                        schedulerWork.Clear();
+                        taskByTextId.Clear();
+                        foreach (WorkTask task in openTasks)
+                        {
+                            if (task == null || !task.IsOpen || task.Status != TaskStatus.Queued)
+                            {
+                                continue;
+                            }
+
+                            TaskDefinition refreshedDefinition = hub.Tasks.GetDefinition(task.DefinitionId);
+                            string refreshedFamily = refreshedDefinition?.DisplayName;
+                            if (string.IsNullOrWhiteSpace(refreshedFamily)) refreshedFamily = task.DefinitionId;
+                            schedulerWork.Add(new SchedulerOpenWorkItem
+                            {
+                                TaskId = task.TaskId.ToString(),
+                                Family = refreshedFamily,
+                                MinutesRequired = Math.Max(1, task.MinutesRemaining),
+                                RequiredEquipment = refreshedDefinition != null && refreshedDefinition.EquipmentClasses.Count > 0
+                                    ? refreshedDefinition.EquipmentClasses[0] : string.Empty,
+                                LocationId = task.LocationId,
+                            });
+                            taskByTextId[task.TaskId.ToString()] = task;
+                        }
+                    }
                     break;
                 }
 
@@ -1233,62 +1328,12 @@ namespace LandLedgers.Orchestration.Systems
 
         private void StartAssignedBusinessTasks(WorkAssignmentReport report, Dictionary<string, WorkTask> tasks, int dayIndex, List<string> diagnostics)
         {
-            if (report == null || tasks == null) return;
-            var nextStartByPerson = new Dictionary<int, int>();
-            foreach (WorkAssignment assignment in report.Assignments)
-            {
-                if (assignment == null || assignment.PersonId < 0 || !tasks.TryGetValue(assignment.TaskId, out WorkTask task)) continue;
-                int startMinute = nextStartByPerson.TryGetValue(assignment.PersonId, out int prior)
-                    ? prior : 8 * 60;
-                string reservation = hub.PersonSchedules.TryReserve(
-                    assignment.PersonId, PersonActivityKind.Work, dayIndex, startMinute,
-                    assignment.MinutesCommitted, TaskReservationLabel(task));
-                if (reservation != null)
-                {
-                    diagnostics.Add($"task {task.TaskId}: {reservation}");
-                    continue;
-                }
-
-                // PersonScheduleTracker returns null on success (the return
-                // value is reserved for a refusal reason). Resolve the real
-                // persisted reservation that was just created so completion
-                // can release it through the same authority.
-                string reservationId = null;
-                List<PersonActivityReservation> activeReservations =
-                    hub.PersonSchedules.ActiveFor(assignment.PersonId, dayIndex);
-                for (int i = activeReservations.Count - 1; i >= 0; i--)
-                {
-                    PersonActivityReservation candidate = activeReservations[i];
-                    if (candidate != null &&
-                        candidate.Activity == PersonActivityKind.Work &&
-                        string.Equals(candidate.Label, TaskReservationLabel(task), StringComparison.Ordinal))
-                    {
-                        reservationId = candidate.ReservationId;
-                        break;
-                    }
-                }
-
-                if (string.IsNullOrWhiteSpace(reservationId))
-                {
-                    diagnostics.Add($"task {task.TaskId}: schedule reservation was not materialized");
-                    continue;
-                }
-
-                EntityId person = EntityId.For(EntityKind.Person, assignment.PersonId);
-                string assignReason = null;
-                string startReason = null;
-                bool assigned = hub.Tasks.AssignTask(task.TaskId, person, hub.WorkTimeBudgets, out assignReason);
-                bool started = assigned && hub.Tasks.StartTask(task.TaskId, dayIndex, out startReason);
-                if (!assigned || !started)
-                {
-                    hub.PersonSchedules.Release(reservationId);
-                    diagnostics.Add($"task {task.TaskId}: assignment refused ({assignReason ?? startReason})");
-                    continue;
-                }
-
-                autonomousTaskReservations[task.TaskId] = reservationId;
-                nextStartByPerson[assignment.PersonId] = startMinute + Math.Max(1, assignment.MinutesCommitted);
-            }
+            // Pass VII Workstream D: one shared implementation with the manager
+            // Schedule executor (ManagerWorkSchedulerDrive) — no drift.
+            ManagerWorkSchedulerDrive.StartAssignedTasks(
+                report, tasks, hub.Tasks, hub.PersonSchedules, hub.WorkTimeBudgets,
+                dayIndex, diagnostics, TaskReservationLabel,
+                (taskId, reservationId) => autonomousTaskReservations[taskId] = reservationId);
         }
 
         private static List<string> ScopeNames(DelegationScope scopes)
@@ -1310,7 +1355,7 @@ namespace LandLedgers.Orchestration.Systems
                 : $"task:{task.TaskId}|{task.DefinitionId}";
         }
 
-        private void ExecuteManagerRecruitment(
+        private string ExecuteManagerRecruitment(
             BusinessInstanceState business,
             LaborDemandReport demand,
             ManagerDecisionResult decision,
@@ -1320,7 +1365,7 @@ namespace LandLedgers.Orchestration.Systems
             if (business == null || demand == null || decision == null ||
                 !decision.Acted || !string.Equals(decision.ActionKind, ManagerActKinds.OpenRecruitment, StringComparison.Ordinal))
             {
-                return;
+                return null;
             }
 
             string role = "general labor";
@@ -1347,13 +1392,14 @@ namespace LandLedgers.Orchestration.Systems
             if (effort == null)
             {
                 diagnostics.Add($"manager recruitment for {business.InstanceId}: RecruitmentService refused the effort");
-                return;
+                return null;
             }
 
             // The activity record is an immutable historical read model from
             // ManagerBrain; the real effort id is still surfaced in runtime
             // diagnostics and remains save-persisted by RecruitmentService.
             diagnostics.Add($"manager recruitment for {business.InstanceId}: opened {effort.EffortId} for {role}");
+            return effort.EffortId;
         }
 
         /// <summary>

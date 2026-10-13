@@ -288,6 +288,20 @@ namespace LandLedgers.Economy
             weekToDateRevenueCents += Mathf.Max(0, revenueCents);
         }
 
+        /// <summary>
+        /// Pass VII Workstream A: records a buyerless demand observation for
+        /// forecasting only. Unlike <see cref="RecordDailySales"/>, this never
+        /// moves stock: real inventory declines only on delivery or consumption.
+        /// </summary>
+        public void RecordDailySalesObservation(int unitsSold, int revenueCents)
+        {
+            int clampedUnits = Mathf.Max(0, unitsSold);
+            lastDailyUnitsSold += clampedUnits;
+            lastDailyRevenueCents += Mathf.Max(0, revenueCents);
+            weekToDateUnitsSold += clampedUnits;
+            weekToDateRevenueCents += Mathf.Max(0, revenueCents);
+        }
+
         public void ResetDailySales()
         {
             lastDailyUnitsSold = 0;
@@ -1747,6 +1761,15 @@ namespace LandLedgers.Economy
                 Mathf.Max(0, lastDailyServiceVisits));
         }
 
+        /// <summary>
+        /// Pass VII Workstream A: buyerless revenue manufacture is retired.
+        /// This now records ONLY the demand observation (units/revenue stats used
+        /// by reorder forecasting). It posts no cash, moves no stock, and changes
+        /// no financial state: a sale without a buyer is not a sale (Canon:
+        /// OffScreenSimulationRules rule 5). Real sales settle through
+        /// <see cref="ResolveSettledSale"/> with a named buyer principal.
+        /// </summary>
+        [Obsolete("Buyerless revenue is manufactured. Use ResolveSettledSale with a real buyer principal.")]
         public void ResolveDailySalesPlaceholder(string categoryId, int unitsSold, int revenueCents)
         {
             CategoryStockState stock = GetCategoryStock(categoryId);
@@ -1755,14 +1778,42 @@ namespace LandLedgers.Economy
                 return;
             }
 
-            stock.RecordDailySales(unitsSold, revenueCents);
+            stock.RecordDailySalesObservation(unitsSold, revenueCents);
+            RefreshStockHealth();
+        }
+
+        /// <summary>
+        /// Pass VII Workstream A: the single legitimate goods-sale settlement for
+        /// ordinary businesses. Requires a named buyer principal (e.g.
+        /// "household:12", "business:abc", "external:kansas-city-grain").
+        /// Refuses (returns false, mutates nothing) when the buyer is missing:
+        /// no buyer, no sale. Stock declines here because a real delivery to a
+        /// real buyer happened; the buyer's payment is settled by the caller
+        /// through the authoritative ledger before or with this call.
+        /// </summary>
+        public bool ResolveSettledSale(string categoryId, int unitsSold, int revenueCents, string buyerPrincipal)
+        {
+            if (string.IsNullOrWhiteSpace(buyerPrincipal))
+            {
+                return false;
+            }
+
+            CategoryStockState stock = GetCategoryStock(categoryId);
+            if (stock == null)
+            {
+                return false;
+            }
+
+            int units = Mathf.Max(0, unitsSold);
             int revenue = Mathf.Max(0, revenueCents);
+            stock.RecordDailySales(units, revenue);
             currentCashCents += revenue;
             lastDailyRevenueCents += revenue;
             weekToDateRevenueCents += revenue;
-            weekToDateUnitsSold += Mathf.Max(0, unitsSold);
+            weekToDateUnitsSold += units;
             RecordNetDelta(revenue);
             RefreshStockHealth();
+            return true;
         }
 
         /// <summary>

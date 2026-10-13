@@ -2337,24 +2337,14 @@ namespace LandLedgers.FirstLedger
                 return 0;
             }
 
+            // Pass VII Workstream A: the town pulse is an aggregate demand signal,
+            // not a buyer. No buyer, no sale: the whole request is recorded as
+            // unfulfilled demand (visible to managers via the demand-loss
+            // breakdown) and produces no revenue, no stock movement, and no
+            // financial mutation.
             CategoryStockState stock = runtimeState.GetCategoryStock(categoryId);
-            int unitsSold = Mathf.Min(staffedRequestUnits, stock.CurrentStockUnits);
-            RecordDemandLossBreakdown(requestedUnits, staffedRequestUnits, requestedUnits, stock.CurrentStockUnits);
-            if (unitsSold <= 0)
-            {
-                return 0;
-            }
-
-            int unitPrice = Mathf.Max(minimumCategoryUnitPriceCents, GetAverageCategoryUnitPrice(categoryId));
-            int revenue = unitsSold * unitPrice;
-            runtimeState.ResolveDailySalesPlaceholder(categoryId, unitsSold, revenue);
-            lastDailyOffMapStoreUnitsSold += unitsSold;
-            lastDailyOffMapStoreSpendCents += revenue;
-            int costOfGoodsSold = unitsSold * GetAverageCategoryLandedCost(categoryId);
-            lastDailyCostOfGoodsSoldCents += costOfGoodsSold;
-            weekToDateCostOfGoodsSoldCents += costOfGoodsSold;
-            lastDailyUnitsSold += unitsSold;
-            return unitsSold;
+            RecordDemandLossBreakdown(requestedUnits, staffedRequestUnits, 0, stock.CurrentStockUnits);
+            return 0;
         }
 
         private int ResolveTownPulseSupportIndustryDemand(string categoryId, int requestedUnits)
@@ -3628,7 +3618,17 @@ namespace LandLedgers.FirstLedger
             }
 
             int revenue = unitsSold * unitPrice;
-            runtimeState.ResolveDailySalesPlaceholder(categoryId, unitsSold, revenue);
+            // Pass VII Workstream A: REAL household purchase (the daily sales
+            // loop debits the household ledger via ChargeHouseholdCents with a
+            // budget capped by actual household cash). Settle with the buyer
+            // named; a missing buyer refuses the sale outright.
+            bool settled = runtimeState.ResolveSettledSale(categoryId, unitsSold, revenue, $"household:{householdId}");
+            if (!settled)
+            {
+                RecordGeneralStoreHouseholdAffinity(householdId, categoryId, requestedUnits, 0, 0, unitPrice);
+                return default;
+            }
+
             lastDailyOffMapStoreUnitsSold += unitsSold;
             lastDailyOffMapStoreSpendCents += revenue;
             int costOfGoodsSold = unitsSold * GetAverageCategoryLandedCost(categoryId);

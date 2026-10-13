@@ -57,6 +57,34 @@ namespace LandLedgers.Time
             return null;
         }
 
+        /// <summary>
+        /// Pass V P0-2: schedules under a caller-chosen stable id. Same
+        /// validation and replace semantics as <see cref="Schedule"/>.
+        /// </summary>
+        public string ScheduleWithEventId(string eventId, DueEventKind kind, float dueGameSeconds, string payloadRef)
+        {
+            if (string.IsNullOrWhiteSpace(eventId))
+            {
+                return "eventId must be non-empty.";
+            }
+
+            if (float.IsNaN(dueGameSeconds) || float.IsInfinity(dueGameSeconds) || dueGameSeconds < 0f)
+            {
+                return "dueGameSeconds must be finite and >= 0 (got " + dueGameSeconds + ").";
+            }
+
+            DueEvent existing;
+            if (byId.TryGetValue(eventId, out existing))
+            {
+                ordered.Remove(existing);
+            }
+
+            var due = new DueEvent(eventId, kind, dueGameSeconds, payloadRef, nextSequence++);
+            byId[eventId] = due;
+            InsertOrdered(due);
+            return null;
+        }
+
         /// <summary>Cancels a scheduled event. No-op when the id is unknown.</summary>
         public void Cancel(string eventId)
         {

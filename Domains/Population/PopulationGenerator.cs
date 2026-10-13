@@ -13,10 +13,27 @@ namespace LandLedgers.Population
         private const string UnassignedProfessionName = "No assigned job";
         private const string HouseholdHelperProfessionName = "Household Helper";
 
+        /// <summary>
+        /// Pass V P1-3: generation order follows Canon 12.6G — population
+        /// envelope and real persons first, demographics, kinship and marital
+        /// relationships, family histories, households FROM domestic
+        /// relationships, accommodation, economic roles/property/assets/
+        /// employment, validation. The 55-95 Canon calibration is untouched
+        /// (targets still come from PopulationGenerationSettings).
+        ///
+        /// When <paramref name="kinship"/> is supplied, generation records
+        /// spouse and parent/child edges for every planned family unit.
+        /// <paramref name="startYear"/>/<paramref name="startMonth"/>/<paramref name="startDay"/>
+        /// is the scenario start date used for GeneratedExact birth dates.
+        /// </summary>
         public static PopulationGenerationResult Generate(
             TownWorldController townWorld,
             PopulationGenerationSettings settings,
-            IReadOnlyList<NewcomerSettlementBoardingOption> boardingHouseOptions = null)
+            IReadOnlyList<NewcomerSettlementBoardingOption> boardingHouseOptions = null,
+            KinshipRegistry kinship = null,
+            int startYear = 1892,
+            int startMonth = 3,
+            int startDay = 1)
         {
             PopulationState state = new();
             if (townWorld == null)
@@ -72,22 +89,42 @@ namespace LandLedgers.Population
             Shuffle(homeSlots, random);
             int targetHouseholds = ResolveStartingHouseholdTarget(settings, homeSlots.Count);
             int targetResidents = ResolveStartingResidentTarget(settings, targetHouseholds);
-            int remainingResidentTarget = targetResidents;
 
-            for (int i = 0; i < targetHouseholds; i++)
+            // Pass V P1-3 (Canon 12.6G): persons first. Plan the demographic
+            // cohort — real persons with plausible ages, kinship and marital
+            // relationships with temporally coherent ages — BEFORE any
+            // household exists. Households are formed FROM the family units.
+            List<FamilyUnitPlan> cohort = DemographicCohortPlanner.PlanCohort(targetResidents, targetHouseholds, seed);
+            List<BirthDate> cohortBirthDates = DemographicCohortPlanner.AssignBirthDates(
+                DemographicCohortPlanner.Flatten(cohort),
+                startYear, startMonth, startDay, seed,
+                $"World generation (seed {seed}); scenario provenance, documented as generated.");
+
+            int flatBirthIndex = 0;
+            int homeSlotIndex = 0;
+            for (int unitIndex = 0; unitIndex < cohort.Count && homeSlotIndex < homeSlots.Count; unitIndex++)
             {
-                int remainingHouseholds = targetHouseholds - i;
-                int memberCount = ResolveStartingHouseholdMemberCount(settings, random, remainingResidentTarget, remainingHouseholds);
-                CreateHousehold(state, settings, random, homeSlots[i].building, memberCount);
-                remainingResidentTarget = Mathf.Max(0, remainingResidentTarget - memberCount);
+                CreatePlannedHousehold(
+                    state, settings, random, homeSlots[homeSlotIndex].building,
+                    cohort[unitIndex], cohortBirthDates, ref flatBirthIndex,
+                    kinship, startYear, startMonth, startDay);
+                homeSlotIndex++;
             }
 
             List<NewcomerSettlementHomeOption> settlementHomes = NewcomerSettlementPlanner.BuildHomeOptions(townWorld, settings);
             NewcomerSettlementPlanner.GenerateNewcomerArrivals(state, settings, random, settlementHomes, boardingHouseOptions);
+
+            // Pass V P0-2: newcomer arrivals are created without birth dates;
+            // stamp GeneratedExact dates (birth-date authority) before
+            // validation so every person has a valid date.
+            DemographicCohortPlanner.AssignMissingBirthDates(
+                state.people, startYear, startMonth, startDay, seed ^ 0x5EED,
+                $"World generation (seed {seed}); newcomer arrivals, documented as generated.");
+
             AssignProfessionsAndWorkplaces(state, settings.GetProfessionDefinitions(), workplaces, random, settings);
             RecalculateHouseholdIncome(state);
             NewcomerSettlementPlanner.RefreshSettlementMetrics(state, settlementHomes, boardingHouseOptions);
-            Validate(state, homes, workplaces);
+            Validate(state, homes, workplaces, kinship, startYear, startMonth, startDay);
 
             bool hasErrors = false;
             for (int i = 0; i < state.validationMessages.Count; i++)
@@ -168,32 +205,18 @@ namespace LandLedgers.Population
             return Mathf.Clamp(preferredTarget, minimumPossibleResidents, maximumPossibleResidents);
         }
 
-        private static int ResolveStartingHouseholdMemberCount(
+        private static void CreatePlannedHousehold(
+            PopulationState state,
             PopulationGenerationSettings settings,
             System.Random random,
-            int remainingResidentTarget,
-            int remainingHouseholds)
-        {
-            int minMembers = Mathf.Max(1, settings.minHouseholdSize);
-            int maxMembers = Mathf.Max(minMembers, settings.maxHouseholdSize);
-            if (remainingHouseholds <= 1)
-            {
-                return Mathf.Clamp(remainingResidentTarget, minMembers, maxMembers);
-            }
-
-            int minimumMembersNeededForLaterHouseholds = (remainingHouseholds - 1) * minMembers;
-            int maximumMembersPossibleForLaterHouseholds = (remainingHouseholds - 1) * maxMembers;
-            int minimumForThisHousehold = Mathf.Max(minMembers, remainingResidentTarget - maximumMembersPossibleForLaterHouseholds);
-            int maximumForThisHousehold = Mathf.Min(maxMembers, remainingResidentTarget - minimumMembersNeededForLaterHouseholds);
-            if (maximumForThisHousehold < minimumForThisHousehold)
-            {
-                maximumForThisHousehold = minimumForThisHousehold;
-            }
-
-            return random.Next(minimumForThisHousehold, maximumForThisHousehold + 1);
-        }
-
-        private static void CreateHousehold(PopulationState state, PopulationGenerationSettings settings, System.Random random, BuildingRuntimeInfo home, int memberCount)
+            BuildingRuntimeInfo home,
+            FamilyUnitPlan unit,
+            List<BirthDate> birthDates,
+            ref int flatBirthIndex,
+            KinshipRegistry kinship,
+            int startYear,
+            int startMonth,
+            int startDay)
         {
             string surname = Pick(settings.surnames, random, "Hale");
             int householdId = state.AllocateNextHouseholdId();
@@ -211,9 +234,12 @@ namespace LandLedgers.Population
                 lastSettlementSummary = "Stable resident household"
             };
 
-            memberCount = Mathf.Clamp(memberCount, settings.minHouseholdSize, settings.maxHouseholdSize);
-            for (int memberIndex = 0; memberIndex < memberCount; memberIndex++)
+            int[] personIds = new int[unit.members.Count];
+            for (int memberIndex = 0; memberIndex < unit.members.Count; memberIndex++)
             {
+                PlannedPerson planned = unit.members[memberIndex];
+                BirthDate birthDate = flatBirthIndex < birthDates.Count ? birthDates[flatBirthIndex] : default;
+                flatBirthIndex++;
                 PersonState person = CreateSettlementPerson(
                     state.AllocateNextPersonId(),
                     householdId,
@@ -224,15 +250,41 @@ namespace LandLedgers.Population
                     random,
                     NewcomerArrivalProfile.SettledResident,
                     SettlementArrangement.StableHousehold,
-                    -1,
+                    planned.age,
                     0.45f,
                     6,
                     string.Empty,
                     0,
                     householdId,
-                    0);
+                    0,
+                    planned.isFemale,
+                    birthDate);
+                person.RefreshDerivedAge(startYear, startMonth, startDay);
+                personIds[memberIndex] = person.id;
                 household.memberIds.Add(person.id);
                 state.people.Add(person);
+            }
+
+            if (kinship != null)
+            {
+                for (int memberIndex = 0; memberIndex < unit.members.Count; memberIndex++)
+                {
+                    PlannedPerson planned = unit.members[memberIndex];
+                    if (planned.spousePlanIndex > memberIndex && planned.spousePlanIndex < personIds.Length)
+                    {
+                        kinship.AddSpouses(personIds[memberIndex], personIds[planned.spousePlanIndex], "generation");
+                    }
+
+                    if (planned.motherPlanIndex >= 0 && planned.motherPlanIndex < personIds.Length)
+                    {
+                        kinship.AddParentChild(personIds[planned.motherPlanIndex], personIds[memberIndex], "generation");
+                    }
+
+                    if (planned.fatherPlanIndex >= 0 && planned.fatherPlanIndex < personIds.Length)
+                    {
+                        kinship.AddParentChild(personIds[planned.fatherPlanIndex], personIds[memberIndex], "generation");
+                    }
+                }
             }
 
             household.EnsureHouseholdReservesInitialized(true);
@@ -257,9 +309,11 @@ namespace LandLedgers.Population
             string preferredProfessionBias,
             int settlementDifficulty,
             int hostHouseholdId,
-            int startingCashCents)
+            int startingCashCents,
+            bool? forceIsFemale = null,
+            BirthDate birthDate = default)
         {
-            bool useFemaleName = random.NextDouble() < 0.5d;
+            bool useFemaleName = forceIsFemale ?? random.NextDouble() < 0.5d;
             int age = forcedAge >= 0 ? forcedAge : RollAge(memberIndex, random);
             AgeBand ageBand = GetAgeBand(age);
             LaborAccessLevel laborAccess = GetLaborAccessLevel(ageBand);
@@ -275,6 +329,8 @@ namespace LandLedgers.Population
                 lastName = surname,
                 age = age,
                 ageBand = ageBand,
+                birthDate = birthDate,
+                isFemale = useFemaleName,
                 laborAccessLevel = laborAccess,
                 householdId = householdId,
                 professionId = professionId,
@@ -525,18 +581,53 @@ namespace LandLedgers.Population
             }
         }
 
-        private static void Validate(PopulationState state, List<BuildingRuntimeInfo> homes, List<BuildingRuntimeInfo> workplaces)
+        private static void Validate(
+            PopulationState state,
+            List<BuildingRuntimeInfo> homes,
+            List<BuildingRuntimeInfo> workplaces,
+            KinshipRegistry kinship,
+            int startYear,
+            int startMonth,
+            int startDay)
         {
             HashSet<int> homeIds = BuildBuildingIdSet(homes);
             HashSet<int> workplaceIds = BuildBuildingIdSet(workplaces);
 
             HashSet<int> personIds = new();
+            int spouseEdgeCount = 0;
             for (int i = 0; i < state.people.Count; i++)
             {
                 PersonState person = state.people[i];
                 if (!personIds.Add(person.id))
                 {
                     state.validationMessages.Add($"ERROR: Duplicate person id {person.id}.");
+                }
+
+                // Pass V P0-2/P1-3: every generated person carries a valid birth
+                // date whose derived age matches the planned age.
+                if (!person.birthDate.IsValid)
+                {
+                    state.validationMessages.Add($"ERROR: Person {person.id} has no valid birth date.");
+                }
+                else
+                {
+                    int derivedAge = AgeAuthority.CompletedYears(person.birthDate, startYear, startMonth, startDay);
+                    if (derivedAge != person.age)
+                    {
+                        state.validationMessages.Add(
+                            $"ERROR: Person {person.id} age {person.age} disagrees with birth date {person.birthDate.Year}-{person.birthDate.Month}-{person.birthDate.Day} (derives {derivedAge}).");
+                    }
+
+                    if (person.birthDate.Provenance != BirthDateProvenance.GeneratedExact)
+                    {
+                        state.validationMessages.Add(
+                            $"WARN: Person {person.id} birth date provenance is {person.birthDate.Provenance}, expected GeneratedExact at generation.");
+                    }
+                }
+
+                if (kinship != null)
+                {
+                    spouseEdgeCount += kinship.GetSpouses(person.id).Count;
                 }
 
                 HouseholdState personHousehold = state.GetHousehold(person.householdId);
@@ -570,6 +661,44 @@ namespace LandLedgers.Population
                     && !household.isBoardingHouseGuestHousehold)
                 {
                     state.validationMessages.Add($"ERROR: Household {household.id} has no members.");
+                }
+            }
+
+            // Pass V P1-3: kinship coherence — generation must create real
+            // family edges, and every parent/child edge must be temporally
+            // coherent (parents 17-44 years older than their children).
+            if (kinship != null)
+            {
+                if (spouseEdgeCount == 0 && state.people.Count > 0)
+                {
+                    state.validationMessages.Add("WARN: generation created zero spouse edges.");
+                }
+
+                for (int i = 0; i < state.people.Count; i++)
+                {
+                    PersonState child = state.people[i];
+                    if (child == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (int parentId in kinship.GetParents(child.id))
+                    {
+                        PersonState parent = state.GetPerson(parentId);
+                        if (parent == null)
+                        {
+                            state.validationMessages.Add($"ERROR: Person {child.id} has kinship parent {parentId} with no person record.");
+                            continue;
+                        }
+
+                        int gap = parent.age - child.age;
+                        if (gap < DemographicCohortPlanner.MinParentChildGapYears
+                            || gap > DemographicCohortPlanner.MaxParentChildGapYears)
+                        {
+                            state.validationMessages.Add(
+                                $"ERROR: Person {child.id} (age {child.age}) has parent P{parentId} (age {parent.age}): incoherent age gap.");
+                        }
+                    }
                 }
             }
         }

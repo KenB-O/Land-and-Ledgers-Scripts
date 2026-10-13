@@ -8,8 +8,32 @@ namespace LandLedgers.Population
         public int id;
         public string firstName;
         public string lastName;
+        /// <summary>
+        /// Pass V P0-2: DERIVED CACHE, not authority. The birth date
+        /// (<see cref="birthDate"/>) is the single age authority; this field is
+        /// refreshed from it via <see cref="RefreshDerivedAge"/> and must never
+        /// be incremented as a counter. Kept serialized so older saves keep
+        /// their last computed value until migration re-derives it.
+        /// </summary>
         public int age;
         public AgeBand ageBand;
+        /// <summary>
+        /// Pass V P0-2: the authoritative birth-date representation. Age is
+        /// derived from this (completed calendar years via
+        /// <see cref="AgeAuthority"/>), never stored independently.
+        /// </summary>
+        public BirthDate birthDate;
+        /// <summary>
+        /// Pass V P1-2: biological sex, needed by the demographic drivers
+        /// (maternity, marriage pairing). Set at generation/birth; defaults false.
+        /// </summary>
+        public bool isFemale;
+        /// <summary>
+        /// Pass V P1-2: the person has migrated off-map. Off-map persons keep
+        /// aging (birthday scheduling includes them); their record, kinship,
+        /// ownership and debts are preserved.
+        /// </summary>
+        public bool isOffMap;
         public LaborAccessLevel laborAccessLevel;
         /// <summary>
         /// PKG-8 (3A-D14): legacy dual-write field. HouseholdMembershipRegistry is the sole
@@ -62,6 +86,28 @@ namespace LandLedgers.Population
         public int deathDayIndex = -1;
 
         public string DisplayName => $"{firstName} {lastName}";
+
+        /// <summary>
+        /// Pass V P0-2: true age in completed calendar years on the given
+        /// Gregorian date, derived from <see cref="birthDate"/>. This is the
+        /// only supported way to read a person's age.
+        /// </summary>
+        public int GetTrueAge(int currentYear, int currentMonth, int currentDay)
+        {
+            return AgeAuthority.CompletedYears(birthDate, currentYear, currentMonth, currentDay);
+        }
+
+        /// <summary>
+        /// Pass V P0-2: refreshes the derived <see cref="age"/> cache and the
+        /// age band from the authoritative birth date. Called after generation,
+        /// after load/migration, and when a birthday due-event fires. Nothing
+        /// else may write <see cref="age"/>.
+        /// </summary>
+        public void RefreshDerivedAge(int currentYear, int currentMonth, int currentDay)
+        {
+            age = GetTrueAge(currentYear, currentMonth, currentDay);
+            ageBand = HouseholdLifecycleManager.AgeBandForAge(age);
+        }
 
         public void InitializeWorkerTraits(System.Random random)
         {

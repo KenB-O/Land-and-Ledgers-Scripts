@@ -8,22 +8,27 @@ namespace LandLedgers.Economy.Financing
     public sealed class PaymentScheduleBuilder
     {
         private const int DefaultDaysPerWeek = 7;
-        private const int DefaultWeeksPerMonth = 4;
         private const int DefaultMonthsPerYear = 12;
 
+        /// <summary>
+        /// Pass V P0-1: builds the repayment schedule on the true Gregorian
+        /// calendar. Weekly payments fall every 7 days; monthly payments fall on
+        /// the calendar-month anniversary of the first due date (clamped to the
+        /// month length, e.g. Jan 31 -> Feb 28). Due-date Y/M/D values are real
+        /// Gregorian dates derived from <paramref name="anchor"/>.
+        /// </summary>
         public LoanPaymentSchedule Build(
             string loanId,
             LoanTermStructure term,
             SimulationDate startDate,
-            int firstDueOffsetDays = 7,
-            int daysPerMonth = 28)
+            int firstDueOffsetDays,
+            CalendarAnchor anchor)
         {
             LoanTermStructure sanitized = term.Sanitized();
             int paymentCount = GetPaymentCount(sanitized);
-            int intervalDays = sanitized.repaymentFrequency == RepaymentFrequency.Weekly
-                ? DefaultDaysPerWeek
-                : Mathf.Max(DefaultDaysPerWeek, daysPerMonth);
+            bool isWeekly = sanitized.repaymentFrequency == RepaymentFrequency.Weekly;
             int firstDue = Mathf.Max(1, firstDueOffsetDays);
+            int startAbsoluteDay = GetAbsoluteDayIndex(startDate);
 
             LoanPaymentSchedule schedule = new LoanPaymentSchedule
             {
@@ -36,6 +41,14 @@ namespace LandLedgers.Economy.Financing
             {
                 return schedule;
             }
+
+            // First due date via real calendar arithmetic from the start day;
+            // monthly payments then fall on its month anniversaries.
+            anchor.FromAbsoluteDay(
+                startAbsoluteDay + firstDue,
+                out int firstDueYear,
+                out int firstDueMonth,
+                out int firstDueDay);
 
             int amortizedPrincipalCents = Mathf.Max(0, sanitized.principalCents - sanitized.balloonPaymentCents);
             int standardPaymentCents = CalculateAmortizedPaymentCents(
@@ -61,11 +74,13 @@ namespace LandLedgers.Economy.Financing
                 }
 
                 remainingPrincipalCents = Mathf.Max(0, remainingPrincipalCents - principalCents);
-                int dueDayIndex = GetAbsoluteDayIndex(startDate) + firstDue + (i - 1) * intervalDays;
+                int dueDayIndex = isWeekly
+                    ? startAbsoluteDay + firstDue + (i - 1) * DefaultDaysPerWeek
+                    : GetMonthlyAnniversaryDayIndex(anchor, firstDueYear, firstDueMonth, firstDueDay, i - 1);
                 LoanPaymentDue payment = new LoanPaymentDue
                 {
                     paymentNumber = i,
-                    dueDate = BuildDateFromAbsoluteDay(dueDayIndex, daysPerMonth),
+                    dueDate = anchor.BuildDate(dueDayIndex),
                     dueDayIndex = dueDayIndex,
                     principalCents = principalCents,
                     interestCents = interestCents,
@@ -89,6 +104,12 @@ namespace LandLedgers.Economy.Financing
             schedule.totalInterestCents = totalInterestCents;
             schedule.totalPaymentCents = CalculateScheduledPaymentTotalCents(schedule);
             return schedule;
+        }
+
+        /// <summary>Compatibility overload for callers using the original schedule API.</summary>
+        public LoanPaymentSchedule Build(string loanId, LoanTermStructure term, SimulationDate startDate)
+        {
+            return Build(loanId, term, startDate, 7, CalendarAnchor.Default);
         }
 
         public static int EstimatePaymentCents(LoanTermStructure term)
@@ -252,7 +273,26 @@ namespace LandLedgers.Economy.Financing
                 term,
                 new SimulationDate(0, 0, 1, 1, 1, 1, 1),
                 DefaultDaysPerWeek,
-                DefaultDaysPerWeek * DefaultWeeksPerMonth);
+                CalendarAnchor.Default);
+        }
+
+        /// <summary>
+        /// Pass V P0-1: absolute day index of the month anniversary that falls
+        /// <paramref name="monthsAfterFirst"/> months after the first due date.
+        /// The day-of-month is clamped to the target month's real length.
+        /// </summary>
+        private static int GetMonthlyAnniversaryDayIndex(
+            CalendarAnchor anchor,
+            int firstDueYear,
+            int firstDueMonth,
+            int firstDueDay,
+            int monthsAfterFirst)
+        {
+            int totalMonths = (firstDueMonth - 1) + Math.Max(0, monthsAfterFirst);
+            int targetYear = firstDueYear + totalMonths / DefaultMonthsPerYear;
+            int targetMonth = totalMonths % DefaultMonthsPerYear + 1;
+            int targetDay = Math.Min(firstDueDay, GregorianDateMath.DaysInMonth(targetYear, targetMonth));
+            return anchor.ToAbsoluteDay(targetYear, targetMonth, targetDay);
         }
 
         private static int GetAbsoluteDayIndex(SimulationDate date)
@@ -283,18 +323,5 @@ namespace LandLedgers.Economy.Financing
             return null;
         }
 
-        private static SimulationDate BuildDateFromAbsoluteDay(int absoluteDayIndex, int daysPerMonth)
-        {
-            int clampedDay = Mathf.Max(0, absoluteDayIndex);
-            int normalizedDaysPerMonth = Mathf.Max(DefaultDaysPerWeek, daysPerMonth <= 0 ? DefaultDaysPerWeek * DefaultWeeksPerMonth : daysPerMonth);
-            int dayOfWeekIndex = clampedDay % DefaultDaysPerWeek;
-            int monthIndex = clampedDay / normalizedDaysPerMonth;
-            int month = monthIndex % DefaultMonthsPerYear + 1;
-            int year = monthIndex / DefaultMonthsPerYear + 1;
-            int dayOfMonth = clampedDay % normalizedDaysPerMonth + 1;
-            int week = clampedDay / DefaultDaysPerWeek + 1;
-            int weekOfMonth = (dayOfMonth - 1) / DefaultDaysPerWeek + 1;
-            return new SimulationDate(clampedDay, dayOfWeekIndex, dayOfMonth, week, weekOfMonth, month, year);
-        }
     }
 }

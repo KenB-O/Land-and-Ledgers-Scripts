@@ -338,6 +338,16 @@ namespace LandLedgers.Persistence
         public float laborAbsorption01 = 1f;
         public string lastSettlementSummary = string.Empty;
         public string lastRentalSummary = string.Empty;
+        /// <summary>
+        /// Pass V P1-2/P1-3: the population-wide kinship edges (separate from
+        /// household membership, Tech X §2.2). Restored into the manager's
+        /// KinshipRegistry on load.
+        /// </summary>
+        public List<KinshipEdge> kinshipEdges = new();
+        /// <summary>Pass V P1-2: in-flight pregnancies (birth driver state).</summary>
+        public List<PregnancyRecord> pregnancies = new();
+        /// <summary>Pass V P1-2: opened estates (estate continuity).</summary>
+        public List<LandLedgers.Economy.Estates.Estate> estates = new();
     }
 
     [Serializable]
@@ -376,6 +386,15 @@ namespace LandLedgers.Persistence
         /// dropped on every save — loaded persons came back fully nourished.
         /// </summary>
         public PersonNutritionState nutrition = new();
+        /// <summary>
+        /// Pass V P0-2: the authoritative birth date. Age derives from this;
+        /// the saved `age` is a derived cache re-verified on load.
+        /// </summary>
+        public BirthDate birthDate = new();
+        /// <summary>Pass V P1-2: biological sex (demographic drivers).</summary>
+        public bool isFemale;
+        /// <summary>Pass V P1-2: migrated off-map; the person keeps aging.</summary>
+        public bool isOffMap;
     }
 
     [Serializable]

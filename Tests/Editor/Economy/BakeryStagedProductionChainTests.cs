@@ -39,6 +39,14 @@ namespace LandLedgers.Editor.Economy
                 return null;
             }
 
+            public string ScheduleWithEventId(string eventId, DueEventKind kind, float dueGameSeconds, string payloadRef)
+            {
+                if (string.IsNullOrWhiteSpace(eventId)) return "eventId must be non-empty.";
+                events.RemoveAll(e => e.EventId == eventId);
+                events.Add(new DueEvent(eventId, kind, dueGameSeconds, payloadRef, sequence++));
+                return null;
+            }
+
             public void Cancel(string eventId) => events.RemoveAll(e => e.EventId == eventId);
 
             public List<DueEvent> PopDue(float currentGameSeconds)

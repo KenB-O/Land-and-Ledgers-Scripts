@@ -39,6 +39,13 @@ namespace LandLedgers.Orchestration.Scenarios
         [SerializeField]
         private PopulationInclusionRules populationInclusion = new PopulationInclusionRules();
 
+        [Header("Starting World (P1-1 scenario presets)")]
+        [SerializeField]
+        [Tooltip("Authored starting-world configuration: start date, population range, " +
+            "businesses, player start, property, economy and credit policy. Older assets " +
+            "without this section get a default 55-95 configuration that still validates.")]
+        private StartingWorldConfiguration startingWorld = new StartingWorldConfiguration();
+
         [Header("Goals & Objectives")]
         [SerializeField]
         private List<ScenarioGoal> goals = new List<ScenarioGoal>();
@@ -97,6 +104,44 @@ namespace LandLedgers.Orchestration.Scenarios
         public IReadOnlyList<TunableValue> Tunables => tunables;
 
         /// <summary>
+        /// P1-1: authored starting-world configuration. Never null: assets
+        /// authored before this section existed get a default configuration
+        /// (55-95 residents, 1880-03-01 start) that still validates, so old
+        /// assets keep working without silent behavior changes.
+        /// </summary>
+        public StartingWorldConfiguration StartingWorld
+        {
+            get
+            {
+                startingWorld ??= new StartingWorldConfiguration();
+
+                // Additive migration for assets authored before the Pass V
+                // starting-world section existed. The asset's established
+                // scenario identity is documentary input; this does not
+                // synthesize persons, money, property, or businesses.
+                if (string.IsNullOrWhiteSpace(startingWorld.ScenarioId)
+                    && !string.IsNullOrWhiteSpace(scenarioId))
+                {
+                    startingWorld.SetScenarioId(scenarioId);
+                }
+
+                return startingWorld;
+            }
+        }
+
+        /// <summary>
+        /// P1-1: converts this asset into a versioned ScenarioPreset for the
+        /// coordinator. The preset is a deep copy; editing it never mutates the asset.
+        /// </summary>
+        public ScenarioPreset ToPreset(string presetId, string presetName, string presetVersion)
+        {
+            var preset = new ScenarioPreset();
+            preset.SetIdentity(presetId, presetName, presetVersion);
+            Generation.ScenarioPresetLibrary.DeepCopyIntoStartingWorld(StartingWorld, preset.StartingWorld);
+            return preset;
+        }
+
+        /// <summary>
         /// DEV-1: asset self-validation. Returns human-readable problems; empty means valid.
         /// The ScenarioService refuses to bootstrap an invalid asset and says why (loud, not silent).
         /// </summary>
@@ -137,6 +182,13 @@ namespace LandLedgers.Orchestration.Scenarios
                 {
                     problems.Add($"Objective '{objective.ObjectiveId}' links to unknown GoalId '{objective.LinkedGoalId}'.");
                 }
+            }
+
+            // P1-1: the starting-world configuration must validate too; an asset
+            // whose world config is broken is refused at bootstrap, loudly.
+            if (!Generation.ScenarioPresetLibrary.ValidateStartingWorld(StartingWorld, problems))
+            {
+                problems.Add("StartingWorld configuration is invalid (see problems above).");
             }
 
             return problems;

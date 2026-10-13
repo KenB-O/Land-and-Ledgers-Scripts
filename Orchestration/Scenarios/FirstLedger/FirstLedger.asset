@@ -28,6 +28,41 @@ MonoBehaviour:
     includeRuralServicePopulation: 0
     includeTransients: 0
     notes: Money-goals scenario (Tech X §2.1): the player household and town residents count; rural-service and transient populations are excluded from scenario read models.
+  startingWorld:
+    scenarioId: first-ledger
+    definitionVersion: 1.0.0
+    startYear: 1870
+    startMonth: 1
+    startDay: 1
+    minResidents: 55
+    maxResidents: 95
+    preferredResidents: 78
+    requiredBusinessIds: []
+    populationNotes: First Ledger authored starting population.
+    economicNotes: Starting cash and owner-equity goals remain authored by this asset.
+    propertyNotes: Player household receives only the property rights explicitly granted by the scenario.
+    fixedBusinesses: []
+    minVariableBusinesses: 0
+    maxVariableBusinesses: 2
+    playerStart:
+      householdName: Player Household
+      founderCount: 1
+      startingCashCents: 250000
+      startingDebtCents: 0
+      professionId: ''
+      ownsHomeBuilding: 1
+    economyPolicy:
+      cashBandMinCents: 25000
+      cashBandMaxCents: 150000
+      employmentTargetRate01: 0.75
+      debtChance01: 0.25
+      maxDebtCentsPerHousehold: 150000
+      allowedObligationKinds:
+      - 3
+      - 0
+    propertyGrants: []
+    householdCompositionNotes: ''
+    validationRulesNotes: ''
   goals:
   - goalId: acquire-first-business
     text: Form your first business

@@ -89,6 +89,9 @@ namespace LandLedgers.Persistence
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();
         public NpcOpportunityObservationLogSaveDto npcOpportunityObservation = new();
+        // Pass V P2-3: autonomous entrepreneurship driver state (per-person
+        // observation logs and investigations).
+        public NpcEntrepreneurshipDriver.NpcEntrepreneurshipDriverSaveDto npcEntrepreneurship = new();
         public NpcBusinessEventLogSaveDto npcBusinessEvents = new();
         public NpcPropertyLifeService.NpcPropertyLifeSaveDto npcPropertyLife = new();
         public ConstructionProjectExecutor.ConstructionProjectSaveDto constructionProjects = new();
@@ -116,7 +119,12 @@ namespace LandLedgers.Persistence
         public HouseholdDecisionServiceSaveDto householdDecisions = new();
         public HouseholdDecisionDriverSaveDto householdDecisionDriver = new();
         public DomesticLaborServiceSaveDto domesticLabor = new();
+        public DomesticLaborDriverSaveDto domesticLaborDriver = new();
         public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
+        // Pass V P2-1: batched errand plans with claims and reservations.
+        public HouseholdErrandPlanRegistrySaveDto householdErrandPlans = new();
+        // Pass V P2-2: durable registry of private household lenders.
+        public HouseholdLenderDirectory.HouseholdLenderDirectorySaveDto householdLenders = new();
         /// <summary>
         /// Pass IV (Worker 1): deterministic due-event schedule (task completions,
         /// passive processes, deadlines). Owned by SimulationSystemsHub.DueEvents.

@@ -198,14 +198,28 @@ namespace LandLedgers.Population
                             shortfall, input.AvailableCreditCents),
                     });
                 }
+                // Pass V P2-2: credit exhausted or refused — sell surplus
+                // non-essential goods to real buyers before cutting spending.
+                if (input.SaleableSurplusValueCents >= shortfall)
+                {
+                    return Record(new HouseholdDecision
+                    {
+                        HouseholdId = hid,
+                        Day = input.Day,
+                        Kind = HouseholdDecisionKind.SellAssets,
+                        Reason = string.Format(
+                            "SellAssets: shortfall {0}c, no known opportunities, no searchable contacts, credit {1}c insufficient; saleable surplus {2}c covers it",
+                            shortfall, input.AvailableCreditCents, input.SaleableSurplusValueCents),
+                    });
+                }
                 return Record(new HouseholdDecision
                 {
                     HouseholdId = hid,
                     Day = input.Day,
                     Kind = HouseholdDecisionKind.Economize,
                     Reason = string.Format(
-                        "Economize: shortfall {0}c, no known opportunities, no searchable contacts, credit {1}c insufficient; cut spending to stretch reserves {2}c",
-                        shortfall, input.AvailableCreditCents, reserves),
+                        "Economize: shortfall {0}c, no known opportunities, no searchable contacts, credit {1}c insufficient, saleable surplus {2}c insufficient; cut spending to stretch reserves {3}c",
+                        shortfall, input.AvailableCreditCents, input.SaleableSurplusValueCents, reserves),
                 });
             }
 

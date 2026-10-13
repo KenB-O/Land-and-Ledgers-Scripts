@@ -49,6 +49,12 @@ namespace LandLedgers.Population
         public int EdgeCount => edges.Count;
 
         /// <summary>
+        /// Pass V P1-2: all directed edges (persistence restores these;
+        /// AddEdge dedupes exact duplicates on re-import).
+        /// </summary>
+        public IReadOnlyList<KinshipEdge> AllEdges => edges;
+
+        /// <summary>
         /// Adds a kinship edge. Symmetric relations (Spouse, Sibling) and the Parent/Child
         /// inverse are recorded automatically; exact duplicates are ignored.
         /// </summary>
@@ -139,6 +145,39 @@ namespace LandLedgers.Population
                 Source = source ?? string.Empty,
             });
         }
+
+        /// <summary>Save support (CLN-1 pattern): capture.</summary>
+        public KinshipRegistrySaveDto CaptureSaveDto()
+        {
+            return new KinshipRegistrySaveDto
+            {
+                edges = new List<KinshipEdge>(AllEdges),
+            };
+        }
+
+        /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
+        public void LoadFromSaveDto(KinshipRegistrySaveDto dto)
+        {
+            edges.Clear();
+            if (dto == null || dto.edges == null)
+            {
+                return;
+            }
+            foreach (KinshipEdge edge in dto.edges)
+            {
+                if (edge != null)
+                {
+                    edges.Add(edge);
+                }
+            }
+        }
+    }
+
+    /// <summary>Save DTO for the kinship registry (CLN-1 pattern).</summary>
+    [Serializable]
+    public sealed class KinshipRegistrySaveDto
+    {
+        public List<KinshipEdge> edges = new List<KinshipEdge>();
     }
 
     /// <summary>
@@ -331,6 +370,9 @@ namespace LandLedgers.Population
         /// Records a birth: new Person (fresh HF-1 PersonId, never reused), kinship edges to
         /// both parents, and Active membership in the household. Kinship and membership are
         /// separate records (Tech X §2.2).
+        ///
+        /// Pass V P0-2: stamps the authoritative <see cref="BirthDate"/> (provenance
+        /// Exact for live births). The caller schedules the birthday due-event.
         /// </summary>
         public PersonState RecordBirth(
             int householdId,
@@ -338,7 +380,8 @@ namespace LandLedgers.Population
             int fatherPersonId,
             string firstName,
             string lastName,
-            int dayIndex)
+            int dayIndex,
+            BirthDate birthDate)
         {
             HouseholdState household = population.GetHousehold(householdId);
             if (household == null)
@@ -352,6 +395,7 @@ namespace LandLedgers.Population
                 id = population.AllocateNextPersonId(),
                 firstName = firstName ?? "Child",
                 lastName = lastName ?? household.surname ?? string.Empty,
+                birthDate = birthDate,
                 age = 0,
                 ageBand = AgeBand.Child0To9,
                 deathDayIndex = -1,
@@ -391,17 +435,13 @@ namespace LandLedgers.Population
             return true;
         }
 
-        /// <summary>Ages a person by whole years, maintaining the age band.</summary>
-        public void AgePerson(PersonState person, int years)
-        {
-            if (person == null || years <= 0)
-            {
-                return;
-            }
-
-            person.age += years;
-            person.ageBand = AgeBandForAge(person.age);
-        }
+        /// <summary>
+        /// Pass V P0-2: AgePerson is REMOVED. PersonState.age was an incremented
+        /// counter with zero production callers; age is now derived from the
+        /// authoritative birth date via AgeAuthority (PersonState.RefreshDerivedAge),
+        /// advanced by birthday due-events on the hub scheduler. No replacement
+        /// incrementer exists by design.
+        /// </summary>
 
         /// <summary>
         /// Dissolves a household: ends every active membership, marks the household

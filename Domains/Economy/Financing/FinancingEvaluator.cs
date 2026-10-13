@@ -236,7 +236,7 @@ namespace LandLedgers.Economy.Financing
                 requiredDownPaymentCents = requiredDownPaymentCents,
                 decision = decision,
                 reasonCodes = new List<FinancingReasonCode>(Distinct(reasons)),
-                expiresOnDate = BuildDateFromAbsoluteDay(GetAbsoluteDayIndex(request.approvalDate) + 14, GetDaysPerMonth(request.daysPerMonth))
+                expiresOnDate = CalendarAnchor.Default.BuildDate(Mathf.Max(0, GetAbsoluteDayIndex(request.approvalDate) + 14))
             };
 
             return new FinancingApprovalResult(
@@ -630,24 +630,10 @@ namespace LandLedgers.Economy.Financing
             return null;
         }
 
-        private static int GetDaysPerMonth(int requestedDaysPerMonth)
-        {
-            return requestedDaysPerMonth > 0 ? requestedDaysPerMonth : 28;
-        }
-
-        private static SimulationDate BuildDateFromAbsoluteDay(int absoluteDayIndex, int daysPerMonth)
-        {
-            int safeDaysPerMonth = GetDaysPerMonth(daysPerMonth);
-            int clampedDay = Mathf.Max(0, absoluteDayIndex);
-            int dayOfWeekIndex = clampedDay % 7;
-            int monthIndex = clampedDay / safeDaysPerMonth;
-            int dayOfMonth = clampedDay % safeDaysPerMonth + 1;
-            int week = clampedDay / 7 + 1;
-            int weekOfMonth = (dayOfMonth - 1) / 7 + 1;
-            int month = monthIndex % 12 + 1;
-            int year = monthIndex / 12 + 1;
-            return new SimulationDate(clampedDay, dayOfWeekIndex, dayOfMonth, week, weekOfMonth, month, year);
-        }
+        // Pass V P0-1: the 336-day GetDaysPerMonth/BuildDateFromAbsoluteDay
+        // fiction is removed. Financing dates derive from the Gregorian anchor
+        // (see the expiresOnDate call site). The request's daysPerMonth field is
+        // inert serialization compat.
 
         private static string FormatMoney(int cents)
         {

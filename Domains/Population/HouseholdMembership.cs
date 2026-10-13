@@ -170,6 +170,65 @@ namespace LandLedgers.Population
         public int ActiveCount => activeByPerson.Count;
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>
+        /// Pass V (W4, additive): all membership records, active and ended, for
+        /// save capture. Read-only view; the registry remains the sole mutator.
+        /// </summary>
+        public List<HouseholdMembership> AllMemberships()
+        {
+            var all = new List<HouseholdMembership>(byMembershipId.Count);
+            foreach (HouseholdMembership membership in byMembershipId.Values)
+            {
+                all.Add(membership);
+            }
+            all.Sort((a, b) => a.MembershipId.CompareTo(b.MembershipId));
+            return all;
+        }
+
+        /// <summary>Save support (CLN-1 pattern): capture.</summary>
+        public HouseholdMembershipRegistrySaveDto CaptureSaveDto()
+        {
+            return new HouseholdMembershipRegistrySaveDto
+            {
+                memberships = AllMemberships(),
+            };
+        }
+
+        /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
+        public void LoadFromSaveDto(HouseholdMembershipRegistrySaveDto dto)
+        {
+            activeByPerson.Clear();
+            byMembershipId.Clear();
+            ended.Clear();
+            if (dto == null || dto.memberships == null)
+            {
+                return;
+            }
+            foreach (HouseholdMembership membership in dto.memberships)
+            {
+                if (membership == null)
+                {
+                    continue;
+                }
+                byMembershipId[membership.MembershipId] = membership;
+                if (membership.IsActive)
+                {
+                    activeByPerson[membership.PersonId] = membership;
+                }
+                else
+                {
+                    ended.Add(membership);
+                }
+            }
+        }
+    }
+
+    /// <summary>Save DTO for the household membership registry (CLN-1 pattern).</summary>
+    [Serializable]
+    public sealed class HouseholdMembershipRegistrySaveDto
+    {
+        public List<HouseholdMembership> memberships = new List<HouseholdMembership>();
     }
 
     /// <summary>

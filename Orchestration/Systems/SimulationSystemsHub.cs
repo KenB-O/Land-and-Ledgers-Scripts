@@ -294,6 +294,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly List<NpcBusinessLifeRecord> npcBusinessLifeRecords = new List<NpcBusinessLifeRecord>();
         private NpcBusinessInvestigation npcBusinessInvestigation;
         private NpcOpportunityObservationLog npcOpportunityObservation;
+        private NpcEntrepreneurshipDriver npcEntrepreneurshipDriver;
         private NpcBusinessEventLog npcBusinessEvents;
         private NpcPropertyLifeService npcPropertyLife;
         private ConstructionProjectExecutor constructionProjectExecutor;
@@ -332,8 +333,11 @@ namespace LandLedgers.Orchestration.Systems
         private ParcelSubdivisionService parcelSubdivisionService;
         private HouseholdDecisionService householdDecisionService;
         private HouseholdDecisionDriver householdDecisionDriver;
+        private HouseholdLenderDirectory householdLenderDirectory;
         private DomesticLaborService domesticLaborService;
         private HouseholdAutonomyDriver householdAutonomyDriver;
+        private DomesticLaborDriver domesticLaborDriver;
+        private HouseholdErrandCoordinator householdErrandCoordinator;
         private HousingSearchNeedRegistry housingSearchNeedRegistry;
         private HousingAuthority housingAuthority;
         private readonly List<BoardingHouseShopRuntime> boardingHouseRuntimes = new List<BoardingHouseShopRuntime>();
@@ -365,6 +369,14 @@ namespace LandLedgers.Orchestration.Systems
         public IList<NpcBusinessLifeRecord> NpcBusinessLifeRecords => npcBusinessLifeRecords;
         public NpcBusinessInvestigation NpcBusinessInvestigation => npcBusinessInvestigation ??= new NpcBusinessInvestigation();
         public NpcOpportunityObservationLog NpcOpportunityObservation => npcOpportunityObservation ??= new NpcOpportunityObservationLog();
+
+        /// <summary>
+        /// Pass V P2-3: the autonomous opportunity-evaluation driver —
+        /// observation -> recognition -> investigation -> formation, no quotas.
+        /// Owns the per-person observation logs and investigations.
+        /// </summary>
+        public NpcEntrepreneurshipDriver NpcEntrepreneurship =>
+            npcEntrepreneurshipDriver ??= new NpcEntrepreneurshipDriver();
         public NpcBusinessEventLog NpcBusinessEvents => npcBusinessEvents ??= new NpcBusinessEventLog();
         public NpcPropertyLifeService NpcPropertyLife => npcPropertyLife ??= new NpcPropertyLifeService();
         public ConstructionProjectExecutor ConstructionExecutor => constructionProjectExecutor ??= new ConstructionProjectExecutor();
@@ -474,6 +486,27 @@ namespace LandLedgers.Orchestration.Systems
                 ContactGraph, Employments, HousingSearchNeeds, FinancialObligations, Ids, CreditCash);
 
         /// <summary>
+        /// Pass V P2-2: durable registry of private individuals willing to
+        /// lend to households. World generation registers wealthy NPCs here
+        /// with documented capital; the autonomy driver resolves per-household
+        /// facilities from it. Empty by default: no guaranteed credit.
+        /// </summary>
+        public HouseholdLenderDirectory HouseholdLenders
+        {
+            get
+            {
+                if (householdLenderDirectory == null)
+                {
+                    householdLenderDirectory = new HouseholdLenderDirectory();
+                    householdLenderDirectory.BindHubServices(
+                        CreditOffers, FinancialObligations, CreditCash, Ids, CreditEvents);
+                }
+
+                return householdLenderDirectory;
+            }
+        }
+
+        /// <summary>
         /// Pass III Worker C: narrow domestic labor (meal prep, fuel, animal
         /// care, chores) on the existing TaskAuthority + person-time.
         /// </summary>
@@ -486,6 +519,22 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public HouseholdAutonomyDriver HouseholdAutonomy =>
             householdAutonomyDriver ??= new HouseholdAutonomyDriver();
+
+        /// <summary>
+        /// Pass V drive-by: the domestic labor day driver (meal prep, fuel,
+        /// animal care, chores) — previously tests-only. Hub-owned and
+        /// persisted; SimulationDrivers runs it daily.
+        /// </summary>
+        public DomesticLaborDriver DomesticLaborDriver =>
+            domesticLaborDriver ??= new DomesticLaborDriver();
+
+        /// <summary>
+        /// Pass V P2-1: the household errand coordinator — batched shopping
+        /// plans (HouseholdErrandPlan) with claims, reservations, and
+        /// reassignment. Hub-owned and persisted.
+        /// </summary>
+        public HouseholdErrandCoordinator HouseholdErrands =>
+            householdErrandCoordinator ??= new HouseholdErrandCoordinator();
 
         /// <summary>
         /// Pass III Worker C: hub-owned housing-search registry used by the
@@ -814,6 +863,7 @@ namespace LandLedgers.Orchestration.Systems
                 npcBusinessLifecycle = CaptureNpcBusinessLifecycle(),
                 npcBusinessInvestigation = NpcBusinessInvestigation.CaptureSaveDto(),
                 npcOpportunityObservation = NpcOpportunityObservation.CaptureSaveDto(),
+                npcEntrepreneurship = NpcEntrepreneurship.CaptureSaveDto(),
                 npcBusinessEvents = NpcBusinessEvents.CaptureSaveDto(),
                 npcPropertyLife = NpcPropertyLife.CaptureSaveDto(),
                 constructionProjects = ConstructionExecutor.CaptureSaveDto(new List<ConstructionProject>(ConstructionProjects)),
@@ -830,7 +880,10 @@ namespace LandLedgers.Orchestration.Systems
                 tenancyPayments = TenancyPayments.CaptureSaveDto(),
                 householdDecisions = HouseholdDecisions.CaptureSaveDto(),
                 householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
+                householdLenders = HouseholdLenders.CaptureSaveDto(),
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
+                domesticLaborDriver = DomesticLaborDriver.CaptureSaveDto(),
+                householdErrandPlans = HouseholdErrands.Plans.CaptureSaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
                 housing = Housing.CaptureSaveDto(),
                 boardingHouseRuntimes = CaptureBoardingHouseRuntimes(),
@@ -911,6 +964,7 @@ namespace LandLedgers.Orchestration.Systems
             }
             NpcBusinessInvestigation.LoadFromSaveDto(dto.npcBusinessInvestigation);
             NpcOpportunityObservation.LoadFromSaveDto(dto.npcOpportunityObservation);
+            NpcEntrepreneurship.LoadFromSaveDto(dto.npcEntrepreneurship);
             NpcBusinessEvents.LoadFromSaveDto(dto.npcBusinessEvents);
             NpcPropertyLife.LoadFromSaveDto(dto.npcPropertyLife, diagnostics);
             ConstructionProjects.Clear();
@@ -933,7 +987,10 @@ namespace LandLedgers.Orchestration.Systems
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
+            HouseholdLenders.LoadFromSaveDto(dto.householdLenders);
             DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
+            DomesticLaborDriver.LoadFromSaveDto(dto.domesticLaborDriver);
+            HouseholdErrands.Plans.LoadFromSaveDto(dto.householdErrandPlans);
             HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
             // Pass IV (Worker 1): due-event schedule (clear-then-load, idempotent).
             DueEvents.LoadFromSaveDto(dto.dueEvents);

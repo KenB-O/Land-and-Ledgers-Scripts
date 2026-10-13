@@ -52,6 +52,26 @@ namespace LandLedgers.Population
             public Func<int, List<RentObligationState>> RentObligationsFor;
             /// <summary>True when the household's shelter is at risk; null = false.</summary>
             public Func<int, bool> ShelterRiskFor;
+            /// <summary>
+            /// Pass V P2-2: the durable registry of private lenders. Null =
+            /// no lenders known to the world: borrowing is refused everywhere.
+            /// </summary>
+            public HouseholdLenderDirectory Lenders;
+            /// <summary>
+            /// Pass V P2-2: person id to display name (for matching known
+            /// lender contacts). Null = contacts cannot be named, no facility.
+            /// </summary>
+            public Func<int, string> PersonNameOf;
+            /// <summary>
+            /// Pass V P2-2: the hardship asset-sale port. Null = no sale
+            /// channel wired.
+            /// </summary>
+            public IHardshipAssetSalePort AssetSale;
+            /// <summary>
+            /// Pass V P2-2: distress value (cents) of the household's saleable
+            /// surplus; null = 0.
+            /// </summary>
+            public Func<int, int> SaleableSurplusValueFor;
             public ResidentialConditionKind CurrentCondition = ResidentialConditionKind.SuitablyHoused;
             public HouseholdDecisionDriver.DecisionExecutionParams ExecutionParams =
                 new HouseholdDecisionDriver.DecisionExecutionParams();
@@ -177,6 +197,18 @@ namespace LandLedgers.Population
                 }
             }
 
+            // Pass V P2-2: legitimate credit comes only from a KNOWN private
+            // lender with real finite funds. No known lender -> no credit,
+            // never a guaranteed loan.
+            IHouseholdCreditFacility facility = null;
+            if (ctx.Lenders != null && ctx.ContactGraph != null && ctx.PersonNameOf != null)
+            {
+                facility = ctx.Lenders.FindFacilityFor(
+                    members,
+                    memberId => ctx.ContactGraph.ReachableCandidates(string.Empty, new[] { memberId }),
+                    ctx.PersonNameOf);
+            }
+
             var input = new HouseholdPressureInput
             {
                 HouseholdId = householdId.ToString(),
@@ -188,8 +220,10 @@ namespace LandLedgers.Population
                 KnownOpportunityCount = knownOpportunities,
                 HasShelterRisk = shelterRisk,
                 HasSearchableContacts = hasSearchableContacts,
-                AvailableCreditCents = 0, // no legitimate credit facility tracked yet
-                KnownCreditorId = string.Empty,
+                AvailableCreditCents = facility != null ? facility.LendableCents() : 0,
+                KnownCreditorId = facility != null ? facility.CreditorName : string.Empty,
+                SaleableSurplusValueCents = ctx.SaleableSurplusValueFor != null
+                    ? Math.Max(0, ctx.SaleableSurplusValueFor(householdId)) : 0,
                 RecentJobLoss = recentJobLoss,
                 JobLossNote = jobLossNote,
             };
@@ -201,6 +235,8 @@ namespace LandLedgers.Population
             {
                 Memberships = ctx.Memberships,
                 Params = ctx.ExecutionParams ?? new HouseholdDecisionDriver.DecisionExecutionParams(),
+                CreditFacility = facility,
+                AssetSale = ctx.AssetSale,
             };
             execCtx.Params.CurrentCondition = ctx.CurrentCondition;
             ctx.DecisionDriver.Execute(decision, input, execCtx, dayIndex, diag);

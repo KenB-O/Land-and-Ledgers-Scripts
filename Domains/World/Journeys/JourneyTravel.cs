@@ -90,6 +90,127 @@ namespace LandLedgers.World.Journeys
         }
 
         /// <summary>
+        /// Pass VII Workstream B (P2-9): horseback travel bound to a REAL horse.
+        /// TravelMode.Horseback was a speed constant with no animal behind it
+        /// (phantom horses). This plans the same journey-model route, but the
+        /// trip only happens when a saddle-capable, work-ready horse is free
+        /// for the whole travel window: the horse is reserved on the shared
+        /// availability record (so it cannot simultaneously plow or haul) and
+        /// accrues real work cost from the miles ridden. No horse, no
+        /// horseback — the traveler walks or the trip is refused honestly.
+        /// Returns null with a diagnostic when unroutable or horseless.
+        /// </summary>
+        public static WorkTask PlanMountedTravel(
+            TaskAuthority authority,
+            JourneyModel model,
+            LandLedgers.Animals.AnimalRegistry registry,
+            LandLedgers.Animals.IAnimalAvailabilityAuthority availability,
+            EntityId personId,
+            System.Collections.Generic.IList<LandLedgers.Primitives.EntityId> candidateHorses,
+            string fromLocationId,
+            string toLocationId,
+            int dayIndex,
+            float nowGameSeconds,
+            System.Collections.Generic.List<string> diagnostics)
+        {
+            diagnostics ??= new System.Collections.Generic.List<string>();
+            if (registry == null)
+            {
+                diagnostics.Add("JourneyTravel: no animal registry — horseback needs a real horse.");
+                return null;
+            }
+            if (availability == null)
+            {
+                diagnostics.Add("JourneyTravel: no availability authority — the horse cannot be reserved.");
+                return null;
+            }
+            if (candidateHorses == null || candidateHorses.Count == 0)
+            {
+                diagnostics.Add("JourneyTravel: no candidate horses — horseback travel refused, no phantom horse.");
+                return null;
+            }
+
+            JourneyRoute route = model != null
+                ? model.FindRoute(fromLocationId, toLocationId, TravelMode.Horseback)
+                : null;
+            if (route == null || !route.Found)
+            {
+                diagnostics.Add("JourneyTravel: " + (route != null ? route.Diagnostic : "no journey model — travel not planned."));
+                return null;
+            }
+            if (route.TotalMinutes <= 0)
+            {
+                diagnostics.Add($"JourneyTravel: {fromLocationId} → {toLocationId} is zero travel — no task needed.");
+                return null;
+            }
+
+            // Pick the first suitable AND available horse: saddle capability and
+            // fitness from HorseAuthority, freedom from the availability truth.
+            LandLedgers.Animals.AnimalState chosen = null;
+            var skipReasons = new System.Collections.Generic.List<string>();
+            float windowEnd = nowGameSeconds + route.TotalMinutes * 60f;
+            foreach (LandLedgers.Primitives.EntityId horseId in candidateHorses)
+            {
+                LandLedgers.Animals.AnimalState horse = registry.GetAnimal(horseId);
+                if (horse == null || !horse.IsActive || horse.Species != LandLedgers.Animals.AnimalSpecies.Horse)
+                {
+                    skipReasons.Add($"{horseId}: not an active horse");
+                    continue;
+                }
+                if ((horse.HorseCapabilities & LandLedgers.Animals.HorseUseCapabilities.Saddle) == 0)
+                {
+                    skipReasons.Add($"{horseId}: not saddle-trained");
+                    continue;
+                }
+                if (!LandLedgers.Animals.HorseAuthority.IsWorkReady(horse))
+                {
+                    skipReasons.Add($"{horseId}: not fit for work");
+                    continue;
+                }
+                if (!availability.IsAvailable(horseId.ToString(), nowGameSeconds))
+                {
+                    skipReasons.Add($"{horseId}: already committed");
+                    continue;
+                }
+                chosen = horse;
+                break;
+            }
+            if (chosen == null)
+            {
+                diagnostics.Add(
+                    "JourneyTravel: horseback travel refused — no suitable free horse (" +
+                    string.Join("; ", skipReasons.ToArray()) + ").");
+                return null;
+            }
+
+            string refusal = LandLedgers.Animals.HorseAuthority.TryReserveUse(
+                chosen, LandLedgers.Animals.HorseUseKind.Mounted, "travel:" + personId,
+                availability, nowGameSeconds, windowEnd, out _);
+            if (refusal != null)
+            {
+                diagnostics.Add("JourneyTravel: horseback travel refused — " + refusal);
+                return null;
+            }
+
+            // Real work cost from the miles ridden: the horse tires on the road.
+            float intensity = Math.Max(0f, route.TotalMiles) * 0.02f;
+            LandLedgers.Animals.HorseAuthority.ComputeWorkCost(chosen, intensity,
+                out float fatigue01, out float nutritionCost01, out float conditionCost01);
+            LandLedgers.Animals.HorseAuthority.ApplyWork(chosen, fatigue01, nutritionCost01, conditionCost01);
+
+            WorkTask task = authority != null
+                ? authority.CreateTaskWithPlannedMinutes(
+                    TravelTaskId, personId, dayIndex, route.TotalMinutes,
+                    customerRef: $"mounted-travel:{fromLocationId}->{toLocationId}:{chosen.AnimalId}")
+                : null;
+            diagnostics.Add(
+                $"JourneyTravel: planned {route.TotalMinutes} min of horseback travel " +
+                $"({route.TotalMiles:F1} mi) for {personId} on horse {chosen.AnimalId} " +
+                $"(reserved [{nowGameSeconds:F0}-{windowEnd:F0}]s, fatigue now {chosen.Fatigue01:0.00}).");
+            return task;
+        }
+
+        /// <summary>
         /// Whole days of goods aging for a trip of totalMinutes. Perishables age
         /// in transit on REAL travel time now (Tech X §8.4): a same-day haul
         /// ages ~0 days, a multi-day wagon haul ages honestly.

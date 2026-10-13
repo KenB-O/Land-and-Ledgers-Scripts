@@ -74,6 +74,20 @@ namespace LandLedgers.Editor.Economy
                 foreach (string id in dead) live.Remove(id);
             }
 
+            public void ReleaseAllForResource(string resourceKey)
+            {
+                var dead = new List<string>();
+                foreach (var kv in live)
+                {
+                    foreach (ReservationItem item in kv.Value.Items)
+                    {
+                        if (item.ResourceKey == resourceKey) { dead.Add(kv.Key); break; }
+                    }
+                }
+
+                foreach (string id in dead) live.Remove(id);
+            }
+
             public bool IsReserved(string resourceKey, float atGameSeconds)
             {
                 foreach (ReservationHandle h in live.Values)

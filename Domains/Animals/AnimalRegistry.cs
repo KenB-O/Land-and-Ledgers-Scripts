@@ -169,6 +169,12 @@ namespace LandLedgers.Animals
         public float Training01;
         public HorseUseKind CurrentUse;
         public string CurrentAssignmentId = string.Empty;
+        /// <summary>
+        /// Pass VII (P1-4): the live availability-authority reservation id for
+        /// the current use, so release paths free the real hold. Empty when the
+        /// horse holds no reservation. Additive field.
+        /// </summary>
+        public string CurrentReservationId = string.Empty;
         public int LastCareDayIndex = -1;
     }
 

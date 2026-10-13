@@ -99,8 +99,15 @@ namespace LandLedgers.EditorTests.PassVI
 
     /// <summary>
     /// Pass VI proof 3: shared horse no-double-booking.
-    /// Demonstrates the confirmed defect: HorseAuthority and DraftPowerService
-    /// maintain disjoint availability truths, so one horse can be double-booked.
+    /// Pass VI demonstrated the confirmed defect: HorseAuthority and
+    /// DraftPowerService maintained disjoint availability truths, so one
+    /// horse could be double-booked. Pass VII Workstream B FIXED it:
+    /// HorseAuthority.TryReserveUse now reserves through
+    /// IAnimalAvailabilityAuthority, a thin gateway over the Pass IV
+    /// IUnifiedReservationAuthority, so the mount path and the draft path
+    /// contend on the SAME "animal:" reservation record. Behavioral proof
+    /// lives in Pass7AnimalAvailabilityTests (DraftThenMount, MountThenDraft,
+    /// SliceC, SliceD). This fixture is kept as the historical record.
     /// </summary>
     [TestFixture]
     public sealed class SharedHorseProofTests
@@ -108,23 +115,20 @@ namespace LandLedgers.EditorTests.PassVI
         [Test]
         public void OneHorse_TwoReservations_NoCrossCheck_Documented()
         {
-            // The defect: HorseAuthority.TryReserveUse (mount) and
-            // DraftPowerService.TryReserveAnimals (draft) do not consult each
-            // other. This test documents the disjoint authority. A full
-            // behavioral double-booking test requires the Unity runtime
-            // (HorseAuthority is a static service); the source audit confirms
-            // the missing cross-check. See Document D.
-            //
-            // What we assert here: the two reservation mechanisms exist as
-            // separate types with no shared availability record.
+            // Pass VI documented the defect (Worker B F1; Document D): the two
+            // reservation mechanisms existed as separate types with no shared
+            // availability record. Pass VII unified them; this test keeps
+            // asserting the types exist while the behavioral proof moved to
+            // Pass7AnimalAvailabilityTests.
             Type horseAuthority = Type.GetType(
                 "LandLedgers.Animals.HorseAuthority, LandLedgers.Harness");
             Type draftPower = Type.GetType(
                 "LandLedgers.Economy.DraftPower.DraftPowerService, LandLedgers.Harness");
+            Type availability = Type.GetType(
+                "LandLedgers.Animals.AnimalAvailabilityAuthority, LandLedgers.Harness");
             Assert.IsNotNull(horseAuthority, "HorseAuthority exists.");
             Assert.IsNotNull(draftPower, "DraftPowerService exists.");
-            // The gap: neither type references the other's reservation state.
-            // (Verified by source inspection; Worker B F1.)
+            Assert.IsNotNull(availability, "AnimalAvailabilityAuthority exists (Pass VII unification).");
         }
     }
 

@@ -4,6 +4,7 @@ using System.Text;
 using LandLedgers.FirstLedger;
 using LandLedgers.Animals;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Pathing;
 using LandLedgers.Persistence;
@@ -55,7 +56,23 @@ namespace LandLedgers.Economy
             if (shipment.Status == LogisticsShipmentStatus.Completed || shipment.Status == LogisticsShipmentStatus.Failed)
                 return "LogisticsRuntimeManager.BindPhysicalTransport: shipment is no longer active.";
             if (wagon == null || !wagon.IsWagon) return "LogisticsRuntimeManager.BindPhysicalTransport: a real wagon is required.";
-            string refusal = WagonAuthority.TryAssignDraftTeam(wagon, draftHorses, driverPersonId, shipment.ShipmentId);
+            // Pass VII Workstream B (P1-4): the draft team reserves on the shared
+            // animal availability record — a horse already plowing, rented, or
+            // hauling another shipment refuses here instead of double-booking.
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            IUnifiedReservationAuthority reservations = systemsHub != null ? systemsHub.ReservationAuthority : null;
+            if (reservations == null)
+                return "LogisticsRuntimeManager.BindPhysicalTransport: no reservation authority — the draft team cannot be reserved.";
+            var availability = new AnimalAvailabilityAuthority(reservations);
+            float now = timeManager != null ? timeManager.AbsoluteGameSeconds : 0f;
+            float totalDuration = Mathf.Max(60f,
+                shipment.loadingDurationGameSeconds
+                + shipment.transitDurationGameSeconds
+                + shipment.unloadingDurationGameSeconds);
+            float remaining = Mathf.Max(60f, totalDuration - Mathf.Max(0f, shipment.totalElapsedGameSeconds));
+            string refusal = WagonAuthority.TryAssignDraftTeam(
+                wagon, draftHorses, driverPersonId, shipment.ShipmentId,
+                availability, now, now + remaining);
             if (refusal != null) return refusal;
             shipment.physicalWagonAssetId = wagon.AssetId;
             shipment.physicalDriverPersonId = driverPersonId ?? string.Empty;
@@ -77,7 +94,10 @@ namespace LandLedgers.Economy
         {
             if (shipment == null || wagon == null)
                 return "LogisticsRuntimeManager.ReleasePhysicalTransport: shipment and wagon are required.";
-            WagonAuthority.ReleaseDraftTeam(wagon, draftHorses);
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            IUnifiedReservationAuthority releaseReservations = systemsHub != null ? systemsHub.ReservationAuthority : null;
+            WagonAuthority.ReleaseDraftTeam(wagon, draftHorses,
+                releaseReservations != null ? new AnimalAvailabilityAuthority(releaseReservations) : null);
             WagonAuthority.ApplyTripWear(wagon, distanceMiles, loadRatio);
             shipment.physicalTransportBound = false;
             shipment.physicalWagonAssetId = string.Empty;
@@ -1025,8 +1045,16 @@ namespace LandLedgers.Economy
                 : 0f;
             float routeDistance = shipment.RoutePlan != null ? shipment.RoutePlan.TotalTravelCells : 0f;
             ReleasePhysicalTransport(shipment, wagon, horses, routeDistance, loadRatio);
+            // Pass VII Workstream B (P1-5): real work cost from the trip actually
+            // run — intensity from distance and load, modulation from each
+            // horse's current state. No flat wear constants, no zero-cost hauling.
+            float intensity = Mathf.Max(0f, routeDistance) * 0.005f * (0.5f + Mathf.Clamp01(loadRatio));
             foreach (AnimalState horse in horses)
-                HorseAuthority.ApplyWork(horse, 0.05f, 0.02f, 0f);
+            {
+                HorseAuthority.ComputeWorkCost(horse, intensity,
+                    out float fatigue01, out float nutritionCost01, out float conditionCost01);
+                HorseAuthority.ApplyWork(horse, fatigue01, nutritionCost01, conditionCost01);
+            }
         }
 
         /// <summary>

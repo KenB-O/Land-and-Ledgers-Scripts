@@ -4,6 +4,7 @@ using UnityEditor;
 using UnityEngine;
 using LandLedgers.Animals;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Economy;
 using LandLedgers.Primitives;
@@ -18,11 +19,19 @@ namespace LandLedgers.EditorTests.Economy
             var ids = new EntityIdRegistry();
             AnimalState horse = new AnimalRegistry(ids).RegisterAnimal(
                 AnimalSpecies.Horse, "draft", AnimalSex.Male, AnimalOwnerKind.Household, "H-1", 0, "opening stock");
+            var availability = new AnimalAvailabilityAuthority(new EquipmentReservationService());
             Assert.That(HorseAuthority.Configure(horse, HorseUseCapabilities.GeneralPurpose, "farm-1", "stable-1", 0), Is.Null);
-            Assert.That(HorseAuthority.TryReserveUse(horse, HorseUseKind.Draft, "shipment-1"), Is.Null);
-            Assert.That(HorseAuthority.TryReserveUse(horse, HorseUseKind.Mounted, "journey-1"), Does.Contain("already assigned"));
-            HorseAuthority.ReleaseUse(horse);
+            Assert.That(HorseAuthority.TryReserveUse(
+                horse, HorseUseKind.Draft, "shipment-1", availability, 0f, 3600f, out string reservationId), Is.Null);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(reservationId));
+            Assert.That(HorseAuthority.TryReserveUse(
+                horse, HorseUseKind.Mounted, "journey-1", availability, 0f, 3600f, out _), Does.Contain("already assigned"));
+            HorseAuthority.ReleaseUse(horse, availability);
             Assert.That(horse.AnimalId.Kind, Is.EqualTo(EntityKind.Animal));
+            // After release the horse is free again on the shared record.
+            Assert.That(HorseAuthority.TryReserveUse(
+                horse, HorseUseKind.Mounted, "journey-2", availability, 0f, 3600f, out _), Is.Null);
+            HorseAuthority.ReleaseUse(horse, availability);
         }
 
         [Test]
@@ -49,12 +58,14 @@ namespace LandLedgers.EditorTests.Economy
             HorseAuthority.Configure(horse, HorseUseCapabilities.Draft, "yard-1", "stable-1", 0);
             var wagon = new EquipmentAsset { AssetId = "WG-2", Kind = WagonAuthority.DefaultKind, Condition01 = 1f };
             WagonAuthority.Configure(wagon, "GeneralFarmFreight", 450f, 4f, "yard-1");
-            Assert.That(WagonAuthority.TryAssignDraftTeam(wagon, new List<AnimalState> { horse }, "P1", "S1"), Is.Null);
+            var availability = new AnimalAvailabilityAuthority(new EquipmentReservationService());
+            Assert.That(WagonAuthority.TryAssignDraftTeam(
+                wagon, new List<AnimalState> { horse }, "P1", "S1", availability, 0f, 3600f), Is.Null);
             Assert.That(wagon.DraftAnimalIds, Has.Count.EqualTo(1));
             Assert.That(wagon.CurrentDriverPersonId, Is.EqualTo("P1"));
             Assert.That(wagon.CurrentShipmentId, Is.EqualTo("S1"));
             Assert.That(horse.CurrentUse, Is.EqualTo(HorseUseKind.Draft));
-            WagonAuthority.ReleaseDraftTeam(wagon, new List<AnimalState> { horse });
+            WagonAuthority.ReleaseDraftTeam(wagon, new List<AnimalState> { horse }, availability);
             Assert.That(horse.CurrentUse, Is.EqualTo(HorseUseKind.None));
         }
 

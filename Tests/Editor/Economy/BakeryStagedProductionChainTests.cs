@@ -130,6 +130,16 @@ namespace LandLedgers.Editor.Economy
                 foreach (string id in doomed) live.Remove(id);
             }
 
+            public void ReleaseAllForResource(string resourceKey)
+            {
+                var doomed = new List<string>();
+                foreach (var kvp in live)
+                    foreach (ReservationItem it in kvp.Value.Items)
+                        if (string.Equals(it.ResourceKey, resourceKey, StringComparison.Ordinal))
+                        { doomed.Add(kvp.Key); break; }
+                foreach (string id in doomed) live.Remove(id);
+            }
+
             public bool IsReserved(string resourceKey, float atGameSeconds)
             {
                 foreach (ReservationHandle h in live.Values)

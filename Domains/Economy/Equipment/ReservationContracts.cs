@@ -202,6 +202,14 @@ namespace LandLedgers.Economy.Equipment
         /// <summary>Releases every reservation owned by a task (cancellation path).</summary>
         void ReleaseAllForTask(string ownerTaskId);
 
+        /// <summary>
+        /// Pass VII: releases every live reservation holding the given resource
+        /// key, regardless of owner task. Used when the resource itself changes
+        /// hands (sale) or is retired: the new holder must not inherit the old
+        /// holder's commitments, and stale holds must not block legitimate use.
+        /// </summary>
+        void ReleaseAllForResource(string resourceKey);
+
         /// <summary>Whether the resource key is reserved at the given absolute game seconds.</summary>
         bool IsReserved(string resourceKey, float atGameSeconds);
 

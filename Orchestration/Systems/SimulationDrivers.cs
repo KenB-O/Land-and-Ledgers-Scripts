@@ -4,6 +4,7 @@ using System.Linq;
 using LandLedgers.Animals;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Delegation;
+using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Creation;
@@ -700,6 +701,10 @@ namespace LandLedgers.Orchestration.Systems
             // work-time budgets so missed meals reduce usable minutes for real.
             DriveBoardingHouseDays(absoluteDayIndex);
             DriveDailyNeeds(absoluteDayIndex);
+            // Pass VII Workstream B (P1-5): daily horse care had no production
+            // caller — horses never tired and never needed care. Fed from the
+            // farm's real feed stock now; unfed horses degrade loudly.
+            DriveHorseCareDay(absoluteDayIndex);
             DriveTenancyPayments(absoluteDayIndex);
             // Pass V drive-by: DomesticLaborDriver had NO live caller (tests
             // only). Wire it here: need-driven domestic tasks (meals, fuel,
@@ -994,6 +999,31 @@ namespace LandLedgers.Orchestration.Systems
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
         }
 
+        /// <summary>
+        /// Pass VII Workstream B (P1-5): production daily horse care. Every
+        /// active horse is fed from the farm's real, finite feed stock
+        /// (HorseFeedStockAdapter) and recovers through
+        /// HorseAuthority.ApplyCare; horses the stock cannot cover degrade and
+        /// are named loudly. A horse holding a draft reservation eats the
+        /// working ration — draft power has honest upkeep.
+        /// </summary>
+        private void DriveHorseCareDay(int absoluteDayIndex)
+        {
+            if (hub == null || hub.Animals == null || hub.FarmSlice == null || hub.DraftPower == null) return;
+            var diagnostics = new List<string>();
+            int unfed = HorseCareDriver.CareDay(
+                hub.Animals,
+                new HorseFeedStockAdapter(hub.FarmSlice.Feed),
+                horse => horse != null && hub.DraftPower.IsAnimalReserved(horse.AnimalId),
+                absoluteDayIndex,
+                diagnostics);
+            if (unfed > 0 || diagnostics.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] horse care day " + absoluteDayIndex + ": " +
+                    unfed + " unfed | " + string.Join(" | ", diagnostics));
+            }
+        }
+
         private void DriveHouseholdAutonomy(int absoluteDayIndex, List<string> diag)
         {
             if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
@@ -1223,10 +1253,18 @@ namespace LandLedgers.Orchestration.Systems
             if (personId < 0 || !seen.Add(personId)) return;
             EntityId personEntity = EntityId.For(EntityKind.Person, personId);
             WorkTimeBudget budget = hub.WorkTimeBudgets.GetOrCreate(personEntity);
+            int availableMinutes = budget.MinutesRemaining;
+            // Pass VII Workstream B (P2-10): the draft-driver hold is a real
+            // person-time reservation in the unified authority. A person
+            // driving a draft team is not available for scheduled work —
+            // worker time is single-bookable, and the hold is visible to the
+            // WorkScheduler as zero remaining minutes (no second scheduler).
+            if (hub != null && hub.DraftPower != null && hub.DraftPower.IsDriverReserved(personEntity))
+                availableMinutes = 0;
             workers.Add(new SchedulerAvailableWorker
             {
                 PersonId = personId,
-                AvailableMinutes = budget.MinutesRemaining,
+                AvailableMinutes = availableMinutes,
                 SkillEvidence = new Dictionary<string, float>(),
             });
         }

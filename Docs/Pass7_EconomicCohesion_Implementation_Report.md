@@ -37,8 +37,8 @@ All twelve slices proven against production authorities:
 - H. Manager failure (ManagerExecutionSliceTests).
 - I. Foreman information (ForemanInformationSliceTests).
 - J. Social activity without economic gain (SocialInformationTests).
-- K. Household economic consequence (see below).
-- L. Save/load and repeated execution (see below).
+- K. Household economic consequence (Pass7SliceKHouseholdConsequenceTests, 2 passed): K_IncomeLoss_ReducedSpending_CutsRealBusinessDemand proves job loss leads to Economize (50 percent discretionary cap), with identical discretionary need filling 10 units baseline and 5 units post-loss, so the store's real revenue and unit demand drop, cash is conserved across the buyer/seller boundary, and exactly one documented wage inflow occurs. K_GenuineCostIncrease_RentRise_CutsRealBusinessDemand proves the same chain driven by a genuine rent increase (6000c to 12000c) with employment untouched.
+- L. Save/load and repeated execution (Pass7SliceLSaveLoadContinuityTests, 4 passed): interrupt, restore, continue, exactly-once for four areas: purchases (in-transit external purchase arrives once, boundary totals recomputed), animal reservations (mid-term rental returns once, fee obligation and hold released once), estate administration (mid-inventory restore continues to closure, 60000c bank deposit placed once, titles vested once), information transmission (mid-chain rumor continues to the next recipient once, provenance chain intact). Manager operations already covered by ManagerDecisionExecutionTests.SaveLoad_PreservesLedger_NoDuplicateExecutionAfterRestore.
 
 ## Extended simulation
 

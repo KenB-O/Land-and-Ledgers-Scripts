@@ -98,6 +98,9 @@ These are findings from the Pass VI cohesion audit that are registered for futur
 - PASS7-003: Mine closure lifecycle runtime wiring (PASS6-009 carried forward). Still source-only. Severity P2. Owner: Muse source pass.
 - PASS7-004: Farm harvest cycle runtime driver (PASS6-010 carried forward). Still no production callers for HarvestField, TendField, PlantField. Severity P2. Owner: Muse source pass.
 - PASS7-005: Illness economic integration (PASS6-011 carried forward). laborCapacityPercent and HealthWorkImpactBand still have no consumers. Severity P2. Owner: Muse source pass.
+- PASS7-006: Retail capacity pool sharp edge (found in 90-day simulation). ReleaseProductSpace calls GetOrCreatePool, which mints a zero-allocation pool on first sale; TryOccupyProductSpace then refuses all future shipment receives for that product line, and AdvanceShipments marks shipments "Delivered" anyway, so goods vanish. Workaround: configure pool capacity at build. A store that never configures shelf capacity silently loses every shipment after its first sale. Severity P1. Owner: Muse source pass.
+- PASS7-007: AddCategoryStockUnits caps silently (found in 90-day simulation). Returns acceptedUnits, but callers ignoring the return value over-count production. All Pass VII drivers record only accepted units. Audit existing callers. Severity P2. Owner: Muse source pass.
+- PASS7-008: Shipment receive failure masked as Delivered (found in 90-day simulation). When TryReceive fails, the shipment is still marked "Delivered" with only a diagnostic line. Drivers must measure actual stock deltas rather than trusting ledger status. Severity P2. Owner: Muse source pass.
 
 ## Fixed in Pass VI (retained with evidence)
 

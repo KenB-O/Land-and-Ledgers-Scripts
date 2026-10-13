@@ -107,6 +107,9 @@ namespace LandLedgers.Population
         {
             age = GetTrueAge(currentYear, currentMonth, currentDay);
             ageBand = HouseholdLifecycleManager.AgeBandForAge(age);
+            // Pass VI cohesion fix: labor access follows the age band, so sim-born children
+            // gain real economic participation as they grow instead of keeping None forever.
+            laborAccessLevel = HouseholdLifecycleManager.LaborAccessForAgeBand(ageBand);
         }
 
         public void InitializeWorkerTraits(System.Random random)

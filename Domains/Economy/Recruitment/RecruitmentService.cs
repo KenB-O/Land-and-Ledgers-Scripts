@@ -293,6 +293,8 @@ namespace LandLedgers.Economy.Recruitment
             {
                 if (p == null || p.ageBand != AgeBand.Adult18Plus) continue;
                 if (p.laborAccessLevel == LaborAccessLevel.None) continue;
+                // Pass VI cohesion fix: the dead are not hireable.
+                if (p.deathDayIndex >= 0) continue;
                 bool employed = false;
                 if (employment != null)
                 {
@@ -569,6 +571,12 @@ namespace LandLedgers.Economy.Recruitment
             if (person.ageBand != AgeBand.Adult18Plus || person.laborAccessLevel == LaborAccessLevel.None)
             {
                 diag.Add($"RecruitmentService.DirectApproach: P{personId} cannot take the role.");
+                return null;
+            }
+            // Pass VI cohesion fix: the dead are not hireable.
+            if (person.deathDayIndex >= 0)
+            {
+                diag.Add($"RecruitmentService.DirectApproach: P{personId} is deceased.");
                 return null;
             }
             if (employment != null)

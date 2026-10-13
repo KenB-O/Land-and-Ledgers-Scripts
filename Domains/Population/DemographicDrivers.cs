@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Estates;
 using LandLedgers.Primitives;
 using LandLedgers.Time;
@@ -40,6 +41,7 @@ namespace LandLedgers.Population
         public EntityIdRegistry Ids;
         public IDueEventScheduler Scheduler;
         public HouseholdLedgerRegistry Ledgers;
+        public EmploymentRelationshipRegistry Employments;
         public CalendarAnchor Anchor = CalendarAnchor.Default;
         public SimulationDate CurrentDate;
         public int CurrentDayIndex;
@@ -428,6 +430,19 @@ namespace LandLedgers.Population
 
             bool recorded = ctx.Lifecycle != null && ctx.Lifecycle.RecordDeath(person.id, ctx.CurrentDayIndex, cause);
             BirthdayService.CancelForPerson(person.id, ctx.Scheduler);
+
+            // Pass VI cohesion fix: death ends employment. Without this, payroll keeps
+            // paying Active employments for the deceased (a money sink), because
+            // WageSettlementService settles every Active employment with no death check.
+            if (ctx.Employments != null)
+            {
+                int ended = ctx.Employments.EndEmploymentsForDeceased(person.id, ctx.CurrentDayIndex);
+                if (ended > 0)
+                {
+                    ctx.Diagnostics.Add(
+                        $"MortalityDriver: ended {ended} employment(s) for deceased P{person.id}.");
+                }
+            }
 
             if (ctx.Estates != null && ctx.Kinship != null)
             {

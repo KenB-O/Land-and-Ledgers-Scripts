@@ -170,6 +170,13 @@ namespace LandLedgers.Population
         {
             ctx.Kinship.AddSpouses(a.id, b.id, "marriage");
             string surname = !string.IsNullOrWhiteSpace(a.lastName) ? a.lastName : b.lastName;
+            // Pass VI cohesion fix: RegisterMembership rejects a second Active membership
+            // (first wins), so A's old membership must end before FormHousehold runs.
+            // Otherwise A stays in the old household while the new one is logged as formed.
+            if (ctx.Memberships != null)
+            {
+                ctx.Memberships.EndMembership(a.id, ctx.CurrentDayIndex, "marriage");
+            }
             HouseholdState household = ctx.Lifecycle.FormHousehold(
                 $"{surname} Household", surname, a.id, ctx.CurrentDayIndex, HouseholdMembershipSource.Authored);
             if (household == null)
@@ -452,6 +459,14 @@ namespace LandLedgers.Population
         private static void SplitHousehold(DemographicDriverContext ctx, PersonState person, int oldHouseholdId)
         {
             HouseholdState oldHousehold = ctx.Population.GetHousehold(oldHouseholdId);
+            // Pass VI cohesion fix: RegisterMembership rejects a second Active membership
+            // (first wins), so the old membership must end BEFORE FormHousehold runs.
+            // Otherwise FormHousehold returns a ghost household while the person stays
+            // in the old one, and the split is logged as a false success.
+            if (ctx.Memberships != null)
+            {
+                ctx.Memberships.EndMembership(person.id, ctx.CurrentDayIndex, "household split");
+            }
             HouseholdState household = ctx.Lifecycle.FormHousehold(
                 $"{person.lastName} Household", person.lastName, person.id,
                 ctx.CurrentDayIndex, HouseholdMembershipSource.Authored);

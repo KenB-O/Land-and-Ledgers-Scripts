@@ -32,6 +32,7 @@ namespace LandLedgers.Economy
         Dismissed = 2,
         Resigned = 3,
         MissedPayroll = 4,
+        Death = 5,
     }
 
     /// <summary>
@@ -203,6 +204,31 @@ namespace LandLedgers.Economy
             }
 
             return active;
+        }
+
+        /// <summary>
+        /// Pass VI cohesion fix: ends every active employment for a deceased person.
+        /// Without this, payroll keeps paying the dead (a money sink) because
+        /// WageSettlementService settles all Active employments with no death check.
+        /// Returns the number of employments ended.
+        /// </summary>
+        public int EndEmploymentsForDeceased(int personId, int dayIndex)
+        {
+            List<EmploymentRelationship> active = GetActiveByEmployee(personId);
+            for (int i = 0; i < active.Count; i++)
+            {
+                active[i].LifecycleState = EmploymentLifecycleState.Ended;
+                active[i].EndDayIndex = dayIndex;
+                active[i].EndReason = EmploymentEndReason.Death;
+            }
+
+            if (active.Count > 0)
+            {
+                diagnostics.Add(
+                    $"EmploymentRelationshipRegistry: ended {active.Count} active employment(s) for deceased P{personId}.");
+            }
+
+            return active.Count;
         }
 
         /// <summary>

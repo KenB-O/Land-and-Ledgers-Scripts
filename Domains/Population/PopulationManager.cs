@@ -521,6 +521,7 @@ namespace LandLedgers.Population
                 Ids = entityIds,
                 Scheduler = hub != null ? hub.DueEvents : null,
                 Ledgers = ResolvedHouseholdLedgers,
+                Employments = hub != null ? hub.Employments : null,
                 Anchor = anchor,
                 CurrentDate = anchor.BuildDate(absoluteDayIndex),
                 CurrentDayIndex = absoluteDayIndex,

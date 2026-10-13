@@ -496,6 +496,24 @@ namespace LandLedgers.Population
             return AgeBand.Adult18Plus;
         }
 
+        /// <summary>
+        /// Pass VI cohesion fix: the canonical age-band to labor-access mapping, shared by
+        /// generation, migration, and age refresh. Previously this lived only as a private
+        /// method in FamilyFormationDrivers, so sim-born children kept LaborAccessLevel.None
+        /// forever and could never work or act for their household as adults.
+        /// </summary>
+        public static LaborAccessLevel LaborAccessForAgeBand(AgeBand band)
+        {
+            switch (band)
+            {
+                case AgeBand.Child0To9: return LaborAccessLevel.None;
+                case AgeBand.Helper10To12: return LaborAccessLevel.HouseholdHelper;
+                case AgeBand.JuniorWorker13To15: return LaborAccessLevel.JuniorLowTrust;
+                case AgeBand.YoungWorker16To17: return LaborAccessLevel.YoungWorker;
+                default: return LaborAccessLevel.FullLaborMarket;
+            }
+        }
+
         private string RegisterMembership(
             int personId,
             int householdId,

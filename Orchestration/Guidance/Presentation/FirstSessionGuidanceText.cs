@@ -5,7 +5,7 @@ namespace LandLedgers.UI
 {
     public static class FirstSessionGuidanceText
     {
-        public const string MoneyModelSummary = "Owner Cash buys land, shells, businesses, and fit-outs. Store Cash / Business Cash keeps each business alive. Manual draws can move business cash to Owner Cash, while reserve warnings show the operating risk. Loans can bridge expansion but payments come from Owner Cash.";
+        public const string MoneyModelSummary = "Owner Cash buys land, shells, businesses, and fit-outs. Store Cash / Business Cash keeps each business alive. Revenue and Profits are separate: Profits are what remains after legitimate operating costs. Manual draws can move business cash to Owner Cash, while reserve warnings show the operating risk. Loans can bridge expansion but payments come from Owner Cash.";
 
         public static string BuildConstructionBlockerNextStep(string missingSummary)
         {

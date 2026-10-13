@@ -4,6 +4,7 @@ using LandLedgers.Economy;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Time;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -109,11 +110,13 @@ namespace LandLedgers.EditorTests.Population
         public void WinterHeatingConsumesFuelAndRecordsPressure()
         {
             HouseholdState household = CreateHousehold();
+            household.heatRetentionTier = HouseholdHeatRetentionTier.Drafty;
             household.EnsureHouseholdReservesInitialized(true);
             HouseholdReserveState fuel = household.GetReserve("fuel_wood");
             fuel.currentUnits = 1;
 
-            int used = HouseholdReserveEvaluator.ResolveDailyUse(household, 0);
+            int used = HouseholdReserveEvaluator.ResolveDailyUse(
+                household, CalendarAnchor.Default.ToAbsoluteDay(1880, 12, 15));
             HouseholdDemandSnapshot demand = HouseholdReserveEvaluator.BuildDemandSnapshot(household);
 
             Assert.Greater(used, 0);
@@ -136,9 +139,16 @@ namespace LandLedgers.EditorTests.Population
             shoulder.EnsureHouseholdReservesInitialized(true);
             warm.EnsureHouseholdReservesInitialized(true);
 
-            HouseholdReserveEvaluator.ResolveDailyUse(winter, 0);
-            HouseholdReserveEvaluator.ResolveDailyUse(shoulder, 56);
-            HouseholdReserveEvaluator.ResolveDailyUse(warm, 84);
+            // The Pass V calendar is Gregorian and absolute day 0 is the
+            // March 1 anchor; the old 28-day-month values (0/56/84) no
+            // longer represent winter/shoulder/warm dates.
+            int winterDay = CalendarAnchor.Default.ToAbsoluteDay(1880, 12, 15);
+            int shoulderDay = CalendarAnchor.Default.ToAbsoluteDay(1880, 3, 15);
+            int warmDay = CalendarAnchor.Default.ToAbsoluteDay(1880, 4, 15);
+
+            HouseholdReserveEvaluator.ResolveDailyUse(winter, winterDay);
+            HouseholdReserveEvaluator.ResolveDailyUse(shoulder, shoulderDay);
+            HouseholdReserveEvaluator.ResolveDailyUse(warm, warmDay);
 
             Assert.Greater(winter.lastWinterStrain01, shoulder.lastWinterStrain01);
             Assert.Greater(shoulder.lastWinterStrain01, 0f);

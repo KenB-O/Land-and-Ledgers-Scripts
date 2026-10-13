@@ -3,6 +3,7 @@ using LandLedgers.Civic;
 using System.Text;
 using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Orchestration.Scenarios;
@@ -317,6 +318,7 @@ namespace LandLedgers.FirstLedger
                 simulationDrivers.RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort());
             }
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            RegisterLiveBoardingHouseRuntimes(simulationDrivers);
             OpeningTransportStock.Ensure(
                 systemsHub,
                 sharedBusinessRuntime != null ? sharedBusinessRuntime.Businesses : null,
@@ -865,6 +867,66 @@ namespace LandLedgers.FirstLedger
             }
 
             sharedBusinessRuntime.Configure(townWorld, null, populationManager, timeManager, storeRuntime, playerPortfolioManager);
+        }
+
+        /// <summary>
+        /// Binds authored boarding-house Businesses to the detailed room and
+        /// boarder runtime during an ordinary New Game. Previously the
+        /// SimulationDrivers adapter existed, but no production bootstrap
+        /// created or registered a runtime, leaving housing search with no
+        /// real boarding inventory. Capacity comes from the existing generic
+        /// Business authority; this method never grants beds beyond that
+        /// authored capacity and never creates a second cash authority.
+        /// </summary>
+        private void RegisterLiveBoardingHouseRuntimes(SimulationDrivers drivers)
+        {
+            if (drivers == null || systemsHub == null || sharedBusinessRuntime == null)
+            {
+                return;
+            }
+
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || business.BusinessType != BusinessType.BoardingHouse
+                    || string.IsNullOrWhiteSpace(business.InstanceId))
+                {
+                    continue;
+                }
+
+                bool alreadyRegistered = false;
+                foreach (BoardingHouseShopRuntime existing in systemsHub.BoardingHouseRuntimes)
+                {
+                    if (existing != null && string.Equals(existing.BusinessInstanceId,
+                        business.InstanceId, System.StringComparison.Ordinal))
+                    {
+                        alreadyRegistered = true;
+                        break;
+                    }
+                }
+
+                if (alreadyRegistered)
+                {
+                    continue;
+                }
+
+                int bedCapacity = sharedBusinessRuntime.GetBoardingHouseBedCapacity(business);
+                if (bedCapacity <= 0)
+                {
+                    Debug.LogWarning($"[WorldStartup] Boarding House '{business.InstanceId}' has no authored bed capacity; no rooms registered.", this);
+                    continue;
+                }
+
+                var runtime = new BoardingHouseShopRuntime(business.InstanceId, systemsHub.Ids);
+                string refusal = runtime.AddRoom(BoardingRoomType.SharedBed, bedCapacity, null);
+                if (!string.IsNullOrWhiteSpace(refusal))
+                {
+                    Debug.LogWarning($"[WorldStartup] Boarding House '{business.InstanceId}' room registration refused: {refusal}", this);
+                    continue;
+                }
+
+                drivers.RegisterBoardingHouseRuntime(runtime);
+                Debug.Log($"[WorldStartup] Registered boarding-house runtime '{business.InstanceId}' with {bedCapacity} authored bed(s).", this);
+            }
         }
 
         private void ConfigurePopulationPathingDirector()

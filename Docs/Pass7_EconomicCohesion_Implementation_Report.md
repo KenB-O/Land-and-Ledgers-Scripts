@@ -42,7 +42,7 @@ All twelve slices proven against production authorities:
 
 ## Extended simulation
 
-See below.
+A bounded 90-day town economy (days 500 through 589) driven entirely by production authorities through the Roslyn harness: 6 households, 13 persons, 4 businesses (bakery, farm, general store, mill), 2 draft horses and a wagon, weekly payroll, manager procurement, real demand, trade credit, a farm bank loan, landlord rent, social information spread, and adverse events (a 21-day mill breakdown and a drought-halved harvest). The scenario verifies exact cash reconciliation (every cent), goods conservation (produced, consumed, wasted, in-transit), zero reservation conflicts, zero person-time double-booking, save/load continuation identity, and tick-size determinism (1-day vs 3-day chunks agree). Tests: Scenario90Days_Reconciles_WithStoryBeats, Scenario30Days_Reconciles, SaveLoad_MidSim_IdenticalContinuation, TickSize_DailyVsThreeDayChunks_Agree (Pass7NinetyDayScenarioTests, 4 passed). No profits were injected; all economic activity flows through the production authorities.
 
 ## Water
 

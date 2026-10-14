@@ -126,6 +126,14 @@ The following files represent major centralized authorities with high code volum
 
 ---
 
+### NPC Construction Authority (Pass VIII 6.2)
+- **CONCEPT**: The full NPC build chain — parcel-authorized project creation → catalog design → work packages → supplier discovery → real-lot procurement → real-chain freight → on-site stockpile → package staging → equipment reservation → person-time labor (credited only as worked) → dependency-ordered progress → completion → HousingAuthority-registered usable spaces → occupancy. Cancellation returns staged materials to the source exactly once.
+- **CURRENT AUTHORITY**: `ConstructionProjectExecutor` (physical staging) & `NpcConstructionCommissioner` (the NPC principal's decisions/books) & `ConstructionProcurementService` (supplier discovery + sale) & `ConstructionMaterialFreightCoordinator` (shipment chain into the site stockpile)
+- **LOCATION**: `Domains/Economy/Businesses/Construction/NpcHomeConstruction.cs`, `NpcCommissionedBuild.cs`, `ConstructionMaterialFreight.cs`, `BuildingDesignCatalog.cs`
+- **NOTES / KNOWN LIMITATIONS**: Consumes (never modifies) the sibling-owned `FreightShipmentService`, `EquipmentReservationService`, `TaskAuthority`/`WorkTimeBudgetStore`, `PersonScheduleTracker`, `TitleAuthority` (via the `IConstructionParcelAuthority` port), `HousingAuthority`, and supplier sale runtimes (via `IConstructionMaterialSalePort`). Runtime adapters for the ports (`IConstructionParcelAuthority`, `IConstructionMaterialSalePort`, `IConstructionMaterialRestock`, `IConstructionMaterialSource`, `IConstructionMaterialPricePort`, `IHouseholdToolCustody`) are Unity-side work. **Housing-worker boundary**: `CompleteProject` registers building `bld-{projectId}` with `HousingAuthority.RegisterBuilding` and defines spaces from the design spec; consume via `housing.SpacesForBuilding(buildingId)` and `HousingAuthority.Occupy`. Visual placement stays pending Codex prefab handoffs (`PrefabHandoffRecord`) — data is real, visuals are not claimed.
+
+---
+
 ### Market Opportunity / Pressure Authority
 - **CONCEPT**: Local market demand curves, commodity deficits, service shortages, household consumer preferences, and town economic pulse.
 - **CURRENT AUTHORITY**: `OpportunityPressureRuntimeManager` & `TownPulseRuntimeManager`

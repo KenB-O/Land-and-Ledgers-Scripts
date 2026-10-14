@@ -35,8 +35,9 @@ ManagerBrain (decision generation), DelegationService (authority), TaskAuthority
 
 ## Source entry points
 
-- `ManagerDecisionExecution` executors, one per `ManagerActKinds` value.
-- Each executor: `Evaluate` (trigger condition and authority check), `Execute` (production API call), `Track` (execution state and idempotency).
+- `ManagerDecisionExecution.ExecuteDecision`: evaluates trigger conditions, checks delegation authority, and routes to the per-kind executor.
+- One executor class per `ManagerActKinds` value, each with an `Execute` method returning `ManagerExecutionOutcome`.
+- `ManagerExecutedActionRecord` and the executed-action log provide idempotency tracking (`HasExecuted`).
 - Delegation check precedes every execution.
 
 ## Tests that prove it

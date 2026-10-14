@@ -37,9 +37,11 @@ HouseholdLedger, FinancialObligationAuthority, inventory lots with provenance, P
 
 ## Source entry points
 
-- `RealDemandSource.EvaluateHouseholdDemand` and `EvaluateBusinessDemand`: need to purchase translation.
-- `RealDemandSource.TryExecutePurchase`: the 10-step purchase path.
-- `ExternalMarketAuthority.ExecuteExternalSale` and `ExecuteExternalPurchase`: boundary transactions with provenance.
+- `RealDemandSource.CollectDemand`: gathers household and business needs into purchase intents.
+- `RealDemandSource.RegisterBusinessInputNeed` and `ClearBusinessInputNeeds`: business demand registration.
+- `BusinessInstanceSellerAdapter.Sell`: the actual sale execution through the business inventory.
+- `ExternalMarketAuthority.RecordExternalSale` and `RecordExternalPurchase`: boundary transactions with provenance.
+- `ExternalMarketAuthority.GetBoundaryReconciliation`: inflow, outflow, and net at the modeled boundary.
 - `SharedBusinessRuntimeManager.TrySellTownPulseDemand`: now a no-revenue unfulfilled-demand recorder.
 
 ## Tests that prove it

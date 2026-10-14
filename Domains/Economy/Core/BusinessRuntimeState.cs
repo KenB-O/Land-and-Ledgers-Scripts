@@ -1945,20 +1945,47 @@ namespace LandLedgers.Economy
                 return;
             }
 
+            // Legacy fallback (registry unwired): person slots pay through the
+            // SAME household-crediting path as the employment loop, so business
+            // cash out == household ledger in. Pass VIII circulation: owner
+            // slots and non-person assignments never carry payroll wages
+            // (PL-04, matches the projector's skip rule); when the household
+            // ledgers are unwired the gap is logged, never silently kept.
+            lastWeeklyPayrollDiagnostics.Clear();
             for (int i = 0; i < workerSlots.Count; i++)
             {
                 WorkerSlotState slot = workerSlots[i];
-                if (!slot.IsFilled)
+                if (slot == null || !slot.IsFilled)
                 {
                     continue;
                 }
 
+                if (!string.IsNullOrWhiteSpace(slot.AssignedWorkerId)
+                    && slot.AssignedWorkerId.StartsWith("owner:", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!int.TryParse(slot.AssignedWorkerId, out int personId))
+                {
+                    lastWeeklyPayrollDiagnostics.Add(
+                        $"slot '{slot.SlotId}' assignment '{slot.AssignedWorkerId}' has no person id — no payroll wage paid without a worker identity.");
+                    continue;
+                }
+
                 int wage = slot.WeeklyWageCents;
+                if (wage <= 0)
+                {
+                    slot.MarkPaidActive();
+                    continue;
+                }
+
                 if (currentCashCents >= wage)
                 {
                     currentCashCents -= wage;
                     lastWeeklyPayrollCents += wage;
                     RecordNetDelta(-wage);
+                    CreditWorkerHousehold(personId, $"slot:{BusinessId}:{slot.SlotId}", wage, "weekly payroll");
                     slot.MarkPaidActive();
                     continue;
                 }
@@ -2086,32 +2113,47 @@ namespace LandLedgers.Economy
                 return;
             }
 
-            if (HouseholdLedgers == null || PersonHouseholdIdLookup == null)
+            CreditWorkerHousehold(employment.EmployeePersonId, employment.Id, wageCents, "weekly payroll");
+        }
+
+        /// <summary>
+        /// Pass VIII circulation: the shared wage-crediting core used by both the
+        /// employment-registry loop and the legacy slot loop. The employment
+        /// reference is the provenance recorded on the household ledger entry.
+        /// </summary>
+        private void CreditWorkerHousehold(int personId, string employmentRef, int wageCents, string periodLabel)
+        {
+            if (wageCents <= 0)
             {
-                lastWeeklyPayrollDiagnostics.Add(
-                    $"P{employment.EmployeePersonId} paid {wageCents}c via {employment.Id} but no household ledger/lookup is wired — wage credit skipped, business cash deducted.");
                 return;
             }
 
-            int householdId = PersonHouseholdIdLookup(employment.EmployeePersonId);
+            if (HouseholdLedgers == null || PersonHouseholdIdLookup == null)
+            {
+                lastWeeklyPayrollDiagnostics.Add(
+                    $"P{personId} paid {wageCents}c via {employmentRef} but no household ledger/lookup is wired — wage credit skipped, business cash deducted.");
+                return;
+            }
+
+            int householdId = PersonHouseholdIdLookup(personId);
             if (householdId < 0)
             {
                 lastWeeklyPayrollDiagnostics.Add(
-                    $"P{employment.EmployeePersonId} paid {wageCents}c via {employment.Id} but has no household — wage credit skipped, business cash deducted.");
+                    $"P{personId} paid {wageCents}c via {employmentRef} but has no household — wage credit skipped, business cash deducted.");
                 return;
             }
 
             HouseholdLedger ledger = HouseholdLedgers.GetOrCreate(householdId);
             string rejection = ledger.RecordWagePayment(
                 Mathf.Max(0, PayrollDayIndex),
-                employment.Id,
-                employment.EmployeePersonId,
+                employmentRef,
+                personId,
                 wageCents,
-                "weekly payroll");
+                periodLabel);
             if (rejection != null)
             {
                 lastWeeklyPayrollDiagnostics.Add(
-                    $"P{employment.EmployeePersonId} wage credit rejected for H{householdId} — {rejection}");
+                    $"P{personId} wage credit rejected for H{householdId} — {rejection}");
             }
         }
 

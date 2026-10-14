@@ -3036,7 +3036,11 @@ namespace LandLedgers.Economy
             int stockBuys = Mathf.Max(0, runtime.LastWeeklyInputProcurementSpendCents)
                 + Mathf.Max(0, runtime.LastWeeklyLocalTransferCostCents);
             int transferDelta = runtime.LastWeeklyCashTransferInCents - runtime.LastWeeklyCashTransferOutCents;
-            return $"Cash changed because: sales {FormatMoney(runtime.WeekToDateRevenueCents + runtime.LastWeeklyLocalTransferRevenueCents)}, COGS $0.00, payroll {FormatMoney(runtime.LastWeeklyPayrollCents)}, stock buys {FormatMoney(stockBuys)}, owner draw {FormatMoney(runtime.LastWeeklyOwnerDistributionCents)}, transfers {FormatSignedMoney(transferDelta)}.";
+            // Pass VIII circulation: internal transfer revenue is NOT ordinary
+            // sales — it is shown on its own line so related-party volume can
+            // never inflate the sales figure. (COGS is tracked per-archetype;
+            // this shared summary reports procurement spend as stock buys.)
+            return $"Cash changed because: sales {FormatMoney(runtime.WeekToDateRevenueCents)}, internal transfers in {FormatMoney(runtime.LastWeeklyLocalTransferRevenueCents)}, payroll {FormatMoney(runtime.LastWeeklyPayrollCents)}, stock buys {FormatMoney(stockBuys)}, owner draw {FormatMoney(runtime.LastWeeklyOwnerDistributionCents)}, owner financing {FormatSignedMoney(transferDelta)}.";
         }
 
         private static string GetWeeklyBlockedReason(BusinessRuntimeState runtime)

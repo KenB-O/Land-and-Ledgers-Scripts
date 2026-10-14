@@ -41,6 +41,10 @@ namespace LandLedgers.Reporting
         public int cashRunwayWeeks;
         public string primaryBlockedReason;
         public string cashBridgeSummary;
+        // Pass VIII circulation: operating-only expense total (excludes owner
+        // distributions and owner cash transfers, which are financing flows).
+        // Appended — never reorder serialized fields.
+        public int knownOperatingExpenseCents;
     }
 
     [Serializable]

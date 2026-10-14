@@ -129,5 +129,60 @@ namespace LandLedgers.EditorTests.Economy
             asset.Release();
             Assert.IsNull(asset.Reserve("task-b", "plowing field 4"));
         }
+
+        [Test]
+        public void Craft_ConsumesLotsInProvenanceLedger()
+        {
+            // Pass VIII: CraftEquipment used to decrement the unit count but
+            // never recorded lot consumption — the FIFO provenance ledger
+            // kept reporting forged iron as on hand (ledger divergence).
+            var smithy = NewSmithy();
+            EntityId smith = Person(5);
+            var skills = SkilledSmith(smith, BlacksmithRuntime.SmithingSkillId, 100);
+            var diagnostics = new List<string>();
+
+            EquipmentAsset plow = smithy.CraftEquipment("plow", smith, 42, skills, diagnostics);
+            Assert.IsNotNull(plow, string.Join("; ", diagnostics));
+
+            // Unit authority and provenance ledger agree: 8 iron + 2 coal gone.
+            Assert.AreEqual(100 - 8, smithy.MaterialOnHand(ImportCatalog.IronStockId));
+            Assert.AreEqual(100 - 8, smithy.LotUnitsOnHand(ImportCatalog.IronStockId, "IMP-TEST-1"));
+            Assert.AreEqual(50 - 2, smithy.MaterialOnHand(ImportCatalog.ForgeCoalId));
+            Assert.AreEqual(50 - 2, smithy.LotUnitsOnHand(ImportCatalog.ForgeCoalId, "IMP-TEST-2"));
+        }
+
+        [Test]
+        public void Repair_RevenueCreditedToBusinessCash_Conserved()
+        {
+            // Pass VIII: the agreed price leaves the customer ledger AND lands
+            // in the shop's business cash — cent for cent, no manufactured or
+            // vanished money.
+            var smithy = NewSmithy();
+            var diagnostics = new List<string>();
+            var queue = smithy.Repairs;
+
+            RepairWorkOrder order = queue.Intake("Farmer Jo", "farm-1", "EQ-farm-1-001",
+                "Moldboard plow", "share chipped", "smithing", "farm-1", RepairUrgency.Routine, 50, diagnostics);
+            Assert.IsNull(queue.Diagnose(order.WorkOrderId, "share chipped through, needs replacement",
+                2, ImportCatalog.IronStockId, 90));
+            Assert.IsNull(queue.AgreeTerms(order.WorkOrderId, 350));
+
+            var asset = new EquipmentAsset { AssetId = "EQ-farm-1-001", Kind = "plow", Condition01 = 0.3f };
+            EntityId smith = Person(6);
+            var skills = SkilledSmith(smith, BlacksmithRuntime.SmithingSkillId, 200);
+            var customerLedger = new HouseholdLedger(9);
+            customerLedger.RecordInflow(50, 1000, HouseholdIncomeSource.OtherDocumented,
+                "test", "test funds", "test");
+            var businessCash = new LandLedgers.Economy.BusinessRuntimeState();
+
+            string failure = smithy.CompleteRepair(order.WorkOrderId, asset, smith, 51,
+                skills, customerLedger, diagnostics, businessCash: businessCash);
+
+            Assert.IsNull(failure, failure);
+            Assert.AreEqual(RepairOrderStatus.Complete, order.Status);
+            Assert.AreEqual(350, smithy.RepairRevenueCents, "the reporting tally still books");
+            Assert.AreEqual(1000 - 350, customerLedger.GetBalanceCents(), "customer paid");
+            Assert.AreEqual(350, businessCash.CurrentCashCents, "shop received — conserved");
+        }
     }
 }

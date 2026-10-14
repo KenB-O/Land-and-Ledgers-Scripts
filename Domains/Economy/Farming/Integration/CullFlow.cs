@@ -32,7 +32,11 @@ namespace LandLedgers.Economy.Farming.Integration
             int priceCents,
             int dayIndex,
             HouseholdLedger sellerLedger,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            // Pass VIII (production networks, additive, default-off): the
+            // butcher's operating cash, passed through to the sale so the
+            // butcher pays for the cull cow (no manufactured revenue).
+            LandLedgers.Economy.BusinessRuntimeState buyerCash = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             if (registry == null)
@@ -63,7 +67,7 @@ namespace LandLedgers.Economy.Farming.Integration
 
             FarmLivestockSale sale = FarmLivestockMarket.ExecuteSale(
                 registry, cowId, farmBusinessId, farmBusinessName,
-                butcher, butcherBusinessId, priceCents, dayIndex, sellerLedger, diagnostics);
+                butcher, butcherBusinessId, priceCents, dayIndex, sellerLedger, diagnostics, buyerCash);
 
             if (sale != null)
             {

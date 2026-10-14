@@ -652,7 +652,9 @@ namespace LandLedgers.Orchestration.Systems
                     FounderLedgerByPersonId = personId =>
                     {
                         int householdId = ResolvePersonHouseholdId(personId);
-                        return householdId >= 0 ? hub.HouseholdLedgers.GetOrCreate(householdId) : null;
+                        return householdId >= 0 && hub.HouseholdLedgers != null
+                            ? hub.HouseholdLedgers.GetOrCreate(householdId)
+                            : null;
                     },
                     AssetRegister = hub.NpcFormationAssets,
                     Liquidation = null, // no production liquidation port; EvaluateWeek does not need it
@@ -1086,26 +1088,29 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         private void DrivePostalRevenue(int absoluteDayIndex)
         {
-            if (hub == null || sharedBusinessRuntime == null) return;
+            if (hub == null || hub.Postal == null || sharedBusinessRuntime == null) return;
             PostalService postal = hub.Postal;
             int uncollected = postal.FindUncollectedPostageCents();
             if (uncollected <= 0) return;
 
             BusinessRuntimeState officeRuntime = null;
-            foreach (PostalOffice office in postal.Offices)
+            if (postal.Offices != null)
             {
-                if (office == null || string.IsNullOrWhiteSpace(office.BusinessInstanceId)) continue;
-                foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                foreach (PostalOffice office in postal.Offices)
                 {
-                    if (business != null && string.Equals(business.InstanceId,
-                        office.BusinessInstanceId, StringComparison.OrdinalIgnoreCase))
+                    if (office == null || string.IsNullOrWhiteSpace(office.BusinessInstanceId)) continue;
+                    foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
                     {
-                        officeRuntime = business.RuntimeState;
-                        break;
+                        if (business != null && string.Equals(business.InstanceId,
+                            office.BusinessInstanceId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            officeRuntime = business.RuntimeState;
+                            break;
+                        }
                     }
-                }
 
-                break; // the first office owns the service-wide pot
+                    break; // the first office owns the service-wide pot
+                }
             }
 
             var diag = new List<string>();

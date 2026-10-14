@@ -768,6 +768,19 @@ namespace LandLedgers.Economy
         public int PayrollDayIndex { get; set; } = -1;
 
         /// <summary>
+        /// Pass VIII Worker 7: optional weekly attendance check
+        /// (employmentId, weekIndex) -> the worker actually worked that week.
+        /// When installed, payroll pays only weeks actually worked: no
+        /// automatic attendance from a mere employment record. An absent
+        /// worker's wage is not earned — it is neither paid nor accrued as
+        /// employer liability — and the skip is recorded loudly in the
+        /// payroll diagnostics. Null = legacy behavior (employment record +
+        /// business cash decide). The week index is derived from
+        /// PayrollDayIndex / 7 when set; without it the check is skipped.
+        /// </summary>
+        public Func<string, int, bool> WeeklyAttendanceProvider { get; set; }
+
+        /// <summary>
         /// Worker D (Autonomous Labor, Phase F): settled-week marker for the
         /// idempotency-guarded payroll driver. -1 = no week settled yet. The
         /// WageSettlementService sets this after a successful weekly settlement;
@@ -1983,16 +1996,54 @@ namespace LandLedgers.Economy
         /// the slot's template wage. Slot paid/suspended states are maintained as the
         /// legacy compatibility projection (PKG-7) so existing readouts keep working.
         /// </summary>
+        /// <summary>
+        /// Pass VIII Worker 7: consults the attendance seam fail-closed. A
+        /// throwing provider is treated as "no attendance recorded" with a
+        /// loud diagnostic — never as an excuse to pay on the record alone.
+        /// </summary>
+        private bool AttendanceWorked(string employmentId, int weekIndex)
+        {
+            try
+            {
+                return WeeklyAttendanceProvider(employmentId, weekIndex);
+            }
+            catch (Exception ex)
+            {
+                lastWeeklyPayrollDiagnostics.Add(
+                    $"attendance check for employment {employmentId} week {weekIndex} failed " +
+                    $"({ex.GetType().Name}) — treated as absent, wage not paid.");
+                return false;
+            }
+        }
+
         private void ResolveWeeklyPayrollFromEmployments(EmploymentRelationshipRegistry employments)
         {
             EnsureEmploymentRecords(employments);
             lastWeeklyPayrollDiagnostics.Clear();
+
+            // Pass VIII Worker 7: the attendance week, when the driver stamped
+            // the day. Without a stamped day the attendance seam cannot name a
+            // week, so it is skipped (legacy behavior) rather than guessed.
+            int attendanceWeek = PayrollDayIndex >= 0 ? PayrollDayIndex / 7 : -1;
 
             foreach (EmploymentRelationship employment in employments.GetActiveByEmployer(BusinessId))
             {
                 int wage = Mathf.Max(0, employment.Compensation.AgreedWeeklyWageCents);
                 if (wage <= 0)
                 {
+                    continue;
+                }
+
+                // Pass VIII Worker 7: no automatic attendance from a mere
+                // employment record. An absent worker earns no wage for the
+                // week: nothing is paid and no employer liability accrues.
+                if (WeeklyAttendanceProvider != null && attendanceWeek >= 0
+                    && !AttendanceWorked(employment.Id, attendanceWeek))
+                {
+                    lastWeeklyPayrollDiagnostics.Add(
+                        $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
+                        $"no attendance recorded for week {attendanceWeek} — wage not earned, not paid, no liability accrued.");
+                    SyncSlotPaidState(employment.EmployeePersonId, paid: false);
                     continue;
                 }
 

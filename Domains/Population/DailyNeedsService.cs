@@ -28,6 +28,32 @@ namespace LandLedgers.Population
         private readonly List<string> diagnostics = new List<string>();
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
+        /// <summary>
+        /// Pass VIII Worker 7: a person's usable work minutes combine nutrition
+        /// AND health. A seriously injured or ill provider keeps their
+        /// employment record but loses usable minutes — disability bites as
+        /// real lost capacity, which flows through task assignment, attendance,
+        /// wages, and household decisions. Returns 0..1.
+        /// </summary>
+        public static float WorkCapacityFactor(PersonState person)
+        {
+            if (person == null)
+            {
+                return 1f;
+            }
+            float nutrition = 1f;
+            if (person.nutrition != null)
+            {
+                nutrition = person.nutrition.WorkCapacityMultiplier;
+            }
+            float health = 1f;
+            if (person.health != null)
+            {
+                health = Math.Max(0, Math.Min(100, person.health.laborCapacityPercent)) / 100f;
+            }
+            return Math.Max(0f, Math.Min(1f, nutrition * health));
+        }
+
         public sealed class DayReport
         {
             public int DayIndex;
@@ -274,7 +300,7 @@ namespace LandLedgers.Population
                 {
                     WorkTimeBudget budget = budgetStore.GetOrCreate(
                         EntityId.For(EntityKind.Person, p.id));
-                    budget.SetCapacityMultiplier(p.nutrition.WorkCapacityMultiplier);
+                    budget.SetCapacityMultiplier(WorkCapacityFactor(p));
                 }
             }
             int missed = totalDailyNeed - mealsEaten;
@@ -372,7 +398,7 @@ namespace LandLedgers.Population
                 {
                     WorkTimeBudget budget = budgetStore.GetOrCreate(
                         EntityId.For(EntityKind.Person, p.id));
-                    budget.SetCapacityMultiplier(p.nutrition.WorkCapacityMultiplier);
+                    budget.SetCapacityMultiplier(WorkCapacityFactor(p));
                 }
             }
 

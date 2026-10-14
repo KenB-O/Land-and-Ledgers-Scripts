@@ -140,6 +140,15 @@ namespace LandLedgers.World.Journeys
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public int ActiveJourneyCount => CountActive();
+
+        /// <summary>
+        /// Pass VIII Worker 7: optional person-availability seam. When
+        /// installed, DepartPerson refuses travelers the predicate marks
+        /// unavailable (the production wiring marks the deceased: a dead
+        /// person is never sent off-map, no matter which caller forgot to
+        /// check). Null = no enforcement (legacy).
+        /// </summary>
+        public Func<int, bool> IsPersonUnavailable { get; set; }
         public IEnumerable<OffMapJourneyRecord> AllJourneys() => byId.Values;
 
         private int CountActive()
@@ -171,6 +180,27 @@ namespace LandLedgers.World.Journeys
             List<string> diag)
         {
             diag = diag ?? diagnostics;
+            // Pass VIII Worker 7: the dead never travel.
+            if (IsPersonUnavailable != null)
+            {
+                bool unavailable;
+                try
+                {
+                    unavailable = IsPersonUnavailable(personId);
+                }
+                catch (Exception ex)
+                {
+                    diag.Add($"OffMapJourneyAuthority: person-availability check failed for P{personId} " +
+                        $"({ex.GetType().Name}) — departure refused rather than sent blind.");
+                    return null;
+                }
+                if (unavailable)
+                {
+                    diag.Add($"OffMapJourneyAuthority: P{personId} is unavailable for travel " +
+                        "(person-availability seam) — departure refused.");
+                    return null;
+                }
+            }
             return Depart(OffMapTravelerKind.Person, personId, null,
                 originLocationId, destinationLabel, offMapLegDays, expectedReturnDays,
                 purpose, cargoUnits, obligationIds, dayIndex,

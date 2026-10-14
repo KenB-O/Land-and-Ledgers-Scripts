@@ -90,14 +90,30 @@ namespace LandLedgers.Economy.Equipment
         /// Returns a rented asset: releases the reservation. The return condition
         /// is recorded in diagnostics — damage found on return is the renter's
         /// liability to settle through the business's normal repair/damage flow.
+        ///
+        /// Pass VIII Worker 7: the unified-authority hold taken by RentOut is
+        /// released here when the reservations service is supplied. Without
+        /// the release the returned rig stayed reserved forever — it could
+        /// never be rented or used again (a leaked hold on a shared asset).
         /// </summary>
-        public string Return(string assetId, float conditionOnReturn, List<string> diagnostics)
+        public string Return(string assetId, float conditionOnReturn, List<string> diagnostics,
+            EquipmentReservationService reservations = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             var rental = activeRentals.Find(r => r.AssetId == assetId);
             if (rental == null)
                 return $"RentalFleet: asset {assetId} is not currently rented out.";
             activeRentals.Remove(rental);
+            if (reservations != null)
+            {
+                reservations.Release(EquipmentReservationService.AssetKey(assetId));
+                diagnostics.Add($"RentalFleet: {assetId} reservation released — the rig is rentable again.");
+            }
+            else
+            {
+                diagnostics.Add($"RentalFleet: {assetId} returned WITHOUT a reservations service — " +
+                    "the unified-authority hold was NOT released; pass the service to free the rig.");
+            }
             diagnostics.Add($"RentalFleet: {assetId} returned by {rental.RenterName} at condition {conditionOnReturn:0.00}.");
             return null;
         }

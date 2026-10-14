@@ -157,7 +157,28 @@ namespace LandLedgers.Economy.Labor
             {
                 EmploymentRelationship employment = population[i];
                 int wage = agreedWages[i];
-                bool paid = wage > 0 && replayCash >= wage;
+                // Pass VIII Worker 7: the replay must honor the same
+                // attendance gate the single-writer path used, or the read
+                // model would credit workers the business did not pay.
+                bool attended = true;
+                string attendanceNote = null;
+                if (business.WeeklyAttendanceProvider != null && weekIndex >= 0)
+                {
+                    try
+                    {
+                        attended = business.WeeklyAttendanceProvider(employment.Id, weekIndex);
+                    }
+                    catch (Exception ex)
+                    {
+                        attended = false;
+                        attendanceNote = $"attendance check failed ({ex.GetType().Name}) — treated as absent";
+                    }
+                    if (!attended && attendanceNote == null)
+                    {
+                        attendanceNote = "unpaid - no attendance recorded for the week, wage not earned";
+                    }
+                }
+                bool paid = attended && wage > 0 && replayCash >= wage;
                 if (paid)
                 {
                     replayCash -= wage;
@@ -170,7 +191,8 @@ namespace LandLedgers.Economy.Labor
                     PersonId = employment.EmployeePersonId,
                     AmountCents = wage,
                     Paid = paid,
-                    Note = paid ? "paid via weekly payroll" : "unpaid - operating liability accrued, employment suspended"
+                    Note = paid ? "paid via weekly payroll"
+                        : attendanceNote ?? "unpaid - operating liability accrued, employment suspended"
                 });
             }
 

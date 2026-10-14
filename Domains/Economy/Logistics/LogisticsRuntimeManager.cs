@@ -1199,6 +1199,7 @@ namespace LandLedgers.Economy
                     }
 
                     CreditSellerRevenue(shipment, accepted);
+                    shipment.deliveredQuantityUnits += accepted;
                     shipment.remainingQuantityUnits = Mathf.Max(0, deliveredUnits - accepted);
                     shipment.deliveryApplied = accepted >= deliveredUnits;
                     shipment.state = shipment.remainingQuantityUnits > 0 ? LogisticsShipmentStatus.Partial : LogisticsShipmentStatus.Completed;
@@ -1216,6 +1217,7 @@ namespace LandLedgers.Economy
                             shipment.buyerUnitCostCents,
                             ResolveSummaryLabel(shipment));
                         shipment.remainingQuantityUnits = Mathf.Max(0, deliveredUnits - accepted);
+                        shipment.deliveredQuantityUnits += accepted;
                         shipment.deliveryApplied = accepted >= deliveredUnits;
                         shipment.state = shipment.remainingQuantityUnits > 0 ? LogisticsShipmentStatus.Partial : LogisticsShipmentStatus.Completed;
                         if (shipment.deliveryApplied)
@@ -1254,6 +1256,7 @@ namespace LandLedgers.Economy
                         return;
                     }
                     shipment.remainingQuantityUnits = Mathf.Max(0, shipment.remainingQuantityUnits - deliveredUnits);
+                    shipment.deliveredQuantityUnits += deliveredUnits;
                     shipment.deliveryApplied = true;
                     shipment.state = LogisticsShipmentStatus.Completed;
                     CreditSellerRevenue(shipment, deliveredUnits);
@@ -1308,6 +1311,7 @@ namespace LandLedgers.Economy
 
                     CreditSellerRevenue(shipment, accepted);
                     BookFreightCharge(shipment, accepted, destination);
+                    shipment.deliveredQuantityUnits += accepted;
                     shipment.remainingQuantityUnits = Mathf.Max(0, deliveredUnits - accepted);
                     shipment.deliveryApplied = accepted >= deliveredUnits;
                     shipment.state = shipment.remainingQuantityUnits > 0 ? LogisticsShipmentStatus.Partial : LogisticsShipmentStatus.Completed;

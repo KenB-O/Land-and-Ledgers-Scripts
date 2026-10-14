@@ -27,6 +27,7 @@ namespace LandLedgers.Editor.Economy
         private FreightShipmentHooks hooks;
         private EntityId loader;
         private EntityId driver;
+        private Dictionary<string, int> recipientStock;
 
         [SetUp]
         public void SetUp()
@@ -35,12 +36,24 @@ namespace LandLedgers.Editor.Economy
             budgets = new WorkTimeBudgetStore();
             budgets.EnsureDay(42);
             service = new FreightShipmentService();
+            recipientStock = new Dictionary<string, int>(StringComparer.Ordinal);
             hooks = new FreightShipmentHooks
             {
                 Tasks = tasks,
                 Budgets = budgets,
                 DayIndex = 42,
                 Diagnostics = new List<string>(),
+                // PASS7-008: the receiving authority is wired — unloaded goods land
+                // in real recipient stock, and delivery completes only on acceptance.
+                ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string reason) =>
+                {
+                    reason = string.Empty;
+                    if (quantityUnits <= 0) return 0;
+                    string key = string.IsNullOrWhiteSpace(shipment.destinationBusinessInstanceId)
+                        ? "nowhere" : shipment.destinationBusinessInstanceId;
+                    recipientStock[key] = recipientStock.TryGetValue(key, out int have) ? have + quantityUnits : quantityUnits;
+                    return quantityUnits;
+                },
             };
             loader = EntityId.For(EntityKind.Person, 701);
             driver = EntityId.For(EntityKind.Person, 702);
@@ -102,6 +115,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(LogisticsShipmentStatus.Completed, shipment.Status, "completed");
             Assert.IsTrue(shipment.deliveryApplied, "delivery applied");
             Assert.AreEqual(0, shipment.RemainingQuantityUnits, "wagon empty");
+            Assert.AreEqual(100, shipment.DeliveredQuantityUnits, "accepted quantity recorded");
+            Assert.AreEqual(100, recipientStock["store-1"], "goods landed in real recipient stock");
             Assert.AreEqual("store-1", shipment.physicalLocationId, "custody: recipient");
             Assert.IsFalse(shipment.physicalTransportBound, "transport released");
             Assert.IsTrue(service.VerifyConservation(shipment, 100, out string cons2), cons2);
@@ -211,6 +226,8 @@ namespace LandLedgers.Editor.Economy
             while (r.Status != LogisticsShipmentStatus.Completed && uguard++ < 10)
                 service2.WorkUnloading(r, 60, hooks, out _);
             Assert.AreEqual(LogisticsShipmentStatus.Completed, r.Status, "completed after load");
+            Assert.AreEqual(80, r.DeliveredQuantityUnits, "accepted quantity recorded");
+            Assert.AreEqual(80, recipientStock["store-1"], "goods landed in real recipient stock");
             Assert.IsTrue(service2.VerifyConservation(r, 80, out string cons), cons);
         }
 
@@ -236,6 +253,7 @@ namespace LandLedgers.Editor.Economy
                 "second unload refused");
             Assert.IsFalse(service.WorkUnloading(shipment, 60, hooks, out _), "work unload refused");
             Assert.AreEqual(0, shipment.RemainingQuantityUnits, "still zero — no duplicated goods");
+            Assert.AreEqual(40, recipientStock["store-1"], "recipient stock credited exactly once");
             Assert.IsTrue(service.VerifyConservation(shipment, 40, out string cons), cons);
         }
     }

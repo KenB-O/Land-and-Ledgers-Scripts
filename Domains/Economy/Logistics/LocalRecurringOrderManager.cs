@@ -303,7 +303,15 @@ namespace LandLedgers.Economy
 
             if (accepted < consumed)
             {
-                request.Seller.RuntimeState.AddCategoryStockUnits(template.SellerCategoryId, consumed - accepted);
+                // PASS7-007: the buyer could not take it all — return the remainder
+                // to the seller's stock and record anything that still cannot be held.
+                int reabsorbed = request.Seller.RuntimeState.AddCategoryStockUnits(template.SellerCategoryId, consumed - accepted);
+                int stranded = consumed - accepted - reabsorbed;
+                if (stranded > 0)
+                {
+                    request.Seller.RuntimeState.AppendWeeklyBlockedReason(
+                        $"recurring order stranded {stranded}u {template.SellerCategoryId}: seller stock full after buyer refusal");
+                }
             }
 
             int sellerRevenue = accepted * sellerUnitPriceCents;

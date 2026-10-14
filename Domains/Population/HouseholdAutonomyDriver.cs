@@ -137,7 +137,6 @@ namespace LandLedgers.Population
             // never status-derived income (Pass II Phase F rule).
             long expectedPerDay = 0;
             int employedMembers = 0;
-            var fingerprintParts = new List<string>();
             foreach (int memberId in members)
             {
                 List<EmploymentRelationship> active = ctx.Employments != null
@@ -148,30 +147,74 @@ namespace LandLedgers.Population
                 {
                     if (rel == null) continue;
                     expectedPerDay += Math.Max(0, rel.Compensation.AgreedWeeklyWageCents) / 7;
-                    fingerprintParts.Add(rel.Id ?? string.Empty);
                 }
             }
-            fingerprintParts.Sort(StringComparer.Ordinal);
-            string fingerprint = string.Join("|", fingerprintParts.ToArray());
 
-            // Job-loss detection: had employment at last evaluation, none now.
+            // Job-loss detection. Pass VIII Worker 7: fingerprints are PER
+            // MEMBER (their own employments), not household-scoped. The old
+            // household-scoped fingerprint misattributed the earner's loss to
+            // survivors — "P2 employment ended" when the provider P1 died.
+            // A member who held their own employment at the last evaluation
+            // and has none now lost a job; a departed earner whose
+            // employments actually ended is provider loss (death, above all).
             // Limited information: only this household's own registry history.
             bool recentJobLoss = false;
             string jobLossNote = string.Empty;
+            var currentMemberSet = new HashSet<int>(members);
             foreach (int memberId in members)
             {
-                string last;
-                bool had = lastEmploymentFingerprint.TryGetValue(memberId, out last) && !string.IsNullOrEmpty(last);
                 List<EmploymentRelationship> now = ctx.Employments != null
                     ? ctx.Employments.GetActiveByEmployee(memberId)
                     : new List<EmploymentRelationship>();
-                if (had && now.Count == 0)
+                var ownParts = new List<string>();
+                foreach (EmploymentRelationship rel in now)
+                {
+                    if (rel == null) continue;
+                    ownParts.Add(rel.Id ?? string.Empty);
+                }
+                ownParts.Sort(StringComparer.Ordinal);
+                string ownFingerprint = string.Join("|", ownParts.ToArray());
+
+                string lastOwn;
+                bool hadOwn = lastEmploymentFingerprint.TryGetValue(memberId, out lastOwn)
+                    && !string.IsNullOrEmpty(lastOwn);
+                if (hadOwn && now.Count == 0)
                 {
                     recentJobLoss = true;
                     jobLossNote = "P" + memberId + " employment ended";
                     if (diag != null) diag.Add("HouseholdAutonomy: household " + householdId + " job loss — " + jobLossNote);
                 }
-                lastEmploymentFingerprint[memberId] = fingerprint;
+                lastEmploymentFingerprint[memberId] = ownFingerprint;
+            }
+            // Provider loss: a former member held employment at the last
+            // evaluation, is gone now, and their employments actually ended.
+            // Reported once — the departed entry is cleared so it never
+            // repeats daily (or after a save/load).
+            var departedIds = new List<int>();
+            foreach (int knownId in lastEmploymentFingerprint.Keys)
+            {
+                if (!currentMemberSet.Contains(knownId)) departedIds.Add(knownId);
+            }
+            foreach (int departedId in departedIds)
+            {
+                string lastOwn = lastEmploymentFingerprint[departedId];
+                bool hadEmployment = !string.IsNullOrEmpty(lastOwn);
+                bool stillEmployed = false;
+                if (ctx.Employments != null)
+                {
+                    foreach (EmploymentRelationship rel in ctx.Employments.GetActiveByEmployee(departedId))
+                    {
+                        stillEmployed = true;
+                        break;
+                    }
+                }
+                if (hadEmployment && !stillEmployed)
+                {
+                    recentJobLoss = true;
+                    jobLossNote = "P" + departedId + " (departed) employment ended";
+                    if (diag != null) diag.Add("HouseholdAutonomy: household " + householdId + " provider loss — " + jobLossNote);
+                }
+                lastEmploymentFingerprint[departedId] = string.Empty;
             }
 
             // Dependents: members without active employment. Documented

@@ -409,7 +409,9 @@ namespace LandLedgers.Economy.Postal
 
             int transitDays = Math.Max(1, (route.TotalMinutes + 1439) / 1440);
             // Seeded reliability: most dispatches on time, some miss the connection (calibration).
-            var rng = new System.Random(office.Seed * 100003 + dayIndex * 31 + destOfficeId.GetHashCode());
+            // G-04: destOfficeId hashed with a stable FNV-1a — string.GetHashCode()
+            // is randomized per process in .NET, which broke determinism.
+            var rng = new System.Random(unchecked(office.Seed * 100003 + dayIndex * 31 + (int)StableHash32(destOfficeId)));
             bool onTime = rng.NextDouble() < OnTimeProbability;
 
             // Record real handoffs through intermediate offices on the route.
@@ -581,6 +583,26 @@ namespace LandLedgers.Economy.Postal
         private static void RegisterQuietly(TaskAuthority authority, TaskDefinition definition)
         {
             authority.RegisterDefinition(definition, out _);
+        }
+
+        /// <summary>
+        /// G-04: stable FNV-1a 32-bit hash over a string's UTF-16 code units.
+        /// Deterministic across processes, runs, and platforms; replaces
+        /// string.GetHashCode(), which .NET randomizes per process.
+        /// </summary>
+        private static uint StableHash32(string value)
+        {
+            uint hash = 2166136261u;
+            if (!string.IsNullOrEmpty(value))
+            {
+                foreach (char c in value)
+                {
+                    hash ^= c;
+                    hash *= 16777619u;
+                }
+            }
+
+            return hash;
         }
 
         public PostalServiceSaveDto CaptureSaveDto()

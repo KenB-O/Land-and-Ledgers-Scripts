@@ -224,5 +224,38 @@ namespace LandLedgers.EditorTests.Economy
             MailItem item = restored.GetMailItem(new List<MailItem>(restored.MailItems)[0].MailId);
             Assert.AreEqual(MailStatus.InTransit, item.Status, "In-transit mail survives save/load mid-journey.");
         }
+
+        [Test]
+        public void DispatchSeed_IsDeterministicAcrossRuns()
+        {
+            // G-04: the dispatch reliability roll was seeded with
+            // string.GetHashCode(), which .NET randomizes per process, so the
+            // same scenario rolled different on-time outcomes in different
+            // processes (flaked RegisteredMailServiceTests). The stable FNV-1a
+            // seed must give byte-identical outcomes every run.
+            var journeys = TwoTowns();
+            var diag = new List<string>();
+
+            MailItem first = null;
+            MailItem second = null;
+            for (int run = 0; run < 2; run++)
+            {
+                var postal = TwoOffices();
+                MailItem item = postal.PostItem(MailKind.Letter, "Kennedy", 1, "Emma",
+                    "po-a", "po-b", 0, diag);
+                postal.AdvanceDay(journeys, 0, diag);
+                if (run == 0) first = item; else second = item;
+            }
+
+            Assert.AreEqual(first.Status, second.Status, "Dispatch outcome identical across runs.");
+            Assert.AreEqual(MailStatus.InTransit, first.Status);
+            Assert.AreEqual(first.DueArrivalDayIndex, second.DueArrivalDayIndex,
+                "Due arrival day identical across runs.");
+            // Pinned stable-seed outcome: 8-mile wagon leg = 1 transit day and the
+            // FNV-1a draw for (seed 7, day 0, "po-b") rolls on-time, so due day 1.
+            // Any return to a per-process-randomized seed flakes this assertion.
+            Assert.AreEqual(1, first.DueArrivalDayIndex);
+            Assert.AreEqual(first.History.Count, second.History.Count);
+        }
     }
 }

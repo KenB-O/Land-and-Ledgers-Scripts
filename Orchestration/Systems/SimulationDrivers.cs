@@ -1199,6 +1199,16 @@ namespace LandLedgers.Orchestration.Systems
             {
                 Debug.LogWarning("[SimulationDrivers] business lender charter: " + charterProblem);
             }
+            // Pass VIII worker 8: the lender's social-knowledge intake
+            // (BusinessLenderService.BindSocialKnowledge) is source-ready but
+            // intentionally unwired here. It requires a designated lending
+            // officer — a real PersonState on the town bank's staff — and no
+            // such person exists in production yet. Binding the store without
+            // an officer would consume no packets; inventing an officer would
+            // be a fake person. When bank staffing lands, call
+            // hub.BusinessLender.BindSocialKnowledge(hub.KnowledgeTransmissions,
+            // officerPersonId) here. Until then underwriting never sees
+            // social evidence, and all existing behavior is unchanged.
 
             hub.ManagerDecisionExecution.Configure(new ManagerExecutionServices
             {
@@ -1224,6 +1234,11 @@ namespace LandLedgers.Orchestration.Systems
                 Recruiting = hub.Recruiting,
                 SupplierKnowledge = sellerKnowledge,
                 BusinessLender = hub.BusinessLender,
+                // Pass VIII worker 8: the hub-owned knowledge transmission
+                // store feeds the Procure executor's supplier choice. The
+                // executor consults only what the manager person actually
+                // heard; an unheard rumor changes nothing.
+                SocialKnowledge = hub.KnowledgeTransmissions,
                 OpenRecruitment = (business, demand, decision, day, diag) =>
                     ExecuteManagerRecruitment(business, demand, decision, day, diag),
             });

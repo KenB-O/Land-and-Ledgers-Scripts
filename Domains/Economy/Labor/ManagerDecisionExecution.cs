@@ -249,6 +249,14 @@ namespace LandLedgers.Economy.Labor
         public ShopperSellerKnowledge SupplierKnowledge;
         public IManagerBusinessLender BusinessLender;
         /// <summary>
+        /// Pass VIII worker 8: optional social-knowledge intake. When bound,
+        /// the Procure executor consults what the manager person actually
+        /// heard about candidate suppliers (corroborated trouble only) before
+        /// choosing. Null by default: procurement works without it, and an
+        /// unbound store never changes a supplier choice.
+        /// </summary>
+        public IKnowledgeTransmissionStore SocialKnowledge;
+        /// <summary>
         /// The existing recruitment path (SimulationDrivers.ExecuteManagerRecruitment).
         /// Returns the opened effort id, or null when the path refuses.
         /// </summary>
@@ -886,6 +894,32 @@ namespace LandLedgers.Economy.Labor
                 float available = candidate.GenericConfiguration.GetAvailableInventoryQuantity(productId);
                 if (available < needQuantity - 0.001f && available <= 0f) continue;
                 if (available <= 0f) continue;
+
+                // Pass VIII worker 8: the manager buys with what they
+                // actually heard. Corroborated trouble (a firsthand telling
+                // or two independent sources) steers the order to the next
+                // known supplier with real goods. A single uncorroborated
+                // rumor is noted and does not move the order: the supplier
+                // is never punished on hearsay alone.
+                if (services.SocialKnowledge != null && managerPersonId >= 0
+                    && !string.IsNullOrWhiteSpace(candidate.InstanceId))
+                {
+                    SocialEvidenceAssessment trouble = SocialEvidenceEvaluator.Assess(
+                        services.SocialKnowledge, managerPersonId,
+                        SocialEvidenceEvaluator.SupplierTroubleSubject(candidate.InstanceId));
+                    if (trouble.Corroborated)
+                    {
+                        diagnostics.Add($"ManagerDecisionExecution[Procure]: skipping supplier {candidate.InstanceId} — " +
+                                        SocialEvidenceEvaluator.CiteEvidence(trouble) + ".");
+                        continue;
+                    }
+                    if (trouble.PacketCount > 0)
+                    {
+                        diagnostics.Add($"ManagerDecisionExecution[Procure]: uncorroborated rumor about supplier " +
+                                        $"{candidate.InstanceId} noted — not acting on it. " +
+                                        SocialEvidenceEvaluator.CiteEvidence(trouble) + ".");
+                    }
+                }
 
                 bool known = services.SupplierKnowledge != null && managerPersonId >= 0
                     && services.SupplierKnowledge.Knows(managerPersonId, candidate.InstanceId);

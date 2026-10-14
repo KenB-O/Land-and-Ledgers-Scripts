@@ -97,20 +97,41 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
     /// Pass V P1-5: authored business inventory grants are applied through real
     /// inventory positions with scenario provenance. No synthetic inventory:
     /// every grant names a real business and product.
+    ///
+    /// Pass VIII (Worker 9): the reset path calls ClearAuthoredState before a
+    /// New Game / Restart / Replay so a regenerated world never double-posts
+    /// authored opening stock (grant lot ids are deterministic per seed, and
+    /// GenericInventoryPosition.Add appends — it does not dedupe).
     /// </summary>
     public interface IScenarioInventoryPort
     {
         LandLedgers.Economy.GenericInventoryPosition GetOrCreatePosition(string businessId, string productId);
+
+        /// <summary>
+        /// Purges every authored position posted by a prior generation run.
+        /// Called only by the scenario reset path.
+        /// </summary>
+        void ClearAuthoredState(string reason);
     }
 
     /// <summary>
     /// Pass V P1-5: authored property grants. The harness/test implementation
     /// records them as data; the production implementation applies them through
     /// the title authority with scenario provenance.
+    ///
+    /// Pass VIII (Worker 9): the reset path calls ClearAuthoredState before a
+    /// New Game / Restart / Replay so a regenerated world never records the
+    /// same authored grants twice.
     /// </summary>
     public interface IScenarioPropertyPort
     {
         void RecordGrant(ScenarioSeedPropertyGrant grant, string provenanceTag);
         IReadOnlyList<ScenarioSeedPropertyGrant> RecordedGrants { get; }
+
+        /// <summary>
+        /// Purges every authored grant recorded by a prior generation run.
+        /// Called only by the scenario reset path.
+        /// </summary>
+        void ClearAuthoredState(string reason);
     }
 }

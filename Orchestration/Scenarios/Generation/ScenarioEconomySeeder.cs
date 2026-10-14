@@ -41,6 +41,12 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             public int InventoryGrantCount;
             public int PropertyGrantCount;
             public int RejectedCount;
+            /// <summary>
+            /// Pass VIII (Worker 9): inventory grants skipped because the
+            /// deterministic lot id already exists in the position — a
+            /// re-seed over state the reset path missed posts nothing twice.
+            /// </summary>
+            public int DuplicateGrantsSkipped;
             public List<string> Rejections = new List<string>();
         }
 
@@ -272,6 +278,20 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
                         // Deterministic lot identity: derived from the seed and the
                         // grant's position in the draft, never Guid.NewGuid, so a
                         // regenerated world is lot-for-lot identical.
+                        string deterministicLotId = $"scnlot-{rng.Seed}-{businessIndex}-{grantIndex}";
+                        if (LotAlreadyPresent(position, deterministicLotId))
+                        {
+                            // Pass VIII (Worker 9): idempotent re-seed. The reset
+                            // path clears authored inventory on New Game, but if
+                            // a port missed the clear, the same deterministic
+                            // lot must not be posted twice.
+                            report.DuplicateGrantsSkipped++;
+                            diagnostics?.Add($"Seed: inventory grant for '{business.BusinessId}' / " +
+                                $"'{grant.ProductId}' already present as lot '{deterministicLotId}'; skipped, not double-posted.");
+                            grantIndex++;
+                            continue;
+                        }
+
                         var definition = new LandLedgers.Economy.GenericProductDefinition(
                             grant.ProductId, grant.ProductId,
                             LandLedgers.Economy.ProductQuantityUnit.Each,
@@ -282,7 +302,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
                             definition,
                             $"scenario-authored:{provenanceTag}",
                             startDayIndex,
-                            deterministicLotId: $"scnlot-{rng.Seed}-{businessIndex}-{grantIndex}");
+                            deterministicLotId: deterministicLotId);
                         report.InventoryGrantCount++;
                         grantIndex++;
                     }
@@ -351,6 +371,32 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             // Inventory stream bookkeeping (see above): consume deterministically.
             inventoryRng.Next();
             return report;
+        }
+
+        private static bool LotAlreadyPresent(
+            LandLedgers.Economy.GenericInventoryPosition position,
+            string deterministicLotId)
+        {
+            if (position == null || string.IsNullOrWhiteSpace(deterministicLotId))
+            {
+                return false;
+            }
+
+            var lots = position.Lots;
+            if (lots == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < lots.Count; i++)
+            {
+                if (lots[i] != null && string.Equals(lots[i].LotId, deterministicLotId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static string ResolveCreditorBusiness(ScenarioSeedPopulation population)

@@ -319,6 +319,8 @@ namespace LandLedgers.Orchestration.Scenarios
         private readonly ScenarioService scenarioService;
         private readonly LandLedgers.Economy.PlayerPortfolioManager portfolio;
         private readonly LandLedgers.Economy.Financing.PlayerDebtManager debtManager;
+        private readonly LandLedgers.Orchestration.Scenarios.Generation.IScenarioInventoryPort inventoryPort;
+        private readonly LandLedgers.Orchestration.Scenarios.Generation.IScenarioPropertyPort propertyPort;
 
         private readonly List<string> clearedCategories = new List<string>();
 
@@ -332,7 +334,9 @@ namespace LandLedgers.Orchestration.Scenarios
             EquipmentReservationService reservations = null,
             ScenarioService scenarioService = null,
             LandLedgers.Economy.PlayerPortfolioManager portfolio = null,
-            LandLedgers.Economy.Financing.PlayerDebtManager debtManager = null)
+            LandLedgers.Economy.Financing.PlayerDebtManager debtManager = null,
+            LandLedgers.Orchestration.Scenarios.Generation.IScenarioInventoryPort inventoryPort = null,
+            LandLedgers.Orchestration.Scenarios.Generation.IScenarioPropertyPort propertyPort = null)
         {
             this.populationManager = populationManager;
             this.obligations = obligations;
@@ -342,6 +346,8 @@ namespace LandLedgers.Orchestration.Scenarios
             this.scenarioService = scenarioService;
             this.portfolio = portfolio;
             this.debtManager = debtManager;
+            this.inventoryPort = inventoryPort;
+            this.propertyPort = propertyPort;
         }
 
         public void ResetForNewGame(List<string> diagnostics)
@@ -364,6 +370,14 @@ namespace LandLedgers.Orchestration.Scenarios
                 () => debtManager.LoadFromSaveDto(new PlayerDebtSaveDto()), diagnostics);
             ClearOrNote(reservations != null, "stale-reservations",
                 () => reservations.LoadFromSaveDto(new EquipmentReservationAuthoritySaveDto()), diagnostics);
+            // Pass VIII (Worker 9): authored opening stock and property grants
+            // are deterministic per seed and GenericInventoryPosition.Add
+            // appends — without a reset a Restart would double-post the same
+            // authored lots/grants.
+            ClearOrNote(inventoryPort != null, "authored-inventory",
+                () => inventoryPort.ClearAuthoredState("new game reset"), diagnostics);
+            ClearOrNote(propertyPort != null, "authored-property",
+                () => propertyPort.ClearAuthoredState("new game reset"), diagnostics);
 
             // "generated-businesses" and "manager-decisions" are cleared by the
             // business runtime's own new-game path via the bootstrapper; when

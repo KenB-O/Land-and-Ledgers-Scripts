@@ -600,8 +600,19 @@ namespace LandLedgers.Time
         private void ResetShortTickStateForCurrentTimeOfDay()
         {
             float interval = settings.ShortTickIntervalGameSeconds;
+            // Pass VIII (Worker 9): whole deferred ticks carry across midnight
+            // instead of being silently dropped. ProcessShortTicks promises
+            // deferral-not-discard ("accelerated time never loses simulated
+            // seconds"); resetting the accumulator to the bare intraday
+            // remainder broke that promise at every day boundary where the
+            // per-frame cap had bound. The per-frame cap still bounds how many
+            // fire per call — the remainder keeps deferring into later frames.
+            // shortTickIndex restarts at the new day's intraday position; it is
+            // only a determinism salt, never a conserved counter.
+            float carriedWholeTicks = Mathf.Floor(
+                Mathf.Max(0f, shortTickAccumulatorGameSeconds) / Mathf.Max(0.001f, interval)) * interval;
+            shortTickAccumulatorGameSeconds = carriedWholeTicks + Mathf.Repeat(gameSecondsIntoDay, interval);
             shortTickIndex = Mathf.FloorToInt(gameSecondsIntoDay / interval);
-            shortTickAccumulatorGameSeconds = Mathf.Repeat(gameSecondsIntoDay, interval);
         }
 
         private void ResetFrameDiagnostics()

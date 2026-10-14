@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Primitives;
 using LandLedgers.Population;
 using LandLedgers.Tasks;
@@ -69,6 +70,18 @@ namespace LandLedgers.Economy
         public List<string> DependsOnPackageIds = new List<string>();
         public WorkPackageStatus Status = WorkPackageStatus.Draft;
         public int CompletedDayIndex = -1;
+        /// <summary>
+        /// Pass VIII Worker 3: the staged lines consumed for THIS package
+        /// (a per-package view of the project's MaterialsConsumed, used for
+        /// cancellation accounting — staged lines return to the source
+        /// exactly once).
+        /// </summary>
+        public List<ConsumedMaterialLine> StagedMaterialLines = new List<ConsumedMaterialLine>();
+        /// <summary>
+        /// Pass VIII Worker 3: true once this package's staged lines were
+        /// returned to the source on cancellation. Guards double-return.
+        /// </summary>
+        public bool StagedMaterialsReturned;
 
         public WorkPackage() { }
     }
@@ -99,6 +112,34 @@ namespace LandLedgers.Economy
     }
 
     /// <summary>
+    /// Pass VIII Worker 3: binds one real labor WorkTask to the package it
+    /// works. WorkCommittedLabor verifies the binding — minutes worked on
+    /// another package's task can never credit this one.
+    /// </summary>
+    [Serializable]
+    public sealed class LaborTaskBinding
+    {
+        public string TaskId = string.Empty;
+        public string PackageId = string.Empty;
+
+        public LaborTaskBinding() { }
+    }
+
+    /// <summary>
+    /// Pass VIII Worker 3: one equipment hold taken for a package — the
+    /// reservation key plus the package it serves, so completion and
+    /// cancellation release exactly what they took.
+    /// </summary>
+    [Serializable]
+    public sealed class EquipmentHold
+    {
+        public string PackageId = string.Empty;
+        public string ReservationKey = string.Empty;
+
+        public EquipmentHold() { }
+    }
+
+    /// <summary>
     /// Phase D: the construction project — contract → parcel + labor +
     /// materials + progress billing → completed structure. The project owns
     /// the staged execution the contract book lacks; it never creates a
@@ -124,6 +165,16 @@ namespace LandLedgers.Economy
         /// package only as the task is worked (never at reserve time).
         /// </summary>
         public List<string> LaborTaskIds = new List<string>();
+        /// <summary>
+        /// Pass VIII Worker 3: which package each labor task works. Verified
+        /// by WorkCommittedLabor — a task never credits the wrong package.
+        /// </summary>
+        public List<LaborTaskBinding> LaborTaskBindings = new List<LaborTaskBinding>();
+        /// <summary>
+        /// Pass VIII Worker 3: equipment holds taken for packages. Released
+        /// on package completion or project cancellation — never leaked.
+        /// </summary>
+        public List<EquipmentHold> EquipmentHolds = new List<EquipmentHold>();
         /// <summary>
         /// True when the design needs a Unity prefab unavailable in this
         /// repo — the data construction is real, but visual placement is
@@ -161,6 +212,26 @@ namespace LandLedgers.Economy
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
         /// <summary>
+        /// Pass VIII Worker 3: optional equipment reservation authority.
+        /// When set, CommitLabor reserves the package's required tools
+        /// through the REAL reservation authority (no double-booking across
+        /// packages/projects); holds release on package completion or
+        /// project cancellation. Null = the pre-Pass-VIII behavior (tool
+        /// custody only).
+        /// </summary>
+        public EquipmentReservationService EquipmentReservations { get; set; }
+
+        /// <summary>
+        /// Pass VIII Worker 3: equipment key for one required tool of one
+        /// household's build. One key per (household, tool) — the reservation
+        /// authority owns exclusivity.
+        /// </summary>
+        public static string EquipmentKeyFor(int householdId, string toolItemId)
+        {
+            return "construction-tool:" + householdId + ":" + (toolItemId ?? string.Empty);
+        }
+
+        /// <summary>
         /// Phase D: identifies the housing need's answer as a project —
         /// design + parcel + commissioning household, all real. No project
         /// is created from a bare NeedHousing flag: the caller passes the
@@ -174,6 +245,25 @@ namespace LandLedgers.Economy
             int dayIndex,
             List<string> diag)
         {
+            return CreateProject(catalog, householdId, designId, parcelId, null, dayIndex, diag);
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 3: parcel-authorized project creation. The
+        /// parcel authority (the runtime adapter reads the real
+        /// TitleAuthority) verifies the parcel exists and the commissioning
+        /// household holds it — a project is never created on a parcel
+        /// nobody holds. Null authority = the Phase D behavior (unchecked).
+        /// </summary>
+        public ConstructionProject CreateProject(
+            BuildingDesignCatalog catalog,
+            int householdId,
+            string designId,
+            string parcelId,
+            IConstructionParcelAuthority parcelAuthority,
+            int dayIndex,
+            List<string> diag)
+        {
             diag = diag ?? diagnostics;
             if (catalog == null)
                 return Refuse<ConstructionProject>(diag, "no design catalog — designs are catalog data, never invented.");
@@ -184,6 +274,12 @@ namespace LandLedgers.Economy
             BuildingDesign design = catalog.FindDesign(designId);
             if (design == null)
                 return Refuse<ConstructionProject>(diag, $"unknown design '{designId}' — projects build catalog designs only.");
+            if (parcelAuthority != null)
+            {
+                string authProblem = parcelAuthority.AuthorizeBuild(householdId, parcelId, dayIndex, diag);
+                if (authProblem != null)
+                    return Refuse<ConstructionProject>(diag, "parcel authorization refused: " + authProblem);
+            }
 
             var project = new ConstructionProject
             {
@@ -281,16 +377,56 @@ namespace LandLedgers.Economy
                 if (refusal != null)
                     return $"ConstructionProjectExecutor.StagePackageMaterials: {refusal}";
                 package.MaterialProvenance.Add(provenance ?? string.Empty);
-                project.MaterialsConsumed.Add(new ConsumedMaterialLine
+                var line = new ConsumedMaterialLine
                 {
                     DisplayName = requirement.MaterialDisplayName,
                     Units = requirement.RequiredUnits,
                     UnitLabel = requirement.UnitLabel ?? string.Empty,
                     Provenance = provenance ?? string.Empty,
-                });
+                };
+                project.MaterialsConsumed.Add(line);
+                package.StagedMaterialLines.Add(line);
             }
             package.Status = WorkPackageStatus.MaterialsStaged;
             diag.Add($"ConstructionProjectExecutor: package '{package.PackageId}' materials staged ({package.Materials.Count} requirement(s), real lots).");
+            return null;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 3: stages a package's materials from the
+        /// project's ON-SITE stockpile — the receiving end of the freight
+        /// leg. Same all-or-nothing guarantees as staging from a source:
+        /// when the stockpile cannot cover every requirement in full,
+        /// nothing is consumed.
+        /// </summary>
+        public string StagePackageMaterialsFromStockpile(
+            ConstructionProject project,
+            WorkPackage package,
+            ConstructionSiteStockpile stockpile,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (project == null || package == null)
+                return "ConstructionProjectExecutor.StagePackageMaterialsFromStockpile: project and package required.";
+            if (stockpile == null)
+                return "ConstructionProjectExecutor.StagePackageMaterialsFromStockpile: no site stockpile — freighted materials land at the site, never in the package directly.";
+            if (package.Status != WorkPackageStatus.Ready)
+                return $"ConstructionProjectExecutor.StagePackageMaterialsFromStockpile: package '{package.PackageId}' is {package.Status} — materials stage once from Ready.";
+
+            List<ConsumedMaterialLine> consumed;
+            string consumeProblem = stockpile.ConsumeForPackage(package, dayIndex, diag, out consumed);
+            if (consumeProblem != null)
+                return "ConstructionProjectExecutor.StagePackageMaterialsFromStockpile: " + consumeProblem;
+            foreach (ConsumedMaterialLine line in consumed ?? new List<ConsumedMaterialLine>())
+            {
+                if (line == null) continue;
+                package.MaterialProvenance.Add(line.Provenance ?? string.Empty);
+                project.MaterialsConsumed.Add(line);
+                package.StagedMaterialLines.Add(line);
+            }
+            package.Status = WorkPackageStatus.MaterialsStaged;
+            diag.Add($"ConstructionProjectExecutor: package '{package.PackageId}' staged from the on-site stockpile ({consumed?.Count ?? 0} line(s)).");
             return null;
         }
 
@@ -341,61 +477,138 @@ namespace LandLedgers.Economy
             }
 
             string reservationLabel = $"{label} [{project.ProjectId}/{package.PackageId}]";
+
+            // Pass VIII Worker 3: equipment first — the package's required
+            // tools are reserved through the REAL reservation authority when
+            // one is wired. A tool already held by another package/project
+            // refuses LOUDLY here; the project never advances without its
+            // equipment.
+            List<string> equipmentKeys = null;
+            if (EquipmentReservations != null
+                && package.RequiredToolItemIds != null
+                && package.RequiredToolItemIds.Count > 0)
+            {
+                equipmentKeys = new List<string>();
+                foreach (string toolId in package.RequiredToolItemIds)
+                {
+                    if (string.IsNullOrWhiteSpace(toolId)) continue;
+                    equipmentKeys.Add(EquipmentKeyFor(project.HouseholdId, toolId));
+                }
+                if (equipmentKeys.Count > 0)
+                {
+                    string reserveProblem = EquipmentReservations.ReserveAll(equipmentKeys,
+                        $"project:{project.ProjectId}/package:{package.PackageId}",
+                        reservationLabel, diag);
+                    if (reserveProblem != null)
+                    {
+                        diag.Add($"ConstructionProjectExecutor: equipment refused — {reserveProblem}");
+                        return $"ConstructionProjectExecutor.CommitLabor refused: equipment unavailable — {reserveProblem}";
+                    }
+                }
+            }
+
             string refusal = scheduleTracker.TryReserve(
                 personId, PersonActivityKind.Building, dayIndex, startMinuteOfDay, durationMinutes, reservationLabel);
             if (refusal != null)
             {
+                ReleaseEquipmentKeys(EquipmentReservations, project, package.PackageId, diag);
                 diag.Add($"ConstructionProjectExecutor: labor refused — {refusal}");
                 return $"ConstructionProjectExecutor.CommitLabor refused: {refusal}";
             }
+            string scheduleReservationId = FindReservationId(scheduleTracker, personId, dayIndex, reservationLabel);
 
             int committed = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
-            if (tasks != null && budgets != null)
+            if (budgets.CurrentAbsoluteDayIndex >= 0)
+                budgets.EnsureDay(dayIndex);
+            string definitionId = $"construction-labor:{package.PhaseName}";
+            if (tasks.GetDefinition(definitionId) == null)
             {
-                if (budgets.CurrentAbsoluteDayIndex >= 0)
-                    budgets.EnsureDay(dayIndex);
-                string definitionId = $"construction-labor:{package.PhaseName}";
-                if (tasks.GetDefinition(definitionId) == null)
+                string registrationFailure;
+                if (!tasks.RegisterDefinition(new TaskDefinition(definitionId, $"Construction — {package.PhaseName}", committed), out registrationFailure))
                 {
-                    string registrationFailure;
-                    if (!tasks.RegisterDefinition(new TaskDefinition(definitionId, $"Construction — {package.PhaseName}", committed), out registrationFailure))
-                        return $"ConstructionProjectExecutor.CommitLabor refused: {registrationFailure}";
+                    ReleaseScheduleAndEquipment(scheduleTracker, scheduleReservationId, project, package.PackageId, EquipmentReservations, diag);
+                    return $"ConstructionProjectExecutor.CommitLabor refused: {registrationFailure}";
                 }
-
-                WorkTask task = tasks.CreateTaskWithPlannedMinutes(
-                    definitionId,
-                    EntityId.For(EntityKind.Household, Math.Max(0, project.HouseholdId)),
-                    dayIndex,
-                    committed);
-                string assignFailure;
-                if (!tasks.AssignTask(task.TaskId, EntityId.For(EntityKind.Person, personId), budgets, dayIndex, out assignFailure))
-                    return $"ConstructionProjectExecutor.CommitLabor refused: {assignFailure}";
-                string startFailure;
-                if (!tasks.StartTask(task.TaskId, dayIndex, out startFailure))
-                    return $"ConstructionProjectExecutor.CommitLabor refused: {startFailure}";
-
-                string taskId = task.TaskId.ToString();
-                project.LaborTaskIds.Add(taskId);
             }
-            else
+
+            WorkTask task = tasks.CreateTaskWithPlannedMinutes(
+                definitionId,
+                EntityId.For(EntityKind.Household, Math.Max(0, project.HouseholdId)),
+                dayIndex,
+                committed);
+            string assignFailure;
+            if (!tasks.AssignTask(task.TaskId, EntityId.For(EntityKind.Person, personId), budgets, dayIndex, out assignFailure))
             {
-                // Compatibility path for older authored construction fixtures.
-                package.LaborMinutesCommitted += committed;
-                project.TotalLaborMinutesCommitted += committed;
+                ReleaseScheduleAndEquipment(scheduleTracker, scheduleReservationId, project, package.PackageId, EquipmentReservations, diag);
+                return $"ConstructionProjectExecutor.CommitLabor refused: {assignFailure}";
+            }
+            string startFailure;
+            if (!tasks.StartTask(task.TaskId, dayIndex, out startFailure))
+            {
+                ReleaseScheduleAndEquipment(scheduleTracker, scheduleReservationId, project, package.PackageId, EquipmentReservations, diag);
+                return $"ConstructionProjectExecutor.CommitLabor refused: {startFailure}";
+            }
+
+            string taskId = task.TaskId.ToString();
+            project.LaborTaskIds.Add(taskId);
+            project.LaborTaskBindings.Add(new LaborTaskBinding { TaskId = taskId, PackageId = package.PackageId });
+            if (equipmentKeys != null)
+            {
+                foreach (string key in equipmentKeys)
+                    project.EquipmentHolds.Add(new EquipmentHold { PackageId = package.PackageId, ReservationKey = key });
             }
             package.Status = WorkPackageStatus.InProgress;
 
+            if (!string.IsNullOrWhiteSpace(scheduleReservationId)
+                && !project.LaborReservationIds.Contains(scheduleReservationId))
+                project.LaborReservationIds.Add(scheduleReservationId);
+            diag.Add($"ConstructionProjectExecutor: P{personId} committed {committed} min to package '{package.PackageId}' (day {dayIndex}).");
+            return null;
+        }
+
+        private static string FindReservationId(PersonScheduleTracker scheduleTracker, int personId,
+            int dayIndex, string label)
+        {
             foreach (PersonActivityReservation reservation in scheduleTracker.ActiveFor(personId, dayIndex))
             {
                 if (reservation != null && !reservation.Released
-                    && string.Equals(reservation.Label, reservationLabel, StringComparison.Ordinal))
+                    && string.Equals(reservation.Label, label, StringComparison.Ordinal))
+                    return reservation.ReservationId;
+            }
+            return string.Empty;
+        }
+
+        private static void ReleaseScheduleAndEquipment(PersonScheduleTracker scheduleTracker,
+            string scheduleReservationId, ConstructionProject project, string packageId,
+            EquipmentReservationService equipment, List<string> diag)
+        {
+            if (scheduleTracker != null && !string.IsNullOrWhiteSpace(scheduleReservationId))
+            {
+                scheduleTracker.Release(scheduleReservationId);
+                project.LaborReservationIds.Remove(scheduleReservationId);
+            }
+            ReleaseEquipmentKeys(equipment, project, packageId, diag);
+        }
+
+        private static void ReleaseEquipmentKeys(EquipmentReservationService equipment,
+            ConstructionProject project, string packageId, List<string> diag)
+        {
+            if (equipment == null || project == null) return;
+            var remaining = new List<EquipmentHold>();
+            foreach (EquipmentHold hold in project.EquipmentHolds)
+            {
+                if (hold != null && string.Equals(hold.PackageId, packageId, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(hold.ReservationKey))
                 {
-                    project.LaborReservationIds.Add(reservation.ReservationId);
-                    break;
+                    equipment.Release(hold.ReservationKey);
+                    diag?.Add($"ConstructionProjectExecutor: released equipment '{hold.ReservationKey}' for package '{packageId}'.");
+                }
+                else if (hold != null)
+                {
+                    remaining.Add(hold);
                 }
             }
-            diag.Add($"ConstructionProjectExecutor: P{personId} committed {committed} min to package '{package.PackageId}' (day {dayIndex}).");
-            return null;
+            project.EquipmentHolds = remaining;
         }
 
         /// <summary>Compatibility overload for pre-Pass-IV callers.</summary>
@@ -418,7 +631,9 @@ namespace LandLedgers.Economy
         /// <summary>
         /// Applies worked minutes through the universal TaskAuthority. This is
         /// intentionally separate from reservation so construction cannot receive
-        /// labor credit before the worker actually advances the task.
+        /// labor credit before the worker actually advances the task. The task
+        /// must be bound to THIS package (see CommitLabor) — minutes worked
+        /// on another package's task can never credit this one.
         /// </summary>
         public string WorkCommittedLabor(
             ConstructionProject project,
@@ -433,6 +648,21 @@ namespace LandLedgers.Economy
             diag = diag ?? diagnostics;
             if (project == null || package == null || tasks == null || budgets == null)
                 return "ConstructionProjectExecutor.WorkCommittedLabor: project, package, TaskAuthority and budgets required.";
+            if (string.IsNullOrWhiteSpace(laborTaskId))
+                return "ConstructionProjectExecutor.WorkCommittedLabor: no labor task id — refusing phantom work.";
+            bool bound = false;
+            foreach (LaborTaskBinding binding in project.LaborTaskBindings)
+            {
+                if (binding != null
+                    && string.Equals(binding.TaskId, laborTaskId, StringComparison.Ordinal)
+                    && string.Equals(binding.PackageId, package.PackageId, StringComparison.Ordinal))
+                {
+                    bound = true;
+                    break;
+                }
+            }
+            if (!bound)
+                return $"ConstructionProjectExecutor.WorkCommittedLabor: task '{laborTaskId}' is not bound to package '{package.PackageId}' — refusing cross-package credit.";
             WorkTask task = tasks.FindTask(laborTaskId);
             if (task == null)
                 return $"ConstructionProjectExecutor.WorkCommittedLabor: no labor task '{laborTaskId}'.";
@@ -473,9 +703,155 @@ namespace LandLedgers.Economy
                 return $"ConstructionProjectExecutor.AdvancePackage: package '{package.PackageId}' has {package.LaborMinutesCommitted} of {package.LaborMinutesRequired} labor minutes — work is real.";
             package.Status = WorkPackageStatus.Complete;
             package.CompletedDayIndex = dayIndex;
+            ReleaseEquipmentKeys(EquipmentReservations, project, package.PackageId, diag);
             if (project.Status == ConstructionProjectStatus.WorkPackagesCreated)
                 project.Status = ConstructionProjectStatus.InProgress;
             diag.Add($"ConstructionProjectExecutor: package '{package.PackageId}' ('{package.PhaseName}') complete (day {dayIndex}).");
+            return null;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 3: cancels the project. Staged (but not yet
+        /// built-in) materials return to the source through the restock port
+        /// — exactly once, all-or-nothing per package; the call is
+        /// retryable and never double-returns. Unstaged site-stockpile units
+        /// drain back the same way. Labor reservations and equipment holds
+        /// release; open labor tasks are failed honestly through the
+        /// TaskAuthority. Completed packages stay built (their materials are
+        /// embodied in the building); a completed project cannot be
+        /// cancelled — that would be demolition, not cancellation.
+        /// </summary>
+        public string CancelProject(
+            ConstructionProject project,
+            ConstructionSiteStockpile stockpile,
+            IConstructionMaterialRestock restock,
+            PersonScheduleTracker scheduleTracker,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (project == null)
+                return "ConstructionProjectExecutor.CancelProject: project required.";
+            if (project.Status == ConstructionProjectStatus.Complete)
+                return $"ConstructionProjectExecutor.CancelProject: project '{project.ProjectId}' is complete — cancellation is not demolition.";
+            if (project.Status == ConstructionProjectStatus.Cancelled)
+                return $"ConstructionProjectExecutor.CancelProject: project '{project.ProjectId}' is already cancelled.";
+
+            // Collect staged-but-not-built-in lines. Completed packages keep
+            // their materials (embodied in the building); returned packages
+            // are skipped (never double-returned).
+            var packagesToMark = new List<WorkPackage>();
+            int stagedLineCount = 0;
+            foreach (WorkPackage package in project.WorkPackages)
+            {
+                if (package == null) continue;
+                if (package.Status == WorkPackageStatus.Complete) continue;
+                if (package.StagedMaterialsReturned) continue;
+                if (package.StagedMaterialLines.Count == 0) continue;
+                packagesToMark.Add(package);
+                stagedLineCount += package.StagedMaterialLines.Count;
+            }
+            // Drain the site stockpile exactly once — drained lines are real
+            // units that must go back through the restock port below.
+            List<ConsumedMaterialLine> drainedStockpile = stockpile != null
+                ? stockpile.DrainAll($"project '{project.ProjectId}'", dayIndex)
+                : new List<ConsumedMaterialLine>();
+            if (stagedLineCount + drainedStockpile.Count > 0 && restock == null)
+            {
+                // The drain already happened — put the units back so the
+                // refusal leaves the project exactly where it was.
+                if (stockpile != null)
+                {
+                    foreach (ConsumedMaterialLine line in drainedStockpile)
+                    {
+                        if (line == null || line.Units <= 0) continue;
+                        stockpile.Lines.Add(new ConstructionSiteStockpile.StockpileLine
+                        {
+                            DisplayName = line.DisplayName,
+                            UnitLabel = line.UnitLabel,
+                            Units = line.Units,
+                            Provenance = line.Provenance,
+                        });
+                    }
+                }
+                return $"ConstructionProjectExecutor.CancelProject: {stagedLineCount + drainedStockpile.Count} staged line(s) must be accounted for, but no restock port was supplied — refusing rather than losing them.";
+            }
+
+            // All-or-nothing per package: a package is marked returned only
+            // when every one of its lines went back. Retryable on refusal.
+            foreach (WorkPackage package in packagesToMark)
+            {
+                bool allReturned = true;
+                foreach (ConsumedMaterialLine line in package.StagedMaterialLines)
+                {
+                    if (line == null) continue;
+                    string returnProblem = restock.TryReturn(line, $"project '{project.ProjectId}'", dayIndex, diag);
+                    if (returnProblem != null)
+                    {
+                        diag.Add($"ConstructionProjectExecutor.CancelProject: restock refused for '{line.DisplayName}' x{line.Units}: {returnProblem} — package '{package.PackageId}' NOT marked returned; retry the cancellation.");
+                        allReturned = false;
+                        break;
+                    }
+                    diag.Add($"ConstructionProjectExecutor.CancelProject: returned '{line.DisplayName}' x{line.Units} to the source (package '{package.PackageId}').");
+                }
+                if (allReturned)
+                    package.StagedMaterialsReturned = true;
+                else
+                    return $"ConstructionProjectExecutor.CancelProject: restock incomplete for package '{package.PackageId}' — nothing else touched; retry.";
+            }
+            foreach (ConsumedMaterialLine line in drainedStockpile)
+            {
+                if (line == null) continue;
+                string returnProblem = restock.TryReturn(line, $"project '{project.ProjectId}'", dayIndex, diag);
+                if (returnProblem != null)
+                    return $"ConstructionProjectExecutor.CancelProject: restock refused for stockpile line '{line.DisplayName}' x{line.Units}: {returnProblem}.";
+                diag.Add($"ConstructionProjectExecutor.CancelProject: returned stockpile '{line.DisplayName}' x{line.Units} to the source.");
+            }
+
+            // Release person-time.
+            if (scheduleTracker != null)
+            {
+                foreach (string reservationId in project.LaborReservationIds)
+                {
+                    if (string.IsNullOrWhiteSpace(reservationId)) continue;
+                    scheduleTracker.Release(reservationId);
+                }
+                project.LaborReservationIds.Clear();
+            }
+            // Fail open labor tasks honestly through the task authority.
+            if (tasks != null)
+            {
+                foreach (LaborTaskBinding binding in project.LaborTaskBindings)
+                {
+                    if (binding == null || string.IsNullOrWhiteSpace(binding.TaskId)) continue;
+                    WorkTask task = tasks.FindTask(binding.TaskId);
+                    if (task != null && task.IsOpen)
+                        tasks.CompleteTask(task.TaskId, TaskOutcome.SeriousFailure, dayIndex, budgets);
+                }
+            }
+            // Release equipment.
+            if (EquipmentReservations != null)
+            {
+                var remaining = new List<EquipmentHold>();
+                foreach (EquipmentHold hold in project.EquipmentHolds)
+                {
+                    if (hold != null && !string.IsNullOrWhiteSpace(hold.ReservationKey))
+                    {
+                        EquipmentReservations.Release(hold.ReservationKey);
+                        diag.Add($"ConstructionProjectExecutor.CancelProject: released equipment '{hold.ReservationKey}'.");
+                    }
+                    else if (hold != null)
+                    {
+                        remaining.Add(hold);
+                    }
+                }
+                project.EquipmentHolds = remaining;
+            }
+
+            project.Status = ConstructionProjectStatus.Cancelled;
+            diag.Add($"ConstructionProjectExecutor: project '{project.ProjectId}' CANCELLED (day {dayIndex}) — staged materials returned, reservations released.");
             return null;
         }
 

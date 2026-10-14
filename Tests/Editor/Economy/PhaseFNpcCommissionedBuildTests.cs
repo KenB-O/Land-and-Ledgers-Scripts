@@ -3,6 +3,8 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Tasks;
+using LandLedgers.Time;
 using LandLedgers.World.Property;
 using NUnit.Framework;
 
@@ -199,13 +201,26 @@ namespace LandLedgers.EditorTests.Economy
 
             Assert.IsNull(FundStage(f, project, record, foundation, 11), string.Join("; ", f.Diag));
             Assert.AreEqual(2000, record.FindFunding(foundation.PackageId).ActualMaterialCostCents);
+            var selfTasks = new TaskAuthority();
+            var selfBudgets = new WorkTimeBudgetStore();
             Assert.IsNull(f.Commissioner.CommitOwnLabor(f.Executor, project, record, foundation,
-                5, f.Tracker, f.Custody, 11, 360, 240, f.Diag), string.Join("; ", f.Diag));
+                5, f.Tracker, f.Custody, selfTasks, selfBudgets, 11, 360, 240, f.Diag), string.Join("; ", f.Diag));
+            // Labor minutes credit only as the task is actually worked — never at reserve time.
+            string foundationTaskId = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+            Assert.IsNull(f.Executor.WorkCommittedLabor(project, foundation, foundationTaskId, 240,
+                selfTasks, selfBudgets, 11, f.Diag), string.Join("; ", f.Diag));
+            Assert.AreEqual(240, foundation.LaborMinutesCommitted);
             Assert.IsNull(f.Executor.AdvancePackage(project, foundation, 11, f.Diag));
 
             Assert.IsNull(FundStage(f, project, record, framing, 12), string.Join("; ", f.Diag));
+            var framingTasks = new TaskAuthority();
+            var framingBudgets = new WorkTimeBudgetStore();
             Assert.IsNull(f.Commissioner.CommitOwnLabor(f.Executor, project, record, framing,
-                5, f.Tracker, f.Custody, 12, 360, 480, f.Diag), string.Join("; ", f.Diag));
+                5, f.Tracker, f.Custody, framingTasks, framingBudgets, 12, 360, 480, f.Diag), string.Join("; ", f.Diag));
+            string framingTaskId = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+            Assert.IsNull(f.Executor.WorkCommittedLabor(project, framing, framingTaskId, 480,
+                framingTasks, framingBudgets, 12, f.Diag), string.Join("; ", f.Diag));
+            Assert.AreEqual(480, framing.LaborMinutesCommitted);
             Assert.IsNull(f.Executor.AdvancePackage(project, framing, 12, f.Diag));
 
             Assert.IsNull(f.Executor.CompleteProject(project, f.Catalog.FindDesign("cabin-a"),
@@ -245,9 +260,11 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNull(FundStage(f, project, record, framing, 11), string.Join("; ", f.Diag));
 
             // Hire P21 (of H9) at 4800c/week for the foundation's 240 minutes.
+            var hireTasks = new TaskAuthority();
+            var hireBudgets = new WorkTimeBudgetStore();
             Assert.IsNull(f.Commissioner.HireWorker(f.Employments, f.Executor, project, record,
                 foundation, 21, 9, "household:7 construction", 4800,
-                f.Tracker, f.Custody, 11, 360, 240, f.Diag), string.Join("; ", f.Diag));
+                f.Tracker, f.Custody, hireTasks, hireBudgets, 11, 360, 240, f.Diag), string.Join("; ", f.Diag));
             Assert.IsTrue(f.Employments.TryGetById(
                 $"emp-{project.ProjectId}-{foundation.PackageId}-21-11", out EmploymentRelationship rel));
             Assert.AreEqual(4800, rel.Compensation.AgreedWeeklyWageCents);
@@ -256,10 +273,14 @@ namespace LandLedgers.EditorTests.Economy
             // the schedule tracker refuses loudly through the executor.
             string doubleBook = f.Commissioner.HireWorker(f.Employments, f.Executor, project, record,
                 framing, 21, 9, "household:7 construction", 4800,
-                f.Tracker, f.Custody, 11, 400, 240, f.Diag);
+                f.Tracker, f.Custody, hireTasks, hireBudgets, 11, 400, 240, f.Diag);
             Assert.IsNotNull(doubleBook, "overlapping person-time must be refused.");
             StringAssert.Contains("refused", doubleBook.ToLowerInvariant());
 
+            // The hired time is real: work the foundation task before advancing.
+            string hiredTaskId = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+            Assert.IsNull(f.Executor.WorkCommittedLabor(project, foundation, hiredTaskId, 240,
+                hireTasks, hireBudgets, 11, f.Diag), string.Join("; ", f.Diag));
             Assert.IsNull(f.Executor.AdvancePackage(project, foundation, 11, f.Diag));
 
             // Wages on completion: 240 min of a 2400-min week at 4800c/week = 480c.

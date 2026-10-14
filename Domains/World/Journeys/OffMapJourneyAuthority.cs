@@ -62,6 +62,44 @@ namespace LandLedgers.World.Journeys
 
         /// <summary>Authoritative location label while departed. Never a map coordinate.</summary>
         public string OffMapLocationLabel => "off-map:" + JourneyId;
+
+        /// <summary>
+        /// Pass VIII (Worker 9): deep snapshot. CaptureSaveDto must hand out a
+        /// stable snapshot — aliasing the live record meant post-capture
+        /// mutations (completion, cancellation) leaked into the saved DTO.
+        /// </summary>
+        public OffMapJourneyRecord Copy()
+        {
+            return new OffMapJourneyRecord
+            {
+                JourneyId = JourneyId,
+                TravelerKind = TravelerKind,
+                PersonId = PersonId,
+                VehicleId = VehicleId,
+                OriginLocationId = OriginLocationId,
+                DestinationLabel = DestinationLabel,
+                GatewayLocationId = GatewayLocationId,
+                RouteLegLocationIds = RouteLegLocationIds != null
+                    ? new List<string>(RouteLegLocationIds) : new List<string>(),
+                RouteMiles = RouteMiles,
+                GatewayTravelDays = GatewayTravelDays,
+                OffMapLegDays = OffMapLegDays,
+                DepartureDayIndex = DepartureDayIndex,
+                DueReturnDayIndex = DueReturnDayIndex,
+                ActualReturnDayIndex = ActualReturnDayIndex,
+                CargoUnits = CargoUnits != null
+                    ? new Dictionary<string, int>(CargoUnits, System.StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase),
+                PurchaseManifestUnits = PurchaseManifestUnits != null
+                    ? new Dictionary<string, int>(PurchaseManifestUnits, System.StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase),
+                ObligationIds = ObligationIds != null
+                    ? new List<string>(ObligationIds) : new List<string>(),
+                Purpose = Purpose,
+                State = State,
+                CancelReason = CancelReason,
+            };
+        }
     }
 
     /// <summary>
@@ -477,10 +515,15 @@ namespace LandLedgers.World.Journeys
         /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
         public OffMapJourneyAuthoritySaveDto CaptureSaveDto()
         {
-            return new OffMapJourneyAuthoritySaveDto
+            var snapshot = new List<OffMapJourneyRecord>(byId.Count);
+            foreach (OffMapJourneyRecord record in byId.Values)
             {
-                journeys = new List<OffMapJourneyRecord>(byId.Values),
-            };
+                // Pass VIII (Worker 9): deep snapshot — the DTO must not alias
+                // live records, or post-capture mutations leak into the save.
+                snapshot.Add(record != null ? record.Copy() : null);
+            }
+
+            return new OffMapJourneyAuthoritySaveDto { journeys = snapshot };
         }
 
         /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
@@ -491,11 +534,15 @@ namespace LandLedgers.World.Journeys
             foreach (var record in dto.journeys)
             {
                 if (record == null || string.IsNullOrEmpty(record.JourneyId)) continue;
-                record.CargoUnits = record.CargoUnits ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                record.PurchaseManifestUnits = record.PurchaseManifestUnits ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                record.ObligationIds = record.ObligationIds ?? new List<string>();
-                record.RouteLegLocationIds = record.RouteLegLocationIds ?? new List<string>();
-                byId[record.JourneyId] = record;
+                // Pass VIII (Worker 9): copy on load as well — the DTO is a
+                // snapshot; the live authority must not alias it, or later
+                // mutations (completion, cancellation) would dirty the save.
+                OffMapJourneyRecord live = record.Copy();
+                live.CargoUnits = live.CargoUnits ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                live.PurchaseManifestUnits = live.PurchaseManifestUnits ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                live.ObligationIds = live.ObligationIds ?? new List<string>();
+                live.RouteLegLocationIds = live.RouteLegLocationIds ?? new List<string>();
+                byId[live.JourneyId] = live;
             }
         }
     }

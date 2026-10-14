@@ -171,6 +171,11 @@ namespace LandLedgers.EditorTests.Orchestration
             {
                 Positions.Clear();
             }
+
+            public void ClearAuthoredState(string reason)
+            {
+                Positions.Clear();
+            }
         }
 
         public sealed class SimulatedPropertyPort : IScenarioPropertyPort
@@ -188,6 +193,11 @@ namespace LandLedgers.EditorTests.Orchestration
             public IReadOnlyList<ScenarioSeedPropertyGrant> RecordedGrants => grants;
 
             public void Clear()
+            {
+                grants.Clear();
+            }
+
+            public void ClearAuthoredState(string reason)
             {
                 grants.Clear();
             }

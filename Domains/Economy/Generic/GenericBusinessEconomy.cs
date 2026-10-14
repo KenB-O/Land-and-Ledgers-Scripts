@@ -393,7 +393,17 @@ namespace LandLedgers.Economy
         public void ReleaseProductSpace(string productId, float amount)
         {
             if (!TryGetLine(productId, out GenericRetailProductLine line)) return;
-            GetOrCreatePool(line.CapacityPoolId).Release(amount);
+            // PASS7-006: never mint a capacity pool on release. A pool that was
+            // never configured imposes no constraint, so there is nothing to
+            // release; minting a zero-allocation pool here would false-block every
+            // future receive for the product line (TryOccupyProductSpace refuses
+            // against a zero-allocation pool once it exists).
+            RetailCapacityPool pool = capacityPools != null
+                ? capacityPools.FirstOrDefault(p =>
+                    string.Equals(p.PoolId, line.CapacityPoolId, StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (pool == null) return;
+            pool.Release(amount);
         }
     }
 
@@ -691,9 +701,21 @@ namespace LandLedgers.Economy
             if (!(settleTransaction?.Invoke(context) ?? false))
             {
                 if (genericInventorySale)
+                {
                     business.GenericConfiguration.AddInventory(context.ProductId, context.Quantity, genericInventoryCost);
+                }
                 else
-                    business.RuntimeState.AddCategoryStockUnits(context.ProductId, consumed);
+                {
+                    // PASS7-007: the rollback must restore exactly what was consumed.
+                    // AddCategoryStockUnits can cap at the category target; a capped
+                    // rollback would silently vaporize the shortfall, so measure it.
+                    int restored = business.RuntimeState.AddCategoryStockUnits(context.ProductId, consumed);
+                    reason = restored >= consumed
+                        ? "Retail sale rolled back: Transaction authority refused settlement."
+                        : $"Retail sale rolled back: Transaction authority refused settlement. " +
+                          $"WARNING: only {restored}/{consumed} {context.ProductId} restored to stock (category cap).";
+                    return false;
+                }
                 reason = "Retail sale rolled back: Transaction authority refused settlement.";
                 return false;
             }

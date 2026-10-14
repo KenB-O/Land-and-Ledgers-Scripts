@@ -245,7 +245,7 @@ namespace LandLedgers.Economy.Freight
                 return 0;
             }
 
-            if (shipment.Status != LogisticsShipmentStatus.Completed)
+            if (shipment.Status != LogisticsShipmentStatus.Completed || !shipment.deliveryApplied)
             {
                 diagnostics.Add($"Shipment '{shipmentId}' is {shipment.Status}; " +
                     "freight charges collect only on completed delivery.");

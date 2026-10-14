@@ -73,8 +73,13 @@ namespace LandLedgers.EditorTests.Economy
             shipment.AdvanceGameSeconds(20f);
             Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status);
 
+            // PASS7-008: the clock never completes a shipment. Unloading pins at
+            // its stage end until a delivery authority applies the receipt — a
+            // Completed status always implies actual acceptance, never elapsed time.
             shipment.AdvanceGameSeconds(10f);
-            Assert.AreEqual(LogisticsShipmentStatus.Completed, shipment.Status);
+            Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status);
+            Assert.IsFalse(shipment.deliveryApplied, "delivery not applied by the clock");
+            Assert.AreEqual(8, shipment.RemainingQuantityUnits, "cargo intact while awaiting delivery");
         }
 
         [Test]

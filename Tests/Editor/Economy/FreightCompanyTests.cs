@@ -165,6 +165,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(0, company.CollectFreightCharge("s1", diagnostics));
 
             shipment.state = LogisticsShipmentStatus.Completed;
+            shipment.deliveryApplied = true;
             Assert.AreEqual(500, company.CollectFreightCharge("s1", diagnostics));
         }
 
@@ -176,6 +177,7 @@ namespace LandLedgers.EditorTests.Economy
             LogisticsShipmentState shipment = BuildShipment("s2", 100);
             shipment.freightPayerBusinessInstanceId = "biz_freight_001"; // self
             shipment.state = LogisticsShipmentStatus.Completed;
+            shipment.deliveryApplied = true;
             company.TryAcceptShipment(shipment, diagnostics);
 
             // Canon §3.6: internal work never fabricates revenue to the same enterprise.

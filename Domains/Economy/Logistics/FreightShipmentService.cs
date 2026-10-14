@@ -36,7 +36,23 @@ namespace LandLedgers.Economy.Logistics
         public WorkTimeBudgetStore Budgets;
         public int DayIndex;
         public List<string> Diagnostics;
+
+        /// <summary>
+        /// PASS7-008: recipient acceptance for an unloaded shipment. Returns the
+        /// accepted unit count (0..quantityUnits). The authority behind it must be
+        /// the shipment-aware receiving authority (idempotent: a repeated callback
+        /// for the same shipment id must not duplicate inventory). Null means no
+        /// receiving authority is wired: the shipment is held as Delayed rather
+        /// than falsely marked delivered.
+        /// </summary>
+        public ReceiveFreightShipmentHandler ReceiveShipment;
     }
+
+    /// <summary>
+    /// Recipient acceptance callback: (shipment, quantityUnits, reason) -> accepted units.
+    /// </summary>
+    public delegate int ReceiveFreightShipmentHandler(
+        LogisticsShipmentState shipment, int quantityUnits, out string reason);
 
     /// <summary>
     /// Drives freight shipments. The wagon, driver, and animals are real;
@@ -267,13 +283,18 @@ namespace LandLedgers.Economy.Logistics
             Log(hooks, "shipment '" + shipment.ShipmentId + "' resumed -> " + shipment.Status + ".");
         }
 
-        /// <summary>Begins unloading: creates the real handling-time WorkTask.</summary>
+        /// <summary>Begins unloading: creates the real handling-time WorkTask.
+        /// A partially received shipment (Partial, delivery not applied, no open
+        /// unload task) may begin unloading again to retry the remainder.</summary>
         public bool BeginUnloading(LogisticsShipmentState shipment, EntityId unloaderId,
             FreightShipmentHooks hooks, out string reason)
         {
             reason = string.Empty;
             if (shipment == null) { reason = "No shipment."; return false; }
-            if (shipment.Status != LogisticsShipmentStatus.Arrived)
+            bool resumingPartial = shipment.Status == LogisticsShipmentStatus.Partial
+                && !shipment.deliveryApplied
+                && !unloadTasks.ContainsKey(shipment.ShipmentId);
+            if (shipment.Status != LogisticsShipmentStatus.Arrived && !resumingPartial)
             {
                 reason = "FreightShipmentService: shipment '" + shipment.ShipmentId + "' is " + shipment.Status + ", not Arrived.";
                 return false;
@@ -299,7 +320,14 @@ namespace LandLedgers.Economy.Logistics
             return true;
         }
 
-        /// <summary>Works the unloading task; on completion the recipient has custody.</summary>
+        /// <summary>
+        /// Works the unloading task; on completion the recipient is asked to accept
+        /// the goods through the wired receiving authority (PASS7-008). The shipment
+        /// completes ONLY when the recipient accepts the full remaining quantity:
+        /// partial acceptance records exact accepted/remaining counts (Partial), a
+        /// refusal keeps the goods in wagon custody (Delayed, retryable), and a
+        /// missing receiving authority never produces a false delivery.
+        /// </summary>
         public bool WorkUnloading(LogisticsShipmentState shipment, int minutes,
             FreightShipmentHooks hooks, out string reason)
         {
@@ -314,14 +342,63 @@ namespace LandLedgers.Economy.Logistics
             if (!done) return true;
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
             unloadTasks.Remove(shipment.ShipmentId);
-            // Recipient custody: goods delivered, wagon released.
-            shipment.deliveryApplied = true;
-            shipment.remainingQuantityUnits = 0;
-            shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
-            shipment.physicalTransportBound = false;
-            shipment.state = LogisticsShipmentStatus.Completed;
-            Log(hooks, "shipment '" + shipment.ShipmentId + "': delivered — recipient '"
-                + shipment.destinationBusinessInstanceId + "' has custody.");
+
+            int remaining = Math.Max(0, shipment.remainingQuantityUnits);
+            if (remaining <= 0)
+            {
+                // Nothing to hand over: the transport completed with zero cargo.
+                shipment.deliveryApplied = true;
+                shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
+                shipment.physicalTransportBound = false;
+                shipment.state = LogisticsShipmentStatus.Partial;
+                Log(hooks, "shipment '" + shipment.ShipmentId + "': unload complete with zero cargo — nothing to deliver.");
+                return true;
+            }
+
+            if (hooks == null || hooks.ReceiveShipment == null)
+            {
+                // No receiving authority wired: hold the goods in wagon custody.
+                // Marking this delivered would be the PASS7-008 mask.
+                shipment.deliveryApplied = false;
+                shipment.MarkDelayed(
+                    "no receiving authority wired — delivery cannot be verified; " + remaining + "u held in wagon custody",
+                    LogisticsShipmentStatus.Arrived);
+                Log(hooks, "shipment '" + shipment.ShipmentId + "': NOT delivered — " + shipment.BlockedReason + ".");
+                return true;
+            }
+
+            int accepted = Math.Max(0, Math.Min(remaining, hooks.ReceiveShipment(shipment, remaining, out string receiveReason)));
+            shipment.deliveredQuantityUnits += accepted;
+            shipment.remainingQuantityUnits = remaining - accepted;
+            if (accepted >= remaining)
+            {
+                // Recipient custody: goods accepted into inventory, wagon released.
+                shipment.deliveryApplied = true;
+                shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
+                shipment.physicalTransportBound = false;
+                shipment.state = LogisticsShipmentStatus.Completed;
+                Log(hooks, "shipment '" + shipment.ShipmentId + "': delivered — recipient '"
+                    + shipment.destinationBusinessInstanceId + "' accepted " + accepted + "u into inventory.");
+                return true;
+            }
+
+            if (accepted > 0)
+            {
+                shipment.deliveryApplied = false;
+                shipment.state = LogisticsShipmentStatus.Partial;
+                shipment.blockedReason = "recipient accepted " + accepted + "/" + remaining + "u"
+                    + (string.IsNullOrWhiteSpace(receiveReason) ? "" : " (" + receiveReason.Trim() + ")");
+                Log(hooks, "shipment '" + shipment.ShipmentId + "': PARTIAL — " + shipment.blockedReason
+                    + "; " + shipment.remainingQuantityUnits + "u remain in wagon custody (unload may resume).");
+                return true;
+            }
+
+            shipment.deliveryApplied = false;
+            shipment.MarkDelayed(
+                string.IsNullOrWhiteSpace(receiveReason) ? "recipient refused shipment" : receiveReason.Trim(),
+                LogisticsShipmentStatus.Arrived);
+            Log(hooks, "shipment '" + shipment.ShipmentId + "': NOT delivered — " + shipment.BlockedReason
+                + "; " + remaining + "u remain in wagon custody.");
             return true;
         }
 
@@ -349,6 +426,15 @@ namespace LandLedgers.Economy.Logistics
                 reason = "Conservation violation on '" + shipment.ShipmentId + "': planned "
                     + shipment.PlannedQuantityUnits + " != delivered " + deliveredUnits
                     + " + remaining " + shipment.RemainingQuantityUnits + ".";
+                return false;
+            }
+            // PASS7-008: when the shipment tracks actual acceptance, the claimed
+            // delivered count must equal it — completion cannot imply acceptance
+            // the recipient never performed.
+            if (shipment.DeliveredQuantityUnits > 0 && deliveredUnits != shipment.DeliveredQuantityUnits)
+            {
+                reason = "Acceptance mismatch on '" + shipment.ShipmentId + "': claimed delivered "
+                    + deliveredUnits + " != accepted " + shipment.DeliveredQuantityUnits + ".";
                 return false;
             }
             return true;

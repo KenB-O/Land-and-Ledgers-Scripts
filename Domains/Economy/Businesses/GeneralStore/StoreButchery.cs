@@ -121,8 +121,28 @@ namespace LandLedgers.Economy.GeneralStore
                 return null;
             }
 
+            // The store retails the cuts through its meat category.
+            // PASS7-007: cap the wholesale request at what the store can actually
+            // receive BEFORE the butcher deducts. The butcher charges for what we
+            // request, so requesting more than receivable room would pay for meat
+            // that has nowhere to go.
+            const string meatCategoryId = "meat";
+            storeState.EnsureCategoryStock(meatCategoryId, 0, Mathf.Max(requestedLbs, 100));
+            CategoryStockState meatStock = storeState.GetCategoryStock(meatCategoryId);
+            int receivableRoom = meatStock == null
+                ? 0
+                : meatStock.TargetStockUnits > 0
+                    ? Mathf.Max(0, meatStock.TargetStockUnits - meatStock.CurrentStockUnits)
+                    : int.MaxValue;
+            int cappedRequestLbs = Mathf.Min(requestedLbs, receivableRoom);
+            if (cappedRequestLbs <= 0)
+            {
+                diagnostics.Add("Store could not receive the wholesale cuts (meat category full).");
+                return null;
+            }
+
             int lbsBefore = lotBefore.QuantityLbs;
-            int wholesaleCostCents = butcher.SellWholesale(lotId, requestedLbs, storeBusinessId, diagnostics);
+            int wholesaleCostCents = butcher.SellWholesale(lotId, cappedRequestLbs, storeBusinessId, diagnostics);
             if (wholesaleCostCents <= 0)
             {
                 diagnostics.Add($"Wholesale purchase from lot '{lotId}' failed.");
@@ -137,14 +157,10 @@ namespace LandLedgers.Economy.GeneralStore
                 return null;
             }
 
-            // The store retails the cuts through its meat category.
-            const string meatCategoryId = "meat";
-            storeState.EnsureCategoryStock(meatCategoryId, 0, Mathf.Max(lbsTaken, 100));
             int accepted = storeState.AddCategoryStockUnits(meatCategoryId, lbsTaken);
-            if (accepted <= 0)
+            if (accepted < lbsTaken)
             {
-                diagnostics.Add("Store could not receive the wholesale cuts (meat category full).");
-                return null;
+                diagnostics.Add($"Store received only {accepted}/{lbsTaken} lbs wholesale cuts (meat category filled during purchase).");
             }
 
             storeState.AddWeeklyLocalTransferCost(wholesaleCostCents,

@@ -98,6 +98,10 @@ namespace LandLedgers.Economy
         [SerializeField] public string blockedReason = string.Empty;
         [SerializeField] public int plannedQuantityUnits;
         [SerializeField] public int remainingQuantityUnits;
+        // PASS7-008: units the recipient has actually accepted into inventory.
+        // Conservation reads planned == delivered + remaining (+ lost, which is
+        // zero outside pre-load blocks). Additive field; legacy saves read 0.
+        [SerializeField] public int deliveredQuantityUnits;
         [SerializeField] public int sellerUnitRevenueCents;
         [SerializeField] public int buyerUnitCostCents;
         [SerializeField] public int freightChargeCents;
@@ -128,6 +132,7 @@ namespace LandLedgers.Economy
         public string FreightPayerBusinessInstanceId => freightPayerBusinessInstanceId ?? string.Empty;
         public int PlannedQuantityUnits => Mathf.Max(0, plannedQuantityUnits);
         public int RemainingQuantityUnits => Mathf.Max(0, remainingQuantityUnits);
+        public int DeliveredQuantityUnits => Mathf.Max(0, deliveredQuantityUnits);
         public int FreightChargeCents => Mathf.Max(0, freightChargeCents);
         public float EstimatedRemainingGameSeconds => Mathf.Max(0f, ResolveCurrentStageDuration() - stageElapsedGameSeconds);
 
@@ -162,6 +167,17 @@ namespace LandLedgers.Economy
                 }
 
                 float duration = Mathf.Max(0.01f, ResolveCurrentStageDuration());
+                // PASS7-008: the clock never completes a shipment. Unloading pins at
+                // its stage end until a delivery authority applies the receipt and
+                // resolves it to Completed / Partial / Delayed / Failed explicitly.
+                // A Completed status therefore always implies actual acceptance.
+                if (state == LogisticsShipmentStatus.Unloading
+                    && stageElapsedGameSeconds + 0.0001f >= duration)
+                {
+                    stageElapsedGameSeconds = duration;
+                    return;
+                }
+
                 float step = Mathf.Min(remaining, duration - stageElapsedGameSeconds);
                 stageElapsedGameSeconds += step;
                 totalElapsedGameSeconds += step;
@@ -220,6 +236,7 @@ namespace LandLedgers.Economy
                 blockedReason = blockedReason ?? string.Empty,
                 plannedQuantityUnits = PlannedQuantityUnits,
                 remainingQuantityUnits = RemainingQuantityUnits,
+                deliveredQuantityUnits = DeliveredQuantityUnits,
                 sellerUnitRevenueCents = Mathf.Max(0, sellerUnitRevenueCents),
                 buyerUnitCostCents = Mathf.Max(0, buyerUnitCostCents),
                 freightChargeCents = FreightChargeCents,
@@ -270,6 +287,7 @@ namespace LandLedgers.Economy
             state.blockedReason = dto.blockedReason ?? string.Empty;
             state.plannedQuantityUnits = Mathf.Max(0, dto.plannedQuantityUnits);
             state.remainingQuantityUnits = Mathf.Max(0, dto.remainingQuantityUnits);
+            state.deliveredQuantityUnits = Mathf.Max(0, dto.deliveredQuantityUnits);
             state.sellerUnitRevenueCents = Mathf.Max(0, dto.sellerUnitRevenueCents);
             state.buyerUnitCostCents = Mathf.Max(0, dto.buyerUnitCostCents);
             state.freightChargeCents = Mathf.Max(0, dto.freightChargeCents);
@@ -315,24 +333,14 @@ namespace LandLedgers.Economy
                 state.state = LogisticsShipmentStatus.Failed;
             }
 
-            // Ambiguous quarantine (K): If legacy state is ambiguous (e.g. delayed with blocked reason,
-            // or has blocked reason but delivery never occurred and remaining cargo > 0),
-            // quarantine/block execution rather than inventing physical or economic history.
-            // Do not fabricate source deductions, payments, or destination receipts.
-            bool isAmbiguousMalformed =
-                !provablyNeverLoaded
-                && !string.IsNullOrWhiteSpace(state.blockedReason)
-                && !state.deliveryApplied
-                && state.remainingQuantityUnits > 0
-                && (state.state == LogisticsShipmentStatus.Delayed || state.state == LogisticsShipmentStatus.Failed);
-
-            if (isAmbiguousMalformed)
-            {
-                state.state = LogisticsShipmentStatus.Failed;
-                state.remainingQuantityUnits = 0;
-                state.loadApplied = false;
-                state.sourceCommittedAtSchedule = false;
-            }
+            // PASS7-008: no "ambiguous quarantine" zeroing here. A Delayed or Failed
+            // shipment that was actually loaded (loadApplied) carries REAL cargo:
+            // goods awaiting a retry, or stranded cargo quarantined on the shipment
+            // by FailShipmentAfterLoad. Zeroing it on reload would silently vaporize
+            // goods the quarantine doctrine requires to stay visible and auditable.
+            // Phantom cargo (loading provably never occurred) is already normalized
+            // by the deterministic repair above; everything else is preserved so a
+            // save/load during an unresolved delivery is lossless and idempotent.
 
             return state;
         }
@@ -375,13 +383,22 @@ namespace LandLedgers.Economy
 
         private void AdvanceToNextStage()
         {
+            // PASS7-008: Unloading never advances by clock. Completion, partial
+            // acceptance, delay, and failure are set ONLY by a delivery authority
+            // applying the receipt (LogisticsRuntimeManager.TryApplyDelivery or
+            // FreightShipmentService.WorkUnloading); the stage clock pins at the
+            // Unloading end (see AdvanceGameSeconds) until that happens.
+            if (state == LogisticsShipmentStatus.Unloading)
+            {
+                return;
+            }
+
             stageElapsedGameSeconds = 0f;
             state = state switch
             {
                 LogisticsShipmentStatus.Loading => LogisticsShipmentStatus.InTransit,
                 LogisticsShipmentStatus.InTransit => LogisticsShipmentStatus.Unloading,
                 LogisticsShipmentStatus.Arrived => LogisticsShipmentStatus.Unloading,
-                LogisticsShipmentStatus.Unloading => LogisticsShipmentStatus.Completed,
                 LogisticsShipmentStatus.Delayed => resumeStateAfterDelay,
                 _ => state
             };

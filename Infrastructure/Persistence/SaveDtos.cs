@@ -555,6 +555,9 @@ namespace LandLedgers.Persistence
         public string blockedReason = string.Empty;
         public int plannedQuantityUnits;
         public int remainingQuantityUnits;
+        // PASS7-008 additive: units actually accepted by the recipient. Legacy
+        // saves without this field restore 0 (clear-then-load stays valid).
+        public int deliveredQuantityUnits;
         public int sellerUnitRevenueCents;
         public int buyerUnitCostCents;
         public int freightChargeCents;

@@ -3634,13 +3634,32 @@ namespace LandLedgers.Economy
             }
 
             int slabsProduced = processedLogs * SawmillSlabsOffcutsPerLog;
+            int slabsStored = 0;
             if (slabsProduced > 0)
             {
-                runtime.AddCategoryStockUnits(CategorySlabsOffcuts, slabsProduced);
+                // PASS7-007: record only what storage actually accepts. A capped add
+                // must not over-count production, and the surplus must not vanish.
+                slabsStored = runtime.AddCategoryStockUnits(CategorySlabsOffcuts, slabsProduced);
             }
 
             SyncSawmillBusinessStockFromSupport(runtime, sawmill);
             int slabsSold = SellLocalMarketOutput(business, CategorySlabsOffcuts, SawmillOffcutLocalOutletMaxUnits, summary);
+
+            int slabsSurplus = slabsProduced - slabsStored;
+            if (slabsSurplus > 0)
+            {
+                // The outlet sale above may have freed storage room; store what fits now.
+                int slabsStoredLate = runtime.AddCategoryStockUnits(CategorySlabsOffcuts, slabsSurplus);
+                slabsStored += slabsStoredLate;
+                int slabsDisposed = slabsSurplus - slabsStoredLate;
+                if (slabsDisposed > 0)
+                {
+                    // Storage is genuinely full: the surplus is disposed as mill fuel,
+                    // recorded loudly — never silently vanished.
+                    AddBlockedReason(blockedReasons, $"slab/offcut storage overflow: {slabsDisposed} units disposed as mill fuel");
+                    AppendSummarySegment(summary, $"{slabsDisposed} slabs/offcuts disposed as mill fuel (storage full)");
+                }
+            }
 
             if (processedLogs <= 0 && hauledLogs <= 0 && sawmill.LogStockUnits > 0)
             {
@@ -3651,7 +3670,7 @@ namespace LandLedgers.Economy
             string maintenance = !string.IsNullOrWhiteSpace(maintenanceSource)
                 ? $"; maintenance {maintenanceSource}"
                 : string.Empty;
-            string result = $"cut {cutLogs} timber, hauled {hauledLogs} logs, processed {processedLogs} logs, produced {lumberProduced} lumber, {slabsProduced} slabs/offcuts";
+            string result = $"cut {cutLogs} timber, hauled {hauledLogs} logs, processed {processedLogs} logs, produced {lumberProduced} lumber, {slabsProduced} slabs/offcuts ({slabsStored} stored)";
             result += $"; stock {sawmill.CurrentStockUnits}/{sawmill.LumberStorageCapacityUnits} lumber, {sawmill.LogStockUnits} logs, {sawmill.StandingTimberUnits} standing timber";
             result += $"; crew {sawmill.SawmillCrewLabel}; condition {runtime.Reliability01:P0}; hauling {haulingMode}{maintenance}";
             if (slabsSold > 0)
@@ -4306,9 +4325,11 @@ namespace LandLedgers.Economy
 
                 operableUnits = ConsumeSecondaryInputsForOutput(business, profile, inputCategoryId, operableUnits, blockedReasons);
                 producedUnits = runtime.AddCategoryStockUnits(outputCategoryId, operableUnits);
-                if (operableUnits > 0 && producedUnits <= 0)
+                if (operableUnits > 0 && producedUnits < operableUnits)
                 {
-                    blockedReasons.Add($"output storage full: {outputCategoryId}");
+                    // PASS7-007: storage accepted less than planned — record the
+                    // shortfall instead of over-counting production.
+                    blockedReasons.Add($"output storage shortfall: stored {producedUnits}/{operableUnits} {outputCategoryId}");
                 }
             }
 
@@ -5955,7 +5976,17 @@ namespace LandLedgers.Economy
             int accepted = yard.RuntimeState.AddCategoryStockUnits(CategoryLumber, consumed);
             if (accepted < consumed)
             {
-                sawmill.RuntimeState.AddCategoryStockUnits(CategoryLumber, consumed - accepted);
+                // PASS7-007: the yard could not take it all — return the remainder to
+                // the sawmill's stock and record anything that still cannot be held.
+                int reabsorbed = sawmill.RuntimeState.AddCategoryStockUnits(CategoryLumber, consumed - accepted);
+                int stranded = consumed - accepted - reabsorbed;
+                if (stranded > 0)
+                {
+                    sawmill.RuntimeState.AppendWeeklyBlockedReason(
+                        $"lumber transfer stranded {stranded}u: yard and sawmill storage full");
+                    yard.RuntimeState.AppendWeeklyBlockedReason(
+                        $"lumber transfer stranded {stranded}u: yard and sawmill storage full");
+                }
             }
             SyncLinkedSawmillSupportFromBusiness(sawmill);
 

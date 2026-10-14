@@ -153,6 +153,13 @@ namespace LandLedgers.Orchestration.Systems
         private readonly Dictionary<string, long> boughtOffMapUnits = new Dictionary<string, long>();
         private readonly Dictionary<string, long> soldOffMapUnits = new Dictionary<string, long>();
         private readonly Dictionary<int, int> personMinutesWorked = new Dictionary<int, int>();
+        /// <summary>
+        /// Pass VIII Worker 7: minutes worked in the CURRENT payroll week, per
+        /// person. Reset on week rollover; feeds the attendance seam so payroll
+        /// pays only weeks actually worked.
+        /// </summary>
+        private readonly Dictionary<int, int> personMinutesWorkedThisWeek = new Dictionary<int, int>();
+        private int attendanceWeekTracked = -1;
         private int unmetNeeds;
         private int shortages;
         private int hungerEvents;
@@ -288,6 +295,13 @@ namespace LandLedgers.Orchestration.Systems
             journeyModel = BuildJourneyModel();
             offMap = new OffMapJourneyAuthority(journeyModel);
 
+            // Pass VIII Worker 7: the dead are never offered work or travel.
+            // The seams sit in the authorities so EVERY caller is covered,
+            // including callers that never learned to check.
+            tasks.IsWorkerUnavailable = worker =>
+                worker.Kind == EntityKind.Person && IsDead(worker.Id);
+            offMap.IsPersonUnavailable = personId => IsDead(personId);
+
             tasks.RegisterDefinition(new TaskDefinition("work-shift", "Work shift", WorkShiftMinutes), out _);
             tasks.RegisterDefinition(new TaskDefinition("domestic-work", "Domestic work", 240), out _);
             tasks.RegisterDefinition(new TaskDefinition("domestic-help", "Domestic help", 120), out _);
@@ -322,6 +336,10 @@ namespace LandLedgers.Orchestration.Systems
                 id = id,
                 firstName = first,
                 lastName = last,
+                // Pass VIII Worker 7: the birth date lives on the person (as in
+                // production), so birthdays re-derive age, band, AND labor
+                // access from it — a child who ages into a worker band can work.
+                birthDate = birth,
                 age = AgeAuthority.CompletedYears(birth, AnchorYear, AnchorMonth, AnchorDay),
                 ageBand = HouseholdLifecycleManager.AgeBandForAge(
                     AgeAuthority.CompletedYears(birth, AnchorYear, AnchorMonth, AnchorDay)),
@@ -542,6 +560,7 @@ namespace LandLedgers.Orchestration.Systems
             state.EmploymentRegistry = employments;
             state.HouseholdLedgers = ledgerRegistry;
             state.PersonHouseholdIdLookup = memberships.GetActiveHouseholdId;
+            InstallAttendanceProvider(state);
             businesses[bizId] = state;
             businessStock[bizId] = new Dictionary<string, GenericInventoryPosition>(StringComparer.OrdinalIgnoreCase);
         }
@@ -662,6 +681,14 @@ namespace LandLedgers.Orchestration.Systems
             absoluteDayIndex++;
             int day = absoluteDayIndex;
             budgets.EnsureDay(day);
+            // Pass VIII Worker 7: payroll-week rollover for the attendance
+            // seam — a fresh week starts with zero recorded minutes.
+            int week = day / 7;
+            if (week != attendanceWeekTracked)
+            {
+                personMinutesWorkedThisWeek.Clear();
+                attendanceWeekTracked = week;
+            }
             foreach (var runtime in productionRuntimes.Values)
             {
                 runtime.SetDayIndex(day);
@@ -711,8 +738,11 @@ namespace LandLedgers.Orchestration.Systems
                 }
                 int newAge = AgeAuthority.CompletedYears(birth,
                     CurrentYear(), CurrentMonth(), CurrentDay());
-                person.age = newAge; // mirror of the birth-date authority until P0-2 lands the derived read
-                person.ageBand = HouseholdLifecycleManager.AgeBandForAge(newAge);
+                // Pass VIII Worker 7: re-derive from the birth-date authority —
+                // age, age band, AND labor access. A child who ages into a
+                // worker band must not stay frozen with LaborAccessLevel.None.
+                person.RefreshDerivedAge(CurrentYear(), CurrentMonth(), CurrentDay());
+                newAge = person.age;
                 birthdaysProcessed++;
                 Log($"P{personId} ({person.DisplayName}) turned {newAge}.");
                 // Chain the next birthday from the day after the one that just fired:
@@ -1005,9 +1035,54 @@ namespace LandLedgers.Orchestration.Systems
                 diag.Add($"society: {label} for P{personId} refused at work: {rejection}");
                 return;
             }
+            RecordPersonMinutes(personId, minutes);
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 7: one place records worked minutes — the
+        /// all-time counter (reconciliation) and the current-week counter
+        /// (the payroll attendance seam).
+        /// </summary>
+        private void RecordPersonMinutes(int personId, int minutes)
+        {
             int worked;
             personMinutesWorked.TryGetValue(personId, out worked);
             personMinutesWorked[personId] = worked + minutes;
+            int weekly;
+            personMinutesWorkedThisWeek.TryGetValue(personId, out weekly);
+            personMinutesWorkedThisWeek[personId] = weekly + minutes;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 7: installs the payroll attendance seam on one
+        /// business runtime: no automatic attendance from a mere employment
+        /// record — payroll pays only weeks the worker's minutes were actually
+        /// recorded. Called for fresh businesses and for businesses rebuilt
+        /// from a save DTO (the provider is a live closure, not save data).
+        /// </summary>
+        private void InstallAttendanceProvider(BusinessRuntimeState state)
+        {
+            if (state == null) return;
+            state.WeeklyAttendanceProvider = (employmentId, weekIndex) =>
+                AttendanceRecorded(employmentId);
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 7: the payroll attendance check — true when the
+        /// employment's worker has any recorded minutes in the current week.
+        /// Unknown employments count as absent (fail-closed): payroll never
+        /// pays on a record it cannot attribute to real work.
+        /// </summary>
+        private bool AttendanceRecorded(string employmentId)
+        {
+            EmploymentRelationship rel;
+            if (!employments.TryGetById(employmentId, out rel) || rel == null)
+            {
+                return false;
+            }
+            int weekly;
+            return personMinutesWorkedThisWeek.TryGetValue(rel.EmployeePersonId, out weekly)
+                && weekly > 0;
         }
 
         private void RunWorkTasks(int day)
@@ -1118,6 +1193,39 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return; // no worker, no production: never faked
             }
+            // Pass VIII Worker 7: attendance is verified presence, not the
+            // employment record alone. A present worker whose business has no
+            // production to run still attended: upkeep/standby occupies the
+            // shift through the real task system (budget, tracker, minutes),
+            // so payroll attendance is satisfied without conjuring goods.
+            // A genuinely absent worker (dead, off-map) records nothing and
+            // is not paid.
+            int minutesBefore = WeeklyMinutesWorked(workerPersonId);
+            RunProductionAttempt(bizId, workerPersonId, day);
+            if (WeeklyMinutesWorked(workerPersonId) == minutesBefore)
+            {
+                DoTask(workerPersonId, "work-shift", WorkShiftMinutes, day,
+                    $"{bizId} upkeep (no production today)");
+            }
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 7: current-week minutes for one person (the
+        /// payroll attendance seam's input).
+        /// </summary>
+        private int WeeklyMinutesWorked(int personId)
+        {
+            int weekly;
+            personMinutesWorkedThisWeek.TryGetValue(personId, out weekly);
+            return weekly;
+        }
+
+        private void RunProductionAttempt(string bizId, int workerPersonId, int day)
+        {
+            if (IsDead(workerPersonId) || IsOffMap(workerPersonId))
+            {
+                return; // no worker, no production: never faked
+            }
             ProductionMethodDefinition method = methods[bizId];
             GenericProductionPolicy policy = policies[bizId];
             GenericInventoryPosition output = Position(bizId, method.OutputProductId);
@@ -1211,6 +1319,12 @@ namespace LandLedgers.Orchestration.Systems
             if (!advanced)
             {
                 diag.Add($"society: {bizId} production advance failed: {advanceReason}");
+            }
+            else
+            {
+                // Pass VIII Worker 7: production work is real work — it counts
+                // for the payroll attendance seam like any other shift.
+                RecordPersonMinutes(workerPersonId, WorkShiftMinutes);
             }
             if (process.Completed)
             {
@@ -2433,11 +2547,15 @@ namespace LandLedgers.Orchestration.Systems
             // Rewire business authorities AFTER the fresh registries are in
             // place: the rebuilt businesses must see the restored employment
             // registry (with day-15 hires), household ledgers, and lookup.
+            // Pass VIII Worker 7: the attendance seam is a live closure, not
+            // save data — reinstall it here or the restored run silently pays
+            // on the employment record alone.
             foreach (var kv in businesses)
             {
                 kv.Value.EmploymentRegistry = employments;
                 kv.Value.HouseholdLedgers = ledgerRegistry;
                 kv.Value.PersonHouseholdIdLookup = memberships.GetActiveHouseholdId;
+                InstallAttendanceProvider(kv.Value);
             }
             dueEvents = fresh.dueEvents;
             estates = fresh.estates;

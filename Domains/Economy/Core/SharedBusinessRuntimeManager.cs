@@ -4260,27 +4260,44 @@ namespace LandLedgers.Economy
                 int weeklyVisits = Mathf.Max(0, dailyVisitCapacity * serviceDays);
                 int constrainedWeeklyVisits = weeklyVisits;
                 int consumedServiceInputs = ConsumeServiceInputsForVisits(business, profile, ref constrainedWeeklyVisits, blockedReasons);
-                int resolvedDailyVisits = serviceDays > 0 ? Mathf.CeilToInt(constrainedWeeklyVisits / (float)serviceDays) : constrainedWeeklyVisits;
                 int serviceUnitPriceCents = GetServiceVisitPriceCents(business, profile);
-                int serviceRevenueCents = Mathf.RoundToInt(constrainedWeeklyVisits * serviceUnitPriceCents * GetServiceRevenueMultiplier(business.BusinessType));
-                if (constrainedWeeklyVisits > 0 && serviceRevenueCents > 0)
+                // G-07 demand gate: staffed capacity is supply, not revenue.
+                // Visits only become revenue when a household pays for them,
+                // mirroring the doctor path (debit households first). A staffed
+                // business with no household demand earns nothing.
+                int paidVisits = ResolveHouseholdPaidServiceVisits(business, constrainedWeeklyVisits, serviceUnitPriceCents);
+                int lostVisits = Mathf.Max(0, constrainedWeeklyVisits - paidVisits);
+                int serviceRevenueCents = Mathf.RoundToInt(paidVisits * serviceUnitPriceCents * GetServiceRevenueMultiplier(business.BusinessType));
+                if (paidVisits > 0 && serviceRevenueCents > 0)
                 {
-                    runtime.AddWeeklyLocalTransferRevenue(
-                        serviceRevenueCents,
-                        $"served {constrainedWeeklyVisits} weekly visits for {FormatMoney(serviceRevenueCents)}");
+                    runtime.RecordDailyServiceRevenue(
+                        GetFirstCategoryId(profile.ServiceCategoryIds),
+                        paidVisits,
+                        serviceRevenueCents);
+                }
+                if (lostVisits > 0)
+                {
+                    // No buyer, no sale: record the buyerless demand as
+                    // unfulfilled so managers can respond to it, without
+                    // manufacturing revenue (town-pulse retirement pattern).
+                    AppendTransferToOperationSummary(
+                        business,
+                        $"; service demand for {lostVisits} visits unfulfilled (no paying household)");
                 }
 
+                int resolvedDailyVisits = serviceDays > 0 ? Mathf.CeilToInt(paidVisits / (float)serviceDays) : paidVisits;
                 business.ApplyWeeklyOperationResult(0);
                 business.ApplyDailyServiceResult(resolvedDailyVisits);
                 string serviceBlocked = BuildBlockedReason(blockedReasons);
                 string serviceInputs = consumedServiceInputs > 0 ? $"; consumed {consumedServiceInputs} input units" : string.Empty;
                 string serviceCash = serviceRevenueCents > 0 ? $"; revenue {FormatMoney(serviceRevenueCents)}" : "; no service revenue";
-                string serviceSummary = $"{resolvedDailyVisits}/{profile.BaselineDailyServiceCapacity} visits/day, {constrainedWeeklyVisits}/{weeklyVisits} weekly visits{serviceInputs}{serviceCash}";
-                runtime.RecordWeeklyOperation(consumedServiceInputs, constrainedWeeklyVisits, serviceSummary, serviceBlocked);
+                string serviceDemand = lostVisits > 0 ? $"; {lostVisits} visits lost (no paying household)" : string.Empty;
+                string serviceSummary = $"{resolvedDailyVisits}/{profile.BaselineDailyServiceCapacity} visits/day, {paidVisits}/{weeklyVisits} paid weekly visits{serviceInputs}{serviceCash}{serviceDemand}";
+                runtime.RecordWeeklyOperation(consumedServiceInputs, paidVisits, serviceSummary, serviceBlocked);
                 RecordOperationSummary(business, string.IsNullOrWhiteSpace(serviceBlocked)
                     ? serviceSummary
                     : $"{serviceSummary}; blocked: {serviceBlocked}");
-                AppendSummarySegment(summary, $"{BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)} service {constrainedWeeklyVisits} {FormatMoney(serviceRevenueCents)}");
+                AppendSummarySegment(summary, $"{BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)} service {paidVisits} {FormatMoney(serviceRevenueCents)}");
                 return;
             }
 
@@ -4469,6 +4486,91 @@ namespace LandLedgers.Economy
                 ? GetAverageCategoryTransferPriceCents(business, profile, serviceCategoryId)
                 : 0;
             return Mathf.Max(1, price > 1 ? price : GetFallbackServiceVisitPriceCents(business != null ? business.BusinessType : profile.Business.BusinessType));
+        }
+
+        /// <summary>
+        /// G-07: the most visits one household buys from a single service
+        /// business in a week. The cap keeps one wealthy household from
+        /// absorbing a whole town's service capacity, which would distort the
+        /// demand signal the gate is meant to produce.
+        /// </summary>
+        private const int MaxServiceVisitsPerHouseholdPerWeek = 2;
+
+        /// <summary>
+        /// G-07 demand gate: service visits only become revenue when a
+        /// household pays for them. Mirrors the doctor path: each buying
+        /// household is debited first through its household ledger
+        /// (refusal-first, so an unpaid visit is never counted), and the
+        /// legacy spending wallet is the fallback payment source exactly as
+        /// the doctor path treats it. Returns the number of paid visits.
+        /// </summary>
+        private int ResolveHouseholdPaidServiceVisits(
+            BusinessInstanceState business, int requestedVisits, int visitPriceCents)
+        {
+            if (business == null || requestedVisits <= 0 || visitPriceCents <= 0)
+            {
+                return 0;
+            }
+
+            if (populationManager == null
+                || populationManager.State == null
+                || populationManager.State.households == null)
+            {
+                return 0;
+            }
+
+            int remaining = requestedVisits;
+            int paid = 0;
+            int dayIndex = CurrentDayIndex;
+            string serviceName = BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType);
+            List<HouseholdState> households = populationManager.State.households;
+            for (int i = 0; i < households.Count && remaining > 0; i++)
+            {
+                HouseholdState household = households[i];
+                if (household == null)
+                {
+                    continue;
+                }
+
+                HouseholdLedger ledger = HouseholdLedgers != null
+                    ? HouseholdLedgers.GetOrCreate(household.id)
+                    : null;
+                int householdCashCents = ledger != null
+                    ? ledger.GetBalanceCents()
+                    : Mathf.Max(0, household.spendingMoneyCents);
+                if (householdCashCents < visitPriceCents)
+                {
+                    continue;
+                }
+
+                int affordable = Mathf.Min(MaxServiceVisitsPerHouseholdPerWeek, householdCashCents / visitPriceCents);
+                int visits = Mathf.Min(remaining, Mathf.Max(0, affordable));
+                if (visits <= 0)
+                {
+                    continue;
+                }
+
+                int charge = visits * visitPriceCents;
+                string rejection = ledger != null
+                    ? ledger.RecordOutflow(Mathf.Max(0, dayIndex), charge, $"{serviceName} service visits", "service")
+                    : null;
+                if (rejection != null)
+                {
+                    // The ledger refused (insufficient funds): no payment, no
+                    // visit. Nothing moves when the household cannot pay.
+                    continue;
+                }
+
+                if (ledger == null)
+                {
+                    household.spendingMoneyCents = Mathf.Max(0, household.spendingMoneyCents - charge);
+                }
+
+                paid += visits;
+                remaining -= visits;
+            }
+
+            return paid;
         }
 
         private static int GetServiceVisitsPerInputUnit(BusinessType businessType, string categoryId)

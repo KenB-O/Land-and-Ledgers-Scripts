@@ -564,6 +564,9 @@ namespace LandLedgers.Persistence
         public bool sourceCommittedAtSchedule;
         public bool loadApplied;
         public bool deliveryApplied;
+        // G-02 additive: freight revenue collection marker. Legacy saves
+        // without this field restore false (uncollected).
+        public bool freightRevenueCollected;
         public float loadingDurationGameSeconds;
         public float transitDurationGameSeconds;
         public float unloadingDurationGameSeconds;

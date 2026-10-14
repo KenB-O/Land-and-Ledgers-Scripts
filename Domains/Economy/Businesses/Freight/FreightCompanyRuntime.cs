@@ -34,6 +34,13 @@ namespace LandLedgers.Economy.Freight
         public const string UnloadFreightTaskId = "fr.unload-freight";
         public const string RepairWagonTaskId = "fr.repair-wagon";
 
+        /// <summary>
+        /// G-02: revenue category for posted freight charges. Mirrors the
+        /// canonical "freight_service" category used by the shared business
+        /// runtime's LiveryFreight branch.
+        /// </summary>
+        public const string FreightRevenueCategoryId = "freight_service";
+
         [SerializeField]
         private string businessInstanceId = string.Empty;
 
@@ -262,9 +269,64 @@ namespace LandLedgers.Economy.Freight
                 return 0;
             }
 
+            // G-02: idempotent via the collected flag — a second call for the
+            // same shipment finds FreightRevenueCollected and is never
+            // rescanned, so the charge posts exactly once.
+            shipment.freightRevenueCollected = true;
             diagnostics.Add($"Collected {shipment.FreightChargeCents}c freight charge for '{shipmentId}' " +
                 $"from {shipment.FreightPayerBusinessInstanceId} (external payer).");
             return shipment.FreightChargeCents;
+        }
+
+        /// <summary>
+        /// G-02: pure scan for completed-uncollected shipments. No mutation:
+        /// returns the ids of shipments that are Completed with delivery
+        /// applied and whose freight revenue has not been collected. The
+        /// external-payer rule (Canon §3.6) is enforced by
+        /// <see cref="CollectFreightCharge"/>, which yields zero for
+        /// self-payer/missing-payer shipments.
+        /// </summary>
+        public List<string> FindUncollectedFreightChargeShipmentIds()
+        {
+            var ids = new List<string>();
+            if (activeShipments == null)
+                return ids;
+            foreach (LogisticsShipmentState shipment in activeShipments)
+            {
+                if (shipment == null)
+                    continue;
+                if (shipment.Status == LogisticsShipmentStatus.Completed
+                    && shipment.deliveryApplied
+                    && !shipment.FreightRevenueCollected)
+                    ids.Add(shipment.ShipmentId);
+            }
+
+            return ids;
+        }
+
+        /// <summary>
+        /// G-02: revenue collection for the tick — scans for
+        /// completed-uncollected shipments, calls <see cref="CollectFreightCharge"/>,
+        /// and posts positive charges to the business ledger with provenance
+        /// (Canon XIII §13.2). Exactly-once: the collected flag makes
+        /// re-scans yield nothing. Returns total cents posted.
+        /// </summary>
+        public int CollectAndPostUncollectedRevenue(BusinessRuntimeState businessRuntime, List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            int posted = 0;
+            foreach (string shipmentId in FindUncollectedFreightChargeShipmentIds())
+            {
+                int cents = CollectFreightCharge(shipmentId, diagnostics);
+                if (cents <= 0 || businessRuntime == null)
+                    continue;
+                businessRuntime.RecordDailyServiceRevenue(FreightRevenueCategoryId, 1, cents);
+                posted += cents;
+                diagnostics.Add($"FreightCompanyRuntime: {cents}c freight revenue posted to {businessInstanceId} " +
+                    $"(provenance: freight charge, shipment '{shipmentId}').");
+            }
+
+            return posted;
         }
 
         /// <summary>

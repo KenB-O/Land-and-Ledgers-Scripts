@@ -6,6 +6,7 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
@@ -1056,6 +1057,9 @@ namespace LandLedgers.Orchestration.Systems
             hub.Postal.AdvanceDay(hub.Journeys, absoluteDayIndex, diag);
             hub.MoneyOrders.AdvanceDay(absoluteDayIndex, diag);
             hub.RegisteredMail.AuditOverdue(absoluteDayIndex, diag);
+            // G-02: postal revenue collection — earned postage reaches the
+            // owning office business's ledger.
+            DrivePostalRevenue(absoluteDayIndex);
 
             // T2B: open efforts accrue inquiries from real persons; letters
             // resolve — postal-routed ones only when the mail item really
@@ -1064,6 +1068,61 @@ namespace LandLedgers.Orchestration.Systems
             {
                 hub.Recruiting.AdvanceDay(
                     populationManager.State, hub.Employments, absoluteDayIndex, diag, hub.Postal);
+            }
+        }
+
+        /// <summary>
+        /// G-02: postal revenue collection — scans the post office's uncollected
+        /// postage and posts it to the owning office business's ledger with
+        /// provenance (Canon XIII §13.2). The pot drains only when the owning
+        /// business runtime resolves; otherwise it is left intact — never
+        /// lost, never manufactured.
+        ///
+        /// Freight note: FreightCompanyRuntime's scan/collect/post path is
+        /// implemented and tested on the runtime, but freight companies have
+        /// no production instances yet (DeliveryService.DispatchViaFreightCompany
+        /// documents the live-instance gap as scene work), so there is nothing
+        /// to drive here today — and nothing is faked.
+        /// </summary>
+        private void DrivePostalRevenue(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            PostalService postal = hub.Postal;
+            int uncollected = postal.FindUncollectedPostageCents();
+            if (uncollected <= 0) return;
+
+            BusinessRuntimeState officeRuntime = null;
+            foreach (PostalOffice office in postal.Offices)
+            {
+                if (office == null || string.IsNullOrWhiteSpace(office.BusinessInstanceId)) continue;
+                foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                {
+                    if (business != null && string.Equals(business.InstanceId,
+                        office.BusinessInstanceId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        officeRuntime = business.RuntimeState;
+                        break;
+                    }
+                }
+
+                break; // the first office owns the service-wide pot
+            }
+
+            var diag = new List<string>();
+            if (officeRuntime == null)
+            {
+                diag.Add($"Postal revenue: {uncollected}c uncollected but no owning office business " +
+                    "runtime resolved — pot left intact, never drained blind.");
+            }
+            else
+            {
+                postal.CollectAndPostPostageRevenue(officeRuntime, diag);
+            }
+
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] postal revenue day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
             }
         }
 

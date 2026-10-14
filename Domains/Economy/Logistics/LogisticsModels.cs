@@ -108,6 +108,11 @@ namespace LandLedgers.Economy
         [SerializeField] public bool sourceCommittedAtSchedule;
         [SerializeField] public bool loadApplied;
         [SerializeField] public bool deliveryApplied;
+        // G-02 additive: freight revenue collection marker. Set when
+        // FreightCompanyRuntime.CollectFreightCharge returns a positive
+        // charge; the revenue scan is idempotent via this flag. Legacy saves
+        // read false (uncollected).
+        [SerializeField] public bool freightRevenueCollected;
         [SerializeField] public float loadingDurationGameSeconds = 30f;
         [SerializeField] public float transitDurationGameSeconds = 120f;
         [SerializeField] public float unloadingDurationGameSeconds = 30f;
@@ -134,6 +139,8 @@ namespace LandLedgers.Economy
         public int RemainingQuantityUnits => Mathf.Max(0, remainingQuantityUnits);
         public int DeliveredQuantityUnits => Mathf.Max(0, deliveredQuantityUnits);
         public int FreightChargeCents => Mathf.Max(0, freightChargeCents);
+        /// <summary>G-02: true once the freight charge was collected (idempotent revenue).</summary>
+        public bool FreightRevenueCollected => freightRevenueCollected;
         public float EstimatedRemainingGameSeconds => Mathf.Max(0f, ResolveCurrentStageDuration() - stageElapsedGameSeconds);
 
         /// <summary>
@@ -243,6 +250,7 @@ namespace LandLedgers.Economy
                 sourceCommittedAtSchedule = sourceCommittedAtSchedule,
                 loadApplied = loadApplied,
                 deliveryApplied = deliveryApplied,
+                freightRevenueCollected = freightRevenueCollected,
                 loadingDurationGameSeconds = Mathf.Max(0f, loadingDurationGameSeconds),
                 transitDurationGameSeconds = Mathf.Max(0f, transitDurationGameSeconds),
                 unloadingDurationGameSeconds = Mathf.Max(0f, unloadingDurationGameSeconds),
@@ -294,6 +302,7 @@ namespace LandLedgers.Economy
             state.sourceCommittedAtSchedule = dto.sourceCommittedAtSchedule;
             state.loadApplied = dto.loadApplied;
             state.deliveryApplied = dto.deliveryApplied;
+            state.freightRevenueCollected = dto.freightRevenueCollected;
             state.loadingDurationGameSeconds = Mathf.Max(0f, dto.loadingDurationGameSeconds);
             state.transitDurationGameSeconds = Mathf.Max(0f, dto.transitDurationGameSeconds);
             state.unloadingDurationGameSeconds = Mathf.Max(0f, dto.unloadingDurationGameSeconds);

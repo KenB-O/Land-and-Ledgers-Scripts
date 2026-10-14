@@ -151,6 +151,13 @@ namespace LandLedgers.Economy.Postal
         public const string DispatchPouchTaskId = "postal.dispatch-pouch";
         public const string DeliverLocalMailTaskId = "postal.deliver-local-mail";
 
+        /// <summary>
+        /// G-02: revenue category for posted postage. The shared business
+        /// runtime has no canonical postal category; this is the posting
+        /// category used by the revenue collection path.
+        /// </summary>
+        public const string PostageRevenueCategoryId = "postal_service";
+
         private readonly Dictionary<string, PostalOffice> offices =
             new Dictionary<string, PostalOffice>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, MailItem> mail =
@@ -187,6 +194,32 @@ namespace LandLedgers.Economy.Postal
         public IReadOnlyCollection<MailItem> MailItems => mail.Values;
         public IReadOnlyCollection<PostalContract> Contracts => contracts.Values;
         public int UncollectedPostageCents => Math.Max(0, uncollectedPostageCents);
+
+        /// <summary>
+        /// G-02: pure scan for uncollected postage revenue. Returns the
+        /// accrued cents (0 = nothing to collect). Never mutates — the drain
+        /// happens exactly once in <see cref="CollectPostageRevenue"/>.
+        /// </summary>
+        public int FindUncollectedPostageCents() => Math.Max(0, uncollectedPostageCents);
+
+        /// <summary>
+        /// G-02: revenue collection for the tick — calls
+        /// <see cref="CollectPostageRevenue"/> and posts the released postage
+        /// to the business ledger with provenance (Canon XIII §13.2).
+        /// Exactly-once: the pot drains on collect, so re-scans yield
+        /// nothing. Returns total cents posted.
+        /// </summary>
+        public int CollectAndPostPostageRevenue(BusinessRuntimeState businessRuntime, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            int cents = CollectPostageRevenue(diag);
+            if (cents <= 0 || businessRuntime == null)
+                return 0;
+            businessRuntime.RecordDailyServiceRevenue(PostageRevenueCategoryId, 1, cents);
+            diag.Add($"PostalService: {cents}c postage revenue posted to the post office business ledger " +
+                "(provenance: postage).");
+            return cents;
+        }
 
         /// <summary>Registers a post office with its departure schedule.</summary>
         public string RegisterOffice(

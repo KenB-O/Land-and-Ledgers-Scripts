@@ -1146,6 +1146,39 @@ namespace LandLedgers.Orchestration.Systems
                             assetSaleService.EvaluateSaleableValue(householdId, null),
                     }, diag);
             }
+            // Pass VIII Worker 7: close the decision→work loop. SeekIncome
+            // discoveries land in the opportunity log; this turns unpursued
+            // entries into real person-initiated applications wherever a
+            // hiring effort is genuinely open. No open effort, no
+            // application — the entry waits.
+            DriveOpportunityPursuit(absoluteDayIndex, diag);
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 7: daily opportunity pursuit for every household.
+        /// </summary>
+        private void DriveOpportunityPursuit(int absoluteDayIndex, List<string> diag)
+        {
+            if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            var pursuit = new OpportunityPursuitService();
+            var ctx = new OpportunityPursuitService.PursuitContext
+            {
+                OpportunityLog = hub.HouseholdDecisionDriver.OpportunityLog,
+                Memberships = householdMemberships,
+                Population = populationManager.State,
+                Employments = hub.Employments,
+                Recruitment = hub.Recruiting,
+            };
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                int filed = pursuit.PursueForHousehold(household.id, absoluteDayIndex, ctx, diag);
+                if (filed > 0)
+                {
+                    Debug.Log($"[SimulationDrivers] opportunity pursuit day {absoluteDayIndex}: " +
+                        $"H{household.id} filed {filed} job application(s).");
+                }
+            }
         }
 
         /// <summary>
@@ -1244,6 +1277,9 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             ConfigureManagerExecution();
+            // Pass VIII Worker 7: the dead are never offered work. The seam
+            // sits in the task authority so every assignment path is covered.
+            EnsureWorkerAvailabilitySeam();
             var diagnostics = new List<string>();
             hub.ManagerDecisionExecution.AdvanceShipments(absoluteDayIndex, diagnostics);
             // Pass VIII (6.3): service the production business loans — real
@@ -1421,9 +1457,34 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        /// <summary>
+        /// Pass VIII Worker 7: installs the worker-availability seam on the
+        /// hub task authority (idempotent). A dead person is never offered
+        /// work at assignment or start, no matter which caller forgot to check.
+        /// </summary>
+        private void EnsureWorkerAvailabilitySeam()
+        {
+            if (hub == null || hub.Tasks == null) return;
+            hub.Tasks.IsWorkerUnavailable = worker =>
+            {
+                if (worker.Kind != LandLedgers.Primitives.EntityKind.Person) return false;
+                if (populationManager?.State == null) return false;
+                PersonState person = populationManager.State.GetPerson(worker.Id);
+                return person != null && person.deathDayIndex >= 0;
+            };
+        }
+
         private void AddLaborWorker(int personId, HashSet<int> seen, List<SchedulerAvailableWorker> workers, int dayIndex)
         {
             if (personId < 0 || !seen.Add(personId)) return;
+            // Pass VIII Worker 7: the dead are never scheduled — not through
+            // employment records (ended at death) and not through the owner
+            // path below.
+            if (populationManager?.State != null)
+            {
+                PersonState person = populationManager.State.GetPerson(personId);
+                if (person != null && person.deathDayIndex >= 0) return;
+            }
             EntityId personEntity = EntityId.For(EntityKind.Person, personId);
             WorkTimeBudget budget = hub.WorkTimeBudgets.GetOrCreate(personEntity);
             int availableMinutes = budget.MinutesRemaining;

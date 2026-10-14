@@ -98,6 +98,8 @@ namespace LandLedgers.Orchestration.Systems
         private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
+        // G-01: weekly source-side driver for NPC business lifecycles (owned by the driver).
+        private NpcBusinessLifecycleDriver npcBusinessLifecycleDriver;
 
         /// <summary>
         /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
@@ -539,6 +541,9 @@ namespace LandLedgers.Orchestration.Systems
             // Pass V P2-3: autonomous entrepreneurship — observation to
             // formation, no quotas.
             DriveEntrepreneurshipWeek(absoluteDayIndex);
+            // G-01: NPC business lifecycles — weekly struggle/respond/pivot
+            // evaluation for every live NPC-founded business.
+            DriveNpcBusinessLifecycleWeek(absoluteDayIndex);
         }
 
         /// <summary>
@@ -597,6 +602,74 @@ namespace LandLedgers.Orchestration.Systems
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] entrepreneurship week " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        /// <summary>
+        /// G-01: runs the NPC business lifecycle driver once per week, beside
+        /// the entrepreneurship drive. Sources a life record for every live
+        /// NPC-founded business, builds the NpcLifecycleContext from hub
+        /// authorities (real business cash via NpcBusinessRuntimeCashPort,
+        /// obligations, employments, founder ledgers, formation assets, event
+        /// log, ids, creditor cash bridge), and evaluates with the shared
+        /// calibrated survival reserve per business (payroll + reorder based;
+        /// the driver's per-type table is the fallback). Struggling
+        /// businesses cut costs and seek customers with real money; the
+        /// credit-loop borrow context stays null in this pass.
+        /// </summary>
+        private void DriveNpcBusinessLifecycleWeek(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            npcBusinessLifecycleDriver ??= new NpcBusinessLifecycleDriver();
+
+            var businesses = new List<NpcBusinessLifecycleDriver.NpcLifecycleBusinessInfo>();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || business.Owner == null
+                    || business.Owner.OwnerKind != BusinessOwnerKind.Npc)
+                    continue;
+                businesses.Add(new NpcBusinessLifecycleDriver.NpcLifecycleBusinessInfo
+                {
+                    BusinessInstanceId = business.InstanceId,
+                    BusinessType = business.BusinessType,
+                    OwnerPersonId = business.Owner.PersonId,
+                    OwnerName = business.Owner.DisplayName,
+                    Business = business,
+                });
+            }
+
+            var diag = new List<string>();
+            npcBusinessLifecycleDriver.EvaluateWeek(
+                new NpcBusinessLifecycleDriver.LifecycleDriverContext
+                {
+                    LifeRecords = hub.NpcBusinessLifeRecords,
+                    NpcBusinesses = businesses,
+                    Cash = new NpcBusinessRuntimeCashPort(sharedBusinessRuntime),
+                    Obligations = hub.FinancialObligations,
+                    Employments = hub.Employments,
+                    FounderLedgerByPersonId = personId =>
+                    {
+                        int householdId = ResolvePersonHouseholdId(personId);
+                        return householdId >= 0 ? hub.HouseholdLedgers.GetOrCreate(householdId) : null;
+                    },
+                    AssetRegister = hub.NpcFormationAssets,
+                    Liquidation = null, // no production liquidation port; EvaluateWeek does not need it
+                    Events = hub.NpcBusinessEvents,
+                    Ids = hub.Ids,
+                    CreditorCash = hub.CreditCash,
+                    // Sane per-business-type tuning: the shared calibrated
+                    // reserve (weekly payroll + reorder buffer + fragility
+                    // padding), falling back to the driver's table.
+                    SurvivalReserveCents = info => info?.Business != null
+                        ? SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(info.Business)
+                        : NpcBusinessLifecycleDriver.DefaultSurvivalReserveCents(
+                            info != null ? info.BusinessType : BusinessType.Generic),
+                    DayIndex = absoluteDayIndex,
+                }, diag);
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] npc business lifecycle week " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
         }

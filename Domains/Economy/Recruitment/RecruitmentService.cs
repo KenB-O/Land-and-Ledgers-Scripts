@@ -623,6 +623,112 @@ namespace LandLedgers.Economy.Recruitment
         }
 
         /// <summary>
+        /// Pass VIII Worker 7: open (not closed) hiring efforts for one
+        /// business, oldest first. Read-only: the opportunity-pursuit path
+        /// uses this to find where a person who heard of work can apply.
+        /// </summary>
+        public List<RecruitmentEffort> OpenEffortsForBusiness(string businessInstanceId)
+        {
+            var open = new List<RecruitmentEffort>();
+            if (string.IsNullOrWhiteSpace(businessInstanceId))
+            {
+                return open;
+            }
+            foreach (RecruitmentEffort effort in efforts.Values)
+            {
+                if (effort == null || effort.Closed)
+                {
+                    continue;
+                }
+                if (string.Equals(effort.BusinessInstanceId, businessInstanceId, StringComparison.Ordinal))
+                {
+                    open.Add(effort);
+                }
+            }
+            open.Sort((a, b) => a.OpenedDayIndex.CompareTo(b.OpenedDayIndex));
+            return open;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 7: a PERSON-initiated job application. The mirror
+        /// of DirectApproach: instead of the employer approaching a candidate,
+        /// a person who legitimately heard of an opening (a SeekIncome
+        /// discovery through their documented contacts) applies to it.
+        ///
+        /// Eligibility mirrors DirectApproach exactly: a real, living adult
+        /// with labor access who is not already employed. The application
+        /// creates an inquiry — never an employment: hiring stays the
+        /// employer's decision through HireFromInquiry. No open effort, no
+        /// application (nothing is invented for the applicant to join).
+        /// </summary>
+        public CandidateInquiry ApplyForOpening(
+            string effortId, int personId,
+            PopulationState population, EmploymentRelationshipRegistry employment,
+            int dayIndex, string provenance, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!efforts.TryGetValue(effortId, out RecruitmentEffort effort) || effort.Closed)
+            {
+                diag.Add("RecruitmentService.ApplyForOpening: unknown or closed effort.");
+                return null;
+            }
+            PersonState person = population?.GetPerson(personId);
+            if (person == null)
+            {
+                diag.Add($"RecruitmentService.ApplyForOpening: P{personId} is not a known person.");
+                return null;
+            }
+            if (person.ageBand != AgeBand.Adult18Plus || person.laborAccessLevel == LaborAccessLevel.None)
+            {
+                diag.Add($"RecruitmentService.ApplyForOpening: P{personId} cannot take the role.");
+                return null;
+            }
+            if (person.deathDayIndex >= 0)
+            {
+                diag.Add($"RecruitmentService.ApplyForOpening: P{personId} is deceased.");
+                return null;
+            }
+            if (employment != null)
+            {
+                foreach (EmploymentRelationship rel in employment.GetActiveByEmployee(personId))
+                {
+                    diag.Add($"RecruitmentService.ApplyForOpening: P{personId} is already employed — " +
+                        "no application while holding a job.");
+                    return null;
+                }
+            }
+            // One open application per person per effort: re-applying to the
+            // same opening the household already pursued is noise, not search.
+            foreach (CandidateInquiry existing in inquiries.Values)
+            {
+                if (existing != null
+                    && string.Equals(existing.EffortId, effortId, StringComparison.Ordinal)
+                    && existing.PersonId == personId
+                    && existing.Status == InquiryStatus.Open)
+                {
+                    diag.Add($"RecruitmentService.ApplyForOpening: P{personId} already has an open " +
+                        $"application for effort '{effortId}'.");
+                    return null;
+                }
+            }
+            var inquiry = new CandidateInquiry
+            {
+                InquiryId = $"inq-{effortId}-apply-{personId}-{dayIndex}",
+                EffortId = effortId,
+                PersonId = personId,
+                ReceivedDayIndex = dayIndex,
+                HowHeard = string.IsNullOrWhiteSpace(provenance)
+                    ? "heard of the opening"
+                    : provenance,
+                Note = $"application by {person.firstName} {person.lastName}",
+            };
+            inquiries[inquiry.InquiryId] = inquiry;
+            diag.Add($"RecruitmentService: P{personId} applied to '{effort.RoleDisplayName}' " +
+                $"at {effort.BusinessInstanceId} ({inquiry.HowHeard}).");
+            return inquiry;
+        }
+
+        /// <summary>
         /// P6: captures open efforts, inquiries, and in-flight letters for the
         /// save pipeline (CLN-1 pattern) — an effort's seeded inquiry stream
         /// and its unresolved letters survive save/load.

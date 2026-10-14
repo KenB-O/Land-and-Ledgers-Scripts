@@ -138,6 +138,16 @@ namespace LandLedgers.Time
             return null;
         }
 
+        /// <summary>
+        /// G-05: purges every scheduled event (New Game / Restart). Sequence
+        /// restarts at 0, matching <see cref="LoadFromSaveDto"/> clear-then-load.
+        /// </summary>
+        public void Clear()
+        {
+            events.Clear();
+            nextSequence = 0;
+        }
+
         /// <summary>Save: captures the pending event queue (owning runtime class holds its DTO).</summary>
         public SimpleDueEventSchedulerSaveDto CaptureSaveDto()
         {

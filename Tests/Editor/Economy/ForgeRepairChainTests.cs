@@ -45,6 +45,12 @@ namespace LandLedgers.Editor.Economy
 
             public void Cancel(string eventId) => events.RemoveAll(e => e.EventId == eventId);
             public void CancelForPayload(string payloadRef) => events.RemoveAll(e => e.PayloadRef == payloadRef);
+
+            public void Clear()
+            {
+                events.Clear();
+                sequence = 0;
+            }
             public List<DueEvent> PopDue(float currentGameSeconds)
             {
                 var popped = events.FindAll(e => e.DueGameSeconds <= currentGameSeconds);

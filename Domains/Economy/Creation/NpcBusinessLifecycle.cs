@@ -206,6 +206,14 @@ namespace LandLedgers.Economy.Creation
         public NpcBusinessEventLog Events;
         public EntityIdRegistry Ids;
         public int DayIndex;
+        /// <summary>
+        /// Pass VIII circulation: optional bridge to the creditors' real cash
+        /// stores. When set, close-down settlements credit the creditor's
+        /// store as well as reducing the debt, so repayment conserves cash
+        /// across the boundary. When null or the creditor has no registered
+        /// store, the debt reduction stands and the gap is logged explicitly.
+        /// </summary>
+        public CreditCashBridge CreditorCash;
     }
 
     /// <summary>
@@ -551,10 +559,18 @@ namespace LandLedgers.Economy.Creation
                                 $"close-down:{record.BusinessInstanceId}");
                             if (paymentRecord != null)
                             {
-                                result.CashPaidToCreditorsCents += payment;
+                                result.CashPaidToCreditorsCents += paymentRecord.AmountCents;
+                                // Pass VIII circulation: the creditor's cash
+                                // store receives the payment too — repayment
+                                // conserves cash across the boundary instead
+                                // of destroying it on the creditor's books.
+                                string creditNote = CreditCreditorCash(context, obligationId,
+                                    obligation.Creditor, debtorName, paymentRecord.AmountCents,
+                                    day, diagnostics,
+                                    $"close-down settlement of obligation '{obligationId}'");
                                 context.Events?.Record(day, NpcBusinessEventKind.ObligationSettled,
                                     record.FounderPersonId, record.BusinessInstanceId,
-                                    $"close-down: paid {payment}c on obligation '{obligationId}' to '{obligation.Creditor}'.");
+                                    $"close-down: paid {paymentRecord.AmountCents}c on obligation '{obligationId}' to '{obligation.Creditor}'{creditNote}.");
                             }
                         }
                         else
@@ -680,6 +696,49 @@ namespace LandLedgers.Economy.Creation
             diagnostics.Add($"{record.BusinessInstanceId} closed: settled {result.ObligationsSettled.Count}, " +
                 $"assumed {result.ObligationsAssumed.Count}, liquidated {result.AssetsLiquidated}, staff released {result.StaffReleased}.");
             return result;
+        }
+
+        /// <summary>
+        /// Pass VIII circulation: routes a close-down settlement payment to
+        /// the creditor's real cash store when one is registered on the
+        /// context's creditor bridge. Returns the event-log suffix describing
+        /// the outcome. A missing bridge or unregistered creditor is logged
+        /// explicitly — the debt reduction stands, and the unmodeled
+        /// creditor-side receipt is named rather than silent.
+        /// </summary>
+        private static string CreditCreditorCash(
+            NpcLifecycleContext context,
+            string obligationId,
+            string creditorName,
+            string debtorName,
+            int amountCents,
+            int dayIndex,
+            List<string> diagnostics,
+            string reason)
+        {
+            if (context == null || context.CreditorCash == null)
+            {
+                diagnostics?.Add($"close-down: no creditor cash bridge — {amountCents}c settlement on '{obligationId}' " +
+                    $"reduced the debt to '{creditorName}'; the creditor-side cash receipt is unmodeled.");
+                return "; creditor cash receipt unmodeled (no bridge)";
+            }
+
+            IRealCashStore store = context.CreditorCash.FindStore(creditorName);
+            if (store == null)
+            {
+                diagnostics?.Add($"close-down: creditor '{creditorName}' has no registered cash store — {amountCents}c " +
+                    $"settlement on '{obligationId}' reduced the debt; the creditor-side cash receipt is unmodeled for this creditor.");
+                return $"; creditor '{creditorName}' has no registered cash store";
+            }
+
+            string refusal = store.CreditCents(dayIndex, amountCents, "DebtRepayment", obligationId, reason, debtorName);
+            if (refusal != null)
+            {
+                diagnostics?.Add($"close-down: creditor '{creditorName}' refused the {amountCents}c settlement credit — {refusal}");
+                return $"; creditor cash credit refused: {refusal}";
+            }
+
+            return $"; creditor cash received ({store.ReadBalanceCents()}c now held)";
         }
 
         /// <summary>

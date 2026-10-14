@@ -22,6 +22,9 @@ namespace LandLedgers.Population
         BoardingIncome = 9, // boarder/lodging payments received
         ServiceIncome = 10, // contract/service work settlement via agreement
         OtherDocumented = 11, // must still carry a reason
+        // Pass VIII circulation: commercial rent received (business premises,
+        // workshops). Appended — never renumber.
+        CommercialRentReceived = 12,
     }
 
     /// <summary>One household cash movement. Inflows always carry source + reason.</summary>

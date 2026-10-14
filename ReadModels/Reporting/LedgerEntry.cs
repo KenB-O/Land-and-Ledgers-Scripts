@@ -9,7 +9,11 @@ namespace LandLedgers.Reporting
         Expense = 1,
         InventoryAdjustment = 2,
         CashAdjustment = 3,
-        Informational = 4
+        Informational = 4,
+        // Pass VIII circulation: owner financing flows (capital injections,
+        // owner draws, inter-owner transfers) are neither operating revenue
+        // nor operating expense. Appended — never renumber.
+        Financing = 5
     }
 
     public enum LedgerEntryCategory

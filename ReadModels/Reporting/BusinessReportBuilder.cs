@@ -168,10 +168,11 @@ namespace LandLedgers.Reporting
                 }
             }
 
+            summary.financial.knownOperatingExpenseCents = SumKnownOperatingExpenses(summary.financial);
             summary.financial.knownExpenseCents = SumKnownExpenses(summary.financial);
             summary.financial.netCashChangeCents = SubtractCents(summary.financial.closingCashCents, summary.financial.openingCashCents);
-            summary.financial.knownProfitProxyCents = SubtractCents(AddCents(summary.financial.revenueCents, summary.financial.cashTransferInCents), summary.financial.knownExpenseCents);
-            summary.financial.unknownExpenseCents = Math.Max(0, SubtractCents(summary.financial.knownProfitProxyCents, summary.financial.netCashChangeCents));
+            summary.financial.knownProfitProxyCents = SubtractCents(summary.financial.revenueCents, summary.financial.knownOperatingExpenseCents);
+            summary.financial.unknownExpenseCents = Math.Max(0, SubtractCents(ExplainedCashChangeCents(summary.financial), summary.financial.netCashChangeCents));
             summary.financial.survivalReserveCents = last.financial.survivalReserveCents;
             summary.financial.cashRunwayWeeks = last.financial.cashRunwayWeeks;
             summary.financial.primaryBlockedReason = last.financial.primaryBlockedReason;
@@ -232,10 +233,17 @@ namespace LandLedgers.Reporting
             financial.cashTransferInCents = Math.Max(0, snapshot.cashTransferInCents);
             financial.cashTransferOutCents = Math.Max(0, snapshot.cashTransferOutCents);
             financial.otherExpenseCents = Math.Max(0, snapshot.otherExpenseCents);
+            // Pass VIII circulation: the profit proxy is OPERATING profit only
+            // (revenue minus operating expense). Owner cash transfers in are
+            // financing inflows, not revenue; owner draws and transfers out are
+            // financing outflows, not operating expense. A business may now
+            // read profitable (positive proxy) while cash-short (negative cash
+            // change) — the distinction the old formula collapsed.
+            financial.knownOperatingExpenseCents = SumKnownOperatingExpenses(financial);
             financial.knownExpenseCents = SumKnownExpenses(financial);
             financial.netCashChangeCents = SubtractCents(financial.closingCashCents, financial.openingCashCents);
-            financial.knownProfitProxyCents = SubtractCents(AddCents(financial.revenueCents, financial.cashTransferInCents), financial.knownExpenseCents);
-            financial.unknownExpenseCents = Math.Max(0, SubtractCents(financial.knownProfitProxyCents, financial.netCashChangeCents));
+            financial.knownProfitProxyCents = SubtractCents(financial.revenueCents, financial.knownOperatingExpenseCents);
+            financial.unknownExpenseCents = Math.Max(0, SubtractCents(ExplainedCashChangeCents(financial), financial.netCashChangeCents));
             financial.survivalReserveCents = Math.Max(0, snapshot.survivalReserveCents);
             financial.cashRunwayWeeks = snapshot.cashRunwayWeeks > 0 ? snapshot.cashRunwayWeeks : EstimateCashRunwayWeeks(financial);
             financial.primaryBlockedReason = snapshot.primaryBlockedReason ?? string.Empty;
@@ -556,9 +564,9 @@ namespace LandLedgers.Reporting
             AddLedgerEntry(entries, snapshot, cadence, "payroll", LedgerEntryKind.Expense, LedgerEntryCategory.Payroll, -Math.Max(0, snapshot.payrollExpenseCents), 0, string.Empty, $"{cadence} payroll summary");
             AddLedgerEntry(entries, snapshot, cadence, "reorder", LedgerEntryKind.Expense, LedgerEntryCategory.Reorder, -Math.Max(0, snapshot.reorderExpenseCents), Math.Max(0, snapshot.reorderUnitsReceived), "units", $"{cadence} reorder spend summary");
             AddLedgerEntry(entries, snapshot, cadence, "local_supply", LedgerEntryKind.Expense, LedgerEntryCategory.Reorder, -Math.Max(0, snapshot.localSupplyExpenseCents), 0, string.Empty, $"{cadence} local supply spend summary");
-            AddLedgerEntry(entries, snapshot, cadence, "owner_draw", LedgerEntryKind.Expense, LedgerEntryCategory.Other, -Math.Max(0, snapshot.ownerDistributionCents), 0, string.Empty, $"{cadence} owner draw summary");
-            AddLedgerEntry(entries, snapshot, cadence, "cash_transfer_in", LedgerEntryKind.Revenue, LedgerEntryCategory.Other, Math.Max(0, snapshot.cashTransferInCents), 0, string.Empty, $"{cadence} owner cash transfer in summary");
-            AddLedgerEntry(entries, snapshot, cadence, "cash_transfer_out", LedgerEntryKind.Expense, LedgerEntryCategory.Other, -Math.Max(0, snapshot.cashTransferOutCents), 0, string.Empty, $"{cadence} owner cash transfer out summary");
+            AddLedgerEntry(entries, snapshot, cadence, "owner_draw", LedgerEntryKind.Financing, LedgerEntryCategory.Other, -Math.Max(0, snapshot.ownerDistributionCents), 0, string.Empty, $"{cadence} owner draw summary");
+            AddLedgerEntry(entries, snapshot, cadence, "cash_transfer_in", LedgerEntryKind.Financing, LedgerEntryCategory.Other, Math.Max(0, snapshot.cashTransferInCents), 0, string.Empty, $"{cadence} owner cash transfer in summary");
+            AddLedgerEntry(entries, snapshot, cadence, "cash_transfer_out", LedgerEntryKind.Financing, LedgerEntryCategory.Other, -Math.Max(0, snapshot.cashTransferOutCents), 0, string.Empty, $"{cadence} owner cash transfer out summary");
         }
 
         private static void AddLedgerEntry(
@@ -1004,19 +1012,46 @@ namespace LandLedgers.Reporting
         internal static int SumKnownExpenses(BusinessFinancialRollup financial)
         {
             return AddCents(
+                SumKnownOperatingExpenses(financial),
+                AddCents(Math.Max(0, financial.ownerDistributionCents), Math.Max(0, financial.cashTransferOutCents)));
+        }
+
+        /// <summary>
+        /// Pass VIII circulation: operating-only expenses. Owner distributions
+        /// and owner cash transfers are financing flows — they move cash but
+        /// are not operating profit or operating expense, so they are excluded
+        /// from the operating-expense total used by the profit proxy and the
+        /// runway estimate.
+        /// </summary>
+        internal static int SumKnownOperatingExpenses(BusinessFinancialRollup financial)
+        {
+            return AddCents(
                 AddCents(
-                    AddCents(
-                        AddCents(Math.Max(0, financial.costOfGoodsSoldCents), Math.Max(0, financial.payrollExpenseCents)),
-                        Math.Max(0, financial.reorderExpenseCents)),
-                    Math.Max(0, financial.localSupplyExpenseCents)),
-                AddCents(
-                    AddCents(Math.Max(0, financial.ownerDistributionCents), Math.Max(0, financial.cashTransferOutCents)),
-                    Math.Max(0, financial.otherExpenseCents)));
+                    AddCents(Math.Max(0, financial.costOfGoodsSoldCents), Math.Max(0, financial.payrollExpenseCents)),
+                    Math.Max(0, financial.reorderExpenseCents)),
+                AddCents(Math.Max(0, financial.localSupplyExpenseCents), Math.Max(0, financial.otherExpenseCents)));
+        }
+
+        /// <summary>
+        /// Pass VIII circulation: the cash-flow bridge with operating and
+        /// financing flows separated. Operating profit (revenue minus operating
+        /// expense) plus net owner financing minus the unexplained plug equals
+        /// the observed cash change.
+        /// </summary>
+        internal static int ExplainedCashChangeCents(BusinessFinancialRollup financial)
+        {
+            int operatingAndFinancingIn = AddCents(financial.knownProfitProxyCents, Math.Max(0, financial.cashTransferInCents));
+            int financingOut = AddCents(Math.Max(0, financial.cashTransferOutCents), Math.Max(0, financial.ownerDistributionCents));
+            return SubtractCents(operatingAndFinancingIn, financingOut);
         }
 
         internal static int EstimateCashRunwayWeeks(BusinessFinancialRollup financial)
         {
-            int weeklyBurn = Math.Max(0, financial.knownExpenseCents - financial.revenueCents - financial.cashTransferInCents);
+            // Pass VIII circulation: runway is OPERATING runway — revenue
+            // against operating expense only. Owner financing inflows are
+            // excluded so a business kept alive by owner top-ups still shows
+            // its real operating burn instead of an infinite runway.
+            int weeklyBurn = Math.Max(0, financial.knownOperatingExpenseCents - financial.revenueCents);
             if (weeklyBurn <= 0)
             {
                 return 99;
@@ -1033,7 +1068,7 @@ namespace LandLedgers.Reporting
                 return string.Empty;
             }
 
-            return $"Cash changed because: sales {FormatMoney(financial.revenueCents)}, COGS {FormatMoney(financial.costOfGoodsSoldCents)}, payroll {FormatMoney(financial.payrollExpenseCents)}, stock buys {FormatMoney(AddCents(financial.reorderExpenseCents, financial.localSupplyExpenseCents))}, owner draw {FormatMoney(financial.ownerDistributionCents)}, transfers {FormatSignedMoney(SubtractCents(financial.cashTransferInCents, financial.cashTransferOutCents))}.";
+            return $"Cash changed because: sales {FormatMoney(financial.revenueCents)}, COGS {FormatMoney(financial.costOfGoodsSoldCents)}, payroll {FormatMoney(financial.payrollExpenseCents)}, stock buys {FormatMoney(AddCents(financial.reorderExpenseCents, financial.localSupplyExpenseCents))}, owner draw {FormatMoney(financial.ownerDistributionCents)}, owner financing {FormatSignedMoney(SubtractCents(financial.cashTransferInCents, financial.cashTransferOutCents))}.";
         }
 
         internal static string FormatMoney(int cents)

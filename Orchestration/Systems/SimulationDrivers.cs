@@ -1598,10 +1598,53 @@ namespace LandLedgers.Orchestration.Systems
                 StartAssignedBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
             }
 
+            // G-06: NPC-owner auto-resolution for escalated manager requests —
+            // borrow routed to lender underwriting, asset sales per the
+            // distress-sale policy. Player-owned requests stay pending.
+            DriveNpcOwnerRequestResolution(absoluteDayIndex, diagnostics);
+
             if (diagnostics.Count > 0)
             {
                 Debug.LogWarning("[SimulationDrivers] autonomous labor: " + string.Join(" | ", diagnostics));
             }
+        }
+
+        /// <summary>
+        /// G-06: NPC-owner auto-resolution for manager pending requests.
+        /// Runs after the day's manager decisions execute: escalated Borrow
+        /// requests go to BusinessLenderService underwriting instead of
+        /// stalling, and SellAsset requests resolve per the distress-sale
+        /// policy (approve only when cash is below the survival reserve and
+        /// the price meets the appraisal). Player-owned businesses keep
+        /// their requests pending for the future UI. No production appraisal
+        /// exists for unnamed-asset sales, so those deny loudly with reason
+        /// rather than approving blind.
+        /// </summary>
+        private void DriveNpcOwnerRequestResolution(int absoluteDayIndex, List<string> diagnostics)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            if (hub.ManagerDecisionExecution == null || !hub.ManagerDecisionExecution.IsConfigured) return;
+
+            var resolver = new NpcOwnerRequestResolver();
+            var diag = new List<string>();
+            resolver.ResolvePending(
+                new NpcOwnerRequestResolver.OwnerResolutionContext
+                {
+                    Ledger = hub.ManagerDecisionExecution.Ledger,
+                    FindBusiness = id =>
+                    {
+                        BusinessInstanceState found;
+                        return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found : null;
+                    },
+                    SurvivalReserveCents = business =>
+                        SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business),
+                    AppraiseSaleCents = null, // no production appraisal for unnamed assets yet
+                    BusinessLender = hub.BusinessLender,
+                    Obligations = hub.FinancialObligations,
+                    Ids = hub.Ids,
+                    DayIndex = absoluteDayIndex,
+                }, diag);
+            diagnostics.AddRange(diag);
         }
 
         /// <summary>

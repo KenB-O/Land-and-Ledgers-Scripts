@@ -1171,15 +1171,33 @@ namespace LandLedgers.Orchestration.Systems
         /// Pass VII Workstream D: wires the manager decision execution service
         /// to the hub's real production authorities. The recruitment callback
         /// is the existing ExecuteManagerRecruitment path, preserved verbatim.
-        /// No production business lender is arranged: non-escalated borrowing
-        /// fails honestly, and the brain escalates all borrowing to a pending
-        /// owner-approval request.
+        /// Pass VIII (6.3): the production business lender (town bank) is
+        /// arranged here — manager Borrow decisions within delegated limits
+        /// reach a real funded lender through IManagerBusinessLender instead
+        /// of failing honestly forever. The brain still escalates borrowing
+        /// it flags for owner approval.
         /// </summary>
         private void ConfigureManagerExecution()
         {
             if (managerExecutionConfigured || hub == null || sharedBusinessRuntime == null)
             {
                 return;
+            }
+
+            hub.BusinessLender.BindBusinessLookup(id =>
+            {
+                BusinessInstanceState found;
+                return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found : null;
+            });
+            var lenderDiag = new List<string>();
+            string charterProblem = hub.BusinessLender.EnsureCharteredCapital(
+                BusinessLenderService.DefaultCharterCapitalCents,
+                "town bank charter capital (calibration — see BusinessLenderService)",
+                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                lenderDiag);
+            if (charterProblem != null)
+            {
+                Debug.LogWarning("[SimulationDrivers] business lender charter: " + charterProblem);
             }
 
             hub.ManagerDecisionExecution.Configure(new ManagerExecutionServices
@@ -1205,7 +1223,7 @@ namespace LandLedgers.Orchestration.Systems
                 Ids = hub.Ids,
                 Recruiting = hub.Recruiting,
                 SupplierKnowledge = sellerKnowledge,
-                BusinessLender = null,
+                BusinessLender = hub.BusinessLender,
                 OpenRecruitment = (business, demand, decision, day, diag) =>
                     ExecuteManagerRecruitment(business, demand, decision, day, diag),
             });
@@ -1228,6 +1246,10 @@ namespace LandLedgers.Orchestration.Systems
             ConfigureManagerExecution();
             var diagnostics = new List<string>();
             hub.ManagerDecisionExecution.AdvanceShipments(absoluteDayIndex, diagnostics);
+            // Pass VIII (6.3): service the production business loans — real
+            // interest accrual, scheduled collection from borrowers' tills,
+            // and the documented default consequences.
+            hub.BusinessLender.ProcessDay(absoluteDayIndex, diagnostics);
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
                 if (business == null || string.IsNullOrWhiteSpace(business.InstanceId))

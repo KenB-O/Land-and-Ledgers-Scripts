@@ -337,6 +337,7 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdDecisionService householdDecisionService;
         private HouseholdDecisionDriver householdDecisionDriver;
         private HouseholdLenderDirectory householdLenderDirectory;
+        private BusinessLenderService businessLenderService;
         private DomesticLaborService domesticLaborService;
         private HouseholdAutonomyDriver householdAutonomyDriver;
         private DomesticLaborDriver domesticLaborDriver;
@@ -531,6 +532,29 @@ namespace LandLedgers.Orchestration.Systems
                 }
 
                 return householdLenderDirectory;
+            }
+        }
+
+        /// <summary>
+        /// Pass VIII (6.3): the live production business lender — the town
+        /// bank as a real formal-bank credit participant. Implements
+        /// IManagerBusinessLender so manager Borrow decisions reach a funded
+        /// lender through the existing delegation path. Unchartered by
+        /// default: no capital, no credit — the driver charters it once with
+        /// documented capital.
+        /// </summary>
+        public BusinessLenderService BusinessLender
+        {
+            get
+            {
+                if (businessLenderService == null)
+                {
+                    businessLenderService = new BusinessLenderService();
+                    businessLenderService.BindHubServices(
+                        Ids, FinancialObligations, CreditOffers, CreditEvents, Valuation);
+                }
+
+                return businessLenderService;
             }
         }
 
@@ -911,6 +935,7 @@ namespace LandLedgers.Orchestration.Systems
                 householdDecisions = HouseholdDecisions.CaptureSaveDto(),
                 householdDecisionDriver = HouseholdDecisionDriver.CaptureSaveDto(),
                 householdLenders = HouseholdLenders.CaptureSaveDto(),
+                businessLender = BusinessLender.CaptureSaveDto(),
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
                 domesticLaborDriver = DomesticLaborDriver.CaptureSaveDto(),
                 householdErrandPlans = HouseholdErrands.Plans.CaptureSaveDto(),
@@ -1022,6 +1047,7 @@ namespace LandLedgers.Orchestration.Systems
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
             HouseholdLenders.LoadFromSaveDto(dto.householdLenders);
+            BusinessLender.LoadFromSaveDto(dto.businessLender);
             DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
             DomesticLaborDriver.LoadFromSaveDto(dto.domesticLaborDriver);
             HouseholdErrands.Plans.LoadFromSaveDto(dto.householdErrandPlans);

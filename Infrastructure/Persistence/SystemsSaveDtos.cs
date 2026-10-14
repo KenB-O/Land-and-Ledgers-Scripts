@@ -132,6 +132,12 @@ namespace LandLedgers.Persistence
         public HouseholdErrandPlanRegistrySaveDto householdErrandPlans = new();
         // Pass V P2-2: durable registry of private household lenders.
         public HouseholdLenderDirectory.HouseholdLenderDirectorySaveDto householdLenders = new();
+        // Pass VIII (6.3): the production business lender's servicing books
+        // (charter, cash position, loan schedule state, borrower memory).
+        // The obligations themselves persist via financialObligations above —
+        // this section never re-creates debt.
+        public BusinessLenderService.BusinessLenderServiceSaveDto businessLender =
+            new BusinessLenderService.BusinessLenderServiceSaveDto();
         /// <summary>
         /// Pass IV (Worker 1): deterministic due-event schedule (task completions,
         /// passive processes, deadlines). Owned by SimulationSystemsHub.DueEvents.

@@ -6,6 +6,7 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
@@ -98,6 +99,8 @@ namespace LandLedgers.Orchestration.Systems
         private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
+        // G-01: weekly source-side driver for NPC business lifecycles (owned by the driver).
+        private NpcBusinessLifecycleDriver npcBusinessLifecycleDriver;
 
         /// <summary>
         /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
@@ -539,6 +542,9 @@ namespace LandLedgers.Orchestration.Systems
             // Pass V P2-3: autonomous entrepreneurship — observation to
             // formation, no quotas.
             DriveEntrepreneurshipWeek(absoluteDayIndex);
+            // G-01: NPC business lifecycles — weekly struggle/respond/pivot
+            // evaluation for every live NPC-founded business.
+            DriveNpcBusinessLifecycleWeek(absoluteDayIndex);
         }
 
         /// <summary>
@@ -597,6 +603,76 @@ namespace LandLedgers.Orchestration.Systems
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] entrepreneurship week " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        /// <summary>
+        /// G-01: runs the NPC business lifecycle driver once per week, beside
+        /// the entrepreneurship drive. Sources a life record for every live
+        /// NPC-founded business, builds the NpcLifecycleContext from hub
+        /// authorities (real business cash via NpcBusinessRuntimeCashPort,
+        /// obligations, employments, founder ledgers, formation assets, event
+        /// log, ids, creditor cash bridge), and evaluates with the shared
+        /// calibrated survival reserve per business (payroll + reorder based;
+        /// the driver's per-type table is the fallback). Struggling
+        /// businesses cut costs and seek customers with real money; the
+        /// credit-loop borrow context stays null in this pass.
+        /// </summary>
+        private void DriveNpcBusinessLifecycleWeek(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            npcBusinessLifecycleDriver ??= new NpcBusinessLifecycleDriver();
+
+            var businesses = new List<NpcBusinessLifecycleDriver.NpcLifecycleBusinessInfo>();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || business.Owner == null
+                    || business.Owner.OwnerKind != BusinessOwnerKind.Npc)
+                    continue;
+                businesses.Add(new NpcBusinessLifecycleDriver.NpcLifecycleBusinessInfo
+                {
+                    BusinessInstanceId = business.InstanceId,
+                    BusinessType = business.BusinessType,
+                    OwnerPersonId = business.Owner.PersonId,
+                    OwnerName = business.Owner.DisplayName,
+                    Business = business,
+                });
+            }
+
+            var diag = new List<string>();
+            npcBusinessLifecycleDriver.EvaluateWeek(
+                new NpcBusinessLifecycleDriver.LifecycleDriverContext
+                {
+                    LifeRecords = hub.NpcBusinessLifeRecords,
+                    NpcBusinesses = businesses,
+                    Cash = new NpcBusinessRuntimeCashPort(sharedBusinessRuntime),
+                    Obligations = hub.FinancialObligations,
+                    Employments = hub.Employments,
+                    FounderLedgerByPersonId = personId =>
+                    {
+                        int householdId = ResolvePersonHouseholdId(personId);
+                        return householdId >= 0 && hub.HouseholdLedgers != null
+                            ? hub.HouseholdLedgers.GetOrCreate(householdId)
+                            : null;
+                    },
+                    AssetRegister = hub.NpcFormationAssets,
+                    Liquidation = null, // no production liquidation port; EvaluateWeek does not need it
+                    Events = hub.NpcBusinessEvents,
+                    Ids = hub.Ids,
+                    CreditorCash = hub.CreditCash,
+                    // Sane per-business-type tuning: the shared calibrated
+                    // reserve (weekly payroll + reorder buffer + fragility
+                    // padding), falling back to the driver's table.
+                    SurvivalReserveCents = info => info?.Business != null
+                        ? SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(info.Business)
+                        : NpcBusinessLifecycleDriver.DefaultSurvivalReserveCents(
+                            info != null ? info.BusinessType : BusinessType.Generic),
+                    DayIndex = absoluteDayIndex,
+                }, diag);
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] npc business lifecycle week " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
         }
@@ -983,6 +1059,9 @@ namespace LandLedgers.Orchestration.Systems
             hub.Postal.AdvanceDay(hub.Journeys, absoluteDayIndex, diag);
             hub.MoneyOrders.AdvanceDay(absoluteDayIndex, diag);
             hub.RegisteredMail.AuditOverdue(absoluteDayIndex, diag);
+            // G-02: postal revenue collection — earned postage reaches the
+            // owning office business's ledger.
+            DrivePostalRevenue(absoluteDayIndex);
 
             // T2B: open efforts accrue inquiries from real persons; letters
             // resolve — postal-routed ones only when the mail item really
@@ -991,6 +1070,64 @@ namespace LandLedgers.Orchestration.Systems
             {
                 hub.Recruiting.AdvanceDay(
                     populationManager.State, hub.Employments, absoluteDayIndex, diag, hub.Postal);
+            }
+        }
+
+        /// <summary>
+        /// G-02: postal revenue collection — scans the post office's uncollected
+        /// postage and posts it to the owning office business's ledger with
+        /// provenance (Canon XIII §13.2). The pot drains only when the owning
+        /// business runtime resolves; otherwise it is left intact — never
+        /// lost, never manufactured.
+        ///
+        /// Freight note: FreightCompanyRuntime's scan/collect/post path is
+        /// implemented and tested on the runtime, but freight companies have
+        /// no production instances yet (DeliveryService.DispatchViaFreightCompany
+        /// documents the live-instance gap as scene work), so there is nothing
+        /// to drive here today — and nothing is faked.
+        /// </summary>
+        private void DrivePostalRevenue(int absoluteDayIndex)
+        {
+            if (hub == null || hub.Postal == null || sharedBusinessRuntime == null) return;
+            PostalService postal = hub.Postal;
+            int uncollected = postal.FindUncollectedPostageCents();
+            if (uncollected <= 0) return;
+
+            BusinessRuntimeState officeRuntime = null;
+            if (postal.Offices != null)
+            {
+                foreach (PostalOffice office in postal.Offices)
+                {
+                    if (office == null || string.IsNullOrWhiteSpace(office.BusinessInstanceId)) continue;
+                    foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                    {
+                        if (business != null && string.Equals(business.InstanceId,
+                            office.BusinessInstanceId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            officeRuntime = business.RuntimeState;
+                            break;
+                        }
+                    }
+
+                    break; // the first office owns the service-wide pot
+                }
+            }
+
+            var diag = new List<string>();
+            if (officeRuntime == null)
+            {
+                diag.Add($"Postal revenue: {uncollected}c uncollected but no owning office business " +
+                    "runtime resolved — pot left intact, never drained blind.");
+            }
+            else
+            {
+                postal.CollectAndPostPostageRevenue(officeRuntime, diag);
+            }
+
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] postal revenue day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
             }
         }
 
@@ -1466,10 +1603,53 @@ namespace LandLedgers.Orchestration.Systems
                 StartAssignedBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
             }
 
+            // G-06: NPC-owner auto-resolution for escalated manager requests —
+            // borrow routed to lender underwriting, asset sales per the
+            // distress-sale policy. Player-owned requests stay pending.
+            DriveNpcOwnerRequestResolution(absoluteDayIndex, diagnostics);
+
             if (diagnostics.Count > 0)
             {
                 Debug.LogWarning("[SimulationDrivers] autonomous labor: " + string.Join(" | ", diagnostics));
             }
+        }
+
+        /// <summary>
+        /// G-06: NPC-owner auto-resolution for manager pending requests.
+        /// Runs after the day's manager decisions execute: escalated Borrow
+        /// requests go to BusinessLenderService underwriting instead of
+        /// stalling, and SellAsset requests resolve per the distress-sale
+        /// policy (approve only when cash is below the survival reserve and
+        /// the price meets the appraisal). Player-owned businesses keep
+        /// their requests pending for the future UI. No production appraisal
+        /// exists for unnamed-asset sales, so those deny loudly with reason
+        /// rather than approving blind.
+        /// </summary>
+        private void DriveNpcOwnerRequestResolution(int absoluteDayIndex, List<string> diagnostics)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            if (hub.ManagerDecisionExecution == null || !hub.ManagerDecisionExecution.IsConfigured) return;
+
+            var resolver = new NpcOwnerRequestResolver();
+            var diag = new List<string>();
+            resolver.ResolvePending(
+                new NpcOwnerRequestResolver.OwnerResolutionContext
+                {
+                    Ledger = hub.ManagerDecisionExecution.Ledger,
+                    FindBusiness = id =>
+                    {
+                        BusinessInstanceState found;
+                        return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found : null;
+                    },
+                    SurvivalReserveCents = business =>
+                        SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business),
+                    AppraiseSaleCents = null, // no production appraisal for unnamed assets yet
+                    BusinessLender = hub.BusinessLender,
+                    Obligations = hub.FinancialObligations,
+                    Ids = hub.Ids,
+                    DayIndex = absoluteDayIndex,
+                }, diag);
+            diagnostics.AddRange(diag);
         }
 
         /// <summary>

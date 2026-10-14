@@ -77,6 +77,12 @@ namespace LandLedgers.Editor.Economy
 
             public void CancelForPayload(string payloadRef) =>
                 events.RemoveAll(e => string.Equals(e.PayloadRef, payloadRef, StringComparison.Ordinal));
+
+            public void Clear()
+            {
+                events.Clear();
+                sequence = 0;
+            }
         }
 
         private sealed class TestReservationAuthority : IUnifiedReservationAuthority

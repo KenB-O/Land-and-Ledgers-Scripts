@@ -25,6 +25,7 @@ using LandLedgers.Economy.Financing;
 using LandLedgers.Orchestration.Scenarios.Generation;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Time;
 using LandLedgers.World;
 using UnityEngine;
 
@@ -321,6 +322,7 @@ namespace LandLedgers.Orchestration.Scenarios
         private readonly LandLedgers.Economy.Financing.PlayerDebtManager debtManager;
         private readonly LandLedgers.Orchestration.Scenarios.Generation.IScenarioInventoryPort inventoryPort;
         private readonly LandLedgers.Orchestration.Scenarios.Generation.IScenarioPropertyPort propertyPort;
+        private readonly IDueEventScheduler dueEventScheduler;
 
         private readonly List<string> clearedCategories = new List<string>();
 
@@ -336,7 +338,8 @@ namespace LandLedgers.Orchestration.Scenarios
             LandLedgers.Economy.PlayerPortfolioManager portfolio = null,
             LandLedgers.Economy.Financing.PlayerDebtManager debtManager = null,
             LandLedgers.Orchestration.Scenarios.Generation.IScenarioInventoryPort inventoryPort = null,
-            LandLedgers.Orchestration.Scenarios.Generation.IScenarioPropertyPort propertyPort = null)
+            LandLedgers.Orchestration.Scenarios.Generation.IScenarioPropertyPort propertyPort = null,
+            IDueEventScheduler dueEventScheduler = null)
         {
             this.populationManager = populationManager;
             this.obligations = obligations;
@@ -348,6 +351,7 @@ namespace LandLedgers.Orchestration.Scenarios
             this.debtManager = debtManager;
             this.inventoryPort = inventoryPort;
             this.propertyPort = propertyPort;
+            this.dueEventScheduler = dueEventScheduler;
         }
 
         public void ResetForNewGame(List<string> diagnostics)
@@ -378,6 +382,10 @@ namespace LandLedgers.Orchestration.Scenarios
                 () => inventoryPort.ClearAuthoredState("new game reset"), diagnostics);
             ClearOrNote(propertyPort != null, "authored-property",
                 () => propertyPort.ClearAuthoredState("new game reset"), diagnostics);
+            // G-05: the previous campaign's due events (domestic-labor,
+            // work-allocation, ...) must not leak into a New Game / Restart.
+            ClearOrNote(dueEventScheduler != null, "due-events",
+                () => dueEventScheduler.Clear(), diagnostics);
 
             // "generated-businesses" and "manager-decisions" are cleared by the
             // business runtime's own new-game path via the bootstrapper; when

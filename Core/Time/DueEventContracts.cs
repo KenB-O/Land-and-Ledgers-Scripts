@@ -134,6 +134,14 @@ namespace LandLedgers.Time
 
         /// <summary>Cancels every event whose payloadRef matches (task/process cancelled).</summary>
         void CancelForPayload(string payloadRef);
+
+        /// <summary>
+        /// G-05: clears every scheduled event. New Game / Restart must not
+        /// inherit the previous campaign's due events (e.g. domestic-labor and
+        /// work-allocation events). Idempotent; the sequence cursor restarts,
+        /// matching clear-then-load semantics.
+        /// </summary>
+        void Clear();
     }
 
     /// <summary>

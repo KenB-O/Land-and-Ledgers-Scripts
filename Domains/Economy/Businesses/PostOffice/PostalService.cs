@@ -151,6 +151,13 @@ namespace LandLedgers.Economy.Postal
         public const string DispatchPouchTaskId = "postal.dispatch-pouch";
         public const string DeliverLocalMailTaskId = "postal.deliver-local-mail";
 
+        /// <summary>
+        /// G-02: revenue category for posted postage. The shared business
+        /// runtime has no canonical postal category; this is the posting
+        /// category used by the revenue collection path.
+        /// </summary>
+        public const string PostageRevenueCategoryId = "postal_service";
+
         private readonly Dictionary<string, PostalOffice> offices =
             new Dictionary<string, PostalOffice>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, MailItem> mail =
@@ -187,6 +194,32 @@ namespace LandLedgers.Economy.Postal
         public IReadOnlyCollection<MailItem> MailItems => mail.Values;
         public IReadOnlyCollection<PostalContract> Contracts => contracts.Values;
         public int UncollectedPostageCents => Math.Max(0, uncollectedPostageCents);
+
+        /// <summary>
+        /// G-02: pure scan for uncollected postage revenue. Returns the
+        /// accrued cents (0 = nothing to collect). Never mutates — the drain
+        /// happens exactly once in <see cref="CollectPostageRevenue"/>.
+        /// </summary>
+        public int FindUncollectedPostageCents() => Math.Max(0, uncollectedPostageCents);
+
+        /// <summary>
+        /// G-02: revenue collection for the tick — calls
+        /// <see cref="CollectPostageRevenue"/> and posts the released postage
+        /// to the business ledger with provenance (Canon XIII §13.2).
+        /// Exactly-once: the pot drains on collect, so re-scans yield
+        /// nothing. Returns total cents posted.
+        /// </summary>
+        public int CollectAndPostPostageRevenue(BusinessRuntimeState businessRuntime, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            int cents = CollectPostageRevenue(diag);
+            if (cents <= 0 || businessRuntime == null)
+                return 0;
+            businessRuntime.RecordDailyServiceRevenue(PostageRevenueCategoryId, 1, cents);
+            diag.Add($"PostalService: {cents}c postage revenue posted to the post office business ledger " +
+                "(provenance: postage).");
+            return cents;
+        }
 
         /// <summary>Registers a post office with its departure schedule.</summary>
         public string RegisterOffice(
@@ -409,7 +442,9 @@ namespace LandLedgers.Economy.Postal
 
             int transitDays = Math.Max(1, (route.TotalMinutes + 1439) / 1440);
             // Seeded reliability: most dispatches on time, some miss the connection (calibration).
-            var rng = new System.Random(office.Seed * 100003 + dayIndex * 31 + destOfficeId.GetHashCode());
+            // G-04: destOfficeId hashed with a stable FNV-1a — string.GetHashCode()
+            // is randomized per process in .NET, which broke determinism.
+            var rng = new System.Random(unchecked(office.Seed * 100003 + dayIndex * 31 + (int)StableHash32(destOfficeId)));
             bool onTime = rng.NextDouble() < OnTimeProbability;
 
             // Record real handoffs through intermediate offices on the route.
@@ -581,6 +616,26 @@ namespace LandLedgers.Economy.Postal
         private static void RegisterQuietly(TaskAuthority authority, TaskDefinition definition)
         {
             authority.RegisterDefinition(definition, out _);
+        }
+
+        /// <summary>
+        /// G-04: stable FNV-1a 32-bit hash over a string's UTF-16 code units.
+        /// Deterministic across processes, runs, and platforms; replaces
+        /// string.GetHashCode(), which .NET randomizes per process.
+        /// </summary>
+        private static uint StableHash32(string value)
+        {
+            uint hash = 2166136261u;
+            if (!string.IsNullOrEmpty(value))
+            {
+                foreach (char c in value)
+                {
+                    hash ^= c;
+                    hash *= 16777619u;
+                }
+            }
+
+            return hash;
         }
 
         public PostalServiceSaveDto CaptureSaveDto()

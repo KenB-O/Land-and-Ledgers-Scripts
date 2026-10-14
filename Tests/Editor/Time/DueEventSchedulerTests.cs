@@ -201,6 +201,32 @@ namespace LandLedgers.EditorTests.Time
             Assert.AreEqual(1, restored.ScheduledCount);
         }
 
+        [Test]
+        public void Clear_PurgesAllEvents_AndRestartsSequence()
+        {
+            // G-05: New Game / Restart must not inherit the previous campaign's
+            // due events (domestic-labor, work-allocation, ...).
+            var scheduler = CreateScheduler();
+            string ignored;
+            scheduler.Schedule(DueEventKind.TaskCompletionDue, 100f, "task-a", out ignored);
+            scheduler.Schedule(DueEventKind.TendingDue, 200f, "task-b", out ignored);
+            Assert.AreEqual(2, scheduler.ScheduledCount);
+
+            scheduler.Clear();
+
+            Assert.AreEqual(0, scheduler.ScheduledCount);
+            Assert.IsNull(scheduler.PeekNext());
+            Assert.AreEqual(0, scheduler.PopDue(100000f).Count);
+
+            // Sequence restarts like clear-then-load: a fresh event is schedulable
+            // and pops alone.
+            Assert.IsNull(scheduler.Schedule(DueEventKind.TaskCompletionDue, 50f, "fresh", out string freshId));
+            Assert.AreEqual(1, scheduler.ScheduledCount);
+            List<DueEvent> due = scheduler.PopDue(100f);
+            Assert.AreEqual(1, due.Count);
+            Assert.AreEqual(freshId, due[0].EventId);
+        }
+
         private static DueEventScheduler BuildSeededSchedule(int seed, int count)
         {
             var scheduler = new DueEventScheduler();

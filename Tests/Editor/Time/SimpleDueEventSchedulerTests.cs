@@ -117,5 +117,23 @@ namespace LandLedgers.Editor.Time
                 "due-ResourceReleaseDue-resv-abc",
                 DueEventIdConventions.ForReservation("abc"));
         }
+
+        [Test]
+        public void Clear_PurgesAllEvents()
+        {
+            // G-05: New Game / Restart must not inherit the previous campaign's
+            // due events.
+            var scheduler = new SimpleDueEventScheduler();
+            string ignored;
+            scheduler.Schedule(DueEventKind.TaskCompletionDue, 100f, "task-a", out ignored);
+            scheduler.Schedule(DueEventKind.TendingDue, 200f, "task-b", out ignored);
+            Assert.AreEqual(2, scheduler.ScheduledCount);
+
+            scheduler.Clear();
+
+            Assert.AreEqual(0, scheduler.ScheduledCount);
+            Assert.IsNull(scheduler.PeekNext());
+            Assert.AreEqual(0, scheduler.PopDue(100000f).Count);
+        }
     }
 }

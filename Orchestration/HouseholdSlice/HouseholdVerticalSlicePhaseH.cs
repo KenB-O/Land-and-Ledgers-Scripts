@@ -1523,6 +1523,13 @@ namespace LandLedgers.Orchestration.HouseholdSlice
                     P_Emil, w.Schedule, w.ToolCustody, w.Tasks, w.Budgets,
                     day, 360, package.LaborMinutesRequired, w.Diagnostics);
                 if (laborProblem != null) throw new InvalidOperationException("construction: labor: " + laborProblem);
+                // Pass VIII Worker 3: labor minutes credit only as the task is
+                // actually worked — never at reserve time.
+                string laborTaskId = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+                string workProblem = w.ProjectExecutor.WorkCommittedLabor(
+                    project, package, laborTaskId, package.LaborMinutesRequired,
+                    w.Tasks, w.Budgets, day, w.Diagnostics);
+                if (workProblem != null) throw new InvalidOperationException("construction: work: " + workProblem);
                 string advanceProblem = w.ProjectExecutor.AdvancePackage(project, package, day, w.Diagnostics);
                 if (advanceProblem != null) throw new InvalidOperationException("construction: advance: " + advanceProblem);
                 day++;

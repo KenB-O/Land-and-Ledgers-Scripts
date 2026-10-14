@@ -50,6 +50,12 @@ namespace LandLedgers.Economy
         public List<string> EmploymentIds = new List<string>();
         public int WorkerMinutesCommitted;
         public int WagesPaidCents;
+        /// <summary>
+        /// Pass VIII Worker 3: real freight charges paid to move this
+        /// package's materials to the site (a real quoted charge, never
+        /// invented). Tracked separately from material cost.
+        /// </summary>
+        public int FreightCostCents;
         public string Notes = string.Empty;
 
         public NpcBuildPackageFunding() { }
@@ -401,6 +407,101 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
+        /// Pass VIII Worker 3: the FULL material chain for one package —
+        /// supplier discovery, real-lot sale, real-cash payment, real-chain
+        /// freight to the site, then staging from the site stockpile. The
+        /// overrun gate runs BEFORE anything moves (priced from the same
+        /// price list the sale port must honor); the sale total must match
+        /// the priced total or the leg refuses. Freight charges ride on the
+        /// freight plan's real quoted charge and are recorded separately.
+        /// </summary>
+        public string ProcureAndStagePackage(
+            ConstructionProjectExecutor executor,
+            ConstructionProject project,
+            NpcConstructionRecord record,
+            WorkPackage package,
+            ConstructionProcurementService procurement,
+            IConstructionMaterialSalePort salePort,
+            IConstructionMaterialPricePort pricePort,
+            Population.ISupplierDirectory suppliers,
+            ConstructionMaterialFreightCoordinator freightCoordinator,
+            ConstructionFreightPlan freightPlan,
+            ConstructionSiteStockpile stockpile,
+            CreditCashBridge cash,
+            string buyerOwnerName,
+            FinancialObligationAuthority obligations,
+            EntityIdRegistry ids,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (executor == null || project == null || record == null || package == null)
+                return "NpcCommissioner.ProcureAndStagePackage: executor, project, record and package required.";
+            if (procurement == null)
+                return "NpcCommissioner.ProcureAndStagePackage: no procurement service.";
+            if (cash == null)
+                return "NpcCommissioner.ProcureAndStagePackage: no cash bridge — materials are bought with real cash only.";
+            if (project.Status == ConstructionProjectStatus.Paused)
+                return $"NpcCommissioner.ProcureAndStagePackage: project '{project.ProjectId}' is paused — resolve or resume first.";
+            if (record.HasOpenOverrun())
+                return $"NpcCommissioner.ProcureAndStagePackage: record '{record.RecordId}' has an unresolved overrun — the NPC answers it before funding more work.";
+            NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
+            if (funding == null)
+                return $"NpcCommissioner.ProcureAndStagePackage: no funding line for package '{package.PackageId}'.";
+
+            // Price every requirement — unpriced means unknowable, never guessed.
+            int priced = 0;
+            foreach (ConstructionMaterialRequirement requirement in package.Materials ?? new List<ConstructionMaterialRequirement>())
+            {
+                if (requirement == null || !requirement.IsCoherent)
+                    return $"NpcCommissioner.ProcureAndStagePackage: package '{package.PackageId}' has an incoherent material requirement — refusing.";
+                int unitPrice = pricePort != null ? pricePort.UnitPriceCents(requirement) : -1;
+                if (unitPrice < 0)
+                    return $"NpcCommissioner.ProcureAndStagePackage: '{requirement.MaterialDisplayName}' is unpriced — cost unknowable, refusing.";
+                priced += unitPrice * Math.Max(0, requirement.RequiredUnits);
+            }
+
+            // Overrun check BEFORE anything moves.
+            int tolerance = (int)Math.Ceiling(funding.EstimatedMaterialCostCents * Math.Max(0.0, OverrunTolerance01));
+            int freightCharge = Math.Max(0, freightPlan != null ? freightPlan.FreightChargeCents : 0);
+            if (priced + freightCharge > funding.EstimatedMaterialCostCents + tolerance)
+            {
+                var overrun = new NpcBuildOverrunEvent
+                {
+                    DayIndex = dayIndex,
+                    PackageId = package.PackageId,
+                    EstimatedCents = funding.EstimatedMaterialCostCents,
+                    ActualCents = priced + freightCharge,
+                };
+                record.Overruns.Add(overrun);
+                record.Decisions.Add($"day {dayIndex}: OVERRUN on '{package.PhaseName}' — estimated {overrun.EstimatedCents}c, actual {overrun.ActualCents}c (incl. {freightCharge}c freight). Funding blocked until resolved.");
+                diag.Add($"NpcCommissioner: OVERRUN on package '{package.PackageId}' ('{package.PhaseName}'): " +
+                    $"estimated {overrun.EstimatedCents}c, actual {overrun.ActualCents}c — nothing procured, nothing paid.");
+                return $"cost overrun on '{package.PhaseName}': estimated {overrun.EstimatedCents}c, actual {overrun.ActualCents}c — resolve it (inject cash, pause, change order) before funding.";
+            }
+
+            IRealCashStore buyerStore = cash.FindStore(buyerOwnerName);
+            if (buyerStore == null)
+                return $"NpcCommissioner.ProcureAndStagePackage: '{buyerOwnerName}' has no real cash store.";
+            if (buyerStore.ReadBalanceCents() < priced + freightCharge)
+                return $"NpcCommissioner.ProcureAndStagePackage: '{buyerOwnerName}' holds {buyerStore.ReadBalanceCents()}c but procurement costs {priced + freightCharge}c — refusing rather than spending what they lack.";
+
+            ConstructionMaterialSale sale;
+            string problem = procurement.ProcureFreightAndStage(executor, project, package,
+                salePort, pricePort, suppliers, freightCoordinator, freightPlan, stockpile,
+                cash, buyerOwnerName, obligations, ids, priced, dayIndex, diag, out sale);
+            if (problem != null) return problem;
+
+            funding.ActualMaterialCostCents = sale != null ? sale.TotalCents : priced;
+            funding.FreightCostCents = freightCharge;
+            record.TotalActualCostCents += funding.ActualMaterialCostCents + freightCharge;
+            record.Decisions.Add($"day {dayIndex}: procured '{package.PhaseName}' — sale '{(sale != null ? sale.SaleId : "?")}' " +
+                $"({funding.ActualMaterialCostCents}c materials + {freightCharge}c freight), freighted through the real shipment chain and staged.");
+            diag.Add($"NpcCommissioner: package '{package.PackageId}' ('{package.PhaseName}') procured and staged — {funding.ActualMaterialCostCents}c materials, {freightCharge}c freight, all paid from real cash.");
+            return null;
+        }
+
+        /// <summary>
         /// The NPC's own people work the package — through the executor's
         /// CommitLabor, so person-time is reserved and double-booking is
         /// refused loudly. Recorded as own labor on the funding line.
@@ -437,23 +538,10 @@ namespace LandLedgers.Economy
             return null;
         }
 
-        /// <summary>Compatibility overload for pre-universal-task callers.</summary>
-        public string CommitOwnLabor(
-            ConstructionProjectExecutor executor,
-            ConstructionProject project,
-            NpcConstructionRecord record,
-            WorkPackage package,
-            int personId,
-            PersonScheduleTracker tracker,
-            IHouseholdToolCustody custody,
-            int dayIndex,
-            int startMinuteOfDay,
-            int durationMinutes,
-            List<string> diag)
-        {
-            return CommitOwnLabor(executor, project, record, package, personId, tracker,
-                custody, null, null, dayIndex, startMinuteOfDay, durationMinutes, diag);
-        }
+        // Pass VIII Worker 3: the pre-universal-task compatibility overloads
+        // were removed — they passed null TaskAuthority/WorkTimeBudgetStore,
+        // which the executor rightly refuses ("labor must be a real
+        // WorkTask"). Labor commits through the full overloads below only.
 
         /// <summary>
         /// Hires a worker: registers the REAL employment relationship (agreed
@@ -521,28 +609,8 @@ namespace LandLedgers.Economy
             return null;
         }
 
-        /// <summary>Compatibility overload for pre-universal-task callers.</summary>
-        public string HireWorker(
-            EmploymentRelationshipRegistry employments,
-            ConstructionProjectExecutor executor,
-            ConstructionProject project,
-            NpcConstructionRecord record,
-            WorkPackage package,
-            int workerPersonId,
-            int workerHouseholdId,
-            string employerLabel,
-            int agreedWeeklyWageCents,
-            PersonScheduleTracker tracker,
-            IHouseholdToolCustody custody,
-            int dayIndex,
-            int startMinuteOfDay,
-            int durationMinutes,
-            List<string> diag)
-        {
-            return HireWorker(employments, executor, project, record, package, workerPersonId,
-                workerHouseholdId, employerLabel, agreedWeeklyWageCents, tracker, custody,
-                null, null, dayIndex, startMinuteOfDay, durationMinutes, diag);
-        }
+        // Pass VIII Worker 3: see the note above — the pre-universal-task
+        // HireWorker overload was removed for the same reason.
 
         /// <summary>
         /// Pays hired workers for a completed package from the NPC's real
@@ -692,24 +760,7 @@ namespace LandLedgers.Economy
         private static string MoveCash(CreditCashBridge cash, string payer, string payee, int amountCents,
             int dayIndex, string purpose, List<string> diag)
         {
-            if (amountCents <= 0) return null;
-            CreditCashAccount payerCash = cash.OpenWindow(payer, diag);
-            CreditCashAccount payeeCash = cash.OpenWindow(payee, diag);
-            if (payerCash == null || payeeCash == null)
-            {
-                cash.DiscardWindow(payerCash); cash.DiscardWindow(payeeCash);
-                return $"no real cash store for '{payer}' or '{payee}'.";
-            }
-            if (payerCash.BalanceCents < amountCents)
-            {
-                cash.DiscardWindow(payerCash); cash.DiscardWindow(payeeCash);
-                return $"'{payer}' holds {payerCash.BalanceCents}c, needs {amountCents}c.";
-            }
-            payerCash.BalanceCents -= amountCents;
-            payeeCash.BalanceCents += amountCents;
-            string p1 = cash.CommitWindow(payerCash, dayIndex, purpose, payee, diag);
-            string p2 = cash.CommitWindow(payeeCash, dayIndex, purpose, payer, diag);
-            return p1 ?? p2;
+            return ConstructionCashMover.MoveCash(cash, payer, payee, amountCents, dayIndex, purpose, diag);
         }
 
         #endregion

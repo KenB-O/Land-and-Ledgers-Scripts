@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Labor;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.ReadModels.Valuation;
 using LandLedgers.Reputation;
@@ -186,6 +187,22 @@ namespace LandLedgers.Economy.Financing
         private EnterpriseValuationReadModel valuation;
         private Func<string, BusinessInstanceState> findBusiness;
 
+        // Pass VIII worker 8: optional social-knowledge intake. The bank
+        // lends on what its lending officer actually heard — never on
+        // hearsay the officer never received. Unwired by default (officer
+        // -1): all existing underwriting behavior is unchanged until a real
+        // officer person is designated and bound.
+        private IKnowledgeTransmissionStore socialKnowledge;
+        private int lendingOfficerPersonId = -1;
+        // TUNING: trust reduction when borrower trouble is corroborated by
+        // social evidence (firsthand telling or two independent sources).
+        // Trust flows into the shared underwriting (rate, capacity, floor);
+        // it never refuses by itself — only the real underwriting can.
+        private const float CorroboratedTroubleTrustReduction = 0.15f;
+        // TUNING: trust reduction when an uncorroborated rumor is confirmed
+        // by the bank's own legitimate records (real delinquency/default).
+        private const float RecordsConfirmedTroubleTrustReduction = 0.18f;
+
         public BusinessLenderService() : this("Frontier Town Bank") { }
 
         public BusinessLenderService(string lenderName)
@@ -213,6 +230,19 @@ namespace LandLedgers.Economy.Financing
         public void BindBusinessLookup(Func<string, BusinessInstanceState> findBusiness)
         {
             this.findBusiness = findBusiness;
+        }
+
+        /// <summary>
+        /// Pass VIII worker 8: binds the social-knowledge intake. The
+        /// lending officer must be a real person: only packets that officer
+        /// actually received can affect a credit file. Until a real officer
+        /// is designated (production content step), the intake stays unwired
+        /// and underwriting never sees social evidence.
+        /// </summary>
+        public void BindSocialKnowledge(IKnowledgeTransmissionStore knowledge, int lendingOfficerPersonId)
+        {
+            this.socialKnowledge = knowledge;
+            this.lendingOfficerPersonId = lendingOfficerPersonId;
         }
 
         /// <summary>
@@ -294,7 +324,7 @@ namespace LandLedgers.Economy.Financing
                     $"business '{debtorBusinessId}' has no cash ledger — proceeds could not land.");
 
             // Information: real projections, real exposure, real collateral.
-            BorrowerFinancialInformation info = BuildBorrowerInformation(business, debtorBusinessId, obligations);
+            BorrowerFinancialInformation info = BuildBorrowerInformation(business, debtorBusinessId, obligations, diagnostics);
 
             // Lender availability: the bank must really hold the funds.
             int reserveFloor = ReserveFloorCents();
@@ -354,6 +384,11 @@ namespace LandLedgers.Economy.Financing
                         $"total outstanding {info.TotalOutstandingCents}c across live obligations; {info.DefaultCount} defaulted; " +
                         $"existing weekly debt service {info.ExistingWeeklyDebtServiceCents}c.",
                         "", dayIndex);
+                    if (!string.IsNullOrWhiteSpace(info.SocialEvidenceNote))
+                    {
+                        workflow.DiscloseEvidence(ids, request, "social-evidence",
+                            info.SocialEvidenceNote, "", dayIndex);
+                    }
                 }
             }
 
@@ -710,10 +745,16 @@ namespace LandLedgers.Economy.Financing
             public bool HasActiveBankLoan;
             public float Caution01;
             public int CooldownUntilDayIndex = -1;
+            /// <summary>
+            /// Pass VIII worker 8: set when the lending officer's social
+            /// evidence reduced lender trust. Disclosed on the credit file with
+            /// provenance; empty when social evidence played no part.
+            /// </summary>
+            public string SocialEvidenceNote = string.Empty;
         }
 
         private BorrowerFinancialInformation BuildBorrowerInformation(BusinessInstanceState business,
-            string debtorBusinessId, FinancialObligationAuthority obligations)
+            string debtorBusinessId, FinancialObligationAuthority obligations, List<string> diagnostics)
         {
             var info = new BorrowerFinancialInformation
             {
@@ -751,7 +792,90 @@ namespace LandLedgers.Economy.Financing
             info.Caution01 = memory.Caution01;
             info.CooldownUntilDayIndex = memory.CooldownUntilDayIndex;
             info.LenderTrust01 = DeriveLenderTrust(business, memory, defaultCount);
+            ApplyBorrowerSocialEvidence(info, debtorBusinessId, obligations, diagnostics);
             return info;
+        }
+
+        /// <summary>
+        /// Pass VIII worker 8: the lender hears of borrower trouble through
+        /// its officer's real conversations, then seeks corroboration before
+        /// it can affect credit.
+        ///
+        /// Policy, in order:
+        ///   1. No packets, or the intake is unwired: nothing happens.
+        ///   2. Corroborated trouble (a firsthand telling, or two
+        ///      independent sources): the bank trusts the borrower less.
+        ///      Lower trust flows into the shared underwriting (rate,
+        ///      capacity, the trust floor) — the rumor still cannot refuse
+        ///      the loan by itself; only the real underwriting can refuse,
+        ///      on real projections, exposure and collateral.
+        ///   3. An uncorroborated rumor: the bank seeks corroboration in its
+        ///      own legitimate records (real delinquent or defaulted
+        ///      obligations of this debtor). Confirmed by records: trust is
+        ///      reduced and the file says so. Not confirmed: the rumor is
+        ///      noted and has no credit effect whatsoever.
+        ///
+        /// Repeated tellings of the same rumor never fabricate a second
+        /// source: independence is counted by distinct chain roots.
+        /// </summary>
+        private void ApplyBorrowerSocialEvidence(BorrowerFinancialInformation info,
+            string debtorBusinessId, FinancialObligationAuthority obligations, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (info == null || socialKnowledge == null || lendingOfficerPersonId < 0)
+                return;
+
+            SocialEvidenceAssessment evidence = SocialEvidenceEvaluator.Assess(
+                socialKnowledge, lendingOfficerPersonId,
+                SocialEvidenceEvaluator.BorrowerTroubleSubject(debtorBusinessId));
+            if (evidence.PacketCount == 0)
+                return;
+
+            string citation = SocialEvidenceEvaluator.CiteEvidence(evidence);
+            if (evidence.Corroborated)
+            {
+                info.LenderTrust01 = Mathf.Clamp01(info.LenderTrust01 - CorroboratedTroubleTrustReduction);
+                info.SocialEvidenceNote = $"corroborated borrower-trouble evidence reduced lender trust to {info.LenderTrust01:0.00}: {citation}";
+                diagnostics.Add($"BusinessLenderService [{lenderName}]: {info.SocialEvidenceNote}.");
+                return;
+            }
+
+            // Uncorroborated rumor: seek corroboration in the bank's own
+            // legitimate records before it may affect the credit file.
+            bool confirmed = HasRealDelinquency(obligations, debtorBusinessId);
+            if (confirmed)
+            {
+                info.LenderTrust01 = Mathf.Clamp01(info.LenderTrust01 - RecordsConfirmedTroubleTrustReduction);
+                info.SocialEvidenceNote = $"uncorroborated borrower-trouble rumor confirmed by the bank's own obligation records; " +
+                                          $"lender trust reduced to {info.LenderTrust01:0.00}: {citation}";
+                diagnostics.Add($"BusinessLenderService [{lenderName}]: {info.SocialEvidenceNote}.");
+            }
+            else
+            {
+                diagnostics.Add($"BusinessLenderService [{lenderName}]: uncorroborated rumor of borrower trouble " +
+                                $"for '{debtorBusinessId}' — no confirming records found, seeking corroboration; " +
+                                $"no credit effect. {citation}.");
+            }
+        }
+
+        /// <summary>
+        /// The bank's own legitimate records: a live delinquent or defaulted
+        /// obligation of this debtor. This is corroboration by evidence, not
+        /// by inventing another source.
+        /// </summary>
+        private static bool HasRealDelinquency(FinancialObligationAuthority obligations, string debtorBusinessId)
+        {
+            if (obligations == null || string.IsNullOrWhiteSpace(debtorBusinessId))
+                return false;
+            foreach (FinancialObligation obligation in obligations.Obligations)
+            {
+                if (obligation == null || obligation.Settled) continue;
+                if (!string.Equals(obligation.Debtor, debtorBusinessId, StringComparison.Ordinal)) continue;
+                if (obligation.Status == FinancialObligationStatus.Delinquent
+                    || obligation.Status == FinancialObligationStatus.Defaulted)
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>

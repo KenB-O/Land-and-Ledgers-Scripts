@@ -612,6 +612,89 @@ namespace LandLedgers.Economy.Recruitment
             return null;
         }
 
+        /// <summary>
+        /// Pass VIII worker 8: a real person applies to a real open hiring
+        /// effort on their own initiative — the worker side of job seeking.
+        /// Unlike the passive word-of-mouth flow, currently-employed
+        /// applicants are accepted (people seek work while employed); their
+        /// current employment is recorded honestly on the inquiry note so
+        /// the hiring side decides with full information. One open inquiry
+        /// per person per effort — no duplicates. The effort must be open,
+        /// the person must be a plausible candidate (adult, labor access,
+        /// living), and the HowHeard string must honestly describe how the
+        /// applicant learned of the opening. Returns the inquiry, or null
+        /// with a diagnostic when the application is refused.
+        /// </summary>
+        public CandidateInquiry ApplyForEffort(
+            string effortId, int personId,
+            PopulationState population, EmploymentRelationshipRegistry employment,
+            string howHeard, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!efforts.TryGetValue(effortId, out RecruitmentEffort effort) || effort.Closed)
+            {
+                diag.Add("RecruitmentService.ApplyForEffort: unknown or closed effort.");
+                return null;
+            }
+            PersonState person = population?.GetPerson(personId);
+            if (person == null)
+            {
+                diag.Add($"RecruitmentService.ApplyForEffort: P{personId} is not a known person.");
+                return null;
+            }
+            if (person.ageBand != AgeBand.Adult18Plus || person.laborAccessLevel == LaborAccessLevel.None)
+            {
+                diag.Add($"RecruitmentService.ApplyForEffort: P{personId} cannot take the role.");
+                return null;
+            }
+            if (person.deathDayIndex >= 0)
+            {
+                diag.Add($"RecruitmentService.ApplyForEffort: P{personId} is deceased.");
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(howHeard))
+            {
+                diag.Add($"RecruitmentService.ApplyForEffort: P{personId} must honestly state how they heard of the opening.");
+                return null;
+            }
+            foreach (CandidateInquiry existing in inquiries.Values)
+            {
+                if (string.Equals(existing.EffortId, effortId, StringComparison.Ordinal)
+                    && existing.PersonId == personId
+                    && existing.Status == InquiryStatus.Open)
+                {
+                    diag.Add($"RecruitmentService.ApplyForEffort: P{personId} already has an open inquiry on effort {effortId} — no duplicate.");
+                    return null;
+                }
+            }
+
+            string currentEmployment = string.Empty;
+            if (employment != null)
+            {
+                foreach (EmploymentRelationship rel in employment.GetActiveByEmployee(personId))
+                {
+                    if (rel != null && !string.IsNullOrWhiteSpace(rel.EmployerBusinessId))
+                    {
+                        currentEmployment = $" (currently employed at {rel.EmployerBusinessId})";
+                        break;
+                    }
+                }
+            }
+
+            var inquiry = new CandidateInquiry
+            {
+                InquiryId = $"inq-{effortId}-apply-{personId}-{dayIndex}",
+                EffortId = effortId,
+                PersonId = personId,
+                ReceivedDayIndex = dayIndex,
+                HowHeard = howHeard,
+                Note = $"{person.firstName} {person.lastName} applied{currentEmployment}",
+            };
+            inquiries[inquiry.InquiryId] = inquiry;
+            diag.Add($"RecruitmentService: application {inquiry.InquiryId} — P{personId} applied to effort {effortId} ({howHeard}).");
+            return inquiry;
+        }
+
         public string CloseEffort(string effortId, List<string> diag)
         {
             diag = diag ?? diagnostics;

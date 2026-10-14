@@ -278,6 +278,19 @@ namespace LandLedgers.Economy
             campPressure01 = Mathf.Clamp01(resolvedCampPressure01);
         }
 
+        /// <summary>
+        /// Pass VIII (production networks): depletes the deposit by tons
+        /// actually broken. remainingRichness01 is the mine's depletion dial
+        /// (the shared weekly path depletes it too); extraction that never
+        /// depletes is infinite ore. The rate is caller-set (tuning lives
+        /// with the production authority, not the state container).
+        /// </summary>
+        public void ApplyExtractionDepletion(int tons, float depletionPerTon01)
+        {
+            float depletion = Mathf.Max(0, tons) * Mathf.Max(0f, depletionPerTon01);
+            remainingRichness01 = Mathf.Clamp01(remainingRichness01 - depletion);
+        }
+
         public MineRuntimeSaveDto CaptureSaveDto()
         {
             var shipmentLedger = new MineOreShipmentLedgerSaveDto();

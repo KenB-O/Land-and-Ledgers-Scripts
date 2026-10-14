@@ -329,6 +329,19 @@ namespace LandLedgers.Economy.Blacksmith
             materialStock[recipe.MaterialId] -= recipe.MaterialUnits;
             materialStock[ImportCatalog.ForgeCoalId] -= recipe.FuelUnits;
 
+            // Pass VIII (production networks): the FIFO provenance ledger must
+            // mirror the unit decrement — CompleteRepair already records lot
+            // consumption, but CraftEquipment omitted it, so LotUnitsOnHand
+            // kept reporting units that were already forged into equipment
+            // (ledger divergence: provenance said the iron was still on hand).
+            var lotNotes = new List<string>();
+            RecordLotConsumption(recipe.MaterialId, recipe.MaterialUnits, lotNotes);
+            var fuelNotes = new List<string>();
+            RecordLotConsumption(ImportCatalog.ForgeCoalId, recipe.FuelUnits, fuelNotes);
+            diagnostics.Add(
+                $"BlacksmithRuntime: crafted {recipe.EquipmentKind} consumed lots " +
+                $"[{string.Join(", ", lotNotes.ToArray())}] + fuel [{string.Join(", ", fuelNotes.ToArray())}].");
+
             var asset = new EquipmentAsset
             {
                 AssetId = $"EQ-{businessInstanceId}-{nextAssetNumber++:D3}",
@@ -367,7 +380,14 @@ namespace LandLedgers.Economy.Blacksmith
             // shop's register; when supplied, announce the finished repair
             // on the pickup ledger.
             ArtisanLienRegister unpaidLienRegister = null,
-            RepairPickupLedger pickupAnnounceLedger = null)
+            RepairPickupLedger pickupAnnounceLedger = null,
+            // Pass VIII (production networks, additive, default-off): when
+            // wired, the agreed repair price is credited to the shop's business
+            // cash as transfer revenue with provenance (the one-cash-writer
+            // rule: the price leaves the customer ledger above AND lands in
+            // the business cash here — never one side alone). Callers that
+            // post revenue through their own settlement path leave this null.
+            LandLedgers.Economy.BusinessRuntimeState businessCash = null)
         {
             diagnostics = diagnostics ?? new List<string>();
             // NX-1A: Canon 4.1 — repair work happens at the forge station
@@ -417,6 +437,11 @@ namespace LandLedgers.Economy.Blacksmith
                     $"repair {order.WorkOrderId}: {order.AssetDescription} ({order.DiagnosedProblem})", businessName);
                 if (rejection != null)
                     return $"BlacksmithRuntime: customer payment failed — {rejection}";
+                // Pass VIII: the price that just left the customer ledger lands
+                // in the shop's business cash — conservation, both sides.
+                if (businessCash != null)
+                    businessCash.AddWeeklyLocalTransferRevenue(order.AgreedPriceCents,
+                        $"repair {order.WorkOrderId}: {order.AssetDescription} ({order.DiagnosedProblem})");
             }
 
             order.Status = RepairOrderStatus.Complete;

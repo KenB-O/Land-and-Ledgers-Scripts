@@ -51,7 +51,13 @@ namespace LandLedgers.Economy.Farming
             int priceCents,
             int dayIndex,
             HouseholdLedger sellerLedger,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            // Pass VIII (production networks, additive, default-off): the
+            // butcher's operating cash. When wired, the butcher pays the price
+            // from it (TryBuyLivestock refuses when short) — the farm's
+            // SaleProceeds inflow then has a matching outflow (no manufactured
+            // revenue). Unwired keeps the legacy no-payment path.
+            LandLedgers.Economy.BusinessRuntimeState buyerCash = null)
         {
             diagnostics ??= new List<string>();
             if (registry == null)
@@ -73,8 +79,13 @@ namespace LandLedgers.Economy.Farming
                 return null;
             }
 
-            if (animal.OwnerKind != AnimalOwnerKind.Business
-                || !string.Equals(animal.OwnerId, farmBusinessId, StringComparison.Ordinal))
+            // Pass VIII: the production ownership convention is "farm:" +
+            // business id (FarmBootstrap; CullFlow requires it). The legacy
+            // unprefixed form is still accepted for older records — but a
+            // farm never sells another farm's animal either way.
+            bool ownedByFarm = string.Equals(animal.OwnerId, farmBusinessId, StringComparison.Ordinal)
+                || string.Equals(animal.OwnerId, "farm:" + farmBusinessId, StringComparison.Ordinal);
+            if (animal.OwnerKind != AnimalOwnerKind.Business || !ownedByFarm)
             {
                 diagnostics.Add($"Animal {animalId} is not owned by farm '{farmBusinessId}' " +
                     $"(owned by {animal.OwnerKind}:{animal.OwnerId}).");
@@ -95,20 +106,29 @@ namespace LandLedgers.Economy.Farming
 
             int price = Mathf.Max(0, priceCents);
 
-            // Close the farm's open ownership record, then transfer through the BIZ-4
-            // buying flow, which appends the butcher's ownership record.
+            // Pass VIII: atomic ownership — snapshot the farm's open records
+            // BEFORE the butcher appends its own, and close only the farm's
+            // records after acceptance. Closing first left the animal
+            // ownerless when the purchase refused; closing everything after
+            // would also close the butcher's just-appended record.
+            var farmOpenRecords = new List<AnimalOwnershipRecord>();
             foreach (AnimalOwnershipRecord record in animal.OwnershipHistory)
             {
                 if (record.IsCurrent)
                 {
-                    record.EndDayIndex = dayIndex;
+                    farmOpenRecords.Add(record);
                 }
             }
 
-            if (!butcher.TryBuyLivestock(registry, animalId, price, dayIndex, diagnostics))
+            if (!butcher.TryBuyLivestock(registry, animalId, price, dayIndex, diagnostics, buyerCash))
             {
-                diagnostics.Add($"Butcher declined animal {animalId}.");
+                diagnostics.Add($"Butcher declined animal {animalId} — sale refused, farm keeps the animal.");
                 return null;
+            }
+
+            foreach (AnimalOwnershipRecord record in farmOpenRecords)
+            {
+                record.EndDayIndex = dayIndex;
             }
 
             string animalKey = animalId.ToString();

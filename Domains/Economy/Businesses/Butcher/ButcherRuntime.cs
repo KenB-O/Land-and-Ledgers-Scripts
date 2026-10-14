@@ -275,13 +275,19 @@ namespace LandLedgers.Economy.Butcher
         /// <summary>
         /// Buys a live animal into the business (ownership → business). The animal must
         /// exist and be active; the spend is recorded with the animal as provenance.
+        /// Pass VIII (production networks): when buyerCash is wired, the price is
+        /// paid from the butcher's operating cash (TrySpendCents — refuses when
+        /// short, so the purchase never happens on money the butcher does not
+        /// hold). The farm-side SaleProceeds inflow recorded by the caller then
+        /// has its matching outflow: no manufactured revenue.
         /// </summary>
         public bool TryBuyLivestock(
             AnimalRegistry registry,
             EntityId animalId,
             int priceCents,
             int dayIndex,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            LandLedgers.Economy.BusinessRuntimeState buyerCash = null)
         {
             diagnostics ??= new List<string>();
             if (registry == null)
@@ -295,6 +301,18 @@ namespace LandLedgers.Economy.Butcher
             {
                 diagnostics.Add($"Animal {animalId} is not available for purchase.");
                 return false;
+            }
+
+            int price = Mathf.Max(0, priceCents);
+            if (buyerCash != null && price > 0)
+            {
+                if (!buyerCash.TrySpendCents(price))
+                {
+                    diagnostics.Add($"Butcher '{businessInstanceId}' cannot afford {animalId} " +
+                        $"for {price}c (operating cash {buyerCash.CurrentCashCents}c) — purchase refused, no animal taken.");
+                    return false;
+                }
+                buyerCash.RecordWeeklyInputProcurement(1, price);
             }
 
             animal.OwnerKind = AnimalOwnerKind.Business;

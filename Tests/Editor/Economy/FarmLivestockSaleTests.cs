@@ -127,5 +127,76 @@ namespace LandLedgers.EditorTests.Economy
 
             Assert.IsNull(sale);
         }
+
+        [Test]
+        public void Sale_AcceptsProductionFarmOwnershipConvention()
+        {
+            // Pass VIII: FarmBootstrap registers farm animals as "farm:" +
+            // farm id (CullFlow requires it), but ExecuteSale used to demand
+            // the bare id — the live cull path could never complete.
+            AnimalRegistry registry = NewRegistry();
+            AnimalState animal = registry.RegisterAnimal(
+                AnimalSpecies.Cattle, "Angus", AnimalSex.Female,
+                AnimalOwnerKind.Business, "farm:F1", 50, "raised on farm");
+
+            var diagnostics = new List<string>();
+            FarmLivestockSale sale = FarmLivestockMarket.ExecuteSale(
+                registry, animal.AnimalId, "F1", "Test Farm",
+                NewButcher(), "B1", 8500, 100,
+                new HouseholdLedger(7), diagnostics);
+
+            Assert.IsNotNull(sale, string.Join("; ", diagnostics));
+            Assert.AreEqual(AnimalOwnerKind.Business, animal.OwnerKind);
+            Assert.AreEqual("B1", animal.OwnerId);
+        }
+
+        [Test]
+        public void Sale_ButcherPaysFromOperatingCash_Conserved()
+        {
+            // Pass VIII: the farm's SaleProceeds inflow must have the
+            // butcher's matching outflow — no manufactured revenue.
+            AnimalRegistry registry = NewRegistry();
+            AnimalState animal = NewFarmAnimal(registry, "F1");
+            var sellerLedger = new HouseholdLedger(7);
+            var buyerCash = new LandLedgers.Economy.BusinessRuntimeState();
+            buyerCash.AddCashCents(20000);
+
+            var diagnostics = new List<string>();
+            FarmLivestockSale sale = FarmLivestockMarket.ExecuteSale(
+                registry, animal.AnimalId, "F1", "Test Farm",
+                NewButcher(), "B1", 8500, 100, sellerLedger, diagnostics, buyerCash);
+
+            Assert.IsNotNull(sale, string.Join("; ", diagnostics));
+            Assert.AreEqual(8500, sellerLedger.GetBalanceCents(), "farm credited");
+            Assert.AreEqual(20000 - 8500, buyerCash.CurrentCashCents, "butcher paid — conserved");
+        }
+
+        [Test]
+        public void Sale_Refused_WhenButcherCannotAfford_Atomic()
+        {
+            // Pass VIII: a butcher that cannot pay takes no animal, and the
+            // farm's ownership record is never left dangling.
+            AnimalRegistry registry = NewRegistry();
+            AnimalState animal = NewFarmAnimal(registry, "F1");
+            var sellerLedger = new HouseholdLedger(7);
+            var buyerCash = new LandLedgers.Economy.BusinessRuntimeState();
+            buyerCash.AddCashCents(100);
+            int historyBefore = animal.OwnershipHistory.Count;
+
+            var diagnostics = new List<string>();
+            FarmLivestockSale sale = FarmLivestockMarket.ExecuteSale(
+                registry, animal.AnimalId, "F1", "Test Farm",
+                NewButcher(), "B1", 8500, 100, sellerLedger, diagnostics, buyerCash);
+
+            Assert.IsNull(sale, "the butcher cannot afford the animal");
+            Assert.AreEqual(AnimalOwnerKind.Business, animal.OwnerKind);
+            Assert.AreEqual("F1", animal.OwnerId, "farm keeps the animal");
+            Assert.AreEqual(historyBefore, animal.OwnershipHistory.Count,
+                "no ownership record closed on a refused sale");
+            Assert.IsTrue(animal.OwnershipHistory[animal.OwnershipHistory.Count - 1].IsCurrent,
+                "the farm's record is still current — nothing dangles");
+            Assert.AreEqual(0, sellerLedger.GetBalanceCents(), "farm credited nothing");
+            Assert.AreEqual(100, buyerCash.CurrentCashCents, "butcher paid nothing");
+        }
     }
 }

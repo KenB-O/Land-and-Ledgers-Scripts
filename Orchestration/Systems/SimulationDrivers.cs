@@ -710,6 +710,12 @@ namespace LandLedgers.Orchestration.Systems
             // farm's real feed stock now; unfed horses degrade loudly.
             DriveHorseCareDay(absoluteDayIndex);
             DriveTenancyPayments(absoluteDayIndex);
+            // Pass VIII Worker 2: the absent-occupant boundary — an absent
+            // person (dead or departed from the town roster) must not hold
+            // local accommodation indefinitely without a valid arrangement.
+            // Strict policy here (no exemptions); the autonomy worker owns
+            // lenient exemptions through HousingAbsenceSweep's predicate.
+            DriveHousingAbsenceSweep(absoluteDayIndex);
             // Pass V drive-by: DomesticLaborDriver had NO live caller (tests
             // only). Wire it here: need-driven domestic tasks (meals, fuel,
             // animals, chores) scheduled on real person time through the real
@@ -817,6 +823,56 @@ namespace LandLedgers.Orchestration.Systems
             {
                 Debug.LogWarning("[SimulationDrivers] tenancy: " + string.Join(" | ", diagnostics));
             }
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2: daily absent-occupant sweep. Absent means
+        /// dead (deathDayIndex >= 0) or departed from the town roster
+        /// (settlement arrangement Departed, or no longer a known person).
+        /// Strict: no valid-arrangement exemptions here. Each resolved
+        /// person is also vacated from any boarding house that holds them
+        /// so beds free in lockstep with housing occupancies.
+        /// </summary>
+        private void DriveHousingAbsenceSweep(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager == null) return;
+            var diagnostics = new List<string>();
+            var sweep = new HousingAbsenceSweep();
+            var bridge = new BoardingLodgingBridge();
+            HousingAbsenceSweepResult result = sweep.Sweep(
+                hub.Housing,
+                IsPersonAbsent,
+                absoluteDayIndex,
+                diagnostics,
+                hasValidAbsenceArrangement: null,
+                onPersonVacated: personId =>
+                {
+                    if (hub.BoardingHouseRuntimes == null) return;
+                    foreach (BoardingHouseShopRuntime runtime in hub.BoardingHouseRuntimes)
+                    {
+                        if (runtime == null) continue;
+                        bridge.VacatePersonFromHouse(runtime, personId, absoluteDayIndex,
+                            hub.Housing, hub.LodgingRegistry, diagnostics);
+                    }
+                });
+            if (result.PersonsResolved > 0 || result.OccupanciesEnded > 0)
+            {
+                Debug.Log($"[SimulationDrivers] housing absence sweep day {absoluteDayIndex}: " +
+                    $"{result.PersonsResolved} absent person(s) resolved, {result.OccupanciesEnded} occupanc(ies) ended.");
+            }
+            if (diagnostics.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] housing absence: " + string.Join(" | ", diagnostics));
+            }
+        }
+
+        private bool IsPersonAbsent(int personId)
+        {
+            if (populationManager?.State == null) return false;
+            PersonState person = populationManager.State.GetPerson(personId);
+            if (person == null) return true; // no longer in the town roster
+            if (person.deathDayIndex >= 0) return true;
+            return person.settlementArrangement == SettlementArrangement.Departed;
         }
 
         private void DriveBoardingHouseDays(int absoluteDayIndex)

@@ -77,6 +77,15 @@ namespace LandLedgers.World.Property
         public int UpfrontCostCents;
         public int RecurringMonthlyCents;
         public int TotalPriceCents;             // purchase / land price (0 when not a purchase path)
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): the person/business/government id
+        /// the recurring rent is owed to. When set and RecurringMonthlyCents
+        /// is positive, the executor attaches real payment terms to the
+        /// tenancy agreement so rent flows through the legitimate
+        /// authorities — discovery never yields free housing. Empty =
+        /// the agreement carries no payment schedule (loudly diagnosed).
+        /// </summary>
+        public string PayeeHolderId = string.Empty;
         public int TravelDaysFromTown;
         public string Prerequisites = string.Empty;
 
@@ -596,14 +605,77 @@ namespace LandLedgers.World.Property
                 option.SpaceId, option.Description, dayIndex, -1, string.Empty, diag);
             result.AgreementId = agreement != null ? agreement.AgreementId : string.Empty;
 
+            // Pass VIII Worker 2: a rental with a real recurring cost and a
+            // named payee becomes a real tenancy — payment terms attach so
+            // the rent loop charges actual cash or books real arrears.
+            // Discovery never yields free housing when the payee is known.
+            if (agreement != null && option.RecurringMonthlyCents > 0
+                && !string.IsNullOrWhiteSpace(option.PayeeHolderId))
+            {
+                string termsRefusal = housing.AttachPaymentTerms(agreement.AgreementId,
+                    new TenancyPaymentTerms
+                    {
+                        AmountCents = option.RecurringMonthlyCents,
+                        PeriodDays = 30,
+                        DueDayOfPeriod = 1,
+                        StartDay = dayIndex,
+                        PayeeHolderId = option.PayeeHolderId,
+                        TenantHouseholdId = result.HouseholdId,
+                    }, diag);
+                if (termsRefusal != null)
+                {
+                    housing.EndAgreement(agreement.AgreementId, dayIndex, endLinkedOccupancies: false,
+                        "payment terms refused — no rent-free tenancy created", diag);
+                    result.AgreementId = string.Empty;
+                    result.FailureReason = $"payment terms refused: {termsRefusal}";
+                    diag.Add($"HousingSearchExecutor: {result.FailureReason}");
+                    return result;
+                }
+            }
+            else if (agreement != null && option.RecurringMonthlyCents > 0)
+            {
+                diag.Add($"HousingSearchExecutor: {kindLabel} option '{option.OptionId}' costs {option.RecurringMonthlyCents}c/month " +
+                         "but names no payee — the agreement carries no payment schedule and the rent loop cannot charge it. " +
+                         "Name the payee (PayeeHolderId) so rent flows through the legitimate authorities.");
+            }
+
             if (members != null)
             {
                 foreach (PersonState member in members)
                 {
                     if (member == null || member.deathDayIndex >= 0) continue;
-                    ResidentialOccupancy occ = housing.Occupy(
-                        member.id, result.HouseholdId, option.SpaceId, arrangement, dayIndex, diag);
-                    if (occ != null) result.OccupancyIds.Add(occ.OccupancyId);
+                    // Pass VIII Worker 2: commercial lodging occupancies go
+                    // through the capacity-guarded path — a room cannot be
+                    // rented beyond its beds. Private/voluntary arrangements
+                    // keep Canon 12.7 freedom with consequence (overcrowding
+                    // recorded as unsuitable, never refused at the door).
+                    if (HousingAuthority.IsCommercialLodgingArrangement(arrangement))
+                    {
+                        string refusal = housing.TryOccupyUnderAgreement(
+                            member.id, result.HouseholdId, option.SpaceId, arrangement,
+                            dayIndex, result.AgreementId, diag, out ResidentialOccupancy guarded);
+                        if (refusal != null)
+                        {
+                            if (!string.IsNullOrWhiteSpace(result.AgreementId))
+                                housing.EndAgreement(result.AgreementId, dayIndex, endLinkedOccupancies: false,
+                                    "occupancy refused — no partial tenancy left behind", diag);
+                            result.AgreementId = string.Empty;
+                            result.FailureReason = $"occupancy refused for P{member.id}: {refusal}";
+                            diag.Add($"HousingSearchExecutor: {result.FailureReason}");
+                            return result;
+                        }
+                        if (guarded != null) result.OccupancyIds.Add(guarded.OccupancyId);
+                    }
+                    else
+                    {
+                        ResidentialOccupancy occ = housing.Occupy(
+                            member.id, result.HouseholdId, option.SpaceId, arrangement, dayIndex, diag);
+                        if (occ != null)
+                        {
+                            occ.AgreementId = result.AgreementId;
+                            result.OccupancyIds.Add(occ.OccupancyId);
+                        }
+                    }
                 }
             }
             result.Executed = true;

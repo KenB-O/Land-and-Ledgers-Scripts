@@ -74,6 +74,14 @@ namespace LandLedgers.World.Property
         public AccommodationArrangement Arrangement = AccommodationArrangement.Unspecified;
         public int SinceDayIndex;
         public int UntilDayIndex = -1; // -1 = current
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): the property agreement this
+        /// occupancy was created under (empty = none — e.g. informal kin
+        /// hosting or a legacy record). Lets closure, transfer and the
+        /// absence sweep resolve occupancies through their agreements
+        /// instead of orphaning them.
+        /// </summary>
+        public string AgreementId = string.Empty;
 
         public bool IsCurrent => UntilDayIndex < 0;
 
@@ -236,6 +244,301 @@ namespace LandLedgers.World.Property
             occupancies[occupancy.OccupancyId] = occupancy;
             diag.Add($"HousingAuthority: P{personId} (H{householdId}) occupies '{spaceId}' as {arrangement}.");
             return occupancy;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): commercial lodging arrangements
+        /// are capacity-guarded — a room cannot be rented beyond its beds.
+        /// Private/voluntary arrangements (kin hosting, doubled-up, camp,
+        /// precarious) stay permissive per Canon 12.7 freedom with
+        /// consequence: overcrowding there is recorded as unsuitable by the
+        /// shelter-suitability evaluator, never refused at the door.
+        /// </summary>
+        public static bool IsCommercialLodgingArrangement(AccommodationArrangement arrangement)
+        {
+            return arrangement == AccommodationArrangement.Rental
+                || arrangement == AccommodationArrangement.RoomRental
+                || arrangement == AccommodationArrangement.BoardingOrLodging
+                || arrangement == AccommodationArrangement.TransientLodging
+                || arrangement == AccommodationArrangement.EmployerLodging;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): the guarded occupancy path for
+        /// tenancies and boarding. Refuses unknown spaces, unstated
+        /// arrangements, and — for commercial lodging arrangements —
+        /// occupancy beyond the space's sleeping capacity. Links the
+        /// occupancy to its property agreement so closure, transfer and
+        /// the absence sweep can resolve it. Returns null on success, the
+        /// refusal reason otherwise; the created occupancy comes back via
+        /// the out parameter.
+        /// </summary>
+        public string TryOccupyUnderAgreement(
+            int personId, int householdId, string spaceId,
+            AccommodationArrangement arrangement, int dayIndex, string agreementId,
+            List<string> diag, out ResidentialOccupancy occupancy)
+        {
+            diag = diag ?? diagnostics;
+            occupancy = null;
+            if (!spaces.TryGetValue(spaceId, out AccommodationSpace space))
+                return $"HousingAuthority.TryOccupyUnderAgreement: unknown space '{spaceId}' — a household cannot occupy nonexistent accommodation.";
+            if (arrangement == AccommodationArrangement.Unspecified)
+                return "HousingAuthority.TryOccupyUnderAgreement: the arrangement must be stated — arrangements are not tiers.";
+            if (IsCommercialLodgingArrangement(arrangement))
+            {
+                int others = 0;
+                foreach (ResidentialOccupancy occ in occupancies.Values)
+                {
+                    if (occ.IsCurrent && occ.PersonId != personId
+                        && string.Equals(occ.SpaceId, spaceId, StringComparison.Ordinal))
+                        others++;
+                }
+                if (others + 1 > Math.Max(0, space.SleepingCapacity))
+                    return $"HousingAuthority.TryOccupyUnderAgreement: '{spaceId}' sleeps {space.SleepingCapacity} " +
+                           $"and already holds {others} — a room cannot be rented beyond capacity (Canon 12.7 commercial lodging).";
+            }
+            occupancy = Occupy(personId, householdId, spaceId, arrangement, dayIndex, diag);
+            if (occupancy == null)
+                return $"HousingAuthority.TryOccupyUnderAgreement: occupancy recording failed for P{personId} in '{spaceId}'.";
+            occupancy.AgreementId = agreementId ?? string.Empty;
+            return null;
+        }
+
+        /// <summary>Pass VIII Worker 2 (additive): current occupants of one space, in record order.</summary>
+        public int OccupantCount(string spaceId)
+        {
+            if (string.IsNullOrWhiteSpace(spaceId)) return 0;
+            int count = 0;
+            foreach (ResidentialOccupancy occ in occupancies.Values)
+            {
+                if (occ.IsCurrent && string.Equals(occ.SpaceId, spaceId, StringComparison.Ordinal))
+                    count++;
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): every current occupancy in the
+        /// authority, in record order. The absence sweep and diagnostics
+        /// consume this; it never invents state.
+        /// </summary>
+        public List<ResidentialOccupancy> AllCurrentOccupancies()
+        {
+            var result = new List<ResidentialOccupancy>();
+            foreach (ResidentialOccupancy occ in occupancies.Values)
+            {
+                if (occ != null && occ.IsCurrent) result.Add(occ);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): real accommodation availability —
+        /// every space with zero current occupants, in space-id order. The
+        /// housing opportunity adapter and the migration worker consume
+        /// this; it reports what exists, never what is wanted.
+        /// </summary>
+        public List<AccommodationSpace> VacantSpaces()
+        {
+            var result = new List<AccommodationSpace>();
+            foreach (AccommodationSpace space in spaces.Values)
+            {
+                if (space != null && OccupantCount(space.SpaceId) == 0)
+                    result.Add(space);
+            }
+            result.Sort((a, b) => string.Compare(a.SpaceId, b.SpaceId, StringComparison.Ordinal));
+            return result;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): capacity changes are real edits,
+        /// not silent field writes. Growing is always allowed; shrinking
+        /// below the current occupant count is refused — people are moved
+        /// out first, the beds are not redefined under them. Returns null
+        /// on success, the refusal otherwise.
+        /// </summary>
+        public string ChangeSpaceCapacity(string spaceId, int newCapacity, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!spaces.TryGetValue(spaceId, out AccommodationSpace space))
+                return $"HousingAuthority.ChangeSpaceCapacity: unknown space '{spaceId}'.";
+            if (newCapacity < 0)
+                return $"HousingAuthority.ChangeSpaceCapacity: capacity cannot be negative (got {newCapacity}).";
+            int occupants = OccupantCount(spaceId);
+            if (newCapacity < occupants)
+                return $"HousingAuthority.ChangeSpaceCapacity: '{spaceId}' holds {occupants} current occupant(s) — " +
+                       "shrink the space only after people move out, never under them.";
+            int old = space.SleepingCapacity;
+            space.SleepingCapacity = newCapacity;
+            diag.Add($"HousingAuthority: '{spaceId}' capacity {old} -> {newCapacity} (day {dayIndex}).");
+            return null;
+        }
+
+        /// <summary>Pass VIII Worker 2 (additive): agreement lookup.</summary>
+        public PropertyAgreement FindAgreement(string agreementId)
+        {
+            if (string.IsNullOrWhiteSpace(agreementId)) return null;
+            agreements.TryGetValue(agreementId, out PropertyAgreement agreement);
+            return agreement;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): agreements whose target is one
+        /// space or building, in agreement-id order.
+        /// </summary>
+        public List<PropertyAgreement> AgreementsForTarget(string targetId)
+        {
+            var result = new List<PropertyAgreement>();
+            foreach (PropertyAgreement agreement in agreements.Values)
+            {
+                if (agreement != null && string.Equals(agreement.SpaceOrParcelId, targetId, StringComparison.Ordinal))
+                    result.Add(agreement);
+            }
+            result.Sort((a, b) => string.Compare(a.AgreementId, b.AgreementId, StringComparison.Ordinal));
+            return result;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): ends a tenancy. The agreement
+        /// keeps its id (FinancialObligationAuthority obligations stay
+        /// linked — no orphaned debt); optionally the occupancies created
+        /// under it end too, freeing the space. Idempotent: ending an
+        /// already-ended agreement is a diagnostic, not an error. Returns
+        /// null on success, the refusal otherwise.
+        /// </summary>
+        public string EndAgreement(string agreementId, int dayIndex, bool endLinkedOccupancies, string reason, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!agreements.TryGetValue(agreementId, out PropertyAgreement agreement))
+                return $"HousingAuthority.EndAgreement: unknown agreement '{agreementId}'.";
+            if (agreement.EndDayIndex >= 0 && agreement.EndDayIndex <= dayIndex)
+            {
+                diag.Add($"HousingAuthority: agreement '{agreementId}' already ended (day {agreement.EndDayIndex}) — no double end.");
+                return null;
+            }
+            agreement.EndDayIndex = dayIndex;
+            diag.Add($"HousingAuthority: agreement '{agreementId}' ended day {dayIndex} — {reason}.");
+            if (endLinkedOccupancies)
+            {
+                foreach (ResidentialOccupancy occ in occupancies.Values)
+                {
+                    if (occ.IsCurrent && string.Equals(occ.AgreementId, agreementId, StringComparison.Ordinal))
+                    {
+                        occ.UntilDayIndex = dayIndex;
+                        diag.Add($"HousingAuthority: occupancy '{occ.OccupancyId}' (P{occ.PersonId}) ended with agreement '{agreementId}' — space '{occ.SpaceId}' freed.");
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): property transfer. The agreement
+        /// keeps its id and its occupants keep their beds — occupancy is a
+        /// fact, not a right the transfer revokes. Only the grantor name
+        /// and, when terms exist, the rent payee move to the new holder.
+        /// Arrears obligations in FinancialObligationAuthority stay linked
+        /// by agreement id. Returns null on success, the refusal otherwise.
+        /// </summary>
+        public string TransferAgreement(string agreementId, string newGrantorName, string newPayeeHolderId, int dayIndex, string reason, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!agreements.TryGetValue(agreementId, out PropertyAgreement agreement))
+                return $"HousingAuthority.TransferAgreement: unknown agreement '{agreementId}'.";
+            if (string.IsNullOrWhiteSpace(newGrantorName))
+                return "HousingAuthority.TransferAgreement: the new grantor must be named.";
+            if (agreement.EndDayIndex >= 0 && agreement.EndDayIndex <= dayIndex)
+                return $"HousingAuthority.TransferAgreement: agreement '{agreementId}' already ended (day {agreement.EndDayIndex}) — transfer a live tenancy, not a closed one.";
+            string oldGrantor = agreement.GrantorName;
+            agreement.GrantorName = newGrantorName;
+            string payeeNote = "no payment terms — nothing to redirect";
+            if (agreement.PaymentTerms != null && !string.IsNullOrWhiteSpace(newPayeeHolderId))
+            {
+                string oldPayee = agreement.PaymentTerms.PayeeHolderId;
+                agreement.PaymentTerms.PayeeHolderId = newPayeeHolderId;
+                payeeNote = $"rent payee '{oldPayee}' -> '{newPayeeHolderId}'";
+            }
+            diag.Add($"HousingAuthority: agreement '{agreementId}' transferred '{oldGrantor}' -> '{newGrantorName}' (day {dayIndex}, {reason}); " +
+                     $"occupants and obligation links unchanged; {payeeNote}.");
+            return null;
+        }
+
+        /// <summary>Pass VIII Worker 2 (additive): the outcome of closing one building.</summary>
+        [Serializable]
+        public sealed class BuildingClosureResult
+        {
+            public string BuildingId = string.Empty;
+            public int OccupanciesEnded;
+            public int AgreementsEnded;
+            public int AssignmentsEnded;
+            public List<string> EndedAgreementIds = new List<string>();
+            public string Refusal = string.Empty;
+
+            public BuildingClosureResult() { }
+        }
+
+        /// <summary>
+        /// Pass VIII Worker 2 (additive): business closure / property
+        /// shutdown for one building. Ends every current occupancy in its
+        /// spaces (departure frees each space), ends every agreement
+        /// targeting its spaces or the building itself, and closes active
+        /// functional assignments. History is kept — nothing is deleted, so
+        /// no occupant or obligation is orphaned. Returns the closure
+        /// record, with Refusal set when the building is unknown.
+        /// </summary>
+        public BuildingClosureResult CloseBuilding(string buildingId, int dayIndex, string reason, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var result = new BuildingClosureResult { BuildingId = buildingId ?? string.Empty };
+            if (!buildings.ContainsKey(buildingId))
+            {
+                result.Refusal = $"HousingAuthority.CloseBuilding: unknown building '{buildingId}'.";
+                return result;
+            }
+            var spaceIds = new List<string>();
+            foreach (AccommodationSpace space in SpacesForBuilding(buildingId))
+            {
+                if (space == null) continue;
+                spaceIds.Add(space.SpaceId);
+                foreach (ResidentialOccupancy occ in CurrentOccupants(space.SpaceId))
+                {
+                    occ.UntilDayIndex = dayIndex;
+                    result.OccupanciesEnded++;
+                    diag.Add($"HousingAuthority: occupancy '{occ.OccupancyId}' (P{occ.PersonId}) ended — building '{buildingId}' closed (day {dayIndex}, {reason}).");
+                }
+            }
+            var agreementIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string spaceId in spaceIds)
+                foreach (PropertyAgreement agreement in AgreementsForTarget(spaceId))
+                    agreementIds.Add(agreement.AgreementId);
+            foreach (PropertyAgreement agreement in AgreementsForTarget(buildingId))
+                agreementIds.Add(agreement.AgreementId);
+            foreach (string agreementId in agreementIds)
+            {
+                string refusal = EndAgreement(agreementId, dayIndex, endLinkedOccupancies: true, reason: $"building '{buildingId}' closed — {reason}", diag);
+                if (refusal == null)
+                {
+                    result.AgreementsEnded++;
+                    result.EndedAgreementIds.Add(agreementId);
+                }
+                else
+                {
+                    diag.Add(refusal);
+                }
+            }
+            foreach (FunctionalSpaceAssignment assignment in assignments.Values)
+            {
+                if (assignment.IsActive && (spaceIds.Contains(assignment.SpaceId)
+                    || string.Equals(assignment.SpaceId, buildingId, StringComparison.Ordinal)))
+                {
+                    assignment.UntilDayIndex = dayIndex;
+                    result.AssignmentsEnded++;
+                    diag.Add($"HousingAuthority: functional assignment '{assignment.AssignmentId}' closed with building '{buildingId}'.");
+                }
+            }
+            diag.Add($"HousingAuthority: building '{buildingId}' closed (day {dayIndex}, {reason}) — " +
+                     $"{result.OccupanciesEnded} occupanc(ies), {result.AgreementsEnded} agreement(s), {result.AssignmentsEnded} assignment(s) ended; history kept.");
+            return result;
         }
 
         public List<ResidentialOccupancy> CurrentOccupants(string spaceId)

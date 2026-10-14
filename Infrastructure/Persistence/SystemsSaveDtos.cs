@@ -118,6 +118,9 @@ namespace LandLedgers.Persistence
         // states plus settled-period idempotency markers.
         public HousingAuthority.HousingSaveDto housing = new();
         public TenancyPaymentService.TenancyPaymentSaveDto tenancyPayments = new();
+        // Pass VIII Worker 2: lodging registrations — which business rooms
+        // are real accommodation.
+        public LodgingRegistry.LodgingRegistrySaveDto lodgingRegistry = new();
         // Pass III Worker C: household decisions, decision-execution state,
         // domestic labor assignments, and autonomy job-loss fingerprints.
         public HouseholdDecisionServiceSaveDto householdDecisions = new();

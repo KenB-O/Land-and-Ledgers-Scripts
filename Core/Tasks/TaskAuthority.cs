@@ -79,6 +79,15 @@ namespace LandLedgers.Tasks
         private ITaskExecutionGate executionGate;
 
         /// <summary>
+        /// Pass VIII Worker 7: optional worker-availability seam. When installed,
+        /// AssignTask and StartTask refuse workers the predicate marks
+        /// unavailable (the production wiring marks the deceased: a dead person
+        /// is never offered work, at task assignment or at start, no matter
+        /// which caller forgot to check). Null = no enforcement (legacy).
+        /// </summary>
+        public Func<EntityId, bool> IsWorkerUnavailable { get; set; }
+
+        /// <summary>
         /// NX-1A: installs the equipment execution gate. Canon 4.1 CANON LOCK —
         /// a task is executable only when the full combination exists (capable
         /// person + required tool/equipment + workspace + materials + motive
@@ -196,6 +205,30 @@ namespace LandLedgers.Tasks
                 return false;
             }
 
+            // Pass VIII Worker 7: the dead are never offered work. The seam is
+            // consulted here so every caller is covered, including callers
+            // that never learned to check.
+            if (IsWorkerUnavailable != null)
+            {
+                bool unavailable;
+                try
+                {
+                    unavailable = IsWorkerUnavailable(workerId);
+                }
+                catch (Exception ex)
+                {
+                    rejectionReason = "Cannot assign " + taskId + ": worker-availability check failed (" +
+                        ex.GetType().Name + ") — refused rather than assigned blind.";
+                    return false;
+                }
+                if (unavailable)
+                {
+                    rejectionReason = "Cannot assign " + taskId + ": " + workerId +
+                        " is unavailable for work (worker-availability seam).";
+                    return false;
+                }
+            }
+
             if (task.Status != TaskStatus.Queued)
             {
                 rejectionReason = "Task " + taskId + " is " + task.Status + ", not Queued.";
@@ -252,6 +285,29 @@ namespace LandLedgers.Tasks
             {
                 rejectionReason = "Task " + taskId + " is " + task.Status + ", not Assigned or ResourcesReserved.";
                 return false;
+            }
+
+            // Pass VIII Worker 7: a worker who became unavailable between
+            // assignment and start (death, above all) must not start work.
+            if (IsWorkerUnavailable != null && task.HasAssignee)
+            {
+                bool unavailable;
+                try
+                {
+                    unavailable = IsWorkerUnavailable(task.AssigneeId);
+                }
+                catch (Exception ex)
+                {
+                    rejectionReason = "Task " + taskId + ": worker-availability check failed (" +
+                        ex.GetType().Name + ") — refused rather than started blind.";
+                    return false;
+                }
+                if (unavailable)
+                {
+                    rejectionReason = "Task " + taskId + ": " + task.AssigneeId +
+                        " is unavailable for work (worker-availability seam) — start refused.";
+                    return false;
+                }
             }
 
             // NX-1A: Canon 4.1 — work begins only when the full combination

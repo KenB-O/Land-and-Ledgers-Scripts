@@ -36,7 +36,7 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
     /// by ledger authorities, never collected here. Money moves only
     /// through ledger authorities.
     /// </summary>
-    public sealed class BoardingHouseShopRuntime : IRentCashSink, IBoarderCheckInPort
+    public sealed class BoardingHouseShopRuntime : IRentCashSink, IBoarderCheckInPort, IBoardingHouseLodgingSide
     {
         /// <summary>D1F TUNING: chamber-work minutes one housekeeper gives per day (Canon Part XV).</summary>
         public const int HousekeeperMinutesPerDay = 240;

@@ -319,6 +319,7 @@ namespace LandLedgers.Orchestration.Systems
         private LaborMigrationLinker laborMigrationLinker;
         private DelegationService delegationService;
         private TenancyPaymentService tenancyPaymentService;
+        private LodgingRegistry lodgingRegistry;
 
         /// <summary>
         /// Pass IV (Worker 1): deterministic due-event scheduler (task completions,
@@ -483,6 +484,14 @@ namespace LandLedgers.Orchestration.Systems
         /// the ITenancyPayeeDirectory.
         /// </summary>
         public TenancyPaymentService TenancyPayments => tenancyPaymentService ??= new TenancyPaymentService();
+
+        /// <summary>
+        /// Pass VIII Worker 2: hub-owned lodging registry — which business
+        /// rooms are registered as real accommodation. Boarding check-in
+        /// refuses unregistered rooms; closure ends registrations. Owned by
+        /// the hub so registration survives with the save.
+        /// </summary>
+        public LodgingRegistry LodgingRegistry => lodgingRegistry ??= new LodgingRegistry();
 
         /// <summary>
         /// Pass IV (Worker 1): the deterministic due-event scheduler. Drivers pop due
@@ -907,6 +916,7 @@ namespace LandLedgers.Orchestration.Systems
                 householdErrandPlans = HouseholdErrands.Plans.CaptureSaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
                 housing = Housing.CaptureSaveDto(),
+                lodgingRegistry = LodgingRegistry.CaptureSaveDto(),
                 boardingHouseRuntimes = CaptureBoardingHouseRuntimes(),
                 // Pass IV (Worker 1): deterministic due-event schedule.
                 dueEvents = DueEvents.CaptureSaveDto(),
@@ -1006,6 +1016,7 @@ namespace LandLedgers.Orchestration.Systems
             Parcels.LoadFromSaveDto(dto.parcels);
             PropertyInterests.LoadFromSaveDto(dto.propertyInterests);
             Housing.LoadFromSaveDto(dto.housing);
+            LodgingRegistry.LoadFromSaveDto(dto.lodgingRegistry);
             LoadBoardingHouseRuntimes(dto.boardingHouseRuntimes);
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);

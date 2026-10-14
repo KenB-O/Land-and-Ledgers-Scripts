@@ -234,6 +234,42 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             return null;
         }
 
+        /// <summary>
+        /// Pass VIII Worker 2: resizes a room's real bed count. Growing is
+        /// always allowed; shrinking is refused when a bed at or above the
+        /// new count is occupied or awaiting turnover — people and chamber
+        /// work come first, the count is never redefined under them. Room
+        /// type rules still hold (private = 1, family >= 2). Returns null on
+        /// success, the refusal otherwise.
+        /// </summary>
+        public string ChangeRoomBedCount(string roomId, int newBedCount, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            BoardingRoom room = FindRoom(roomId);
+            if (room == null)
+                return $"BoardingRoomInventory.ChangeRoomBedCount: no room '{roomId}'.";
+            if (newBedCount <= 0)
+                return "BoardingRoomInventory.ChangeRoomBedCount: a room needs at least one bed.";
+            if (room.RoomType == BoardingRoomType.PrivateRoom && newBedCount != 1)
+                return "BoardingRoomInventory.ChangeRoomBedCount: a private room holds exactly one bed — nothing conjured.";
+            if (room.RoomType == BoardingRoomType.FamilyRoom && newBedCount < 2)
+                return "BoardingRoomInventory.ChangeRoomBedCount: a family room needs at least two beds.";
+            int highestInUse = -1;
+            if (room.OccupiedBeds != null)
+                foreach (BoardingBedAssignment assignment in room.OccupiedBeds)
+                    if (assignment != null) highestInUse = Math.Max(highestInUse, assignment.BedIndex);
+            if (room.BedsNeedingTurnover != null)
+                foreach (int soiled in room.BedsNeedingTurnover)
+                    highestInUse = Math.Max(highestInUse, soiled);
+            if (newBedCount <= highestInUse)
+                return $"BoardingRoomInventory.ChangeRoomBedCount: bed {highestInUse} in '{roomId}' is occupied or needs turnover — " +
+                       "vacate and turn it first, never redefine the count under people.";
+            int old = room.BedCount;
+            room.BedCount = newBedCount;
+            diag.Add($"BoardingRoomInventory: '{roomId}' resized {old} -> {newBedCount} bed(s).");
+            return null;
+        }
+
         public bool ReleaseBedByPerson(int personId, List<string> diag)
         {
             diag = diag ?? diagnostics;

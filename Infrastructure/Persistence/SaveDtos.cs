@@ -1065,6 +1065,11 @@ namespace LandLedgers.Persistence
         public string civicStatusLabel = "Civic";
         public int teacherPersonId = -1;
         public string teacherDisplayName = string.Empty;
+        // Pass IX WS6 (A1-10, additive): teacher household (pay creditor) + term settlement state.
+        public int teacherHouseholdId = -1;
+        public int teacherPayTermStartDayIndex = -1;
+        public bool teacherPayTermSettled;
+        public string teacherPayableObligationId = string.Empty;
     }
 
     [Serializable]

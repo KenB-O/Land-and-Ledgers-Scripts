@@ -31,8 +31,8 @@
 //     (book basis weighted by recorded condition for equipment).
 //   - LiquidationValueCents: EstimatedValue at the documented liquidation
 //     discount — what a forced/orderly wind-down sale is expected to fetch.
-//   - AskingPriceCents: what the seller asks (the manager's proposal uses
-//     the liquidation value as its ask for a distress sale).
+//   - AskingPriceCents: what the seller asks (the manager's proposal asks
+//     the estimated value; the owner policy approves at/above appraised).
 //   - SalePriceCents: what a completed sale actually transacted at (the
 //     approved request amount), recorded on the execution record.
 //   Business operating value and owner equity are NOT computed here — they

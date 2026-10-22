@@ -29,8 +29,10 @@
 //     names a SPECIFIC asset from the business's own registers
 //     (coordinator decision 3): the most worn equipment asset with
 //     book-cost evidence, else the largest un-liquidated formation asset.
-//     The proposed amount is the appraisal's liquidation value for THAT
-//     asset (AssetSaleAppraisalService); no evidence, no proposal.
+//     The proposed amount is the appraisal's ASKING price for THAT asset
+//     (its estimated value — the owner policy approves at/above appraised
+//     value; the liquidation value is the distinct close-down basis).
+//     No evidence, no proposal.
 //
 // The builder is a plain class: SimulationDrivers (a MonoBehaviour,
 // harness-excluded) assembles the live evidence; everything derived is
@@ -276,7 +278,7 @@ namespace LandLedgers.Economy.Labor
             {
                 if (asset.IsReserved) continue;
                 AssetAppraisalResult value = appraisal.AppraiseEquipment(business.InstanceId, asset);
-                if (!value.HasEvidence || value.LiquidationValueCents <= 0) continue;
+                if (!value.HasEvidence || value.AskingPriceCents <= 0) continue;
                 if (candidate == null || asset.Condition01 < candidate.Condition01)
                 {
                     candidate = asset;
@@ -286,11 +288,18 @@ namespace LandLedgers.Economy.Labor
 
             if (candidate != null)
             {
+                // The proposed price is the ASKING price (the appraised
+                // estimated value): the owner-resolution policy approves a
+                // distress sale only at/above appraised value, so asking
+                // the liquidation value would be denied by construction.
+                // The liquidation value remains the close-down basis
+                // (RegisterLiquidationPort), a distinct kind.
                 inputs.ProposedAssetId = candidate.AssetId;
-                inputs.ProposedAssetSaleCents = candidateValue.LiquidationValueCents;
+                inputs.ProposedAssetSaleCents = candidateValue.AskingPriceCents;
                 diagnostics.Add($"ManagerCycleInputsBuilder: '{business.InstanceId}' is distressed " +
                                 $"({cash}c < {reserve}c reserve) — proposes selling equipment '{candidate.AssetId}' " +
-                                $"at its {candidateValue.LiquidationValueCents}c liquidation value.");
+                                $"at its {candidateValue.AskingPriceCents}c asking price " +
+                                $"(estimated value; liquidation value {candidateValue.LiquidationValueCents}c).");
                 return;
             }
 
@@ -303,7 +312,7 @@ namespace LandLedgers.Economy.Labor
                 {
                     if (asset == null || asset.Liquidated) continue;
                     AssetAppraisalResult value = appraisal.AppraiseFormation(asset);
-                    if (!value.HasEvidence || value.LiquidationValueCents <= 0) continue;
+                    if (!value.HasEvidence || value.AskingPriceCents <= 0) continue;
                     if (formationCandidate == null || asset.CostCents > formationCandidate.CostCents)
                     {
                         formationCandidate = asset;
@@ -315,10 +324,11 @@ namespace LandLedgers.Economy.Labor
             if (formationCandidate != null)
             {
                 inputs.ProposedAssetId = AssetSaleAppraisalService.FormationAssetPrefix + formationCandidate.ItemId;
-                inputs.ProposedAssetSaleCents = formationValue.LiquidationValueCents;
+                inputs.ProposedAssetSaleCents = formationValue.AskingPriceCents;
                 diagnostics.Add($"ManagerCycleInputsBuilder: '{business.InstanceId}' is distressed " +
                                 $"({cash}c < {reserve}c reserve) — proposes selling formation asset " +
-                                $"'{formationCandidate.ItemId}' at its {formationValue.LiquidationValueCents}c liquidation value.");
+                                $"'{formationCandidate.ItemId}' at its {formationValue.AskingPriceCents}c asking price " +
+                                $"(estimated value; liquidation value {formationValue.LiquidationValueCents}c).");
             }
         }
 

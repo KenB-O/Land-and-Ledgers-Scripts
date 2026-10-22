@@ -952,6 +952,16 @@ namespace LandLedgers.EditorTests.Population
 
             restored.Clear();
             Assert.AreEqual(0, restored.MinutesWorkedInWeek(41, 1), "Clear() empties every week");
+
+            // Weekly reset: pruning drops old weeks, keeps the grace week.
+            var weekly = new WeeklyAttendanceAccumulator();
+            weekly.RecordWorkedMinutes(41, 1, 100); // week 0
+            weekly.RecordWorkedMinutes(41, 8, 100); // week 1
+            weekly.RecordWorkedMinutes(41, 15, 100); // week 2
+            Assert.AreEqual(1, weekly.PruneWeeksBefore(1));
+            Assert.AreEqual(0, weekly.MinutesWorkedInWeek(41, 0));
+            Assert.AreEqual(100, weekly.MinutesWorkedInWeek(41, 1));
+            Assert.AreEqual(100, weekly.MinutesWorkedInWeek(41, 2));
         }
     }
 }

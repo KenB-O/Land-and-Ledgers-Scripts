@@ -585,6 +585,12 @@ namespace LandLedgers.Orchestration.Systems
                 ? timeManager.CurrentAbsoluteDayIndex
                 : hub.LaborDayIndex;
 
+            // Pass IX (A2-05): weekly reset of the attendance table — totals
+            // older than last week can no longer be consulted by payroll or
+            // its replay, so they are pruned at the week boundary.
+            weeklyAttendance.PruneWeeksBefore(
+                WeeklyAttendanceAccumulator.WeekIndexForDay(absoluteDayIndex) - 1);
+
             // P1: SWN-3 liability ledger -> BIZ-5 valuation. Liabilities change
             // during the week (loans drawn, payables accrued); re-sync weekly so
             // the valuation read model reflects real balances, not boot-time ones.

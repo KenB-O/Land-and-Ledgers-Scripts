@@ -147,6 +147,37 @@ namespace LandLedgers.Economy.Labor
         }
 
         /// <summary>
+        /// Pass IX (A2-05): drops totals for weeks before
+        /// <paramref name="weekIndex"/> — called from the weekly boundary so
+        /// the table cannot grow without bound over a long game. Callers keep
+        /// a one-week grace (settlement/replay may re-read the prior week).
+        /// Returns the number of entries pruned.
+        /// </summary>
+        public int PruneWeeksBefore(int weekIndex)
+        {
+            if (weekIndex <= 0)
+            {
+                return 0;
+            }
+
+            var stale = new List<long>();
+            foreach (KeyValuePair<long, int> entry in minutesByPersonWeek)
+            {
+                if ((int)(entry.Key >> 32) < weekIndex)
+                {
+                    stale.Add(entry.Key);
+                }
+            }
+
+            foreach (long key in stale)
+            {
+                minutesByPersonWeek.Remove(key);
+            }
+
+            return stale.Count;
+        }
+
+        /// <summary>
         /// Pass IX (A2-05): clears every accumulated week — the save-load seam
         /// calls this (via LoadFromSaveDto) so a restored game never inherits
         /// attendance from a previous session.

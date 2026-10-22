@@ -1334,7 +1334,13 @@ namespace LandLedgers.Economy.Labor
 
             var request = new ManagerPendingRequest
             {
-                RequestId = $"mgr-req:sellasset:{business.InstanceId}:d{context.DayIndex}:{amountCents}c",
+                // R-06: RequestId carries the asset id with the same
+                // composition as RequestKey — two different assets on the
+                // same business/day/amount must never share an execution
+                // action key ("SellAssetExecuted:" + RequestId).
+                RequestId = string.IsNullOrWhiteSpace(assetId)
+                    ? $"mgr-req:sellasset:{business.InstanceId}:d{context.DayIndex}:{amountCents}c"
+                    : $"mgr-req:sellasset:{business.InstanceId}:{assetId}:d{context.DayIndex}:{amountCents}c",
                 RequestKey = requestKey,
                 BusinessInstanceId = business.InstanceId,
                 Kind = ManagerActKinds.SellAsset,

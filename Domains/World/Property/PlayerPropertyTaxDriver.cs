@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Civic;
 
 namespace LandLedgers.World.Property
 {
@@ -102,8 +103,15 @@ namespace LandLedgers.World.Property
         /// <summary>
         /// Player-facing tax payment: spends owner cash first, then records the
         /// payment against the assessment. Money moves before the books do.
+        /// Pass IX WS6 (A1-07/A1-11): when a civic treasury is supplied, the
+        /// amount the assessment actually absorbed is credited to it as
+        /// TaxReceived — before this pass the spent cash had no recipient and
+        /// left the economy. The credit equals the increase in
+        /// AmountPaidCents, so player debit == treasury credit exactly; when
+        /// the assessment absorbs nothing, nothing is credited.
         /// </summary>
-        public bool TryPayAssessment(string assessmentId, int amountCents, int dayIndex, out string message)
+        public bool TryPayAssessment(string assessmentId, int amountCents, int dayIndex, out string message,
+            CivicTreasuryService civicTreasury = null)
         {
             message = string.Empty;
             TaxAssessment assessment = taxes.GetAssessment(assessmentId);
@@ -120,11 +128,18 @@ namespace LandLedgers.World.Property
             if (trySpend == null ||
                 !trySpend(amountCents, $"Property tax {assessment.TaxYear} — {assessment.ParcelId}", out message))
                 return false;
+            int paidBefore = assessment.AmountPaidCents;
             string problem = taxes.PayTax(assessment, amountCents, dayIndex, diagnostics);
             if (problem != null)
             {
                 message = problem;
                 return false;
+            }
+            int absorbed = Math.Max(0, assessment.AmountPaidCents - paidBefore);
+            if (civicTreasury != null && absorbed > 0)
+            {
+                civicTreasury.TryCredit(absorbed, CivicLedgerEntryKind.TaxReceived, dayIndex,
+                    $"player property tax {assessment.TaxYear} — {assessment.ParcelId}", diagnostics);
             }
             message = $"Paid {amountCents}c toward {assessment.TaxYear} property tax on '{assessment.ParcelId}' — " +
                 $"{assessment.TotalOwedCents()}c still owed.";

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Blacksmith;
@@ -365,6 +366,21 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>P6: T2B recruitment workflows (efforts, inquiries, letters).</summary>
         public RecruitmentService Recruiting => recruitmentService ??= new RecruitmentService();
+
+        private CivicTreasuryService civicTreasury;
+
+        /// <summary>
+        /// Pass IX WS6 (A1-11): the ONE civic cash store — receives property
+        /// taxes (player and NPC legs), pays the schoolhouse teacher. Owned
+        /// here like every other authority; persisted via the systems DTO.
+        /// </summary>
+        public CivicTreasuryService CivicTreasury => civicTreasury ??= new CivicTreasuryService();
+
+        /// <summary>Pass IX WS6: restores the civic treasury from its save section (clear-then-load inside the service).</summary>
+        public void LoadCivicTreasuryFromSaveDto(CivicTreasuryService.CivicTreasurySaveDto dto)
+        {
+            CivicTreasury.LoadFromSaveDto(dto);
+        }
 
         public PersonScheduleTracker PersonSchedules => personScheduleTracker ??= new PersonScheduleTracker();
 
@@ -959,6 +975,7 @@ namespace LandLedgers.Orchestration.Systems
                 reservations = Reservations.CaptureSaveDto(),
                 draftPower = DraftPower.CaptureSaveDto(),
                 equipmentCapacities = EquipmentCapacities.CaptureSaveDto(),
+                civicTreasury = CivicTreasury.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -1072,6 +1089,8 @@ namespace LandLedgers.Orchestration.Systems
             Reservations.LoadFromSaveDto(dto.reservations);
             DraftPower.LoadFromSaveDto(dto.draftPower);
             EquipmentCapacities.LoadFromSaveDto(dto.equipmentCapacities);
+            // Pass IX WS6: civic treasury (additive section; absent in old saves = empty).
+            LoadCivicTreasuryFromSaveDto(dto.civicTreasury);
             FreightPool.AttachDraftPower(DraftPower);
             FreightPool.AttachWagonRegistry(TransportAssets);
             FreightPool.MigrateWagonsToRegistry(diagnostics);            weatherSeed = Math.Max(0, dto.weatherSeed);

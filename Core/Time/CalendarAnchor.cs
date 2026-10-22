@@ -52,6 +52,21 @@ namespace LandLedgers.Time
             return GregorianDateMath.ToAbsoluteDay(targetYear, targetMonth, targetDay, year, month, day);
         }
 
+        /// <summary>
+        /// Pass IX WS6 (A1-02): this anchor date's day index in the canonical
+        /// anchor frame (Jan 1 of <see cref="DefaultAnchorYear"/> = 0) — the
+        /// frame ScenarioDateUtil.DayIndexForDate reports. For the default
+        /// anchor (1880-03-01) this is 60. The conversion between the
+        /// TimeManager absolute frame (anchor date = 0) and the anchor frame
+        /// is exactly this value: anchorFrameDay = absoluteDay + AnchorDayIndex.
+        /// Computed through the same Gregorian math ScenarioDateUtil uses,
+        /// with the anchor year taken from this type's own DefaultAnchorYear
+        /// (ScenarioDateUtil.AnchorYear in turn derives from it — one
+        /// authority, no drift). Core may not reference Orchestration, so the
+        /// delegation runs through the shared constant, not a type reference.
+        /// </summary>
+        public int AnchorDayIndex => GregorianDateMath.ToAbsoluteDay(year, month, day, DefaultAnchorYear, 1, 1);
+
         /// <summary>Gregorian date for an absolute simulation day index.</summary>
         public void FromAbsoluteDay(int absoluteDay, out int targetYear, out int targetMonth, out int targetDay)
         {

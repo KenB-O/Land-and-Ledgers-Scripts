@@ -68,6 +68,7 @@ found, the test fails loudly rather than passing silently.
 | ForgeRepairChain | Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs | Domains/Economy/Businesses/Blacksmith | (none) |
 | StoreRestockService | Domains/Economy/Businesses/GeneralStore/StoreProcurementChain.cs | Domains/Economy/Businesses/GeneralStore | Orchestration/HouseholdSlice/HouseholdVerticalSlicePhaseH.cs |
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
+| ScenarioObjectiveService | Orchestration/Scenarios/Generation/ScenarioObjectiveService.cs | Orchestration/Scenarios/Generation | Orchestration/Systems/SimulationSystemsHub.cs |
 
 ## Notes per entry
 
@@ -94,6 +95,19 @@ found, the test fails loudly rather than passing silently.
   purchase path grows a real intent executor. Its only production-tree
   references are inside its owning directory (the demand contracts and a
   mention in `SharedBusinessRuntimeManager`).
+- `ScenarioObjectiveService` (Pass IX WS6, A1-03; completion latch added
+  by the Pass IX review fixes, R-08) is hub-owned and persisted:
+  `SimulationSystemsHub` constructs it and round-trips its
+  `ScenarioRunState` through `SystemsSaveDto.scenarioRunState` — that
+  reference is allowlisted as by-design ownership, not live driving.
+  Its evaluation is source-complete: dated qualifiers latch complete
+  when their predicate holds at any evaluation on or before the deadline
+  (persisted in the run state) and fail the run exactly once when an
+  unlatched deadline passes unmet. What is NOT wired is production
+  start: nothing in the live tick calls `BeginScenario` or `Evaluate` —
+  scenario start is a declared Unity scene bootstrap handoff, pending
+  that hook. Registered here so the persisted-but-never-started state
+  stays visible instead of reading as live.
 
 ## Audited production-reachable systems (NOT registry entries)
 
@@ -119,6 +133,10 @@ note records their audited status so the question does not reopen:
 
 - 2026-10-13: registry created (Pass VIII self-directed fixes, G-09/G-10/G-12).
   Seventeen entries. No rewiring, no deletions.
+- Pass IX review fix (R-08): `ScenarioObjectiveService` registered —
+  hub-owned and persisted, evaluation source-complete with the
+  completion latch, production start pending the scene bootstrap hook
+  (declared Unity handoff, deliberately not invented here).
 - Pass IX (WS6): `RealDemandSource` registered as unwired (A3-09, see its
   note — unwired by decision, not oversight). Production-reachable audit
   note added for the mine chain, freight, farm, estate, domestic-labor,

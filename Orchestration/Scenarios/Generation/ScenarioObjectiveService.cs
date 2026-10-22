@@ -18,6 +18,14 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
         public List<string> FailedScenarioIds = new List<string>();
         /// <summary>Goal ids whose missed deadline caused the failure(s), in failure order.</summary>
         public List<string> FailedGoalIds = new List<string>();
+        /// <summary>
+        /// Pass IX review R-08 (additive): goal ids LATCHED complete — a
+        /// dated qualifier whose predicate held at any evaluation on or
+        /// before its deadline is complete for the rest of the run, even if
+        /// the predicate later turns false (assets can be sold after being
+        /// owned by the deadline; the goal was still met).
+        /// </summary>
+        public List<string> LatchedCompleteGoalIds = new List<string>();
 
         public ScenarioRunState Clone()
         {
@@ -26,6 +34,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
                 ScenarioId = ScenarioId ?? string.Empty,
                 FailedScenarioIds = new List<string>(FailedScenarioIds ?? new List<string>()),
                 FailedGoalIds = new List<string>(FailedGoalIds ?? new List<string>()),
+                LatchedCompleteGoalIds = new List<string>(LatchedCompleteGoalIds ?? new List<string>()),
             };
         }
     }
@@ -123,18 +132,34 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
         /// <summary>
         /// Evaluates all dated qualifiers at a day. Returns true when this
         /// call newly failed the scenario.
+        /// Pass IX review R-08: a qualifier whose predicate holds at ANY
+        /// evaluation on or before its deadline is latched complete in the
+        /// persisted run state and can never fail afterwards — meeting a
+        /// goal by its deadline is a fact about the run, not about the
+        /// predicate's value whenever evaluation happens to occur. Only an
+        /// unlatched qualifier past its deadline, with its predicate false,
+        /// fails the run.
         /// </summary>
         public bool Evaluate(int dayIndex)
         {
             if (string.IsNullOrEmpty(state.ScenarioId) || IsFailed) return false;
+            state.LatchedCompleteGoalIds ??= new List<string>();
             for (int i = 0; i < qualifiers.Count; i++)
             {
                 DatedQualifier qualifier = qualifiers[i];
-                if (dayIndex <= qualifier.DeadlineDayIndex) continue;
+                if (state.LatchedCompleteGoalIds.Contains(qualifier.GoalId)) continue;
                 bool qualifies;
                 try { qualifies = qualifier.Predicate(); }
                 catch { qualifies = false; }
-                if (qualifies) continue;
+                if (qualifies)
+                {
+                    // Latched on or before the deadline by the rule above;
+                    // a qualifier first observed holding after its deadline
+                    // is likewise complete now and latches the same way.
+                    state.LatchedCompleteGoalIds.Add(qualifier.GoalId);
+                    continue;
+                }
+                if (dayIndex <= qualifier.DeadlineDayIndex) continue;
 
                 state.FailedGoalIds.Add(qualifier.GoalId);
                 state.FailedScenarioIds.Add(state.ScenarioId);

@@ -871,6 +871,44 @@ namespace LandLedgers.Orchestration.Systems
                 hub.DomesticLaborDriver.PruneStalePending(absoluteDayIndex);
             }
             DriveNpcPropertyLifeDay(absoluteDayIndex);
+            DriveSchoolhouseTeacherPay(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Pass IX review R-02: the production teacher-pay drive. No
+        /// school-term flow existed in production (the schoolhouse is owned
+        /// by the scene's CivicFoundationManager, not the hub), so teacher
+        /// pay is called here, from the day-change path, guarded to term
+        /// boundaries: only on a term-start day, and only when a teacher
+        /// with a household is assigned. The funded portion credits the
+        /// teacher's household ledger (hub registry, by the state's
+        /// teacherHouseholdId) in the same call; PayTeacher's own term
+        /// no-op semantics make repeat safety exact.
+        /// </summary>
+        private void DriveSchoolhouseTeacherPay(int absoluteDayIndex)
+        {
+            if (hub == null) return;
+            if (LandLedgers.Civic.SchoolhouseAssignment.TermStartFor(absoluteDayIndex) != absoluteDayIndex)
+            {
+                return; // term boundaries only — PayTeacher settles a whole term at its start
+            }
+
+            LandLedgers.Civic.CivicFoundationManager civic = FindAnyObjectByType<LandLedgers.Civic.CivicFoundationManager>();
+            LandLedgers.Civic.SchoolhouseState schoolhouse = civic != null ? civic.Schoolhouse : null;
+            if (schoolhouse == null || !schoolhouse.HasTeacher || schoolhouse.teacherHouseholdId < 0)
+            {
+                return;
+            }
+
+            HouseholdLedger teacherLedger = hub.HouseholdLedgers.Get(schoolhouse.teacherHouseholdId);
+            var diag = new List<string>();
+            bool settled = schoolhouse.PayTeacher(
+                hub.CivicTreasury, hub.FinancialObligations, hub.Ids, absoluteDayIndex, diag, teacherLedger);
+            if (settled || diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] schoolhouse teacher pay day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
         }
 
         /// <summary>

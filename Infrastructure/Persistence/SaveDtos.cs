@@ -985,6 +985,21 @@ namespace LandLedgers.Persistence
         public List<string> lastSuspendedPayrollWorkerIds = new();
         public BusinessMainFocusSaveDto mainFocus = new();
         public BusinessCapacitySaveDto capacity = new();
+        // Pass IX review R-05 (additive): named payables (creditor, amount,
+        // reason, day, ObligationId, escrow flag) so a save/load round-trip
+        // never anonymizes or drops a settleable debt.
+        public List<BusinessNamedPayableSaveDto> namedPayables = new();
+    }
+
+    [Serializable]
+    public sealed class BusinessNamedPayableSaveDto
+    {
+        public string creditor = string.Empty;
+        public int amountCents;
+        public string reason = string.Empty;
+        public int dayIndex = -1;
+        public string obligationId = string.Empty;
+        public bool cashAlreadyDeducted;
     }
 
     [Serializable]

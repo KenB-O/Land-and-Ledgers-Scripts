@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Farming.Crops;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -126,6 +128,146 @@ namespace LandLedgers.EditorTests.Economy.Farming
                 f.Chain, FarmId, f.Tasks, f.Ids, harvestDay, f.Diag);
             Assert.AreEqual(0, again.TasksConsumed);
             Assert.AreEqual(0, again.UnitsHarvested);
+        }
+
+        // ---------- Pass IX farm integration: the reconciled weekly drive ----------
+        // SharedBusinessRuntimeManager.ResolveFarmOperation delegates
+        // CropFarm weekly resolution to FarmCycleDriver.DriveWeekly (the
+        // entry exercised here — the manager itself is excluded from the
+        // Roslyn harness subset). The manager's weekly order in
+        // ResolveWeeklySharedOperations is: payroll and expenses post
+        // BEFORE operation resolution, then the operation outcome is
+        // recorded on the runtime. RunWeeklyLegs mirrors that order with
+        // the real runtime APIs so the pass-through is proven, not assumed.
+
+        private const int WeeklyWageCents = 300;
+        private const int WeeklyExpenseCents = 200;
+        private const int FarmStartingCashCents = 10000;
+
+        private static BusinessRuntimeState NewFarmRuntime(HouseholdLedgerRegistry ledgers)
+        {
+            var employments = new EmploymentRelationshipRegistry();
+            employments.Register(new EmploymentRelationship
+            {
+                Id = "farm-emp-501",
+                EmployeePersonId = 501,
+                EmployerBusinessId = FarmId,
+                RoleDisplayName = "Field hand",
+                Kind = EmploymentKind.Permanent,
+                LifecycleState = EmploymentLifecycleState.Active,
+                Compensation = CompensationTerms.FromWeeklyWage(WeeklyWageCents, "test"),
+                StartDayIndex = 0,
+                Source = EmploymentSource.Authored,
+            });
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity(FarmId);
+            runtime.EmploymentRegistry = employments;
+            runtime.HouseholdLedgers = ledgers;
+            runtime.PersonHouseholdIdLookup = pid => pid == 501 ? 11 : -1;
+            runtime.PayrollDayIndex = SpringDay;
+            runtime.SetCurrentCashCents(FarmStartingCashCents);
+            // The abstract path credited THIS stock from staffing counts;
+            // the reconciled path must never touch it (lots are the output).
+            runtime.EnsureCategoryStock("crop_food", 0, 100);
+            return runtime;
+        }
+
+        private static FarmCycleDriver.FarmWeeklyResult RunWeeklyLegs(
+            Fixture f, FarmCycleDriver driver, BusinessRuntimeState runtime,
+            HouseholdLedgerRegistry ledgers, int dayIndex, bool postPayrollAndExpenses)
+        {
+            if (postPayrollAndExpenses)
+            {
+                runtime.ResolveWeeklyPayroll();
+                runtime.AddWeeklyLocalTransferCost(WeeklyExpenseCents, "farm operating expenses");
+            }
+            FarmCycleDriver.FarmWeeklyResult result = driver.DriveWeekly(
+                f.Chain, FarmId, f.Tasks, f.Ids, dayIndex, f.Diag);
+            // ResolveFarmOperation's recording pass-through.
+            runtime.RecordWeeklyOperation(0, result.UnitsHarvested, result.BuildSummary(), result.BlockedReason);
+            return result;
+        }
+
+        private static void AssertWagesAndExpensesPosted(
+            BusinessRuntimeState runtime, HouseholdLedgerRegistry ledgers)
+        {
+            Assert.AreEqual(WeeklyWageCents, runtime.LastWeeklyPayrollCents,
+                "weekly wages still post on the reconciled path");
+            Assert.AreEqual(WeeklyWageCents, ledgers.Get(11).GetBalanceCents(),
+                "the wage reaches the worker household (business out == household in)");
+            Assert.AreEqual(WeeklyExpenseCents, runtime.LastWeeklyLocalTransferCostCents,
+                "weekly operating expenses still post on the reconciled path");
+            Assert.AreEqual(FarmStartingCashCents - WeeklyWageCents - WeeklyExpenseCents,
+                runtime.CurrentCashCents, "cash reflects wages + expenses exactly once each");
+        }
+
+        [Test]
+        public void WeeklyDrive_WithCompletedTasks_ProducesFarmOutputExactlyOnce()
+        {
+            Fixture f = NewFixture();
+            var driver = new FarmCycleDriver();
+            var ledgers = new HouseholdLedgerRegistry();
+            BusinessRuntimeState runtime = NewFarmRuntime(ledgers);
+
+            CompleteFieldTask(f, CropChain.PlantFieldTaskId, "wheat-40",
+                "crop:Wheat;seed:80;source:general store", SpringDay);
+            Assert.AreEqual(1, driver.DriveWeekly(f.Chain, FarmId, f.Tasks, f.Ids, SpringDay, f.Diag).FieldsPlanted,
+                string.Join("; ", f.Diag));
+            CompleteFieldTask(f, CropChain.TendFieldTaskId, "wheat-40", "", 40);
+            Assert.AreEqual(1, driver.DriveWeekly(f.Chain, FarmId, f.Tasks, f.Ids, 40, f.Diag).FieldsTended,
+                string.Join("; ", f.Diag));
+
+            int harvestDay = SpringDay + 95; // wheat GrowDays = 95
+            CompleteFieldTask(f, CropChain.HarvestFieldTaskId, "wheat-40", "", harvestDay);
+
+            // One weekly drive: wages/expenses post first (production
+            // order), then the delegated drive produces the harvest.
+            FarmCycleDriver.FarmWeeklyResult week = RunWeeklyLegs(
+                f, driver, runtime, ledgers, harvestDay, postPayrollAndExpenses: true);
+            AssertWagesAndExpensesPosted(runtime, ledgers);
+            Assert.AreEqual(1, week.FieldsHarvested, string.Join("; ", f.Diag));
+            Assert.AreEqual(1, week.HarvestedLots.Count);
+            Assert.Greater(week.UnitsHarvested, 0);
+            Assert.AreEqual(week.HarvestedLots[0].QuantityUnits, week.UnitsHarvested,
+                "the harvest lot is the one and only output credit of the weekly drive");
+            Assert.AreEqual("general store", week.HarvestedLots[0].SeedSource);
+            Assert.AreEqual(week.UnitsHarvested, runtime.LastWeeklyOutputUnitsProduced);
+            Assert.AreEqual(0, runtime.GetCategoryStock("crop_food").CurrentStockUnits,
+                "no abstract category-stock output beside the lot (no double production)");
+
+            // The reconciled weekly path runs again: the completed tasks
+            // were consumed exactly once, so nothing is produced again and
+            // no second lot appears.
+            FarmCycleDriver.FarmWeeklyResult again = driver.DriveWeekly(
+                f.Chain, FarmId, f.Tasks, f.Ids, harvestDay, f.Diag);
+            Assert.AreEqual(0, again.TasksConsumed);
+            Assert.AreEqual(0, again.UnitsHarvested, "a second weekly drive never re-credits the same work");
+            Assert.AreEqual(0, again.HarvestedLots.Count);
+            Assert.AreEqual(0, runtime.GetCategoryStock("crop_food").CurrentStockUnits);
+        }
+
+        [Test]
+        public void WeeklyDrive_NoCompletedTasks_ProducesNoFarmOutput_WhileWagesAndExpensesStillPost()
+        {
+            Fixture f = NewFixture();
+            var driver = new FarmCycleDriver();
+            var ledgers = new HouseholdLedgerRegistry();
+            BusinessRuntimeState runtime = NewFarmRuntime(ledgers);
+
+            FarmCycleDriver.FarmWeeklyResult week = RunWeeklyLegs(
+                f, driver, runtime, ledgers, SpringDay, postPayrollAndExpenses: true);
+
+            Assert.AreEqual(0, week.TasksConsumed);
+            Assert.AreEqual(0, week.UnitsHarvested,
+                "staffing counts alone no longer produce farm output (A4-18/A4-19)");
+            Assert.AreEqual(0, week.HarvestedLots.Count);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(week.BlockedReason),
+                "the empty drive reports why, loudly");
+            Assert.AreEqual(CropGrowthState.Prepared, f.Authority.GetField("wheat-40").GrowthState);
+            Assert.AreEqual(0, runtime.GetCategoryStock("crop_food").CurrentStockUnits,
+                "the abstract path adds no category-stock crop output");
+            Assert.AreEqual(0, runtime.LastWeeklyOutputUnitsProduced);
+            AssertWagesAndExpensesPosted(runtime, ledgers);
         }
 
         [Test]

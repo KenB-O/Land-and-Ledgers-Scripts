@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.World.Journeys;
@@ -109,6 +110,77 @@ namespace LandLedgers.Economy.Postal
         public string Note = string.Empty;
 
         public PostalHandoff() { }
+    }
+
+    /// <summary>
+    /// Pass IX WS1 (A3-03): a REAL sender cash authority for postage. Postage
+    /// is collected from the sender through this seam before an item is
+    /// accepted; when the sender cannot pay, posting is refused and no
+    /// postage accrues — the post office never earns from nothing
+    /// (Canon XIII §13.2, "no free carriage").
+    /// </summary>
+    public interface IPostalSenderCashAuthority
+    {
+        /// <summary>Debits postageCents from the sender's real cash store.
+        /// Returns false (moving nothing) when the sender cannot pay.</summary>
+        bool TryPayPostage(int postageCents, int dayIndex, string purpose, List<string> diag);
+    }
+
+    /// <summary>Pass IX WS1 (A3-03): postage paid from a sender's household ledger (the single household-cash writer).</summary>
+    public sealed class HouseholdLedgerPostagePayer : IPostalSenderCashAuthority
+    {
+        private readonly HouseholdLedger ledger;
+
+        public HouseholdLedgerPostagePayer(HouseholdLedger ledger)
+        {
+            this.ledger = ledger;
+        }
+
+        public bool TryPayPostage(int postageCents, int dayIndex, string purpose, List<string> diag)
+        {
+            if (ledger == null || postageCents <= 0)
+            {
+                return false;
+            }
+
+            string rejection = ledger.RecordOutflow(
+                Math.Max(0, dayIndex), postageCents,
+                string.IsNullOrWhiteSpace(purpose) ? "postage" : purpose, "post office");
+            if (rejection != null)
+            {
+                diag?.Add($"PostalService: sender household cannot pay postage — {rejection}");
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>Pass IX WS1 (A3-03): postage paid from a business's till (BusinessRuntimeState is the business-cash writer).</summary>
+    public sealed class BusinessCashPostagePayer : IPostalSenderCashAuthority
+    {
+        private readonly BusinessRuntimeState runtime;
+
+        public BusinessCashPostagePayer(BusinessRuntimeState runtime)
+        {
+            this.runtime = runtime;
+        }
+
+        public bool TryPayPostage(int postageCents, int dayIndex, string purpose, List<string> diag)
+        {
+            if (runtime == null || postageCents <= 0)
+            {
+                return false;
+            }
+
+            if (!runtime.TrySpendCents(postageCents))
+            {
+                diag?.Add($"PostalService: sender business holds {runtime.CurrentCashCents}c — cannot pay {postageCents}c postage.");
+                return false;
+            }
+
+            return true;
+        }
     }
 
     /// <summary>NX-2A: save data for the postal network authority.</summary>
@@ -244,13 +316,44 @@ namespace LandLedgers.Economy.Postal
         }
 
         /// <summary>
-        /// Accepts a mail item and charges postage. Postage accumulates as
-        /// uncollected revenue — the caller posts it to the business ledger with
-        /// provenance (CollectPostageRevenue). No free carriage.
+        /// Legacy acceptance path without a sender cash authority in scope.
+        /// Pass IX WS1 (A3-03): production callers must use the payer
+        /// overload — postage there is debited from the sender's real cash
+        /// store before acceptance and posting is refused when the sender
+        /// cannot pay. This overload remains only for callers/tests that
+        /// exercise the postal network itself (schedules, custody, routing)
+        /// where no sender wallet exists in scope; it is not a production
+        /// revenue path.
         /// </summary>
         public MailItem PostItem(
             MailKind kind, string senderName, int recipientPersonId, string recipientName,
             string fromOfficeId, string toOfficeId, int dayIndex, List<string> diag)
+        {
+            return PostItemCore(kind, senderName, recipientPersonId, recipientName,
+                fromOfficeId, toOfficeId, dayIndex, null, diag);
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-03): accepts a mail item and charges postage TO THE
+        /// SENDER through a real cash authority. The sender is debited first;
+        /// when the debit fails (or no payer is supplied) the item is refused
+        /// and NO postage accrues — so the revenue later collected by
+        /// CollectAndPostPostageRevenue is exactly the sum of real sender
+        /// debits. Total modeled cash is conserved end to end.
+        /// </summary>
+        public MailItem PostItem(
+            MailKind kind, string senderName, int recipientPersonId, string recipientName,
+            string fromOfficeId, string toOfficeId, int dayIndex,
+            IPostalSenderCashAuthority senderPayer, List<string> diag)
+        {
+            return PostItemCore(kind, senderName, recipientPersonId, recipientName,
+                fromOfficeId, toOfficeId, dayIndex, senderPayer, diag, requirePayer: true);
+        }
+
+        private MailItem PostItemCore(
+            MailKind kind, string senderName, int recipientPersonId, string recipientName,
+            string fromOfficeId, string toOfficeId, int dayIndex,
+            IPostalSenderCashAuthority senderPayer, List<string> diag, bool requirePayer = false)
         {
             diag = diag ?? diagnostics;
             if (kind == MailKind.Unspecified)
@@ -277,6 +380,22 @@ namespace LandLedgers.Economy.Postal
                 MailKind.Parcel => ParcelPostageCents,
                 _ => LetterPostageCents,
             };
+            if (requirePayer)
+            {
+                // A3-03: debit the sender FIRST. No payer, or a payer who
+                // cannot pay, means no acceptance and no accrued postage.
+                if (senderPayer == null)
+                {
+                    diag.Add("PostalService.PostItem: no sender cash authority — posting refused (no free carriage, Canon XIII §13.2).");
+                    return null;
+                }
+
+                if (!senderPayer.TryPayPostage(postage, dayIndex, $"postage: {kind} {fromOfficeId} → {toOfficeId}", diag))
+                {
+                    diag.Add($"PostalService.PostItem: sender '{senderName}' could not pay {postage}c postage — posting refused.");
+                    return null;
+                }
+            }
             var item = new MailItem
             {
                 MailId = $"mail-{dayIndex}-{sequence++}",

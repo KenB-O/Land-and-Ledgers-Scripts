@@ -5,6 +5,7 @@ using LandLedgers.Animals;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Transport;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
@@ -276,6 +277,53 @@ namespace LandLedgers.Economy
         /// bootstrap from PopulationState via the membership authority).
         /// </summary>
         public Func<int, int> PersonHouseholdIdLookup { get; set; }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-10/A3-12): the single debt authority, assigned by
+        /// bootstrap (SimulationDrivers sets this from
+        /// SimulationSystemsHub.FinancialObligations with its Ids registry).
+        /// When set, business runtime liability accruals also post named,
+        /// settleable Payables to this authority.
+        /// </summary>
+        public FinancialObligationAuthority ObligationAuthority { get; set; }
+
+        /// <summary>Pass IX WS1: id allocator paired with <see cref="ObligationAuthority"/>.</summary>
+        public EntityIdRegistry ObligationIdRegistry { get; set; }
+
+        /// <summary>
+        /// Pass IX WS1: wires the debt authority into every business runtime
+        /// state that does not already have one, flushing any named payables
+        /// accrued before wiring arrived. Called on the weekly path alongside
+        /// the household-cash wiring.
+        /// </summary>
+        public void WireObligationAuthorityToBusinesses()
+        {
+            if (ObligationAuthority == null || ObligationIdRegistry == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business?.RuntimeState == null)
+                {
+                    continue;
+                }
+
+                if (business.RuntimeState.ObligationAuthority == null)
+                {
+                    business.RuntimeState.ObligationAuthority = ObligationAuthority;
+                }
+
+                if (business.RuntimeState.ObligationIdRegistry == null)
+                {
+                    business.RuntimeState.ObligationIdRegistry = ObligationIdRegistry;
+                }
+
+                business.RuntimeState.FlushNamedPayablesToAuthority();
+            }
+        }
 
         /// <summary>
         /// Pass VII Workstream A: the registry of real household purchasing
@@ -1802,32 +1850,31 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
-            int mirroredConsumed = 0;
+            // Pass IX WS1 (A4-14, repro-confirmed): the linked branch formerly
+            // set mirroredConsumed = requested unconditionally after a sync
+            // that only COPIES support stock into the business runtime (it
+            // deducts nothing from either store), then credited revenue for
+            // the full requested units — revenue for goods never deducted.
+            // Both branches now settle through the same clamped sale: stock is
+            // actually consumed first and revenue posts only for the units
+            // deducted; the linked support mirror is then re-synced FROM the
+            // business so the mirror shows the post-sale stock.
             if (linkedSawmillSupportNode != null)
             {
                 SyncSawmillBusinessStockFromSupport(sawmill.RuntimeState, linkedSawmillSupportNode);
-                mirroredConsumed = requested;
-            }
-            else
-            {
-                CategoryStockState lumberStock = sawmill.RuntimeState.GetCategoryStock(CategoryLumber);
-                if (lumberStock != null && lumberStock.CurrentStockUnits > 0)
-                {
-                    int mirrorUnits = Mathf.Min(requested, lumberStock.CurrentStockUnits);
-                    sawmill.RuntimeState.TryConsumeCategoryStockUnits(CategoryLumber, mirrorUnits, out mirroredConsumed);
-                }
             }
 
-            int revenue = requested * Mathf.Max(0, unitCostCents);
-            if (revenue > 0)
+            int mirroredConsumed = sawmill.RuntimeState.SettleCategoryStockSale(
+                CategoryLumber, requested, unitCostCents, "sold lumber to construction");
+            int revenue = mirroredConsumed * Mathf.Max(0, unitCostCents);
+
+            if (linkedSawmillSupportNode != null)
             {
-                sawmill.RuntimeState.AddWeeklyLocalTransferRevenue(
-                    revenue,
-                    $"sold {requested} lumber to construction for {FormatMoney(revenue)}");
+                SyncLinkedSawmillSupportFromBusiness(sawmill);
             }
 
             sawmill.RefreshCapacityState();
-            AppendTransferToOperationSummary(sawmill, $"; sold {requested} lumber to construction for {FormatMoney(revenue)}");
+            AppendTransferToOperationSummary(sawmill, $"; sold {mirroredConsumed} lumber to construction for {FormatMoney(revenue)}");
             return mirroredConsumed;
         }
 
@@ -3477,6 +3524,7 @@ namespace LandLedgers.Economy
         private void ResolvePayrollForType(BusinessType businessType)
         {
             WireHouseholdCashToBusinesses();
+            WireObligationAuthorityToBusinesses();
             for (int i = 0; i < businesses.Count; i++)
             {
                 BusinessInstanceState business = businesses[i];
@@ -4267,7 +4315,13 @@ namespace LandLedgers.Economy
                 // business with no household demand earns nothing.
                 int paidVisits = ResolveHouseholdPaidServiceVisits(business, constrainedWeeklyVisits, serviceUnitPriceCents);
                 int lostVisits = Mathf.Max(0, constrainedWeeklyVisits - paidVisits);
-                int serviceRevenueCents = Mathf.RoundToInt(paidVisits * serviceUnitPriceCents * GetServiceRevenueMultiplier(business.BusinessType));
+                // Pass IX WS1 (A3-01): business credit == household debit,
+                // exactly. The former business-type revenue multiplier
+                // (Barber 1.2, Saloon 1.15, Builder 1.1, Freight 1.05) credited
+                // 5-20% more than households were debited in
+                // ResolveHouseholdPaidServiceVisits — cash minted from nothing
+                // every service week (Canon XIII §13.2).
+                int serviceRevenueCents = BusinessRuntimeState.ComputeServiceRevenueCents(paidVisits, serviceUnitPriceCents);
                 if (paidVisits > 0 && serviceRevenueCents > 0)
                 {
                     runtime.RecordDailyServiceRevenue(
@@ -4445,18 +4499,6 @@ namespace LandLedgers.Economy
                 BusinessType.LiveryFreight => 6,
                 BusinessType.Builder => 5,
                 _ => 6
-            };
-        }
-
-        private static float GetServiceRevenueMultiplier(BusinessType businessType)
-        {
-            return businessType switch
-            {
-                BusinessType.Barber => 1.2f,
-                BusinessType.Saloon => 1.15f,
-                BusinessType.Builder => 1.1f,
-                BusinessType.LiveryFreight => 1.05f,
-                _ => 1f
             };
         }
 

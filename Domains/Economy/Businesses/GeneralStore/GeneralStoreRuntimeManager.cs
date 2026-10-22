@@ -2865,10 +2865,46 @@ namespace LandLedgers.FirstLedger
             }
 
             int minimumOpeningCash = GetBusinessSurvivalCashReserveCents() + StartupSurplusAboveSurvivalReserveCents;
-            if (runtimeState.CurrentCashCents < minimumOpeningCash)
+            int shortfall = minimumOpeningCash - runtimeState.CurrentCashCents;
+            if (shortfall <= 0)
             {
-                runtimeState.AddCashCents(minimumOpeningCash - runtimeState.CurrentCashCents);
+                return;
             }
+
+            // Pass IX WS1 (A3-05): the former code topped the new store up to
+            // its opening minimum with AddCashCents from NO payer — an
+            // unnamed grant that minted the shortfall at founding. Opening
+            // capital now comes from the owner's real cash (the portfolio,
+            // itself seeded by the documented First Ledger starting stake —
+            // that endowment stays the distinguishable source). The transfer
+            // is named and conserved: owner cash out == store cash in. When
+            // the owner cannot cover the shortfall, only what owner cash
+            // actually covers moves (possibly nothing) — the store opens
+            // under-capitalized honestly rather than subsidized from nothing.
+            playerPortfolioManager ??= FindAnyObjectByType<PlayerPortfolioManager>();
+            if (playerPortfolioManager == null)
+            {
+                status = "Opening capital not funded: no owner portfolio is available to fund the store — no cash was granted from nowhere.";
+                return;
+            }
+
+            int funded = Mathf.Min(shortfall, playerPortfolioManager.OwnerCashCents);
+            if (funded <= 0)
+            {
+                status = "Opening capital not funded: owner cash is empty — the store opens without a startup top-up (no unnamed grant).";
+                return;
+            }
+
+            if (!playerPortfolioManager.TrySpendOwnerCash(funded, "General Store opening capital", out string spendMessage))
+            {
+                status = $"Opening capital not funded: {spendMessage}";
+                return;
+            }
+
+            runtimeState.AddCashCents(funded);
+            status = funded >= shortfall
+                ? $"Opening capital of {FormatMoney(funded)} funded from owner cash."
+                : $"Opening capital partially funded: {FormatMoney(funded)} of {FormatMoney(shortfall)} from owner cash — owner cash ran short, no grant filled the gap.";
         }
 
         private void RecordGeneralStoreMissedDemand(string categoryId, int requestedUnits, int missedUnits)

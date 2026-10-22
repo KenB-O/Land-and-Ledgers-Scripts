@@ -241,31 +241,18 @@ namespace LandLedgers.Economy.Freight
         /// Records freight revenue — ONLY from the external freight payer named on the
         /// shipment. Returns the charge; the caller posts it to the business ledger
         /// with provenance (Canon XIII §13.2).
+        /// Pass IX WS1 (A3-04): this legacy overload only NAMES the payer; it
+        /// cannot verify a debit. Production collection must use
+        /// <see cref="CollectFreightCharge(string, BusinessRuntimeState, List{string})"/>
+        /// (or the resolver overload of CollectAndPostUncollectedRevenue),
+        /// which debits the named payer's till BEFORE revenue may post.
         /// </summary>
         public int CollectFreightCharge(string shipmentId, List<string> diagnostics)
         {
             diagnostics ??= new List<string>();
             LogisticsShipmentState shipment = FindShipment(shipmentId);
-            if (shipment == null)
+            if (!TryValidateCollectable(shipment, shipmentId, diagnostics))
             {
-                diagnostics.Add($"Unknown shipment '{shipmentId}'.");
-                return 0;
-            }
-
-            if (shipment.Status != LogisticsShipmentStatus.Completed || !shipment.deliveryApplied)
-            {
-                diagnostics.Add($"Shipment '{shipmentId}' is {shipment.Status}; " +
-                    "freight charges collect only on completed delivery.");
-                return 0;
-            }
-
-            if (string.IsNullOrWhiteSpace(shipment.FreightPayerBusinessInstanceId)
-                || shipment.FreightPayerBusinessInstanceId == businessInstanceId)
-            {
-                // No external payer (or self) — no revenue event. Internal work never
-                // fabricates revenue to the same enterprise (Canon §3.6).
-                diagnostics.Add($"Shipment '{shipmentId}' has no external freight payer; " +
-                    "no revenue recorded (Canon §3.6).");
                 return 0;
             }
 
@@ -276,6 +263,79 @@ namespace LandLedgers.Economy.Freight
             diagnostics.Add($"Collected {shipment.FreightChargeCents}c freight charge for '{shipmentId}' " +
                 $"from {shipment.FreightPayerBusinessInstanceId} (external payer).");
             return shipment.FreightChargeCents;
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-04): verified collection. The named payer's till is
+        /// debited FIRST (BusinessRuntimeState.TrySpendCents — the business
+        /// cash writer); only a successful debit marks the charge collected
+        /// and returns it for revenue posting. When the payer till is missing,
+        /// is not the named payer, or cannot cover the charge, NOTHING is
+        /// collected and the shipment stays uncollected — revenue never posts
+        /// for a payer who was not actually debited.
+        /// </summary>
+        public int CollectFreightCharge(string shipmentId, BusinessRuntimeState payerRuntime, List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            LogisticsShipmentState shipment = FindShipment(shipmentId);
+            if (!TryValidateCollectable(shipment, shipmentId, diagnostics))
+            {
+                return 0;
+            }
+
+            if (payerRuntime == null
+                || !string.Equals(payerRuntime.BusinessId, shipment.FreightPayerBusinessInstanceId, StringComparison.Ordinal))
+            {
+                diagnostics.Add($"Shipment '{shipmentId}': payer till for '{shipment.FreightPayerBusinessInstanceId}' " +
+                    "is unavailable or does not name the freight payer — charge NOT collected.");
+                return 0;
+            }
+
+            if (!payerRuntime.TrySpendCents(shipment.FreightChargeCents))
+            {
+                diagnostics.Add($"Shipment '{shipmentId}': payer '{shipment.FreightPayerBusinessInstanceId}' holds " +
+                    $"{payerRuntime.CurrentCashCents}c, charge is {shipment.FreightChargeCents}c — charge NOT collected, no revenue posts.");
+                return 0;
+            }
+
+            shipment.freightRevenueCollected = true;
+            diagnostics.Add($"Collected {shipment.FreightChargeCents}c freight charge for '{shipmentId}' " +
+                $"from {shipment.FreightPayerBusinessInstanceId} (payer debited first, verified).");
+            return shipment.FreightChargeCents;
+        }
+
+        private bool TryValidateCollectable(LogisticsShipmentState shipment, string shipmentId, List<string> diagnostics)
+        {
+            if (shipment == null)
+            {
+                diagnostics.Add($"Unknown shipment '{shipmentId}'.");
+                return false;
+            }
+
+            if (shipment.Status != LogisticsShipmentStatus.Completed || !shipment.deliveryApplied)
+            {
+                diagnostics.Add($"Shipment '{shipmentId}' is {shipment.Status}; " +
+                    "freight charges collect only on completed delivery.");
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(shipment.FreightPayerBusinessInstanceId)
+                || shipment.FreightPayerBusinessInstanceId == businessInstanceId)
+            {
+                // No external payer (or self) — no revenue event. Internal work never
+                // fabricates revenue to the same enterprise (Canon §3.6).
+                diagnostics.Add($"Shipment '{shipmentId}' has no external freight payer; " +
+                    "no revenue recorded (Canon §3.6).");
+                return false;
+            }
+
+            if (shipment.FreightRevenueCollected)
+            {
+                diagnostics.Add($"Shipment '{shipmentId}': freight charge already collected — never collected twice.");
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -324,6 +384,46 @@ namespace LandLedgers.Economy.Freight
                 posted += cents;
                 diagnostics.Add($"FreightCompanyRuntime: {cents}c freight revenue posted to {businessInstanceId} " +
                     $"(provenance: freight charge, shipment '{shipmentId}').");
+            }
+
+            return posted;
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-04): verified revenue collection for production —
+        /// each shipment's named payer is resolved to its till and DEBITED
+        /// through the verified CollectFreightCharge before any revenue posts
+        /// to the carrier. Shipments whose payer cannot be resolved or cannot
+        /// pay stay uncollected (retried on a later tick), never posted.
+        /// Returns total cents posted; carrier credit == payer debit per
+        /// shipment by construction.
+        /// </summary>
+        public int CollectAndPostUncollectedRevenue(
+            BusinessRuntimeState businessRuntime,
+            Func<string, BusinessRuntimeState> payerRuntimeResolver,
+            List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            if (payerRuntimeResolver == null)
+            {
+                diagnostics.Add("FreightCompanyRuntime: no payer resolver — verified collection cannot run; nothing posted.");
+                return 0;
+            }
+
+            int posted = 0;
+            foreach (string shipmentId in FindUncollectedFreightChargeShipmentIds())
+            {
+                LogisticsShipmentState shipment = FindShipment(shipmentId);
+                if (shipment == null)
+                    continue;
+                BusinessRuntimeState payerRuntime = payerRuntimeResolver(shipment.FreightPayerBusinessInstanceId);
+                int cents = CollectFreightCharge(shipmentId, payerRuntime, diagnostics);
+                if (cents <= 0 || businessRuntime == null)
+                    continue;
+                businessRuntime.RecordDailyServiceRevenue(FreightRevenueCategoryId, 1, cents);
+                posted += cents;
+                diagnostics.Add($"FreightCompanyRuntime: {cents}c freight revenue posted to {businessInstanceId} " +
+                    $"(provenance: freight charge, shipment '{shipmentId}', payer debited and verified).");
             }
 
             return posted;

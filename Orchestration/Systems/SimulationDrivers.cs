@@ -397,6 +397,12 @@ namespace LandLedgers.Orchestration.Systems
                 sharedBusinessRuntime.HouseholdLedgers = hub.HouseholdLedgers;
                 sharedBusinessRuntime.PersonHouseholdIdLookup = ResolvePersonHouseholdId;
                 sharedBusinessRuntime.WireHouseholdCashToBusinesses();
+                // Pass IX WS1 (A3-10/A3-12): the single debt authority, so
+                // payroll escrows and operating-liability accruals post named
+                // Payables instead of living only in a scalar.
+                sharedBusinessRuntime.ObligationAuthority = hub.FinancialObligations;
+                sharedBusinessRuntime.ObligationIdRegistry = hub.Ids;
+                sharedBusinessRuntime.WireObligationAuthorityToBusinesses();
             }
 
             if (populationManager != null)
@@ -488,7 +494,14 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            hub.Valuation.RecordWeeklyProfit(business.InstanceId, business.RuntimeState.WeekToDateNetCents);
+            // Pass IX WS1 (A3-06a): post the financing-excluded OPERATING
+            // figure, not WeekToDateNetCents. The cash-net includes loan
+            // proceeds (AdjustCashCents credits from ManagerBorrowExecutor /
+            // NpcOwnerRequestResolver borrow paths), which booked borrowed
+            // money as valuation "profit". WeeklyOperatingProfitCents is
+            // derived the way BusinessReportBuilder's knownProfitProxy is:
+            // revenue minus operating expense only.
+            hub.Valuation.RecordWeeklyProfit(business.InstanceId, business.RuntimeState.WeeklyOperatingProfitCents);
         }
 
         private void OnWeekChanged(SimulationDateChangedContext context)

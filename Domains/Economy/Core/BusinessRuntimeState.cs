@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Financing;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -727,6 +728,30 @@ namespace LandLedgers.Economy
         public int AllTimeNetCents { get; }
     }
 
+    /// <summary>
+    /// Pass IX WS1 (A3-12): one named payable behind the legacy
+    /// accruedLiabilityCents scalar. Every accrual names its creditor; when the
+    /// shared FinancialObligationAuthority is wired the same amount also exists
+    /// there as a settleable Payable obligation (ObligationId set). Records
+    /// without an ObligationId are the unwired-wiring-gap case: the debt is
+    /// still named and countable here, never anonymous.
+    /// </summary>
+    [Serializable]
+    public sealed class BusinessNamedPayableRecord
+    {
+        public string Creditor = string.Empty;
+        public int AmountCents;
+        public string Reason = string.Empty;
+        public int DayIndex = -1;
+        public string ObligationId = string.Empty;
+        /// <summary>True when business cash was already deducted for this
+        /// amount (wage escrow case, A3-10): settling must credit the creditor
+        /// WITHOUT deducting business cash a second time.</summary>
+        public bool CashAlreadyDeducted;
+
+        public BusinessNamedPayableRecord() { }
+    }
+
     [Serializable]
     public sealed class BusinessRuntimeState
     {
@@ -766,6 +791,43 @@ namespace LandLedgers.Economy
         /// ResolveWeeklyPayroll runs. -1 when unknown (entries still record).
         /// </summary>
         public int PayrollDayIndex { get; set; } = -1;
+
+        /// <summary>
+        /// Pass IX WS1 (A3-10/A3-12): the single debt authority. UNITY WIRING
+        /// STEP: set from SimulationSystemsHub.FinancialObligations (via
+        /// SharedBusinessRuntimeManager.WireObligationAuthorityToBusinesses).
+        /// When set (with <see cref="ObligationIdRegistry"/>), every operating
+        /// liability accrual ALSO creates a named, settleable Payable in this
+        /// authority — the scalar accruedLiabilityCents remains only as the
+        /// legacy readout total. Null by default: accruals are then kept as
+        /// named records on this runtime (see <see cref="NamedPayables"/>),
+        /// never anonymous, and can be flushed via
+        /// <see cref="FlushNamedPayablesToAuthority"/> once wiring arrives.
+        /// </summary>
+        public FinancialObligationAuthority ObligationAuthority { get; set; }
+
+        /// <summary>Pass IX WS1: id allocator paired with <see cref="ObligationAuthority"/>.</summary>
+        public EntityIdRegistry ObligationIdRegistry { get; set; }
+
+        private readonly List<BusinessNamedPayableRecord> namedPayables = new List<BusinessNamedPayableRecord>();
+
+        /// <summary>Pass IX WS1 (A3-12): every operating-liability accrual, named by creditor.</summary>
+        public IReadOnlyList<BusinessNamedPayableRecord> NamedPayables => namedPayables;
+
+        /// <summary>Pass IX WS1: total of named payables recorded on this runtime.</summary>
+        public int NamedPayableTotalCents
+        {
+            get
+            {
+                int total = 0;
+                for (int i = 0; i < namedPayables.Count; i++)
+                {
+                    total += namedPayables[i] != null ? Math.Max(0, namedPayables[i].AmountCents) : 0;
+                }
+
+                return total;
+            }
+        }
 
         /// <summary>
         /// Pass VIII Worker 7: optional weekly attendance check
@@ -851,7 +913,7 @@ namespace LandLedgers.Economy
             // an operating liability. No second payment path exists.
             employment.LifecycleState = EmploymentLifecycleState.Suspended;
             employment.SuspensionReason = EmploymentSuspensionReason.EmployerPaymentDefault;
-            AccrueOperatingLiabilityCents(wage, $"partial-period wage default: '{periodLabel}' for {employment.RoleDisplayName} (employment {employment.Id})");
+            AccrueOperatingLiabilityCents(wage, $"person:{employment.EmployeePersonId}", $"partial-period wage default: '{periodLabel}' for {employment.RoleDisplayName} (employment {employment.Id})");
             SyncSlotPaidState(employment.EmployeePersonId, paid: false);
             string workerId = employment.EmployeePersonId.ToString();
             if (!lastSuspendedPayrollWorkerIds.Contains(workerId))
@@ -1991,7 +2053,7 @@ namespace LandLedgers.Economy
                 }
 
                 string suspendedWorkerId = slot.SuspendForMissedPayroll();
-                AccrueOperatingLiabilityCents(wage, $"missed payroll for {slot.AssignedWorkerDisplayName}");
+                AccrueOperatingLiabilityCents(wage, $"person:{personId}", $"missed payroll for {slot.AssignedWorkerDisplayName}");
                 if (!string.IsNullOrWhiteSpace(suspendedWorkerId))
                 {
                     lastSuspendedPayrollWorkerIds.Add(suspendedWorkerId);
@@ -2086,7 +2148,7 @@ namespace LandLedgers.Economy
 
                 employment.LifecycleState = EmploymentLifecycleState.Suspended;
                 employment.SuspensionReason = EmploymentSuspensionReason.EmployerPaymentDefault;
-                AccrueOperatingLiabilityCents(wage, $"missed payroll for {employment.RoleDisplayName} (employment {employment.Id})");
+                AccrueOperatingLiabilityCents(wage, $"person:{employment.EmployeePersonId}", $"missed payroll for {employment.RoleDisplayName} (employment {employment.Id})");
                 SyncSlotPaidState(employment.EmployeePersonId, paid: false);
                 string workerId = employment.EmployeePersonId.ToString();
                 if (!lastSuspendedPayrollWorkerIds.Contains(workerId))
@@ -2128,10 +2190,21 @@ namespace LandLedgers.Economy
                 return;
             }
 
+            // Pass IX WS1 (A3-10): the caller has already deducted the wage
+            // from business cash. If the household credit cannot land — ledger
+            // wiring missing, worker has no household, or the ledger rejects —
+            // the deducted wage must NOT vanish: it becomes a named Payable to
+            // the worker (creditor person:{id}, or household:{id} when known),
+            // marked CashAlreadyDeducted so settlement credits the worker
+            // without deducting business cash a second time. Conservation:
+            // business cash out == household in + escrowed named payable.
             if (HouseholdLedgers == null || PersonHouseholdIdLookup == null)
             {
                 lastWeeklyPayrollDiagnostics.Add(
-                    $"P{personId} paid {wageCents}c via {employmentRef} but no household ledger/lookup is wired — wage credit skipped, business cash deducted.");
+                    $"P{personId} paid {wageCents}c via {employmentRef} but no household ledger/lookup is wired — wage held as a named payable to the worker, business cash deducted.");
+                AccrueOperatingLiabilityCents(wageCents, $"person:{personId}",
+                    $"wage escrow ({periodLabel}) for P{personId} via {employmentRef}: household ledger unwired",
+                    cashAlreadyDeducted: true);
                 return;
             }
 
@@ -2139,7 +2212,10 @@ namespace LandLedgers.Economy
             if (householdId < 0)
             {
                 lastWeeklyPayrollDiagnostics.Add(
-                    $"P{personId} paid {wageCents}c via {employmentRef} but has no household — wage credit skipped, business cash deducted.");
+                    $"P{personId} paid {wageCents}c via {employmentRef} but has no household — wage held as a named payable to the worker, business cash deducted.");
+                AccrueOperatingLiabilityCents(wageCents, $"person:{personId}",
+                    $"wage escrow ({periodLabel}) for P{personId} via {employmentRef}: worker has no household",
+                    cashAlreadyDeducted: true);
                 return;
             }
 
@@ -2153,7 +2229,10 @@ namespace LandLedgers.Economy
             if (rejection != null)
             {
                 lastWeeklyPayrollDiagnostics.Add(
-                    $"P{personId} wage credit rejected for H{householdId} — {rejection}");
+                    $"P{personId} wage credit rejected for H{householdId} — {rejection} Wage held as a named payable.");
+                AccrueOperatingLiabilityCents(wageCents, $"household:{householdId}",
+                    $"wage escrow ({periodLabel}) for P{personId} via {employmentRef}: ledger rejected the credit",
+                    cashAlreadyDeducted: true);
             }
         }
 
@@ -2450,6 +2529,22 @@ namespace LandLedgers.Economy
 
         public void AccrueOperatingLiabilityCents(int cents, string reason = null)
         {
+            AccrueOperatingLiabilityCents(cents, null, reason, cashAlreadyDeducted: false);
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-12): accrues an operating liability WITH a named
+        /// creditor. The scalar total still rises (legacy readouts keep
+        /// working), but the debt now also exists as a named
+        /// <see cref="BusinessNamedPayableRecord"/> and, when the shared
+        /// FinancialObligationAuthority is wired, as a settleable Payable
+        /// obligation there (debtor = this business) — visible to valuation
+        /// through the authority totals and settleable at close-down through
+        /// the authority's payment API. Anonymous accruals (no creditor) keep
+        /// the legacy scalar-only behavior for callers that cannot name one.
+        /// </summary>
+        public void AccrueOperatingLiabilityCents(int cents, string creditor, string reason, bool cashAlreadyDeducted = false)
+        {
             int amount = Mathf.Max(0, cents);
             if (amount <= 0)
             {
@@ -2462,6 +2557,272 @@ namespace LandLedgers.Economy
             {
                 AppendWeeklyBlockedReason($"accrued liability: {reason.Trim()}");
             }
+
+            if (string.IsNullOrWhiteSpace(creditor))
+            {
+                return;
+            }
+
+            var record = new BusinessNamedPayableRecord
+            {
+                Creditor = creditor.Trim(),
+                AmountCents = amount,
+                Reason = reason ?? string.Empty,
+                DayIndex = PayrollDayIndex,
+                CashAlreadyDeducted = cashAlreadyDeducted,
+            };
+            namedPayables.Add(record);
+            PostNamedPayableToAuthority(record);
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-12): posts one named payable to the shared debt
+        /// authority when wired. Returns the obligation id (empty when the
+        /// authority is unwired or creation was refused — the named record on
+        /// this runtime remains the evidence either way).
+        /// </summary>
+        private string PostNamedPayableToAuthority(BusinessNamedPayableRecord record)
+        {
+            if (record == null || !string.IsNullOrWhiteSpace(record.ObligationId))
+            {
+                return record != null ? record.ObligationId : string.Empty;
+            }
+
+            if (ObligationAuthority == null || ObligationIdRegistry == null
+                || string.IsNullOrWhiteSpace(BusinessId))
+            {
+                return string.Empty;
+            }
+
+            FinancialObligation obligation = ObligationAuthority.Create(
+                ObligationIdRegistry, FinancialObligationKind.Payable,
+                BusinessId, record.Creditor, record.AmountCents,
+                Mathf.Max(0, record.DayIndex),
+                "due on demand unless agreed otherwise",
+                string.IsNullOrWhiteSpace(record.Reason) ? "operating liability" : record.Reason);
+            if (obligation != null)
+            {
+                record.ObligationId = obligation.ObligationId;
+            }
+
+            return record.ObligationId;
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-12): when the debt authority is wired AFTER accruals
+        /// happened (bootstrap order), flush every not-yet-posted named payable
+        /// into it. Idempotent: records already posted keep their obligation id
+        /// and are never duplicated. Returns how many were posted.
+        /// </summary>
+        public int FlushNamedPayablesToAuthority()
+        {
+            int posted = 0;
+            for (int i = 0; i < namedPayables.Count; i++)
+            {
+                BusinessNamedPayableRecord record = namedPayables[i];
+                if (record == null || !string.IsNullOrWhiteSpace(record.ObligationId))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(PostNamedPayableToAuthority(record)))
+                {
+                    posted++;
+                }
+            }
+
+            return posted;
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-12): settles (part of) one named payable — the
+        /// close-down / make-whole path. For escrowed wage payables
+        /// (CashAlreadyDeducted) the business cash was already deducted when
+        /// the wage fell due, so settlement records the obligation payment
+        /// WITHOUT a second deduction; the caller credits the creditor's real
+        /// cash store with the same amount. For ordinary payables the amount
+        /// is spent from business cash first (refused when cash is short —
+        /// a payable is never "settled" with money that does not exist).
+        /// Returns false with a diagnostic when nothing was settled.
+        /// </summary>
+        public bool TrySettleNamedPayable(string obligationId, int amountCents, int dayIndex, out string diagnostic)
+        {
+            diagnostic = string.Empty;
+            int amount = Mathf.Max(0, amountCents);
+            if (amount <= 0 || string.IsNullOrWhiteSpace(obligationId))
+            {
+                diagnostic = "a named payable id and a positive amount are required.";
+                return false;
+            }
+
+            BusinessNamedPayableRecord record = null;
+            for (int i = 0; i < namedPayables.Count; i++)
+            {
+                if (namedPayables[i] != null
+                    && string.Equals(namedPayables[i].ObligationId, obligationId, StringComparison.Ordinal))
+                {
+                    record = namedPayables[i];
+                    break;
+                }
+            }
+
+            if (record == null)
+            {
+                diagnostic = $"no named payable '{obligationId}' on business '{BusinessId}'.";
+                return false;
+            }
+
+            if (amount > record.AmountCents)
+            {
+                diagnostic = $"settlement {amount}c exceeds the {record.AmountCents}c payable — overpayment refused.";
+                return false;
+            }
+
+            if (!record.CashAlreadyDeducted && CurrentCashCents < amount)
+            {
+                diagnostic = $"business holds {CurrentCashCents}c — cannot settle {amount}c payable from real cash.";
+                return false;
+            }
+
+            if (ObligationAuthority != null)
+            {
+                FinancialPaymentRecord payment = ObligationAuthority.ApplyPayment(
+                    obligationId, amount, Mathf.Max(0, dayIndex), BusinessId, record.Creditor);
+                if (payment == null)
+                {
+                    diagnostic = "the debt authority rejected the settlement payment.";
+                    return false;
+                }
+            }
+
+            if (!record.CashAlreadyDeducted && !TrySpendCents(amount))
+            {
+                diagnostic = $"business holds {CurrentCashCents}c — cannot settle {amount}c payable from real cash.";
+                return false;
+            }
+
+            record.AmountCents -= amount;
+            accruedLiabilityCents = Mathf.Max(0, accruedLiabilityCents - amount);
+            if (record.AmountCents <= 0)
+            {
+                namedPayables.Remove(record);
+            }
+
+            RefreshWeeklyCashAfter();
+            return true;
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-06a): the financing-excluded weekly OPERATING profit
+        /// for valuation evidence, derived the way BusinessReportBuilder's
+        /// knownProfitProxy is: revenue minus operating expense only. Revenue =
+        /// week-to-date sales/service revenue + weekly local-transfer revenue.
+        /// Operating expense = payroll + input procurement spend + local
+        /// transfer costs. Owner cash transfers, owner distributions and any
+        /// financing credits (loan proceeds land via AdjustCashCents, which
+        /// touches only the cash-net fields) are NOT inputs — a borrowing week
+        /// therefore posts no phantom "profit" to valuation.
+        /// </summary>
+        public int WeeklyOperatingProfitCents =>
+            (WeekToDateRevenueCents + LastWeeklyLocalTransferRevenueCents)
+            - (LastWeeklyPayrollCents + LastWeeklyInputProcurementSpendCents + LastWeeklyLocalTransferCostCents);
+
+        /// <summary>
+        /// Pass IX WS1 (A3-01): service revenue is exactly what households were
+        /// debited — paid visits times the visit price. There is deliberately
+        /// NO business-type multiplier: a multiplier credit above the payer
+        /// debit mints the difference from nothing (Canon XIII §13.2).
+        /// SharedBusinessRuntimeManager's weekly service path credits through
+        /// this computation.
+        /// </summary>
+        public static int ComputeServiceRevenueCents(int paidVisits, int visitPriceCents)
+        {
+            return Mathf.Max(0, paidVisits) * Mathf.Max(0, visitPriceCents);
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-02): fail-closed, symmetric freight-charge
+        /// settlement between two business tills. The carrier is credited ONLY
+        /// when the payer leg posts in full: if the payer cannot cover the
+        /// charge, NO cash moves on either side and the full charge becomes a
+        /// named Payable on the payer (creditor = carrier business) through
+        /// the payer's liability routing. Returns true when the charge settled
+        /// in cash; false when it became a payable (or was refused as invalid).
+        /// </summary>
+        public static bool TrySettleFreightCharge(
+            BusinessRuntimeState payer, BusinessRuntimeState carrier,
+            int freightChargeCents, string summaryLabel, out string diagnostic)
+        {
+            diagnostic = string.Empty;
+            int charge = Mathf.Max(0, freightChargeCents);
+            if (charge <= 0)
+            {
+                diagnostic = "no freight charge to settle.";
+                return false;
+            }
+
+            if (payer == null || carrier == null)
+            {
+                diagnostic = "freight charge needs both a payer and a carrier till — neither leg posts.";
+                return false;
+            }
+
+            if (ReferenceEquals(payer, carrier))
+            {
+                diagnostic = "freight payer is the carrier itself — internal work fabricates no revenue (Canon §3.6).";
+                return false;
+            }
+
+            if (payer.CurrentCashCents < charge)
+            {
+                payer.AccrueOperatingLiabilityCents(charge, carrier.BusinessId,
+                    $"unpaid freight charge: {summaryLabel}");
+                payer.AppendWeeklyTransferSummary(
+                    $"{summaryLabel} freight {charge}c unpaid — named payable to {carrier.BusinessId}");
+                diagnostic = $"payer holds {payer.CurrentCashCents}c, freight charge is {charge}c — " +
+                    "carrier NOT credited; full charge accrued as a named payable to the carrier.";
+                return false;
+            }
+
+            payer.AddWeeklyLocalTransferCost(charge, $"{summaryLabel} freight charged {charge}c");
+            carrier.AddWeeklyLocalTransferRevenue(charge, $"{summaryLabel} freight for {charge}c");
+            return true;
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A4-14): settles a stock sale from this runtime's own
+        /// category stock: consumes min(requested, on-hand) units and credits
+        /// transfer revenue ONLY for the units actually deducted. Returns the
+        /// units actually consumed (the only units revenue was credited for).
+        /// </summary>
+        public int SettleCategoryStockSale(string categoryId, int requestedUnits, int unitPriceCents, string summaryLabel)
+        {
+            int requested = Mathf.Max(0, requestedUnits);
+            if (requested <= 0 || string.IsNullOrWhiteSpace(categoryId))
+            {
+                return 0;
+            }
+
+            CategoryStockState stock = GetCategoryStock(categoryId);
+            if (stock == null || stock.CurrentStockUnits <= 0)
+            {
+                return 0;
+            }
+
+            int sellable = Mathf.Min(requested, stock.CurrentStockUnits);
+            if (!TryConsumeCategoryStockUnits(categoryId, sellable, out int consumed) || consumed <= 0)
+            {
+                return 0;
+            }
+
+            int revenue = consumed * Mathf.Max(0, unitPriceCents);
+            if (revenue > 0)
+            {
+                AddWeeklyLocalTransferRevenue(revenue,
+                    $"{summaryLabel} {consumed} units for {revenue}c");
+            }
+
+            return consumed;
         }
 
         public void AppendWeeklyTransferSummary(string summarySegment)

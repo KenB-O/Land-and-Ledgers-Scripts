@@ -378,7 +378,8 @@ namespace LandLedgers.Economy.Recruitment
             string effortId, int recipientPersonId,
             string fromLocationId, string toLocationId,
             JourneyModel journeys, int dayIndex, List<string> diag,
-            PostalService postal = null)
+            PostalService postal = null,
+            IPostalSenderCashAuthority senderPayer = null)
         {
             diag = diag ?? diagnostics;
             if (!efforts.TryGetValue(effortId, out RecruitmentEffort effort) || effort.Closed)
@@ -398,11 +399,22 @@ namespace LandLedgers.Economy.Recruitment
                 string toOffice = postal.FindNearestOfficeId(toLocationId, journeys, diag);
                 if (!string.IsNullOrEmpty(fromOffice) && !string.IsNullOrEmpty(toOffice))
                 {
-                    MailItem item = postal.PostItem(
-                        MailKind.Letter,
-                        $"hiring: {effort.RoleDisplayName} at {effort.BusinessInstanceId}",
-                        recipientPersonId, $"P{recipientPersonId}",
-                        fromOffice, toOffice, dayIndex, diag);
+                    // Pass IX WS1 (A3-03): when a sender cash authority is
+                    // supplied (the hiring business's till in production),
+                    // postage is debited from it and a sender who cannot pay
+                    // is refused by the post office — the letter then falls
+                    // back to the foot-messenger path below, never free post.
+                    MailItem item = senderPayer != null
+                        ? postal.PostItem(
+                            MailKind.Letter,
+                            $"hiring: {effort.RoleDisplayName} at {effort.BusinessInstanceId}",
+                            recipientPersonId, $"P{recipientPersonId}",
+                            fromOffice, toOffice, dayIndex, senderPayer, diag)
+                        : postal.PostItem(
+                            MailKind.Letter,
+                            $"hiring: {effort.RoleDisplayName} at {effort.BusinessInstanceId}",
+                            recipientPersonId, $"P{recipientPersonId}",
+                            fromOffice, toOffice, dayIndex, diag);
                     if (item != null)
                     {
                         int postalDays = Math.Max(1, postal.EstimateTransitDays(fromOffice, toOffice, journeys));

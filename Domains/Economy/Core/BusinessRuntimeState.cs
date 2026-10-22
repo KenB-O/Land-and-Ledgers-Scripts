@@ -1767,6 +1767,28 @@ namespace LandLedgers.Economy
                 dto.lastSuspendedPayrollWorkerIds.Add(lastSuspendedPayrollWorkerIds[i]);
             }
 
+            // Pass IX review R-05: named payables persist with the runtime —
+            // creditor identity, ObligationId and the escrow flag are part of
+            // the debt's identity, not decoration.
+            for (int i = 0; i < namedPayables.Count; i++)
+            {
+                BusinessNamedPayableRecord record = namedPayables[i];
+                if (record == null)
+                {
+                    continue;
+                }
+
+                dto.namedPayables.Add(new BusinessNamedPayableSaveDto
+                {
+                    creditor = record.Creditor ?? string.Empty,
+                    amountCents = Mathf.Max(0, record.AmountCents),
+                    reason = record.Reason ?? string.Empty,
+                    dayIndex = record.DayIndex,
+                    obligationId = record.ObligationId ?? string.Empty,
+                    cashAlreadyDeducted = record.CashAlreadyDeducted,
+                });
+            }
+
             return dto;
         }
 
@@ -1838,6 +1860,36 @@ namespace LandLedgers.Economy
                 for (int i = 0; i < dto.lastSuspendedPayrollWorkerIds.Count; i++)
                 {
                     state.lastSuspendedPayrollWorkerIds.Add(dto.lastSuspendedPayrollWorkerIds[i] ?? string.Empty);
+                }
+            }
+
+            // Pass IX review R-05: restore named payables exactly as saved.
+            // accruedLiabilityCents was captured as its own scalar and is
+            // restored above, so the scalar total and the named records stay
+            // consistent across the round-trip; records carrying an
+            // ObligationId keep pointing at the authority obligation (the
+            // authority itself is persisted separately) and records without
+            // one remain flushable via FlushNamedPayablesToAuthority.
+            state.namedPayables.Clear();
+            if (dto.namedPayables != null)
+            {
+                for (int i = 0; i < dto.namedPayables.Count; i++)
+                {
+                    BusinessNamedPayableSaveDto payableDto = dto.namedPayables[i];
+                    if (payableDto == null)
+                    {
+                        continue;
+                    }
+
+                    state.namedPayables.Add(new BusinessNamedPayableRecord
+                    {
+                        Creditor = payableDto.creditor ?? string.Empty,
+                        AmountCents = Mathf.Max(0, payableDto.amountCents),
+                        Reason = payableDto.reason ?? string.Empty,
+                        DayIndex = payableDto.dayIndex,
+                        ObligationId = payableDto.obligationId ?? string.Empty,
+                        CashAlreadyDeducted = payableDto.cashAlreadyDeducted,
+                    });
                 }
             }
 

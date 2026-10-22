@@ -209,6 +209,13 @@ namespace LandLedgers.Editor.Economy
             carrierRuntime = new BusinessRuntimeState();
             carrierRuntime.BindBusinessIdentity("biz-freight-1");
             driver.EnsureCompany("biz-freight-1", carrierRuntime);
+            // R-04: the shipments' named payer ("biz-store-1") is a real
+            // funded till registered with the driver — verified collection
+            // debits it before the carrier is credited.
+            var payerRuntime = new BusinessRuntimeState();
+            payerRuntime.BindBusinessIdentity("biz-store-1");
+            payerRuntime.SetCurrentCashCents(100000);
+            driver.RegisterBusinessRuntime("biz-store-1", payerRuntime);
             return driver;
         }
 

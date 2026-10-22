@@ -211,6 +211,7 @@ namespace LandLedgers.EditorTests.Economy
             {
                 AssetKind = "equipment",
                 ItemId = "counter-scales",
+                OwnerBusinessId = "store-1",
                 Units = 1,
                 CostCents = 8000,
                 Provenance = "purchase:smithy-1",
@@ -372,7 +373,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Execution_FormationAsset_TransfersViaRegisterFlag()
+        public void Execution_FormationAsset_TransfersOwnershipToBuyer()
         {
             var f = new Fixture();
             BusinessInstanceState seller = f.AddBusiness("store-1", 1000);
@@ -381,6 +382,7 @@ namespace LandLedgers.EditorTests.Economy
             {
                 AssetKind = "inventory",
                 ItemId = "flour-stock",
+                OwnerBusinessId = "store-1",
                 Units = 20,
                 CostCents = 8000,
                 Provenance = "purchase:mill-1",
@@ -391,7 +393,8 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(1, execution.ExecuteApprovedSales(f.Ledger, f.ExecutionContext(), f.Diag));
 
             NpcFormationAsset asset = f.Formation.Assets[0];
-            Assert.IsTrue(asset.Liquidated, "the formation asset leaves the seller's available register");
+            Assert.IsFalse(asset.Liquidated, "R-12: a sale is not a liquidation — the buyer receives the asset");
+            Assert.AreEqual("store-2", asset.OwnerBusinessId, "R-01/R-12: ownership transfers to the buyer in the register");
             Assert.AreEqual(5800, seller.RuntimeState.CurrentCashCents);
             Assert.AreEqual(45200, buyer.RuntimeState.CurrentCashCents);
             Assert.AreEqual("store-2", execution.CompletedSales[0].BuyerBusinessId);
@@ -495,6 +498,7 @@ namespace LandLedgers.EditorTests.Economy
             {
                 AssetKind = "equipment",
                 ItemId = "counter-scales",
+                OwnerBusinessId = "store-1",
                 Units = 1,
                 CostCents = 10000,
                 Provenance = "purchase:smithy-1",
@@ -553,6 +557,7 @@ namespace LandLedgers.EditorTests.Economy
             {
                 AssetKind = "equipment",
                 ItemId = "counter-scales",
+                OwnerBusinessId = "store-1",
                 Units = 1,
                 CostCents = 10000,
                 Provenance = "purchase:smithy-1",
@@ -578,6 +583,7 @@ namespace LandLedgers.EditorTests.Economy
             {
                 AssetKind = "equipment",
                 ItemId = "mystery-crate",
+                OwnerBusinessId = "store-1",
                 Units = 1,
                 CostCents = 0, // no recorded cost — no evidence
                 Provenance = "purchase:smithy-1",

@@ -458,7 +458,8 @@ namespace LandLedgers.Civic
         /// </summary>
         public bool PayTeacher(
             CivicTreasuryService treasury, FinancialObligationAuthority obligations,
-            EntityIdRegistry ids, int dayIndex, List<string> diag = null)
+            EntityIdRegistry ids, int dayIndex, List<string> diag = null,
+            HouseholdLedger teacherHouseholdLedger = null)
         {
             assignment ??= new SchoolhouseAssignment();
             if (!assignment.HasTeacher && HasTeacher)
@@ -466,7 +467,7 @@ namespace LandLedgers.Civic
                 // Assignment record not yet synced (older save): sync from the state fields.
                 assignment.Assign(teacherPersonId, teacherHouseholdId, teacherDisplayName);
             }
-            return assignment.PayTeacher(treasury, obligations, ids, dayIndex, diag);
+            return assignment.PayTeacher(treasury, obligations, ids, dayIndex, diag, teacherHouseholdLedger);
         }
 
         public bool MatchesBuildingReference(int candidateBuildingId, int candidatePlotId)

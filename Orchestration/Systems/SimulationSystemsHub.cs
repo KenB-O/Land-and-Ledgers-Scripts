@@ -136,7 +136,14 @@ namespace LandLedgers.Orchestration.Systems
         public SkillService Skills => skillService ??= new SkillService();
         public WorkTimeBudgetStore WorkTimeBudgets => workTimeBudgets ??= new WorkTimeBudgetStore();
         public GenericProductionRuntimeRegistry GenericProduction =>
-            genericProductionRuntime ??= new GenericProductionRuntimeRegistry(Tasks, WorkTimeBudgets);
+            genericProductionRuntime ??= new GenericProductionRuntimeRegistry(Tasks, WorkTimeBudgets)
+            {
+                // Pass IX review R-11: the registry's provenance seam is the
+                // hub's own persisted stock ledger — without this assignment
+                // production output provenance was silently never recorded.
+                ProvenanceLedger = StockProvenance,
+                ProvenanceIds = Ids,
+            };
         public EnterpriseValuationReadModel Valuation => valuation ??= new EnterpriseValuationReadModel();
         public FreightResourcePool FreightPool => freightPool ??= new FreightResourcePool();
         public TransportAssetRegistry TransportAssets => transportAssets ??= new TransportAssetRegistry();

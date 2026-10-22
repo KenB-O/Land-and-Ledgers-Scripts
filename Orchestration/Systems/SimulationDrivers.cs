@@ -871,6 +871,44 @@ namespace LandLedgers.Orchestration.Systems
                 hub.DomesticLaborDriver.PruneStalePending(absoluteDayIndex);
             }
             DriveNpcPropertyLifeDay(absoluteDayIndex);
+            DriveSchoolhouseTeacherPay(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Pass IX review R-02: the production teacher-pay drive. No
+        /// school-term flow existed in production (the schoolhouse is owned
+        /// by the scene's CivicFoundationManager, not the hub), so teacher
+        /// pay is called here, from the day-change path, guarded to term
+        /// boundaries: only on a term-start day, and only when a teacher
+        /// with a household is assigned. The funded portion credits the
+        /// teacher's household ledger (hub registry, by the state's
+        /// teacherHouseholdId) in the same call; PayTeacher's own term
+        /// no-op semantics make repeat safety exact.
+        /// </summary>
+        private void DriveSchoolhouseTeacherPay(int absoluteDayIndex)
+        {
+            if (hub == null) return;
+            if (LandLedgers.Civic.SchoolhouseAssignment.TermStartFor(absoluteDayIndex) != absoluteDayIndex)
+            {
+                return; // term boundaries only — PayTeacher settles a whole term at its start
+            }
+
+            LandLedgers.Civic.CivicFoundationManager civic = FindAnyObjectByType<LandLedgers.Civic.CivicFoundationManager>();
+            LandLedgers.Civic.SchoolhouseState schoolhouse = civic != null ? civic.Schoolhouse : null;
+            if (schoolhouse == null || !schoolhouse.HasTeacher || schoolhouse.teacherHouseholdId < 0)
+            {
+                return;
+            }
+
+            HouseholdLedger teacherLedger = hub.HouseholdLedgers.Get(schoolhouse.teacherHouseholdId);
+            var diag = new List<string>();
+            bool settled = schoolhouse.PayTeacher(
+                hub.CivicTreasury, hub.FinancialObligations, hub.Ids, absoluteDayIndex, diag, teacherLedger);
+            if (settled || diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] schoolhouse teacher pay day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
         }
 
         /// <summary>
@@ -905,7 +943,7 @@ namespace LandLedgers.Orchestration.Systems
                 : null;
             NpcPropertyLifeReport report = hub.NpcPropertyLife.DriveNpcPropertyLife(
                 hub.CreditCash, hub.NpcPropertyLife.Taxes, hub.FinancialObligations,
-                hub.CivicTreasury, absoluteDayIndex, diag, saleContext);
+                hub.CivicTreasury, absoluteDayIndex, diag, saleContext, hub.Ids);
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] npc property life day " + absoluteDayIndex + ": " +
@@ -1480,6 +1518,35 @@ namespace LandLedgers.Orchestration.Systems
                     "roads closed; journeys route around or refuse (NX-2C).");
             }
 
+            // R-03: wire the postage payers from real production context —
+            // recruitment letters are paid by the hiring business's till
+            // (resolved from the shared business runtime), and registered-
+            // mail senders / return-receipt requesters are paid by their
+            // own household ledger (person -> active household membership
+            // -> household ledger; falling back to the person's recorded
+            // household id). Unresolvable senders get no payer.
+            if (sharedBusinessRuntime != null)
+            {
+                hub.Recruiting.SenderBusinessRuntimeResolver = id =>
+                {
+                    BusinessInstanceState found;
+                    return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found.RuntimeState : null;
+                };
+            }
+
+            hub.RegisteredMail.PersonHouseholdLedgerResolver = personId =>
+            {
+                if (personId < 0) return null;
+                int householdId = householdMemberships != null ? householdMemberships.GetActiveHouseholdId(personId) : -1;
+                if (householdId < 0 && populationManager != null && populationManager.State != null)
+                {
+                    PersonState person = populationManager.State.GetPerson(personId);
+                    if (person != null) householdId = person.householdId;
+                }
+
+                return householdId >= 0 ? hub.HouseholdLedgers.Get(householdId) : null;
+            };
+
             hub.Postal.AdvanceDay(hub.Journeys, absoluteDayIndex, diag);
             hub.MoneyOrders.AdvanceDay(absoluteDayIndex, diag);
             hub.RegisteredMail.AuditOverdue(absoluteDayIndex, diag);
@@ -1570,6 +1637,18 @@ namespace LandLedgers.Orchestration.Systems
             if (FreightProduction.Companies.Count == 0)
             {
                 return;
+            }
+
+            // R-04: register every live business runtime with the freight
+            // driver so each shipment's named payer resolves to its real
+            // till for verified collection (payer debited before the
+            // carrier is credited; unresolvable payers stay uncollected).
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business != null && business.RuntimeState != null)
+                {
+                    FreightProduction.RegisterBusinessRuntime(business.InstanceId, business.RuntimeState);
+                }
             }
 
             var diag = new List<string>();

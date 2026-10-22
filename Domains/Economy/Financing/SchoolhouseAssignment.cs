@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 
 namespace LandLedgers.Civic
@@ -82,7 +83,8 @@ namespace LandLedgers.Civic
         /// </summary>
         public bool PayTeacher(
             CivicTreasuryService treasury, FinancialObligationAuthority obligations,
-            EntityIdRegistry ids, int dayIndex, List<string> diag = null)
+            EntityIdRegistry ids, int dayIndex, List<string> diag = null,
+            HouseholdLedger teacherHouseholdLedger = null)
         {
             diag = diag ?? new List<string>();
             if (!HasTeacher)
@@ -104,6 +106,17 @@ namespace LandLedgers.Civic
                 return false;
             }
 
+            // R-02: the funded portion must CREDIT the teacher's household
+            // through HouseholdLedger in this same call — a treasury debit
+            // with no recipient is money destruction. No ledger for the
+            // teacher's household, no debit.
+            if (fromTreasury > 0 && teacherHouseholdLedger == null)
+            {
+                diag.Add($"SchoolhouseAssignment.PayTeacher: treasury covers {fromTreasury}c of the term wage but no " +
+                    $"household ledger for teacher household {TeacherHouseholdId} was supplied to credit it to — nothing debited, term not settled.");
+                return false;
+            }
+
             if (fromTreasury > 0)
             {
                 if (!treasury.TryDebit(fromTreasury, CivicLedgerEntryKind.TeacherPayroll, dayIndex,
@@ -120,10 +133,33 @@ namespace LandLedgers.Civic
                     $"teacher pay — school term from day {termStart}");
                 if (payable == null)
                 {
-                    diag.Add("SchoolhouseAssignment.PayTeacher: the obligation authority refused the shortfall Payable — term not marked settled.");
+                    // Compensate the debit (R-14 ordering flaw): the term
+                    // is not settled, so the treasury keeps its cash.
+                    if (fromTreasury > 0)
+                    {
+                        treasury.TryCredit(fromTreasury, CivicLedgerEntryKind.OtherCredit, dayIndex,
+                            $"school term wage rollback — Payable refused, term from day {termStart} unsettled", diag);
+                    }
+
+                    diag.Add("SchoolhouseAssignment.PayTeacher: the obligation authority refused the shortfall Payable — debit rolled back, term not marked settled.");
                     return false;
                 }
                 payableId = payable.ObligationId;
+            }
+
+            if (fromTreasury > 0)
+            {
+                // The household credit leg: exactly the debited amount, so
+                // treasury debit == household credit + payable principal.
+                string creditRefusal = teacherHouseholdLedger.RecordInflow(dayIndex, fromTreasury,
+                    HouseholdIncomeSource.WageEmployment, $"schoolhouse-term:{termStart}",
+                    $"teacher pay — school term from day {termStart} (civic treasury)", SchoolFundDebtor);
+                if (creditRefusal != null)
+                {
+                    diag.Add($"SchoolhouseAssignment.PayTeacher: household credit refused ({creditRefusal}) — " +
+                        "this cannot happen for a positive documented inflow; flagged loudly.");
+                    return false;
+                }
             }
 
             TermStartDayIndex = termStart;
@@ -131,6 +167,7 @@ namespace LandLedgers.Civic
             LastPaidFromTreasuryCents = fromTreasury;
             LastPayableObligationId = payableId;
             diag.Add($"SchoolhouseAssignment.PayTeacher: term from day {termStart} settled — {fromTreasury}c from civic treasury" +
+                (fromTreasury > 0 ? $" credited to teacher household {TeacherHouseholdId}" : "") +
                 (shortfall > 0 ? $", {shortfall}c as Payable '{payableId}' (debtor {SchoolFundDebtor}, creditor household:{TeacherHouseholdId})" : "") + ".");
             return true;
         }

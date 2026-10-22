@@ -509,6 +509,7 @@ namespace LandLedgers.Editor.Integration
             {
                 AssetKind = "equipment",
                 ItemId = "millstones",
+                OwnerBusinessId = Mill,
                 Units = 1,
                 CostCents = 20000,
                 Provenance = "founder capital",
@@ -691,6 +692,7 @@ namespace LandLedgers.Editor.Integration
             {
                 AssetKind = "equipment",
                 ItemId = "oven",
+                OwnerBusinessId = Bakery,
                 Units = 1,
                 CostCents = 8000,
                 Provenance = "founder capital",

@@ -90,7 +90,14 @@ namespace LandLedgers.EditorTests.Integration
             "BakeryChainContext", "BakeryFlourDispenseLine", "BakeryFlourLot", "BakeryFlourStock",
             "BakeryFuelDispenseLine", "BakeryFuelLot", "BakeryFuelStock", "BakeryPriceSchedule",
             "BakeryStagedBreadLot", "BakeryStagedWasteRecord", "BankCreditParticipant", "BankLoanUnderwritingResult",
-            "BorrowerLenderMemory", "BuildingFootprintLinker", "BuildingFootprintView", "BusinessCashPostagePayer",
+            "BorrowerLenderMemory", "BuildingFootprintLinker", "BuildingFootprintView",
+            // Pass IX review fix R-13: "BusinessCashPostagePayer" removed from this
+            // baseline — since R-03 it is constructed by RecruitmentService
+            // (Domains/Economy/Recruitment), a genuine production caller outside
+            // its owning PostOffice directory, so the scan accounts it by caller.
+            // "HouseholdLedgerPostagePayer" STAYS: its only production
+            // construction is RegisteredMailService in the SAME PostOffice
+            // directory, which the direct-name rule counts as feature-internal.
             "BusinessCashStore", "BusinessDefinition", "BusinessEconomyDefinition", "BusinessInputNeed",
             "BusinessInstanceSellerAdapter", "BusinessLoanRecord", "BusinessMainFocusDefinition", "BusinessMainFocusState",
             "BusinessNamedPayableRecord", "BusinessOperationsDefinition", "BusinessReputationChangeResult", "BusinessSaleTerms",

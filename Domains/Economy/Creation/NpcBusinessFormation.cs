@@ -72,6 +72,13 @@ namespace LandLedgers.Economy.Creation
         public string Provenance = string.Empty;
         public bool Liquidated;
 
+        /// <summary>Pass IX review R-01 (additive): the business instance
+        /// that owns this asset. Formation sets it to the created business;
+        /// a formation-asset sale transfers it to the buyer. Empty means
+        /// unscoped legacy data — such an asset is NOT any business's to
+        /// propose, appraise, sell or liquidate (fail-closed).</summary>
+        public string OwnerBusinessId = string.Empty;
+
         public NpcFormationAsset() { }
     }
 
@@ -228,9 +235,17 @@ namespace LandLedgers.Economy.Creation
 
         public int CountForBusiness(string businessInstanceId)
         {
-            // Assets are recorded per formation run; the register is scoped
-            // to one formation by the service. Count is informational.
-            return assets != null ? assets.Count : 0;
+            // R-01: the register is global (hub-owned), so counting is
+            // owner-scoped: only assets whose OwnerBusinessId matches.
+            if (assets == null || string.IsNullOrWhiteSpace(businessInstanceId)) return 0;
+            int count = 0;
+            foreach (NpcFormationAsset asset in assets)
+            {
+                if (asset != null && string.Equals(asset.OwnerBusinessId, businessInstanceId, StringComparison.Ordinal))
+                    count++;
+            }
+
+            return count;
         }
 
         public NpcFormationAssetRegisterSaveDto CaptureSaveDto()
@@ -598,6 +613,9 @@ namespace LandLedgers.Economy.Creation
 
             foreach (NpcFormationAsset asset in intent.Assets)
             {
+                // R-01: scope every formation asset to the business just
+                // created for it — the register is global, ownership is not.
+                if (asset != null) asset.OwnerBusinessId = created.InstanceId;
                 string refusal = context.AssetRegister.Record(asset);
                 if (refusal != null)
                 {

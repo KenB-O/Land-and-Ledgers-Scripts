@@ -101,6 +101,7 @@ namespace LandLedgers.World.Property
     public sealed class NpcPropertyLifeReport
     {
         public int HoldingsAudited;
+        public int TaxesLevied;
         public int TaxesPaidCents;
         public int TreasuryCreditedCents;
         public int MaintenanceNeedsFunded;
@@ -1065,12 +1066,39 @@ namespace LandLedgers.World.Property
         public NpcPropertyLifeReport DriveNpcPropertyLife(
             CreditCashBridge cash, PropertyTaxService tax,
             FinancialObligationAuthority obligations, CivicTreasuryService treasury,
-            int dayIndex, List<string> diag, NpcDistressSaleContext saleContext = null)
+            int dayIndex, List<string> diag, NpcDistressSaleContext saleContext = null,
+            EntityIdRegistry ids = null)
         {
             diag = diag ?? diagnostics;
             var report = new NpcPropertyLifeReport();
             report.HoldingsAudited = holdings.Count;
             if (holdings.Count == 0) return report;
+
+            // 0) Annual levy (Pass IX review R-07): the production levy path
+            // into this drive's tax book — the same catch-up rule the player
+            // tax driver uses: every registered holding owes exactly one
+            // assessment per tax year, levied when the current year's is
+            // missing. The assessed basis is the holding's recorded
+            // acquisition price (the only real valuation on the record);
+            // the rate/due/penalty calibration is PropertyTaxCalibration's,
+            // shared with the player leg.
+            if (tax != null)
+            {
+                int taxYear = PropertyTaxCalibration.TaxYearForDay(dayIndex);
+                foreach (NpcPropertyHolding holding in new List<NpcPropertyHolding>(holdings.Values))
+                {
+                    if (holding == null) continue;
+                    if (tax.HasAssessmentForParcelYear(holding.ParcelId, taxYear)) continue;
+                    int levyCents = PropertyTaxCalibration.ComputeLevyCents(holding.AcquisitionPriceCents);
+                    if (levyCents <= 0) continue;
+                    TaxAssessment levied = LevyPropertyTax(tax, ids, holding, taxYear, levyCents,
+                        dayIndex + PropertyTaxCalibration.DueDaysAfterLevy,
+                        PropertyTaxCalibration.PenaltyBpsMonthly,
+                        PropertyTaxCalibration.InterestBpsAnnual,
+                        dayIndex, diag);
+                    if (levied != null) report.TaxesLevied++;
+                }
+            }
 
             // 1) Tax audit.
             if (cash != null && tax != null && treasury != null)
@@ -1126,6 +1154,10 @@ namespace LandLedgers.World.Property
         {
             public List<NpcPropertyHolding> Holdings = new List<NpcPropertyHolding>();
             public List<NpcPropertyTenancy> Tenancies = new List<NpcPropertyTenancy>();
+            // Pass IX review R-07 (additive): the service's own tax book —
+            // without it every levied assessment died with the session and
+            // the production audit ran over an empty book after any load.
+            public PropertyTaxService.PropertyTaxSaveDto Taxes;
         }
 
         public NpcPropertyLifeSaveDto CaptureSaveDto()
@@ -1135,6 +1167,7 @@ namespace LandLedgers.World.Property
                 if (holding != null) dto.Holdings.Add(holding);
             foreach (NpcPropertyTenancy tenancy in tenancies.Values)
                 if (tenancy != null) dto.Tenancies.Add(tenancy);
+            dto.Taxes = Taxes.CaptureSaveDto();
             return dto;
         }
 
@@ -1143,6 +1176,7 @@ namespace LandLedgers.World.Property
             diag = diag ?? diagnostics;
             holdings.Clear();
             tenancies.Clear();
+            Taxes.LoadFromSaveDto(dto != null ? dto.Taxes : null);
             if (dto == null) return;
             if (dto.Holdings != null)
             {

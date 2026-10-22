@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Population;
 using LandLedgers.Tasks;
 using UnityEngine;
 
@@ -49,6 +50,26 @@ namespace LandLedgers.Economy.Postal
         /// scope only).
         /// </summary>
         public IPostalSenderCashAuthority ReturnReceiptPayer { get; set; }
+
+        /// <summary>
+        /// Pass IX review R-03: production resolver from a sender/recipient
+        /// PERSON id to that person's household ledger (membership → household
+        /// ledger registry, wired by SimulationDrivers). Used to supply a
+        /// real funded payer where the call context names a person but no
+        /// explicit payer: the sender of a registered letter
+        /// (senderPersonId) and the recipient who requested/signed for a
+        /// return receipt (recipientPersonId — the receipt's postage payer
+        /// per the ReturnReceiptPayer doc). A person who resolves to no
+        /// ledger gets no payer — nothing is fabricated.
+        /// </summary>
+        public Func<int, HouseholdLedger> PersonHouseholdLedgerResolver { get; set; }
+
+        private IPostalSenderCashAuthority ResolvePersonPayer(int personId)
+        {
+            if (personId < 0 || PersonHouseholdLedgerResolver == null) return null;
+            HouseholdLedger ledger = PersonHouseholdLedgerResolver(personId);
+            return ledger != null ? new HouseholdLedgerPostagePayer(ledger) : null;
+        }
 
         /// <summary>Days past due before an overdue registered item's chain is declared broken (calibration).</summary>
         public int OverdueLossThresholdDays { get; set; } = 30;
@@ -207,6 +228,16 @@ namespace LandLedgers.Economy.Postal
             PostalService svc = RequirePostal(nameof(PostRegisteredLetter), diag);
             if (svc == null) return null;
 
+            // R-03: no explicit payer — resolve the actual sender's
+            // household from senderPersonId (the call context's identity).
+            if (senderPayer == null) senderPayer = ResolvePersonPayer(senderPersonId);
+            if (senderPayer == null && PersonHouseholdLedgerResolver != null)
+            {
+                diag.Add($"RegisteredMailService.PostRegisteredLetter: no funded household resolvable for sender " +
+                    $"P{senderPersonId} — registered letter refused, never free post.");
+                return null;
+            }
+
             // Pass IX WS1 (A3-03): with a sender cash authority, postage is
             // debited from the sender and an unpaid letter is refused before
             // registration — registration never rides on uncollected postage.
@@ -301,6 +332,15 @@ namespace LandLedgers.Economy.Postal
             bool offMap = string.Equals(item.ToOfficeId, PostalService.OffMapOfficeId, StringComparison.OrdinalIgnoreCase);
             if (record.ReturnReceiptRequested && !offMap)
             {
+                // R-03: assign ReturnReceiptPayer from the funded sender of
+                // the receipt — the delivering recipient (record.RecipientPersonId),
+                // whose household ledger the production resolver supplies.
+                // Re-resolved per delivery so one recipient's payer never
+                // leaks into another's receipt; unresolvable = null.
+                if (PersonHouseholdLedgerResolver != null)
+                {
+                    ReturnReceiptPayer = ResolvePersonPayer(record.RecipientPersonId);
+                }
                 // Pass IX WS1 (A3-03): the receipt's postage is paid through
                 // ReturnReceiptPayer when one is wired; an unpaid receipt is
                 // not posted (the delivery itself already happened — only

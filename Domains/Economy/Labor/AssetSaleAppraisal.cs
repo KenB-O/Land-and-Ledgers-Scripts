@@ -174,7 +174,7 @@ namespace LandLedgers.Economy.Labor
         /// liquidated asset, a missing entry, or a zero recorded cost is
         /// no-evidence.
         /// </summary>
-        public AssetAppraisalResult AppraiseFormation(NpcFormationAsset asset)
+        public AssetAppraisalResult AppraiseFormation(string businessInstanceId, NpcFormationAsset asset)
         {
             if (asset == null || string.IsNullOrWhiteSpace(asset.ItemId))
             {
@@ -182,6 +182,15 @@ namespace LandLedgers.Economy.Labor
             }
 
             string assetId = FormationAssetPrefix + asset.ItemId;
+            // R-01: ownership check mirroring AppraiseEquipment — a foreign
+            // (or unscoped/legacy unowned) asset is not the seller's to appraise.
+            if (string.IsNullOrWhiteSpace(asset.OwnerBusinessId)
+                || !string.Equals(asset.OwnerBusinessId, businessInstanceId ?? string.Empty, StringComparison.Ordinal))
+            {
+                return AssetAppraisalResult.NoEvidence(assetId,
+                    $"formation asset '{asset.ItemId}' is owned by '{asset.OwnerBusinessId}', " +
+                    $"not by business '{businessInstanceId}' — not the seller's to appraise or sell");
+            }
             if (asset.Liquidated)
             {
                 return AssetAppraisalResult.NoEvidence(assetId,
@@ -221,6 +230,21 @@ namespace LandLedgers.Economy.Labor
             return null;
         }
 
+        /// <summary>R-01: finds the formation asset owned by a specific business.</summary>
+        public NpcFormationAsset FindFormationAsset(string businessInstanceId, string itemId)
+        {
+            if (FormationAssets == null || string.IsNullOrWhiteSpace(itemId)
+                || string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            foreach (NpcFormationAsset asset in FormationAssets.Assets)
+            {
+                if (asset != null && string.Equals(asset.ItemId, itemId, StringComparison.Ordinal)
+                    && string.Equals(asset.OwnerBusinessId, businessInstanceId, StringComparison.Ordinal))
+                    return asset;
+            }
+
+            return null;
+        }
+
         /// <summary>Appraises whatever asset a request/asset id names.</summary>
         public AssetAppraisalResult Appraise(string businessInstanceId, string assetId)
         {
@@ -232,7 +256,9 @@ namespace LandLedgers.Economy.Labor
 
             if (IsFormationAssetId(assetId))
             {
-                return AppraiseFormation(FindFormationAsset(FormationItemId(assetId)));
+                return AppraiseFormation(businessInstanceId,
+                    FindFormationAsset(businessInstanceId, FormationItemId(assetId))
+                    ?? FindFormationAsset(FormationItemId(assetId)));
             }
 
             EquipmentAsset asset = FindEquipmentAsset != null ? FindEquipmentAsset(assetId) : null;
@@ -380,6 +406,14 @@ namespace LandLedgers.Economy.Labor
                 {
                     return Refuse(request, $"formation asset '{request.AssetId}' is gone or already liquidated", diagnostics);
                 }
+
+                // R-01: only the seller's own formation asset can be sold.
+                if (!string.Equals(formation.OwnerBusinessId, seller.InstanceId, StringComparison.Ordinal))
+                {
+                    return Refuse(request,
+                        $"formation asset '{request.AssetId}' is owned by '{formation.OwnerBusinessId}', " +
+                        $"not by the seller '{seller.InstanceId}'", diagnostics);
+                }
             }
             else
             {
@@ -433,11 +467,12 @@ namespace LandLedgers.Economy.Labor
             }
             else
             {
-                // Formation assets carry no owner field: the register's
-                // consumed flag is the transfer record (the same flag
-                // CloseOrderly liquidation uses), and the sale record below
-                // names the buyer.
-                formation.Liquidated = true;
+                // R-01/R-12: a formation-asset SALE transfers ownership to
+                // the buyer — the same register record now names the buyer
+                // as owner (a real register record for the buyer), it is NOT
+                // liquidated/consumed. Only CloseOrderly liquidation of a
+                // business's OWN assets marks Liquidated for cash.
+                formation.OwnerBusinessId = buyer.InstanceId;
             }
 
             if (transferRefusal != null)
@@ -517,8 +552,15 @@ namespace LandLedgers.Economy.Labor
             // The request STAYS Approved (the owner's consent stands); the
             // failure is appended to its note so the blocker is visible and
             // a later run can complete the sale when conditions change.
-            request.ResolutionNote = (request.ResolutionNote ?? string.Empty) +
-                $" | execution deferred: {reason}.";
+            // R-12: do not append the same deferral reason unboundedly on
+            // daily retries — one entry per distinct reason.
+            string entry = $" | execution deferred: {reason}.";
+            string note = request.ResolutionNote ?? string.Empty;
+            if (!note.Contains(entry))
+            {
+                request.ResolutionNote = note + entry;
+            }
+
             diagnostics.Add($"AssetSaleExecution: {request.RequestId} deferred — {reason}.");
             return false;
         }
@@ -562,8 +604,14 @@ namespace LandLedgers.Economy.Labor
             if (asset == null) return "RegisterLiquidationPort: no asset supplied.";
             if (cash == null || allBusinesses == null)
                 return "RegisterLiquidationPort: no cash port or business directory — no real buyer can pay.";
+            // R-01: liquidation only ever sells the closing business's OWN asset.
+            if (!string.Equals(asset.OwnerBusinessId, businessInstanceId ?? string.Empty, StringComparison.Ordinal))
+            {
+                return $"RegisterLiquidationPort: formation asset '{asset.ItemId}' is owned by " +
+                       $"'{asset.OwnerBusinessId}', not by closing business '{businessInstanceId}' — refused.";
+            }
 
-            AssetAppraisalResult value = appraisal.AppraiseFormation(asset);
+            AssetAppraisalResult value = appraisal.AppraiseFormation(businessInstanceId, asset);
             if (!value.HasEvidence)
             {
                 return $"RegisterLiquidationPort: no liquidation without evidence — {value.BasisNote}.";

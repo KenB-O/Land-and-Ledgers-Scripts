@@ -130,6 +130,16 @@ namespace LandLedgers.Economy.Recruitment
         private readonly List<string> diagnostics = new List<string>();
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
+        /// <summary>
+        /// Pass IX review R-03: production resolver from a business instance
+        /// id to its runtime till (wired by SimulationDrivers from the shared
+        /// business runtime). SendLetter uses it to supply the hiring
+        /// business — the effort's BusinessInstanceId, the actual sender in
+        /// its call context — as a BusinessCashPostagePayer when no explicit
+        /// payer is passed. Unresolvable business = no payer supplied.
+        /// </summary>
+        public Func<string, BusinessRuntimeState> SenderBusinessRuntimeResolver;
+
         public IReadOnlyCollection<RecruitmentEffort> Efforts => efforts.Values;
         public IReadOnlyCollection<CandidateInquiry> Inquiries => inquiries.Values;
 
@@ -399,12 +409,35 @@ namespace LandLedgers.Economy.Recruitment
                 string toOffice = postal.FindNearestOfficeId(toLocationId, journeys, diag);
                 if (!string.IsNullOrEmpty(fromOffice) && !string.IsNullOrEmpty(toOffice))
                 {
+                    // R-03: no explicit payer — the sender is the hiring
+                    // business named by the effort; resolve its real till.
+                    if (senderPayer == null && SenderBusinessRuntimeResolver != null)
+                    {
+                        BusinessRuntimeState senderRuntime = SenderBusinessRuntimeResolver(effort.BusinessInstanceId);
+                        if (senderRuntime != null)
+                            senderPayer = new BusinessCashPostagePayer(senderRuntime);
+                    }
+
+                    // R-03: when production payer wiring exists (an explicit
+                    // payer or the business resolver) but no payer could be
+                    // supplied for this sender, the letter must NOT ride the
+                    // legacy no-payer posting path — that would be free post.
+                    // It falls back to the foot messenger below instead.
+                    bool payerWiringPresent = senderPayer != null || SenderBusinessRuntimeResolver != null;
+                    MailItem item = null;
+                    if (payerWiringPresent && senderPayer == null)
+                    {
+                        diag.Add($"RecruitmentService.SendLetter: no funded payer resolvable for hiring business " +
+                            $"'{effort.BusinessInstanceId}' — letter goes by foot messenger, never free post.");
+                    }
+                    else
+                    {
                     // Pass IX WS1 (A3-03): when a sender cash authority is
                     // supplied (the hiring business's till in production),
                     // postage is debited from it and a sender who cannot pay
                     // is refused by the post office — the letter then falls
                     // back to the foot-messenger path below, never free post.
-                    MailItem item = senderPayer != null
+                    item = senderPayer != null
                         ? postal.PostItem(
                             MailKind.Letter,
                             $"hiring: {effort.RoleDisplayName} at {effort.BusinessInstanceId}",
@@ -423,6 +456,7 @@ namespace LandLedgers.Economy.Recruitment
                         return FinishLetter(effortId, effort, recipientPersonId, dayIndex, postalDays, item.MailId, diag);
                     }
                     diag.Add("RecruitmentService.SendLetter: post office refused the letter — falling back to foot messenger.");
+                    }
                 }
                 else
                 {

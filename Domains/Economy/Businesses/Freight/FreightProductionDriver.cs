@@ -87,6 +87,38 @@ namespace LandLedgers.Economy.Freight
             return company;
         }
 
+        /// <summary>R-04: optional external resolver for a freight payer's
+        /// till (e.g. the shared business runtime directory). Resolution
+        /// falls back to runtimes registered with this driver; a payer that
+        /// resolves nowhere stays uncollected — never credited blind.</summary>
+        public Func<string, BusinessRuntimeState> PayerRuntimeResolver;
+
+        /// <summary>R-04: registers any business's runtime so shipment
+        /// payers named by id can be resolved (and debited) at collection.</summary>
+        public void RegisterBusinessRuntime(string businessInstanceId, BusinessRuntimeState runtime)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId) || runtime == null)
+                return;
+            businessRuntimes[businessInstanceId] = runtime;
+        }
+
+        /// <summary>Resolves a shipment payer's runtime, or null when the
+        /// payer genuinely cannot be resolved from the driver's data.</summary>
+        public BusinessRuntimeState ResolvePayerRuntime(string payerBusinessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(payerBusinessInstanceId))
+                return null;
+            if (PayerRuntimeResolver != null)
+            {
+                BusinessRuntimeState resolved = PayerRuntimeResolver(payerBusinessInstanceId);
+                if (resolved != null)
+                    return resolved;
+            }
+
+            return businessRuntimes.TryGetValue(payerBusinessInstanceId, out BusinessRuntimeState runtime)
+                ? runtime : null;
+        }
+
         public FreightCompanyRuntime FindCompany(string businessInstanceId)
         {
             if (string.IsNullOrWhiteSpace(businessInstanceId))
@@ -257,10 +289,14 @@ namespace LandLedgers.Economy.Freight
             // Settlement: exactly the completed-and-accepted shipments, once
             // each (the runtime's collected flag makes re-scans no-ops). No
             // revenue ever settles for cargo that was not accepted.
+            // R-04: VERIFIED collection only — each shipment's named payer
+            // is resolved to its runtime and debited before the carrier is
+            // credited. An unresolvable payer leaves the charge uncollected
+            // (no legacy unverified fallback, no phantom carrier credit).
             foreach (KeyValuePair<string, FreightCompanyRuntime> entry in companies)
             {
                 businessRuntimes.TryGetValue(entry.Key, out BusinessRuntimeState runtime);
-                entry.Value.CollectAndPostUncollectedRevenue(runtime, diagnostics);
+                entry.Value.CollectAndPostUncollectedRevenue(runtime, ResolvePayerRuntime, diagnostics);
             }
             return advanced;
         }

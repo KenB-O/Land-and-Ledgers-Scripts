@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using LandLedgers.Civic;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using NUnit.Framework;
 
@@ -17,6 +18,8 @@ namespace LandLedgers.EditorTests.World
     [TestFixture]
     public sealed class Pass9SchoolhouseTeacherPayTests
     {
+        private static HouseholdLedger TeacherLedger() => new HouseholdLedger(7);
+
         private static SchoolhouseAssignment Assignment()
         {
             var assignment = new SchoolhouseAssignment();
@@ -42,20 +45,20 @@ namespace LandLedgers.EditorTests.World
             SchoolhouseAssignment assignment = Assignment();
             var diag = new List<string>();
 
-            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 10, diag));
+            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 10, diag, TeacherLedger()));
             Assert.AreEqual(20000 - 12000, treasury.BalanceCents);
             Assert.AreEqual(12000, assignment.LastPaidFromTreasuryCents);
             Assert.AreEqual(0, obligations.Obligations.Count, "a funded term creates no debt");
             Assert.AreEqual(-12000, treasury.TotalForKind(CivicLedgerEntryKind.TeacherPayroll));
 
             // Repeat calls inside the same term are no-ops.
-            Assert.IsFalse(assignment.PayTeacher(treasury, obligations, ids, 20, diag));
-            Assert.IsFalse(assignment.PayTeacher(treasury, obligations, ids, 59, diag));
+            Assert.IsFalse(assignment.PayTeacher(treasury, obligations, ids, 20, diag, TeacherLedger()));
+            Assert.IsFalse(assignment.PayTeacher(treasury, obligations, ids, 59, diag, TeacherLedger()));
             Assert.AreEqual(8000, treasury.BalanceCents);
 
             // The next term settles again: 8000c from the treasury and the
             // 4000c remainder as a named Payable.
-            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 60, diag));
+            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 60, diag, TeacherLedger()));
             Assert.AreEqual(0, treasury.BalanceCents);
             Assert.AreEqual(8000, assignment.LastPaidFromTreasuryCents);
             Assert.AreEqual(1, obligations.Obligations.Count);
@@ -74,7 +77,7 @@ namespace LandLedgers.EditorTests.World
             SchoolhouseAssignment assignment = Assignment();
             var diag = new List<string>();
 
-            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 10, diag));
+            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 10, diag, TeacherLedger()));
             Assert.AreEqual(0, treasury.BalanceCents, "the treasury paid what it held — no negative balance, no invented cash");
             Assert.AreEqual(5000, assignment.LastPaidFromTreasuryCents);
             Assert.AreEqual(1, obligations.Obligations.Count, "exactly one Payable for the shortfall");
@@ -87,7 +90,7 @@ namespace LandLedgers.EditorTests.World
             Assert.AreEqual(12000, assignment.LastPaidFromTreasuryCents + payable.TotalOutstandingCents);
 
             // No second Payable from repeat calls in the same term.
-            Assert.IsFalse(assignment.PayTeacher(treasury, obligations, ids, 30, diag));
+            Assert.IsFalse(assignment.PayTeacher(treasury, obligations, ids, 30, diag, TeacherLedger()));
             Assert.AreEqual(1, obligations.Obligations.Count);
         }
 
@@ -98,7 +101,7 @@ namespace LandLedgers.EditorTests.World
             var obligations = new FinancialObligationAuthority();
             var ids = new EntityIdRegistry();
             SchoolhouseAssignment assignment = Assignment();
-            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 0, new List<string>()));
+            Assert.IsTrue(assignment.PayTeacher(treasury, obligations, ids, 0, new List<string>(), TeacherLedger()));
             Assert.AreEqual(0, treasury.BalanceCents);
             FinancialObligation payable = obligations.Find(assignment.LastPayableObligationId);
             Assert.IsNotNull(payable);

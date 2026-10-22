@@ -151,6 +151,15 @@ namespace LandLedgers.Economy.Financing
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
+        /// <summary>
+        /// Pass IX review R-07: the NPC property-life register a successful
+        /// closing records the buyer's holding into (the hub's
+        /// NpcPropertyLifeService in production). Null = no register wired —
+        /// closings still close, loudly noted in diagnostics when a closed
+        /// acquisition cannot be registered.
+        /// </summary>
+        public NpcPropertyLifeService PropertyLife { get; set; }
+
         #region Price negotiation
 
         /// <summary>
@@ -549,6 +558,42 @@ namespace LandLedgers.Economy.Financing
                 plan.AgreedPriceCents,
                 $"title of '{plan.ParcelId}' transferred to '{plan.BuyerName}' on acquisition closing.",
                 result.SellerNoteObligationId, conveyanceId);
+
+            // Pass IX review R-07: a closed acquisition IS a holding — record
+            // it in the property-life register with the closing's own note /
+            // loan obligation ids, so the annual tax levy and the production
+            // drive have a real holding to work on. A parcel that already
+            // has a holding keeps it (its ownership follows the service's
+            // own sale path); a missing register is noted, never faked.
+            if (PropertyLife != null)
+            {
+                bool alreadyHeld = false;
+                foreach (NpcPropertyHolding existing in PropertyLife.Holdings)
+                {
+                    if (existing != null && string.Equals(existing.ParcelId, plan.ParcelId, StringComparison.Ordinal))
+                    {
+                        alreadyHeld = true;
+                        break;
+                    }
+                }
+                if (alreadyHeld)
+                {
+                    diag.Add($"NpcPropertyAcquisition: '{plan.ParcelId}' already has a property-life holding — registration skipped, the existing holding stands.");
+                }
+                else
+                {
+                    NpcPropertyHoldingKind kind = plan.OccupantPersonIds != null && plan.OccupantPersonIds.Count > 0
+                        ? NpcPropertyHoldingKind.OwnerOccupied
+                        : NpcPropertyHoldingKind.Vacant;
+                    PropertyLife.RegisterHolding(plan.ParcelId, string.Empty, plan.BuyerHouseholdId,
+                        dayIndex, plan.AgreedPriceCents,
+                        result.SellerNoteObligationId, result.LenderObligationId, kind, diag);
+                }
+            }
+            else
+            {
+                diag.Add("NpcPropertyAcquisition: closed without a property-life register wired — the holding is not registered (R-07 seam unset).");
+            }
             return result;
         }
 

@@ -1,4 +1,5 @@
 using System;
+using LandLedgers.Primitives;
 
 namespace LandLedgers.Economy
 {
@@ -17,7 +18,9 @@ namespace LandLedgers.Economy
             int unitCostCents,
             string provenance,
             int dayIndex,
-            out string reason)
+            out string reason,
+            SharedCategoryStockLedger provenanceLedger = null,
+            EntityIdRegistry provenanceIds = null)
         {
             reason = string.Empty;
             if (configuration == null || method == null || string.IsNullOrWhiteSpace(method.OutputProductId)
@@ -26,11 +29,24 @@ namespace LandLedgers.Economy
                 reason = "Production output requires a configured fungible Product.";
                 return false;
             }
-            return GenericProductionAuthority.TryCreateOutputOnce(process, () =>
+            bool created = GenericProductionAuthority.TryCreateOutputOnce(process, () =>
             {
                 return configuration.TryAddInventory(method.OutputProductId, method.OutputQuantity,
                     unitCostCents, definition, provenance, dayIndex);
             });
+            if (created && provenanceLedger != null)
+            {
+                // Pass IX WS6 (IDENT-001): the output seam is a provenance
+                // boundary — record the output lot with the real input lots
+                // the process consumed at start.
+                provenanceLedger.RecordProductionOutput(
+                    method.OutputProductId, method.OutputQuantity,
+                    process != null ? process.ProcessId : string.Empty,
+                    string.Empty,
+                    process != null ? process.ConsumedInputLotIds : null,
+                    dayIndex, provenanceIds);
+            }
+            return created;
         }
     }
 }

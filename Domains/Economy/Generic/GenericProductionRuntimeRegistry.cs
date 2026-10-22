@@ -26,6 +26,18 @@ namespace LandLedgers.Economy
             this.budgets = budgets;
         }
 
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): optional boundary provenance ledger (the
+        /// hub's SharedCategoryStockLedger in production). When set, each
+        /// completed process's output is recorded with the real input lots
+        /// the process consumed. Null = no provenance recording (legacy
+        /// callers unchanged).
+        /// </summary>
+        public SharedCategoryStockLedger ProvenanceLedger { get; set; }
+
+        /// <summary>Pass IX WS6 (IDENT-001): optional id allocator for provenance lot ids; null = documented negative local sequence on the ledger.</summary>
+        public EntityIdRegistry ProvenanceIds { get; set; }
+
         public GenericProductionRuntime ForBusiness(BusinessInstanceState business, EntityId businessId, int dayIndex)
         {
             if (business == null) throw new ArgumentNullException(nameof(business));
@@ -73,13 +85,23 @@ namespace LandLedgers.Economy
                             && string.Equals(candidate.MethodId, process.MethodId, StringComparison.OrdinalIgnoreCase));
                     if (method == null || string.IsNullOrWhiteSpace(method.OutputProductId)) return true;
                     output = new GenericProductDefinition(method.OutputProductId, method.OutputProductId, ProductQuantityUnit.Each);
-                    return business.GenericConfiguration.TryAddInventory(
+                    bool added = business.GenericConfiguration.TryAddInventory(
                         method.OutputProductId,
                         method.OutputQuantity,
                         0,
                         output,
                         $"generic-production:{process.ProcessId}",
                         dayIndex);
+                    if (added && ProvenanceLedger != null)
+                    {
+                        // Pass IX WS6 (IDENT-001): hub vector-slice output
+                        // seam — provenance with the process's real input lots.
+                        ProvenanceLedger.RecordProductionOutput(
+                            method.OutputProductId, method.OutputQuantity,
+                            process.ProcessId, business.InstanceId,
+                            process.ConsumedInputLotIds, dayIndex, ProvenanceIds);
+                    }
+                    return added;
                 }, out _);
             }
         }

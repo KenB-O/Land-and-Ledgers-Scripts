@@ -157,6 +157,8 @@ namespace LandLedgers.Persistence
         public CivicTreasuryService.CivicTreasurySaveDto civicTreasury = new();
         /// <summary>Pass IX WS6 (A1-03, additive): scenario run state — active scenario id + failed scenario/goal ids.</summary>
         public ScenarioRunState scenarioRunState = new();
+        /// <summary>Pass IX WS6 (IDENT-001, additive): shared category-stock provenance records (boundary lot identity).</summary>
+        public SharedCategoryStockLedger.SharedCategoryStockLedgerSaveDto stockProvenance = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

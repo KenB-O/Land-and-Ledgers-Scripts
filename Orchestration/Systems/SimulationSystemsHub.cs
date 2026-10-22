@@ -369,6 +369,7 @@ namespace LandLedgers.Orchestration.Systems
         public RecruitmentService Recruiting => recruitmentService ??= new RecruitmentService();
 
         private CivicTreasuryService civicTreasury;
+        private SharedCategoryStockLedger stockProvenance;
 
         /// <summary>
         /// Pass IX WS6 (A1-11): the ONE civic cash store — receives property
@@ -382,6 +383,14 @@ namespace LandLedgers.Orchestration.Systems
         {
             CivicTreasury.LoadFromSaveDto(dto);
         }
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): boundary provenance for shared category
+        /// stock — production outputs and external arrivals recorded here;
+        /// interior category movements remain bare counts (phased remainder,
+        /// stated on SharedCategoryStockLedger).
+        /// </summary>
+        public SharedCategoryStockLedger StockProvenance => stockProvenance ??= new SharedCategoryStockLedger();
 
         private ScenarioObjectiveService scenarioObjectives;
 
@@ -987,6 +996,7 @@ namespace LandLedgers.Orchestration.Systems
                 equipmentCapacities = EquipmentCapacities.CaptureSaveDto(),
                 civicTreasury = CivicTreasury.CaptureSaveDto(),
                 scenarioRunState = ScenarioObjectives.CaptureRunState(),
+                stockProvenance = StockProvenance.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -1104,6 +1114,8 @@ namespace LandLedgers.Orchestration.Systems
             LoadCivicTreasuryFromSaveDto(dto.civicTreasury);
             // Pass IX WS6 (A1-03): scenario run/failure state (additive section).
             ScenarioObjectives.LoadRunState(dto.scenarioRunState);
+            // Pass IX WS6 (IDENT-001): stock provenance (additive section).
+            StockProvenance.LoadFromSaveDto(dto.stockProvenance);
             FreightPool.AttachDraftPower(DraftPower);
             FreightPool.AttachWagonRegistry(TransportAssets);
             FreightPool.MigrateWagonsToRegistry(diagnostics);            weatherSeed = Math.Max(0, dto.weatherSeed);

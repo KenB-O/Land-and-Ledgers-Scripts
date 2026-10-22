@@ -25,7 +25,7 @@ The 4 failures at every stage are identical: MoneyOrderServiceTests.IndorseOrder
 | 45-day Ruston Decline adverse circulation (Pass8AdverseCirculation) | 8 passed, 0 failed |
 | Tick-size variation (TickSize) | 6 passed, 0 failed |
 | Three-year horizon (ThreeYear) | 5 passed, 0 failed |
-| Save/load persistence (SaveLoad) | 67 passed, 0 failed |
+| Save/load persistence (SaveLoad) | 69 passed, 0 failed |
 
 The same five filters were run on the pre-review-fix tree (3813305) with identical results, so the review fixes changed no simulation outcome.
 
@@ -48,5 +48,5 @@ The same five filters were run on the pre-review-fix tree (3813305) with identic
 
 ## Persistence (brief 7.4)
 
-- SaveLoad suite: 67 passed, 0 failed on the final tree, covering New Game clearing, restart, mid-shipment and mid-production restore, and multiple tick sizes (with the TickSize suite).
+- SaveLoad suite: 69 passed, 0 failed on the final tree, covering New Game clearing, restart, mid-shipment and mid-production restore, and multiple tick sizes (with the TickSize suite).
 - Pass IX additions proven by round-trip tests: named Payables (creditor, obligation link, escrow flag), the NPC tax book, scenario latched-goal state, civic treasury state, weekly attendance state, and stock provenance.

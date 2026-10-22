@@ -216,6 +216,18 @@ namespace LandLedgers.Economy
 
         public bool TryConsume(float amount, out float consumed)
         {
+            return TryConsume(amount, out consumed, null);
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): FIFO consume that also reports the real
+        /// lot ids it drew from (in consumption order), so a production
+        /// process can record exactly which lots became its inputs.
+        /// Positions whose product carries no lot identity simply report
+        /// no lots — the bare count still moves, honestly unidentitied.
+        /// </summary>
+        public bool TryConsume(float amount, out float consumed, List<string> consumedLotIds)
+        {
             consumed = 0f;
             if (amount <= 0f || AvailableQuantity <= 0f || amount > AvailableQuantity + 0.001f) return false;
             consumed = amount;
@@ -224,7 +236,14 @@ namespace LandLedgers.Economy
             {
                 float remaining = consumed;
                 for (int i = 0; i < lots.Count && remaining > 0f; i++)
+                {
+                    if (lots[i] != null && lots[i].Quantity > 0f && consumedLotIds != null
+                        && !string.IsNullOrEmpty(lots[i].LotId))
+                    {
+                        consumedLotIds.Add(lots[i].LotId);
+                    }
                     remaining -= lots[i].Consume(remaining);
+                }
                 lots.RemoveAll(lot => lot == null || lot.Quantity <= 0f);
             }
             return consumed > 0f;
@@ -926,6 +945,8 @@ namespace LandLedgers.Economy
         public List<string> ReservedEquipmentIds = new();
         public List<string> ReservedWorkspaceIds = new();
         public List<string> ConsumedInputIds = new();
+        /// <summary>Pass IX WS6 (IDENT-001, additive): the real inventory lot ids this process consumed (FIFO-captured at start), feeding the boundary provenance record at output.</summary>
+        public List<string> ConsumedInputLotIds = new();
 
         public bool PersonRequiredNow(ProductionMethodDefinition method)
         {
@@ -1228,6 +1249,17 @@ namespace LandLedgers.Economy
                 && string.Equals(existing.ProductId, productId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
             if (position == null || quantity <= 0f || position.Quantity + 0.001f < quantity) return false;
             return position.TryConsume(quantity, out consumed) && consumed >= quantity - 0.001f;
+        }
+
+        /// <summary>Pass IX WS6 (IDENT-001): TryConsumeInventory that also captures the FIFO lot ids consumed.</summary>
+        public bool TryConsumeInventoryCapturingLots(string productId, float quantity, List<string> consumedLotIds, out float consumed)
+        {
+            consumed = 0f;
+            inventory ??= new List<GenericInventoryPosition>();
+            GenericInventoryPosition position = inventory.FirstOrDefault(existing => existing != null
+                && string.Equals(existing.ProductId, productId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+            if (position == null || quantity <= 0f || position.Quantity + 0.001f < quantity) return false;
+            return position.TryConsume(quantity, out consumed, consumedLotIds) && consumed >= quantity - 0.001f;
         }
 
         public bool TryReserveInventory(string productId, float quantity)

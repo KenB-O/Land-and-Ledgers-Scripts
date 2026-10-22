@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Butcher;
@@ -30,6 +31,7 @@ using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
 using LandLedgers.World.Property;
+using LandLedgers.Orchestration.Scenarios.Generation;
 
 namespace LandLedgers.Persistence
 {
@@ -151,6 +153,12 @@ namespace LandLedgers.Persistence
         public EquipmentReservationAuthoritySaveDto reservations = new();
         public DraftPowerServiceSaveDto draftPower = new();
         public EquipmentCapacityServiceSaveDto equipmentCapacities = new();
+        /// <summary>Pass IX WS6 (A1-11, additive): the civic treasury — public cash received from taxes, debited for teacher pay.</summary>
+        public CivicTreasuryService.CivicTreasurySaveDto civicTreasury = new();
+        /// <summary>Pass IX WS6 (A1-03, additive): scenario run state — active scenario id + failed scenario/goal ids.</summary>
+        public ScenarioRunState scenarioRunState = new();
+        /// <summary>Pass IX WS6 (IDENT-001, additive): shared category-stock provenance records (boundary lot identity).</summary>
+        public SharedCategoryStockLedger.SharedCategoryStockLedgerSaveDto stockProvenance = new();
     }
 
     /// <summary>FVS-4: dairy chain save section.</summary>

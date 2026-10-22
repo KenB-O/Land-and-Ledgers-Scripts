@@ -67,6 +67,7 @@ found, the test fails loudly rather than passing silently.
 | BakeryStagedProductionChain | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs | Domains/Economy/Businesses/Bakery | (none) |
 | ForgeRepairChain | Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs | Domains/Economy/Businesses/Blacksmith | (none) |
 | StoreRestockService | Domains/Economy/Businesses/GeneralStore/StoreProcurementChain.cs | Domains/Economy/Businesses/GeneralStore | Orchestration/HouseholdSlice/HouseholdVerticalSlicePhaseH.cs |
+| RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 
 ## Notes per entry
 
@@ -83,8 +84,49 @@ found, the test fails loudly rather than passing silently.
 - `StoreRestockService` is instantiated only by the Phase H vertical-slice
   test fixture (`HouseholdVerticalSlicePhaseH.cs`), which is allowlisted.
   No production restock path calls it.
+- `RealDemandSource` (Pass IX WS6, A3-09) is registered honestly as
+  UNWIRED, deliberately. It collects fully-provenanced `PurchaseIntent`s
+  from real household needs and business input needs, but its intents have
+  no executor in the TownWorld purchase path — `TownWorldController`
+  resolves demand itself when purchases happen. Wiring the source in
+  without an executor behind it would fake execution (intents collected,
+  nothing bought), so it stays a collection-side system until the
+  purchase path grows a real intent executor. Its only production-tree
+  references are inside its owning directory (the demand contracts and a
+  mention in `SharedBusinessRuntimeManager`).
+
+## Audited production-reachable systems (NOT registry entries)
+
+The Pass IX audit re-checked a set of systems that look similar to the
+registered entries but ARE reached from production call paths. They were
+never registered here and must not be added as historical entries; this
+note records their audited status so the question does not reopen:
+
+- `MineProductionCycle` and its production chain — driven via
+  `MineProductionDriver` and referenced by `SharedBusinessRuntimeManager`.
+- `FreightCompanyRuntime` — referenced by `SimulationDrivers`,
+  `PostalService`, `DeliveryService`, and the logistics models.
+- `FarmCycleDriver` — referenced by `SharedBusinessRuntimeManager`.
+- `EstateLifecycleDriver` — driven from `SimulationDrivers`.
+- `DomesticLaborDriver` — driven from `SimulationDrivers` and owned by
+  `SimulationSystemsHub`.
+- `DailyActivityPlanner` — driven from `SimulationDrivers` and the
+  population services.
+- `ConversationRunner` — run by `DailySocialDrive`, which
+  `SimulationDrivers` invokes.
 
 ## Change log
 
 - 2026-10-13: registry created (Pass VIII self-directed fixes, G-09/G-10/G-12).
   Seventeen entries. No rewiring, no deletions.
+- Pass IX (WS6): `RealDemandSource` registered as unwired (A3-09, see its
+  note — unwired by decision, not oversight). Production-reachable audit
+  note added for the mine chain, freight, farm, estate, domestic-labor,
+  daily-activity, and conversation systems; no historical entries added
+  for them and all seventeen still-unwired entries remain intact. The
+  registry test also gained an assembly-scan enumeration (see
+  `Pass9RegistryAssemblyScanTests`) that sweeps the compiled assembly for
+  further unwired concrete types, with a small allowlist of
+  source-only-by-design types (PassengerManifest, PersonMoneyAccounts,
+  ScenarioCoordinator, ScenarioWorldBuilder, RealDemandSource,
+  BusinessValuationService).

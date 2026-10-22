@@ -870,6 +870,53 @@ namespace LandLedgers.Orchestration.Systems
             {
                 hub.DomesticLaborDriver.PruneStalePending(absoluteDayIndex);
             }
+            DriveNpcPropertyLifeDay(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (A1-07 driver half): the NPC property-life production
+        /// step — tax audit into the hub civic treasury, a maintenance pass,
+        /// and at most one distress sale — over the hub's real holdings.
+        /// Gated so fixtures/worlds that never registered NPC holdings
+        /// no-op cleanly: no holdings, no audit, no invented cash or buyers.
+        /// The distress-sale context is supplied only when the acquisition
+        /// manager (the title authority's owner) is present; without a named
+        /// buyer the brokered sale refuses inside the service, loudly.
+        /// </summary>
+        private void DriveNpcPropertyLifeDay(int absoluteDayIndex)
+        {
+            if (hub?.NpcPropertyLife == null) return;
+            if (hub.NpcPropertyLife.Holdings.Count == 0) return;
+            var diag = new List<string>();
+            AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
+            var saleContext = acquisitionMarket != null
+                ? new NpcDistressSaleContext
+                {
+                    Ids = hub.Ids,
+                    Authority = hub.FinancialObligations,
+                    Cash = hub.CreditCash,
+                    Titles = acquisitionMarket.Titles,
+                    Housing = hub.Housing,
+                    Workflow = hub.CreditOffers,
+                    Events = hub.CreditEvents,
+                    TaxService = hub.NpcPropertyLife.Taxes,
+                    BuyerHouseholdId = -1, // no named-buyer source in production yet — sales refuse honestly
+                }
+                : null;
+            NpcPropertyLifeReport report = hub.NpcPropertyLife.DriveNpcPropertyLife(
+                hub.CreditCash, hub.NpcPropertyLife.Taxes, hub.FinancialObligations,
+                hub.CivicTreasury, absoluteDayIndex, diag, saleContext);
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] npc property life day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+            if (report.TaxesPaidCents > 0 || report.SalesAttempted > 0)
+            {
+                Debug.Log($"[SimulationDrivers] npc property life day {absoluteDayIndex}: " +
+                    $"taxes paid {report.TaxesPaidCents}c, treasury credited {report.TreasuryCreditedCents}c, " +
+                    $"maintenance funded {report.MaintenanceNeedsFunded}, sales attempted {report.SalesAttempted}.");
+            }
         }
 
         private void OnDayChanged(SimulationDateChangedContext context)

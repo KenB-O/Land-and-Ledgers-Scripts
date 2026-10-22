@@ -8760,6 +8760,20 @@ namespace LandLedgers.Economy
                 titleDiagnostics.Add(problem);
                 Debug.LogWarning($"[Acquisitions] Title chain recording: {problem}", this);
             }
+            // Pass IX WS6 (A1-06): this is the single choke point every
+            // player acquisition success path flows through (deal closings,
+            // land purchases, business purchases), so dispute recording
+            // lives here: a non-Clean title chain records a Verified claim
+            // raised by the new owner. NPC acquisitions record through
+            // NpcPropertyLifeService sales the same way.
+            if (string.IsNullOrEmpty(problem))
+            {
+                var disputeDiag = new List<string>();
+                PropertyDisputes.RecordAcquisitionDisputes(
+                    titleAuthority, PlayerTitleBridge.ParcelKeyForPlot(plot.id),
+                    PlayerTitleBridge.PlayerHolderName, null, GetCurrentDayIndex(), disputeDiag);
+                foreach (string line in disputeDiag) titleDiagnostics.Add(line);
+            }
         }
 
         /// <summary>P5: records a player disposal (sale) in the T2F title chain.</summary>
@@ -8819,10 +8833,31 @@ namespace LandLedgers.Economy
         /// <summary>
         /// P5: player-facing property-tax payment — spends owner cash first, then
         /// books the payment against the assessment.
+        /// Pass IX WS6 (A1-07/A1-11): the optional hub civic treasury is the
+        /// payment's recipient — the absorbed amount is credited to it as
+        /// TaxReceived so player tax cents conserve end to end instead of
+        /// being destroyed. Callers with hub access pass
+        /// SimulationSystemsHub.CivicTreasury here.
         /// </summary>
-        public bool TryPayPropertyTax(string assessmentId, int amountCents, out string message)
+        public bool TryPayPropertyTax(string assessmentId, int amountCents, out string message,
+            CivicTreasuryService hubCivicTreasury = null)
         {
-            return PropertyTaxes.TryPayAssessment(assessmentId, amountCents, GetCurrentDayIndex(), out message);
+            return PropertyTaxes.TryPayAssessment(assessmentId, amountCents, GetCurrentDayIndex(), out message, hubCivicTreasury);
+        }
+
+        private PropertyDisputeService propertyDisputes;
+
+        /// <summary>
+        /// Pass IX WS6 (A1-06): dispute claims recorded at acquisition and
+        /// consulted by quick diligence. Scene wiring may replace this with
+        /// a hub-bound instance (mirroring into the hub PropertyInterestStore).
+        /// </summary>
+        public PropertyDisputeService PropertyDisputes => propertyDisputes ??= new PropertyDisputeService();
+
+        /// <summary>Pass IX WS6: binds the dispute service (e.g. hub-bound) used at acquisition/diligence.</summary>
+        public void BindPropertyDisputeService(PropertyDisputeService disputes)
+        {
+            if (disputes != null) propertyDisputes = disputes;
         }
 
         private void RefundSpend(int cents, string label)
@@ -8893,12 +8928,14 @@ namespace LandLedgers.Economy
             }
 
             int seed = PositiveHash((listing.plotId + 31) * 43 + (listing.buildingId + 47) * 19 + (int)kind * 97 + marketSeed);
-            if (listing.kind == AcquisitionListingKind.Business)
-            {
-                return BuildBusinessQuickDiligenceLine(listing, seed, kind);
-            }
-
-            return BuildLandQuickDiligenceLine(listing, seed, kind);
+            string line = listing.kind == AcquisitionListingKind.Business
+                ? BuildBusinessQuickDiligenceLine(listing, seed, kind)
+                : BuildLandQuickDiligenceLine(listing, seed, kind);
+            // Pass IX WS6 (A1-06): the dispute clue pass — flags Open/Contested
+            // claims on the parcel without leaking claimant identity.
+            string disputeClue = QuickDiligenceService.BuildDisputeClue(
+                PlayerTitleBridge.ParcelKeyForPlot(listing.plotId), PropertyDisputes);
+            return string.IsNullOrEmpty(disputeClue) ? line : line + " " + disputeClue;
         }
 
         /// <summary>

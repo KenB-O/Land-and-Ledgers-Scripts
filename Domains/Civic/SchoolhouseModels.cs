@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
+using LandLedgers.Economy.Financing;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.World;
 using UnityEngine;
 
@@ -385,6 +388,10 @@ namespace LandLedgers.Civic
         public string civicStatusLabel = "Civic";
         public int teacherPersonId = -1;
         public string teacherDisplayName = string.Empty;
+        /// <summary>Pass IX WS6 (A1-10): the teacher's household — the pay creditor. -1 = none.</summary>
+        public int teacherHouseholdId = -1;
+        /// <summary>Pass IX WS6 (A1-10): the real employment/pay record for the teacher assignment.</summary>
+        public SchoolhouseAssignment assignment = new SchoolhouseAssignment();
 
         public bool HasBuildingReference => buildingId >= 0 && plotId >= 0;
         public bool Built => built && HasBuildingReference;
@@ -427,12 +434,39 @@ namespace LandLedgers.Civic
 
             teacherPersonId = teacher.id;
             teacherDisplayName = teacher.DisplayName;
+            // Pass IX WS6 (A1-10): the teacher's household is wired at
+            // assignment time — it is the creditor teacher pay settles to.
+            teacherHouseholdId = teacher.householdId;
+            assignment ??= new SchoolhouseAssignment();
+            assignment.Assign(teacher.id, teacher.householdId, teacher.DisplayName);
         }
 
         public void ClearTeacher()
         {
             teacherPersonId = -1;
             teacherDisplayName = string.Empty;
+            teacherHouseholdId = -1;
+            assignment ??= new SchoolhouseAssignment();
+            assignment.Clear();
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (A1-10): settles the current school term's wage from
+        /// the civic treasury; any shortfall becomes exactly one named
+        /// Payable (see SchoolhouseAssignment). Repeat calls inside a
+        /// settled term are no-ops.
+        /// </summary>
+        public bool PayTeacher(
+            CivicTreasuryService treasury, FinancialObligationAuthority obligations,
+            EntityIdRegistry ids, int dayIndex, List<string> diag = null)
+        {
+            assignment ??= new SchoolhouseAssignment();
+            if (!assignment.HasTeacher && HasTeacher)
+            {
+                // Assignment record not yet synced (older save): sync from the state fields.
+                assignment.Assign(teacherPersonId, teacherHouseholdId, teacherDisplayName);
+            }
+            return assignment.PayTeacher(treasury, obligations, ids, dayIndex, diag);
         }
 
         public bool MatchesBuildingReference(int candidateBuildingId, int candidatePlotId)
@@ -483,7 +517,11 @@ namespace LandLedgers.Civic
                 ownerDisplayName = ownerDisplayName,
                 civicStatusLabel = civicStatusLabel,
                 teacherPersonId = teacherPersonId,
-                teacherDisplayName = teacherDisplayName
+                teacherDisplayName = teacherDisplayName,
+                teacherHouseholdId = teacherHouseholdId,
+                teacherPayTermStartDayIndex = assignment != null ? assignment.TermStartDayIndex : -1,
+                teacherPayTermSettled = assignment != null && assignment.TermSettled,
+                teacherPayableObligationId = assignment != null ? assignment.LastPayableObligationId : string.Empty
             };
         }
 
@@ -506,6 +544,19 @@ namespace LandLedgers.Civic
             civicStatusLabel = dto.civicStatusLabel;
             teacherPersonId = dto.teacherPersonId;
             teacherDisplayName = dto.teacherDisplayName;
+            teacherHouseholdId = dto.teacherHouseholdId;
+            assignment ??= new SchoolhouseAssignment();
+            if (teacherPersonId >= 0)
+            {
+                assignment.Assign(teacherPersonId, teacherHouseholdId, teacherDisplayName);
+                assignment.TermStartDayIndex = dto.teacherPayTermStartDayIndex;
+                assignment.TermSettled = dto.teacherPayTermSettled;
+                assignment.LastPayableObligationId = dto.teacherPayableObligationId ?? string.Empty;
+            }
+            else
+            {
+                assignment.Clear();
+            }
 
             if (!HasBuildingReference)
             {

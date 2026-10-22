@@ -8434,20 +8434,61 @@ namespace LandLedgers.World
         private void BuildRoadVisuals(Transform root)
         {
             Material roadMaterial = GetRoadVisualMaterial();
+            // Pass IX WS6 (road rect merging): one visual per maximal
+            // rectangle of same-type road cells instead of one visual per
+            // cell, consuming the grid through the (previously dead)
+            // FindUnconsumedRoadRect/RoadRowCanExtend/MarkConsumed helpers.
+            // Blocked (suppressed) road cells keep their per-cell visual
+            // exactly as before and are consumed up front so the merger
+            // never swallows them; the terrain overlay pass is separate
+            // and untouched, as is the non-road decor pass.
+            bool[,] consumed = new bool[grid.Width, grid.Depth];
             for (int z = 0; z < grid.Depth; z++)
             {
                 for (int x = 0; x < grid.Width; x++)
                 {
                     GridCoord coord = new(x, z);
-                    if (!grid.GetCell(coord).IsRoad)
+                    TownCell cell = grid.GetCell(coord);
+                    if (!cell.IsRoad || !cell.blocked)
                     {
                         continue;
                     }
 
-                    GridRect roadRect = new(x, z, 1, 1);
-                    GameObject roadVisual = CreateRectVisual(
+                    consumed[x, z] = true;
+                    GridRect cellRect = new(x, z, 1, 1);
+                    GameObject cellVisual = CreateRectVisual(
                         root,
                         $"Road Cell {x}_{z}",
+                        cellRect,
+                        RoadVisualYOffset,
+                        RoadVisualHeight,
+                        settings.roadColor,
+                        roadMaterial);
+                    ApplyRoadTextureTiling(cellVisual, cellRect);
+                }
+            }
+
+            for (int z = 0; z < grid.Depth; z++)
+            {
+                for (int x = 0; x < grid.Width; x++)
+                {
+                    if (consumed[x, z])
+                    {
+                        continue;
+                    }
+
+                    GridCoord coord = new(x, z);
+                    TownCell cell = grid.GetCell(coord);
+                    if (!cell.IsRoad)
+                    {
+                        continue;
+                    }
+
+                    GridRect roadRect = FindUnconsumedRoadRect(x, z, cell.roadType, consumed);
+                    MarkConsumed(roadRect, consumed);
+                    GameObject roadVisual = CreateRectVisual(
+                        root,
+                        $"Road Rect {x}_{z} {roadRect.width}x{roadRect.depth}",
                         roadRect,
                         RoadVisualYOffset,
                         RoadVisualHeight,
@@ -8458,18 +8499,18 @@ namespace LandLedgers.World
             }
         }
 
-        private GridRect FindUnconsumedRoadRect(int startX, int startZ, bool[,] consumed)
+        private GridRect FindUnconsumedRoadRect(int startX, int startZ, RoadType roadType, bool[,] consumed)
         {
             int width = 0;
             while (startX + width < grid.Width
                 && !consumed[startX + width, startZ]
-                && grid.GetCell(new GridCoord(startX + width, startZ)).IsRoad)
+                && IsMergeableRoadCell(startX + width, startZ, roadType))
             {
                 width++;
             }
 
             int depth = 1;
-            while (startZ + depth < grid.Depth && RoadRowCanExtend(startX, startZ + depth, width, consumed))
+            while (startZ + depth < grid.Depth && RoadRowCanExtend(startX, startZ + depth, width, roadType, consumed))
             {
                 depth++;
             }
@@ -8477,18 +8518,24 @@ namespace LandLedgers.World
             return new GridRect(startX, startZ, width, depth);
         }
 
-        private bool RoadRowCanExtend(int startX, int z, int width, bool[,] consumed)
+        private bool RoadRowCanExtend(int startX, int z, int width, RoadType roadType, bool[,] consumed)
         {
             for (int xOffset = 0; xOffset < width; xOffset++)
             {
                 int x = startX + xOffset;
-                if (consumed[x, z] || !grid.GetCell(new GridCoord(x, z)).IsRoad)
+                if (consumed[x, z] || !IsMergeableRoadCell(x, z, roadType))
                 {
                     return false;
                 }
             }
 
             return true;
+        }
+
+        private bool IsMergeableRoadCell(int x, int z, RoadType roadType)
+        {
+            TownCell cell = grid.GetCell(new GridCoord(x, z));
+            return cell.IsRoad && !cell.blocked && cell.roadType == roadType;
         }
 
         private static void MarkConsumed(GridRect rect, bool[,] consumed)

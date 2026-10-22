@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Blacksmith;
@@ -19,6 +20,7 @@ using LandLedgers.Economy.Recruitment;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Persistence;
+using LandLedgers.Orchestration.Scenarios.Generation;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World;
@@ -365,6 +367,39 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>P6: T2B recruitment workflows (efforts, inquiries, letters).</summary>
         public RecruitmentService Recruiting => recruitmentService ??= new RecruitmentService();
+
+        private CivicTreasuryService civicTreasury;
+        private SharedCategoryStockLedger stockProvenance;
+
+        /// <summary>
+        /// Pass IX WS6 (A1-11): the ONE civic cash store — receives property
+        /// taxes (player and NPC legs), pays the schoolhouse teacher. Owned
+        /// here like every other authority; persisted via the systems DTO.
+        /// </summary>
+        public CivicTreasuryService CivicTreasury => civicTreasury ??= new CivicTreasuryService();
+
+        /// <summary>Pass IX WS6: restores the civic treasury from its save section (clear-then-load inside the service).</summary>
+        public void LoadCivicTreasuryFromSaveDto(CivicTreasuryService.CivicTreasurySaveDto dto)
+        {
+            CivicTreasury.LoadFromSaveDto(dto);
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): boundary provenance for shared category
+        /// stock — production outputs and external arrivals recorded here;
+        /// interior category movements remain bare counts (phased remainder,
+        /// stated on SharedCategoryStockLedger).
+        /// </summary>
+        public SharedCategoryStockLedger StockProvenance => stockProvenance ??= new SharedCategoryStockLedger();
+
+        private ScenarioObjectiveService scenarioObjectives;
+
+        /// <summary>
+        /// Pass IX WS6 (A1-03): scenario objective/failure state — dated
+        /// qualifiers fail the run exactly once into the persisted run
+        /// state (SystemsSaveDto.scenarioRunState).
+        /// </summary>
+        public ScenarioObjectiveService ScenarioObjectives => scenarioObjectives ??= new ScenarioObjectiveService();
 
         public PersonScheduleTracker PersonSchedules => personScheduleTracker ??= new PersonScheduleTracker();
 
@@ -959,6 +994,9 @@ namespace LandLedgers.Orchestration.Systems
                 reservations = Reservations.CaptureSaveDto(),
                 draftPower = DraftPower.CaptureSaveDto(),
                 equipmentCapacities = EquipmentCapacities.CaptureSaveDto(),
+                civicTreasury = CivicTreasury.CaptureSaveDto(),
+                scenarioRunState = ScenarioObjectives.CaptureRunState(),
+                stockProvenance = StockProvenance.CaptureSaveDto(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -1072,6 +1110,12 @@ namespace LandLedgers.Orchestration.Systems
             Reservations.LoadFromSaveDto(dto.reservations);
             DraftPower.LoadFromSaveDto(dto.draftPower);
             EquipmentCapacities.LoadFromSaveDto(dto.equipmentCapacities);
+            // Pass IX WS6: civic treasury (additive section; absent in old saves = empty).
+            LoadCivicTreasuryFromSaveDto(dto.civicTreasury);
+            // Pass IX WS6 (A1-03): scenario run/failure state (additive section).
+            ScenarioObjectives.LoadRunState(dto.scenarioRunState);
+            // Pass IX WS6 (IDENT-001): stock provenance (additive section).
+            StockProvenance.LoadFromSaveDto(dto.stockProvenance);
             FreightPool.AttachDraftPower(DraftPower);
             FreightPool.AttachWagonRegistry(TransportAssets);
             FreightPool.MigrateWagonsToRegistry(diagnostics);            weatherSeed = Math.Max(0, dto.weatherSeed);

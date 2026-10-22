@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Civic;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Primitives;
 
@@ -95,6 +96,46 @@ namespace LandLedgers.World.Property
         public NpcPropertySaleResult() { }
     }
 
+    /// <summary>Pass IX WS6: aggregated outcome of one production drive over NPC holdings.</summary>
+    [Serializable]
+    public sealed class NpcPropertyLifeReport
+    {
+        public int HoldingsAudited;
+        public int TaxesPaidCents;
+        public int TreasuryCreditedCents;
+        public int MaintenanceNeedsFunded;
+        public int HoldingsDegraded;
+        public int SalesAttempted;
+        public bool SaleCompleted;
+        public string SaleHoldingId = string.Empty;
+        public string SaleNote = string.Empty;
+
+        public NpcPropertyLifeReport() { }
+    }
+
+    /// <summary>
+    /// Pass IX WS6: the real authorities and named buyer a brokered distress
+    /// sale needs. Any missing piece refuses the sale loudly.
+    /// </summary>
+    public sealed class NpcDistressSaleContext
+    {
+        public EntityIdRegistry Ids;
+        public FinancialObligationAuthority Authority;
+        public CreditCashBridge Cash;
+        public TitleAuthority Titles;
+        public HousingAuthority Housing;
+        public CreditOfferWorkflow Workflow;
+        public CreditEventLog Events;
+        public PropertyTaxService TaxService;
+        public PropertyDisputeService Disputes;
+        public int BuyerHouseholdId = -1;
+        public int SalePriceCents;
+        public bool BuyerAssumesNote;
+        public bool CreditorConsentsToAssumption;
+
+        public NpcDistressSaleContext() { }
+    }
+
     /// <summary>
     /// Phase F (F4): post-acquisition property life. The acquired or built
     /// property enters the NPC's real economic life:
@@ -130,6 +171,17 @@ namespace LandLedgers.World.Property
         private int sequence;
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>Pass IX WS6: all registered holdings (the production drive enumerates these).</summary>
+        public IReadOnlyCollection<NpcPropertyHolding> Holdings => holdings.Values;
+
+        /// <summary>
+        /// Pass IX WS6: the service's own property-tax book for the production
+        /// drive. Levies made through <see cref="LevyPropertyTax"/> with this
+        /// service are the ones the daily drive can audit; assessments levied
+        /// into a caller-owned book stay with that caller.
+        /// </summary>
+        public PropertyTaxService Taxes { get; } = new PropertyTaxService();
 
         /// <summary>Registers the holding after an F2 closing or F3 completion.</summary>
         public NpcPropertyHolding RegisterHolding(
@@ -220,6 +272,148 @@ namespace LandLedgers.World.Property
             }
             holding.Decisions.Add($"day {dayIndex}: paid {amountCents}c property tax on '{holding.ParcelId}' from real cash.");
             return null;
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (A1-07/A1-11): the NPC tax leg against the civic
+        /// treasury. For every levied assessment on every holding, pays what
+        /// the owner's real cash covers (arrears stand for the rest). The
+        /// payment waterfall is fees-first: penalties/interest are the County
+        /// Tax Collector's collection income and move to the collector's real
+        /// cash store when one is registered; the principal is credited to
+        /// the civic treasury exactly once per cent actually paid (the
+        /// treasury credit equals the increase in AmountPaidCents minus the
+        /// fee portion, so a second audit can never re-credit the same
+        /// cents). When no collector store is registered the fee portion
+        /// also credits the treasury — nothing vanishes. Returns the total
+        /// credited to the treasury; <paramref name="totalPaidCents"/> is
+        /// the total that left owners' cash.
+        /// </summary>
+        public static int AuditTaxes(
+            PropertyTaxService tax, CreditCashBridge cash,
+            IEnumerable<NpcPropertyHolding> persons,
+            FinancialObligationAuthority obligations,
+            CivicTreasuryService treasury, int dayIndex, List<string> diag,
+            out int totalPaidCents)
+        {
+            totalPaidCents = 0;
+            int totalCredited = 0;
+            diag = diag ?? new List<string>();
+            if (tax == null || cash == null || persons == null || treasury == null)
+            {
+                diag.Add("NpcPropertyLife.AuditTaxes: tax service, cash bridge, holdings and treasury are required — nothing audited.");
+                return 0;
+            }
+            // `obligations` is accepted so the drive's call contract carries
+            // the one debt authority; the audit itself creates no debt —
+            // unpaid balances remain tax arrears on the assessment.
+            _ = obligations;
+            foreach (NpcPropertyHolding holding in persons)
+            {
+                if (holding == null) continue;
+                string payer = "household:" + holding.OwnerHouseholdId;
+                foreach (string assessmentId in new List<string>(holding.TaxAssessmentIds))
+                {
+                    TaxAssessment assessment = tax.GetAssessment(assessmentId);
+                    if (assessment == null || assessment.Status == TaxAssessmentStatus.Satisfied) continue;
+                    int owed = assessment.TotalOwedCents();
+                    if (owed <= 0) continue;
+                    IRealCashStore store = cash.FindStore(payer);
+                    if (store == null)
+                    {
+                        diag.Add($"NpcPropertyLife.AuditTaxes: '{payer}' has no real cash store — {owed}c tax on '{holding.ParcelId}' stands as arrears.");
+                        continue;
+                    }
+                    int amount = Math.Min(owed, store.ReadBalanceCents());
+                    if (amount <= 0)
+                    {
+                        diag.Add($"NpcPropertyLife.AuditTaxes: '{payer}' holds no cash — {owed}c tax on '{holding.ParcelId}' stands as arrears.");
+                        continue;
+                    }
+                    // Fees-first waterfall (collector keeps finder/arrears-fee income).
+                    int totalFees = Math.Max(0, assessment.PenaltiesAccruedCents + assessment.InterestAccruedCents);
+                    int feePortion = Math.Min(amount, Math.Max(0, totalFees - assessment.AmountPaidCents));
+                    int principalPortion = amount - feePortion;
+                    bool collectorPaid = false;
+                    if (feePortion > 0 && cash.FindStore("County Tax Collector") != null)
+                    {
+                        string feeProblem = MoveCash(cash, payer, "County Tax Collector", feePortion, dayIndex,
+                            $"property tax fees {assessment.TaxYear} on '{holding.ParcelId}'", diag);
+                        if (feeProblem != null)
+                        {
+                            diag.Add("NpcPropertyLife.AuditTaxes: collector fee move failed: " + feeProblem);
+                            continue;
+                        }
+                        collectorPaid = true;
+                    }
+                    int treasuryPortion = principalPortion + (collectorPaid ? 0 : feePortion);
+                    if (treasuryPortion > 0)
+                    {
+                        string debitProblem = DebitCashOnly(cash, payer, treasuryPortion, dayIndex,
+                            $"property tax principal {assessment.TaxYear} on '{holding.ParcelId}' to civic treasury", diag);
+                        if (debitProblem != null)
+                        {
+                            if (collectorPaid)
+                                MoveCash(cash, "County Tax Collector", payer, feePortion, dayIndex,
+                                    "property tax fee returned — principal debit failed", diag);
+                            diag.Add("NpcPropertyLife.AuditTaxes: principal debit failed: " + debitProblem);
+                            continue;
+                        }
+                    }
+                    int paidBefore = assessment.AmountPaidCents;
+                    string payProblem = tax.PayTax(assessment, amount, dayIndex, diag);
+                    if (payProblem != null)
+                    {
+                        if (collectorPaid)
+                            MoveCash(cash, "County Tax Collector", payer, feePortion, dayIndex,
+                                "property tax payment returned — assessment refused", diag);
+                        if (treasuryPortion > 0)
+                            CreditCashOnly(cash, payer, treasuryPortion, dayIndex,
+                                "property tax principal returned — assessment refused", diag);
+                        diag.Add("NpcPropertyLife.AuditTaxes: assessment refused payment: " + payProblem);
+                        continue;
+                    }
+                    int absorbed = Math.Max(0, assessment.AmountPaidCents - paidBefore);
+                    // The treasury is credited exactly the portion of the
+                    // absorbed payment that was debited for it — never more
+                    // than was paid, never twice for the same cents.
+                    int credit = Math.Min(treasuryPortion, absorbed);
+                    if (credit > 0)
+                    {
+                        treasury.TryCredit(credit, CivicLedgerEntryKind.TaxReceived, dayIndex,
+                            $"npc property tax {assessment.TaxYear} — {holding.ParcelId} ({payer})", diag);
+                        totalCredited += credit;
+                    }
+                    totalPaidCents += absorbed;
+                    holding.Decisions.Add($"day {dayIndex}: tax audit paid {absorbed}c on '{holding.ParcelId}' ({credit}c principal/fees to civic treasury{(collectorPaid ? $", {feePortion}c fees to County Tax Collector" : "")}).");
+                }
+            }
+            return totalCredited;
+        }
+
+        /// <summary>Debits one real cash store through the bridge with no purse recipient (the treasury is the recipient store).</summary>
+        private static string DebitCashOnly(CreditCashBridge cash, string payer, int amountCents, int dayIndex, string purpose, List<string> diag)
+        {
+            if (amountCents <= 0) return null;
+            CreditCashAccount window = cash.OpenWindow(payer, diag);
+            if (window == null) return $"no real cash store for '{payer}'.";
+            if (window.BalanceCents < amountCents)
+            {
+                cash.DiscardWindow(window);
+                return $"'{payer}' holds {window.BalanceCents}c, needs {amountCents}c.";
+            }
+            window.BalanceCents -= amountCents;
+            return cash.CommitWindow(window, dayIndex, purpose, "civic-treasury", diag);
+        }
+
+        /// <summary>Credits one real cash store through the bridge (reversal path only).</summary>
+        private static string CreditCashOnly(CreditCashBridge cash, string payer, int amountCents, int dayIndex, string purpose, List<string> diag)
+        {
+            if (amountCents <= 0) return null;
+            CreditCashAccount window = cash.OpenWindow(payer, diag);
+            if (window == null) return $"no real cash store for '{payer}'.";
+            window.BalanceCents += amountCents;
+            return cash.CommitWindow(window, dayIndex, purpose, "civic-treasury", diag);
         }
 
         /// <summary>
@@ -527,7 +721,8 @@ namespace LandLedgers.World.Property
             bool creditorConsentsToAssumption,
             int dayIndex,
             CreditEventLog events,
-            List<string> diag)
+            List<string> diag,
+            PropertyDisputeService disputes = null)
         {
             diag = diag ?? diagnostics;
             var result = new NpcPropertySaleResult
@@ -654,6 +849,23 @@ namespace LandLedgers.World.Property
             housing?.RecordAgreement("resale", sellerName, buyerName, holding.ParcelId,
                 $"resale of '{holding.ParcelId}' for {salePriceCents}c", dayIndex, -1, conveyanceId, diag);
 
+            // Pass IX WS6 (A1-06): tenants on the holding are non-owner
+            // occupants displaced by this acquisition — each gets a
+            // Reported, Contested dispute claim on the record.
+            if (disputes != null)
+            {
+                foreach (string tenancyId in new List<string>(holding.TenancyIds))
+                {
+                    if (tenancies.TryGetValue(tenancyId ?? string.Empty, out NpcPropertyTenancy tenancy) && tenancy != null)
+                    {
+                        disputes.RecordAcquisitionDisputes(null, holding.ParcelId,
+                            buyerName, "household:" + tenancy.TenantHouseholdId, dayIndex, diag);
+                    }
+                }
+                // The chain itself is also checked when a title authority is at hand.
+                disputes.RecordAcquisitionDisputes(titles, holding.ParcelId, buyerName, null, dayIndex, diag);
+            }
+
             // The holding follows the parcel to its new owner.
             holding.OwnerHouseholdId = buyerHouseholdId;
             holding.AcquiredDayIndex = dayIndex;
@@ -776,6 +988,136 @@ namespace LandLedgers.World.Property
             string p2 = cash.CommitWindow(payeeCash, dayIndex, purpose, payer, diag);
             return p1 ?? p2;
         }
+
+        #region Production drive (Pass IX WS6, A1-07 driver half)
+
+        /// <summary>
+        /// Attempts ONE brokered sale of a distressed holding through the
+        /// real <see cref="SellProperty"/> path (real buyer cash, real title
+        /// transfer, seller note settled/assumed — never restored). Distress
+        /// = the owner carries an unsettled obligation in the authority or
+        /// a delinquent/lien-filed tax assessment on the holding. Without a
+        /// named buyer and the real authorities the sale is refused loudly,
+        /// not faked.
+        /// </summary>
+        public NpcPropertySaleResult TryBrokerSaleFromDistress(
+            NpcPropertyHolding holding, NpcDistressSaleContext context, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var result = new NpcPropertySaleResult
+            {
+                HoldingId = holding != null ? holding.HoldingId : string.Empty,
+                ParcelId = holding != null ? holding.ParcelId : string.Empty,
+            };
+            if (holding == null) return FailSale(result, "no holding to broker.", diag);
+            if (context == null || context.Authority == null || context.Cash == null || context.Titles == null)
+                return FailSale(result, "brokered sale needs the obligation authority, cash bridge and title authority — not supplied.", diag);
+            if (context.BuyerHouseholdId < 0 || context.BuyerHouseholdId == holding.OwnerHouseholdId)
+                return FailSale(result, "no real, different buyer household named — no sale brokered.", diag);
+            if (context.SalePriceCents <= 0)
+                return FailSale(result, "no real sale price — no sale brokered.", diag);
+            if (!IsDistressed(holding, context.Authority, context.TaxService))
+                return FailSale(result, $"holding '{holding.HoldingId}' is not distressed — no forced sale.", diag);
+            return SellProperty(context.Ids, context.Authority, context.Cash, context.Titles,
+                context.Housing, context.Workflow, holding, context.BuyerHouseholdId,
+                context.SalePriceCents, context.BuyerAssumesNote, context.CreditorConsentsToAssumption,
+                dayIndex, context.Events, diag, context.Disputes);
+        }
+
+        /// <summary>Distress predicate for the brokered-sale path (see <see cref="TryBrokerSaleFromDistress"/>).</summary>
+        public bool IsDistressed(NpcPropertyHolding holding, FinancialObligationAuthority obligations, PropertyTaxService tax)
+        {
+            if (holding == null) return false;
+            if (obligations != null && obligations.TotalOutstandingFor("household:" + holding.OwnerHouseholdId) > 0)
+            {
+                foreach (FinancialObligation obligation in obligations.Obligations)
+                {
+                    if (obligation != null && !obligation.Settled
+                        && string.Equals(obligation.Debtor, "household:" + holding.OwnerHouseholdId, StringComparison.Ordinal)
+                        && obligation.Status == FinancialObligationStatus.Delinquent)
+                        return true;
+                }
+            }
+            if (tax != null)
+            {
+                foreach (string assessmentId in holding.TaxAssessmentIds)
+                {
+                    TaxAssessment assessment = tax.GetAssessment(assessmentId);
+                    if (assessment != null && assessment.TotalOwedCents() > 0
+                        && (assessment.Status == TaxAssessmentStatus.Delinquent
+                            || assessment.Status == TaxAssessmentStatus.LienFiled))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Pass IX WS6: the periodic production step over hub holdings —
+        /// (1) tax audit into the civic treasury, (2) maintenance pass
+        /// (fund the oldest affordable need per holding from real cash;
+        /// neglect degrades the rest), (3) at most ONE overdue/distress
+        /// sale through <see cref="TryBrokerSaleFromDistress"/>. Called
+        /// daily by SimulationDrivers.DriveDemographicDay; a world with no
+        /// holdings (or no cash stores) no-ops cleanly with diagnostics,
+        /// never invented money or buyers.
+        /// </summary>
+        public NpcPropertyLifeReport DriveNpcPropertyLife(
+            CreditCashBridge cash, PropertyTaxService tax,
+            FinancialObligationAuthority obligations, CivicTreasuryService treasury,
+            int dayIndex, List<string> diag, NpcDistressSaleContext saleContext = null)
+        {
+            diag = diag ?? diagnostics;
+            var report = new NpcPropertyLifeReport();
+            report.HoldingsAudited = holdings.Count;
+            if (holdings.Count == 0) return report;
+
+            // 1) Tax audit.
+            if (cash != null && tax != null && treasury != null)
+            {
+                report.TreasuryCreditedCents = AuditTaxes(tax, cash, holdings.Values, obligations, treasury, dayIndex, diag, out int paid);
+                report.TaxesPaidCents = paid;
+            }
+            else
+            {
+                diag.Add("NpcPropertyLife.Drive: tax audit skipped — cash bridge, tax service or treasury not supplied.");
+            }
+
+            // 2) Maintenance pass.
+            foreach (NpcPropertyHolding holding in new List<NpcPropertyHolding>(holdings.Values))
+            {
+                if (holding == null) continue;
+                if (cash != null)
+                {
+                    foreach (NpcPropertyMaintenanceNeed need in holding.MaintenanceNeeds)
+                    {
+                        if (need == null || need.Funded) continue;
+                        string problem = FundMaintenance(cash, holding, need.NeedId, dayIndex, diag);
+                        if (problem == null) report.MaintenanceNeedsFunded++;
+                        break; // at most one funded need per holding per drive
+                    }
+                }
+                float before = holding.Condition01;
+                DegradeForNeglect(holding, dayIndex, diag);
+                if (holding.Condition01 < before) report.HoldingsDegraded++;
+            }
+
+            // 3) At most ONE distress sale.
+            foreach (NpcPropertyHolding holding in new List<NpcPropertyHolding>(holdings.Values))
+            {
+                if (holding == null) continue;
+                if (!IsDistressed(holding, obligations, tax)) continue;
+                report.SalesAttempted = 1;
+                NpcPropertySaleResult sale = TryBrokerSaleFromDistress(holding, saleContext, dayIndex, diag);
+                report.SaleCompleted = sale != null && sale.Sold;
+                report.SaleHoldingId = holding.HoldingId;
+                report.SaleNote = sale != null ? (sale.Sold ? "sold" : sale.FailureReason) : "no result";
+                break;
+            }
+            return report;
+        }
+
+        #endregion
 
         #region Save / Load
 

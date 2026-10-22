@@ -117,6 +117,15 @@ namespace LandLedgers.Population
         public int AcquiredDayIndex;
         public string SourceLabel = string.Empty;
         public int HeldUnits;
+        // Pass IX WS6 (IDENT-001, additive): lot-identity facets used by
+        // split/merge compatibility. Lots created before this pass carry
+        // the defaults (empty band/kind, owner -1) and merge only with
+        // lots sharing those exact facets.
+        public string QualityBand = string.Empty;
+        public string SourceKind = string.Empty;
+        public int OwnerPersonId = -1;
+        /// <summary>Lineage: ids of lots this lot descends from (split parents, merged constituents).</summary>
+        public List<int> AncestryLotIds = new List<int>();
 
         public int AvailableUnits => Mathf.Max(0, QuantityUnits - Mathf.Max(0, HeldUnits));
     }
@@ -175,7 +184,8 @@ namespace LandLedgers.Population
         /// Adds a lot. Rejects unknown items, non-positive quantities, and
         /// sourceless additions (no synthetic stock).
         /// </summary>
-        public string AddLot(string itemId, int quantityUnits, int dayIndex, string sourceLabel)
+        public string AddLot(string itemId, int quantityUnits, int dayIndex, string sourceLabel,
+            string qualityBand = "", string sourceKind = "", int ownerPersonId = -1)
         {
             HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
             if (definition == null)
@@ -201,8 +211,119 @@ namespace LandLedgers.Population
                 UnitLabel = definition.UnitLabel,
                 AcquiredDayIndex = Mathf.Max(0, dayIndex),
                 SourceLabel = sourceLabel,
+                QualityBand = qualityBand ?? string.Empty,
+                SourceKind = sourceKind ?? string.Empty,
+                OwnerPersonId = ownerPersonId,
             });
             return null;
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): splits units off a lot into a new lot
+        /// with the same identity facets. Splits draw on AVAILABLE units
+        /// only (held units stay committed to their purpose) and must
+        /// leave the source non-empty. The child records the parent in its
+        /// ancestry (plus the parent's own ancestry). Returns the new lot
+        /// id, or -1 with a diagnostic when refused.
+        /// </summary>
+        public int SplitLot(int sourceLotId, int units, int dayIndex)
+        {
+            HouseholdItemLot source = null;
+            for (int i = 0; i < state.Lots.Count; i++)
+            {
+                if (state.Lots[i] != null && state.Lots[i].LotId == sourceLotId)
+                {
+                    source = state.Lots[i];
+                    break;
+                }
+            }
+            if (source == null)
+            {
+                Reject($"SplitLot: no lot {sourceLotId} in household {state.HouseholdId}.");
+                return -1;
+            }
+            if (units <= 0 || units >= source.QuantityUnits || units > source.AvailableUnits)
+            {
+                Reject($"SplitLot: cannot split {units} units from lot {sourceLotId} " +
+                    $"({source.QuantityUnits} units, {source.AvailableUnits} available) — a split must be positive, partial, and unheld.");
+                return -1;
+            }
+
+            var child = new HouseholdItemLot
+            {
+                LotId = state.NextLotSequence++,
+                ItemId = source.ItemId,
+                QuantityUnits = units,
+                UnitLabel = source.UnitLabel,
+                AcquiredDayIndex = Mathf.Max(0, dayIndex),
+                SourceLabel = source.SourceLabel,
+                QualityBand = source.QualityBand ?? string.Empty,
+                SourceKind = source.SourceKind ?? string.Empty,
+                OwnerPersonId = source.OwnerPersonId,
+            };
+            if (source.AncestryLotIds != null)
+                child.AncestryLotIds.AddRange(source.AncestryLotIds);
+            child.AncestryLotIds.Add(source.LotId);
+            source.QuantityUnits -= units;
+            state.Lots.Add(child);
+            return child.LotId;
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): merges lots that share item, quality
+        /// band, source kind, and owner into their OLDEST lot (earliest
+        /// acquisition day, then lowest lot id). Lots with held units never
+        /// merge (their commitment bookkeeping stays distinct). The
+        /// survivor's ancestry becomes the union of every merged lot's
+        /// ancestry plus the merged lots' own ids — lineage is preserved,
+        /// never dropped. Returns the number of lots merged away.
+        /// </summary>
+        public int MergeCompatibleLots(int dayIndex)
+        {
+            var groups = new Dictionary<string, List<HouseholdItemLot>>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < state.Lots.Count; i++)
+            {
+                HouseholdItemLot lot = state.Lots[i];
+                if (lot == null || lot.HeldUnits > 0 || lot.QuantityUnits <= 0) continue;
+                string key = (lot.ItemId ?? string.Empty) + "|" + (lot.QualityBand ?? string.Empty) + "|" +
+                    (lot.SourceKind ?? string.Empty) + "|" + lot.OwnerPersonId;
+                if (!groups.TryGetValue(key, out List<HouseholdItemLot> group))
+                {
+                    group = new List<HouseholdItemLot>();
+                    groups[key] = group;
+                }
+                group.Add(lot);
+            }
+
+            int mergedAway = 0;
+            foreach (KeyValuePair<string, List<HouseholdItemLot>> entry in groups)
+            {
+                List<HouseholdItemLot> group = entry.Value;
+                if (group.Count < 2) continue;
+                group.Sort((a, b) => a.AcquiredDayIndex != b.AcquiredDayIndex
+                    ? a.AcquiredDayIndex.CompareTo(b.AcquiredDayIndex)
+                    : a.LotId.CompareTo(b.LotId));
+                HouseholdItemLot survivor = group[0];
+                survivor.AncestryLotIds ??= new List<int>();
+                for (int i = 1; i < group.Count; i++)
+                {
+                    HouseholdItemLot other = group[i];
+                    survivor.QuantityUnits += other.QuantityUnits;
+                    if (other.AncestryLotIds != null)
+                    {
+                        for (int a = 0; a < other.AncestryLotIds.Count; a++)
+                        {
+                            if (!survivor.AncestryLotIds.Contains(other.AncestryLotIds[a]))
+                                survivor.AncestryLotIds.Add(other.AncestryLotIds[a]);
+                        }
+                    }
+                    if (!survivor.AncestryLotIds.Contains(other.LotId))
+                        survivor.AncestryLotIds.Add(other.LotId);
+                    state.Lots.Remove(other);
+                    mergedAway++;
+                }
+            }
+            return mergedAway;
         }
 
         /// <summary>

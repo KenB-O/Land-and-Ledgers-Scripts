@@ -69,14 +69,18 @@ namespace LandLedgers.Economy
             hasWorkspace ??= business.GenericConfiguration.IsWorkspaceAvailable;
             personAvailable ??= _ => true;
 
+            // Pass IX WS6 (IDENT-001): capture the real FIFO lot ids consumed
+            // so the finished process's provenance record names its inputs.
+            var capturedInputLotIds = new System.Collections.Generic.List<string>();
             bool Consume(ProductionInputRequirement input) =>
-                business.GenericConfiguration.TryConsumeInventory(input.ProductId, input.Quantity, out _);
+                business.GenericConfiguration.TryConsumeInventoryCapturingLots(
+                    input.ProductId, input.Quantity, capturedInputLotIds, out _);
             void Rollback(ProductionInputRequirement input) =>
                 business.GenericConfiguration.AddInventory(input.ProductId, input.Quantity,
                     business.GenericConfiguration.GetInventoryAverageUnitCostCents(input.ProductId),
                     null, "generic-production-rollback", dayIndex);
 
-            return business.TryStartGenericProduction(
+            bool started = business.TryStartGenericProduction(
                 runtime,
                 plan,
                 personId,
@@ -88,6 +92,13 @@ namespace LandLedgers.Economy
                 Rollback,
                 out process,
                 out reason);
+            if (started && process != null)
+            {
+                process.ConsumedInputLotIds ??= new System.Collections.Generic.List<string>();
+                process.ConsumedInputLotIds.Clear();
+                process.ConsumedInputLotIds.AddRange(capturedInputLotIds);
+            }
+            return started;
         }
 
         public static bool Advance(

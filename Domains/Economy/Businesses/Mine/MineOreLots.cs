@@ -67,6 +67,10 @@ namespace LandLedgers.Economy.Businesses.Mine
         [SerializeField]
         private string stockpileCategoryId = string.Empty;
 
+        /// <summary>Pass IX WS6 (IDENT-001, additive): lineage — lot sequence ids this lot descends from (split parents, merged constituents).</summary>
+        [SerializeField]
+        private List<int> ancestryLotSeqs = new List<int>();
+
         public EntityId LotId => lotId;
         public MineralResourceKind MineralKind => mineralKind;
         public int Tons => Math.Max(0, tons);
@@ -82,6 +86,8 @@ namespace LandLedgers.Economy.Businesses.Mine
         public string VeinId => veinId ?? string.Empty;
         public int MinedDayIndex => Math.Max(0, minedDayIndex);
         public string StockpileCategoryId => stockpileCategoryId ?? string.Empty;
+        /// <summary>Pass IX WS6 (IDENT-001): lineage lot sequence ids (split parents, merged constituents).</summary>
+        public IReadOnlyList<int> AncestryLotSeqs => ancestryLotSeqs ?? (ancestryLotSeqs = new List<int>());
 
         public MineOreLot() { }
 
@@ -154,6 +160,78 @@ namespace LandLedgers.Economy.Businesses.Mine
             return removed;
         }
 
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): the grade band two lots must share to be
+        /// merge-compatible — half-unit bands of the lot's grade value, on
+        /// top of identical mineral/shaft/level/vein (see MineOreStock.
+        /// MergeCompatibleLots).
+        /// </summary>
+        public int GradeBandIndex => (int)Math.Floor(Math.Max(0f, gradeValue) * 2f);
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): creates the child of a split — same
+        /// mineral, grade, and origin provenance as the parent, with the
+        /// parent (and the parent's ancestry) recorded in the child's
+        /// lineage. The caller (MineOreStock.SplitLot) removes the tons
+        /// from the parent and validates the request.
+        /// </summary>
+        public static MineOreLot CreateSplit(MineOreLot parent, EntityId newLotId, int tons)
+        {
+            if (parent == null) return null;
+            var child = new MineOreLot
+            {
+                lotId = newLotId,
+                mineralKind = parent.mineralKind,
+                tons = Math.Max(0, tons),
+                gradeValue = parent.gradeValue,
+                gradeUnit = parent.gradeUnit,
+                assayed = parent.assayed,
+                assayId = parent.assayId,
+                assayerPersonId = parent.assayerPersonId,
+                assayDayIndex = parent.assayDayIndex,
+                gradeConfidence01 = parent.gradeConfidence01,
+                shaftId = parent.shaftId,
+                levelId = parent.levelId,
+                veinId = parent.veinId,
+                minedDayIndex = parent.minedDayIndex,
+                stockpileCategoryId = parent.stockpileCategoryId,
+                ancestryLotSeqs = new List<int>(),
+            };
+            if (parent.ancestryLotSeqs != null)
+                child.ancestryLotSeqs.AddRange(parent.ancestryLotSeqs);
+            child.ancestryLotSeqs.Add(parent.lotId.Id);
+            return child;
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): absorbs another lot during a compatible
+        /// merge — tons add, grade becomes the ton-weighted blend, ancestry
+        /// unions. Only MineOreStock.MergeCompatibleLots calls this, after
+        /// the compatibility check.
+        /// </summary>
+        public void AbsorbForMerge(MineOreLot other)
+        {
+            if (other == null || other == this) return;
+            int totalTons = Tons + other.Tons;
+            if (totalTons > 0)
+            {
+                gradeValue = (gradeValue * Tons + other.gradeValue * other.Tons) / totalTons;
+                gradeConfidence01 = (gradeConfidence01 * Tons + other.gradeConfidence01 * other.Tons) / totalTons;
+            }
+            tons = totalTons;
+            ancestryLotSeqs ??= new List<int>();
+            if (other.ancestryLotSeqs != null)
+            {
+                foreach (int seq in other.ancestryLotSeqs)
+                {
+                    if (!ancestryLotSeqs.Contains(seq))
+                        ancestryLotSeqs.Add(seq);
+                }
+            }
+            if (!ancestryLotSeqs.Contains(other.lotId.Id))
+                ancestryLotSeqs.Add(other.lotId.Id);
+        }
+
         public string ProvenanceChain(MineShaftPlan plan)
         {
             var parts = new List<string>();
@@ -189,6 +267,7 @@ namespace LandLedgers.Economy.Businesses.Mine
                 veinId = VeinId,
                 minedDayIndex = MinedDayIndex,
                 stockpileCategoryId = StockpileCategoryId,
+                ancestryLotSeqs = new List<int>(AncestryLotSeqs),
             };
         }
 
@@ -213,6 +292,7 @@ namespace LandLedgers.Economy.Businesses.Mine
                 veinId = dto.veinId ?? string.Empty,
                 minedDayIndex = Math.Max(0, dto.minedDayIndex),
                 stockpileCategoryId = dto.stockpileCategoryId ?? string.Empty,
+                ancestryLotSeqs = dto.ancestryLotSeqs != null ? new List<int>(dto.ancestryLotSeqs) : new List<int>(),
             };
         }
     }
@@ -363,6 +443,80 @@ namespace LandLedgers.Economy.Businesses.Mine
             return lines;
         }
 
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): splits tons off a lot into a new lot
+        /// with identical provenance. The new lot id comes from the
+        /// registry allocator — a split without a registry is refused (no
+        /// anonymous ore). Returns the new lot, or null with a diagnostic.
+        /// </summary>
+        public MineOreLot SplitLot(EntityIdRegistry registry, EntityId sourceLotId, int tons, List<string> callerDiagnostics)
+        {
+            callerDiagnostics = callerDiagnostics ?? new List<string>();
+            if (registry == null)
+            {
+                callerDiagnostics.Add("MineOreStock.SplitLot: an EntityIdRegistry is required — split lots need real lot ids.");
+                return null;
+            }
+            MineOreLot source = FindLot(sourceLotId);
+            if (source == null)
+            {
+                callerDiagnostics.Add($"MineOreStock.SplitLot: lot {sourceLotId} is not on this stockpile.");
+                return null;
+            }
+            if (tons <= 0 || tons >= source.Tons)
+            {
+                callerDiagnostics.Add($"MineOreStock.SplitLot: cannot split {tons} tons from lot {sourceLotId} holding {source.Tons} — a split must be positive and partial.");
+                return null;
+            }
+            EntityId newLotId = registry.Allocate(EntityKind.Lot);
+            MineOreLot child = MineOreLot.CreateSplit(source, newLotId, tons);
+            source.RemoveTons(tons);
+            lots.Add(child);
+            return child;
+        }
+
+        /// <summary>
+        /// Pass IX WS6 (IDENT-001): merges lots sharing mineral, shaft,
+        /// level, vein, and grade band into the OLDEST lot (earliest mined
+        /// day, then lowest lot seq). Assayed lots never merge — an assay
+        /// certifies one specific lot, and blending certified ore would
+        /// falsify it; unassayed estimates blend by ton-weighted grade and
+        /// union their ancestry. Returns the number of lots merged away.
+        /// </summary>
+        public int MergeCompatibleLots()
+        {
+            var groups = new Dictionary<string, List<MineOreLot>>(StringComparer.Ordinal);
+            foreach (MineOreLot lot in lots)
+            {
+                if (lot == null || lot.Tons <= 0 || lot.Assayed) continue;
+                string key = lot.MineralKind + "|" + lot.ShaftId + "|" + lot.LevelId + "|" + lot.VeinId + "|" + lot.GradeBandIndex;
+                if (!groups.TryGetValue(key, out List<MineOreLot> group))
+                {
+                    group = new List<MineOreLot>();
+                    groups[key] = group;
+                }
+                group.Add(lot);
+            }
+
+            int mergedAway = 0;
+            foreach (KeyValuePair<string, List<MineOreLot>> entry in groups)
+            {
+                List<MineOreLot> group = entry.Value;
+                if (group.Count < 2) continue;
+                group.Sort((a, b) => a.MinedDayIndex != b.MinedDayIndex
+                    ? a.MinedDayIndex.CompareTo(b.MinedDayIndex)
+                    : a.LotId.Id.CompareTo(b.LotId.Id));
+                MineOreLot survivor = group[0];
+                for (int i = 1; i < group.Count; i++)
+                {
+                    survivor.AbsorbForMerge(group[i]);
+                    lots.Remove(group[i]);
+                    mergedAway++;
+                }
+            }
+            return mergedAway;
+        }
+
         public MineOreStockSaveDto CaptureSaveDto()
         {
             var dto = new MineOreStockSaveDto();
@@ -416,6 +570,8 @@ namespace LandLedgers.Economy.Businesses.Mine
         public string veinId = string.Empty;
         public int minedDayIndex;
         public string stockpileCategoryId = string.Empty;
+        /// <summary>Pass IX WS6 (IDENT-001, additive): lineage lot sequence ids.</summary>
+        public List<int> ancestryLotSeqs = new List<int>();
     }
 
     [Serializable]

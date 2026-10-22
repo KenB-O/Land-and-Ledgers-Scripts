@@ -33,6 +33,9 @@ namespace LandLedgers.EditorTests.Integration
 
         // The brief's enumerated candidate set: twelve detailed business runtimes,
         // the four staged-production types, and StoreRestockService.
+        // Pass IX WS6: RealDemandSource added (A3-09) — registered unwired by
+        // decision; the candidate list stays authoritative for hand-audited
+        // entries, and Pass9RegistryAssemblyScanTests sweeps the rest.
         private static readonly string[] CandidateTypes =
         {
             "BakeryShopRuntime", "BarberShopRuntime", "DoctorPracticeRuntime",
@@ -42,6 +45,7 @@ namespace LandLedgers.EditorTests.Integration
             "StagedProductionProcess", "ProductionDueEventDriver",
             "BakeryStagedProductionChain", "ForgeRepairChain",
             "StoreRestockService",
+            "RealDemandSource",
         };
 
         private static string ResolveRepoRoot()

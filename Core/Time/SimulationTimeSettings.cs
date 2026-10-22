@@ -73,6 +73,13 @@ namespace LandLedgers.Time
         };
 
         [Header("Starting Date")]
+        // Pass IX WS6 (A1-02) reconciliation: startingYear/Month/DayOfMonth are
+        // the WORLD-CHRONOLOGY label of the default scenario — the era the
+        // world presents as — NOT the session clock. The live session clock
+        // derives from the calendar anchor (CalendarAnchor, default
+        // 1880-03-01) plus the scenario preset's start date, resolved by
+        // ScenarioBootstrapFactory and applied through
+        // TimeManager.LoadFromSaveDto. Do not read these fields as "today".
         [Min(1)]
         public int startingYear = 1892;
 

@@ -80,6 +80,12 @@ namespace LandLedgers.EditorTests.Integration
         private static readonly string[] FeatureInternalBaseline =
         {
             "AbstractAdverseClaimNote", "ActiveProcessRecord", "ActivityTransition", "AptitudeStore",
+            // Pass IX post-merge classification (coordinator, wave-2 integration): the WS5
+            // appraisal service's result and ledger-record DTOs live in AssetSaleAppraisal.cs
+            // and are consumed inside that file by AssetSaleAppraisalService /
+            // AssetSaleExecutionService, whose production callers sit in SimulationDrivers
+            // (the resolver seam). File-internal DTOs of a wired service: feature-internal.
+            "AssetAppraisalResult", "AssetSaleRecord",
             "AutonomousSocietyDriver", "AutonomousSocietySaveDto", "AutonomousWorkGenerator", "AvenueRecommendation",
             "BakeryChainContext", "BakeryFlourDispenseLine", "BakeryFlourLot", "BakeryFlourStock",
             "BakeryFuelDispenseLine", "BakeryFuelLot", "BakeryFuelStock", "BakeryPriceSchedule",

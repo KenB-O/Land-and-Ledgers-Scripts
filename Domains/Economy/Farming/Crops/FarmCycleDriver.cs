@@ -47,6 +47,9 @@ namespace LandLedgers.Economy.Farming.Crops
     /// </summary>
     public sealed class FarmCycleDriver
     {
+        /// <summary>Process-wide driver used by the weekly shared-runtime delegation.</summary>
+        public static readonly FarmCycleDriver Shared = new FarmCycleDriver();
+
         private readonly HashSet<string> consumedTaskIds = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>Task ids whose field-work outcome has already been recorded.</summary>
@@ -193,6 +196,69 @@ namespace LandLedgers.Economy.Farming.Crops
                 }
             }
 
+            return result;
+        }
+
+        /// <summary>Weekly outcome for the shared-runtime delegation.</summary>
+        public sealed class FarmWeeklyResult
+        {
+            public int TasksConsumed;
+            public int FieldsPlanted;
+            public int FieldsTended;
+            public int FieldsHarvested;
+            public int UnitsHarvested;
+            public readonly List<CropLot> HarvestedLots = new List<CropLot>();
+            public string BlockedReason = string.Empty;
+
+            public string BuildSummary()
+            {
+                return $"crop harvest {UnitsHarvested} units from completed field tasks " +
+                    $"({HarvestedLots.Count} lot(s)); planted {FieldsPlanted} field(s); " +
+                    $"tended {FieldsTended} field(s); harvested {FieldsHarvested} field(s)";
+            }
+        }
+
+        /// <summary>
+        /// The weekly production entry the shared runtime delegates to
+        /// (Pass IX farm integration, A4-18/A4-19 — the mine pattern in
+        /// MineProductionDriver.DriveWeekly): drive completed field-work
+        /// tasks and report the outcome. Produces nothing on its own — with
+        /// no completed tasks it is a pure report, and the harvest lot
+        /// credited inside <see cref="DriveCompletedFieldTasks"/> at task
+        /// completion is the ONLY farm output: this entry never also
+        /// credits category stock for the same work, so the reconciled
+        /// weekly path can never double-produce.
+        /// </summary>
+        public FarmWeeklyResult DriveWeekly(
+            CropChain chain,
+            string farmBusinessInstanceId,
+            TaskAuthority tasks,
+            EntityIdRegistry idRegistry,
+            int dayIndex,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            var result = new FarmWeeklyResult();
+            if (chain == null)
+            {
+                result.BlockedReason = "no crop chain — farm production runs from driven field tasks only";
+                return result;
+            }
+
+            FarmDriveResult drive = DriveCompletedFieldTasks(
+                chain, farmBusinessInstanceId, tasks, idRegistry, dayIndex, diagnostics);
+            result.TasksConsumed = drive.TasksConsumed;
+            result.FieldsPlanted = drive.FieldsPlanted;
+            result.FieldsTended = drive.FieldsTended;
+            result.FieldsHarvested = drive.FieldsHarvested;
+            result.UnitsHarvested = drive.UnitsHarvested;
+            result.HarvestedLots.AddRange(drive.HarvestedLots);
+            if (result.TasksConsumed <= 0)
+            {
+                result.BlockedReason = tasks == null
+                    ? "no TaskAuthority — field work runs from completed tasks or not at all"
+                    : "no completed field tasks — production runs from completed field work only";
+            }
             return result;
         }
 

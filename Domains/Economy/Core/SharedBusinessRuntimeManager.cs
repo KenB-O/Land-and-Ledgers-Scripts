@@ -4113,6 +4113,69 @@ namespace LandLedgers.Economy
             AppendSummarySegment(summary, $"Mine {MineRuntimeState.GetMineralDisplayName(mine.MineralKind)} {result.TonsBroken}");
         }
 
+        private void ResolveFarmOperation(BusinessInstanceState business, StringBuilder summary)
+        {
+            // Pass IX farm integration (A4-18, A4-19): RECONCILED, mirroring
+            // ResolveMineOperation above. The abstract weekly path in
+            // ResolveBusinessOperation used to credit crop output from
+            // staffing counts (planned units x efficiency, category-stock
+            // inputs consumed, bare crop_food units out, credited at weekly
+            // resolution). The detailed cycle (CropChain, driven by
+            // FarmCycleDriver from completed TaskAuthority field-work tasks)
+            // is now the ONE production path: this method only delegates to
+            // it and records its outcome. It credits no category stock,
+            // consumes no abstract inputs and procures nothing itself — the
+            // retired conversion's own steps, exactly as the mine's abstract
+            // ore creation and instant off-map sale were retired — so wiring
+            // the detailed driver can never double-produce.
+            //
+            // Non-output weekly consequences keep flowing (the mine's
+            // richness/safety/camp pass-through discipline): payroll and the
+            // weekly settlement reset are resolved BEFORE operation
+            // resolution in ResolveWeeklySharedOperations
+            // (ResolvePayrollForType / ResetWeeklySettlementForType) and are
+            // untouched here; below, the staffing blocked reasons, the
+            // baseline daily-service result, the weekly operation record,
+            // the operation summary and the agricultural activity cue all
+            // pass through exactly as the generic path recorded them, with
+            // the driver's harvested units in place of abstract units.
+            BusinessRuntimeState runtime = business != null ? business.RuntimeState : null;
+            if (business == null || runtime == null)
+            {
+                return;
+            }
+
+            BusinessProfileDefinition profile = FindProfile(business.BusinessType);
+            List<string> blockedReasons = new();
+            SeedBlockedReasons(runtime, blockedReasons);
+            AppendStaffingBlockedReasons(runtime, blockedReasons);
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            LandLedgers.Tasks.TaskAuthority tasks = hub != null ? hub.Tasks : null;
+            EntityIdRegistry ids = hub != null ? hub.Ids : businessIdRegistry;
+            int dayIndex = hub != null ? hub.LaborDayIndex : 0;
+            LandLedgers.Economy.Farming.Crops.CropChain chain =
+                hub != null && hub.FarmSlice != null ? hub.FarmSlice.Crops : null;
+            var diagnostics = new List<string>();
+            LandLedgers.Economy.Farming.Crops.FarmCycleDriver.FarmWeeklyResult result =
+                LandLedgers.Economy.Farming.Crops.FarmCycleDriver.Shared.DriveWeekly(
+                    chain, business.InstanceId, tasks, ids, dayIndex, diagnostics);
+            if (!string.IsNullOrWhiteSpace(result.BlockedReason))
+            {
+                AddBlockedReason(blockedReasons, result.BlockedReason);
+            }
+
+            business.ApplyWeeklyOperationResult(result.UnitsHarvested);
+            business.ApplyDailyServiceResult(profile != null
+                ? Mathf.RoundToInt(Mathf.Max(0, profile.BaselineDailyServiceCapacity) * GetHealthAdjustedOperatingEfficiency01(business))
+                : 0);
+            string resultText = result.BuildSummary();
+            string blocked = BuildBlockedReason(blockedReasons);
+            runtime.RecordWeeklyOperation(0, result.UnitsHarvested, resultText, blocked);
+            RecordOperationSummary(business, string.IsNullOrWhiteSpace(blocked) ? resultText : $"{resultText}; blocked: {blocked}");
+            AppendSummarySegment(summary, $"CropFarm {result.UnitsHarvested}");
+            townWorld?.SetAgriculturalActivityCue(business.AssignedBuildingId, result.UnitsHarvested > 0, blocked);
+        }
 
         private int ResolveBoardingHouseOperations(StringBuilder summary)
         {
@@ -4225,6 +4288,17 @@ namespace LandLedgers.Economy
         {
             if (business != null && business.BusinessType == BusinessType.Sawmill)
             {
+                return;
+            }
+
+            if (business != null && business.BusinessType == BusinessType.CropFarm)
+            {
+                // Pass IX farm integration (A4-18/A4-19): CropFarm production
+                // is reconciled like the mine — see ResolveFarmOperation.
+                // The generic staffing-count conversion below must not ALSO
+                // credit crop output for a farm (no double production);
+                // other business types (including Ranch) are unchanged.
+                ResolveFarmOperation(business, summary);
                 return;
             }
 

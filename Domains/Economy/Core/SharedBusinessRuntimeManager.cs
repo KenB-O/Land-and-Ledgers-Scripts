@@ -4022,105 +4022,49 @@ namespace LandLedgers.Economy
 
         private void ResolveMineOperation(BusinessInstanceState business, StringBuilder summary)
         {
+            // Pass IX WS3 (PASS8-001 / A4-07, A4-10, A4-19): RECONCILED.
+            // This abstract weekly path used to create ore from crew counts,
+            // deplete RemainingRichness01, and sell ore off-map instantly in
+            // the same call. The detailed cycle (MineProductionCycle, driven
+            // by MineProductionDriver from completed break-ore tasks) is now
+            // the ONE production path: this method only delegates to it and
+            // records its outcome. It creates no ore, depletes no richness,
+            // and credits no sale itself — so wiring the detailed driver can
+            // never double-produce or double-deplete.
             MineRuntimeState mine = business != null ? business.MineState : null;
             BusinessRuntimeState runtime = business != null ? business.RuntimeState : null;
-            BusinessProfileDefinition profile = FindProfile(BusinessType.Mine);
-            if (mine == null || runtime == null || profile == null)
+            if (mine == null || runtime == null)
             {
                 return;
             }
 
-            string outputCategoryId = string.IsNullOrWhiteSpace(mine.StockpileCategoryId)
-                ? MineRuntimeState.GetStockpileCategoryId(mine.MineralKind)
-                : mine.StockpileCategoryId;
-            runtime.EnsureCategoryStock(outputCategoryId, 0, Mathf.Max(24, runtime.GetCategoryStock(outputCategoryId)?.TargetStockUnits ?? 0));
-            List<string> blockedReasons = new();
-            SeedBlockedReasons(runtime, blockedReasons);
-            AppendStaffingBlockedReasons(runtime, blockedReasons);
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            LandLedgers.Tasks.TaskAuthority tasks = hub != null ? hub.Tasks : null;
+            EntityIdRegistry ids = hub != null ? hub.Ids : businessIdRegistry;
+            int dayIndex = hub != null ? hub.LaborDayIndex : 0;
+            var diagnostics = new List<string>();
+            LandLedgers.Economy.Businesses.Mine.MineProductionDriver.MineWeeklyResult result =
+                LandLedgers.Economy.Businesses.Mine.MineProductionDriver.Shared.DriveWeekly(
+                    business, tasks, ids, dayIndex, diagnostics);
 
-            int producedUnits = 0;
-            int soldUnits = 0;
-            int soldRevenueCents = 0;
-            float resolvedSafetyRisk01 = Mathf.Clamp01(mine.SafetyRisk01 + GetMineSafetyStageModifier(mine.DevelopmentStage));
-            float resolvedRichness01 = mine.RemainingRichness01;
-            float resolvedCampPressure01 = mine.CampPressure01;
-
-            bool hasRequiredCrew = runtime.RequiredWorkerCount <= 0 || runtime.ActiveRequiredWorkerCount >= runtime.RequiredWorkerCount;
-            if (!hasRequiredCrew)
-            {
-                AddBlockedReason(blockedReasons, "required mine crew inactive");
-            }
-
-            int storageRoom = GetAvailableCategoryCapacity(runtime, outputCategoryId);
-            if (storageRoom <= 0)
-            {
-                AddBlockedReason(blockedReasons, $"output storage full: {outputCategoryId}");
-            }
-
-            if (hasRequiredCrew && storageRoom > 0)
-            {
-                float efficiency01 = GetHealthAdjustedOperatingEfficiency01(business);
-                int plannedUnits = Mathf.RoundToInt(
-                    GetMineBaseOutputUnits(mine.MineralKind)
-                    * GetMineConfidenceMultiplier(mine.DepositConfidence01)
-                    * GetMineStageMultiplier(mine.DevelopmentStage)
-                    * Mathf.Lerp(0.55f, 1.15f, mine.RemainingRichness01)
-                    * Mathf.Clamp(efficiency01, 0f, 1f));
-                if (plannedUnits <= 0)
-                {
-                    AddBlockedReason(blockedReasons, "no staffed weekly capacity");
-                }
-                else
-                {
-                    producedUnits = runtime.AddCategoryStockUnits(outputCategoryId, Mathf.Min(plannedUnits, storageRoom));
-                    if (producedUnits <= 0)
-                    {
-                        AddBlockedReason(blockedReasons, $"output storage full: {outputCategoryId}");
-                    }
-                    else
-                    {
-                        int maxSaleUnits = GetMineOffMapSaleUnits(mine.MineralKind);
-                        if (runtime.TryConsumeCategoryStockUnits(outputCategoryId, Mathf.Min(maxSaleUnits, producedUnits), out soldUnits) && soldUnits > 0)
-                        {
-                            int unitPriceCents = GetAverageCategoryTransferPriceCents(business, profile, outputCategoryId);
-                            soldRevenueCents = soldUnits * Mathf.Max(1, unitPriceCents);
-                            runtime.AddWeeklyLocalTransferRevenue(
-                                soldRevenueCents,
-                                $"off-map {outputCategoryId} sale {soldUnits} units for {FormatMoney(soldRevenueCents)}");
-                        }
-
-                        resolvedRichness01 = Mathf.Clamp01(mine.RemainingRichness01 - producedUnits * GetMineDepletionPerUnit(mine.MineralKind));
-                        resolvedSafetyRisk01 = Mathf.Clamp01(
-                            mine.SafetyRisk01
-                            + GetMineSafetyStageModifier(mine.DevelopmentStage)
-                            + Mathf.Max(0f, 0.12f - efficiency01 * 0.08f));
-                        resolvedCampPressure01 = Mathf.Clamp01(
-                            mine.CampPressure01 * 0.72f
-                            + Mathf.Clamp01(producedUnits / 18f) * (mine.MineralKind is MineralResourceKind.Gold or MineralResourceKind.Silver ? 0.36f : 0.22f));
-                    }
-                }
-            }
-
-            business.ApplyWeeklyOperationResult(producedUnits);
+            business.ApplyWeeklyOperationResult(result.TonsBroken);
             business.ApplyDailyServiceResult(0);
-            string blocked = BuildBlockedReason(blockedReasons);
-            string result = $"{MineRuntimeState.GetMineralDisplayName(mine.MineralKind)} ore {producedUnits} units";
-            if (soldUnits > 0)
-            {
-                result += $"; sold off-map {soldUnits} for {FormatMoney(soldRevenueCents)}";
-            }
-
-            result += $"; confidence {mine.DepositConfidence01:P0}; stage {MineRuntimeState.GetDevelopmentStageDisplayName(mine.DevelopmentStage)}; safety {resolvedSafetyRisk01:P0}; richness {resolvedRichness01:P0}";
-            runtime.RecordWeeklyOperation(0, producedUnits, result, blocked);
+            string resultText = result.BuildSummary(mine);
+            string blocked = result.BlockedReason ?? string.Empty;
+            runtime.RecordWeeklyOperation(0, result.TonsBroken, resultText, blocked);
+            // Richness/safety/camp pass through UNCHANGED from the mine
+            // state: any depletion already happened inside the detailed
+            // cycle, per real ton broken. Nothing is recomputed here.
             mine.RecordWeeklyOutput(
-                producedUnits,
-                string.IsNullOrWhiteSpace(blocked) ? result : $"{result}; blocked: {blocked}",
-                resolvedSafetyRisk01,
-                resolvedRichness01,
-                resolvedCampPressure01);
+                result.TonsBroken,
+                string.IsNullOrWhiteSpace(blocked) ? resultText : $"{resultText}; blocked: {blocked}",
+                mine.SafetyRisk01,
+                mine.RemainingRichness01,
+                mine.CampPressure01);
             RecordOperationSummary(business, mine.LastWeeklyOutputSummary);
-            AppendSummarySegment(summary, $"Mine {MineRuntimeState.GetMineralDisplayName(mine.MineralKind)} {producedUnits}");
+            AppendSummarySegment(summary, $"Mine {MineRuntimeState.GetMineralDisplayName(mine.MineralKind)} {result.TonsBroken}");
         }
+
 
         private int ResolveBoardingHouseOperations(StringBuilder summary)
         {

@@ -83,6 +83,15 @@ namespace LandLedgers.Economy.Labor
         public bool PricingAdjustmentRequested;
         public int ProposedBorrowingCents;
         public int ProposedAssetSaleCents;
+        /// <summary>
+        /// Pass IX WS5 (A3-08, coordinator decision 3): the SPECIFIC asset a
+        /// SellAsset proposal names, taken from the business's own asset
+        /// registers at proposal time (an EquipmentAsset id, or
+        /// "formation:{ItemId}" for a formation-register asset). Empty means
+        /// the proposal names no asset — such a sale can never be appraised
+        /// and must never be approved. Additive field; older saves carry none.
+        /// </summary>
+        public string ProposedAssetId = string.Empty;
     }
 
     /// <summary>One cycle's decision outcome.</summary>
@@ -98,6 +107,9 @@ namespace LandLedgers.Economy.Labor
         public string Outcome = string.Empty;
         public bool Escalated;
         public string EscalationReason = string.Empty;
+        /// <summary>Pass IX WS5: the named asset of a SellAsset decision (see
+        /// ManagerCycleInputs.ProposedAssetId). Additive; empty for other kinds.</summary>
+        public string ProposedAssetId = string.Empty;
         public List<string> Exceptions = new List<string>();
         public int TimeCostMinutes;
         public int DayIndex = -1;
@@ -287,6 +299,7 @@ namespace LandLedgers.Economy.Labor
                 if (candidates != null && candidates.Count > 0 && candidates[0] != null)
                 {
                     result.ActionKind = candidates[0].Kind ?? string.Empty;
+                    result.ProposedAssetId = candidates[0].AssetId ?? string.Empty;
                     // Preserve the amount in the reference so the executor can
                     // size the pending request. Format matches ExecuteAct.
                     if (candidates[0].AmountCents > 0)
@@ -346,6 +359,8 @@ namespace LandLedgers.Economy.Labor
             public string RequiredScope = string.Empty;
             public int AmountCents;
             public int TimeCostMinutes;
+            /// <summary>Pass IX WS5: named asset for SellAsset candidates.</summary>
+            public string AssetId = string.Empty;
         }
 
         private List<CandidateAct> BuildCandidates(ManagerCycleInputs inputs)
@@ -370,10 +385,13 @@ namespace LandLedgers.Economy.Labor
                 candidates.Add(new CandidateAct
                 {
                     Kind = ManagerActKinds.SellAsset,
-                    Evidence = $"asset sale proposed at {inputs.ProposedAssetSaleCents}c",
+                    Evidence = string.IsNullOrWhiteSpace(inputs.ProposedAssetId)
+                        ? $"asset sale proposed at {inputs.ProposedAssetSaleCents}c (no asset named)"
+                        : $"asset sale proposed at {inputs.ProposedAssetSaleCents}c for asset '{inputs.ProposedAssetId}'",
                     EvidenceRank = 0,
                     RequiredScope = string.Empty, // owner-reserved: no scope covers it
                     AmountCents = inputs.ProposedAssetSaleCents,
+                    AssetId = inputs.ProposedAssetId ?? string.Empty,
                     TimeCostMinutes = 15
                 });
             }
@@ -654,7 +672,8 @@ namespace LandLedgers.Economy.Labor
                 ActionKind = candidate.Kind,
                 Evidence = candidate.Evidence,
                 TimeCostMinutes = candidate.TimeCostMinutes,
-                DayIndex = inputs.DayIndex
+                DayIndex = inputs.DayIndex,
+                ProposedAssetId = candidate.AssetId ?? string.Empty
             };
 
             // Consume a claiming DoOnce at execution time - exactly once.

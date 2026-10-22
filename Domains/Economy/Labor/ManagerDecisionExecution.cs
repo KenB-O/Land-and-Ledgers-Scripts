@@ -69,6 +69,15 @@ namespace LandLedgers.Economy.Labor
         public string BusinessInstanceId = string.Empty;
         public string Kind = string.Empty; // ManagerActKinds.Borrow / SellAsset
         public int AmountCents;
+        /// <summary>
+        /// Pass IX WS5 (A3-08, coordinator decision 3): for SellAsset, the
+        /// SPECIFIC asset the sale names (an EquipmentAsset id, or
+        /// "formation:{ItemId}"), taken from the business's own asset
+        /// registers at proposal time. The production appraisal appraises
+        /// THIS asset and the execution step transfers THIS asset. Additive
+        /// field; legacy requests carry none and can never be appraised.
+        /// </summary>
+        public string AssetId = string.Empty;
         public string Detail = string.Empty;
         public int CreatedDayIndex = -1;
         public int ManagerPersonId = -1;
@@ -1308,8 +1317,14 @@ namespace LandLedgers.Economy.Labor
                 return Fail("unknown business '" + (context != null ? context.BusinessInstanceId : "?") + "'", diagnostics);
 
             int amountCents = ParseAmountCents(decision);
+            // Pass IX WS5: the decision names the specific asset (coordinator
+            // decision 3); it rides the request so the owner-resolution
+            // appraisal and the execution step act on THAT asset.
+            string assetId = decision != null ? decision.ProposedAssetId ?? string.Empty : string.Empty;
             // Day-independent deduplication key: retries find the pending request.
-            string requestKey = $"SellAsset:{business.InstanceId}:{amountCents}c";
+            string requestKey = string.IsNullOrWhiteSpace(assetId)
+                ? $"SellAsset:{business.InstanceId}:{amountCents}c"
+                : $"SellAsset:{business.InstanceId}:{assetId}:{amountCents}c";
             ManagerPendingRequest existing = ledger.FindPending(requestKey);
             if (existing != null && string.Equals(existing.Status, "Pending", StringComparison.Ordinal))
             {
@@ -1324,6 +1339,7 @@ namespace LandLedgers.Economy.Labor
                 BusinessInstanceId = business.InstanceId,
                 Kind = ManagerActKinds.SellAsset,
                 AmountCents = amountCents,
+                AssetId = assetId,
                 Detail = "asset sale is owner-reserved — the manager cannot sell business assets unilaterally",
                 CreatedDayIndex = context.DayIndex,
                 ManagerPersonId = context.ManagerPersonId,

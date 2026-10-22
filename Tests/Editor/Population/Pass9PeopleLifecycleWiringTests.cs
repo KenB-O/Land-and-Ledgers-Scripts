@@ -775,5 +775,183 @@ namespace LandLedgers.EditorTests.Population
                 "household 0 resolves at the state layer; only negative ids are invalid");
             Assert.IsNull(state.GetHousehold(-1));
         }
+
+        // ---------- gap-fill seams (redo) ----------
+
+        [Test]
+        public void A2_02_GetCurrentSpouseId_LatestLivingSpouseWins_DeadSpouseIsNotCurrent()
+        {
+            var w = new DemoWorld(Day1892(3, 15));
+            PersonState a = w.MakePerson(1866, 1, 1, false, "A");
+            PersonState b = w.MakePerson(1868, 1, 1, true, "B");
+            PersonState c = w.MakePerson(1870, 1, 1, true, "C");
+            Func<int, bool> alive = id =>
+            {
+                PersonState p = w.Population.GetPerson(id);
+                return p != null && p.deathDayIndex < 0;
+            };
+
+            Assert.AreEqual(-1, w.Kinship.GetCurrentSpouseId(a.id, alive), "unmarried: no current spouse");
+            w.Kinship.AddSpouses(a.id, b.id, "marriage");
+            Assert.AreEqual(b.id, w.Kinship.GetCurrentSpouseId(a.id, alive));
+
+            b.deathDayIndex = w.Ctx.CurrentDayIndex;
+            Assert.AreEqual(-1, w.Kinship.GetCurrentSpouseId(a.id, alive),
+                "a widowed person's dead spouse is not their current spouse");
+            CollectionAssert.Contains(w.Kinship.GetSpouses(a.id), b.id,
+                "the historical edge is never deleted");
+
+            w.Kinship.AddSpouses(a.id, c.id, "remarriage");
+            Assert.AreEqual(c.id, w.Kinship.GetCurrentSpouseId(a.id, alive),
+                "the latest living spouse edge wins");
+
+            // With everyone 'alive' the latest spouse edge (to C) still wins:
+            // current spouse is a derivation over edge order + liveness, and
+            // IsMarriageable refuses anyone who has a living current spouse.
+            Assert.AreEqual(c.id, w.Kinship.GetCurrentSpouseId(a.id, id => true),
+                "with everyone 'alive' the latest edge wins deterministically");
+        }
+
+        [Test]
+        public void A2_10_MigrateOut_ReturnsOutcome_WithEndedEmployments()
+        {
+            var w = new DemoWorld(Day1892(3, 15));
+            PersonState migrant = w.MakePerson(1870, 1, 1, false, "Migrant");
+            w.Lifecycle.FormHousehold("Migrant Household", "Migrant", migrant.id, w.Ctx.CurrentDayIndex, HouseholdMembershipSource.Authored);
+            var employment = new EmploymentRelationship
+            {
+                Id = "outcome-emp",
+                EmployeePersonId = migrant.id,
+                EmployerBusinessId = "mine-1",
+                RoleDisplayName = "Miner",
+                Kind = EmploymentKind.Permanent,
+                LifecycleState = EmploymentLifecycleState.Active,
+                Compensation = CompensationTerms.FromWeeklyWage(500, "test"),
+                StartDayIndex = 0,
+                Source = EmploymentSource.Authored,
+            };
+            Assert.IsNull(w.Employments.Register(employment));
+            Assert.AreEqual(1, w.Employments.CountActiveEmploymentsOfPerson(migrant.id));
+
+            MigrationOutcome outcome = MigrationDriver.MigrateOut(w.Ctx, migrant, distressed: false);
+
+            Assert.AreEqual(migrant.id, outcome.PersonId);
+            Assert.AreEqual(1, outcome.EndedEmployments.Count,
+                "the outcome returns the employments the departure ended");
+            Assert.AreSame(employment, outcome.EndedEmployments[0]);
+            Assert.AreEqual(EmploymentEndReason.MigratedOut, outcome.EndedEmployments[0].EndReason);
+            Assert.AreEqual(0, w.Employments.CountActiveEmploymentsOfPerson(migrant.id));
+            Assert.IsTrue(migrant.isOffMap);
+        }
+
+        [Test]
+        public void A2_01_Birth_DeadFather_ChildLandsInMothersHousehold_WithSiblingKinship()
+        {
+            var w = new DemoWorld(Day1892(3, 15));
+            PersonState mother = w.MakePerson(1868, 3, 3, true, "Mother");
+            PersonState father = w.MakePerson(1866, 2, 2, false, "Father");
+            HouseholdState mothersHousehold = w.Lifecycle.FormHousehold(
+                "Mother Household", "Mother", mother.id, w.Ctx.CurrentDayIndex, HouseholdMembershipSource.Authored);
+            HouseholdState fathersHousehold = w.Lifecycle.FormHousehold(
+                "Father Household", "Father", father.id, w.Ctx.CurrentDayIndex, HouseholdMembershipSource.Authored);
+            w.Kinship.AddSpouses(mother.id, father.id, "marriage");
+
+            // An older sibling already lives with the mother.
+            PersonState sibling = w.Lifecycle.RecordBirth(
+                mothersHousehold.id, mother.id, father.id, "Older", "Mother",
+                w.Ctx.CurrentDayIndex, new BirthDate(1890, 1, 1, BirthDateProvenance.Exact, "test"));
+            Assert.IsNotNull(sibling);
+
+            // The father dies before the second child is born; the pregnancy
+            // record still carries HIS household stamp.
+            father.deathDayIndex = w.Ctx.CurrentDayIndex;
+            w.Ctx.Pregnancies.Add(new PregnancyRecord
+            {
+                motherPersonId = mother.id,
+                fatherPersonId = father.id,
+                householdId = fathersHousehold.id,
+                conceptionDayIndex = w.Ctx.CurrentDayIndex,
+                dueDayIndex = w.Ctx.CurrentDayIndex,
+            });
+
+            BirthDriver.EvaluateBirths(w.Ctx);
+
+            Assert.AreEqual(4, w.Population.people.Count, "the birth was recorded");
+            PersonState child = w.Population.people[3];
+            Assert.AreEqual(mothersHousehold.id, w.Memberships.GetActiveHouseholdId(child.id),
+                "a child of a dead father is born into the mother's household, not the father's stale stamp");
+            CollectionAssert.Contains(w.Kinship.GetParents(child.id), mother.id);
+            CollectionAssert.AreEquivalent(
+                w.Kinship.GetParents(sibling.id), w.Kinship.GetParents(child.id),
+                "siblings share both parent edges");
+            CollectionAssert.Contains(w.Kinship.GetChildren(mother.id), child.id);
+        }
+
+        [Test]
+        public void A2_11_Split_StampsEmployerBusinessId_OnNewHousehold()
+        {
+            var w = new DemoWorld(Day1892(3, 15));
+            PersonState parent = w.MakePerson(1860, 1, 1, false, "Parent");
+            PersonState child = w.MakePerson(1872, 1, 1, false, "Child");
+            HouseholdState home = w.Lifecycle.FormHousehold("Home", "Parent", parent.id, w.Ctx.CurrentDayIndex, HouseholdMembershipSource.Authored);
+            Assert.IsNull(w.Lifecycle.TransferMember(child.id, home.id, w.Ctx.CurrentDayIndex));
+            w.Kinship.AddParentChild(parent.id, child.id, "test");
+            Assert.IsNull(w.Employments.Register(new EmploymentRelationship
+            {
+                Id = "split-stamp-emp",
+                EmployeePersonId = child.id,
+                EmployerBusinessId = "sawmill-7",
+                RoleDisplayName = "Sawyer",
+                Kind = EmploymentKind.Permanent,
+                LifecycleState = EmploymentLifecycleState.Active,
+                Compensation = CompensationTerms.FromWeeklyWage(500, "test"),
+                StartDayIndex = 0,
+                Source = EmploymentSource.Authored,
+            }));
+
+            HouseholdState newHousehold = null;
+            for (int seed = 0; seed < 400 && newHousehold == null; seed++)
+            {
+                w.Ctx.WorldSeed = seed;
+                HouseholdSplitDriver.EvaluateMonth(w.Ctx);
+                int hid = w.Memberships.GetActiveHouseholdId(child.id);
+                if (hid != home.id && hid >= 0)
+                {
+                    newHousehold = w.Population.GetHousehold(hid);
+                }
+            }
+
+            Assert.IsNotNull(newHousehold, "the employed adult child split");
+            Assert.AreEqual("sawmill-7", newHousehold.EmployerBusinessId,
+                "the new household is stamped from the authoritative employment registry record");
+        }
+
+        [Test]
+        public void A2_05_Attendance_SaveDtoRoundTrip_AndClear()
+        {
+            var accumulator = new WeeklyAttendanceAccumulator();
+            accumulator.RecordWorkedMinutes(41, 8, 300); // week 1
+            accumulator.RecordWorkedMinutes(41, 15, 120); // week 2
+            accumulator.RecordWorkedMinutes(42, 9, 60);
+
+            // The accumulator rides SystemsSaveDto.weeklyAttendance (additive
+            // field; SimulationSystemsHub Capture/Load pass this DTO through —
+            // the hub itself is harness-excluded as a MonoBehaviour, so this
+            // pins the DTO round-trip the hub performs).
+            WeeklyAttendanceSaveDto dto = accumulator.CaptureSaveDto();
+
+            var restored = new WeeklyAttendanceAccumulator();
+            restored.RecordWorkedMinutes(99, 1, 500); // stale state from another session
+            restored.LoadFromSaveDto(dto); // clear-then-load seam
+
+            Assert.AreEqual(300, restored.MinutesWorkedInWeek(41, 1));
+            Assert.AreEqual(120, restored.MinutesWorkedInWeek(41, 2));
+            Assert.AreEqual(60, restored.MinutesWorkedInWeek(42, 1));
+            Assert.AreEqual(0, restored.MinutesWorkedInWeek(99, 0),
+                "load cleared the previous session's totals");
+
+            restored.Clear();
+            Assert.AreEqual(0, restored.MinutesWorkedInWeek(41, 1), "Clear() empties every week");
+        }
     }
 }

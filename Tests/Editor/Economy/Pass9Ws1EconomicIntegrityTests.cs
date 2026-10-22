@@ -502,6 +502,25 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void TransferCostShortfall_WithNamedCounterparty_BecomesNamedPayable()
+        {
+            var ids = new EntityIdRegistry();
+            var authority = new FinancialObligationAuthority();
+            BusinessRuntimeState buyer = NewBusiness("biz-buyer", 100);
+            buyer.ObligationAuthority = authority;
+            buyer.ObligationIdRegistry = ids;
+
+            buyer.AddWeeklyLocalTransferCost(450, "recurring order bought grain", "biz-seller");
+
+            Assert.AreEqual(0, buyer.CurrentCashCents, "Only the 100c on hand was spent.");
+            Assert.AreEqual(350, buyer.AccruedLiabilityCents);
+            Assert.AreEqual(1, buyer.NamedPayables.Count);
+            Assert.AreEqual("biz-seller", buyer.NamedPayables[0].Creditor,
+                "A3-12: transfer shortfalls name the real creditor (the seller), never an anonymous scalar alone.");
+            Assert.AreEqual(350, authority.TotalOutstandingFor("biz-buyer"));
+        }
+
+        [Test]
         public void SettleNamedPayable_OrdinaryPayable_SpendsRealCash_AndRefusesWhenShort()
         {
             var ids = new EntityIdRegistry();

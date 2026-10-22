@@ -2512,6 +2512,18 @@ namespace LandLedgers.Economy
 
         public void AddWeeklyLocalTransferCost(int cents, string summarySegment)
         {
+            AddWeeklyLocalTransferCost(cents, summarySegment, null);
+        }
+
+        /// <summary>
+        /// Pass IX WS1 (A3-12): transfer-cost with a named counterparty. When
+        /// cash covers only part of the cost, the shortfall accrues as a named
+        /// payable TO that counterparty (routed to the debt authority when
+        /// wired) instead of an anonymous scalar. Callers that cannot name
+        /// the counterparty keep the legacy two-argument form.
+        /// </summary>
+        public void AddWeeklyLocalTransferCost(int cents, string summarySegment, string creditorBusinessId)
+        {
             int cost = Mathf.Max(0, cents);
             int spend = Mathf.Min(currentCashCents, cost);
             currentCashCents = Mathf.Max(0, currentCashCents - spend);
@@ -2520,7 +2532,14 @@ namespace LandLedgers.Economy
             int shortfall = Mathf.Max(0, cost - spend);
             if (shortfall > 0)
             {
-                AccrueOperatingLiabilityCents(shortfall, summarySegment);
+                if (!string.IsNullOrWhiteSpace(creditorBusinessId))
+                {
+                    AccrueOperatingLiabilityCents(shortfall, creditorBusinessId, summarySegment);
+                }
+                else
+                {
+                    AccrueOperatingLiabilityCents(shortfall, summarySegment);
+                }
             }
 
             AppendWeeklyTransferSummary(summarySegment);

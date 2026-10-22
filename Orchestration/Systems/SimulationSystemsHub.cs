@@ -20,6 +20,7 @@ using LandLedgers.Economy.Recruitment;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Persistence;
+using LandLedgers.Orchestration.Scenarios.Generation;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World;
@@ -381,6 +382,15 @@ namespace LandLedgers.Orchestration.Systems
         {
             CivicTreasury.LoadFromSaveDto(dto);
         }
+
+        private ScenarioObjectiveService scenarioObjectives;
+
+        /// <summary>
+        /// Pass IX WS6 (A1-03): scenario objective/failure state — dated
+        /// qualifiers fail the run exactly once into the persisted run
+        /// state (SystemsSaveDto.scenarioRunState).
+        /// </summary>
+        public ScenarioObjectiveService ScenarioObjectives => scenarioObjectives ??= new ScenarioObjectiveService();
 
         public PersonScheduleTracker PersonSchedules => personScheduleTracker ??= new PersonScheduleTracker();
 
@@ -976,6 +986,7 @@ namespace LandLedgers.Orchestration.Systems
                 draftPower = DraftPower.CaptureSaveDto(),
                 equipmentCapacities = EquipmentCapacities.CaptureSaveDto(),
                 civicTreasury = CivicTreasury.CaptureSaveDto(),
+                scenarioRunState = ScenarioObjectives.CaptureRunState(),
             };
 
             dto.workTimeBudgets = WorkTimeBudgets.CaptureSaveDto();
@@ -1091,6 +1102,8 @@ namespace LandLedgers.Orchestration.Systems
             EquipmentCapacities.LoadFromSaveDto(dto.equipmentCapacities);
             // Pass IX WS6: civic treasury (additive section; absent in old saves = empty).
             LoadCivicTreasuryFromSaveDto(dto.civicTreasury);
+            // Pass IX WS6 (A1-03): scenario run/failure state (additive section).
+            ScenarioObjectives.LoadRunState(dto.scenarioRunState);
             FreightPool.AttachDraftPower(DraftPower);
             FreightPool.AttachWagonRegistry(TransportAssets);
             FreightPool.MigrateWagonsToRegistry(diagnostics);            weatherSeed = Math.Max(0, dto.weatherSeed);

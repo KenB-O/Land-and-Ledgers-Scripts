@@ -103,6 +103,11 @@ namespace LandLedgers.Population
                 return;
             }
 
+            // Pass IX (A2-04): yesterday's unstarted plans are stale — prune
+            // before planning today so the persisted list cannot grow
+            // monotonically (PASS8-009 pattern).
+            PruneStalePending(dayIndex, diag);
+
             // First: requeue anything a start-failure orphaned, then adopt the
             // requeued domestic tasks for this household as today's pending work.
             ReconcileStalled(inputs.HouseholdId, tasks, budgets, schedules, domestic, diag);
@@ -185,6 +190,12 @@ namespace LandLedgers.Population
             int dayIndex = (int)Math.Floor(currentGameSeconds / 86400f);
             int minuteOfDay = (int)Math.Floor((currentGameSeconds - dayIndex * 86400f) / 60f);
 
+            // Pass IX (A2-04): drop stale/terminal entries first — a pending
+            // entry whose day has passed can never start, and Started/Failed
+            // entries are history the in-flight list and diagnostics already
+            // carry. Without this the persisted list grows without bound.
+            PruneStalePending(dayIndex, diag);
+
             foreach (PendingDomesticTask item in pending)
             {
                 if (item == null || !string.Equals(item.Status, "Pending", StringComparison.Ordinal))
@@ -245,6 +256,57 @@ namespace LandLedgers.Population
                 diag.Add("DomesticLaborDriver: P" + item.PersonId + " started '" + item.DefinitionId +
                     "' (" + plannedMinutes + " min); completion due at +" + plannedMinutes + " min.");
             }
+
+            // Terminal entries (Started/Failed) have done their job in this
+            // list — the in-flight record tracks started work to completion.
+            pending.RemoveAll(item => item == null
+                || !string.Equals(item.Status, "Pending", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Pass IX (A2-04): removes pending entries that can no longer start:
+        /// nulls, terminal (Started/Failed) entries, and Pending entries
+        /// planned for a day before <paramref name="currentDayIndex"/> (their
+        /// window has passed; the need re-plans on the next DriveDay).
+        /// Returns the number pruned.
+        /// </summary>
+        public int PruneStalePending(int currentDayIndex, List<string> diag = null)
+        {
+            int before = pending.Count;
+            pending.RemoveAll(item => item == null
+                || !string.Equals(item.Status, "Pending", StringComparison.Ordinal)
+                || item.DayIndex < currentDayIndex);
+            int pruned = before - pending.Count;
+            if (pruned > 0 && diag != null)
+            {
+                diag.Add($"DomesticLaborDriver: pruned {pruned} stale pending entr(ies) before day {currentDayIndex}.");
+            }
+
+            return pruned;
+        }
+
+        /// <summary>
+        /// Pass IX (A2-04): true when a TaskCompletionDue payload names one of
+        /// this driver's in-flight tasks — the production due-event
+        /// dispatcher uses it to route domestic completions here instead of
+        /// the generic task completion path.
+        /// </summary>
+        public bool HasInFlightTask(string taskIdString)
+        {
+            if (string.IsNullOrWhiteSpace(taskIdString))
+            {
+                return false;
+            }
+
+            foreach (InFlightDomesticTask flight in inFlight)
+            {
+                if (flight != null && string.Equals(flight.TaskIdString, taskIdString, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

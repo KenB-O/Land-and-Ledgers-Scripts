@@ -4,6 +4,7 @@ using System.Linq;
 using LandLedgers.Animals;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Delegation;
+using LandLedgers.Economy.Estates;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Postal;
@@ -101,6 +102,26 @@ namespace LandLedgers.Orchestration.Systems
         private bool subscribedToTimeManager;
         // G-01: weekly source-side driver for NPC business lifecycles (owned by the driver).
         private NpcBusinessLifecycleDriver npcBusinessLifecycleDriver;
+
+        // Pass IX (WS2): production wiring state for the people/lifecycle
+        // drivers. The attendance accumulator and the social/estate drives
+        // are plain C# (harness-tested); this MonoBehaviour only forwards
+        // the hub's real authorities into them on the tick/day boundaries.
+        // The accumulator is hub-owned (it rides the systems save DTO);
+        // the local fallback only covers the pre-hub bootstrap window.
+        private readonly WeeklyAttendanceAccumulator fallbackWeeklyAttendance = new WeeklyAttendanceAccumulator();
+        private WeeklyAttendanceAccumulator weeklyAttendance =>
+            hub != null ? hub.WeeklyAttendance : fallbackWeeklyAttendance;
+        private readonly DailyActivityPlanner dailyActivityPlanner = new DailyActivityPlanner();
+        private readonly FamilyLaborLedger domesticFamilyLabor = new FamilyLaborLedger();
+        private readonly EstateAdministrationService estateAdministration = new EstateAdministrationService();
+        private readonly ProbateService estateProbate = new ProbateService();
+        private readonly WillContestService estateContests = new WillContestService();
+        private EstateLifecycleDriver estateLifecycleDriver;
+        private OffMapJourneyAuthority offMapJourneys;
+        // Pass IX (A2-04): watermark of the last game-second value forwarded
+        // to DomesticLaborDriver.AdvanceTick from OnShortTick.
+        private float previousDomesticTickGameSeconds = -1f;
 
         /// <summary>
         /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
@@ -264,6 +285,54 @@ namespace LandLedgers.Orchestration.Systems
             WireHouseholdCashAuthorities();
             WireNpcBusinessCashStores();
             BindNpcBusinessCreation(sharedBusinessRuntime);
+            InstallProductionPayrollGuards();
+        }
+
+        /// <summary>
+        /// Pass IX (A2-05/A2-10): payroll must never pay a dead or off-map
+        /// person. True when the person is unknown, dead, or off-map.
+        /// </summary>
+        private bool IsPersonUnavailableForPayroll(int personId)
+        {
+            if (populationManager?.State == null || personId < 0)
+            {
+                return true;
+            }
+
+            PersonState person = populationManager.State.GetPerson(personId);
+            return person == null || person.deathDayIndex >= 0 || person.isOffMap;
+        }
+
+        /// <summary>
+        /// Pass IX (A2-05): installs the production weekly attendance
+        /// provider and the dead/off-map payroll guard on the shared
+        /// business runtime — the manager's wire methods copy both onto
+        /// every business runtime state, including DTO-rebuilt ones — and
+        /// directly onto the general store's runtime state, whose weekly
+        /// path does not pass through the shared manager's wiring.
+        /// </summary>
+        private void InstallProductionPayrollGuards()
+        {
+            if (hub == null)
+            {
+                return;
+            }
+
+            if (sharedBusinessRuntime != null)
+            {
+                sharedBusinessRuntime.WeeklyAttendanceProvider =
+                    weeklyAttendance.BuildProvider(hub.Employments, IsPersonUnavailableForPayroll);
+                sharedBusinessRuntime.PersonUnavailableForPayrollLookup = IsPersonUnavailableForPayroll;
+                sharedBusinessRuntime.WireEmploymentRegistryToBusinesses();
+                sharedBusinessRuntime.WireHouseholdCashToBusinesses();
+            }
+
+            var generalStore = FindAnyObjectByType<LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreRuntimeManager>();
+            if (generalStore?.RuntimeState != null)
+            {
+                weeklyAttendance.InstallOn(generalStore.RuntimeState, hub.Employments, IsPersonUnavailableForPayroll);
+                generalStore.RuntimeState.PersonUnavailableForPayrollLookup = IsPersonUnavailableForPayroll;
+            }
         }
 
         // CLN-4: accumulated player worked minutes for the current week (owner labor).
@@ -349,6 +418,7 @@ namespace LandLedgers.Orchestration.Systems
                 WireHouseholdCashAuthorities();
                 WireNpcBusinessCashStores();
                 BindNpcBusinessCreation(sharedBusinessRuntime);
+                InstallProductionPayrollGuards();
             }
 
         }
@@ -514,6 +584,12 @@ namespace LandLedgers.Orchestration.Systems
             int absoluteDayIndex = timeManager != null
                 ? timeManager.CurrentAbsoluteDayIndex
                 : hub.LaborDayIndex;
+
+            // Pass IX (A2-05): weekly reset of the attendance table — totals
+            // older than last week can no longer be consulted by payroll or
+            // its replay, so they are pruned at the week boundary.
+            weeklyAttendance.PruneWeeksBefore(
+                WeeklyAttendanceAccumulator.WeekIndexForDay(absoluteDayIndex) - 1);
 
             // P1: SWN-3 liability ledger -> BIZ-5 valuation. Liabilities change
             // during the week (loans drawn, payables accrued); re-sync weekly so
@@ -718,6 +794,28 @@ namespace LandLedgers.Orchestration.Systems
             return null;
         }
 
+        /// <summary>
+        /// Pass IX (WS2): the daily demographic drive. PopulationManager runs
+        /// births due, mortality, birthday scheduling, and the monthly
+        /// conceptions/marriages/migration/splits (idempotent per day via
+        /// deterministic draws). Estates opened by today's mortality advance
+        /// one lifecycle stage beside it (A2-09 / PASS7-001), and served
+        /// domestic pending entries older than 2 days are pruned so the
+        /// persisted pending list cannot grow monotonically (A2-04). The
+        /// daily activity planner (A2-03) runs later in OnDayChanged, after
+        /// the work-time budgets roll — it is part of this same daily
+        /// sequence, not a separate fixture-level hook.
+        /// </summary>
+        private void DriveDemographicDay(int absoluteDayIndex)
+        {
+            populationManager?.DriveDemographicDay(absoluteDayIndex);
+            DriveEstateAdvancement(absoluteDayIndex);
+            if (hub?.DomesticLaborDriver != null)
+            {
+                hub.DomesticLaborDriver.PruneStalePending(absoluteDayIndex);
+            }
+        }
+
         private void OnDayChanged(SimulationDateChangedContext context)
         {
             if (hub == null || timeManager == null)
@@ -731,15 +829,23 @@ namespace LandLedgers.Orchestration.Systems
             // daily drivers advance.
             ProcessDueEvents();
 
-            // Pass V (P0-2/P1-2): demographic day — births due, mortality,
-            // birthday scheduling, and monthly conceptions/marriages/migration/
-            // household splits. Idempotent per day via deterministic draws.
-            populationManager?.DriveDemographicDay(absoluteDayIndex);
+            // Pass V (P0-2/P1-2) + Pass IX (WS2): the demographic drive —
+            // births due, mortality, monthly demographic drivers, estate
+            // advancement beside mortality, and the domestic pending prune.
+            DriveDemographicDay(absoluteDayIndex);
 
             // Population may be generated after Awake; bind the now-real
             // household ledgers before any daily finance workflow can open a
             // cash window.
             RefreshHouseholdCashBindings();
+
+            // Pass IX (A2-05): snapshot YESTERDAY's real worked minutes into
+            // the weekly attendance accumulator BEFORE EnsureDay resets the
+            // budgets — payroll's attendance provider reads these totals.
+            // Re-install the payroll guards too, so any business runtime
+            // rebuilt since yesterday carries them before its weekly run.
+            weeklyAttendance.ObserveDay(hub.WorkTimeBudgets, absoluteDayIndex - 1);
+            InstallProductionPayrollGuards();
 
             // CLN-4: accumulate the player's daily worked minutes for the weekly
             // owner-labor valuation post. Read BEFORE EnsureDay resets the day.
@@ -751,6 +857,12 @@ namespace LandLedgers.Orchestration.Systems
 
             // TTS-1: roll every person's daily work-time budget.
             hub.WorkTimeBudgets.EnsureDay(absoluteDayIndex);
+
+            // Pass IX (A2-03): reserve today's baseline person-time (sleep,
+            // meals, job-seeking, managing, rest) AFTER budgets roll and
+            // BEFORE any labor drive, so work cannot be scheduled over
+            // sleep in the live game (Canon §22 double-booking).
+            DriveDailyActivityPlans(absoluteDayIndex);
 
             // Generic production processes are persisted on their Business and
             // advance through the same TaskAuthority on the daily simulation
@@ -802,8 +914,8 @@ namespace LandLedgers.Orchestration.Systems
             // Pass VIII Worker 2: the absent-occupant boundary — an absent
             // person (dead or departed from the town roster) must not hold
             // local accommodation indefinitely without a valid arrangement.
-            // Strict policy here (no exemptions); the autonomy worker owns
-            // lenient exemptions through HousingAbsenceSweep's predicate.
+            // Pass IX (A2-13): the sweep receives the lenient-arrangement
+            // predicate (live agreement or active return journey).
             DriveHousingAbsenceSweep(absoluteDayIndex);
             // Pass V drive-by: DomesticLaborDriver had NO live caller (tests
             // only). Wire it here: need-driven domestic tasks (meals, fuel,
@@ -815,6 +927,12 @@ namespace LandLedgers.Orchestration.Systems
             // predicate needs the current day for delegation bounds.
             hub.LaborDayIndex = absoluteDayIndex;
             DriveLaborMarketDay(absoluteDayIndex);
+            // Pass IX (A2-06 + A2-07): the daily social drive — social visits
+            // are planned on real person time, co-located conversations
+            // record provenance-carrying knowledge into the hub store, and
+            // employed persons' job security is evaluated so corroborated
+            // layoff knowledge routes into real job applications.
+            DriveSocialDay(absoluteDayIndex);
             DriveAutonomousLabor(absoluteDayIndex);
         }
 
@@ -915,10 +1033,37 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Pass IX (A2-13): the production off-map journey authority over
+        /// the hub's journey model (the hub owns the model; no production
+        /// authority instance existed). The dead never travel: the
+        /// availability seam refuses deceased travelers at departure.
+        /// </summary>
+        private OffMapJourneyAuthority OffMapJourneys
+        {
+            get
+            {
+                if (offMapJourneys == null)
+                {
+                    offMapJourneys = new OffMapJourneyAuthority(hub.Journeys);
+                    offMapJourneys.IsPersonUnavailable = personId =>
+                    {
+                        PersonState person = populationManager?.State?.GetPerson(personId);
+                        return person == null || person.deathDayIndex >= 0;
+                    };
+                }
+
+                return offMapJourneys;
+            }
+        }
+
+        /// <summary>
         /// Pass VIII Worker 2: daily absent-occupant sweep. Absent means
         /// dead (deathDayIndex >= 0) or departed from the town roster
         /// (settlement arrangement Departed, or no longer a known person).
-        /// Strict: no valid-arrangement exemptions here. Each resolved
+        /// Pass IX (A2-13): the sweep now receives the tested lenient
+        /// predicate (AbsenceArrangementPolicies) instead of null — a live
+        /// agreement or an active return journey keeps the person's
+        /// accommodation; the dead are never exempted. Each resolved
         /// person is also vacated from any boarding house that holds them
         /// so beds free in lockstep with housing occupancies.
         /// </summary>
@@ -933,7 +1078,15 @@ namespace LandLedgers.Orchestration.Systems
                 IsPersonAbsent,
                 absoluteDayIndex,
                 diagnostics,
-                hasValidAbsenceArrangement: null,
+                hasValidAbsenceArrangement: AbsenceArrangementPolicies.LenientPolicy(
+                    hub.Housing,
+                    OffMapJourneys,
+                    absoluteDayIndex,
+                    isDeceased: personId =>
+                    {
+                        PersonState person = populationManager.State.GetPerson(personId);
+                        return person != null && person.deathDayIndex >= 0;
+                    }),
                 onPersonVacated: personId =>
                 {
                     if (hub.BoardingHouseRuntimes == null) return;
@@ -962,6 +1115,161 @@ namespace LandLedgers.Orchestration.Systems
             if (person == null) return true; // no longer in the town roster
             if (person.deathDayIndex >= 0) return true;
             return person.settlementArrangement == SettlementArrangement.Departed;
+        }
+
+        /// <summary>
+        /// Pass IX (A2-03): plans every household's day through
+        /// DailyActivityPlanner — sleep first (non-interruptible), meals,
+        /// job-seeking for unemployed adults, a managing block for business
+        /// owners/managers, and rest — reserved on real person time through
+        /// the hub's schedule tracker and work-time budgets.
+        /// </summary>
+        private void DriveDailyActivityPlans(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            var diag = new List<string>();
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                List<int> members = householdMemberships.GetActiveMembers(household.id);
+                if (members.Count == 0) continue;
+                dailyActivityPlanner.PlanHouseholdDay(
+                    members,
+                    personId =>
+                    {
+                        PersonState person = populationManager.State.GetPerson(personId);
+                        bool employed = person != null && hub.Employments != null
+                            && hub.Employments.GetActiveByEmployee(personId).Count > 0;
+                        bool manages = person != null && sharedBusinessRuntime != null
+                            && sharedBusinessRuntime.Businesses != null
+                            && sharedBusinessRuntime.Businesses.Any(b => b?.Owner != null && b.Owner.PersonId == personId);
+                        return new DailyActivityPlanner.PersonDayPlanInputs
+                        {
+                            PersonId = personId,
+                            HouseholdId = household.id,
+                            AgeBand = person != null ? person.ageBand : AgeBand.Adult18Plus,
+                            IsJobSeeker = person != null && !employed && person.ageBand == AgeBand.Adult18Plus,
+                            IsManager = manages,
+                        };
+                    },
+                    absoluteDayIndex,
+                    hub.PersonSchedules,
+                    hub.WorkTimeBudgets,
+                    diag);
+            }
+
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] daily activity plans day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag.Take(20)));
+            }
+        }
+
+        /// <summary>
+        /// Pass IX (A2-06 + A2-07): the daily social drive (see
+        /// DailySocialDrive). Venues are the town's real businesses that
+        /// host socializing (saloon-type first when present); conversations
+        /// and job-security routing run over the hub's real authorities.
+        /// </summary>
+        private void DriveSocialDay(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State == null) return;
+            var diag = new List<string>();
+            var venues = new List<string>();
+            if (sharedBusinessRuntime != null && sharedBusinessRuntime.Businesses != null)
+            {
+                foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                {
+                    if (business == null || string.IsNullOrWhiteSpace(business.InstanceId)) continue;
+                    if (business.BusinessType == BusinessType.Saloon)
+                    {
+                        venues.Insert(0, business.InstanceId);
+                    }
+                    else if (business.BusinessType == BusinessType.Hotel
+                        || business.BusinessType == BusinessType.Restaurant
+                        || business.BusinessType == BusinessType.BoardingHouse)
+                    {
+                        venues.Add(business.InstanceId);
+                    }
+                }
+            }
+
+            var ctx = new DailySocialDriveContext
+            {
+                Population = populationManager.State,
+                Schedules = hub.PersonSchedules,
+                Employments = hub.Employments,
+                Knowledge = hub.KnowledgeTransmissions,
+                Recruiting = hub.Recruiting,
+                BusinessById = businessId =>
+                {
+                    if (sharedBusinessRuntime != null
+                        && sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState found))
+                    {
+                        return found;
+                    }
+
+                    return null;
+                },
+                VenueBusinessIds = venues,
+                DayIndex = absoluteDayIndex,
+                // Deterministic draws need only a stable seed (same day +
+                // person => same visit decision across save/load).
+                WorldSeed = 0x5EED5,
+            };
+            DailySocialDayReport report = DailySocialDrive.DriveDay(ctx, diag);
+            if (report.VisitsPlanned > 0 || report.ConversationsHeld > 0 || report.SeekWorkDecisions > 0)
+            {
+                Debug.Log($"[SimulationDrivers] social day {absoluteDayIndex}: {report.VisitsPlanned} visit(s), " +
+                    $"{report.ConversationsHeld} conversation(s), {report.PacketsRecorded} packet(s), " +
+                    $"{report.SeekWorkDecisions} seek-work decision(s), {report.InquiriesFiled} inquiry(ies).");
+            }
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] social: " + string.Join(" | ", diag.Take(20)));
+            }
+        }
+
+        /// <summary>
+        /// Pass IX (A2-09): builds (once) and runs the estate lifecycle
+        /// driver over the population manager's real estate service — the
+        /// same EstateService mortality opens estates into — advancing each
+        /// open estate one stage per day. Authorities are the hub's real
+        /// ones; absent registries are skipped by the driver, never faked.
+        /// </summary>
+        private void DriveEstateAdvancement(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager == null || populationManager.Estates == null) return;
+            if (estateLifecycleDriver == null)
+            {
+                AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
+                var estateCtx = new EstateLifecycleDriverContext
+                {
+                    Estates = populationManager.Estates,
+                    Administration = estateAdministration,
+                    Ids = hub.Ids,
+                    Kinship = populationManager.Kinship,
+                    Population = populationManager.State,
+                    Titles = acquisitionMarket != null ? acquisitionMarket.Titles : null,
+                    Obligations = hub.FinancialObligations,
+                    Credit = hub.CreditInstruments,
+                    Animals = hub.Animals,
+                    Memberships = householdMemberships,
+                    Ledgers = hub.HouseholdLedgers,
+                    Contests = estateContests,
+                    Probate = estateProbate,
+                    CurrentDayIndex = absoluteDayIndex,
+                };
+                estateLifecycleDriver = new EstateLifecycleDriver(estateCtx);
+            }
+
+            var diag = new List<string>();
+            int advanced = estateLifecycleDriver.AdvanceOpenEstatesOneStage(absoluteDayIndex, diag);
+            if (advanced > 0 || diag.Count > 0)
+            {
+                Debug.Log($"[SimulationDrivers] estate advancement day {absoluteDayIndex}: {advanced} estate(s) advanced. " +
+                    string.Join(" | ", diag.Take(20)));
+            }
         }
 
         private void DriveBoardingHouseDays(int absoluteDayIndex)
@@ -2003,7 +2311,19 @@ namespace LandLedgers.Orchestration.Systems
             switch (dueEvent.Kind)
             {
                 case DueEventKind.TaskCompletionDue:
-                    CompleteTaskAtDueEvent(dueEvent, dayIndex, diag);
+                    // Pass IX (A2-04): domestic completions route to the
+                    // domestic driver (family-labor credit through the
+                    // service), not the generic completion path.
+                    if (hub.DomesticLaborDriver.HasInFlightTask(dueEvent.PayloadRef))
+                    {
+                        hub.DomesticLaborDriver.HandleDueEvent(
+                            dueEvent, hub.Tasks, hub.WorkTimeBudgets, hub.PersonSchedules,
+                            hub.DomesticLabor, domesticFamilyLabor, hub.DueEvents, dayIndex, diag);
+                    }
+                    else
+                    {
+                        CompleteTaskAtDueEvent(dueEvent, dayIndex, diag);
+                    }
                     break;
                 case DueEventKind.PassiveProcessComplete:
                     ResumeTaskAfterPassiveProcess(dueEvent, diag);
@@ -2485,6 +2805,28 @@ namespace LandLedgers.Orchestration.Systems
             // passive completions, or deadlines.
             ProcessDueEvents();
             SyncTaskCompletionDueEvents();
+
+            // Pass IX (A2-04): start planned domestic tasks whose window has
+            // arrived. DriveDomesticLaborDay only PLANS (appends to the
+            // pending list); without this tick call no meal-prep, fuel,
+            // animal-care, or chore task ever executed in production.
+            // Mirrors the LivingWorldSim tick usage.
+            if (timeManager != null && timeManager.AbsoluteGameSeconds > previousDomesticTickGameSeconds)
+            {
+                // Watermark: only forward motion advances domestic labor, so
+                // a repeated/paused tick can never re-start a pending task.
+                previousDomesticTickGameSeconds = timeManager.AbsoluteGameSeconds;
+                var domesticDiag = new List<string>();
+                hub.DomesticLaborDriver.AdvanceTick(
+                    timeManager.AbsoluteGameSeconds,
+                    hub.Tasks, hub.WorkTimeBudgets, hub.PersonSchedules,
+                    hub.DomesticLabor, hub.DueEvents, domesticDiag);
+                if (domesticDiag.Count > 0)
+                {
+                    Debug.Log("[SimulationDrivers] domestic labor tick: " +
+                        string.Join(" | ", domesticDiag.Take(20)));
+                }
+            }
 
             // Player travel advances with the clock (whole minutes only).
             if (playerDirector != null)

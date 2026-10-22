@@ -1328,6 +1328,76 @@ namespace LandLedgers.Economy.Estates
 
         #endregion
 
+        #region Daily advancement (Pass IX A2-09 / PASS7-001)
+
+        /// <summary>
+        /// Pass IX (A2-09): advances every open estate exactly ONE lifecycle
+        /// stage (inventory → claims → distribution → closure). Called once
+        /// per simulation day by the production demographic drive, beside
+        /// PopulationManager mortality — estates opened at death previously
+        /// never advanced in the live game. Idempotent per stage: an estate
+        /// whose next stage refuses (legal hold, unsettled claims) stays at
+        /// its current stage and is retried on a later day; the refusal is
+        /// recorded, never forced. Returns the number of estates advanced.
+        /// </summary>
+        public int AdvanceOpenEstatesOneStage(int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (ctx.Estates == null)
+            {
+                diag.Add("EstateLifecycleDriver: no estate service — daily advancement skipped.");
+                return 0;
+            }
+
+            ctx.CurrentDayIndex = dayIndex;
+            int advanced = 0;
+            IReadOnlyList<Estate> estates = ctx.Estates.AllEstates();
+            for (int i = 0; i < estates.Count; i++)
+            {
+                Estate estate = estates[i];
+                if (estate == null || estate.Status == EstateStatus.Closed)
+                {
+                    continue;
+                }
+
+                EstateLifecycleStage stage = StageOf(estate.EstateId);
+                if (stage >= EstateLifecycleStage.Closed)
+                {
+                    continue;
+                }
+
+                string refusal;
+                switch (stage)
+                {
+                    case EstateLifecycleStage.Opened:
+                        refusal = InventoryEstate(estate.EstateId, diag);
+                        break;
+                    case EstateLifecycleStage.Inventoried:
+                        refusal = AdjudicateClaims(estate.EstateId, diag);
+                        break;
+                    case EstateLifecycleStage.ClaimsAdjudicated:
+                        refusal = DistributeEstate(estate.EstateId, diag);
+                        break;
+                    default:
+                        refusal = CloseEstate(estate.EstateId, diag);
+                        break;
+                }
+
+                if (refusal == null)
+                {
+                    advanced++;
+                }
+                else
+                {
+                    diag.Add($"EstateLifecycleDriver: estate {estate.EstateId} held at {stage}: {refusal}");
+                }
+            }
+
+            return advanced;
+        }
+
+        #endregion
+
         #region Save / Load
 
         /// <summary>Pass VII Workstream C: the driver's persisted progress (owning runtime class).</summary>

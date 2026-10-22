@@ -123,6 +123,35 @@ namespace LandLedgers.Population
             return GetRelated(personId, KinshipRelation.Spouse);
         }
 
+        /// <summary>
+        /// Pass IX (A2-02, PASS6-003): the CURRENT spouse — the partner on the
+        /// latest spouse edge (edges are insertion-ordered) whose partner is
+        /// alive per <paramref name="isAlive"/>, or -1 when none. Historical
+        /// spouse edges are never deleted (estate/kinship history depends on
+        /// them); a dead spouse simply stops being the current spouse, so a
+        /// widow(er) can remarry while the historical edge remains.
+        /// </summary>
+        public int GetCurrentSpouseId(int personId, Func<int, bool> isAlive)
+        {
+            if (personId < 0 || isAlive == null)
+            {
+                return -1;
+            }
+
+            int current = -1;
+            for (int i = 0; i < edges.Count; i++)
+            {
+                KinshipEdge edge = edges[i];
+                if (edge != null && edge.FromPersonId == personId && edge.Relation == KinshipRelation.Spouse
+                    && isAlive(edge.ToPersonId))
+                {
+                    current = edge.ToPersonId; // later edges win: the latest living spouse
+                }
+            }
+
+            return current;
+        }
+
         private void AddDirectedEdge(int fromPersonId, int toPersonId, KinshipRelation relation, string source)
         {
             for (int i = 0; i < edges.Count; i++)

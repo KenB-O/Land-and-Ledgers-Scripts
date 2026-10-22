@@ -164,13 +164,14 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                List<int> spouses = ctx.Kinship.GetSpouses(wife.id);
-                if (spouses.Count == 0)
+                // Pass IX (A2-02): the current (living) spouse — a widow's
+                // historical edge to her dead husband must not be picked.
+                int husbandId = MarriageDriver.CurrentSpouseId(ctx, wife.id);
+                if (husbandId < 0)
                 {
                     continue;
                 }
 
-                int husbandId = spouses[0];
                 PersonState husband = ctx.Population.GetPerson(husbandId);
                 if (husband == null || husband.deathDayIndex >= 0 || husband.isOffMap)
                 {
@@ -178,7 +179,19 @@ namespace LandLedgers.Population
                 }
 
                 // Legitimate conception: a married couple sharing a household.
-                if (wife.householdId != husband.householdId)
+                // Pass IX (A2-01): co-residence reads the membership AUTHORITY
+                // (HouseholdMembershipRegistry) — the legacy PersonState
+                // .householdId field is never written by marriage or birth,
+                // so gating on it made every post-generation marriage sterile
+                // (and let sim-born children pass spuriously against id 0).
+                if (ctx.Memberships == null)
+                {
+                    continue;
+                }
+
+                int wifeHouseholdId = ctx.Memberships.GetActiveHouseholdId(wife.id);
+                int husbandHouseholdId = ctx.Memberships.GetActiveHouseholdId(husband.id);
+                if (wifeHouseholdId < 0 || wifeHouseholdId != husbandHouseholdId)
                 {
                     continue;
                 }
@@ -202,7 +215,7 @@ namespace LandLedgers.Population
                     {
                         motherPersonId = wife.id,
                         fatherPersonId = husband.id,
-                        householdId = wife.householdId,
+                        householdId = wifeHouseholdId,
                         conceptionDayIndex = ctx.CurrentDayIndex,
                         dueDayIndex = ctx.CurrentDayIndex + GestationDays,
                     });
@@ -238,11 +251,27 @@ namespace LandLedgers.Population
                     continue;
                 }
 
+                // Pass IX (A2-01): when the father is dead or unknown by the
+                // time of the birth, the child belongs to the MOTHER's
+                // household (her current membership authority), never to a
+                // stale household stamped for a father who is gone.
+                int householdId = pregnancy.householdId;
+                PersonState father = pregnancy.fatherPersonId >= 0
+                    ? ctx.Population.GetPerson(pregnancy.fatherPersonId) : null;
+                if ((father == null || father.deathDayIndex >= 0) && ctx.Memberships != null)
+                {
+                    int motherHouseholdId = ctx.Memberships.GetActiveHouseholdId(mother.id);
+                    if (motherHouseholdId >= 0)
+                    {
+                        householdId = motherHouseholdId;
+                    }
+                }
+
                 bool isFemale = DemographicRng.Draw01(ctx.WorldSeed, ctx.CurrentDayIndex, mother.id, "birth-sex") < 0.5;
                 string firstName = PickName(ctx, isFemale, mother.id);
                 var birthDate = new BirthDate(year, month, day, BirthDateProvenance.Exact, "Live birth recorded by the birth driver.");
                 PersonState child = ctx.Lifecycle.RecordBirth(
-                    pregnancy.householdId, mother.id, pregnancy.fatherPersonId,
+                    householdId, mother.id, pregnancy.fatherPersonId,
                     firstName, mother.lastName, ctx.CurrentDayIndex, birthDate);
                 if (child == null)
                 {

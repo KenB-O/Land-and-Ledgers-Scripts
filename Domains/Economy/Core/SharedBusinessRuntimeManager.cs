@@ -242,6 +242,39 @@ namespace LandLedgers.Economy
         public int EmploymentRegistryCount => EmploymentRegistry != null ? EmploymentRegistry.Count : -1;
 
         /// <summary>
+        /// Pass IX (A2-05/A2-10, WS2 minimal hook): the production payroll
+        /// guards, assigned by SimulationDrivers — the weekly attendance
+        /// provider (built by WeeklyAttendanceAccumulator) and the
+        /// dead/off-map payroll refusal lookup. The wire methods below copy
+        /// them onto every business runtime state, including DTO-rebuilt
+        /// ones, because both wire methods run on the formation/restore and
+        /// weekly paths. Null = legacy behavior for that guard.
+        /// </summary>
+        public Func<string, int, bool> WeeklyAttendanceProvider { get; set; }
+
+        /// <summary>Pass IX (A2-10): (personId) -> dead or off-map; payroll refuses those persons.</summary>
+        public Func<int, bool> PersonUnavailableForPayrollLookup { get; set; }
+
+        /// <summary>Pass IX: copies the payroll guards onto one runtime state when set here.</summary>
+        private void ApplyPayrollGuards(BusinessRuntimeState runtimeState)
+        {
+            if (runtimeState == null)
+            {
+                return;
+            }
+
+            if (WeeklyAttendanceProvider != null)
+            {
+                runtimeState.WeeklyAttendanceProvider = WeeklyAttendanceProvider;
+            }
+
+            if (PersonUnavailableForPayrollLookup != null)
+            {
+                runtimeState.PersonUnavailableForPayrollLookup = PersonUnavailableForPayrollLookup;
+            }
+        }
+
+        /// <summary>
         /// P1: wires the employment authority into every business runtime state
         /// that does not already have one. Called on the weekly path and after
         /// formation/restore so newly created businesses are covered too.
@@ -259,6 +292,13 @@ namespace LandLedgers.Economy
                 if (business?.RuntimeState != null && business.RuntimeState.EmploymentRegistry == null)
                 {
                     business.RuntimeState.EmploymentRegistry = EmploymentRegistry;
+                }
+
+                // Pass IX: payroll guards ride the same wiring pass so
+                // DTO-rebuilt runtime states are covered too.
+                if (business?.RuntimeState != null)
+                {
+                    ApplyPayrollGuards(business.RuntimeState);
                 }
             }
         }
@@ -494,6 +534,12 @@ namespace LandLedgers.Economy
                 {
                     business.RuntimeState.PersonHouseholdIdLookup = PersonHouseholdIdLookup;
                 }
+
+                // Pass IX: this wiring runs immediately before weekly
+                // payroll (ResolvePayrollForType), so it is the last chance
+                // to install the attendance/off-map guards on any runtime
+                // state rebuilt since the registry wiring ran.
+                ApplyPayrollGuards(business.RuntimeState);
             }
         }
 

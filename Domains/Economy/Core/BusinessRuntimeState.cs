@@ -843,6 +843,36 @@ namespace LandLedgers.Economy
         public Func<string, int, bool> WeeklyAttendanceProvider { get; set; }
 
         /// <summary>
+        /// Pass IX (A2-10): optional payroll eligibility guard —
+        /// (personId) -> true when the person must not be paid (dead or
+        /// off-map). Wired by SimulationDrivers from PopulationState.
+        /// Migration now ends employments at departure, so this is the
+        /// belt-and-braces check for any record that outlives its person:
+        /// every payroll path (weekly employment payroll, legacy slot
+        /// payroll, PayAgreedWage) refuses an unavailable person loudly
+        /// instead of paying a ghost. Null = legacy behavior.
+        /// </summary>
+        public Func<int, bool> PersonUnavailableForPayrollLookup { get; set; }
+
+        /// <summary>Pass IX (A2-10): fail-closed eligibility consult for payroll paths.</summary>
+        private bool IsUnavailableForPayroll(int personId)
+        {
+            if (PersonUnavailableForPayrollLookup == null || personId < 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                return PersonUnavailableForPayrollLookup(personId);
+            }
+            catch (Exception)
+            {
+                return false; // a throwing lookup must not fabricate a refusal
+            }
+        }
+
+        /// <summary>
         /// Worker D (Autonomous Labor, Phase F): settled-week marker for the
         /// idempotency-guarded payroll driver. -1 = no week settled yet. The
         /// WageSettlementService sets this after a successful weekly settlement;
@@ -890,6 +920,14 @@ namespace LandLedgers.Economy
                 && employment.LifecycleState != EmploymentLifecycleState.Ended)
             {
                 return $"PayAgreedWage: employment '{employmentId}' is {employment.LifecycleState} - partial-period wages pay only for Active/OnLeave service or Ended final settlement.";
+            }
+
+            // Pass IX (A2-10): a departed (off-map) or dead worker is not
+            // paid a partial-period wage either. (Death's final settlement,
+            // if any, is an estate matter — never a wage to a ghost.)
+            if (employment.EndReason != EmploymentEndReason.Death && IsUnavailableForPayroll(employment.EmployeePersonId))
+            {
+                return $"PayAgreedWage refused: P{employment.EmployeePersonId} is dead or off-map — no wage is paid to an unavailable person (employment '{employmentId}').";
             }
 
             int wage = Mathf.Max(0, amountCents);
@@ -2035,6 +2073,14 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
+                // Pass IX (A2-10): no ghost wages on the legacy path either.
+                if (IsUnavailableForPayroll(personId))
+                {
+                    lastWeeklyPayrollDiagnostics.Add(
+                        $"slot '{slot.SlotId}' worker P{personId} is dead or off-map — wage refused, not paid.");
+                    continue;
+                }
+
                 int wage = slot.WeeklyWageCents;
                 if (wage <= 0)
                 {
@@ -2120,6 +2166,17 @@ namespace LandLedgers.Economy
                 int wage = Mathf.Max(0, employment.Compensation.AgreedWeeklyWageCents);
                 if (wage <= 0)
                 {
+                    continue;
+                }
+
+                // Pass IX (A2-10): a dead or off-map person is never paid,
+                // even if an Active employment record outlived them.
+                if (IsUnavailableForPayroll(employment.EmployeePersonId))
+                {
+                    lastWeeklyPayrollDiagnostics.Add(
+                        $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
+                        "person is dead or off-map — wage refused, not paid, no liability accrued.");
+                    SyncSlotPaidState(employment.EmployeePersonId, paid: false);
                     continue;
                 }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Time;
 
 namespace LandLedgers.Population
@@ -109,12 +110,40 @@ namespace LandLedgers.Population
             }
         }
 
+        /// <summary>
+        /// Pass IX (A2-02, PASS6-003): the CURRENT spouse of a person — the
+        /// living spouse on their kinship spouse edges, or -1 when none.
+        /// Historical spouse edges are preserved forever (estate and kinship
+        /// history depend on them and are never deleted); a widow(er)'s dead
+        /// spouse simply stops being their CURRENT spouse, so remarriage and
+        /// new conceptions become possible again.
+        /// </summary>
+        public static int CurrentSpouseId(DemographicDriverContext ctx, int personId)
+        {
+            if (ctx == null || ctx.Kinship == null || ctx.Population == null || personId < 0)
+            {
+                return -1;
+            }
+
+            return ctx.Kinship.GetCurrentSpouseId(personId, spouseId =>
+            {
+                PersonState spouse = ctx.Population.GetPerson(spouseId);
+                return spouse != null && spouse.deathDayIndex < 0;
+            });
+        }
+
+        /// <summary>Pass IX (A2-02): true when the person has a living spouse.</summary>
+        public static bool HasCurrentSpouse(DemographicDriverContext ctx, int personId)
+        {
+            return CurrentSpouseId(ctx, personId) >= 0;
+        }
+
         private static bool IsMarriageable(DemographicDriverContext ctx, PersonState person)
         {
             return person != null
                 && person.deathDayIndex < 0
                 && !person.isOffMap
-                && ctx.Kinship.GetSpouses(person.id).Count == 0;
+                && !HasCurrentSpouse(ctx, person.id);
         }
 
         private static PersonState FindPartner(
@@ -270,13 +299,36 @@ namespace LandLedgers.Population
             }
         }
 
-        private static void MigrateOut(DemographicDriverContext ctx, PersonState person, bool distressed)
+        public static MigrationOutcome MigrateOut(DemographicDriverContext ctx, PersonState person, bool distressed)
         {
+            var outcome = new MigrationOutcome
+            {
+                PersonId = person.id,
+                Distressed = distressed,
+                DayIndex = ctx.CurrentDayIndex,
+            };
             ctx.Lifecycle.RemoveMember(person.id, ctx.CurrentDayIndex, distressed ? "migrated off-map (distress)" : "migrated off-map (opportunity)");
             person.isOffMap = true;
+            // Pass IX (A2-10): migration ends local employment, mirroring the
+            // death path (PASS6-012b). Otherwise the departed person's Active
+            // employments draw full wages forever — no payroll path checked
+            // isOffMap. Identity, kinship, ownership, and debts are preserved;
+            // only the local job ends (reason MigratedOut, history retained).
+            if (ctx.Employments != null)
+            {
+                outcome.EndedEmployments = ctx.Employments.EndEmploymentByReason(
+                    person.id, EmploymentEndReason.MigratedOut, ctx.CurrentDayIndex);
+                if (outcome.EndedEmployments.Count > 0)
+                {
+                    ctx.Diagnostics.Add(
+                        $"MigrationDriver: ended {outcome.EndedEmployments.Count} employment(s) for departed P{person.id}.");
+                }
+            }
+
             ctx.Diagnostics.Add(
                 $"MigrationDriver: P{person.id} ({person.DisplayName}) migrated off-map " +
                 $"({(distressed ? "distress" : "opportunity")}); identity, kinship, ownership, and debts preserved.");
+            return outcome;
         }
 
         private static void MigrateIn(DemographicDriverContext ctx, int year, int month, int day)
@@ -425,8 +477,14 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                bool employed = person.workplaceBuildingId >= 0;
-                bool married = ctx.Kinship.GetSpouses(person.id).Count > 0;
+                // Pass IX (A2-11): eligibility reads the employment REGISTRY —
+                // the production hiring path (RecruitmentService) never writes
+                // the legacy workplaceBuildingId field, so registry-employed
+                // adult children previously read as unemployed and could
+                // never split (same stale-field pattern as A2-01).
+                bool employed = ctx.Employments != null
+                    && ctx.Employments.GetActiveByEmployee(person.id).Count > 0;
+                bool married = MarriageDriver.HasCurrentSpouse(ctx, person.id);
                 if (!employed && !married)
                 {
                     continue;
@@ -474,6 +532,18 @@ namespace LandLedgers.Population
             {
                 ctx.Diagnostics.Add($"HouseholdSplitDriver: FormHousehold refused for P{person.id}.");
                 return;
+            }
+
+            // Pass IX (A2-11): stamp the new household with the founder's
+            // employer from the authoritative employment registry (the same
+            // record that made the split eligible), for inspection/location.
+            if (ctx.Employments != null)
+            {
+                List<EmploymentRelationship> active = ctx.Employments.GetActiveByEmployee(person.id);
+                if (active.Count > 0 && active[0] != null)
+                {
+                    household.EmployerBusinessId = active[0].EmployerBusinessId ?? string.Empty;
+                }
             }
 
             // The founder is already registered by FormHousehold; the split is

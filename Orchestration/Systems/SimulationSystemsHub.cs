@@ -288,6 +288,7 @@ namespace LandLedgers.Orchestration.Systems
         // inventory, or debt ledger.
         private PersonScheduleTracker personScheduleTracker;
         private KnowledgeTransmissionStore knowledgeTransmissions;
+        private WeeklyAttendanceAccumulator weeklyAttendance;
         private RentCollectionService rentCollectionService;
         private NpcFormationAssetRegister npcFormationAssetRegister;
         private NpcBusinessLifecycleService npcBusinessLifecycle;
@@ -374,6 +375,14 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public KnowledgeTransmissionStore KnowledgeTransmissions =>
             knowledgeTransmissions ??= new KnowledgeTransmissionStore();
+
+        /// <summary>
+        /// Pass IX (A2-05): the production weekly attendance accumulator.
+        /// Hub-owned so it rides the systems save DTO; SimulationDrivers
+        /// feeds it daily and builds payroll's attendance provider from it.
+        /// </summary>
+        public WeeklyAttendanceAccumulator WeeklyAttendance =>
+            weeklyAttendance ??= new WeeklyAttendanceAccumulator();
 
         public RentCollectionService RentCollection => rentCollectionService ??= new RentCollectionService();
         public NpcFormationAssetRegister NpcFormationAssets => npcFormationAssetRegister ??= new NpcFormationAssetRegister();
@@ -895,6 +904,7 @@ namespace LandLedgers.Orchestration.Systems
                 capabilities = Capabilities.CaptureSaveDto(),
                 operatingLedger = OperatingLedger.CaptureSaveDto(),
                 employments = Employments.CaptureSaveDto(),
+                weeklyAttendance = WeeklyAttendance.CaptureSaveDto(),
                 farmSlice = FarmSlice.CaptureSaveDto(),
                 liabilities = Liabilities.CaptureSaveDto(),
                 financialObligations = FinancialObligations.CaptureSaveDto(),
@@ -990,6 +1000,7 @@ namespace LandLedgers.Orchestration.Systems
             Capabilities.LoadFromSaveDto(dto.capabilities, diagnostics);
             OperatingLedger.LoadFromSaveDto(dto.operatingLedger);
             Employments.LoadFromSaveDto(dto.employments);
+            WeeklyAttendance.LoadFromSaveDto(dto.weeklyAttendance);
             FarmSlice.LoadFromSaveDto(dto.farmSlice);
             FinancialObligations.LoadFromSaveDto(dto.financialObligations);
             CreditOffers.LoadFromSaveDto(dto.creditOffers);

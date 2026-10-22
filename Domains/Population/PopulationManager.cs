@@ -685,7 +685,10 @@ namespace LandLedgers.Population
 
         private HouseholdState FindHouseholdById(int householdId)
         {
-            if (state == null || state.households == null || householdId <= 0)
+            // Pass IX (A2-14): household ids are allocated from 0
+            // (SequentialIdAllocator starts at 0), so only negative ids are
+            // invalid — the old <= 0 guard made household 0 uninspectable.
+            if (state == null || state.households == null || householdId < 0)
             {
                 return null;
             }

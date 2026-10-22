@@ -3048,6 +3048,38 @@ namespace LandLedgers.Economy
             return $"Market split: {capture01:P0} on-map capture / {(1f - capture01):P0} off-map or competitors at current price posture";
         }
 
+        /// <summary>
+        /// Pass IX WS5 (A3-07/A3-13): the numeric market readout behind
+        /// BuildBusinessLocalMarketCaptureLine — the SAME existing
+        /// market-capture and price-index computations, exposed for the
+        /// manager-cycle inputs builder and the weekly competition-pressure
+        /// feed. Returns false when the business type has no primary market
+        /// category (no readout exists — callers must not invent one).
+        /// </summary>
+        public bool TryGetBusinessMarketReadout(
+            BusinessInstanceState business, out float capture01, out float priceIndex01)
+        {
+            capture01 = 0f;
+            priceIndex01 = 0f;
+            if (business == null || business.RuntimeState == null)
+            {
+                return false;
+            }
+
+            BusinessProfileDefinition profile = FindProfile(business.BusinessType);
+            string categoryId = GetPrimaryMarketCategoryId(business.BusinessType);
+            if (string.IsNullOrWhiteSpace(categoryId))
+            {
+                return false;
+            }
+
+            int priceCents = GetAverageCategoryTransferPriceCents(business, profile, categoryId);
+            int referenceCents = GetAverageCategoryLandedCostCents(profile, categoryId);
+            priceIndex01 = CalculateLocalPriceIndex01(priceCents, referenceCents);
+            capture01 = CalculateLocalMarketCapture01(business, categoryId, priceCents, referenceCents);
+            return true;
+        }
+
         public bool TryAdjustBusinessMarginPolicy(BusinessInstanceState business, int stepDelta, out string message)
         {
             message = string.Empty;

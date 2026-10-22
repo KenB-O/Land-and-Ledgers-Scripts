@@ -1117,6 +1117,18 @@ namespace LandLedgers.Economy
             if (!string.IsNullOrWhiteSpace(assetId) && !equipmentAssetIds.Contains(assetId)) equipmentAssetIds.Add(assetId);
         }
 
+        /// <summary>
+        /// Pass IX WS5 (A3-08): drops an equipment reference when the asset's
+        /// title transfers to another business through the ownership
+        /// authority, so the seller's configuration no longer claims it.
+        /// </summary>
+        public void RemoveEquipmentReference(string assetId)
+        {
+            if (string.IsNullOrWhiteSpace(assetId)) return;
+            equipmentAssetIds.RemoveAll(existing =>
+                string.Equals(existing, assetId, StringComparison.OrdinalIgnoreCase));
+        }
+
         public void AddWorkspaceReference(string workspaceId)
         {
             if (!string.IsNullOrWhiteSpace(workspaceId) && !workspaceIds.Contains(workspaceId)) workspaceIds.Add(workspaceId);

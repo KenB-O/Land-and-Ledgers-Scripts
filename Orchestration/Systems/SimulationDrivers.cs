@@ -572,6 +572,54 @@ namespace LandLedgers.Orchestration.Systems
             // derived the way BusinessReportBuilder's knownProfitProxy is:
             // revenue minus operating expense only.
             hub.Valuation.RecordWeeklyProfit(business.InstanceId, business.RuntimeState.WeeklyOperatingProfitCents);
+
+            // Pass IX WS5 (A3-13): feed the market-capture factor during
+            // weekly settlement. Competition pressure is the complement of
+            // the existing market-capture computation; before this feed the
+            // runtime scalar was only set by a monthly-cadence method with
+            // no production caller, so reports carried a permanent 0.
+            if (sharedBusinessRuntime != null
+                && sharedBusinessRuntime.TryGetBusinessMarketReadout(business, out float capture01, out _))
+            {
+                MarketCaptureCompetitionFeed.FeedCompetitionPressure(business.RuntimeState, capture01);
+            }
+        }
+
+        /// <summary>
+        /// Pass IX WS5 (PASS8-003): the production appraisal service over the
+        /// business's own registers — equipment assets from the transport /
+        /// equipment register, book cost from the business's own procurement
+        /// records, formation assets from the formation register. No
+        /// register evidence means no appraisal (the resolver denies).
+        /// </summary>
+        private AssetSaleAppraisalService BuildProductionAppraisalService()
+        {
+            return new AssetSaleAppraisalService
+            {
+                FindEquipmentAsset = id => hub.TransportAssets.Get(id),
+                FormationAssets = hub.NpcFormationAssets,
+                EquipmentBookCostCents = (businessId, assetId) =>
+                {
+                    BusinessInstanceState found;
+                    if (sharedBusinessRuntime == null
+                        || !sharedBusinessRuntime.TryFindByInstanceId(businessId, out found)
+                        || found == null)
+                    {
+                        return 0;
+                    }
+
+                    foreach (EquipmentProcurementState procurement in found.GenericConfiguration.EquipmentProcurements)
+                    {
+                        if (procurement != null && procurement.Order != null
+                            && string.Equals(procurement.AssetId, assetId, StringComparison.Ordinal))
+                        {
+                            return Math.Max(0, procurement.Order.TotalCents);
+                        }
+                    }
+
+                    return 0;
+                },
+            };
         }
 
         private void OnWeekChanged(SimulationDateChangedContext context)
@@ -746,7 +794,15 @@ namespace LandLedgers.Orchestration.Systems
                             : null;
                     },
                     AssetRegister = hub.NpcFormationAssets,
-                    Liquidation = null, // no production liquidation port; EvaluateWeek does not need it
+                    // Pass IX WS5 (A3-08): the production liquidation port —
+                    // close-down sales are real sales at the appraisal's
+                    // liquidation value to a solvent buyer business, paid
+                    // through the runtime cash port. (EvaluateWeek does not
+                    // consume it; CloseOrderly does.)
+                    Liquidation = new RegisterLiquidationPort(
+                        () => sharedBusinessRuntime.Businesses,
+                        new NpcBusinessRuntimeCashPort(sharedBusinessRuntime),
+                        BuildProductionAppraisalService()),
                     Events = hub.NpcBusinessEvents,
                     Ids = hub.Ids,
                     CreditorCash = hub.CreditCash,
@@ -1999,20 +2055,43 @@ namespace LandLedgers.Orchestration.Systems
                         continue;
                     }
 
-                    managerDecision = hub.Managers.DailyCycle(new ManagerCycleInputs
+                    // Pass IX WS5 (A3-07): the cycle inputs are BUILT from
+                    // live business state — shortage from runtime stock vs
+                    // reorder target, maintenance from equipment condition,
+                    // pricing from the market-capture/price-index readout,
+                    // borrowing from the cash-vs-reserve gap with the
+                    // delegation's real MaxBorrowingCents (from the live
+                    // standing instructions, not the old hard-coded 0), and
+                    // asset-sale proposals from lifecycle distress naming
+                    // the specific register asset. The first day of each
+                    // week runs the WeeklyCycle (previously no production
+                    // caller); other days run the DailyCycle.
+                    AssetSaleAppraisalService appraisal = BuildProductionAppraisalService();
+                    var inputsBuilder = new ManagerCycleInputsBuilder(appraisal);
+                    bool hasMarketReadout = sharedBusinessRuntime.TryGetBusinessMarketReadout(
+                        business, out float marketCapture01, out float priceIndex01);
+                    ManagerCycleInputs managerInputs = inputsBuilder.Build(new ManagerCycleLiveEvidence
                     {
-                        BusinessInstanceId = business.InstanceId,
-                        ManagerPersonId = worker.PersonId,
-                        CashCents = business.RuntimeState?.CurrentCashCents ?? 0,
+                        Business = business,
                         DemandReport = demand,
+                        Authority = authority,
                         Instructions = hub.Managers.Instructions.ForBusiness(business.InstanceId),
-                        DelegatedScopes = ScopeNames(authority.Scopes),
+                        ManagerPersonId = worker.PersonId,
                         DayIndex = absoluteDayIndex,
+                        SurvivalReserveCents = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business),
+                        EquipmentAssets = hub.TransportAssets.Assets,
+                        FormationAssets = hub.NpcFormationAssets.Assets,
+                        HasMarketReadout = hasMarketReadout,
+                        MarketCapture01 = marketCapture01,
+                        PriceIndex01 = priceIndex01,
                         JudgmentSeed = absoluteDayIndex ^ StableBusinessRuntimeId(business.InstanceId),
                         JudgmentQuality01 = 0.8f,
-                        PurchaseLimitCents = authority.PurchaseLimitCents,
-                        MaxBorrowingCents = 0,
                     }, diagnostics);
+                    bool isWeeklyTick = WeeklyAttendanceAccumulator.WeekIndexForDay(absoluteDayIndex)
+                        != WeeklyAttendanceAccumulator.WeekIndexForDay(absoluteDayIndex - 1);
+                    managerDecision = isWeeklyTick
+                        ? hub.Managers.WeeklyCycle(managerInputs, diagnostics)
+                        : hub.Managers.DailyCycle(managerInputs, diagnostics);
                     // Pass VII Workstream D: every decision kind executes
                     // through a real production authority (or becomes a
                     // legitimate pending request, or fails with a reason).
@@ -2095,9 +2174,10 @@ namespace LandLedgers.Orchestration.Systems
         /// stalling, and SellAsset requests resolve per the distress-sale
         /// policy (approve only when cash is below the survival reserve and
         /// the price meets the appraisal). Player-owned businesses keep
-        /// their requests pending for the future UI. No production appraisal
-        /// exists for unnamed-asset sales, so those deny loudly with reason
-        /// rather than approving blind.
+        /// their requests pending for the future UI. Pass IX WS5: the
+        /// appraisal is the production register appraisal (named assets
+        /// only — an unnamed or unevidenced sale still denies rather than
+        /// approving blind), and approved sales execute in the same drive.
         /// </summary>
         private void DriveNpcOwnerRequestResolution(int absoluteDayIndex, List<string> diagnostics)
         {
@@ -2106,6 +2186,12 @@ namespace LandLedgers.Orchestration.Systems
 
             var resolver = new NpcOwnerRequestResolver();
             var diag = new List<string>();
+            // Pass IX WS5 (PASS8-003 + A3-08): the production appraisal
+            // source. SellAsset requests now name the specific asset (from
+            // the business's own registers at proposal time); the appraisal
+            // reads those registers and returns -1 (no approval) when they
+            // hold no evidence for the named asset.
+            AssetSaleAppraisalService appraisal = BuildProductionAppraisalService();
             resolver.ResolvePending(
                 new NpcOwnerRequestResolver.OwnerResolutionContext
                 {
@@ -2117,10 +2203,31 @@ namespace LandLedgers.Orchestration.Systems
                     },
                     SurvivalReserveCents = business =>
                         SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business),
-                    AppraiseSaleCents = null, // no production appraisal for unnamed assets yet
+                    AppraiseSaleCents = appraisal.AppraiseSaleCents,
                     BusinessLender = hub.BusinessLender,
                     Obligations = hub.FinancialObligations,
                     Ids = hub.Ids,
+                    DayIndex = absoluteDayIndex,
+                }, diag);
+
+            // Pass IX WS5 (A3-08): the execution step behind an approval —
+            // the named asset transfers to a real buyer business and both
+            // cash legs post exactly once. Player-owned requests never
+            // reach Approved here (the resolver leaves them Pending), so
+            // nothing executes for the player without the future UI.
+            var saleExecution = new AssetSaleExecutionService();
+            saleExecution.ExecuteApprovedSales(
+                hub.ManagerDecisionExecution.Ledger,
+                new AssetSaleExecutionContext
+                {
+                    FindBusiness = id =>
+                    {
+                        BusinessInstanceState found;
+                        return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found : null;
+                    },
+                    AllBusinesses = () => sharedBusinessRuntime.Businesses,
+                    FindEquipmentAsset = id => hub.TransportAssets.Get(id),
+                    FormationAssets = hub.NpcFormationAssets,
                     DayIndex = absoluteDayIndex,
                 }, diag);
             diagnostics.AddRange(diag);

@@ -2385,6 +2385,18 @@ namespace LandLedgers.Economy
             this.competitionPressure01 = Mathf.Clamp01(competitionPressure01);
         }
 
+        /// <summary>
+        /// Pass IX WS5 (A3-13): the weekly-settlement feed for competition
+        /// pressure, derived from the existing market-capture computation
+        /// (see MarketCaptureCompetitionFeed). Reliability is untouched —
+        /// unlike BeginMonthlySummaryCadence, this records exactly the one
+        /// factor being fed.
+        /// </summary>
+        public void RecordCompetitionPressure01(float competitionPressure01)
+        {
+            this.competitionPressure01 = Mathf.Clamp01(competitionPressure01);
+        }
+
         public void AdjustReliability01(float delta)
         {
             reliability01 = Mathf.Clamp01(reliability01 + delta);

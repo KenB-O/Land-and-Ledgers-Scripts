@@ -1572,6 +1572,18 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // R-04: register every live business runtime with the freight
+            // driver so each shipment's named payer resolves to its real
+            // till for verified collection (payer debited before the
+            // carrier is credited; unresolvable payers stay uncollected).
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business != null && business.RuntimeState != null)
+                {
+                    FreightProduction.RegisterBusinessRuntime(business.InstanceId, business.RuntimeState);
+                }
+            }
+
             var diag = new List<string>();
             var hooks = new LandLedgers.Economy.Logistics.FreightShipmentHooks
             {

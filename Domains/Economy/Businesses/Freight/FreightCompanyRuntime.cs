@@ -146,6 +146,28 @@ namespace LandLedgers.Economy.Freight
         }
 
         /// <summary>
+        /// Pass IX WS3 (PASS8-002): replaces the active shipment list with
+        /// restored shipments (save/load). The shipments were accepted before
+        /// the save; restoring them is not a new acceptance and must not
+        /// duplicate them — the list is cleared first, so a restore is
+        /// exactly-once and cargo stays intact on the restored states.
+        /// </summary>
+        public void RestoreActiveShipments(IEnumerable<LogisticsShipmentState> shipments)
+        {
+            activeShipments ??= new List<LogisticsShipmentState>();
+            activeShipments.Clear();
+            if (shipments == null)
+                return;
+            foreach (LogisticsShipmentState shipment in shipments)
+            {
+                if (shipment == null)
+                    continue;
+                shipment.carrierBusinessInstanceId = businessInstanceId;
+                activeShipments.Add(shipment);
+            }
+        }
+
+        /// <summary>
         /// Dispatches an accepted shipment: reserves a team from the shared pool and
         /// enqueues the loading task. Fails loudly when no team is available — the
         /// shipment waits; the company never invents capacity.

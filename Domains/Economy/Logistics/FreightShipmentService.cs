@@ -18,6 +18,7 @@ using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.Persistence;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Equipment;
 using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Economy.Logistics
@@ -46,6 +47,20 @@ namespace LandLedgers.Economy.Logistics
         /// than falsely marked delivered.
         /// </summary>
         public ReceiveFreightShipmentHandler ReceiveShipment;
+
+        /// <summary>
+        /// Pass IX WS3 (A4-13): the existing unified reservation authority
+        /// (EquipmentReservationService via the hub). When wired, Dispatch
+        /// atomically reserves the wagon, driver and draft animals through
+        /// it, and completion releases the hold. When null, exclusivity is
+        /// still enforced across the service's own live shipments — the
+        /// authority ADDS cross-system enforcement (a wagon held by a plow
+        /// task cannot haul), it never replaces the live-shipment check.
+        /// </summary>
+        public IUnifiedReservationAuthority Reservations;
+
+        /// <summary>Absolute game seconds for reservation windows (TimeManager timeline).</summary>
+        public float NowGameSeconds;
     }
 
     /// <summary>
@@ -69,7 +84,104 @@ namespace LandLedgers.Economy.Logistics
             new Dictionary<string, EntityId>(StringComparer.Ordinal);
         private readonly Dictionary<string, EntityId> unloadTasks =
             new Dictionary<string, EntityId>(StringComparer.Ordinal);
+        // Pass IX WS3 (A4-13): every shipment this service created or restored,
+        // so exclusivity can be checked ACROSS live shipments. Terminal
+        // shipments (Completed/Failed) hold nothing and never conflict.
+        private readonly List<LogisticsShipmentState> trackedShipments =
+            new List<LogisticsShipmentState>();
+        // The reservation authority each dispatched shipment reserved through,
+        // so completion releases the exact hold that was taken.
+        private readonly Dictionary<string, IUnifiedReservationAuthority> dispatchAuthorities =
+            new Dictionary<string, IUnifiedReservationAuthority>(StringComparer.Ordinal);
         private int sequence;
+
+        /// <summary>All shipments known to this service (created or restored).</summary>
+        public IReadOnlyList<LogisticsShipmentState> TrackedShipments => trackedShipments;
+
+        /// <summary>Pass IX WS3 (A4-13): a shipment is live while it can still hold a wagon, driver or animal.</summary>
+        public static bool IsLiveShipment(LogisticsShipmentState shipment)
+        {
+            if (shipment == null) return false;
+            return shipment.Status != LogisticsShipmentStatus.Completed
+                && shipment.Status != LogisticsShipmentStatus.Failed;
+        }
+
+        private void Track(LogisticsShipmentState shipment)
+        {
+            if (shipment == null) return;
+            foreach (LogisticsShipmentState existing in trackedShipments)
+            {
+                if (ReferenceEquals(existing, shipment)
+                    || string.Equals(existing.ShipmentId, shipment.ShipmentId, StringComparison.Ordinal))
+                    return;
+            }
+            trackedShipments.Add(shipment);
+        }
+
+        /// <summary>
+        /// Pass IX WS3 (A4-13): finds a live-shipment exclusivity conflict for
+        /// the named wagon / driver / animals, excluding the candidate itself.
+        /// Returns a loud reason, or null when everything is free. A wagon is
+        /// bound from creation (Planned) until a terminal state; a driver or
+        /// animal is bound once the shipment's transport is bound (dispatched)
+        /// until a terminal state — cargo in wagon custody (including a
+        /// refused delivery held as Delayed, and a Partial remainder) keeps
+        /// its wagon bound.
+        /// </summary>
+        public string FindExclusivityConflict(
+            LogisticsShipmentState candidate, string wagonAssetId,
+            EntityId driverId, List<EntityId> animalIds)
+        {
+            string candidateId = candidate != null ? candidate.ShipmentId : string.Empty;
+            foreach (LogisticsShipmentState other in trackedShipments)
+            {
+                if (other == null || !IsLiveShipment(other))
+                    continue;
+                if (string.Equals(other.ShipmentId, candidateId, StringComparison.Ordinal))
+                    continue;
+                if (!string.IsNullOrWhiteSpace(wagonAssetId)
+                    && string.Equals(other.physicalWagonAssetId, wagonAssetId, StringComparison.Ordinal))
+                {
+                    return $"wagon '{wagonAssetId}' is already bound to live shipment " +
+                        $"'{other.ShipmentId}' ({other.Status}) — no double-booking (A4-13).";
+                }
+                if (driverId.IsValid && other.physicalTransportBound
+                    && string.Equals(other.physicalDriverPersonId, driverId.ToString(), StringComparison.Ordinal))
+                {
+                    return $"driver {driverId} is already bound to live shipment " +
+                        $"'{other.ShipmentId}' ({other.Status}) — no double-booking (A4-13).";
+                }
+                if (animalIds != null && other.physicalTransportBound && other.physicalDraftAnimalIds != null)
+                {
+                    foreach (EntityId animal in animalIds)
+                    {
+                        if (!animal.IsValid) continue;
+                        if (other.physicalDraftAnimalIds.Contains(animal.ToString()))
+                        {
+                            return $"draft animal {animal} is already bound to live shipment " +
+                                $"'{other.ShipmentId}' ({other.Status}) — no double-booking (A4-13).";
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Pass IX WS3 (A4-13): releases the reservation-authority hold taken
+        /// at Dispatch for a shipment that reached a terminal state (or was
+        /// abandoned by its driver). Idempotent.
+        /// </summary>
+        public void ReleaseShipmentReservations(LogisticsShipmentState shipment)
+        {
+            if (shipment == null) return;
+            if (dispatchAuthorities.TryGetValue(shipment.ShipmentId, out IUnifiedReservationAuthority authority)
+                && authority != null)
+            {
+                authority.ReleaseAllForTask("freight:" + shipment.ShipmentId);
+            }
+            dispatchAuthorities.Remove(shipment.ShipmentId);
+        }
 
         public void RegisterWagon(EquipmentAsset wagon)
         {
@@ -107,6 +219,22 @@ namespace LandLedgers.Economy.Logistics
                 reason = "FreightShipmentService: asset '" + wagonAssetId + "' is not a wagon (kind '" + wagon.Kind + "').";
                 return null;
             }
+            // Pass IX WS3 (A4-13): the wagon cannot already haul for another
+            // live shipment, and cannot be held by another task through the
+            // reservation authority when one is wired.
+            string wagonConflict = FindExclusivityConflict(null, wagonAssetId, EntityId.Invalid, null);
+            if (wagonConflict != null)
+            {
+                reason = "FreightShipmentService: " + wagonConflict;
+                return null;
+            }
+            if (hooks != null && hooks.Reservations != null
+                && hooks.Reservations.IsReserved(ReservationKeyConventions.Asset(wagonAssetId), hooks.NowGameSeconds))
+            {
+                reason = "FreightShipmentService: wagon '" + wagonAssetId + "' is reserved through the " +
+                    "reservation authority by another holder — no double-booking (A4-13).";
+                return null;
+            }
 
             var shipment = new LogisticsShipmentState
             {
@@ -138,11 +266,13 @@ namespace LandLedgers.Economy.Logistics
             Log(hooks, "shipment '" + shipmentId + "' planned: " + quantityUnits + " units ("
                 + totalMassKg.ToString("0.0") + "kg, " + totalVolumeM3.ToString("0.00") + "m3) on wagon '"
                 + wagonAssetId + "' from '" + sourceBusinessId + "' to '" + destinationBusinessId + "'.");
+            Track(shipment);
             return shipment;
         }
 
         private LogisticsShipmentState BlockPreLoad(LogisticsShipmentState shipment, string why, FreightShipmentHooks hooks)
         {
+            Track(shipment);
             // MR-P001: the blocked record owns zero cargo — loading never occurred.
             shipment.blockedReason = why;
             shipment.state = LogisticsShipmentStatus.Failed;
@@ -167,6 +297,16 @@ namespace LandLedgers.Economy.Logistics
             if (shipment.Status != LogisticsShipmentStatus.Planned)
             {
                 reason = "FreightShipmentService: shipment '" + shipment.ShipmentId + "' is " + shipment.Status + ", not Planned.";
+                return false;
+            }
+            // Pass IX WS3 (A4-13): re-check the wagon at loading — a shipment
+            // restored from a legacy save (or created before another claim)
+            // must not start loading onto a wagon another live shipment holds.
+            Track(shipment);
+            string loadConflict = FindExclusivityConflict(shipment, shipment.physicalWagonAssetId, EntityId.Invalid, null);
+            if (loadConflict != null)
+            {
+                reason = "FreightShipmentService: " + loadConflict;
                 return false;
             }
             string defId = "freight:load:" + shipment.ShipmentId;
@@ -231,6 +371,47 @@ namespace LandLedgers.Economy.Logistics
             {
                 reason = "FreightShipmentService: dispatch needs a real driver — refusing phantom driver.";
                 return false;
+            }
+            // Pass IX WS3 (A4-13): wagon, driver and animals are exclusive
+            // across live shipments — checked against this service's tracked
+            // shipments AND, when wired, atomically reserved through the
+            // existing reservation authority so no other system can take
+            // them mid-haul either.
+            Track(shipment);
+            string conflict = FindExclusivityConflict(
+                shipment, shipment.physicalWagonAssetId, driverId, animalIds);
+            if (conflict != null)
+            {
+                reason = "FreightShipmentService: " + conflict;
+                return false;
+            }
+            if (hooks != null && hooks.Reservations != null)
+            {
+                var request = new ReservationRequest(
+                    "freight:" + shipment.ShipmentId, "freight haul " + shipment.ShipmentId);
+                request.Items.Add(new ReservationItem(
+                    ReservationKeyConventions.Asset(shipment.physicalWagonAssetId),
+                    1f, hooks.NowGameSeconds, float.MaxValue));
+                request.Items.Add(new ReservationItem(
+                    ReservationKeyConventions.Person(driverId.ToString()),
+                    1f, hooks.NowGameSeconds, float.MaxValue));
+                if (animalIds != null)
+                {
+                    foreach (EntityId animal in animalIds)
+                    {
+                        if (animal.IsValid)
+                            request.Items.Add(new ReservationItem(
+                                ReservationKeyConventions.Animal(animal.ToString()),
+                                1f, hooks.NowGameSeconds, float.MaxValue));
+                    }
+                }
+                string refusal = hooks.Reservations.TryReserveAll(request, out _);
+                if (refusal != null)
+                {
+                    reason = "FreightShipmentService: reservation authority refused dispatch — " + refusal;
+                    return false;
+                }
+                dispatchAuthorities[shipment.ShipmentId] = hooks.Reservations;
             }
             shipment.physicalDriverPersonId = driverId.ToString();
             shipment.physicalDraftAnimalIds = new List<string>();
@@ -377,6 +558,7 @@ namespace LandLedgers.Economy.Logistics
                 shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
                 shipment.physicalTransportBound = false;
                 shipment.state = LogisticsShipmentStatus.Completed;
+                ReleaseShipmentReservations(shipment);
                 Log(hooks, "shipment '" + shipment.ShipmentId + "': delivered — recipient '"
                     + shipment.destinationBusinessInstanceId + "' accepted " + accepted + "u into inventory.");
                 return true;
@@ -469,7 +651,14 @@ namespace LandLedgers.Economy.Logistics
             var out_ = new List<LogisticsShipmentState>();
             if (dto == null) return out_;
             foreach (LogisticsShipmentSaveDto s in dto.Shipments)
-                out_.Add(LogisticsShipmentState.FromSaveDto(s));
+            {
+                LogisticsShipmentState restored = LogisticsShipmentState.FromSaveDto(s);
+                out_.Add(restored);
+                // Pass IX WS3 (A4-13): restored shipments are tracked again so
+                // exclusivity covers them exactly once — no duplicate holds,
+                // no invisible live shipment after a mid-transport load.
+                Track(restored);
+            }
             // Rebind in-flight handling tasks by their deterministic definition ids.
             if (hooks != null && hooks.Tasks != null)
             {

@@ -310,9 +310,9 @@ namespace LandLedgers.EditorTests.Economy
 
             // Assets with provenance + one hire.
             Assert.IsNull(f.Assets.Record(new NpcFormationAsset
-                { AssetKind = "equipment", ItemId = "oven", Units = 1, CostCents = 15000, Provenance = "purchase:smith-12" }));
+                { AssetKind = "equipment", ItemId = "oven", Units = 1, CostCents = 15000, Provenance = "purchase:smith-12", OwnerBusinessId = "biz-1" }));
             Assert.IsNull(f.Assets.Record(new NpcFormationAsset
-                { AssetKind = "inventory", ItemId = "flour", Units = 40, CostCents = 20000, Provenance = "lot:mill-9" }));
+                { AssetKind = "inventory", ItemId = "flour", Units = 40, CostCents = 20000, Provenance = "lot:mill-9", OwnerBusinessId = "biz-1" }));
             var relationship = new EmploymentRelationship
             {
                 Id = "emp-biz-1-43-baker", EmployeePersonId = 43, EmployerBusinessId = "biz-1",

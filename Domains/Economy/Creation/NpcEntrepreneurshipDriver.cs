@@ -369,6 +369,15 @@ namespace LandLedgers.Economy.Creation
             }
 
             string refusal = ctx.CreationPort.TryCreateBusiness(intent, diag, out NpcCreatedBusiness created);
+            if (refusal == null && created != null)
+            {
+                // R-01: scope the intent's formation assets to the created business.
+                foreach (NpcFormationAsset asset in intent.Assets)
+                {
+                    if (asset != null) asset.OwnerBusinessId = created.InstanceId;
+                }
+            }
+
             if (refusal != null || created == null)
             {
                 diag.Add($"Entrepreneurship: formation for P{person.id} refused: {refusal ?? "no business returned"} — no business created.");

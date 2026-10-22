@@ -311,7 +311,9 @@ namespace LandLedgers.Economy.Labor
                 foreach (NpcFormationAsset asset in evidence.FormationAssets)
                 {
                     if (asset == null || asset.Liquidated) continue;
-                    AssetAppraisalResult value = appraisal.AppraiseFormation(asset);
+                    // R-01: only the acting business's OWN formation assets.
+                    if (!string.Equals(asset.OwnerBusinessId, business.InstanceId, StringComparison.Ordinal)) continue;
+                    AssetAppraisalResult value = appraisal.AppraiseFormation(business.InstanceId, asset);
                     if (!value.HasEvidence || value.AskingPriceCents <= 0) continue;
                     if (formationCandidate == null || asset.CostCents > formationCandidate.CostCents)
                     {

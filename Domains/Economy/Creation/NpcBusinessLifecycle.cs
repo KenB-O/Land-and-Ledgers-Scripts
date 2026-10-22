@@ -617,6 +617,8 @@ namespace LandLedgers.Economy.Creation
                 foreach (NpcFormationAsset asset in context.AssetRegister.Assets)
                 {
                     if (asset == null || asset.Liquidated) continue;
+                    // R-01: only the closing business's OWN assets liquidate.
+                    if (!string.Equals(asset.OwnerBusinessId, record.BusinessInstanceId, StringComparison.Ordinal)) continue;
                     string refusal = context.Liquidation.Liquidate(record.BusinessInstanceId, asset, day, out NpcLiquidationSale sale);
                     if (refusal == null && sale != null)
                     {

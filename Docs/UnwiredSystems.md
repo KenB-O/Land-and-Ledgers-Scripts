@@ -69,6 +69,7 @@ found, the test fails loudly rather than passing silently.
 | StoreRestockService | Domains/Economy/Businesses/GeneralStore/StoreProcurementChain.cs | Domains/Economy/Businesses/GeneralStore | Orchestration/HouseholdSlice/HouseholdVerticalSlicePhaseH.cs |
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 | ScenarioObjectiveService | Orchestration/Scenarios/Generation/ScenarioObjectiveService.cs | Orchestration/Scenarios/Generation | Orchestration/Systems/SimulationSystemsHub.cs |
+| HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
 
 ## Notes per entry
 
@@ -108,6 +109,17 @@ found, the test fails loudly rather than passing silently.
   scenario start is a declared Unity scene bootstrap handoff, pending
   that hook. Registered here so the persisted-but-never-started state
   stays visible instead of reading as live.
+- `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
+  review fixes, R-13) executes a household move through the real
+  authorities — validated before anything changes, old occupancies ended,
+  new occupancies created under a recorded agreement, no partial moves.
+  It has no production caller: production occupancy changes go through
+  `HousingAuthority` directly (acquisitions, tenancies, estate and
+  absence paths), never through this service's all-or-nothing move
+  operation. Covered by editor tests only. It also remains in the
+  assembly scan's feature-internal baseline, which is inert duplication
+  (the scan accounts a type by caller, registry, or baseline — any one
+  suffices).
 
 ## Audited production-reachable systems (NOT registry entries)
 
@@ -137,6 +149,10 @@ note records their audited status so the question does not reopen:
   hub-owned and persisted, evaluation source-complete with the
   completion latch, production start pending the scene bootstrap hook
   (declared Unity handoff, deliberately not invented here).
+- Pass IX review fix (R-13): `HouseholdMoveService` registered — fully
+  implemented move execution with no production caller (verified by
+  source search: no references outside its own file in the production
+  tree).
 - Pass IX (WS6): `RealDemandSource` registered as unwired (A3-09, see its
   note — unwired by decision, not oversight). Production-reachable audit
   note added for the mine chain, freight, farm, estate, domestic-labor,

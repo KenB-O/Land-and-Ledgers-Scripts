@@ -24,8 +24,17 @@ namespace LandLedgers.Time
         private readonly Dictionary<string, DueEvent> byId =
             new Dictionary<string, DueEvent>(StringComparer.Ordinal);
 
-        /// <summary>All scheduled events, kept sorted by (dueGameSeconds, sequence).</summary>
-        private readonly List<DueEvent> ordered = new List<DueEvent>();
+        /// <summary>
+        /// Pass IX WS4 (A4-17): binary min-heap by (dueGameSeconds, sequence),
+        /// replacing the sorted list whose PopDue drained with RemoveAt(0)
+        /// (O(k·n) per cohort) and whose Schedule/Cancel shifted O(n) entries.
+        /// Heap push/pop are O(log n). Replacement and cancellation are lazy:
+        /// the superseded heap entry becomes stale (byId no longer maps its id
+        /// to that exact object) and is discarded when it reaches the top, so
+        /// the observable pop order — (dueGameSeconds, sequence) over live
+        /// events — is exactly the pre-index order.
+        /// </summary>
+        private readonly List<DueEvent> heap = new List<DueEvent>();
 
         private long nextSequence = 1;
 
@@ -44,15 +53,11 @@ namespace LandLedgers.Time
             }
 
             string id = "due-" + kind + "-" + (payloadRef ?? string.Empty);
-            DueEvent existing;
-            if (byId.TryGetValue(id, out existing))
-            {
-                ordered.Remove(existing);
-            }
-
+            // Replace-by-id: overwriting byId orphans any previous heap entry
+            // for this id (it becomes stale and is skipped lazily).
             var due = new DueEvent(id, kind, dueGameSeconds, payloadRef, nextSequence++);
             byId[id] = due;
-            InsertOrdered(due);
+            HeapPush(due);
             eventId = id;
             return null;
         }
@@ -73,15 +78,9 @@ namespace LandLedgers.Time
                 return "dueGameSeconds must be finite and >= 0 (got " + dueGameSeconds + ").";
             }
 
-            DueEvent existing;
-            if (byId.TryGetValue(eventId, out existing))
-            {
-                ordered.Remove(existing);
-            }
-
             var due = new DueEvent(eventId, kind, dueGameSeconds, payloadRef, nextSequence++);
             byId[eventId] = due;
-            InsertOrdered(due);
+            HeapPush(due);
             return null;
         }
 
@@ -93,12 +92,9 @@ namespace LandLedgers.Time
                 return;
             }
 
-            DueEvent existing;
-            if (byId.TryGetValue(eventId, out existing))
-            {
-                byId.Remove(eventId);
-                ordered.Remove(existing);
-            }
+            // Lazy removal: the heap entry for this id is now stale and is
+            // discarded when it reaches the heap top.
+            byId.Remove(eventId);
         }
 
         /// <summary>
@@ -108,10 +104,10 @@ namespace LandLedgers.Time
         public List<DueEvent> PopDue(float currentGameSeconds)
         {
             var due = new List<DueEvent>();
-            while (ordered.Count > 0 && ordered[0].DueGameSeconds <= currentGameSeconds)
+            DueEvent next;
+            while ((next = LiveTop()) != null && next.DueGameSeconds <= currentGameSeconds)
             {
-                DueEvent next = ordered[0];
-                ordered.RemoveAt(0);
+                HeapPopTop();
                 byId.Remove(next.EventId);
                 due.Add(next);
             }
@@ -122,7 +118,7 @@ namespace LandLedgers.Time
         /// <summary>Peeks the next due event without removing it (null when empty).</summary>
         public DueEvent PeekNext()
         {
-            return ordered.Count > 0 ? ordered[0] : null;
+            return LiveTop();
         }
 
         /// <summary>Cancels every event whose payloadRef matches (task/process cancelled).</summary>
@@ -155,16 +151,21 @@ namespace LandLedgers.Time
         public void Clear()
         {
             byId.Clear();
-            ordered.Clear();
+            heap.Clear();
             nextSequence = 1;
         }
 
         /// <summary>Pass IV: captures the schedule for the save pipeline.</summary>
         public DueEventSchedulerSaveDto CaptureSaveDto()
         {
+            // The DTO lists live events in (dueGameSeconds, sequence) order —
+            // exactly what the pre-index sorted list held. The heap itself is
+            // unordered, so the capture sorts the live set.
+            var live = new List<DueEvent>(byId.Values);
+            live.Sort(CompareEvents);
             return new DueEventSchedulerSaveDto
             {
-                events = new List<DueEvent>(ordered),
+                events = live,
                 nextSequence = nextSequence,
             };
         }
@@ -176,7 +177,7 @@ namespace LandLedgers.Time
         public void LoadFromSaveDto(DueEventSchedulerSaveDto dto)
         {
             byId.Clear();
-            ordered.Clear();
+            heap.Clear();
             nextSequence = 1;
             if (dto == null || dto.events == null)
             {
@@ -190,38 +191,99 @@ namespace LandLedgers.Time
                     continue;
                 }
 
-                DueEvent previous;
-                if (byId.TryGetValue(due.EventId, out previous))
-                {
-                    ordered.Remove(previous);
-                }
-
+                // A repeated id replaces the earlier entry (its heap entry
+                // becomes stale), matching the pre-index clear-then-load.
                 byId[due.EventId] = due;
-                InsertOrdered(due);
+                HeapPush(due);
                 nextSequence = Math.Max(nextSequence, due.Sequence + 1);
             }
 
             nextSequence = Math.Max(nextSequence, Math.Max(1, dto.nextSequence));
         }
 
-        private void InsertOrdered(DueEvent due)
+        /// <summary>An entry is live iff byId still maps its id to this exact object.</summary>
+        private bool IsLive(DueEvent candidate)
         {
-            int lo = 0;
-            int hi = ordered.Count;
-            while (lo < hi)
+            DueEvent current;
+            return candidate != null
+                && byId.TryGetValue(candidate.EventId, out current)
+                && ReferenceEquals(current, candidate);
+        }
+
+        /// <summary>Discards stale entries at the heap top; returns the live top or null.</summary>
+        private DueEvent LiveTop()
+        {
+            while (heap.Count > 0)
             {
-                int mid = (lo + hi) / 2;
-                if (CompareEvents(ordered[mid], due) < 0)
+                DueEvent top = heap[0];
+                if (IsLive(top))
                 {
-                    lo = mid + 1;
+                    return top;
                 }
-                else
-                {
-                    hi = mid;
-                }
+
+                HeapPopTop();
             }
 
-            ordered.Insert(lo, due);
+            return null;
+        }
+
+        private void HeapPush(DueEvent due)
+        {
+            heap.Add(due);
+            int index = heap.Count - 1;
+            while (index > 0)
+            {
+                int parent = (index - 1) / 2;
+                if (CompareEvents(heap[parent], heap[index]) <= 0)
+                {
+                    break;
+                }
+
+                DueEvent swap = heap[parent];
+                heap[parent] = heap[index];
+                heap[index] = swap;
+                index = parent;
+            }
+        }
+
+        /// <summary>Removes the heap top (live or stale). Heap must be non-empty.</summary>
+        private void HeapPopTop()
+        {
+            int lastIndex = heap.Count - 1;
+            DueEvent last = heap[lastIndex];
+            heap.RemoveAt(lastIndex);
+            if (lastIndex == 0)
+            {
+                return;
+            }
+
+            heap[0] = last;
+            int index = 0;
+            while (true)
+            {
+                int left = index * 2 + 1;
+                int right = left + 1;
+                int smallest = index;
+                if (left < heap.Count && CompareEvents(heap[left], heap[smallest]) < 0)
+                {
+                    smallest = left;
+                }
+
+                if (right < heap.Count && CompareEvents(heap[right], heap[smallest]) < 0)
+                {
+                    smallest = right;
+                }
+
+                if (smallest == index)
+                {
+                    break;
+                }
+
+                DueEvent swap = heap[index];
+                heap[index] = heap[smallest];
+                heap[smallest] = swap;
+                index = smallest;
+            }
         }
 
         private static int CompareEvents(DueEvent left, DueEvent right)

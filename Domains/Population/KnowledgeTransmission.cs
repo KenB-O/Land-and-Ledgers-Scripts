@@ -106,7 +106,99 @@ namespace LandLedgers.Population
     public sealed class KnowledgeTransmissionStore : IKnowledgeTransmissionStore
     {
         private readonly List<InformationPacket> packets = new List<InformationPacket>();
+
+        // Pass IX WS4 (A4-15b): indexes so RecordTransmission stops doing two
+        // full scans per insert (O(n^2) cumulative) and PacketsFor stops
+        // scanning every packet. The list above remains the save truth and
+        // full provenance history.
+        //  - packetsById: duplicate-packet-id refusal (ids are global).
+        //  - tellings: (recipient, subject, content, chain root) already
+        //    recorded — the duplicate-telling refusal. Subject compares
+        //    OrdinalIgnoreCase, content and root Ordinal, exactly as the
+        //    pre-index scan did.
+        //  - packetsByRecipient: per-recipient packets in insertion order,
+        //    so PacketsFor filters/sorts the same sequence the full scan
+        //    produced (identical results, identical sort input).
+        private readonly Dictionary<string, List<InformationPacket>> packetsById =
+            new Dictionary<string, List<InformationPacket>>(StringComparer.Ordinal);
+        private readonly HashSet<TellingKey> tellings = new HashSet<TellingKey>();
+        private readonly Dictionary<int, List<InformationPacket>> packetsByRecipient =
+            new Dictionary<int, List<InformationPacket>>();
+
         private int nextPacketSequence = 1;
+
+        private struct TellingKey : IEquatable<TellingKey>
+        {
+            private readonly int recipientPersonId;
+            private readonly string subject;
+            private readonly string contentSummary;
+            private readonly string chainRoot;
+
+            public TellingKey(int recipientPersonId, string subject, string contentSummary, string chainRoot)
+            {
+                this.recipientPersonId = recipientPersonId;
+                this.subject = subject ?? string.Empty;
+                this.contentSummary = contentSummary ?? string.Empty;
+                this.chainRoot = chainRoot ?? string.Empty;
+            }
+
+            public bool Equals(TellingKey other)
+            {
+                return recipientPersonId == other.recipientPersonId
+                    && string.Equals(subject, other.subject, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(contentSummary, other.contentSummary, StringComparison.Ordinal)
+                    && string.Equals(chainRoot, other.chainRoot, StringComparison.Ordinal);
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is TellingKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = recipientPersonId;
+                    hash = (hash * 397) ^ StringComparer.OrdinalIgnoreCase.GetHashCode(subject);
+                    hash = (hash * 397) ^ StringComparer.Ordinal.GetHashCode(contentSummary);
+                    hash = (hash * 397) ^ StringComparer.Ordinal.GetHashCode(chainRoot);
+                    return hash;
+                }
+            }
+        }
+
+        private void IndexPacket(InformationPacket packet)
+        {
+            if (packet == null)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(packet.PacketId))
+            {
+                List<InformationPacket> sameId;
+                if (!packetsById.TryGetValue(packet.PacketId, out sameId))
+                {
+                    sameId = new List<InformationPacket>();
+                    packetsById[packet.PacketId] = sameId;
+                }
+
+                sameId.Add(packet);
+            }
+
+            tellings.Add(new TellingKey(
+                packet.RecipientPersonId, packet.Subject, packet.ContentSummary, ChainRoot(packet)));
+
+            List<InformationPacket> bucket;
+            if (!packetsByRecipient.TryGetValue(packet.RecipientPersonId, out bucket))
+            {
+                bucket = new List<InformationPacket>();
+                packetsByRecipient[packet.RecipientPersonId] = bucket;
+            }
+
+            bucket.Add(packet);
+        }
 
         public IReadOnlyList<InformationPacket> AllPackets => packets;
         public int PacketCount => packets.Count;
@@ -126,30 +218,20 @@ namespace LandLedgers.Population
             if (string.IsNullOrWhiteSpace(packet.PacketId))
                 packet.PacketId = $"pkt-{nextPacketSequence++}";
 
-            for (int i = 0; i < packets.Count; i++)
-            {
-                if (packets[i] != null && string.Equals(packets[i].PacketId, packet.PacketId, StringComparison.Ordinal))
-                    return $"packet {packet.PacketId} is already recorded";
-            }
+            if (packetsById.ContainsKey(packet.PacketId))
+                return $"packet {packet.PacketId} is already recorded";
 
             // Duplicate transmissions of the same telling are refused: hearing
             // the same rumor twice from the same chain does not create a new
             // record, and never a new confirming source.
             string root = ChainRoot(packet);
-            for (int i = 0; i < packets.Count; i++)
+            if (tellings.Contains(new TellingKey(packet.RecipientPersonId, packet.Subject, packet.ContentSummary, root)))
             {
-                InformationPacket existing = packets[i];
-                if (existing == null) continue;
-                if (existing.RecipientPersonId == packet.RecipientPersonId
-                    && string.Equals(existing.Subject, packet.Subject, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(existing.ContentSummary, packet.ContentSummary, StringComparison.Ordinal)
-                    && string.Equals(ChainRoot(existing), root, StringComparison.Ordinal))
-                {
-                    return $"P{packet.RecipientPersonId} already holds this telling of '{packet.Subject}' (chain root {root})";
-                }
+                return $"P{packet.RecipientPersonId} already holds this telling of '{packet.Subject}' (chain root {root})";
             }
 
             packets.Add(packet);
+            IndexPacket(packet);
             diagnostics.Add($"KnowledgeTransmission: recorded {packet.PacketId} '{packet.Subject}' " +
                             $"P{packet.SpeakerPersonId} -> P{packet.RecipientPersonId} " +
                             $"(chain {packet.TransmissionChain}, rumor={packet.IsRumor}, confidence {packet.Confidence01:0.00}).");
@@ -159,10 +241,15 @@ namespace LandLedgers.Population
         public List<InformationPacket> PacketsFor(int personId, string subject)
         {
             var result = new List<InformationPacket>();
-            foreach (InformationPacket packet in packets)
+            List<InformationPacket> bucket;
+            if (!packetsByRecipient.TryGetValue(personId, out bucket))
+            {
+                return result;
+            }
+
+            foreach (InformationPacket packet in bucket)
             {
                 if (packet == null) continue;
-                if (packet.RecipientPersonId != personId) continue;
                 if (!string.IsNullOrWhiteSpace(subject)
                     && !string.Equals(packet.Subject, subject, StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -190,10 +277,15 @@ namespace LandLedgers.Population
         public bool HasPacket(int personId, string packetId)
         {
             if (string.IsNullOrWhiteSpace(packetId)) return false;
-            foreach (InformationPacket packet in packets)
+            List<InformationPacket> sameId;
+            if (!packetsById.TryGetValue(packetId, out sameId))
+                return false;
+            // Packet ids are globally unique in practice (duplicate ids are
+            // refused at record time); the per-id list keeps this exact even
+            // for a hand-built DTO carrying a repeated id.
+            foreach (InformationPacket packet in sameId)
             {
-                if (packet != null && packet.RecipientPersonId == personId
-                    && string.Equals(packet.PacketId, packetId, StringComparison.Ordinal))
+                if (packet != null && packet.RecipientPersonId == personId)
                     return true;
             }
             return false;
@@ -222,9 +314,19 @@ namespace LandLedgers.Population
         public void LoadFromSaveDto(KnowledgeTransmissionSaveDto dto)
         {
             packets.Clear();
+            packetsById.Clear();
+            tellings.Clear();
+            packetsByRecipient.Clear();
             nextPacketSequence = 1;
             if (dto == null) return;
-            if (dto.Packets != null) packets.AddRange(dto.Packets);
+            if (dto.Packets != null)
+            {
+                packets.AddRange(dto.Packets);
+                foreach (InformationPacket packet in packets)
+                {
+                    IndexPacket(packet);
+                }
+            }
             nextPacketSequence = Math.Max(1, dto.NextPacketSequence);
         }
     }

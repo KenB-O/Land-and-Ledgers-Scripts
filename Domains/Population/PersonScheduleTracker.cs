@@ -86,9 +86,86 @@ namespace LandLedgers.Population
     public sealed class PersonScheduleTracker
     {
         private readonly List<PersonActivityReservation> reservations = new List<PersonActivityReservation>();
+
+        // Pass IX WS4 (A4-15a): index by (person, day) so queries stop scaling
+        // with total campaign history. The append-only list above remains the
+        // save truth and the full history; buckets hold the same reservation
+        // objects in the same per-(person, day) insertion order, so every
+        // query returns exactly what the full-history scan returned. The id
+        // map makes Release O(1) instead of a full-history scan.
+        private readonly Dictionary<long, List<PersonActivityReservation>> reservationsByPersonDay =
+            new Dictionary<long, List<PersonActivityReservation>>(PersonDayKeyComparer.Instance);
+
+        /// <summary>
+        /// Strong hash for (person, day) keys: the default long hash
+        /// (low ^ high bits) has only ~13 bits of entropy for realistic
+        /// person ids and day indexes, which collapsed dictionary buckets
+        /// into long chains at campaign scale (measured: 100k-reservation
+        /// restore grew ~10x for 4x data). A splitmix64 finalizer spreads
+        /// the key; equality is unchanged, so semantics are unchanged.
+        /// </summary>
+        private sealed class PersonDayKeyComparer : IEqualityComparer<long>
+        {
+            public static readonly PersonDayKeyComparer Instance = new PersonDayKeyComparer();
+
+            public bool Equals(long x, long y) => x == y;
+
+            public int GetHashCode(long key)
+            {
+                unchecked
+                {
+                    ulong x = (ulong)key + 0x9E3779B97F4A7C15UL;
+                    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9UL;
+                    x = (x ^ (x >> 27)) * 0x94D049BB133111EBUL;
+                    x ^= x >> 31;
+                    return (int)x;
+                }
+            }
+        }
+        private readonly Dictionary<string, PersonActivityReservation> reservationsById =
+            new Dictionary<string, PersonActivityReservation>(StringComparer.Ordinal);
+
         private int nextReservationSequence;
 
         public IReadOnlyList<PersonActivityReservation> Reservations => reservations;
+
+        private static long PersonDayKey(int personId, int dayIndex)
+        {
+            return ((long)personId << 32) | (uint)dayIndex;
+        }
+
+        private List<PersonActivityReservation> BucketFor(int personId, int dayIndex)
+        {
+            List<PersonActivityReservation> bucket;
+            return reservationsByPersonDay.TryGetValue(PersonDayKey(personId, dayIndex), out bucket)
+                ? bucket
+                : null;
+        }
+
+        private void IndexReservation(PersonActivityReservation reservation)
+        {
+            if (reservation == null)
+            {
+                return;
+            }
+
+            long key = PersonDayKey(reservation.PersonId, reservation.DayIndex);
+            List<PersonActivityReservation> bucket;
+            if (!reservationsByPersonDay.TryGetValue(key, out bucket))
+            {
+                bucket = new List<PersonActivityReservation>();
+                reservationsByPersonDay[key] = bucket;
+            }
+
+            bucket.Add(reservation);
+            // First wins: the pre-index Release scanned the list in order and
+            // released the first reservation carrying the id.
+            if (!string.IsNullOrEmpty(reservation.ReservationId)
+                && !reservationsById.ContainsKey(reservation.ReservationId))
+            {
+                reservationsById[reservation.ReservationId] = reservation;
+            }
+        }
 
         /// <summary>
         /// Reserves an activity window. Returns null on success, or a loud
@@ -116,24 +193,28 @@ namespace LandLedgers.Population
                 return $"Refused: P{personId} {activity} [{start}-{end}] runs past midnight — split across days instead.";
             }
 
-            for (int i = 0; i < reservations.Count; i++)
+            List<PersonActivityReservation> bucket = BucketFor(personId, dayIndex);
+            if (bucket != null)
             {
-                PersonActivityReservation existing = reservations[i];
-                if (existing == null || existing.Released || existing.PersonId != personId || existing.DayIndex != dayIndex)
+                for (int i = 0; i < bucket.Count; i++)
                 {
-                    continue;
-                }
+                    PersonActivityReservation existing = bucket[i];
+                    if (existing == null || existing.Released)
+                    {
+                        continue;
+                    }
 
-                if (start < existing.EndMinuteOfDay && existing.StartMinuteOfDay < end)
-                {
-                    return $"Refused: P{personId} is already {existing.Activity} " +
-                        $"[{existing.StartMinuteOfDay}-{existing.EndMinuteOfDay}] on day {dayIndex} " +
-                        $"({existing.Label}); cannot also do {activity} [{start}-{end}]. " +
-                        "Person time is authoritative — one activity at a time.";
+                    if (start < existing.EndMinuteOfDay && existing.StartMinuteOfDay < end)
+                    {
+                        return $"Refused: P{personId} is already {existing.Activity} " +
+                            $"[{existing.StartMinuteOfDay}-{existing.EndMinuteOfDay}] on day {dayIndex} " +
+                            $"({existing.Label}); cannot also do {activity} [{start}-{end}]. " +
+                            "Person time is authoritative — one activity at a time.";
+                    }
                 }
             }
 
-            reservations.Add(new PersonActivityReservation
+            var reservation = new PersonActivityReservation
             {
                 ReservationId = $"sched-{dayIndex}-{nextReservationSequence++}",
                 PersonId = personId,
@@ -142,7 +223,9 @@ namespace LandLedgers.Population
                 StartMinuteOfDay = start,
                 DurationMinutes = duration,
                 Label = label ?? string.Empty,
-            });
+            };
+            reservations.Add(reservation);
+            IndexReservation(reservation);
             return null;
         }
 
@@ -154,14 +237,10 @@ namespace LandLedgers.Population
                 return;
             }
 
-            for (int i = 0; i < reservations.Count; i++)
+            PersonActivityReservation reservation;
+            if (reservationsById.TryGetValue(reservationId, out reservation) && reservation != null)
             {
-                if (reservations[i] != null &&
-                    string.Equals(reservations[i].ReservationId, reservationId, StringComparison.Ordinal))
-                {
-                    reservations[i].Released = true;
-                    return;
-                }
+                reservation.Released = true;
             }
         }
 
@@ -169,10 +248,16 @@ namespace LandLedgers.Population
         public List<PersonActivityReservation> ActiveFor(int personId, int dayIndex)
         {
             var result = new List<PersonActivityReservation>();
-            for (int i = 0; i < reservations.Count; i++)
+            List<PersonActivityReservation> bucket = BucketFor(personId, dayIndex);
+            if (bucket == null)
             {
-                PersonActivityReservation reservation = reservations[i];
-                if (reservation != null && !reservation.Released && reservation.PersonId == personId && reservation.DayIndex == dayIndex)
+                return result;
+            }
+
+            for (int i = 0; i < bucket.Count; i++)
+            {
+                PersonActivityReservation reservation = bucket[i];
+                if (reservation != null && !reservation.Released)
                 {
                     result.Add(reservation);
                 }
@@ -187,18 +272,22 @@ namespace LandLedgers.Population
         /// </summary>
         public string DescribeActivity(int personId, int dayIndex, int minuteOfDay)
         {
-            for (int i = 0; i < reservations.Count; i++)
+            List<PersonActivityReservation> bucket = BucketFor(personId, dayIndex);
+            if (bucket != null)
             {
-                PersonActivityReservation reservation = reservations[i];
-                if (reservation == null || reservation.Released || reservation.PersonId != personId || reservation.DayIndex != dayIndex)
+                for (int i = 0; i < bucket.Count; i++)
                 {
-                    continue;
-                }
+                    PersonActivityReservation reservation = bucket[i];
+                    if (reservation == null || reservation.Released)
+                    {
+                        continue;
+                    }
 
-                if (minuteOfDay >= reservation.StartMinuteOfDay && minuteOfDay < reservation.EndMinuteOfDay)
-                {
-                    return $"P{personId} is {reservation.Activity} " +
-                        $"[{reservation.StartMinuteOfDay}-{reservation.EndMinuteOfDay}] — {reservation.Label}";
+                    if (minuteOfDay >= reservation.StartMinuteOfDay && minuteOfDay < reservation.EndMinuteOfDay)
+                    {
+                        return $"P{personId} is {reservation.Activity} " +
+                            $"[{reservation.StartMinuteOfDay}-{reservation.EndMinuteOfDay}] — {reservation.Label}";
+                    }
                 }
             }
 
@@ -212,10 +301,16 @@ namespace LandLedgers.Population
             int duration = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
             int end = start + duration;
 
-            for (int i = 0; i < reservations.Count; i++)
+            List<PersonActivityReservation> bucket = BucketFor(personId, dayIndex);
+            if (bucket == null)
             {
-                PersonActivityReservation existing = reservations[i];
-                if (existing == null || existing.Released || existing.PersonId != personId || existing.DayIndex != dayIndex)
+                return true;
+            }
+
+            for (int i = 0; i < bucket.Count; i++)
+            {
+                PersonActivityReservation existing = bucket[i];
+                if (existing == null || existing.Released)
                 {
                     continue;
                 }
@@ -243,6 +338,8 @@ namespace LandLedgers.Population
         public void LoadFromSaveDto(PersonScheduleTrackerSaveDto dto)
         {
             reservations.Clear();
+            reservationsByPersonDay.Clear();
+            reservationsById.Clear();
             nextReservationSequence = 0;
             if (dto == null)
             {
@@ -252,6 +349,10 @@ namespace LandLedgers.Population
             if (dto.reservations != null)
             {
                 reservations.AddRange(dto.reservations);
+                for (int i = 0; i < reservations.Count; i++)
+                {
+                    IndexReservation(reservations[i]);
+                }
             }
 
             nextReservationSequence = Math.Max(0, dto.nextReservationSequence);

@@ -943,7 +943,7 @@ namespace LandLedgers.Orchestration.Systems
                 : null;
             NpcPropertyLifeReport report = hub.NpcPropertyLife.DriveNpcPropertyLife(
                 hub.CreditCash, hub.NpcPropertyLife.Taxes, hub.FinancialObligations,
-                hub.CivicTreasury, absoluteDayIndex, diag, saleContext);
+                hub.CivicTreasury, absoluteDayIndex, diag, saleContext, hub.Ids);
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] npc property life day " + absoluteDayIndex + ": " +

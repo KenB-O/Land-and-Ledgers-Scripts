@@ -198,8 +198,11 @@ namespace LandLedgers.EditorTests.World
             NpcPropertyHolding holding = f.Life.RegisterHolding("parcel-1", building.BuildingId, 7, 0, 100000,
                 "", "", NpcPropertyHoldingKind.OwnerOccupied, f.Diag);
 
-            // Tax due on the service's own book (the drive's audit book).
-            TaxAssessment assessment = f.Life.LevyPropertyTax(f.Life.Taxes, f.Ids, holding, 1880, 1200, 100, 100, 600, 10, f.Diag);
+            // Tax due on the service's own book (the drive's audit book) —
+            // levied for the CURRENT tax year, so the drive's own annual
+            // catch-up levy (R-07) sees this year's assessment as present.
+            TaxAssessment assessment = f.Life.LevyPropertyTax(f.Life.Taxes, f.Ids, holding,
+                PropertyTaxCalibration.TaxYearForDay(50), 1200, 100, 100, 600, 10, f.Diag);
             Assert.IsNotNull(assessment);
             // Maintenance need the owner can afford.
             NpcPropertyMaintenanceNeed need = f.Life.ReportMaintenanceNeed(holding, "fix gate", 800, 10, f.Diag);

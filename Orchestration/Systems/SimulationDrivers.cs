@@ -1480,6 +1480,35 @@ namespace LandLedgers.Orchestration.Systems
                     "roads closed; journeys route around or refuse (NX-2C).");
             }
 
+            // R-03: wire the postage payers from real production context —
+            // recruitment letters are paid by the hiring business's till
+            // (resolved from the shared business runtime), and registered-
+            // mail senders / return-receipt requesters are paid by their
+            // own household ledger (person -> active household membership
+            // -> household ledger; falling back to the person's recorded
+            // household id). Unresolvable senders get no payer.
+            if (sharedBusinessRuntime != null)
+            {
+                hub.Recruiting.SenderBusinessRuntimeResolver = id =>
+                {
+                    BusinessInstanceState found;
+                    return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found.RuntimeState : null;
+                };
+            }
+
+            hub.RegisteredMail.PersonHouseholdLedgerResolver = personId =>
+            {
+                if (personId < 0) return null;
+                int householdId = householdMemberships != null ? householdMemberships.GetActiveHouseholdId(personId) : -1;
+                if (householdId < 0 && populationManager != null && populationManager.State != null)
+                {
+                    PersonState person = populationManager.State.GetPerson(personId);
+                    if (person != null) householdId = person.householdId;
+                }
+
+                return householdId >= 0 ? hub.HouseholdLedgers.Get(householdId) : null;
+            };
+
             hub.Postal.AdvanceDay(hub.Journeys, absoluteDayIndex, diag);
             hub.MoneyOrders.AdvanceDay(absoluteDayIndex, diag);
             hub.RegisteredMail.AuditOverdue(absoluteDayIndex, diag);

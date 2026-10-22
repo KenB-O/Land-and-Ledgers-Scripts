@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Time;
 
 namespace LandLedgers.Population
@@ -304,28 +305,36 @@ namespace LandLedgers.Population
             }
         }
 
-        private static void MigrateOut(DemographicDriverContext ctx, PersonState person, bool distressed)
+        public static MigrationOutcome MigrateOut(DemographicDriverContext ctx, PersonState person, bool distressed)
         {
+            var outcome = new MigrationOutcome
+            {
+                PersonId = person.id,
+                Distressed = distressed,
+                DayIndex = ctx.CurrentDayIndex,
+            };
             ctx.Lifecycle.RemoveMember(person.id, ctx.CurrentDayIndex, distressed ? "migrated off-map (distress)" : "migrated off-map (opportunity)");
             person.isOffMap = true;
             // Pass IX (A2-10): migration ends local employment, mirroring the
             // death path (PASS6-012b). Otherwise the departed person's Active
             // employments draw full wages forever — no payroll path checked
             // isOffMap. Identity, kinship, ownership, and debts are preserved;
-            // only the local job ends (reason Departed, history retained).
+            // only the local job ends (reason MigratedOut, history retained).
             if (ctx.Employments != null)
             {
-                int ended = ctx.Employments.EndEmploymentsForDeparture(person.id, ctx.CurrentDayIndex);
-                if (ended > 0)
+                outcome.EndedEmployments = ctx.Employments.EndEmploymentByReason(
+                    person.id, EmploymentEndReason.MigratedOut, ctx.CurrentDayIndex);
+                if (outcome.EndedEmployments.Count > 0)
                 {
                     ctx.Diagnostics.Add(
-                        $"MigrationDriver: ended {ended} employment(s) for departed P{person.id}.");
+                        $"MigrationDriver: ended {outcome.EndedEmployments.Count} employment(s) for departed P{person.id}.");
                 }
             }
 
             ctx.Diagnostics.Add(
                 $"MigrationDriver: P{person.id} ({person.DisplayName}) migrated off-map " +
                 $"({(distressed ? "distress" : "opportunity")}); identity, kinship, ownership, and debts preserved.");
+            return outcome;
         }
 
         private static void MigrateIn(DemographicDriverContext ctx, int year, int month, int day)

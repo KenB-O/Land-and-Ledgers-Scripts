@@ -302,7 +302,7 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void A2_10_Migration_EndsEmployment_WithDepartedReason()
+        public void A2_10_Migration_EndsEmployment_WithMigratedOutReason()
         {
             var w = new DemoWorld(Day1892(3, 15));
             PersonState migrant = w.MakePerson(1870, 1, 1, false, "Migrant");
@@ -333,10 +333,10 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(migrated, "the distressed adult migrates out");
             Assert.AreEqual(EmploymentLifecycleState.Ended, employment.LifecycleState,
                 "migration ends the local employment");
-            Assert.AreEqual(EmploymentEndReason.Departed, employment.EndReason,
-                "the end reason is the appended Departed value (existing values never renumbered)");
+            Assert.AreEqual(EmploymentEndReason.MigratedOut, employment.EndReason,
+                "the end reason is the appended MigratedOut value (existing values never renumbered)");
             Assert.AreEqual(5, (int)EmploymentEndReason.Death, "append-only: Death keeps its serialized value");
-            Assert.AreEqual(6, (int)EmploymentEndReason.Departed);
+            Assert.AreEqual(6, (int)EmploymentEndReason.MigratedOut);
             Assert.AreEqual(0, w.Employments.GetActiveByEmployee(migrant.id).Count);
         }
 
@@ -735,7 +735,7 @@ namespace LandLedgers.EditorTests.Population
             var sweep = new HousingAbsenceSweep();
             HousingAbsenceSweepResult result = sweep.Sweep(
                 housing,
-                personId => personId == 1 || personId == 2, // both Departed/absent
+                personId => personId == 1 || personId == 2, // both departed/absent
                 6,
                 diag,
                 hasValidAbsenceArrangement: AbsenceArrangementPolicies.LenientPolicy(

@@ -37,7 +37,7 @@ namespace LandLedgers.Economy
         /// Pass IX (A2-10): the employee migrated off-map. Appended only —
         /// serialized values are never renumbered.
         /// </summary>
-        Departed = 6,
+        MigratedOut = 6,
     }
 
     /// <summary>
@@ -236,31 +236,49 @@ namespace LandLedgers.Economy
             return active.Count;
         }
 
+        /// <summary>Pass IX (A2-10): number of active employments a person currently holds.</summary>
+        public int CountActiveEmploymentsOfPerson(int personId)
+        {
+            return GetActiveByEmployee(personId).Count;
+        }
+
         /// <summary>
-        /// Pass IX (A2-10): ends every active employment for a person who
-        /// migrated off-map, mirroring EndEmploymentsForDeceased. Without
-        /// this, payroll kept paying departed migrants full wages forever
-        /// (no payroll path checked isOffMap). The records are retained as
-        /// history with EndReason.Departed; a returning migrant re-seeks work
-        /// through the ordinary recruitment paths. Returns the number ended.
+        /// Pass IX (A2-10): the generic end-employment-by-reason capability —
+        /// ends every active employment held by the person with the given
+        /// reason and returns the ended records (history retained, never
+        /// deleted). Death and migration are the two production callers.
         /// </summary>
-        public int EndEmploymentsForDeparture(int personId, int dayIndex)
+        public List<EmploymentRelationship> EndEmploymentByReason(
+            int personId, EmploymentEndReason reason, int dayIndex)
         {
             List<EmploymentRelationship> active = GetActiveByEmployee(personId);
             for (int i = 0; i < active.Count; i++)
             {
                 active[i].LifecycleState = EmploymentLifecycleState.Ended;
                 active[i].EndDayIndex = dayIndex;
-                active[i].EndReason = EmploymentEndReason.Departed;
+                active[i].EndReason = reason;
             }
 
             if (active.Count > 0)
             {
                 diagnostics.Add(
-                    $"EmploymentRelationshipRegistry: ended {active.Count} active employment(s) for departed P{personId}.");
+                    $"EmploymentRelationshipRegistry: ended {active.Count} active employment(s) for P{personId} ({reason}).");
             }
 
-            return active.Count;
+            return active;
+        }
+
+        /// <summary>
+        /// Pass IX (A2-10): ends every active employment for a person who
+        /// migrated off-map, mirroring EndEmploymentsForDeceased. Without
+        /// this, payroll kept paying departed migrants full wages forever
+        /// (no payroll path checked isOffMap). The records are retained as
+        /// history with EndReason.MigratedOut; a returning migrant re-seeks
+        /// work through the ordinary recruitment paths. Returns the number ended.
+        /// </summary>
+        public int EndEmploymentsForDeparture(int personId, int dayIndex)
+        {
+            return EndEmploymentByReason(personId, EmploymentEndReason.MigratedOut, dayIndex).Count;
         }
 
         /// <summary>

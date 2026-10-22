@@ -107,7 +107,11 @@ namespace LandLedgers.Orchestration.Systems
         // drivers. The attendance accumulator and the social/estate drives
         // are plain C# (harness-tested); this MonoBehaviour only forwards
         // the hub's real authorities into them on the tick/day boundaries.
-        private readonly WeeklyAttendanceAccumulator weeklyAttendance = new WeeklyAttendanceAccumulator();
+        // The accumulator is hub-owned (it rides the systems save DTO);
+        // the local fallback only covers the pre-hub bootstrap window.
+        private readonly WeeklyAttendanceAccumulator fallbackWeeklyAttendance = new WeeklyAttendanceAccumulator();
+        private WeeklyAttendanceAccumulator weeklyAttendance =>
+            hub != null ? hub.WeeklyAttendance : fallbackWeeklyAttendance;
         private readonly DailyActivityPlanner dailyActivityPlanner = new DailyActivityPlanner();
         private readonly FamilyLaborLedger domesticFamilyLabor = new FamilyLaborLedger();
         private readonly EstateAdministrationService estateAdministration = new EstateAdministrationService();
@@ -115,6 +119,9 @@ namespace LandLedgers.Orchestration.Systems
         private readonly WillContestService estateContests = new WillContestService();
         private EstateLifecycleDriver estateLifecycleDriver;
         private OffMapJourneyAuthority offMapJourneys;
+        // Pass IX (A2-04): watermark of the last game-second value forwarded
+        // to DomesticLaborDriver.AdvanceTick from OnShortTick.
+        private float previousDomesticTickGameSeconds = -1f;
 
         /// <summary>
         /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
@@ -781,6 +788,28 @@ namespace LandLedgers.Orchestration.Systems
             return null;
         }
 
+        /// <summary>
+        /// Pass IX (WS2): the daily demographic drive. PopulationManager runs
+        /// births due, mortality, birthday scheduling, and the monthly
+        /// conceptions/marriages/migration/splits (idempotent per day via
+        /// deterministic draws). Estates opened by today's mortality advance
+        /// one lifecycle stage beside it (A2-09 / PASS7-001), and served
+        /// domestic pending entries older than 2 days are pruned so the
+        /// persisted pending list cannot grow monotonically (A2-04). The
+        /// daily activity planner (A2-03) runs later in OnDayChanged, after
+        /// the work-time budgets roll — it is part of this same daily
+        /// sequence, not a separate fixture-level hook.
+        /// </summary>
+        private void DriveDemographicDay(int absoluteDayIndex)
+        {
+            populationManager?.DriveDemographicDay(absoluteDayIndex);
+            DriveEstateAdvancement(absoluteDayIndex);
+            if (hub?.DomesticLaborDriver != null)
+            {
+                hub.DomesticLaborDriver.PruneStalePending(absoluteDayIndex);
+            }
+        }
+
         private void OnDayChanged(SimulationDateChangedContext context)
         {
             if (hub == null || timeManager == null)
@@ -794,21 +823,15 @@ namespace LandLedgers.Orchestration.Systems
             // daily drivers advance.
             ProcessDueEvents();
 
-            // Pass V (P0-2/P1-2): demographic day — births due, mortality,
-            // birthday scheduling, and monthly conceptions/marriages/migration/
-            // household splits. Idempotent per day via deterministic draws.
-            populationManager?.DriveDemographicDay(absoluteDayIndex);
+            // Pass V (P0-2/P1-2) + Pass IX (WS2): the demographic drive —
+            // births due, mortality, monthly demographic drivers, estate
+            // advancement beside mortality, and the domestic pending prune.
+            DriveDemographicDay(absoluteDayIndex);
 
             // Population may be generated after Awake; bind the now-real
             // household ledgers before any daily finance workflow can open a
             // cash window.
             RefreshHouseholdCashBindings();
-
-            // Pass IX (A2-09 / PASS7-001): estates opened by today's
-            // mortality advance one lifecycle stage per day beside the
-            // demographic drive (inventory → claims → distribution →
-            // closure) instead of stalling at Opened forever.
-            DriveEstateAdvancement(absoluteDayIndex);
 
             // Pass IX (A2-05): snapshot YESTERDAY's real worked minutes into
             // the weekly attendance accumulator BEFORE EnsureDay resets the
@@ -2782,8 +2805,11 @@ namespace LandLedgers.Orchestration.Systems
             // pending list); without this tick call no meal-prep, fuel,
             // animal-care, or chore task ever executed in production.
             // Mirrors the LivingWorldSim tick usage.
-            if (timeManager != null)
+            if (timeManager != null && timeManager.AbsoluteGameSeconds > previousDomesticTickGameSeconds)
             {
+                // Watermark: only forward motion advances domestic labor, so
+                // a repeated/paused tick can never re-start a pending task.
+                previousDomesticTickGameSeconds = timeManager.AbsoluteGameSeconds;
                 var domesticDiag = new List<string>();
                 hub.DomesticLaborDriver.AdvanceTick(
                     timeManager.AbsoluteGameSeconds,

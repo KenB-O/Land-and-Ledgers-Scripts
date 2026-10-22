@@ -88,6 +88,14 @@ namespace LandLedgers.Population
         public bool hostsBoarders;
         public bool isBoardingHouseLodging;
         public string boardingBusinessInstanceId = string.Empty;
+        /// <summary>
+        /// Pass IX (A2-11, additive): the employer business of the household's
+        /// founder, copied from the authoritative employment registry record
+        /// when a split candidate household is built. Empty when the founder
+        /// holds no active employment. Never read as an employment authority —
+        /// the registry remains the truth.
+        /// </summary>
+        public string EmployerBusinessId = string.Empty;
         public bool isBoardingHouseGuestHousehold;
         public string lodgingBusinessInstanceId = string.Empty;
         public bool isRenterHousehold;

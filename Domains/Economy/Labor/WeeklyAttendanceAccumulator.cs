@@ -146,6 +146,53 @@ namespace LandLedgers.Economy.Labor
             };
         }
 
+        /// <summary>
+        /// Pass IX (A2-05): clears every accumulated week — the save-load seam
+        /// calls this (via LoadFromSaveDto) so a restored game never inherits
+        /// attendance from a previous session.
+        /// </summary>
+        public void Clear()
+        {
+            minutesByPersonWeek.Clear();
+            lastObservedDayIndex = -1;
+        }
+
+        /// <summary>Save support (CLN-1 pattern): capture.</summary>
+        public WeeklyAttendanceSaveDto CaptureSaveDto()
+        {
+            var dto = new WeeklyAttendanceSaveDto { lastObservedDayIndex = lastObservedDayIndex };
+            foreach (KeyValuePair<long, int> entry in minutesByPersonWeek)
+            {
+                dto.personIds.Add((int)(entry.Key & 0xFFFFFFFFL));
+                dto.weekIndexes.Add((int)(entry.Key >> 32));
+                dto.minutes.Add(entry.Value);
+            }
+
+            return dto;
+        }
+
+        /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
+        public void LoadFromSaveDto(WeeklyAttendanceSaveDto dto)
+        {
+            Clear();
+            if (dto == null || dto.personIds == null || dto.weekIndexes == null || dto.minutes == null)
+            {
+                return;
+            }
+
+            lastObservedDayIndex = dto.lastObservedDayIndex;
+            int count = Math.Min(dto.personIds.Count, Math.Min(dto.weekIndexes.Count, dto.minutes.Count));
+            for (int i = 0; i < count; i++)
+            {
+                if (dto.personIds[i] < 0 || dto.weekIndexes[i] < 0 || dto.minutes[i] <= 0)
+                {
+                    continue;
+                }
+
+                minutesByPersonWeek[Key(dto.personIds[i], dto.weekIndexes[i])] = dto.minutes[i];
+            }
+        }
+
         /// <summary>Installs the provider on one business runtime state (null-safe).</summary>
         public void InstallOn(
             BusinessRuntimeState runtimeState,
@@ -159,5 +206,15 @@ namespace LandLedgers.Economy.Labor
 
             runtimeState.WeeklyAttendanceProvider = BuildProvider(employments, personUnavailableForPayroll);
         }
+    }
+
+    /// <summary>Save DTO for the weekly attendance accumulator (parallel lists, CLN-1 pattern).</summary>
+    [Serializable]
+    public sealed class WeeklyAttendanceSaveDto
+    {
+        public List<int> personIds = new List<int>();
+        public List<int> weekIndexes = new List<int>();
+        public List<int> minutes = new List<int>();
+        public int lastObservedDayIndex = -1;
     }
 }

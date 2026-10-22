@@ -52,6 +52,8 @@ namespace LandLedgers.Persistence
         public CapabilityRegistrySaveDto capabilities = new();
         public OperatingLedgerSaveDto operatingLedger = new();
         public EmploymentRegistrySaveDto employments = new();
+        /// <summary>Pass IX (A2-05, additive): production weekly attendance totals feeding payroll.</summary>
+        public WeeklyAttendanceSaveDto weeklyAttendance = new();
         public FarmSliceSaveDto farmSlice = new();
         public LiabilityLedgerSaveDto liabilities = new();
         /// <summary>Shared credit authority: one current balance per obligation.</summary>

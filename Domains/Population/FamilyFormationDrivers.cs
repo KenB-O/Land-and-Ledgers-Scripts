@@ -125,17 +125,11 @@ namespace LandLedgers.Population
                 return -1;
             }
 
-            List<int> spouses = ctx.Kinship.GetSpouses(personId);
-            for (int i = 0; i < spouses.Count; i++)
+            return ctx.Kinship.GetCurrentSpouseId(personId, spouseId =>
             {
-                PersonState spouse = ctx.Population.GetPerson(spouses[i]);
-                if (spouse != null && spouse.deathDayIndex < 0)
-                {
-                    return spouse.id;
-                }
-            }
-
-            return -1;
+                PersonState spouse = ctx.Population.GetPerson(spouseId);
+                return spouse != null && spouse.deathDayIndex < 0;
+            });
         }
 
         /// <summary>Pass IX (A2-02): true when the person has a living spouse.</summary>
@@ -538,6 +532,18 @@ namespace LandLedgers.Population
             {
                 ctx.Diagnostics.Add($"HouseholdSplitDriver: FormHousehold refused for P{person.id}.");
                 return;
+            }
+
+            // Pass IX (A2-11): stamp the new household with the founder's
+            // employer from the authoritative employment registry (the same
+            // record that made the split eligible), for inspection/location.
+            if (ctx.Employments != null)
+            {
+                List<EmploymentRelationship> active = ctx.Employments.GetActiveByEmployee(person.id);
+                if (active.Count > 0 && active[0] != null)
+                {
+                    household.EmployerBusinessId = active[0].EmployerBusinessId ?? string.Empty;
+                }
             }
 
             // The founder is already registered by FormHousehold; the split is

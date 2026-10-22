@@ -117,9 +117,33 @@ namespace LandLedgers.Economy.Labor
         private readonly List<ManagerPendingRequest> pendingRequests = new List<ManagerPendingRequest>();
         private readonly List<ManagerProcurementShipment> shipments = new List<ManagerProcurementShipment>();
 
+        // Pass IX WS4 (A4-15c): the in-transit subset of `shipments`, in ledger
+        // insertion order. The full list remains the save truth and audit
+        // trail (completed shipments are never removed from it); this index
+        // lets the daily AdvanceShipments pass and HasInTransitShipment scale
+        // with ACTIVE shipments instead of total campaign history. Membership
+        // is maintained at the only points a shipment can become or cease to
+        // be in transit: AddShipment, LoadFromSaveDto, and
+        // MarkShipmentNoLongerInTransit (called by AdvanceShipments when it
+        // transitions a shipment to Delivered/Failed).
+        private readonly List<ManagerProcurementShipment> inTransitShipments = new List<ManagerProcurementShipment>();
+
         public IReadOnlyList<ManagerExecutedActionRecord> Actions => actions;
         public IReadOnlyList<ManagerPendingRequest> PendingRequests => pendingRequests;
         public IReadOnlyList<ManagerProcurementShipment> Shipments => shipments;
+
+        /// <summary>Live view of the in-transit index, in ledger order.
+        /// Callers that mutate shipment status while iterating must copy it.</summary>
+        public IReadOnlyList<ManagerProcurementShipment> InTransitShipments => inTransitShipments;
+
+        /// <summary>Removes a shipment from the in-transit index after its
+        /// status has transitioned away from "InTransit". The shipment itself
+        /// stays in the full ledger history.</summary>
+        public void MarkShipmentNoLongerInTransit(ManagerProcurementShipment shipment)
+        {
+            if (shipment == null) return;
+            inTransitShipments.Remove(shipment);
+        }
 
         public bool HasExecuted(string actionKey)
         {
@@ -164,9 +188,9 @@ namespace LandLedgers.Economy.Labor
 
         public bool HasInTransitShipment(string businessInstanceId, string productId)
         {
-            for (int i = 0; i < shipments.Count; i++)
+            for (int i = 0; i < inTransitShipments.Count; i++)
             {
-                ManagerProcurementShipment shipment = shipments[i];
+                ManagerProcurementShipment shipment = inTransitShipments[i];
                 if (shipment != null
                     && string.Equals(shipment.Status, "InTransit", StringComparison.Ordinal)
                     && string.Equals(shipment.BusinessInstanceId, businessInstanceId, StringComparison.Ordinal)
@@ -185,6 +209,8 @@ namespace LandLedgers.Economy.Labor
                     return;
             }
             shipments.Add(shipment);
+            if (string.Equals(shipment.Status, "InTransit", StringComparison.Ordinal))
+                inTransitShipments.Add(shipment);
         }
 
         public ManagerDecisionExecutionSaveDto CaptureSaveDto()
@@ -202,10 +228,20 @@ namespace LandLedgers.Economy.Labor
             actions.Clear();
             pendingRequests.Clear();
             shipments.Clear();
+            inTransitShipments.Clear();
             if (dto == null) return;
             if (dto.Actions != null) actions.AddRange(dto.Actions);
             if (dto.PendingRequests != null) pendingRequests.AddRange(dto.PendingRequests);
-            if (dto.Shipments != null) shipments.AddRange(dto.Shipments);
+            if (dto.Shipments != null)
+            {
+                shipments.AddRange(dto.Shipments);
+                for (int i = 0; i < shipments.Count; i++)
+                {
+                    ManagerProcurementShipment shipment = shipments[i];
+                    if (shipment != null && string.Equals(shipment.Status, "InTransit", StringComparison.Ordinal))
+                        inTransitShipments.Add(shipment);
+                }
+            }
         }
     }
 
@@ -392,7 +428,13 @@ namespace LandLedgers.Economy.Labor
             diagnostics = diagnostics ?? new List<string>();
             if (!IsConfigured || services.FindBusiness == null) return;
 
-            foreach (ManagerProcurementShipment shipment in ledger.Shipments)
+            // Pass IX WS4 (A4-15c): iterate only the in-transit index (a copy,
+            // since transitions below mutate it), in ledger order — the same
+            // shipments, in the same order, with the same outcomes as the
+            // pre-index full-history scan. Completed shipments stay recorded
+            // in the ledger and are never rescanned.
+            var active = new List<ManagerProcurementShipment>(ledger.InTransitShipments);
+            foreach (ManagerProcurementShipment shipment in active)
             {
                 if (shipment == null || !string.Equals(shipment.Status, "InTransit", StringComparison.Ordinal))
                     continue;
@@ -404,6 +446,7 @@ namespace LandLedgers.Economy.Labor
                 {
                     shipment.Status = "Failed";
                     shipment.FailureReason = "destination business no longer exists";
+                    ledger.MarkShipmentNoLongerInTransit(shipment);
                     diagnostics.Add($"ManagerDecisionExecution: shipment {shipment.ShipmentId} failed — {shipment.FailureReason}.");
                     continue;
                 }
@@ -413,6 +456,7 @@ namespace LandLedgers.Economy.Labor
                     shipment.UnitCostCents, null, dayIndex, out string reason))
                 {
                     shipment.Status = "Delivered";
+                    ledger.MarkShipmentNoLongerInTransit(shipment);
                     diagnostics.Add($"ManagerDecisionExecution: shipment {shipment.ShipmentId} delivered " +
                                     $"({shipment.Quantity:0.#} {shipment.ProductId} to {shipment.BusinessInstanceId}).");
                 }
@@ -421,6 +465,7 @@ namespace LandLedgers.Economy.Labor
                     // Idempotent receive refused: already received. Mark
                     // delivered so we never retry the same shipment.
                     shipment.Status = "Delivered";
+                    ledger.MarkShipmentNoLongerInTransit(shipment);
                     diagnostics.Add($"ManagerDecisionExecution: shipment {shipment.ShipmentId} already received ({reason}) — marked delivered.");
                 }
             }

@@ -1086,6 +1086,158 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        // Pass IX WS3 (PASS8-002 / A4-11): production freight ownership.
+        // FreightProductionDriver is the system of record for detailed
+        // shipments; one FreightCompanyRuntime per live freight business is
+        // constructed here, through the production bootstrap path.
+        private LandLedgers.Economy.Freight.FreightProductionDriver freightProduction;
+        private LandLedgers.Economy.Logistics.FreightShipmentService freightShipmentService;
+
+        /// <summary>
+        /// Pass IX WS3: the production freight driver (detailed shipments).
+        /// Scene/bootstrap code reaches the per-business FreightCompanyRuntime
+        /// instances through here.
+        /// </summary>
+        public LandLedgers.Economy.Freight.FreightProductionDriver FreightProduction
+        {
+            get
+            {
+                freightShipmentService ??= new LandLedgers.Economy.Logistics.FreightShipmentService();
+                freightProduction ??= new LandLedgers.Economy.Freight.FreightProductionDriver(freightShipmentService);
+                return freightProduction;
+            }
+        }
+
+        /// <summary>
+        /// Pass IX WS3: constructs the production FreightCompanyRuntime for
+        /// one freight business (idempotent) and binds its ledger runtime.
+        /// </summary>
+        public LandLedgers.Economy.Freight.FreightCompanyRuntime EnsureFreightCompany(BusinessInstanceState business)
+        {
+            if (business == null || string.IsNullOrWhiteSpace(business.InstanceId))
+            {
+                return null;
+            }
+
+            return FreightProduction.EnsureCompany(business.InstanceId, business.RuntimeState);
+        }
+
+        /// <summary>
+        /// Pass IX WS3: ensures every live LiveryFreight business has its
+        /// production FreightCompanyRuntime, then advances all detailed
+        /// shipments by a day of game time through the full lifecycle
+        /// (loading → transport → arrival → unloading → acceptance →
+        /// settlement). The receiving authority is the destination
+        /// business's real category stock: accepted units are exactly the
+        /// units that stock took; a destination that cannot take the goods
+        /// refuses, and the shipment stays in wagon custody (Delayed) with
+        /// no revenue. Shipments wait honestly when the carrier has no real
+        /// handling person (owner or active employee).
+        /// </summary>
+        private void DriveFreightCompanies(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null)
+            {
+                return;
+            }
+
+            EntityId handler = EntityId.Invalid;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || business.BusinessType != BusinessType.LiveryFreight)
+                {
+                    continue;
+                }
+
+                EnsureFreightCompany(business);
+                if (!handler.IsValid)
+                {
+                    handler = ResolveFreightHandler(business);
+                }
+            }
+
+            if (FreightProduction.Companies.Count == 0)
+            {
+                return;
+            }
+
+            var diag = new List<string>();
+            var hooks = new LandLedgers.Economy.Logistics.FreightShipmentHooks
+            {
+                Tasks = hub.Tasks,
+                Budgets = hub.WorkTimeBudgets,
+                DayIndex = absoluteDayIndex,
+                Diagnostics = diag,
+                Reservations = hub.Reservations,
+                NowGameSeconds = AbsoluteNowGameSeconds(),
+                ReceiveShipment = ReceiveFreightIntoDestinationStock,
+            };
+            FreightProduction.AdvanceTick(86400f, hooks, handler, diag);
+            if (diag.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] freight day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+            }
+        }
+
+        private EntityId ResolveFreightHandler(BusinessInstanceState carrier)
+        {
+            if (carrier?.Owner != null && carrier.Owner.PersonId >= 0)
+            {
+                return EntityId.For(EntityKind.Person, carrier.Owner.PersonId);
+            }
+
+            EmploymentRelationshipRegistry registry = carrier?.RuntimeState?.EmploymentRegistry ?? hub?.Employments;
+            if (registry != null && carrier != null)
+            {
+                foreach (EmploymentRelationship relationship in registry.GetActiveByEmployer(carrier.InstanceId))
+                {
+                    if (relationship != null && relationship.EmployeePersonId >= 0)
+                    {
+                        return EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                    }
+                }
+            }
+
+            return EntityId.Invalid;
+        }
+
+        private int ReceiveFreightIntoDestinationStock(
+            LogisticsShipmentState shipment, int quantityUnits, out string reason)
+        {
+            reason = string.Empty;
+            if (shipment == null || quantityUnits <= 0 || sharedBusinessRuntime == null)
+            {
+                reason = "no shipment or nothing to receive";
+                return 0;
+            }
+
+            if (!sharedBusinessRuntime.TryFindByInstanceId(
+                    shipment.destinationBusinessInstanceId, out BusinessInstanceState destination)
+                || destination?.RuntimeState == null)
+            {
+                reason = $"destination '{shipment.destinationBusinessInstanceId}' has no live business runtime";
+                return 0;
+            }
+
+            string categoryId = !string.IsNullOrWhiteSpace(shipment.destinationCategoryId)
+                ? shipment.destinationCategoryId
+                : shipment.sourceCategoryId;
+            if (string.IsNullOrWhiteSpace(categoryId))
+            {
+                reason = "shipment names no destination stock category";
+                return 0;
+            }
+
+            int accepted = destination.RuntimeState.AddCategoryStockUnits(categoryId, quantityUnits);
+            if (accepted < quantityUnits)
+            {
+                reason = $"destination stock accepted {accepted}/{quantityUnits} units of {categoryId}";
+            }
+
+            return accepted;
+        }
+
         /// <summary>
         /// G-02: postal revenue collection — scans the post office's uncollected
         /// postage and posts it to the owning office business's ledger with
@@ -1093,14 +1245,15 @@ namespace LandLedgers.Orchestration.Systems
         /// business runtime resolves; otherwise it is left intact — never
         /// lost, never manufactured.
         ///
-        /// Freight note: FreightCompanyRuntime's scan/collect/post path is
-        /// implemented and tested on the runtime, but freight companies have
-        /// no production instances yet (DeliveryService.DispatchViaFreightCompany
-        /// documents the live-instance gap as scene work), so there is nothing
-        /// to drive here today — and nothing is faked.
+        /// Freight note (Pass IX WS3 update): FreightCompanyRuntime instances
+        /// are now production-owned — see DriveFreightCompanies in this
+        /// region, which constructs one runtime per live LiveryFreight
+        /// business and advances detailed shipments daily.
         /// </summary>
         private void DrivePostalRevenue(int absoluteDayIndex)
         {
+            // Pass IX WS3: detailed freight advances on the same daily drive.
+            DriveFreightCompanies(absoluteDayIndex);
             if (hub == null || hub.Postal == null || sharedBusinessRuntime == null) return;
             PostalService postal = hub.Postal;
             int uncollected = postal.FindUncollectedPostageCents();

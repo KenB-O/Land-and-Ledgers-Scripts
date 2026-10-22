@@ -362,6 +362,44 @@ namespace LandLedgers.Economy.Liabilities
             return total;
         }
 
+        /// <summary>
+        /// Pass IX WS1 (A3-06b): the valuation liability total for a business,
+        /// sourced from the SINGLE debt authority. The authority total counts
+        /// every unsettled obligation naming this business as debtor —
+        /// including BusinessLenderService bank loans, which are created
+        /// directly in FinancialObligationAuthority and never pass through
+        /// this ledger (they formerly never reduced owner equity, Canon
+        /// §11.3). Ledger entries already mirrored in the authority are NOT
+        /// counted twice: only ledger entries with no live authority
+        /// obligation (created before the authority was attached) are added
+        /// on top of the authority total.
+        /// </summary>
+        public int TotalLiabilitiesIncludingAuthorityFor(string businessInstanceId)
+        {
+            if (financialAuthority == null)
+            {
+                return TotalLiabilitiesFor(businessInstanceId);
+            }
+
+            int total = financialAuthority.TotalOutstandingFor(businessInstanceId);
+            foreach (var liability in liabilities)
+            {
+                if (liability == null || liability.Settled
+                    || !string.Equals(liability.BusinessInstanceId, businessInstanceId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                bool mirrored = !string.IsNullOrWhiteSpace(liability.ObligationId)
+                    && financialAuthority.Find(liability.ObligationId) != null;
+                if (!mirrored)
+                {
+                    total += Math.Max(0, liability.BalanceCents);
+                }
+            }
+            return total;
+        }
+
         private BusinessLiability Find(string liabilityId)
         {
             if (string.IsNullOrWhiteSpace(liabilityId)) return null;
@@ -378,7 +416,7 @@ namespace LandLedgers.Economy.Liabilities
         private void PostValuation(string businessInstanceId)
         {
             if (valuation == null || string.IsNullOrWhiteSpace(businessInstanceId)) return;
-            valuation.RecordLiabilities(businessInstanceId, TotalLiabilitiesFor(businessInstanceId));
+            valuation.RecordLiabilities(businessInstanceId, TotalLiabilitiesIncludingAuthorityFor(businessInstanceId));
         }
 
         /// <summary>
@@ -409,9 +447,24 @@ namespace LandLedgers.Economy.Liabilities
                     touched.Add(liability.BusinessInstanceId);
                 }
             }
+            // Pass IX WS1 (A3-06b): debtors that exist ONLY in the shared
+            // authority (bank-loan borrowers) have no ledger entry, so the
+            // loop above never touches them — collect their ids too, or their
+            // debt never reaches valuation.
+            if (financialAuthority != null)
+            {
+                foreach (FinancialObligation obligation in financialAuthority.Obligations)
+                {
+                    if (obligation != null && !obligation.Settled
+                        && !string.IsNullOrWhiteSpace(obligation.Debtor))
+                    {
+                        touched.Add(obligation.Debtor);
+                    }
+                }
+            }
             foreach (var businessId in touched)
             {
-                valuation.RecordLiabilities(businessId, TotalLiabilitiesFor(businessId));
+                valuation.RecordLiabilities(businessId, TotalLiabilitiesIncludingAuthorityFor(businessId));
             }
             diagnostics.Add($"BusinessLiabilityLedger: synced {touched.Count} businesses to valuation.");
         }

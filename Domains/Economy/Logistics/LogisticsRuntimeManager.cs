@@ -1362,31 +1362,55 @@ namespace LandLedgers.Economy
                 freightCharge = Mathf.RoundToInt(freightCharge * (acceptedUnits / (float)shipment.PlannedQuantityUnits));
             }
 
-            BusinessInstanceState carrier = FindBusinessByInstanceId(shipment.CarrierBusinessInstanceId);
-            if (carrier != null
-                && carrier.BusinessType == BusinessType.LiveryFreight
-                && carrier.RuntimeState != null)
-            {
-                carrier.RuntimeState.AddWeeklyLocalTransferRevenue(
-                    freightCharge,
-                    $"{ResolveSummaryLabel(shipment)} freight for {FormatMoney(freightCharge)}");
-                carrier.RefreshCapacityState();
-            }
-
+            // Pass IX WS1 (A3-02): fail-closed and symmetric. The former code
+            // credited the carrier in full FIRST, then charged the payer only
+            // min(cash, cost) via AddWeeklyLocalTransferCost — a broke or
+            // missing payer (early return AFTER the carrier was paid) minted
+            // the difference, and a non-LiveryFreight carrier burned payer
+            // cash with no recipient. Now both legs resolve first and settle
+            // through BusinessRuntimeState.TrySettleFreightCharge: carrier
+            // credited only when the payer leg posts in full; a shortfall
+            // becomes a named Payable to the carrier and no cash moves.
             string payerBusinessId = !string.IsNullOrWhiteSpace(shipment.FreightPayerBusinessInstanceId)
                 ? shipment.FreightPayerBusinessInstanceId
                 : fallbackDestination != null
                     ? fallbackDestination.InstanceId
                     : shipment.destinationBusinessInstanceId;
             BusinessInstanceState payer = FindBusinessByInstanceId(payerBusinessId);
-            if (payer == null || payer.RuntimeState == null)
+            BusinessInstanceState carrier = FindBusinessByInstanceId(shipment.CarrierBusinessInstanceId);
+            bool carrierIsFreightBusiness = carrier != null
+                && carrier.BusinessType == BusinessType.LiveryFreight
+                && carrier.RuntimeState != null;
+
+            if (payer == null || payer.RuntimeState == null || !carrierIsFreightBusiness)
             {
+                // No complete pair of legs: neither posts. When a payer till
+                // exists, the unpaid charge is still recorded as a named
+                // payable to the named carrier so the debt is not lost.
+                if (payer != null && payer.RuntimeState != null
+                    && !string.IsNullOrWhiteSpace(shipment.CarrierBusinessInstanceId))
+                {
+                    payer.RuntimeState.AccrueOperatingLiabilityCents(
+                        freightCharge, shipment.CarrierBusinessInstanceId,
+                        $"unpaid freight charge: {ResolveSummaryLabel(shipment)} (carrier or payer leg unavailable)");
+                }
+
                 return;
             }
 
-            payer.RuntimeState.AddWeeklyLocalTransferCost(
-                freightCharge,
-                $"{ResolveSummaryLabel(shipment)} freight charged {FormatMoney(freightCharge)}");
+            // Make sure the payer's accruals can reach the shared debt
+            // authority even if the weekly wiring has not run yet.
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub != null && payer.RuntimeState.ObligationAuthority == null)
+            {
+                payer.RuntimeState.ObligationAuthority = systemsHub.FinancialObligations;
+                payer.RuntimeState.ObligationIdRegistry = systemsHub.Ids;
+            }
+
+            BusinessRuntimeState.TrySettleFreightCharge(
+                payer.RuntimeState, carrier.RuntimeState, freightCharge,
+                ResolveSummaryLabel(shipment), out _);
+            carrier.RefreshCapacityState();
             payer.RefreshCapacityState();
         }
 

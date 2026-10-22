@@ -328,7 +328,8 @@ namespace LandLedgers.Economy
             {
                 request.Buyer.RuntimeState.AddWeeklyLocalTransferCost(
                     buyerCost,
-                    $"recurring order bought {accepted} {template.BuyerCategoryId} from {request.Seller.RuntimeDisplayName} for {FormatMoney(buyerCost)}");
+                    $"recurring order bought {accepted} {template.BuyerCategoryId} from {request.Seller.RuntimeDisplayName} for {FormatMoney(buyerCost)}",
+                    request.Seller.RuntimeState != null ? request.Seller.RuntimeState.BusinessId : null);
             }
 
             request.Seller.RefreshCapacityState();

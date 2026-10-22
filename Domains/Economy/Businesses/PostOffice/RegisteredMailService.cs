@@ -40,6 +40,16 @@ namespace LandLedgers.Economy.Postal
         /// </summary>
         public bool IndemnityAvailable { get; set; }
 
+        /// <summary>
+        /// Pass IX WS1 (A3-03): the cash authority that pays return-receipt
+        /// postage (the delivering recipient's household ledger in
+        /// production). When set, the return receipt is posted through the
+        /// payer path and is NOT posted when the payer cannot pay. When null,
+        /// the legacy no-authority posting path is used (tests / unwired
+        /// scope only).
+        /// </summary>
+        public IPostalSenderCashAuthority ReturnReceiptPayer { get; set; }
+
         /// <summary>Days past due before an overdue registered item's chain is declared broken (calibration).</summary>
         public int OverdueLossThresholdDays { get; set; } = 30;
 
@@ -190,14 +200,21 @@ namespace LandLedgers.Economy.Postal
             string senderName, int senderPersonId, int recipientPersonId, string recipientName,
             string fromOfficeId, string toOfficeId, int declaredValueCents,
             bool requestReturnReceipt, bool returnReceiptFullParticulars,
-            int dayIndex, List<string> diag)
+            int dayIndex, List<string> diag,
+            IPostalSenderCashAuthority senderPayer = null)
         {
             diag = diag ?? diagnostics;
             PostalService svc = RequirePostal(nameof(PostRegisteredLetter), diag);
             if (svc == null) return null;
 
-            MailItem item = svc.PostItem(MailKind.Letter, senderName, recipientPersonId,
-                recipientName, fromOfficeId, toOfficeId, dayIndex, diag);
+            // Pass IX WS1 (A3-03): with a sender cash authority, postage is
+            // debited from the sender and an unpaid letter is refused before
+            // registration — registration never rides on uncollected postage.
+            MailItem item = senderPayer != null
+                ? svc.PostItem(MailKind.Letter, senderName, recipientPersonId,
+                    recipientName, fromOfficeId, toOfficeId, dayIndex, senderPayer, diag)
+                : svc.PostItem(MailKind.Letter, senderName, recipientPersonId,
+                    recipientName, fromOfficeId, toOfficeId, dayIndex, diag);
             if (item == null) return null;
             return RegisterItem(item.MailId, declaredValueCents, requestReturnReceipt,
                 returnReceiptFullParticulars, senderPersonId, dayIndex, diag);
@@ -284,8 +301,15 @@ namespace LandLedgers.Economy.Postal
             bool offMap = string.Equals(item.ToOfficeId, PostalService.OffMapOfficeId, StringComparison.OrdinalIgnoreCase);
             if (record.ReturnReceiptRequested && !offMap)
             {
-                MailItem receipt = svc.PostItem(MailKind.Letter, record.DeliverySignatureName,
-                    record.SenderPersonId, record.SenderName, item.ToOfficeId, item.FromOfficeId, dayIndex, diag);
+                // Pass IX WS1 (A3-03): the receipt's postage is paid through
+                // ReturnReceiptPayer when one is wired; an unpaid receipt is
+                // not posted (the delivery itself already happened — only
+                // the receipt journey is refused, and it is logged).
+                MailItem receipt = ReturnReceiptPayer != null
+                    ? svc.PostItem(MailKind.Letter, record.DeliverySignatureName,
+                        record.SenderPersonId, record.SenderName, item.ToOfficeId, item.FromOfficeId, dayIndex, ReturnReceiptPayer, diag)
+                    : svc.PostItem(MailKind.Letter, record.DeliverySignatureName,
+                        record.SenderPersonId, record.SenderName, item.ToOfficeId, item.FromOfficeId, dayIndex, diag);
                 if (receipt != null)
                 {
                     receipt.History.Add($"day {dayIndex}: return receipt for registered {record.SerialNumber}, " +

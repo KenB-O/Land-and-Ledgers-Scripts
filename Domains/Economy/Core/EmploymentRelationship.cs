@@ -33,6 +33,11 @@ namespace LandLedgers.Economy
         Resigned = 3,
         MissedPayroll = 4,
         Death = 5,
+        /// <summary>
+        /// Pass IX (A2-10): the employee migrated off-map. Appended only —
+        /// serialized values are never renumbered.
+        /// </summary>
+        Departed = 6,
     }
 
     /// <summary>
@@ -226,6 +231,33 @@ namespace LandLedgers.Economy
             {
                 diagnostics.Add(
                     $"EmploymentRelationshipRegistry: ended {active.Count} active employment(s) for deceased P{personId}.");
+            }
+
+            return active.Count;
+        }
+
+        /// <summary>
+        /// Pass IX (A2-10): ends every active employment for a person who
+        /// migrated off-map, mirroring EndEmploymentsForDeceased. Without
+        /// this, payroll kept paying departed migrants full wages forever
+        /// (no payroll path checked isOffMap). The records are retained as
+        /// history with EndReason.Departed; a returning migrant re-seeks work
+        /// through the ordinary recruitment paths. Returns the number ended.
+        /// </summary>
+        public int EndEmploymentsForDeparture(int personId, int dayIndex)
+        {
+            List<EmploymentRelationship> active = GetActiveByEmployee(personId);
+            for (int i = 0; i < active.Count; i++)
+            {
+                active[i].LifecycleState = EmploymentLifecycleState.Ended;
+                active[i].EndDayIndex = dayIndex;
+                active[i].EndReason = EmploymentEndReason.Departed;
+            }
+
+            if (active.Count > 0)
+            {
+                diagnostics.Add(
+                    $"EmploymentRelationshipRegistry: ended {active.Count} active employment(s) for departed P{personId}.");
             }
 
             return active.Count;

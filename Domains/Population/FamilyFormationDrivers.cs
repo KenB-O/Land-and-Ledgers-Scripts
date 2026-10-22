@@ -109,12 +109,46 @@ namespace LandLedgers.Population
             }
         }
 
+        /// <summary>
+        /// Pass IX (A2-02, PASS6-003): the CURRENT spouse of a person — the
+        /// living spouse on their kinship spouse edges, or -1 when none.
+        /// Historical spouse edges are preserved forever (estate and kinship
+        /// history depend on them and are never deleted); a widow(er)'s dead
+        /// spouse simply stops being their CURRENT spouse, so remarriage and
+        /// new conceptions become possible again.
+        /// </summary>
+        public static int CurrentSpouseId(DemographicDriverContext ctx, int personId)
+        {
+            if (ctx == null || ctx.Kinship == null || ctx.Population == null || personId < 0)
+            {
+                return -1;
+            }
+
+            List<int> spouses = ctx.Kinship.GetSpouses(personId);
+            for (int i = 0; i < spouses.Count; i++)
+            {
+                PersonState spouse = ctx.Population.GetPerson(spouses[i]);
+                if (spouse != null && spouse.deathDayIndex < 0)
+                {
+                    return spouse.id;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>Pass IX (A2-02): true when the person has a living spouse.</summary>
+        public static bool HasCurrentSpouse(DemographicDriverContext ctx, int personId)
+        {
+            return CurrentSpouseId(ctx, personId) >= 0;
+        }
+
         private static bool IsMarriageable(DemographicDriverContext ctx, PersonState person)
         {
             return person != null
                 && person.deathDayIndex < 0
                 && !person.isOffMap
-                && ctx.Kinship.GetSpouses(person.id).Count == 0;
+                && !HasCurrentSpouse(ctx, person.id);
         }
 
         private static PersonState FindPartner(
@@ -274,6 +308,21 @@ namespace LandLedgers.Population
         {
             ctx.Lifecycle.RemoveMember(person.id, ctx.CurrentDayIndex, distressed ? "migrated off-map (distress)" : "migrated off-map (opportunity)");
             person.isOffMap = true;
+            // Pass IX (A2-10): migration ends local employment, mirroring the
+            // death path (PASS6-012b). Otherwise the departed person's Active
+            // employments draw full wages forever — no payroll path checked
+            // isOffMap. Identity, kinship, ownership, and debts are preserved;
+            // only the local job ends (reason Departed, history retained).
+            if (ctx.Employments != null)
+            {
+                int ended = ctx.Employments.EndEmploymentsForDeparture(person.id, ctx.CurrentDayIndex);
+                if (ended > 0)
+                {
+                    ctx.Diagnostics.Add(
+                        $"MigrationDriver: ended {ended} employment(s) for departed P{person.id}.");
+                }
+            }
+
             ctx.Diagnostics.Add(
                 $"MigrationDriver: P{person.id} ({person.DisplayName}) migrated off-map " +
                 $"({(distressed ? "distress" : "opportunity")}); identity, kinship, ownership, and debts preserved.");
@@ -425,8 +474,14 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                bool employed = person.workplaceBuildingId >= 0;
-                bool married = ctx.Kinship.GetSpouses(person.id).Count > 0;
+                // Pass IX (A2-11): eligibility reads the employment REGISTRY —
+                // the production hiring path (RecruitmentService) never writes
+                // the legacy workplaceBuildingId field, so registry-employed
+                // adult children previously read as unemployed and could
+                // never split (same stale-field pattern as A2-01).
+                bool employed = ctx.Employments != null
+                    && ctx.Employments.GetActiveByEmployee(person.id).Count > 0;
+                bool married = MarriageDriver.HasCurrentSpouse(ctx, person.id);
                 if (!employed && !married)
                 {
                     continue;

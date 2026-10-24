@@ -113,6 +113,12 @@ namespace LandLedgers.Economy.Labor
         public List<ManagerExecutedActionRecord> Actions = new List<ManagerExecutedActionRecord>();
         public List<ManagerPendingRequest> PendingRequests = new List<ManagerPendingRequest>();
         public List<ManagerProcurementShipment> Shipments = new List<ManagerProcurementShipment>();
+        // Pass XI WS3 (PASS9-001, additive): executed asset-sale records
+        // (action key, asset id, parties, amounts, day index). The action
+        // record alone carries only a reference string; this list is the
+        // durable execution record, and re-execution is refused from it
+        // as well as from the request status and the action key.
+        public List<AssetSaleRecord> CompletedAssetSales = new List<AssetSaleRecord>();
     }
 
     /// <summary>
@@ -125,6 +131,7 @@ namespace LandLedgers.Economy.Labor
         private readonly List<ManagerExecutedActionRecord> actions = new List<ManagerExecutedActionRecord>();
         private readonly List<ManagerPendingRequest> pendingRequests = new List<ManagerPendingRequest>();
         private readonly List<ManagerProcurementShipment> shipments = new List<ManagerProcurementShipment>();
+        private readonly List<AssetSaleRecord> completedAssetSales = new List<AssetSaleRecord>();
 
         // Pass IX WS4 (A4-15c): the in-transit subset of `shipments`, in ledger
         // insertion order. The full list remains the save truth and audit
@@ -140,6 +147,28 @@ namespace LandLedgers.Economy.Labor
         public IReadOnlyList<ManagerExecutedActionRecord> Actions => actions;
         public IReadOnlyList<ManagerPendingRequest> PendingRequests => pendingRequests;
         public IReadOnlyList<ManagerProcurementShipment> Shipments => shipments;
+        /// <summary>Executed asset-sale records, in execution order (Pass XI WS3, PASS9-001).</summary>
+        public IReadOnlyList<AssetSaleRecord> CompletedAssetSales => completedAssetSales;
+
+        /// <summary>True when an executed sale record already exists for this request id.</summary>
+        public bool HasCompletedSale(string requestId)
+        {
+            if (string.IsNullOrWhiteSpace(requestId)) return false;
+            for (int i = 0; i < completedAssetSales.Count; i++)
+            {
+                if (completedAssetSales[i] != null && string.Equals(completedAssetSales[i].RequestId, requestId, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>Records an executed sale; a second record for the same request id is ignored.</summary>
+        public void RecordCompletedSale(AssetSaleRecord record)
+        {
+            if (record == null || string.IsNullOrWhiteSpace(record.RequestId)) return;
+            if (HasCompletedSale(record.RequestId)) return;
+            completedAssetSales.Add(record);
+        }
 
         /// <summary>Live view of the in-transit index, in ledger order.
         /// Callers that mutate shipment status while iterating must copy it.</summary>
@@ -229,6 +258,7 @@ namespace LandLedgers.Economy.Labor
                 Actions = new List<ManagerExecutedActionRecord>(actions),
                 PendingRequests = new List<ManagerPendingRequest>(pendingRequests),
                 Shipments = new List<ManagerProcurementShipment>(shipments),
+                CompletedAssetSales = new List<AssetSaleRecord>(completedAssetSales),
             };
         }
 
@@ -237,10 +267,16 @@ namespace LandLedgers.Economy.Labor
             actions.Clear();
             pendingRequests.Clear();
             shipments.Clear();
+            completedAssetSales.Clear();
             inTransitShipments.Clear();
             if (dto == null) return;
             if (dto.Actions != null) actions.AddRange(dto.Actions);
             if (dto.PendingRequests != null) pendingRequests.AddRange(dto.PendingRequests);
+            if (dto.CompletedAssetSales != null)
+            {
+                foreach (AssetSaleRecord record in dto.CompletedAssetSales)
+                    RecordCompletedSale(record);
+            }
             if (dto.Shipments != null)
             {
                 shipments.AddRange(dto.Shipments);

@@ -323,6 +323,35 @@ namespace LandLedgers.Economy.Labor
 
         public IReadOnlyList<AssetSaleRecord> CompletedSales => completedSales;
 
+        /// <summary>True when this service instance already holds an executed sale for this request id.</summary>
+        public bool HasCompletedSale(string requestId)
+        {
+            if (string.IsNullOrWhiteSpace(requestId)) return false;
+            for (int i = 0; i < completedSales.Count; i++)
+            {
+                if (completedSales[i] != null && string.Equals(completedSales[i].RequestId, requestId, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Pass XI WS3 (PASS9-001): restores this instance's completed-sale
+        /// record from the durable ledger (drivers construct a fresh
+        /// service every drive, so the ledger — not this list — is the
+        /// save truth; this method lets a caller report on it in-process).
+        /// Records already held are not duplicated.
+        /// </summary>
+        public void RestoreCompletedSalesFromLedger(ManagerDecisionExecutionLedger ledger)
+        {
+            if (ledger == null) return;
+            foreach (AssetSaleRecord record in ledger.CompletedAssetSales)
+            {
+                if (record != null && !HasCompletedSale(record.RequestId))
+                    completedSales.Add(record);
+            }
+        }
+
         /// <summary>Executes every Approved SellAsset request on the ledger.
         /// Returns the number of sales completed in this run.</summary>
         public int ExecuteApprovedSales(
@@ -362,6 +391,17 @@ namespace LandLedgers.Economy.Labor
         {
             diagnostics = diagnostics ?? new List<string>();
             if (request == null || ctx == null) return false;
+
+            // Pass XI WS3 (PASS9-001): the persisted execution record is
+            // an independent refusal, checked before the status gate — so
+            // even a request whose status was somehow reset to Approved
+            // after execution can never re-execute from the record alone.
+            if (HasCompletedSale(request.RequestId) ||
+                (ledger != null && ledger.HasCompletedSale(request.RequestId)))
+            {
+                diagnostics.Add($"AssetSaleExecution: request {request.RequestId} already has a persisted executed-sale record — refused, no second transfer.");
+                return false;
+            }
 
             if (!string.Equals(request.Status, "Approved", StringComparison.Ordinal))
             {
@@ -496,6 +536,9 @@ namespace LandLedgers.Economy.Labor
                 DayIndex = ctx.DayIndex,
             };
             completedSales.Add(record);
+            // Pass XI WS3 (PASS9-001): the record is durable, not just
+            // runtime — it rides the ledger DTO through save and load.
+            ledger?.RecordCompletedSale(record);
             ledger?.RecordAction(new ManagerExecutedActionRecord
             {
                 ActionKey = actionKey,

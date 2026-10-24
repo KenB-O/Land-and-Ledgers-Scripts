@@ -70,6 +70,7 @@ found, the test fails loudly rather than passing silently.
 | StoreRestockService | Domains/Economy/Businesses/GeneralStore/StoreProcurementChain.cs | Domains/Economy/Businesses/GeneralStore | Orchestration/HouseholdSlice/HouseholdVerticalSlicePhaseH.cs |
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
+| ScenarioFailureNoticeBoard | Orchestration/Scenarios/Generation/ScenarioFailureNoticeBoard.cs | Orchestration/Scenarios/Generation | (none) |
 
 ## Notes per entry
 
@@ -115,6 +116,16 @@ found, the test fails loudly rather than passing silently.
   reconcile to one union. It is no longer unwired, so it no longer
   belongs in this table; its wiring is covered by the Pass XI WS1
   scenario start tests.
+- `ScenarioFailureNoticeBoard` (Pass XI WS5) is the Unity-free,
+  exactly-once scenario-failure notice surface: one notice per
+  scenario-plus-goal even with multiple subscribers. It has no
+  production caller yet: the StartPanel reads director state only and
+  holds no `ScenarioObjectiveService` reference, so wiring the board
+  into the live panel is scene/reference work for a Unity session
+  (gate G4), not a safe blind edit. It is registered here honestly as
+  UNWIRED rather than hidden in the scan baseline, because unlike the
+  Saloon types it has no production caller in any file, inside or
+  outside the harness subset. Covered by editor tests only.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -159,6 +170,9 @@ note records their audited status so the question does not reopen:
   implemented move execution with no production caller (verified by
   source search: no references outside its own file in the production
   tree).
+- Pass XI WS5: `ScenarioFailureNoticeBoard` registered as unwired —
+  exactly-once failure-notice surface with no production caller yet;
+  live-panel wiring is Unity-session scene work (gate G4).
 - Pass IX (WS6): `RealDemandSource` registered as unwired (A3-09, see its
   note — unwired by decision, not oversight). Production-reachable audit
   note added for the mine chain, freight, farm, estate, domestic-labor,

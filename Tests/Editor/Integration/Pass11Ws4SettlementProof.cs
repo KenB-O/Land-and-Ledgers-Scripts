@@ -1758,50 +1758,15 @@ namespace LandLedgers.Editor.Integration
                 },
             };
             s.Shipments.Clear();
+            // Pass XI WS4 save/load fixes: RestoreSaveDto now rebinds dispatch
+            // authorities for dispatched, non-terminal shipments itself, and
+            // LoadFromSaveDto now restores the executor's id sequence itself
+            // — the reflection compensation formerly here is removed so the
+            // proof exercises the production fix.
             s.Shipments.AddRange(s.Freight.RestoreSaveDto(snap.FreightDto, s.FreightHooks));
-            // PRODUCTION SAVE/LOAD GAP (reported in the proof document):
-            // RestoreSaveDto re-tracks shipments but does not repopulate the
-            // private dispatchAuthorities map, so a restored in-transit
-            // shipment would complete without releasing its wagon reservation
-            // and the next shipment would refuse on a stale hold. Rebind the
-            // map for every restored shipment that was already dispatched and
-            // is not yet terminal.
-            FieldInfo authField = typeof(FreightShipmentService).GetField("dispatchAuthorities",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            var authMap = authField != null
-                ? authField.GetValue(s.Freight) as System.Collections.IDictionary : null;
-            if (authMap != null)
-            {
-                foreach (LogisticsShipmentState restored in s.Shipments)
-                {
-                    if (restored == null || !restored.physicalTransportBound) continue;
-                    if (restored.Status != LogisticsShipmentStatus.InTransit
-                        && restored.Status != LogisticsShipmentStatus.Arrived
-                        && restored.Status != LogisticsShipmentStatus.Delayed) continue;
-                    authMap[restored.shipmentId] = s.Reservations;
-                }
-            }
             s.MoneyOrders.LoadFromSaveDto(snap.MoneyOrderDto);
             var loadDiag = new List<string>();
             s.Projects = s.ConstrExecutor.LoadFromSaveDto(snap.ConstrDto, loadDiag);
-            // PRODUCTION SAVE/LOAD GAP (reported in the proof document):
-            // ConstructionProjectSaveDto carries projects but not the
-            // executor's id sequence, so a fresh executor restarts at 0 and
-            // the next commission reuses an existing project id. The sequence
-            // is exactly recoverable here because project/package ids are
-            // never deleted: it is one past the largest numeric suffix among
-            // all restored project and package ids.
-            int maxSeq = -1;
-            foreach (ConstructionProject proj in s.Projects)
-            {
-                if (proj == null) continue;
-                maxSeq = Math.Max(maxSeq, TrailingNumber(proj.ProjectId));
-                foreach (WorkPackage pkg in proj.WorkPackages ?? new List<WorkPackage>())
-                    maxSeq = Math.Max(maxSeq, TrailingNumber(pkg.PackageId));
-            }
-            FieldInfo seqField = typeof(ConstructionProjectExecutor).GetField("sequence",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            if (seqField != null) seqField.SetValue(s.ConstrExecutor, maxSeq + 1);
             foreach (KeyValuePair<string, int> kv in snap.YardStocks) s.YardStock.Stock[kv.Key] = kv.Value;
             s.ConstrDriver = s.NewConstrDriver();
 
@@ -1930,15 +1895,6 @@ namespace LandLedgers.Editor.Integration
         public int EndModeledCashCents()
         {
             return TotalModeledCashCents();
-        }
-
-        private static int TrailingNumber(string id)
-        {
-            if (string.IsNullOrEmpty(id)) return -1;
-            int dash = id.LastIndexOf('-');
-            if (dash < 0 || dash == id.Length - 1) return -1;
-            int value;
-            return int.TryParse(id.Substring(dash + 1), out value) ? value : -1;
         }
 
         private static int StockOf(BusinessRuntimeState rt, string good)

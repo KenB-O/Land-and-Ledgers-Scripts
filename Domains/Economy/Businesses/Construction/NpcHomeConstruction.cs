@@ -1023,11 +1023,18 @@ namespace LandLedgers.Economy
         public sealed class ConstructionProjectSaveDto
         {
             public List<ConstructionProject> Projects = new List<ConstructionProject>();
+            /// <summary>
+            /// Pass XI WS4 save/load fix (Gap 1): the executor's id sequence
+            /// at capture. Additive; -1 means absent (an old save predating
+            /// this field) — Load then recomputes from the restored ids.
+            /// </summary>
+            public int ExecutorSequence = -1;
         }
 
         public ConstructionProjectSaveDto CaptureSaveDto(List<ConstructionProject> projects)
         {
             var dto = new ConstructionProjectSaveDto();
+            dto.ExecutorSequence = sequence;
             if (projects == null) return dto;
             foreach (ConstructionProject project in projects)
                 if (project != null) dto.Projects.Add(project);
@@ -1063,7 +1070,32 @@ namespace LandLedgers.Economy
                 project.WorkPackages = deduped;
                 projects.Add(project);
             }
+            // Pass XI WS4 save/load fix (Gap 1): continue the id sequence
+            // instead of restarting at 0 and re-minting an existing id.
+            // The persisted sequence wins when it is ahead (e.g. the
+            // captured list was a subset); the recomputed floor wins when
+            // the field is absent (old save, -1) or behind the restored
+            // ids, so an old save can never collide either.
+            int maxSuffix = -1;
+            foreach (ConstructionProject project in projects)
+            {
+                if (project == null) continue;
+                maxSuffix = Math.Max(maxSuffix, TrailingNumber(project.ProjectId));
+                foreach (WorkPackage package in project.WorkPackages ?? new List<WorkPackage>())
+                    maxSuffix = Math.Max(maxSuffix, TrailingNumber(package.PackageId));
+            }
+            sequence = Math.Max(dto.ExecutorSequence, maxSuffix + 1);
             return projects;
+        }
+
+        /// <summary>Numeric suffix after the last '-' in an id, or -1 when there is none.</summary>
+        private static int TrailingNumber(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return -1;
+            int dash = id.LastIndexOf('-');
+            if (dash < 0 || dash == id.Length - 1) return -1;
+            int value;
+            return int.TryParse(id.Substring(dash + 1), out value) ? value : -1;
         }
         #endregion
     }

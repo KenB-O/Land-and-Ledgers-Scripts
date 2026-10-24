@@ -393,6 +393,8 @@ namespace LandLedgers.Reporting
             staffing.weeklyPayrollCents = 0;
             staffing.filledWorkerPayrollCents = 0;
             staffing.openSlotPlannedPayrollCents = 0;
+            staffing.ownerLaborSlots = 0;
+            staffing.ownerLaborWageCents = 0;
             staffing.payrollSource = BusinessStaffingPayrollSource.Unknown;
             staffing.usesFallbackPayroll = false;
             staffing.payrollReadSummary = string.Empty;
@@ -420,6 +422,8 @@ namespace LandLedgers.Reporting
 
             int filledPayroll = 0;
             int openPlannedPayroll = 0;
+            int ownerLaborSlots = 0;
+            int ownerLaborWage = 0;
             bool sawFilledWage = false;
             HashSet<string> seenSlots = new(StringComparer.Ordinal);
             for (int i = 0; i < workers.Count; i++)
@@ -453,11 +457,26 @@ namespace LandLedgers.Reporting
                     isFilled = source.isFilled
                 };
 
+                // Pass XI WS3 (PASS9-009): production payroll skips
+                // owner slots (worker id prefix "owner:"), so an owner
+                // row's wage is tracked separately and never enters
+                // filled-worker or weekly payroll. The slot still
+                // counts as filled; only the wage is excluded.
+                bool isOwnerRow = !string.IsNullOrWhiteSpace(worker.workerId)
+                    && worker.workerId.StartsWith("owner:", StringComparison.Ordinal);
                 if (worker.isFilled)
                 {
                     staffing.filledWorkerSlots++;
-                    filledPayroll = AddCents(filledPayroll, wage);
-                    sawFilledWage |= wage > 0;
+                    if (isOwnerRow)
+                    {
+                        ownerLaborSlots++;
+                        ownerLaborWage = AddCents(ownerLaborWage, wage);
+                    }
+                    else
+                    {
+                        filledPayroll = AddCents(filledPayroll, wage);
+                        sawFilledWage |= wage > 0;
+                    }
                     if (string.IsNullOrWhiteSpace(worker.workerId) && string.IsNullOrWhiteSpace(worker.workerDisplayName))
                     {
                         AddReportGap(gaps, "filled_worker_missing_identity", $"Filled worker slot '{slotId}' had no worker identity.", BusinessReportGapSeverity.Caution);
@@ -474,6 +493,12 @@ namespace LandLedgers.Reporting
 
             staffing.filledWorkerPayrollCents = filledPayroll;
             staffing.openSlotPlannedPayrollCents = openPlannedPayroll;
+            staffing.ownerLaborSlots = ownerLaborSlots;
+            staffing.ownerLaborWageCents = ownerLaborWage;
+            if (ownerLaborSlots > 0)
+            {
+                AddReportGap(gaps, "owner_labor_excluded_from_payroll", $"Owner labor on {ownerLaborSlots} filled slot(s) is tracked separately and excluded from payroll — production payroll never pays owner slots.", BusinessReportGapSeverity.Informational);
+            }
             if (filledPayroll > 0 || sawFilledWage)
             {
                 staffing.weeklyPayrollCents = filledPayroll;
@@ -522,6 +547,8 @@ namespace LandLedgers.Reporting
             target.weeklyPayrollCents = source.weeklyPayrollCents;
             target.filledWorkerPayrollCents = source.filledWorkerPayrollCents;
             target.openSlotPlannedPayrollCents = source.openSlotPlannedPayrollCents;
+            target.ownerLaborSlots = source.ownerLaborSlots;
+            target.ownerLaborWageCents = source.ownerLaborWageCents;
             target.payrollSource = source.payrollSource;
             target.usesFallbackPayroll = source.usesFallbackPayroll;
             target.payrollReadSummary = source.payrollReadSummary;

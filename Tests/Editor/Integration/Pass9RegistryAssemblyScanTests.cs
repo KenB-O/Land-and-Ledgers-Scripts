@@ -59,13 +59,16 @@ namespace LandLedgers.EditorTests.Integration
 
         // Mirror of UnwiredSystemsRegistryTests.CandidateTypes (hand-audited,
         // authoritative there; mirrored here so the scan's accounting is
-        // self-contained).
+        // self-contained). Pass XI WS1: BankRuntime added with the registry
+        // entry (inert here — its directory is outside the harness
+        // assembly — but kept in parity with the hand-audited list).
         private static readonly string[] CandidateTypes =
         {
             "BakeryShopRuntime", "BarberShopRuntime", "DoctorPracticeRuntime",
             "GrainElevatorShopRuntime", "GrainMillShopRuntime", "HotelShopRuntime",
             "LumberYardShopRuntime", "NewspaperRuntime", "RestaurantShopRuntime",
             "SaloonRuntime", "SawmillShopRuntime", "TailorShopRuntime",
+            "BankRuntime",
             "StagedProductionProcess", "ProductionDueEventDriver",
             "BakeryStagedProductionChain", "ForgeRepairChain",
             "StoreRestockService",

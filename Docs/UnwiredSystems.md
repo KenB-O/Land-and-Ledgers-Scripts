@@ -62,21 +62,31 @@ found, the test fails loudly rather than passing silently.
 | SaloonRuntime | Domains/Economy/Businesses/Saloon/SaloonRuntime.cs | Domains/Economy/Businesses/Saloon | (none) |
 | SawmillShopRuntime | Domains/Economy/Businesses/Sawmill/SawmillShopRuntime.cs | Domains/Economy/Businesses/Sawmill | (none) |
 | TailorShopRuntime | Domains/Economy/Businesses/Tailor/TailorShopRuntime.cs | Domains/Economy/Businesses/Tailor | (none) |
+| BankRuntime | Domains/Economy/Businesses/Bank/BankRuntime.cs | Domains/Economy/Businesses/Bank | (none) |
 | StagedProductionProcess | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
 | ProductionDueEventDriver | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
 | BakeryStagedProductionChain | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs | Domains/Economy/Businesses/Bakery | (none) |
 | ForgeRepairChain | Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs | Domains/Economy/Businesses/Blacksmith | (none) |
 | StoreRestockService | Domains/Economy/Businesses/GeneralStore/StoreProcurementChain.cs | Domains/Economy/Businesses/GeneralStore | Orchestration/HouseholdSlice/HouseholdVerticalSlicePhaseH.cs |
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
-| ScenarioObjectiveService | Orchestration/Scenarios/Generation/ScenarioObjectiveService.cs | Orchestration/Scenarios/Generation | Orchestration/Systems/SimulationSystemsHub.cs |
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
 
 ## Notes per entry
 
-- The twelve `*Runtime` entries are the detailed per-business models
+- The thirteen `*Runtime` entries are the detailed per-business models
   (roughly 32k lines combined). Each ships with its own feature helpers in
   the same directory. None is invoked by `SimulationDrivers`,
   `SharedBusinessRuntimeManager`, or any other production system.
+  `BankRuntime` is the thirteenth: it was missing from this registry
+  until Pass XI WS1, because `Domains/Economy/Businesses/Bank` sits
+  outside the Roslyn harness subset, so neither registry test could see
+  the type at all (the assembly scan only enumerates the compiled
+  harness assembly, and the hand-audited candidate list did not name
+  it). It is registered here honestly as UNWIRED with its true status:
+  zero production references outside its own directory, no bank ledger
+  registered as a CreditCash store, no live deposit refresh before
+  underwriting. It is NOT wired merely to clear this entry; bank
+  binding is WS2 work under a scene-confirmation gate.
 - `StagedProductionProcess` and `ProductionDueEventDriver` are the generic
   staged-production machinery. Their only production-tree references are the
   two chains below, which are themselves unwired, so the references are
@@ -96,19 +106,15 @@ found, the test fails loudly rather than passing silently.
   purchase path grows a real intent executor. Its only production-tree
   references are inside its owning directory (the demand contracts and a
   mention in `SharedBusinessRuntimeManager`).
-- `ScenarioObjectiveService` (Pass IX WS6, A1-03; completion latch added
-  by the Pass IX review fixes, R-08) is hub-owned and persisted:
-  `SimulationSystemsHub` constructs it and round-trips its
-  `ScenarioRunState` through `SystemsSaveDto.scenarioRunState` — that
-  reference is allowlisted as by-design ownership, not live driving.
-  Its evaluation is source-complete: dated qualifiers latch complete
-  when their predicate holds at any evaluation on or before the deadline
-  (persisted in the run state) and fail the run exactly once when an
-  unlatched deadline passes unmet. What is NOT wired is production
-  start: nothing in the live tick calls `BeginScenario` or `Evaluate` —
-  scenario start is a declared Unity scene bootstrap handoff, pending
-  that hook. Registered here so the persisted-but-never-started state
-  stays visible instead of reading as live.
+- `ScenarioObjectiveService` was registered here from Pass IX WS6 until
+  Pass XI WS1, when it was WIRED and its entry removed: the director
+  start hook now calls `BeginScenario` for the started scenario, the
+  drivers day change calls `Evaluate`, the scenario bootstraps register
+  dated qualifiers from live evaluator state and rebuild them after
+  load from the persisted registrations, and the three goal stores
+  reconcile to one union. It is no longer unwired, so it no longer
+  belongs in this table; its wiring is covered by the Pass XI WS1
+  scenario start tests.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,

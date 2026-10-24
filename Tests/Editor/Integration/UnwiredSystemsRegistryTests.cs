@@ -31,17 +31,21 @@ namespace LandLedgers.EditorTests.Integration
             public readonly List<string> Allowlist = new List<string>();
         }
 
-        // The brief's enumerated candidate set: twelve detailed business runtimes,
+        // The brief's enumerated candidate set: thirteen detailed business runtimes,
         // the four staged-production types, and StoreRestockService.
         // Pass IX WS6: RealDemandSource added (A3-09) — registered unwired by
         // decision; the candidate list stays authoritative for hand-audited
         // entries, and Pass9RegistryAssemblyScanTests sweeps the rest.
+        // Pass XI WS1: BankRuntime added — the thirteenth detailed runtime,
+        // previously invisible to both registry tests because its directory
+        // sits outside the harness subset.
         private static readonly string[] CandidateTypes =
         {
             "BakeryShopRuntime", "BarberShopRuntime", "DoctorPracticeRuntime",
             "GrainElevatorShopRuntime", "GrainMillShopRuntime", "HotelShopRuntime",
             "LumberYardShopRuntime", "NewspaperRuntime", "RestaurantShopRuntime",
             "SaloonRuntime", "SawmillShopRuntime", "TailorShopRuntime",
+            "BankRuntime",
             "StagedProductionProcess", "ProductionDueEventDriver",
             "BakeryStagedProductionChain", "ForgeRepairChain",
             "StoreRestockService",

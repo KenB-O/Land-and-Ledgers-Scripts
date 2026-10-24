@@ -425,12 +425,40 @@ namespace LandLedgers.Economy
             }
 
             string shipmentId = $"cship-{sequence++}";
+            // Pass XI WS2: the site stockpile IS the receiving authority for
+            // this leg. Without a ReceiveShipment callback the shipment
+            // service honestly holds the goods in wagon custody and the
+            // chain can never complete (the coordinator previously built
+            // these hooks with no receiver, so every site delivery stalled
+            // at unloading). Acceptance here is site custody only; the
+            // stockpile bookkeeping follows after conservation is verified,
+            // and staging consumes the stockpile — no unit is counted twice.
+            // A shipment bound for anywhere but this site is refused.
             var hooks = new FreightShipmentHooks
             {
                 Tasks = plan.Tasks,
                 Budgets = plan.Budgets,
                 DayIndex = dayIndex,
                 Diagnostics = diag,
+                ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string receiveReason) =>
+                {
+                    receiveReason = string.Empty;
+                    if (shipment == null || quantityUnits <= 0)
+                    {
+                        receiveReason = "no shipment or nothing to receive";
+                        return 0;
+                    }
+                    if (!string.IsNullOrWhiteSpace(plan.SiteLabel)
+                        && !string.Equals(shipment.destinationBusinessInstanceId, plan.SiteLabel, StringComparison.Ordinal))
+                    {
+                        receiveReason = $"shipment '{shipment.ShipmentId}' is bound for " +
+                            $"'{shipment.destinationBusinessInstanceId}', not site '{plan.SiteLabel}'";
+                        return 0;
+                    }
+                    diag?.Add($"ConstructionMaterialFreightCoordinator: site '{plan.SiteLabel}' accepted " +
+                        $"{quantityUnits}u from shipment '{shipment.ShipmentId}' into site custody.");
+                    return quantityUnits;
+                },
             };
             plan.Freight.RegisterWagon(plan.Wagon);
             string reason;

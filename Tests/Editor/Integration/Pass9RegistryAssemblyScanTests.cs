@@ -105,6 +105,24 @@ namespace LandLedgers.EditorTests.Integration
             "BusinessInstanceSellerAdapter", "BusinessLoanRecord", "BusinessMainFocusDefinition", "BusinessMainFocusState",
             "BusinessNamedPayableRecord", "BusinessOperationsDefinition", "BusinessReputationChangeResult", "BusinessSaleTerms",
             "BusinessSaveRecord", "BusinessStockRecord", "BusinessWorkReadModel", "BusinessWorkReadModelBuilder",
+            // Pass XI coordinator integration: ReadModels/Reporting entered the canonical
+            // harness subset so the WS3 owner-reporting tests run there (sources.txt
+            // gained BusinessReportBuilder.cs, PortfolioReportBuilder.cs, ReportDtos.cs,
+            // ReportSnapshots.cs, ReportPeriod.cs, LedgerEntry.cs). The 20 report
+            // DTO/snapshot types below have no production caller outside their feature
+            // (they are consumed by the builders and by Unity presentation) and are
+            // classified feature-internal, the same precedent as BusinessWorkReadModel
+            // and the save-DTO clusters. This growth of the baseline is the visible
+            // review the fixture summary requires; the builders themselves are
+            // accounted for by production callers and are not listed here.
+            "BusinessCapacitySummary", "BusinessCategorySnapshot", "BusinessCategorySummary",
+            "BusinessFinancialRollup", "BusinessInventorySummary", "BusinessMonthlySummary",
+            "BusinessOperationsSummary", "BusinessReportGap", "BusinessReportHeader",
+            "BusinessReportSnapshot", "BusinessStaffingSummary", "BusinessWeeklySummary",
+            "BusinessWorkerSnapshot", "BusinessWorkerSummary",
+            "PortfolioBalanceDriftSummary", "PortfolioBusinessSummaryLine",
+            "PortfolioFinancialRollup", "PortfolioMonthlySummary",
+            "PortfolioReportSnapshot", "PortfolioWeeklySummary",
             "CapturedScenarioSelection", "CarriedGoodsBatch", "CausalDemographicEvent", "CausalEmploymentRecord",
             "CausalObligationSummary", "ChainLinkSummary", "CivicTreasuryLedgerEntry", "ConstructionAcceptanceStage",
             "ConstructionBid", "ConstructionBidEstimateLine", "ConstructionBidRequest", "ConstructionBillingEvent",

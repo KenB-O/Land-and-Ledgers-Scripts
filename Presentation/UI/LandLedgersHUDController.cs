@@ -723,6 +723,12 @@ namespace LandLedgers.UI
                 : "Liquid Cash " + FormatWholeDollars(currentCashDollars);
         }
 
+        // Pass XI WS5 (UI refresh performance): RefreshDate runs on
+        // every visual frame (OnVisualFrameUpdated). The clock text only
+        // changes once a game minute, so skip the assignment — and the
+        // TextMeshPro rebuild it triggers — when the text is unchanged.
+        private string lastDateText;
+
         private void RefreshDate()
         {
             if (dateText == null && Application.isPlaying)
@@ -735,9 +741,14 @@ namespace LandLedgers.UI
                 return;
             }
 
-            dateText.text = timeManager != null
+            string rendered = timeManager != null
                 ? $"{timeManager.GetReadableDate()} | {timeManager.GetReadableClock()}"
                 : fallbackDateText;
+            if (!string.Equals(lastDateText, rendered, System.StringComparison.Ordinal))
+            {
+                lastDateText = rendered;
+                dateText.text = rendered;
+            }
         }
 
         private void RefreshSpeedState(SimulationSpeed speed)

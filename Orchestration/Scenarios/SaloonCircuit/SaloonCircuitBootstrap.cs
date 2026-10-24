@@ -97,6 +97,17 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
         /// Pass XI WS1: reconciles the three goal stores to their union
         /// and writes the union back to all three, logging disagreements.
         /// Never un-completes a goal, never un-fails a run.
+        /// Pass XI WS6 first-gate (M4): the union is written to the
+        /// evaluator as HISTORICAL goals only. A hub-latched final-state
+        /// id that no longer holds live must not be written into
+        /// predicateHolding (the old RestoreState(union, union) did
+        /// exactly that, resurrecting lapsed finals into the saved file
+        /// on every save); finals are re-derived by live evaluation.
+        /// The hub latched list stays sticky by design (A-14, unchanged),
+        /// and director state is only ever marked for goals the
+        /// evaluator currently counts as complete — reconcile never
+        /// ADDS a lapsed final to the director, though it never un-marks
+        /// one live play already set there.
         /// </summary>
         private void ReconcileGoalStores()
         {
@@ -116,10 +127,13 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
                 Debug.LogWarning($"[SaloonCircuitBootstrap] {diagnostic}");
             }
 
-            evaluator.RestoreState(reconciliation.CompletedGoals, reconciliation.CompletedGoals);
+            evaluator.RestoreHistoricalGoals(reconciliation.CompletedGoals);
             foreach (string goalId in reconciliation.CompletedGoals)
             {
-                scenarioDirector.RecordLiveGoalCompletion(SaloonCircuitScenario.ScenarioId, goalId);
+                if (evaluator.GoalHolds(goalId))
+                {
+                    scenarioDirector.RecordLiveGoalCompletion(SaloonCircuitScenario.ScenarioId, goalId);
+                }
             }
             systemsHub.ScenarioObjectives.MergeLatchedGoals(reconciliation.CompletedGoals);
         }
@@ -153,9 +167,13 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
                 return;
             }
 
-            // The flat completed list splits itself: RestoreState files
-            // historical ids as milestones and the rest as holding.
-            evaluator?.RestoreState(dto.completedGoalIds, dto.completedGoalIds);
+            // Pass XI WS6 first-gate (M4): the saved list restores
+            // historical goals only. Final-state ids in the file must
+            // not be filed into predicateHolding — a lapsed final
+            // (e.g. crown-rank-one) is re-derived by live evaluation,
+            // never resurrected from the file. ReconcileGoalStores
+            // below applies the same rule to the three-store union.
+            evaluator?.RestoreHistoricalGoals(dto.completedGoalIds);
             ReconcileGoalStores();
             RegisterObjectiveQualifiers();
         }

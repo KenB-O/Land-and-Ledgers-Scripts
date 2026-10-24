@@ -854,9 +854,33 @@ namespace LandLedgers.Economy
         /// </summary>
         public Func<int, bool> PersonUnavailableForPayrollLookup { get; set; }
 
-        /// <summary>Pass IX (A2-10): fail-closed eligibility consult for payroll paths.</summary>
+        /// <summary>
+        /// Pass XI WS3 (PASS9-007): whether the last eligibility consult
+        /// failed because the lookup threw. Callers read this right after
+        /// IsUnavailableForPayroll to diagnose a refusal honestly instead
+        /// of reporting a dead or off-map person they never confirmed.
+        /// </summary>
+        public bool PayrollEligibilityLookupFailed { get; private set; }
+
+        /// <summary>Exception type from the last failed eligibility consult, if any.</summary>
+        public string LastPayrollEligibilityFailure { get; private set; } = string.Empty;
+
+        /// <summary>
+        /// Pass IX (A2-10), corrected in Pass XI WS3 (PASS9-007):
+        /// fail-CLOSED eligibility consult for payroll paths. The old
+        /// version returned false (available) when the lookup threw, so a
+        /// broken lookup paid wages to people whose eligibility was
+        /// unknown — possibly dead or off-map ghosts. Withholding a wage
+        /// on an unknown outcome fabricates nothing: no cash moves, no
+        /// liability is invented, and the wage can still be paid later
+        /// once the lookup works, through the next payroll run or
+        /// PayAgreedWage. This matches the attendance consult in this
+        /// file, which already treats a throwing check as absent.
+        /// </summary>
         private bool IsUnavailableForPayroll(int personId)
         {
+            PayrollEligibilityLookupFailed = false;
+            LastPayrollEligibilityFailure = string.Empty;
             if (PersonUnavailableForPayrollLookup == null || personId < 0)
             {
                 return false;
@@ -866,9 +890,11 @@ namespace LandLedgers.Economy
             {
                 return PersonUnavailableForPayrollLookup(personId);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                return false; // a throwing lookup must not fabricate a refusal
+                PayrollEligibilityLookupFailed = true;
+                LastPayrollEligibilityFailure = ex.GetType().Name;
+                return true;
             }
         }
 
@@ -925,8 +951,11 @@ namespace LandLedgers.Economy
             // Pass IX (A2-10): a departed (off-map) or dead worker is not
             // paid a partial-period wage either. (Death's final settlement,
             // if any, is an estate matter — never a wage to a ghost.)
-            if (employment.EndReason != EmploymentEndReason.Death && IsUnavailableForPayroll(employment.EmployeePersonId))
+            bool unavailableForPayroll = IsUnavailableForPayroll(employment.EmployeePersonId);
+            if (employment.EndReason != EmploymentEndReason.Death && unavailableForPayroll)
             {
+                if (PayrollEligibilityLookupFailed)
+                    return $"PayAgreedWage refused: payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — no wage is paid on an unknown eligibility outcome (employment '{employmentId}').";
                 return $"PayAgreedWage refused: P{employment.EmployeePersonId} is dead or off-map — no wage is paid to an unavailable person (employment '{employmentId}').";
             }
 
@@ -2129,7 +2158,9 @@ namespace LandLedgers.Economy
                 if (IsUnavailableForPayroll(personId))
                 {
                     lastWeeklyPayrollDiagnostics.Add(
-                        $"slot '{slot.SlotId}' worker P{personId} is dead or off-map — wage refused, not paid.");
+                        PayrollEligibilityLookupFailed
+                            ? $"slot '{slot.SlotId}' worker P{personId} payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — wage refused, not paid."
+                            : $"slot '{slot.SlotId}' worker P{personId} is dead or off-map — wage refused, not paid.");
                     continue;
                 }
 
@@ -2226,8 +2257,11 @@ namespace LandLedgers.Economy
                 if (IsUnavailableForPayroll(employment.EmployeePersonId))
                 {
                     lastWeeklyPayrollDiagnostics.Add(
-                        $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
-                        "person is dead or off-map — wage refused, not paid, no liability accrued.");
+                        PayrollEligibilityLookupFailed
+                            ? $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
+                                $"payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — wage refused, not paid, no liability accrued."
+                            : $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
+                                "person is dead or off-map — wage refused, not paid, no liability accrued.");
                     SyncSlotPaidState(employment.EmployeePersonId, paid: false);
                     continue;
                 }

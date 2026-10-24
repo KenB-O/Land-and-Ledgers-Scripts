@@ -968,7 +968,14 @@ namespace LandLedgers.Economy
             int qualityValue = Mathf.RoundToInt(landValue * Mathf.Clamp01(business.OperatingEfficiency01) * 0.22f);
             int cashPressure = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business) - runtime.CurrentCashCents;
             float distressMultiplier = cashPressure > 0 ? Mathf.Lerp(0.72f, 0.9f, Mathf.Clamp01(runtime.CurrentCashCents / (float)Mathf.Max(1, SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business)))) : 1f;
-            float weakPerformanceMultiplier = runtime.AllTimeNetCents < 0 ? 0.86f : runtime.WeekToDateNetCents < 0 ? 0.94f : 1.04f;
+            // Pass XI WS3 (PASS9-007): the weekly leg of the weak-performance
+            // multiplier reads the financing-excluded operating feed
+            // (WeeklyOperatingProfitCents), not WeekToDateNetCents, which
+            // mixes financing credits into the week's result — a business
+            // kept afloat by borrowing must not price as a strong performer
+            // on the borrowed week. The long-run AllTimeNetCents gate is
+            // unchanged: it is a separate distress gate, not the weekly feed.
+            float weakPerformanceMultiplier = runtime.AllTimeNetCents < 0 ? 0.86f : runtime.WeeklyOperatingProfitCents < 0 ? 0.94f : 1.04f;
             int gross = Mathf.Max(1, landValue + operatingValue + staffValue + qualityValue);
             offerCents = Mathf.Max(1, Mathf.RoundToInt(gross * distressMultiplier * weakPerformanceMultiplier));
             string distress = cashPressure > 0 ? $"distress discount {FormatMoney(cashPressure)} reserve shortfall" : "no distress discount";

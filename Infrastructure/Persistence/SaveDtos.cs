@@ -1120,6 +1120,11 @@ namespace LandLedgers.Persistence
         public TitleAuthority.TitleSaveDto titleChain = new();
         public PropertyTaxService.PropertyTaxSaveDto propertyTax = new();
         public int lastPropertyTaxDay;
+        // Pass XI WS3 (PASS9-003, additive): dispute claims recorded on
+        // the player acquisition path (and, once the WS1 drivers hook
+        // lands, on NPC distress sales through the same service). Old
+        // saves load this as null and start with an empty claim record.
+        public PropertyDisputeService.PropertyDisputeSaveDto propertyDisputes;
     }
 
     [Serializable]

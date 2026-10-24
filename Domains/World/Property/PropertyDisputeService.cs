@@ -81,7 +81,16 @@ namespace LandLedgers.World.Property
         public IReadOnlyList<DisputeClaim> Claims => claims;
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
-        /// <summary>Records one claim. Anonymous claims are refused (T3D doctrine).</summary>
+        /// <summary>
+        /// Records one claim. Anonymous claims are refused (T3D doctrine).
+        /// Pass XI WS3 (PASS9-003): (parcel, claimant, basis) dedup — an
+        /// already Open or Contested claim with the same parcel, claimant
+        /// and basis is returned instead of recording a second claim, and
+        /// nothing is mirrored to the interest store a second time. A
+        /// Resolved or Withdrawn claim does not block a fresh claim on the
+        /// same triple: the old dispute is closed, the new one is real.
+        /// Recording a claim never moves title (Canon §2.3).
+        /// </summary>
         public DisputeClaim RecordClaim(
             string parcelId, string claimantId, string raisedBy,
             KnowledgeCertainty certainty, DisputeClaimStatus status, ClaimBasis basis,
@@ -92,6 +101,18 @@ namespace LandLedgers.World.Property
             {
                 diag.Add("PropertyDisputeService.RecordClaim: a parcel and a named claimant are required — anonymous claims refused.");
                 return null;
+            }
+            foreach (DisputeClaim existing in claims)
+            {
+                if (existing != null && existing.IsOpenOrContested
+                    && string.Equals(existing.ParcelId, parcelId, StringComparison.Ordinal)
+                    && string.Equals(existing.ClaimantId, claimantId, StringComparison.Ordinal)
+                    && existing.Basis == basis)
+                {
+                    diag.Add($"PropertyDisputeService.RecordClaim: duplicate (parcel '{parcelId}', claimant '{claimantId}', basis {basis}) " +
+                        $"refused — existing claim '{existing.ClaimId}' stands; no second claim, no second interest record.");
+                    return existing;
+                }
             }
             var claim = new DisputeClaim
             {

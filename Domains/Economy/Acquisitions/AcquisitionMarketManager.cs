@@ -1133,6 +1133,10 @@ namespace LandLedgers.Economy
             dto.titleChain = titleAuthority.CaptureSaveDto();
             dto.propertyTax = PropertyTaxes.Taxes.CaptureSaveDto();
             dto.lastPropertyTaxDay = PropertyTaxes.LastProcessedDayIndex;
+            // Pass XI WS3 (PASS9-003): persist the dispute-claim record
+            // from the same service the acquisition choke point records
+            // through, so player-path claims survive a save round trip.
+            dto.propertyDisputes = PropertyDisputes.CaptureSaveDto();
 
             return dto;
         }
@@ -1166,6 +1170,7 @@ namespace LandLedgers.Economy
             if (dto == null)
             {
                 titleAuthority.LoadFromSaveDto(new TitleAuthority.TitleSaveDto());
+                PropertyDisputes.LoadFromSaveDto(new PropertyDisputeService.PropertyDisputeSaveDto());
                 EnsureConstructionSupportNodesLoaded();
                 marketBuilt = false;
                 RebuildMarket();
@@ -1189,6 +1194,9 @@ namespace LandLedgers.Economy
             titleAuthority.LoadFromSaveDto(dto.titleChain ?? new TitleAuthority.TitleSaveDto());
             if (dto.propertyTax != null) PropertyTaxes.Taxes.LoadFromSaveDto(dto.propertyTax);
             PropertyTaxes.RestoreLastProcessedDayIndex(dto.lastPropertyTaxDay);
+            // Pass XI WS3 (PASS9-003): restore the dispute-claim record
+            // (null-guarded for pre-Pass-XI saves, which start empty).
+            if (dto.propertyDisputes != null) PropertyDisputes.LoadFromSaveDto(dto.propertyDisputes);
 
             if (dto.ownedPlotIds != null)
             {

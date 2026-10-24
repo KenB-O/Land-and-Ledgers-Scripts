@@ -129,6 +129,26 @@ namespace LandLedgers.World.Property
         public CreditEventLog Events;
         public PropertyTaxService TaxService;
         public PropertyDisputeService Disputes;
+        /// <summary>
+        /// Pass XI WS3 (PASS9-003): the production feed for dispute
+        /// recording on a brokered distress sale. SimulationDrivers (WS1
+        /// owns that file) must set this to the acquisition manager's
+        /// dispute service — the same instance the player acquisition
+        /// path records through, so player and NPC claims share one
+        /// persisted record — when it builds the context:
+        /// <c>context.FeedDisputes(acquisitionMarket.PropertyDisputes)</c>.
+        /// Until that one-line hook lands, SellProperty records nothing
+        /// for distress sales (disputes == null is the honest no-op, not
+        /// a silent claim). A claim recorded here never creates legal
+        /// ownership: SellProperty transfers title only through the title
+        /// authority on a real conveyance, and dispute recording runs
+        /// after that transfer as a record, not as a right.
+        /// </summary>
+        public NpcDistressSaleContext FeedDisputes(PropertyDisputeService disputes)
+        {
+            Disputes = disputes;
+            return this;
+        }
         public int BuyerHouseholdId = -1;
         public int SalePriceCents;
         public bool BuyerAssumesNote;

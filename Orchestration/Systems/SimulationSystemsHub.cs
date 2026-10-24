@@ -357,6 +357,7 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdDecisionDriver householdDecisionDriver;
         private HouseholdLenderDirectory householdLenderDirectory;
         private BusinessLenderService businessLenderService;
+        private BankLedgerBindingRegistry bankLedgerBindings;
         private DomesticLaborService domesticLaborService;
         private HouseholdAutonomyDriver householdAutonomyDriver;
         private DomesticLaborDriver domesticLaborDriver;
@@ -615,6 +616,24 @@ namespace LandLedgers.Orchestration.Systems
                 }
 
                 return businessLenderService;
+            }
+        }
+
+        /// <summary>
+        /// Pass XI WS2 (A-06): the single production home for the bank
+        /// ledger binding registry. The registry holds no balances and no
+        /// bindings by itself: a future scene step binds a player-owned
+        /// bank's ledger through SimulationDrivers.BindBankLedger (one
+        /// ledger per bank, fail-loud on a second). Until that step lands
+        /// the registry is empty by design, not by omission.
+        /// </summary>
+        public BankLedgerBindingRegistry BankLedgerBindings
+        {
+            get
+            {
+                if (bankLedgerBindings == null)
+                    bankLedgerBindings = new BankLedgerBindingRegistry();
+                return bankLedgerBindings;
             }
         }
 

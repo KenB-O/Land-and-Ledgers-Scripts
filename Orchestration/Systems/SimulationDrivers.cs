@@ -220,6 +220,20 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Pass XI WS2 (A-06): binds a player-owned bank's deposit ledger
+        /// through the hub-owned binding registry. One ledger per bank,
+        /// fail-loud on a second distinct ledger; the scene hookup that
+        /// supplies the ledger object is outstanding under G4, so this
+        /// method has no production caller yet — it is the binding point,
+        /// not a binding claim.
+        /// </summary>
+        public string BindBankLedger(string businessInstanceId, BankDepositLedger ledger, List<string> diag)
+        {
+            if (hub == null) return "BindBankLedger: no hub — the binding registry is unavailable.";
+            return hub.BankLedgerBindings.BindBankLedger(businessInstanceId, ledger, diag);
+        }
+
+        /// <summary>
         /// Queues one explicit NPC construction commission for the driver.
         /// The driver commissions only queued requests, never on its own;
         /// which households commission, on what evidence, is a design

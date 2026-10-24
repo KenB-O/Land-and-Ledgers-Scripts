@@ -125,9 +125,19 @@ namespace LandLedgers.EditorTests.Integration
             "PortfolioReportSnapshot", "PortfolioWeeklySummary",
             "CapturedScenarioSelection", "CarriedGoodsBatch", "CausalDemographicEvent", "CausalEmploymentRecord",
             "CausalObligationSummary", "ChainLinkSummary", "CivicTreasuryLedgerEntry", "ConstructionAcceptanceStage",
+            // Pass XI WS2 classification: the Construction feature cluster below
+            // enters the harness assembly with the construction driver. Its entry
+            // types (NpcConstructionDriver, NpcConstructionCommissioner,
+            // ConstructionProjectExecutor) are wired through SimulationDrivers;
+            // these component/record types are consumed inside the feature, so
+            // they are feature-internal, the same precedent as the mine and
+            // lawyer clusters and the WS3 report DTOs.
             "ConstructionBid", "ConstructionBidEstimateLine", "ConstructionBidRequest", "ConstructionBillingEvent",
-            "ConstructionChangeOrder", "ConstructionContractCapacityReading", "ConstructionContractParty", "ConstructionDefectRecord",
-            "ConstructionPaymentMilestone", "ConstructionPaymentObligation", "ConstructionPaymentTerms", "ConstructionSpecSection",
+            "ConstructionChangeOrder", "ConstructionContract", "ConstructionContractBook", "ConstructionContractCapacityReading", "ConstructionContractParty", "ConstructionDefectRecord", "ConstructionFreightPlan",
+            "ConstructionMaterialFreightCoordinator", "ConstructionMaterialSale", "ConstructionMaterialSaleLine",
+            "ConstructionPaymentMilestone", "ConstructionPaymentObligation", "ConstructionPaymentTerms",
+            "ConstructionProcurementService", "ConstructionProgressBillingPolicy", "ConstructionProgressBillingService",
+            "ConstructionSiteStockpile", "ConstructionSpecSection", "ConsumedMaterialLine",
             "ContactLink", "ContestSettlementTerm", "ContractObligation", "ConversationChannel",
             "ConversationOpportunityService", "CreditCounterparty", "CreditEvent", "CreditEvidenceRecord",
             "CreditFacilityRecord", "CreditOfferNegotiationRecord", "CropCalibration", "CustomerSpecialOrderState",
@@ -135,7 +145,7 @@ namespace LandLedgers.EditorTests.Integration
             "DiscoveredOpportunity", "DisputeRepresentationService", "DomainFamiliarityStore", "DomesticAssignment",
             "DraftTeamReservation", "DraftedDeed", "DraftedWillEntry", "DurationEstimatorV2Adapter",
             "EmploymentFingerprintRecord", "EmploymentOffer", "EntityReferenceDiagnostic", "EquipmentAccessGrant",
-            "EquipmentAvailability", "EquipmentEvent", "EquipmentInspectionRecord", "EquipmentMisgradeDispute",
+            "EquipmentAvailability", "EquipmentEvent", "EquipmentHold", "EquipmentInspectionRecord", "EquipmentMisgradeDispute",
             "EquipmentMisgradeDisputeRegister", "EquipmentReadModel", "EquipmentReadModelBuilder", "EquipmentSalvageLedger",
             "EquipmentScrapSale", "EstateAbatementRecord", "EstateAccount", "EstateAccountEntry",
             "EstateAdministratorAppointment", "EstateCreditorClaim", "EstateExecutorAct", "EstateInventoryLine",
@@ -177,7 +187,7 @@ namespace LandLedgers.EditorTests.Integration
             "MineSmelterSettlementTerms", "MineSmelterSettlementTermsSaveDto", "MineTimberingLedger", "MineTimberingRecord",
             "MineTimberingRecordSaveDto", "MineVein", "MineVeinSaveDto", "MineWorkFrontAllocation",
             "MissedSaleRecord", "MotivePowerSource", "NailProductionRun", "NegotiationAptitudeEvaluator",
-            "NegotiationAptitudeState", "NpcAcquisitionPlan", "NpcAcquisitionResult", "NpcBusinessAcquisitionResult",
+            "NegotiationAptitudeState", "NpcAcquisitionPlan", "NpcAcquisitionResult", "NpcBuildOverrunEvent", "NpcBusinessAcquisitionResult",
             "NpcBusinessBorrowContext", "NpcBusinessCloseResult", "NpcBusinessDemandPlanner", "NpcBusinessDemandResult",
             "NpcBusinessEvent", "NpcBusinessInputNeed", "NpcBusinessPurchase", "NpcFinancingPlan",
             "NpcFormationAgreement", "NpcInvestigationFinding", "NpcLenderQuote", "NpcLifecycleContext",

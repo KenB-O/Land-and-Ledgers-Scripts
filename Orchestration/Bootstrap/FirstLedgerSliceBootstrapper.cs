@@ -734,8 +734,13 @@ namespace LandLedgers.FirstLedger
             scenarioDirector.FounderResolver = ResolveScenarioFounders;
             // Pass XI WS1: the director's objective hook needs the
             // hub-owned service. The scenario bootstraps assign the same
-            // reference on Awake; this assignment covers scenes where a
-            // bootstrap awakens after the first start.
+            // reference on Awake. Pass XI WS6 first-gate (M2)
+            // correction: this assignment alone never registered
+            // qualifiers for a late-awakening bootstrap — registration
+            // is the bootstraps' own Awake work (they self-register
+            // when the director already runs their scenario); this
+            // assignment only keeps the director's objective hook
+            // wired for future starts.
             scenarioDirector.ObjectiveService ??= systemsHub.ScenarioObjectives;
 
             PersonState firstPerson = FindFirstLivingPerson(population);

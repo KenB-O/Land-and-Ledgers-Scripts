@@ -228,6 +228,24 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
             {
                 scenarioDirector.ObjectiveService ??= systemsHub.ScenarioObjectives;
                 scenarioDirector.ScenarioStarted += OnScenarioStarted;
+
+                // Pass XI WS6 first-gate (M2): ScenarioStarted fires
+                // once. A bootstrap awakening after the first start
+                // subscribed too late and its qualifier list stayed
+                // empty forever. If the director already runs this
+                // scenario, register now; the guard inside
+                // RegisterObjectiveQualifiers additionally requires
+                // the hub service to track this scenario, and
+                // registration is idempotent (Ensure adopts only when
+                // no registrations exist; Rebuild clear-and-rebuilds
+                // from persisted registrations), so a later
+                // ScenarioStarted re-registration cannot duplicate
+                // qualifiers.
+                if (scenarioDirector.HasActiveScenario
+                    && string.Equals(scenarioDirector.ActiveScenarioId, FirstLedgerScenario.ScenarioId, StringComparison.Ordinal))
+                {
+                    RegisterObjectiveQualifiers();
+                }
             }
 
             if (drivers != null)

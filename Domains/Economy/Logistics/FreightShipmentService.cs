@@ -630,6 +630,13 @@ namespace LandLedgers.Economy.Logistics
             public List<LogisticsShipmentSaveDto> Shipments = new List<LogisticsShipmentSaveDto>();
             public List<string> ShipmentIdsWithLoadTasks = new List<string>();
             public List<string> ShipmentIdsWithUnloadTasks = new List<string>();
+            /// <summary>
+            /// Pass XI WS4 save/load fix (Gap 2): ids of captured shipments
+            /// that held a dispatch reservation through the reservation
+            /// authority, so restore can rebind them. Additive; an old save
+            /// leaves this empty and restore falls back to shipment state.
+            /// </summary>
+            public List<string> ShipmentIdsWithDispatchAuthorities = new List<string>();
         }
 
         /// <summary>Captures shipment DTOs (the state's own save DTO — owned by the state).</summary>
@@ -638,7 +645,12 @@ namespace LandLedgers.Economy.Logistics
             var dto = new FreightServiceSaveDto();
             if (shipments != null)
                 foreach (LogisticsShipmentState s in shipments)
-                    if (s != null) dto.Shipments.Add(s.CaptureSaveDto());
+                {
+                    if (s == null) continue;
+                    dto.Shipments.Add(s.CaptureSaveDto());
+                    if (dispatchAuthorities.ContainsKey(s.ShipmentId))
+                        dto.ShipmentIdsWithDispatchAuthorities.Add(s.ShipmentId);
+                }
             dto.ShipmentIdsWithLoadTasks.AddRange(loadTasks.Keys);
             dto.ShipmentIdsWithUnloadTasks.AddRange(unloadTasks.Keys);
             return dto;
@@ -658,6 +670,32 @@ namespace LandLedgers.Economy.Logistics
                 // exclusivity covers them exactly once — no duplicate holds,
                 // no invisible live shipment after a mid-transport load.
                 Track(restored);
+            }
+            // Pass XI WS4 save/load fix (Gap 2): rebind dispatch authorities
+            // for restored shipments that were already dispatched and are not
+            // yet terminal, so completion releases the wagon reservation
+            // exactly once (ReleaseShipmentReservations is idempotent and
+            // the map entry is removed on release, so a double restore can
+            // only overwrite the same key with the same authority — never a
+            // second hold). When the DTO carries the persisted list, only
+            // listed shipments are bound (a shipment dispatched without an
+            // authority holds nothing to release); an old save with an empty
+            // list falls back to shipment state (transport bound + live),
+            // which is exactly the dispatched-but-unfinished set.
+            if (hooks != null && hooks.Reservations != null)
+            {
+                List<string> persisted = dto.ShipmentIdsWithDispatchAuthorities;
+                bool hasPersisted = persisted != null && persisted.Count > 0;
+                var persistedSet = hasPersisted
+                    ? new HashSet<string>(persisted, StringComparer.Ordinal) : null;
+                foreach (LogisticsShipmentState restored in out_)
+                {
+                    if (restored == null || !restored.physicalTransportBound || !IsLiveShipment(restored))
+                        continue;
+                    if (hasPersisted && !persistedSet.Contains(restored.ShipmentId))
+                        continue;
+                    dispatchAuthorities[restored.ShipmentId] = hooks.Reservations;
+                }
             }
             // Rebind in-flight handling tasks by their deterministic definition ids.
             if (hooks != null && hooks.Tasks != null)

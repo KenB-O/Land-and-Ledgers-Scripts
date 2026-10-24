@@ -117,6 +117,36 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
             }
         }
 
+        /// <summary>
+        /// Pass XI WS6 first-gate (M4): restores ONLY historical goals
+        /// from a reconciled or saved list. Final-state goals are never
+        /// written into predicateHolding from a stored list: a
+        /// hub-latched or director final-state id that no longer holds
+        /// live must not resurrect (the old reconcile path called
+        /// RestoreState(union, union), which filed every non-historical
+        /// union id into predicateHolding on every save, so the saved
+        /// file permanently claimed goals the live state did not hold).
+        /// Final-state goals are re-derived by Evaluate from live state
+        /// on the next tick; historical goals are never un-completed,
+        /// and unknown ids are ignored. This method never touches
+        /// predicateHolding at all — a currently-holding final stays
+        /// holding, a lapsed one stays absent.
+        /// </summary>
+        public void RestoreHistoricalGoals(IEnumerable<string> goalIds)
+        {
+            if (goalIds == null)
+            {
+                return;
+            }
+            foreach (string goalId in goalIds)
+            {
+                if (!string.IsNullOrWhiteSpace(goalId) && HistoricalGoals.Contains(goalId))
+                {
+                    historicalCompleted.Add(goalId);
+                }
+            }
+        }
+
         public bool IsScenarioComplete =>
             predicateHolding.Contains("crown-rank-one")
             && predicateHolding.Contains("own-all-three")

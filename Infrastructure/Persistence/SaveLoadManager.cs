@@ -381,8 +381,12 @@ namespace LandLedgers.Persistence
             // Pass XI WS1: the Saloon bootstrap owns its own evaluator
             // restore, reconciliation, and qualifier rebuild, and only
             // acts when the Saloon Circuit is the restored scenario.
-            // The First Ledger restore above already ran the director
-            // restore, so this must not re-run it.
+            // Pass XI WS6 first-gate (M1): the Saloon restore is
+            // self-sufficient — when the First Ledger restore above
+            // already activated the director it is not re-run, but
+            // when this scene holds no First Ledger bootstrap the
+            // Saloon restore runs the director restore itself rather
+            // than silently dropping the saved Saloon goals.
             SaloonCircuitBootstrap saloonBootstrap = FindAnyObjectByType<SaloonCircuitBootstrap>();
             saloonBootstrap?.RestoreFromSaveDto(save.scenario);
             // Pass XI WS1 (PASS9-006): reset the domestic tick watermark

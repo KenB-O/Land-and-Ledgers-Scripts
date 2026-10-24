@@ -97,6 +97,17 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
         /// Pass XI WS1: reconciles the three goal stores to their union
         /// and writes the union back to all three, logging disagreements.
         /// Never un-completes a goal, never un-fails a run.
+        /// Pass XI WS6 first-gate (M4): the union is written to the
+        /// evaluator as HISTORICAL goals only. A hub-latched final-state
+        /// id that no longer holds live must not be written into
+        /// predicateHolding (the old RestoreState(union, union) did
+        /// exactly that, resurrecting lapsed finals into the saved file
+        /// on every save); finals are re-derived by live evaluation.
+        /// The hub latched list stays sticky by design (A-14, unchanged),
+        /// and director state is only ever marked for goals the
+        /// evaluator currently counts as complete — reconcile never
+        /// ADDS a lapsed final to the director, though it never un-marks
+        /// one live play already set there.
         /// </summary>
         private void ReconcileGoalStores()
         {
@@ -116,10 +127,13 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
                 Debug.LogWarning($"[SaloonCircuitBootstrap] {diagnostic}");
             }
 
-            evaluator.RestoreState(reconciliation.CompletedGoals, reconciliation.CompletedGoals);
+            evaluator.RestoreHistoricalGoals(reconciliation.CompletedGoals);
             foreach (string goalId in reconciliation.CompletedGoals)
             {
-                scenarioDirector.RecordLiveGoalCompletion(SaloonCircuitScenario.ScenarioId, goalId);
+                if (evaluator.GoalHolds(goalId))
+                {
+                    scenarioDirector.RecordLiveGoalCompletion(SaloonCircuitScenario.ScenarioId, goalId);
+                }
             }
             systemsHub.ScenarioObjectives.MergeLatchedGoals(reconciliation.CompletedGoals);
         }
@@ -141,21 +155,48 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
         {
             if (dto == null || scenarioDirector == null)
             {
+                Debug.LogError("[SaloonCircuitBootstrap] Restore skipped: no save dto or no scenario director — Saloon goals cannot be restored.");
                 return;
             }
 
-            // The First Ledger bootstrap already ran the director
-            // restore (SaveLoadManager order); this method only owns
-            // the Saloon evaluator, reconciliation, and qualifier
-            // rebuild, and only when the Saloon Circuit is active.
+            // Pass XI WS6 first-gate (M1): this restore is
+            // self-sufficient. It used to assume the First Ledger
+            // bootstrap had already run the director restore
+            // (SaveLoadManager order), so a scene holding the Saloon
+            // bootstrap without the First Ledger bootstrap never ran
+            // director restore at all, and evaluator restore,
+            // reconciliation, and qualifier rebuild silently no-op'd,
+            // dropping saved Saloon goals on load. When the director
+            // has no active scenario, run its restore here; when it
+            // already runs a scenario (e.g. the First Ledger restore
+            // ran first in SaveLoadManager order), never re-run it.
+            if (!scenarioDirector.HasActiveScenario)
+            {
+                if (!scenarioDirector.RestoreFromSaveDto(dto))
+                {
+                    Debug.LogError("[SaloonCircuitBootstrap] Restore skipped: director restore failed — Saloon evaluator, reconciliation, and qualifier rebuild did not run, so saved Saloon goals are NOT restored.");
+                    return;
+                }
+            }
+
+            // Only the Saloon evaluator, reconciliation, and qualifier
+            // rebuild belong here, and only when the Saloon Circuit is
+            // the restored scenario. A different restored scenario is
+            // a loud skip, not a silent one: a Saloon save must not
+            // seed another scenario's goals, and vice versa.
             if (!string.Equals(scenarioDirector.ActiveScenarioId, SaloonCircuitScenario.ScenarioId, StringComparison.Ordinal))
             {
+                Debug.LogError($"[SaloonCircuitBootstrap] Restore skipped: restored scenario is '{scenarioDirector.ActiveScenarioId ?? "<none>"}', not the Saloon Circuit — evaluator restore, reconciliation, and qualifier rebuild did not run.");
                 return;
             }
 
-            // The flat completed list splits itself: RestoreState files
-            // historical ids as milestones and the rest as holding.
-            evaluator?.RestoreState(dto.completedGoalIds, dto.completedGoalIds);
+            // Pass XI WS6 first-gate (M4): the saved list restores
+            // historical goals only. Final-state ids in the file must
+            // not be filed into predicateHolding — a lapsed final
+            // (e.g. crown-rank-one) is re-derived by live evaluation,
+            // never resurrected from the file. ReconcileGoalStores
+            // below applies the same rule to the three-store union.
+            evaluator?.RestoreHistoricalGoals(dto.completedGoalIds);
             ReconcileGoalStores();
             RegisterObjectiveQualifiers();
         }
@@ -218,6 +259,25 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
             {
                 scenarioDirector.ObjectiveService ??= systemsHub.ScenarioObjectives;
                 scenarioDirector.ScenarioStarted += OnScenarioStarted;
+
+                // Pass XI WS6 first-gate (M2): ScenarioStarted fires
+                // once, after BeginScenario. A bootstrap awakening
+                // after the first start subscribed too late and its
+                // qualifier list stayed empty forever, so daily
+                // Evaluate silently no-op'd. If the director already
+                // runs this scenario, register now; the guard inside
+                // RegisterObjectiveQualifiers additionally requires
+                // the hub service to track this scenario, and
+                // registration is idempotent (Ensure adopts only when
+                // no registrations exist; Rebuild clear-and-rebuilds
+                // from persisted registrations), so a later
+                // ScenarioStarted re-registration cannot duplicate
+                // qualifiers.
+                if (scenarioDirector.HasActiveScenario
+                    && string.Equals(scenarioDirector.ActiveScenarioId, SaloonCircuitScenario.ScenarioId, StringComparison.Ordinal))
+                {
+                    RegisterObjectiveQualifiers();
+                }
             }
 
             if (drivers != null)

@@ -114,7 +114,15 @@ namespace LandLedgers.EditorTests.Integration
             // classified feature-internal, the same precedent as BusinessWorkReadModel
             // and the save-DTO clusters. This growth of the baseline is the visible
             // review the fixture summary requires; the builders themselves are
-            // accounted for by production callers and are not listed here.
+            // NOT listed here because they are static classes (abstract plus
+            // sealed in IL) and the scan filter excludes abstract types, so
+            // they escape the scan on that ground — corrected in Pass XI
+            // WS6 first-gate (R2): the earlier claim that they "are
+            // accounted for by production callers" was wrong, as they have
+            // zero production .cs callers (only comments and tests). The
+            // scan test logic itself is unchanged; this is a comment
+            // correction only, and the builders remain presentation-fed
+            // read models, not hidden unwired types.
             "BusinessCapacitySummary", "BusinessCategorySnapshot", "BusinessCategorySummary",
             "BusinessFinancialRollup", "BusinessInventorySummary", "BusinessMonthlySummary",
             "BusinessOperationsSummary", "BusinessReportGap", "BusinessReportHeader",

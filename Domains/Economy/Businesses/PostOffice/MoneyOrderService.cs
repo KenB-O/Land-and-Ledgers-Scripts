@@ -343,18 +343,25 @@ namespace LandLedgers.Economy.Postal
             if (!string.Equals(order.PayeeName, advice.PayeeName, StringComparison.Ordinal))
                 return FlagFraud(order, $"payee altered: order shows '{order.PayeeName}', advice shows '{advice.PayeeName}'.", dayIndex, diag);
 
-            // Pass XI WS3 (RUN-011): an indorsement TRANSFERS presentment.
-            // Once the payee has indorsed to a second person, the payee no
-            // longer presents — otherwise the original payee could collect
-            // money that now belongs to the indorsee. A bank collecting as
-            // the payee's agent is unaffected: its stamp is not an
-            // indorsement, so it still presents when no indorsement exists.
+            // Pass XI WS3 (RUN-011), completed in Pass XI WS6 first-gate
+            // (M5): an indorsement TRANSFERS presentment. Once the payee
+            // has indorsed to a second person, the payee no longer
+            // presents — otherwise the original payee could collect
+            // money that now belongs to the indorsee. The payee's bank
+            // agency ends with the indorsement too: IndorseOrder clears
+            // BankCollectionAgent, and the gate below additionally
+            // requires no indorsement for bank presentment, so a bank
+            // recorded after the indorsement still cannot present an
+            // indorsed order. A bank collecting as the payee's agent is
+            // unaffected while no indorsement exists: its stamp is not
+            // an indorsement, so it still presents then.
             bool isPayee = string.IsNullOrEmpty(order.IndorsedToName) &&
                 !string.IsNullOrEmpty(presenterName) &&
                 string.Equals(presenterName, order.PayeeName, StringComparison.Ordinal);
             bool isIndorsee = !string.IsNullOrEmpty(order.IndorsedToName) &&
                 string.Equals(presenterName, order.IndorsedToName, StringComparison.Ordinal);
-            bool isCollectingBank = !string.IsNullOrEmpty(order.BankCollectionAgent) &&
+            bool isCollectingBank = string.IsNullOrEmpty(order.IndorsedToName) &&
+                !string.IsNullOrEmpty(order.BankCollectionAgent) &&
                 string.Equals(presenterName, order.BankCollectionAgent, StringComparison.Ordinal);
             if (!isPayee && !isIndorsee && !isCollectingBank)
                 return $"MoneyOrderService.{op}: REFUSED — '{presenterName}' is not the payee '{order.PayeeName}'" +
@@ -414,6 +421,17 @@ namespace LandLedgers.Economy.Postal
                     "More than one indorsement is prohibited; a second indorsee must apply to the Department.";
             order.IndorsedToName = indorseeName;
             order.IndorsedDayIndex = dayIndex;
+            // Pass XI WS6 first-gate (M5): indorsement transfers
+            // presentment, so the payee's bank agency ends here. Clearing
+            // (rather than only gating RedeemOrder) keeps the single
+            // transfer semantics on the order itself: after this, neither
+            // the payee nor the payee's bank can present, only the
+            // indorsee can.
+            if (!string.IsNullOrEmpty(order.BankCollectionAgent))
+            {
+                order.History.Add($"day {dayIndex}: bank collection agency for '{order.BankCollectionAgent}' ended by indorsement to {indorseeName}.");
+                order.BankCollectionAgent = string.Empty;
+            }
             order.History.Add($"day {dayIndex}: indorsed by {order.PayeeName} to {indorseeName} (the single permitted indorsement).");
             diag.Add($"MoneyOrderService: {issuingOfficeId}#{serialNumber} indorsed to '{indorseeName}'.");
             return null;

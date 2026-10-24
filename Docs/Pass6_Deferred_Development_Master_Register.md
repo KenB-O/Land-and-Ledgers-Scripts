@@ -170,6 +170,227 @@ These are findings from the Pass VI cohesion audit that are registered for futur
 - PASS9-013 (P3): Save and restore profiling at campaign scale (audit item A4-16). Measured during Pass IX with no single hotspot; revisit if campaign saves grow. Owner: Muse source pass.
 - PASS9-014 (P2): Harness-excluded production files. The Pass IX edits in SimulationDrivers.cs, SharedBusinessRuntimeManager.cs, SchoolhouseModels.cs, and SimulationSystemsHub.cs are Roslyn syntax-checked only; their Unity compilation is outstanding and is listed in Docs/Pass9_Minimal_Unity_Integration_Handoff.md. Owner: Unity session.
 
+## Pass XI resolutions (2026-10-24)
+
+All Pass XI work is on `muse/continuous-development` (Pass IX baseline
+cc59bec through pre-final-gate tip 6573b31; the WS6 final-gate review
+may add fix commits after). Roslyn harness at that tip: 1404 passed, 3
+failed. Nothing in this section is Unity verified.
+
+- PASS11-FIX-001: RUN-011 partially fixed. The indorsement failure was
+  a genuine production bug and is fixed (WS3 d9f06d7, narrowed by WS6
+  first-gate fix M5: IndorseOrder clears BankCollectionAgent and
+  RedeemOrder gates bank presentment on empty IndorsedToName). The
+  other three historical failures are documented test-side defects
+  left failing deliberately, with face evidence in the test text and
+  agreement from two independent reviews: IssueDuplicate asserts
+  IsNotNull with the message "No duplicate of a non-live order" while
+  production correctly returns null; RunSettlementCycle asserts net
+  2500 while its own comment computes 3500 minus 500 equals 3000, and
+  the same wrong figure propagates into both fund assertions (correct
+  values: net 3000, po-a fund 0, po-b fund 4000); the P5 levies test
+  expects Assessed at day 100, past the 60-day due date, against the
+  delinquency model proven by sibling tests. Recommended next step: a
+  dedicated test-correction review. RUN-011 is NOT closed.
+- PASS11-FIX-002: RUN-002 substantially advanced at source level (WS2).
+  NpcConstructionDriver now advances hub projects one step per day
+  through SimulationDrivers, and the site stockpile is the freight
+  receiving authority (fixing site freight that could never complete).
+  Still outstanding, not invented: a catalog asset, a yard/sawmill lot
+  adapter, a TitleAuthority parcel adapter, and the commissioning
+  trigger rule. The driver advances already-staged packages and waits
+  loudly on Ready packages and completion. RUN-002 is NOT closed;
+  Unity and scene parts remain open.
+- PASS11-FIX-003: RUN-003 substantially advanced at source level (WS2).
+  NPC business and household cash binding were verified already live.
+  BankLedgerBindingRegistry is delivered (one ledger per bank,
+  fail-loud on a second, live reads, no cached balance, no balances
+  created) with a hub-owned lazy property and a
+  SimulationDrivers.BindBankLedger binding point, deliberately NOT
+  wired into underwriting (the lender ledger and BankRuntime ledgers
+  are disjoint; binding both would double-count). Player-bank scene
+  binding stays outstanding under gate G4. RUN-003 is NOT closed.
+- PASS11-FIX-004: RUN-004 remains OPEN for Unity. The WS4 30-day
+  production settlement proof is a Roslyn harness proof, not the Unity
+  Main Scene proof, and is recorded as such; it must not be cited as
+  RUN-004 closure.
+- PASS9-001 (fixed in Pass XI, WS3): executed asset-sale records now
+  persist through the decision ledger DTO with an additive
+  CompletedAssetSales list; re-execution is refused from the persisted
+  record; old saves load empty rather than null. The manager-ledger
+  byte golden changed by exactly the appended empty list and was
+  updated with the assertion still checking exact equality.
+- PASS9-002 (fixed in Pass XI, WS3): fee waterfall fixed by tracking
+  FeesPaidCents plus FeesPaidTracked separately on the assessment, so
+  fees accruing after a partial principal payment route to the County
+  Tax Collector with no double collection; old saves reconstruct
+  fees-first; the player leg refuses a Satisfied assessment before
+  spending, so no debit is stranded. Known limitations, not hidden:
+  the player leg still credits the civic treasury for its fee portion
+  because no collector cash store exists in its call context (the fee
+  split is booked on the assessment for later wiring), and the old-save
+  migration preserves the old misattribution in the principal-first
+  case (fees marked paid that were never paid, best-effort, matching
+  pre-fix behaviour).
+- PASS9-003 (fixed in Pass XI, WS3 plus coordinator hook): same
+  (parcel, claimant, basis) dedup on Open or Contested claims,
+  distress-sale feed, player-path persistence through the acquisition
+  manager DTO, title authority integration with claims as records
+  never ownership, evidence redaction preserved. The drivers hook
+  (FeedDisputes in DriveNpcPropertyLifeDay) is wired and null-safe.
+- PASS9-004: unchanged in Pass XI. Postage stays honest-unset (no
+  funded sender invented); locked by test. Still OPEN.
+- PASS9-005 (fixed in Pass XI, WS3): split child no longer inherits
+  the assay certificate; it starts unassayed at 0.3 estimate
+  confidence and earns its own assay; tonnage conserved, parent keeps
+  its certificate, assayed lots still never re-merge, old saves with
+  a duplicated assay id load with exactly one certified lot plus a
+  diagnostic.
+- PASS9-006 (fixed in Pass XI, WS1): DomesticTickGate (pure, exact old
+  rule, only forward motion advances) plus SaveLoadManager reset to
+  the loaded clock after every restore; completed work, pending tasks,
+  and person-time reservations preserved.
+- PASS9-007 (fixed in Pass XI, WS3, with a WS6 first-gate evolution):
+  offer multiplier weekly leg now reads financing-excluded
+  WeeklyOperatingProfitCents; payroll guard fails closed on lookup
+  exceptions with distinct diagnostics. The WS3 comment claiming the
+  refused week's wage could still be paid later was false for the
+  weekly employment path; WS6 first-gate fix M3 changed the behaviour
+  to accrue the refused week's wage as an operating liability via the
+  named-payable path (confirmed-unavailable persons still accrue
+  nothing; suspension deliberately not copied). Residual recorded as
+  PASS11-003.
+- PASS9-008: still OPEN (gate G1, Kennedy decision required). WS2
+  delivered a decision memo with four options, recommending the
+  intent-executor option only if demand collection should affect
+  play, otherwise leaving it unwired, with the double-buying hazard
+  (intents vs embodied shopping consuming the same needs exactly
+  once) as the central design fact. The type stays registered unwired
+  in Docs/UnwiredSystems.md. Collection was never wired to the live
+  tick merely to claim it wired.
+- PASS9-009 (partially fixed in Pass XI, WS3): the reporting part is
+  fixed (FillStaffing excludes owner rows from filled-worker and
+  weekly payroll, tracked in additive ownerLaborSlots and
+  ownerLaborWageCents; Pass VIII financing separation locked by
+  test). Broader A3-11 portfolio and Unity surfaces (owner-personal
+  cash, protected cash, principal debt, consolidated equity never
+  presented as spendable cash) remain open.
+- PASS9-010: still OPEN (gate G2, owner design approval required). No
+  Canon decisions invented. WS2's mine-closure plan is gated on the
+  mineral reserve decision.
+- PASS9-011: still OPEN. WS3 verified by documentation only (mine and
+  farm delegate to detailed task drivers; all other archetypes still
+  resolve through the generic ResolveBusinessOperation path crediting
+  output at resolution time). WS2 left a per-kind delegation plan
+  (retire archetype handling first, one kind at a time); conversion
+  was not attempted (dual-execution risk).
+- PASS9-012: still OPEN (scene-side remainder plus scenario catalog
+  beyond the two coded scenarios; Unity scene work).
+- PASS9-013: measurement only in Pass XI. WS3 SaveLoad-filtered run
+  71 passed, 0 failed, 72s; WS5 SaveLoad-filtered run 72 passed, 0
+  failed, 70.7s; canonical full run 77s (WS3 measurement). No
+  bottleneck confirmed, nothing optimized. Still OPEN as a revisit
+  item if campaign saves grow.
+- PASS9-014: narrowed, still OPEN (Unity session). The Pass XI audit's
+  full-repo Roslyn build showed zero errors in the four
+  harness-excluded files (only Unity package using gaps elsewhere),
+  and WS1, WS2, WS3, WS5, and WS4-follow-up edits to excluded files
+  were checked the same way, but real Unity compilation, scene
+  serialization, and PlayMode remain unproven. The M1/M2 Unity-runner
+  bootstrap tests are delivered but unrun (PASS11-008).
+- IDENT-001: interior migration remainder still OPEN. Related Pass XI
+  progress only: assay-split provenance (PASS9-005 fix) and
+  WS4-proof provenance conservation; CategoryStockState remains the
+  bulk quantity authority inside business interiors, and no second
+  inventory authority was introduced.
+- PASS8-005: still OPEN. The registry now holds thirteen detailed
+  business runtimes (BankRuntime added by WS1) plus
+  ScenarioFailureNoticeBoard (added by WS5, a presentation surface,
+  not a business runtime). The construction driver and freight driver
+  are live paths, not runtime entries. Construction types are
+  accounted in the scan baseline because they are wired through
+  drivers (WS2); the runtimes themselves remain unwired.
+- PASS8-006: still OPEN. WS2 left a scoped migration integrator plan
+  (accepted intents to OffMapJourneyAuthority journeys exactly once);
+  no integrator was built.
+- PASS7-003: still OPEN. WS2 left a stage-gated mine closure driver
+  plan gated on the G2 mineral reserve decision; no closure driver
+  was built.
+- PASS6-008: still OPEN, with related progress: the PASS9-003 work
+  preserved evidence redaction with diligence clues showing counts
+  and certainty only (identity-safe, verified). The broader
+  quick-diligence clue question is not closed by that.
+- LL-PLAY-005: still OPEN as a Unity item, with source-level progress
+  from WS5 (headline deadline normalization, failure fields,
+  presentation builder, exactly-once notice board). HUD wiring is
+  Unity work. No other LL-PLAY item is closed or advanced by Pass XI
+  source work; the full LL-PLAY set remains preserved for a dedicated
+  Unity pass.
+- A-14 (not a register item, recorded here so it is not lost):
+  late-latch semantics unchanged through Pass XI (WS1 and WS5 both
+  examined it; lenient behaviour pinned by existing latch tests;
+  flipping it is a Canon/design decision). If it flips, the latch
+  tests and the WS5 presentation-boundary comment must be updated
+  together.
+
+## New deferred items discovered in Pass XI
+
+- PASS11-001 (P2): ConstructionProjectExecutor.sequence was not
+  persisted in ConstructionProjectSaveDto, so a restored executor
+  re-minted colliding project ids (found by the WS4 proof; proof
+  restore compensated). FIXED in Pass XI follow-up: additive
+  ExecutorSequence field, restore takes max(persisted, recomputed
+  floor), old saves load safely. Verified by
+  Pass11Ws4SaveLoadFixTests; proof compensation removed.
+- PASS11-002 (P2): FreightShipmentService.dispatchAuthorities was not
+  persisted in FreightServiceSaveDto, so a restored in-transit
+  shipment completed without releasing its wagon reservation, leaving
+  a stale hold (found by the WS4 proof; proof restore compensated).
+  FIXED in Pass XI follow-up: additive
+  ShipmentIdsWithDispatchAuthorities field, restore rebinds the map
+  for transport-bound live shipments (empty list on old saves falls
+  back to shipment state), release idempotent, double restore
+  overwrites the same map key. Limitation: if hooks.Reservations is
+  null at restore, nothing can be rebound (same pattern as the
+  existing task-binding rebind). Verified by
+  Pass11Ws4SaveLoadFixTests; proof compensation removed.
+- PASS11-003 (P3): A manual PayAgreedWage for the identical missed
+  week after lookup recovery could duplicate the accrued refused-week
+  liability (WS6 first-gate M3 residual). Automated payroll cannot
+  double-pay it (weekly payroll pays the current week only). The
+  weekly diagnostic directs settlement through the liability route;
+  mechanical enforcement is a design decision, not invented here.
+  Owner: Muse source pass with design review.
+- PASS11-004 (P2): BoardingLodgingBridge.RegisterHouse has zero
+  production callers (found by WS2 verification, not patched with
+  invented data). Bootstrapped houses get runtime rooms but no
+  HousingAuthority building or LodgingRegistry registration, and
+  bridge CheckIn always refuses. Fixing it needs a parcel mapping
+  (BusinessInstanceState carries only AssignedBuildingId) and a
+  boarding trigger rule. Owner: Muse source pass with design input.
+- PASS11-005 (P2): Named-buyer distress sales have no legitimate buyer
+  source (found by WS2, honest refusal kept). Missing: a solvent
+  household buyer register with willingness evidence, an appraised
+  parcel sale-price feed, and a creditor consent source for note
+  assumption. Ruled out as sources: the business liquidation port,
+  HousingSearch negotiations, and tax-sale bid name strings. Owner:
+  Muse source pass with design review.
+- PASS11-006 (P3): StartPanel live wiring of ScenarioFailureNoticeBoard
+  and ScenarioObjectivePresentation into the panel (WS5 source
+  surface done and tested; the panel reads director state only and
+  holds no ScenarioObjectiveService reference). Wiring is
+  scene/reference work for a Unity session. Owner: Unity session.
+- PASS11-007 (P3): Legacy-slot payroll path still refuses a throwing
+  lookup with no accrual, unlike the employment path (WS6 first-gate
+  M3 residual, deliberately unchanged to keep the diff minimal).
+  Consider mirroring the employment-path accrual. Owner: Muse source
+  pass.
+- PASS11-008 (P3): M1/M2 Unity-runner bootstrap tests
+  (Tests/Editor/Scenarios/Pass11Ws6FirstGateBootstrapTests.cs) are
+  delivered but were never run in the source environment (no Unity
+  runner; the bootstrap files cannot compile in the Roslyn harness).
+  They need a real Unity Test Runner pass. Owner: Unity session.
+
 ## Fixed in Pass VI (retained with evidence)
 
 - PASS6-012a: HouseholdSplitDriver ghost-household bug. Fixed by ending the old membership before FormHousehold and applying the same correction to MarriageDriver. Verified by Section25ObservedUnobservedTests and the full harness.

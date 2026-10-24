@@ -94,6 +94,16 @@ found, the test fails loudly rather than passing silently.
   intra-subsystem and allowlisted.
 - `BakeryStagedProductionChain` and `ForgeRepairChain` are the concrete
   staged-production chains. Covered by editor tests only.
+- Pass XI WS2 update to the BankRuntime note above: the binding
+  contract is now delivered (BankLedgerBindingRegistry: one ledger per
+  bank, fail-loud on a second, live reads, no cached balance, no
+  balances created; hub-owned lazy property;
+  SimulationDrivers.BindBankLedger binding point), but it is
+  deliberately NOT wired into underwriting, because the lender ledger
+  and BankRuntime ledgers are disjoint and binding both would
+  double-count. Player-bank scene binding remains outstanding under
+  gate G4 and must never be described as wired. BankRuntime itself
+  remains UNWIRED.
 - `StoreRestockService` is instantiated only by the Phase H vertical-slice
   test fixture (`HouseholdVerticalSlicePhaseH.cs`), which is allowlisted.
   No production restock path calls it.
@@ -106,7 +116,17 @@ found, the test fails loudly rather than passing silently.
   nothing bought), so it stays a collection-side system until the
   purchase path grows a real intent executor. Its only production-tree
   references are inside its owning directory (the demand contracts and a
-  mention in `SharedBusinessRuntimeManager`).
+  mention in `SharedBusinessRuntimeManager`). Pass XI WS2 update: the
+  wire-or-retire decision (gate G1, PASS9-008) is still open. WS2
+  delivered a decision memo with four options (remain a read model,
+  become an input to the existing purchase executor, replace a specific
+  older demand-discovery path, or not yet necessary), recommending the
+  intent-executor option only if demand collection should affect play,
+  otherwise leaving it unwired. Central design fact: intents vs
+  embodied shopping consuming the same needs exactly once is a
+  double-buying hazard that any executor design must solve. Live
+  purchase already happens through embodied shopping and the general
+  store sale authority; nothing was wired in Pass XI.
 - `ScenarioObjectiveService` was registered here from Pass IX WS6 until
   Pass XI WS1, when it was WIRED and its entry removed: the director
   start hook now calls `BeginScenario` for the started scenario, the
@@ -136,7 +156,11 @@ found, the test fails loudly rather than passing silently.
   operation. Covered by editor tests only. It also remains in the
   assembly scan's feature-internal baseline, which is inert duplication
   (the scan accounts a type by caller, registry, or baseline — any one
-  suffices).
+  suffices). Pass XI WS2 re-confirmation: the service stays caller-free
+  BY DECISION (3 tests prove its atomic guarantee; no approved gameplay
+  path requires whole-household atomicity; acquisition closing
+  occupancy does not state relocation vs second property, so routing
+  it without a relocation flag would change its semantics).
 
 ## Audited production-reachable systems (NOT registry entries)
 
@@ -173,6 +197,12 @@ note records their audited status so the question does not reopen:
 - Pass XI WS5: `ScenarioFailureNoticeBoard` registered as unwired —
   exactly-once failure-notice surface with no production caller yet;
   live-panel wiring is Unity-session scene work (gate G4).
+- Pass XI WS2: BankRuntime note updated for the delivered binding
+  contract (deliberately not wired into underwriting; scene binding
+  outstanding under G4); HouseholdMoveService re-confirmed caller-free
+  by decision; RealDemandSource note updated for the decision memo
+  (gate G1 still open). No entry was closed merely because a test
+  invoked the class.
 - Pass IX (WS6): `RealDemandSource` registered as unwired (A3-09, see its
   note — unwired by decision, not oversight). Production-reachable audit
   note added for the mine chain, freight, farm, estate, domestic-labor,

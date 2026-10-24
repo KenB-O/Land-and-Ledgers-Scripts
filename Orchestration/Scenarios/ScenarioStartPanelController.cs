@@ -184,7 +184,16 @@ namespace LandLedgers.FirstLedger
                 lines.Append('\n');
             }
 
-            objectiveLabel.text = lines.ToString();
+            // Pass XI WS5 (UI refresh performance): this runs every 0.5s
+            // while a scenario is active. Assigning identical text still
+            // forces a TextMeshPro layout pass, so skip the assignment
+            // when nothing changed. Behaviour is identical; only the
+            // redundant rebuild is gone.
+            string rendered = lines.ToString();
+            if (!string.Equals(objectiveLabel.text, rendered, System.StringComparison.Ordinal))
+            {
+                objectiveLabel.text = rendered;
+            }
         }
 
         private static TMP_Text CreateText(Transform parent, string text, float size, FontStyles style)

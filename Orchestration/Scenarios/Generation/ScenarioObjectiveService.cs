@@ -121,6 +121,19 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
         public bool IsFailed;
         /// <summary>Number of goals whose missed deadline has been recorded.</summary>
         public int FailedCount;
+        /// <summary>
+        /// Pass XI WS5 (player-facing): the goal whose missed deadline
+        /// caused the failure, so a panel can name it instead of showing
+        /// every goal as merely incomplete. Empty when not failed.
+        /// Additive: older readers ignore it.
+        /// </summary>
+        public string FailedGoalId = string.Empty;
+        /// <summary>
+        /// Pass XI WS5: the failed goal's deadline day; -1 when the goal
+        /// has no deadline in the run state. Lets a panel say "missed its
+        /// day-N deadline" from the snapshot alone.
+        /// </summary>
+        public int FailedDeadlineDayIndex = -1;
     }
 
     /// <summary>
@@ -336,32 +349,13 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
         public ScenarioHeadlineSnapshot BuildHeadlineSnapshot(
             string title, int completedGoals, int totalGoals, string nextGoalId)
         {
-            int deadline = -1;
-            for (int i = 0; i < qualifiers.Count; i++)
+            int deadline = DeadlineDayIndexForGoal(nextGoalId);
+            string failedGoalId = string.Empty;
+            int failedDeadline = -1;
+            if (state.FailedGoalIds != null && state.FailedGoalIds.Count > 0)
             {
-                if (qualifiers[i].GoalId == nextGoalId)
-                {
-                    deadline = qualifiers[i].DeadlineDayIndex;
-                    break;
-                }
-            }
-            // Pass XI WS1: after a load the live qualifier list is empty
-            // until the bootstrap rebuilds it, so fall back to the
-            // persisted registration instead of reporting -1 for a goal
-            // that has a deadline in the run state.
-            if (deadline < 0 && !string.IsNullOrEmpty(nextGoalId))
-            {
-                foreach (ScenarioQualifierRegistration registration in state.QualifierRegistrations ?? new List<ScenarioQualifierRegistration>())
-                {
-                    if (registration != null && registration.GoalId == nextGoalId)
-                    {
-                        // int.MaxValue is the no-deadline sentinel used by
-                        // qualifier definitions, and still reports as -1.
-                        deadline = registration.DeadlineDayIndex == int.MaxValue
-                            ? -1 : registration.DeadlineDayIndex;
-                        break;
-                    }
-                }
+                failedGoalId = state.FailedGoalIds[0] ?? string.Empty;
+                failedDeadline = DeadlineDayIndexForGoal(failedGoalId);
             }
             return new ScenarioHeadlineSnapshot
             {
@@ -373,7 +367,45 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
                 DeadlineDayIndex = deadline,
                 IsFailed = IsFailed,
                 FailedCount = state.FailedGoalIds.Count,
+                FailedGoalId = failedGoalId,
+                FailedDeadlineDayIndex = failedDeadline,
             };
+        }
+
+        /// <summary>
+        /// Pass XI WS5: one deadline lookup for live qualifiers and
+        /// persisted registrations. int.MaxValue is the no-deadline
+        /// sentinel used by qualifier definitions (every First Ledger
+        /// goal uses it); it reports as -1 on BOTH paths. Before this
+        /// fix the live path reported the raw sentinel (2147483647)
+        /// while only the post-load fallback normalized it, so an
+        /// in-session headline showed an absurd deadline.
+        /// </summary>
+        private int DeadlineDayIndexForGoal(string goalId)
+        {
+            if (string.IsNullOrEmpty(goalId)) return -1;
+            for (int i = 0; i < qualifiers.Count; i++)
+            {
+                if (qualifiers[i].GoalId == goalId)
+                {
+                    int live = qualifiers[i].DeadlineDayIndex == int.MaxValue
+                        ? -1 : qualifiers[i].DeadlineDayIndex;
+                    // A live -1 still falls through to the registration,
+                    // preserving the pre-WS5 precedence (registration wins
+                    // when the live list carries no deadline).
+                    if (live >= 0) return live;
+                    break;
+                }
+            }
+            foreach (ScenarioQualifierRegistration registration in state.QualifierRegistrations ?? new List<ScenarioQualifierRegistration>())
+            {
+                if (registration != null && registration.GoalId == goalId)
+                {
+                    return registration.DeadlineDayIndex == int.MaxValue
+                        ? -1 : registration.DeadlineDayIndex;
+                }
+            }
+            return -1;
         }
     }
 }

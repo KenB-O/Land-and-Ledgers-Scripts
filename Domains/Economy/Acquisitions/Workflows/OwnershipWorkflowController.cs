@@ -253,8 +253,19 @@ namespace LandLedgers.FirstLedger
         {
             if (loanMode)
             {
-                playerDebtManager?.SubmitApplication(out _);
-                LLFeedbackService.Play(LLFeedbackKind.StampApproval, "formal loan workflow submit", canvas);
+                // Pass XI WS5: the approval stamp plays ONLY when the
+                // application was actually submitted. The old code
+                // discarded SubmitApplication's result and stamped every
+                // press — including a rejected one (no amount, active
+                // loan, pending application, reapply cooldown) and a
+                // press with no debt manager at all. RefreshLoan already
+                // reads the manager's status text, so a rejection still
+                // explains itself in the panel.
+                bool submitted = playerDebtManager != null && playerDebtManager.SubmitApplication(out _);
+                LLFeedbackService.Play(
+                    TransactionFeedbackDecision.ForLoanSubmission(submitted),
+                    submitted ? "formal loan workflow submit" : "formal loan workflow submit blocked",
+                    canvas);
                 RefreshLoan();
                 return;
             }

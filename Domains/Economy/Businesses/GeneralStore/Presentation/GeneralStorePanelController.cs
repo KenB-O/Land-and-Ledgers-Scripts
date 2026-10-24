@@ -3626,9 +3626,13 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            playerPortfolio.TryTransferOwnerBusinessCash(business, amount, protectedReserveCents, out message);
+            // Pass XI WS5: the cash sound plays ONLY when the transfer
+            // completed. The old code played it on the requested amount
+            // even when the transfer was blocked (ineligible business),
+            // contradicting the blocked status text.
+            bool transferred = playerPortfolio.TryTransferOwnerBusinessCash(business, amount, protectedReserveCents, out message);
             panelStatus = message;
-            LLFeedbackService.Play(ResolveMoneyFeedbackKind(amount), "business cash deposit", canvas);
+            LLFeedbackService.Play(TransactionFeedbackDecision.ForCashTransfer(transferred, amount), transferred ? "business cash deposit" : "business cash deposit blocked", canvas);
             view?.CashTransferDepositInput?.SetTextWithoutNotify(string.Empty);
             UpdateBusinessCashTransferPanel();
         }
@@ -3665,9 +3669,11 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            playerPortfolio.TryTransferOwnerBusinessCash(business, -amount, protectedReserveCents, out message);
+            // Pass XI WS5: see DepositExactBusinessCash — no cash sound
+            // for a blocked withdrawal.
+            bool transferred = playerPortfolio.TryTransferOwnerBusinessCash(business, -amount, protectedReserveCents, out message);
             panelStatus = message;
-            LLFeedbackService.Play(ResolveMoneyFeedbackKind(amount), "business cash withdrawal", canvas);
+            LLFeedbackService.Play(TransactionFeedbackDecision.ForCashTransfer(transferred, amount), transferred ? "business cash withdrawal" : "business cash withdrawal blocked", canvas);
             view?.CashTransferWithdrawInput?.SetTextWithoutNotify(string.Empty);
             UpdateBusinessCashTransferPanel();
         }
@@ -3696,10 +3702,13 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            playerPortfolio.TrySetBusinessCashThresholds(business, lowerCents, upperCents, protectedReserveCents, out message);
+            // Pass XI WS5: the confirm sound plays ONLY when the
+            // thresholds were actually set; an ineligible business
+            // rejects the change and must not sound confirmed.
+            bool applied = playerPortfolio.TrySetBusinessCashThresholds(business, lowerCents, upperCents, protectedReserveCents, out message);
             message = ResolveSelectedBusinessAutoCashTransferIfNeeded(business, protectedReserveCents, message);
             panelStatus = message;
-            LLFeedbackService.Play(LLFeedbackKind.UIConfirm, "business cash reserve thresholds apply", canvas);
+            LLFeedbackService.Play(TransactionFeedbackDecision.ForOperation(applied, LLFeedbackKind.UIConfirm), applied ? "business cash reserve thresholds apply" : "business cash reserve thresholds apply blocked", canvas);
             UpdateBusinessCashTransferPanel();
         }
 
@@ -3719,13 +3728,17 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            playerPortfolio.TryTransferOwnerBusinessCash(
+            // Pass XI WS5: the quick transfer passes the signed amount
+            // straight through with no clamp, so a blocked transfer
+            // (insufficient cash, protected reserve) previously still
+            // played the cash sound for the full requested amount.
+            bool transferred = playerPortfolio.TryTransferOwnerBusinessCash(
                 business,
                 signedDollars * 100,
                 protectedReserveCents,
                 out message);
             panelStatus = message;
-            LLFeedbackService.Play(ResolveMoneyFeedbackKind(Mathf.Abs(signedDollars) * 100), "business cash quick transfer", canvas);
+            LLFeedbackService.Play(TransactionFeedbackDecision.ForCashTransfer(transferred, Mathf.Abs(signedDollars) * 100), transferred ? "business cash quick transfer" : "business cash quick transfer blocked", canvas);
             UpdateBusinessCashTransferPanel();
         }
 
@@ -3785,10 +3798,12 @@ namespace LandLedgers.FirstLedger
             }
 
             bool enabled = !business.CashTransferRule.AutoTransferEnabled;
-            playerPortfolio.TrySetBusinessAutoTransferEnabled(business, enabled, protectedReserveCents, out message);
+            // Pass XI WS5: no confirm sound when the toggle was rejected
+            // (ineligible business); see ApplyExactBusinessCashThresholds.
+            bool toggled = playerPortfolio.TrySetBusinessAutoTransferEnabled(business, enabled, protectedReserveCents, out message);
             message = ResolveSelectedBusinessAutoCashTransferIfNeeded(business, protectedReserveCents, message);
             panelStatus = message;
-            LLFeedbackService.Play(LLFeedbackKind.UIConfirm, "business cash auto reserve toggle", canvas);
+            LLFeedbackService.Play(TransactionFeedbackDecision.ForOperation(toggled, LLFeedbackKind.UIConfirm), toggled ? "business cash auto reserve toggle" : "business cash auto reserve toggle blocked", canvas);
             UpdateBusinessCashTransferPanel();
         }
 

@@ -129,6 +129,26 @@ namespace LandLedgers.World.Property
         public CreditEventLog Events;
         public PropertyTaxService TaxService;
         public PropertyDisputeService Disputes;
+        /// <summary>
+        /// Pass XI WS3 (PASS9-003): the production feed for dispute
+        /// recording on a brokered distress sale. SimulationDrivers (WS1
+        /// owns that file) must set this to the acquisition manager's
+        /// dispute service — the same instance the player acquisition
+        /// path records through, so player and NPC claims share one
+        /// persisted record — when it builds the context:
+        /// <c>context.FeedDisputes(acquisitionMarket.PropertyDisputes)</c>.
+        /// Until that one-line hook lands, SellProperty records nothing
+        /// for distress sales (disputes == null is the honest no-op, not
+        /// a silent claim). A claim recorded here never creates legal
+        /// ownership: SellProperty transfers title only through the title
+        /// authority on a real conveyance, and dispute recording runs
+        /// after that transfer as a record, not as a right.
+        /// </summary>
+        public NpcDistressSaleContext FeedDisputes(PropertyDisputeService disputes)
+        {
+            Disputes = disputes;
+            return this;
+        }
         public int BuyerHouseholdId = -1;
         public int SalePriceCents;
         public bool BuyerAssumesNote;
@@ -271,6 +291,12 @@ namespace LandLedgers.World.Property
                     $"property tax payment returned — assessment refused: {payProblem}", diag);
                 return $"NpcPropertyLife.PayPropertyTax: assessment refused ({payProblem}); cash return: {(backProblem ?? "clean")}.";
             }
+            // Pass XI WS3 (PASS9-002): this leg pays the collector store
+            // directly, so the fee split it contains must still be booked
+            // on the assessment — otherwise a later AuditTaxes pass would
+            // route the same fees to the collector a second time.
+            assessment.FeesPaidCents += assessment.FeePortionOfPaymentCents(amountCents);
+            assessment.FeesPaidTracked = true;
             holding.Decisions.Add($"day {dayIndex}: paid {amountCents}c property tax on '{holding.ParcelId}' from real cash.");
             return null;
         }
@@ -332,8 +358,12 @@ namespace LandLedgers.World.Property
                         continue;
                     }
                     // Fees-first waterfall (collector keeps finder/arrears-fee income).
-                    int totalFees = Math.Max(0, assessment.PenaltiesAccruedCents + assessment.InterestAccruedCents);
-                    int feePortion = Math.Min(amount, Math.Max(0, totalFees - assessment.AmountPaidCents));
+                    // Pass XI WS3 (PASS9-002): the fee portion is read from
+                    // the assessment's separate FeesPaidCents ledger, never
+                    // from AmountPaidCents — a partial principal payment
+                    // made before fees accrued must not swallow the fees
+                    // that accrue afterwards.
+                    int feePortion = assessment.FeePortionOfPaymentCents(amount);
                     int principalPortion = amount - feePortion;
                     bool collectorPaid = false;
                     if (feePortion > 0 && cash.FindStore("County Tax Collector") != null)
@@ -375,6 +405,12 @@ namespace LandLedgers.World.Property
                         continue;
                     }
                     int absorbed = Math.Max(0, assessment.AmountPaidCents - paidBefore);
+                    // The fee split is settled by this payment: record the
+                    // fee portion actually paid so a later payment never
+                    // routes the same fees again, whichever store received
+                    // them (collector when registered, treasury fallback).
+                    assessment.FeesPaidCents += Math.Min(feePortion, absorbed);
+                    assessment.FeesPaidTracked = true;
                     // The treasury is credited exactly the portion of the
                     // absorbed payment that was debited for it — never more
                     // than was paid, never twice for the same cents.

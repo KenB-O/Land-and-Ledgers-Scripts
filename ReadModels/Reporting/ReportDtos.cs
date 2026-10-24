@@ -122,6 +122,14 @@ namespace LandLedgers.Reporting
         public int weeklyPayrollCents;
         public int filledWorkerPayrollCents;
         public int openSlotPlannedPayrollCents;
+        // Pass XI WS3 (PASS9-009, additive): owner labor is tracked
+        // separately and NEVER counted in the payroll figures above.
+        // Production payroll skips owner slots (worker id prefix
+        // "owner:"), so a worker row carrying an owner wage must not
+        // inflate reported payroll. filledWorkerSlots still counts the
+        // slot as filled; only its wage is excluded.
+        public int ownerLaborSlots;
+        public int ownerLaborWageCents;
         public BusinessStaffingPayrollSource payrollSource;
         public bool usesFallbackPayroll;
         public string payrollReadSummary;
@@ -233,6 +241,11 @@ namespace LandLedgers.Reporting
         public int weeklyPayrollCents;
         public int filledWorkerPayrollCents;
         public int openSlotPlannedPayrollCents;
+        // Pass XI WS3 (PASS9-009): owner labor carried through the
+        // portfolio line alongside the business staffing summary —
+        // excluded from the payroll figures above, counted here.
+        public int ownerLaborSlots;
+        public int ownerLaborWageCents;
         public BusinessStaffingPayrollSource payrollSource;
         public bool usesFallbackPayroll;
         public string payrollReadSummary;

@@ -464,6 +464,8 @@ namespace LandLedgers.Reporting
                 weeklyPayrollCents = Math.Max(0, staffing.weeklyPayrollCents),
                 filledWorkerPayrollCents = Math.Max(0, staffing.filledWorkerPayrollCents),
                 openSlotPlannedPayrollCents = Math.Max(0, staffing.openSlotPlannedPayrollCents),
+                ownerLaborSlots = Math.Max(0, staffing.ownerLaborSlots),
+                ownerLaborWageCents = Math.Max(0, staffing.ownerLaborWageCents),
                 payrollSource = staffing.payrollSource,
                 usesFallbackPayroll = staffing.usesFallbackPayroll,
                 payrollReadSummary = staffing.payrollReadSummary ?? string.Empty,

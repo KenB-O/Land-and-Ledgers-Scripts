@@ -968,7 +968,14 @@ namespace LandLedgers.Economy
             int qualityValue = Mathf.RoundToInt(landValue * Mathf.Clamp01(business.OperatingEfficiency01) * 0.22f);
             int cashPressure = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business) - runtime.CurrentCashCents;
             float distressMultiplier = cashPressure > 0 ? Mathf.Lerp(0.72f, 0.9f, Mathf.Clamp01(runtime.CurrentCashCents / (float)Mathf.Max(1, SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business)))) : 1f;
-            float weakPerformanceMultiplier = runtime.AllTimeNetCents < 0 ? 0.86f : runtime.WeekToDateNetCents < 0 ? 0.94f : 1.04f;
+            // Pass XI WS3 (PASS9-007): the weekly leg of the weak-performance
+            // multiplier reads the financing-excluded operating feed
+            // (WeeklyOperatingProfitCents), not WeekToDateNetCents, which
+            // mixes financing credits into the week's result — a business
+            // kept afloat by borrowing must not price as a strong performer
+            // on the borrowed week. The long-run AllTimeNetCents gate is
+            // unchanged: it is a separate distress gate, not the weekly feed.
+            float weakPerformanceMultiplier = runtime.AllTimeNetCents < 0 ? 0.86f : runtime.WeeklyOperatingProfitCents < 0 ? 0.94f : 1.04f;
             int gross = Mathf.Max(1, landValue + operatingValue + staffValue + qualityValue);
             offerCents = Mathf.Max(1, Mathf.RoundToInt(gross * distressMultiplier * weakPerformanceMultiplier));
             string distress = cashPressure > 0 ? $"distress discount {FormatMoney(cashPressure)} reserve shortfall" : "no distress discount";
@@ -1133,6 +1140,10 @@ namespace LandLedgers.Economy
             dto.titleChain = titleAuthority.CaptureSaveDto();
             dto.propertyTax = PropertyTaxes.Taxes.CaptureSaveDto();
             dto.lastPropertyTaxDay = PropertyTaxes.LastProcessedDayIndex;
+            // Pass XI WS3 (PASS9-003): persist the dispute-claim record
+            // from the same service the acquisition choke point records
+            // through, so player-path claims survive a save round trip.
+            dto.propertyDisputes = PropertyDisputes.CaptureSaveDto();
 
             return dto;
         }
@@ -1166,6 +1177,7 @@ namespace LandLedgers.Economy
             if (dto == null)
             {
                 titleAuthority.LoadFromSaveDto(new TitleAuthority.TitleSaveDto());
+                PropertyDisputes.LoadFromSaveDto(new PropertyDisputeService.PropertyDisputeSaveDto());
                 EnsureConstructionSupportNodesLoaded();
                 marketBuilt = false;
                 RebuildMarket();
@@ -1189,6 +1201,9 @@ namespace LandLedgers.Economy
             titleAuthority.LoadFromSaveDto(dto.titleChain ?? new TitleAuthority.TitleSaveDto());
             if (dto.propertyTax != null) PropertyTaxes.Taxes.LoadFromSaveDto(dto.propertyTax);
             PropertyTaxes.RestoreLastProcessedDayIndex(dto.lastPropertyTaxDay);
+            // Pass XI WS3 (PASS9-003): restore the dispute-claim record
+            // (null-guarded for pre-Pass-XI saves, which start empty).
+            if (dto.propertyDisputes != null) PropertyDisputes.LoadFromSaveDto(dto.propertyDisputes);
 
             if (dto.ownedPlotIds != null)
             {

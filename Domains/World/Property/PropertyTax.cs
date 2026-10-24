@@ -38,6 +38,38 @@ namespace LandLedgers.World.Property
         public int PenaltiesAccruedCents;
         public int InterestAccruedCents;
         public int AmountPaidCents;
+        /// <summary>
+        /// Pass XI WS3 (PASS9-002, additive): cents of THIS assessment's
+        /// payments already allocated to fees (penalties plus interest)
+        /// under the fees-first waterfall. AmountPaidCents mixes principal
+        /// and fees, so deriving the fee portion from it misroutes fees
+        /// that accrue after a partial principal payment to the civic
+        /// treasury instead of the County Tax Collector. FeesPaidCents is
+        /// the separate ledger for that split; see
+        /// <see cref="FeePortionOfPaymentCents(int)"/>.
+        /// </summary>
+        public int FeesPaidCents;
+        /// <summary>
+        /// Pass XI WS3 (PASS9-002, additive): true once FeesPaidCents is
+        /// tracked for this assessment. Old saves predate the field and
+        /// load it as false, which is how LoadFromSaveDto distinguishes
+        /// an untracked old assessment (best-effort reconstruction, never
+        /// a re-route of already-settled fees) from a tracked new one
+        /// whose FeesPaidCents is genuinely zero.
+        /// </summary>
+        public bool FeesPaidTracked;
+
+        /// <summary>Fees (penalties plus interest) accrued but not yet allocated to a payment.</summary>
+        public int UnpaidFeesCents() =>
+            Math.Max(0, PenaltiesAccruedCents + InterestAccruedCents - FeesPaidCents);
+
+        /// <summary>
+        /// Fees-first split of one payment: the fee portion is the unpaid
+        /// fees, capped by the payment itself. Principal is the remainder.
+        /// Never derived from AmountPaidCents, which mixes the two.
+        /// </summary>
+        public int FeePortionOfPaymentCents(int amountCents) =>
+            Math.Min(Math.Max(0, amountCents), UnpaidFeesCents());
         public TaxAssessmentStatus Status = TaxAssessmentStatus.Unspecified;
         public string TaxLienInstrumentId = string.Empty;
 
@@ -154,6 +186,8 @@ namespace LandLedgers.World.Property
                 PenaltyBpsMonthly = Math.Max(0, penaltyBpsMonthly),
                 InterestBpsAnnual = Math.Max(0, interestBpsAnnual),
                 Status = TaxAssessmentStatus.Assessed,
+                FeesPaidCents = 0,
+                FeesPaidTracked = true,
             };
             assessments[assessment.AssessmentId] = assessment;
             diag.Add($"PropertyTaxService: {taxYear} levy on '{parcelId}' — {amountCents}c due day {dueDayIndex} " +
@@ -440,8 +474,25 @@ namespace LandLedgers.World.Property
             {
                 foreach (TaxAssessment assessment in dto.Assessments)
                 {
-                    if (assessment != null && !string.IsNullOrEmpty(assessment.AssessmentId))
-                        assessments[assessment.AssessmentId] = assessment;
+                    if (assessment == null || string.IsNullOrEmpty(assessment.AssessmentId)) continue;
+                    if (!assessment.FeesPaidTracked)
+                    {
+                        // Pass XI WS3 (PASS9-002) old-save migration: the
+                        // pre-fix book never tracked the fee split, so the
+                        // fees-first reconstruction (fees paid so far are
+                        // at most the fees accrued, capped by what was
+                        // paid) is the safe default. It preserves the
+                        // previous recipient for already-settled fees —
+                        // nothing is re-routed on load — and only fees
+                        // accruing after the load route under the new
+                        // split. Tracked assessments keep their recorded
+                        // FeesPaidCents untouched.
+                        assessment.FeesPaidCents = Math.Min(
+                            Math.Max(0, assessment.AmountPaidCents),
+                            Math.Max(0, assessment.PenaltiesAccruedCents + assessment.InterestAccruedCents));
+                        assessment.FeesPaidTracked = true;
+                    }
+                    assessments[assessment.AssessmentId] = assessment;
                 }
             }
             if (dto.Sales != null)

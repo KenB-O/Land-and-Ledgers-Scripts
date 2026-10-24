@@ -343,7 +343,14 @@ namespace LandLedgers.Economy.Postal
             if (!string.Equals(order.PayeeName, advice.PayeeName, StringComparison.Ordinal))
                 return FlagFraud(order, $"payee altered: order shows '{order.PayeeName}', advice shows '{advice.PayeeName}'.", dayIndex, diag);
 
-            bool isPayee = !string.IsNullOrEmpty(presenterName) &&
+            // Pass XI WS3 (RUN-011): an indorsement TRANSFERS presentment.
+            // Once the payee has indorsed to a second person, the payee no
+            // longer presents — otherwise the original payee could collect
+            // money that now belongs to the indorsee. A bank collecting as
+            // the payee's agent is unaffected: its stamp is not an
+            // indorsement, so it still presents when no indorsement exists.
+            bool isPayee = string.IsNullOrEmpty(order.IndorsedToName) &&
+                !string.IsNullOrEmpty(presenterName) &&
                 string.Equals(presenterName, order.PayeeName, StringComparison.Ordinal);
             bool isIndorsee = !string.IsNullOrEmpty(order.IndorsedToName) &&
                 string.Equals(presenterName, order.IndorsedToName, StringComparison.Ordinal);

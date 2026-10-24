@@ -237,6 +237,33 @@ namespace LandLedgers.Economy.Freight
             int minutes = Math.Max(1, Mathf.CeilToInt(Math.Max(0f, gameSeconds) / 60f));
             int advanced = 0;
 
+            // Pass XI WS2 (A-25): an Invalid handler is safe but silent in
+            // the original code — handler-gated shipments (Planned, Loading,
+            // Arrived, Unloading, undelivered Partial) simply never move,
+            // while InTransit shipments still advance and revenue still
+            // collects. Name the wait loudly so a carrier with no owner and
+            // no active employees is diagnosable instead of mysteriously
+            // idle. Behaviour is unchanged: nothing is dispatched without
+            // a real handler.
+            if (!handlerId.IsValid)
+            {
+                int waiting = 0;
+                foreach (LogisticsShipmentState shipment in AllShipments())
+                {
+                    if (shipment == null || !FreightShipmentService.IsLiveShipment(shipment)) continue;
+                    if (shipment.Status == LogisticsShipmentStatus.Planned
+                        || (shipment.Status == LogisticsShipmentStatus.Loading && !shipment.loadApplied)
+                        || shipment.Status == LogisticsShipmentStatus.Arrived
+                        || shipment.Status == LogisticsShipmentStatus.Unloading
+                        || (shipment.Status == LogisticsShipmentStatus.Partial && !shipment.deliveryApplied))
+                        waiting++;
+                }
+                if (waiting > 0)
+                    diagnostics.Add($"FreightProductionDriver: {waiting} shipment(s) wait for a handler — " +
+                        "the carrier has no owner and no active employees, so loading and unloading cannot start. " +
+                        "In-transit shipments still advance and revenue still collects; nothing is dispatched without a real handler.");
+            }
+
             foreach (LogisticsShipmentState shipment in AllShipments())
             {
                 if (shipment == null || !FreightShipmentService.IsLiveShipment(shipment))

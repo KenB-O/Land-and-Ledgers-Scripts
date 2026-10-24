@@ -106,6 +106,14 @@ namespace LandLedgers.Economy
         /// <summary>Explicit commission requests waiting to be commissioned. Filled only by the caller.</summary>
         public List<NpcConstructionRequest> PendingRequests { get; } = new List<NpcConstructionRequest>();
 
+        /// <summary>
+        /// Optional per-household material source resolver (a yard runtime
+        /// for one household's project, a household-inventory source for
+        /// another). When set it wins over the single material source for
+        /// that project's household; when unset the single source is used.
+        /// </summary>
+        public Func<int, IConstructionMaterialSource> MaterialSourceByHousehold { get; set; }
+
         public NpcConstructionDriver(
             NpcConstructionCommissioner commissioner,
             ConstructionProjectExecutor executor,
@@ -329,10 +337,13 @@ namespace LandLedgers.Economy
                 if (problem != null) blockedProcurementPackages.Add(key);
                 return problem;
             }
-            if (materialSource == null)
+            IConstructionMaterialSource source = MaterialSourceByHousehold != null
+                ? MaterialSourceByHousehold(project.HouseholdId) : null;
+            if (source == null) source = materialSource;
+            if (source == null)
                 return "no material source and no procurement port bound — materials come from real lots only.";
             return commissioner.FundAndStagePackage(executor, project, record, package,
-                materialSource, pricePort, cash, buyerOwnerName, defaultSupplierOwnerName,
+                source, pricePort, cash, buyerOwnerName, defaultSupplierOwnerName,
                 obligations, ids, dayIndex, diag);
         }
 

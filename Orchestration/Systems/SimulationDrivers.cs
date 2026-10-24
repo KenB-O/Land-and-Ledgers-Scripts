@@ -119,9 +119,18 @@ namespace LandLedgers.Orchestration.Systems
         private readonly WillContestService estateContests = new WillContestService();
         private EstateLifecycleDriver estateLifecycleDriver;
         private OffMapJourneyAuthority offMapJourneys;
-        // Pass IX (A2-04): watermark of the last game-second value forwarded
-        // to DomesticLaborDriver.AdvanceTick from OnShortTick.
-        private float previousDomesticTickGameSeconds = -1f;
+        // Pass XI WS1 (PASS9-006): watermark of the last game-second value
+        // forwarded to DomesticLaborDriver.AdvanceTick from OnShortTick.
+        // Held in DomesticTickGate so the save/load hook can reset it
+        // explicitly; the gate holds only the float, never driver state.
+        private readonly DomesticTickGate domesticTickGate = new DomesticTickGate();
+
+        /// <summary>
+        /// Pass XI WS1: scenario id warned about once for objective
+        /// evaluation mismatch, so a miswired start cannot spam the log
+        /// once per day.
+        /// </summary>
+        private string scenarioEvaluateWarnedForId;
 
         /// <summary>
         /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
@@ -286,6 +295,93 @@ namespace LandLedgers.Orchestration.Systems
             WireNpcBusinessCashStores();
             BindNpcBusinessCreation(sharedBusinessRuntime);
             InstallProductionPayrollGuards();
+        }
+
+        /// <summary>
+        /// Pass XI WS1: the production entry point for rebinding drivers
+        /// after load or restore, or when a drivers object is created
+        /// after bootstrap. Re-runs the FindAnyObjectByType discovery
+        /// plus TimeManager subscription plus AttachBusinessRuntime
+        /// wiring, and is safe to call twice: subscription is guarded by
+        /// the existing subscribed flag, manager execution configuration
+        /// is guarded by its own flag, and the weekly callback setter
+        /// accepts the same delegate repeatedly. Restored systems then
+        /// resume through ordinary drivers instead of stale references.
+        /// PlayerDirector is a plain C# authority and cannot be
+        /// discovered from the scene; bootstrap assignment still owns it,
+        /// and Rebind forwards an already-assigned one to the director.
+        /// </summary>
+        public void Rebind()
+        {
+            hub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
+            scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            populationManager ??= FindAnyObjectByType<PopulationManager>();
+            SubscribeToTimeManager();
+
+            if (hub == null)
+            {
+                Debug.LogWarning("[SimulationDrivers] Rebind found no SimulationSystemsHub — drivers idle.");
+                return;
+            }
+
+            if (scenarioDirector != null)
+            {
+                scenarioDirector.TaskAuthority = hub.Tasks;
+                if (playerDirector != null)
+                {
+                    scenarioDirector.PlayerDirector = playerDirector;
+                }
+            }
+
+            if (sharedBusinessRuntime != null)
+            {
+                AttachBusinessRuntime(sharedBusinessRuntime);
+            }
+        }
+
+        /// <summary>
+        /// Pass XI WS1 (PASS9-006): save/load hook, called by
+        /// SaveLoadManager after a restore (and usable on New Game
+        /// clear). Resets the domestic tick watermark to the loaded
+        /// clock so loading an earlier-time save in the same session
+        /// does not stall domestic labor. Touches only the watermark:
+        /// completed work, pending tasks, and person-time reservations
+        /// are untouched.
+        /// </summary>
+        public void ResetDomesticTickWatermark(float loadedAbsoluteGameSeconds)
+        {
+            domesticTickGate.Reset(loadedAbsoluteGameSeconds);
+        }
+
+        /// <summary>
+        /// Pass XI WS1: the drivers daily hook for scenario objective
+        /// evaluation. Runs the hub objective service for the director's
+        /// active scenario with the current absolute day index. A
+        /// mismatch between director and service scenario ids (a start
+        /// hook that never ran) warns once per scenario instead of
+        /// evaluating the wrong run.
+        /// </summary>
+        private void EvaluateScenarioObjectives(int absoluteDayIndex)
+        {
+            if (scenarioDirector == null || !scenarioDirector.HasActiveScenario || hub == null)
+            {
+                return;
+            }
+
+            string activeId = scenarioDirector.ActiveScenarioId;
+            if (!string.Equals(hub.ScenarioObjectives.ScenarioId, activeId, StringComparison.Ordinal))
+            {
+                if (!string.Equals(scenarioEvaluateWarnedForId, activeId, StringComparison.Ordinal))
+                {
+                    scenarioEvaluateWarnedForId = activeId;
+                    Debug.LogWarning($"[SimulationDrivers] Scenario objectives not evaluating: objective service tracks '{hub.ScenarioObjectives.ScenarioId}' but the director runs '{activeId}'. Check the scenario start hook.");
+                }
+                return;
+            }
+
+            hub.ScenarioObjectives.Evaluate(absoluteDayIndex);
         }
 
         /// <summary>
@@ -965,6 +1061,10 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             int absoluteDayIndex = timeManager.CurrentAbsoluteDayIndex;
+
+            // Pass XI WS1 start contract: the day change drives dated
+            // objective evaluation for the active scenario.
+            EvaluateScenarioObjectives(absoluteDayIndex);
 
             // Pass IV (Worker 1): drain due events due at the day boundary before the
             // daily drivers advance.
@@ -3044,11 +3144,11 @@ namespace LandLedgers.Orchestration.Systems
             // pending list); without this tick call no meal-prep, fuel,
             // animal-care, or chore task ever executed in production.
             // Mirrors the LivingWorldSim tick usage.
-            if (timeManager != null && timeManager.AbsoluteGameSeconds > previousDomesticTickGameSeconds)
+            if (timeManager != null && domesticTickGate.ShouldAdvance(timeManager.AbsoluteGameSeconds))
             {
                 // Watermark: only forward motion advances domestic labor, so
                 // a repeated/paused tick can never re-start a pending task.
-                previousDomesticTickGameSeconds = timeManager.AbsoluteGameSeconds;
+                domesticTickGate.MarkAdvanced(timeManager.AbsoluteGameSeconds);
                 var domesticDiag = new List<string>();
                 hub.DomesticLaborDriver.AdvanceTick(
                     timeManager.AbsoluteGameSeconds,

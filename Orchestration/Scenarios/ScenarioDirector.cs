@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Orchestration.Player;
+using LandLedgers.Orchestration.Scenarios.Generation;
 using LandLedgers.Population;
 using LandLedgers.Persistence;
 using LandLedgers.Tasks;
@@ -65,6 +66,32 @@ namespace LandLedgers.Orchestration.Scenarios
         public bool HasActiveScenario => Service.HasActiveScenario;
         public string ActiveScenarioId => Service.ActiveState?.Asset.ScenarioId;
 
+        /// <summary>
+        /// Pass XI WS1: the hub-owned objective tracker for the active
+        /// scenario. Assigned by scene bootstrap code (the slice
+        /// bootstrapper and the scenario bootstraps both find the hub and
+        /// the director on Awake); never constructed here, so the
+        /// director stays the one scenario authority and this service
+        /// only tracks dated qualifiers for the director's scenario.
+        /// Scene hookup contract: if a scene holds neither bootstrap,
+        /// bootstrap code must assign this before any SwitchScenario, or
+        /// objective tracking stays idle and SwitchScenario warns.
+        /// </summary>
+        public ScenarioObjectiveService ObjectiveService { get; set; }
+
+        /// <summary>
+        /// Pass XI WS1: fired at the end of a genuine scenario start
+        /// (SwitchScenario), after ObjectiveService.BeginScenario, so
+        /// scenario bootstraps can register their dated qualifiers
+        /// against the fresh run state. Never fired on restore: restore
+        /// must not wipe the hub-loaded run state, and the bootstrap
+        /// restore path reconciles and rebuilds qualifiers instead.
+        /// </summary>
+        public event Action<string> ScenarioStarted;
+
+        /// <summary>True while RestoreFromSaveDto runs SwitchScenario, so the start hook below is skipped on restore.</summary>
+        private bool suppressObjectiveStart;
+
         public ScenarioSaveDto CaptureSaveDto()
         {
             if (!HasActiveScenario)
@@ -87,9 +114,23 @@ namespace LandLedgers.Orchestration.Scenarios
                 return false;
             }
 
-            if (!SwitchScenario(dto.activeScenarioId))
+            // Pass XI WS1: restore runs the same activation as a start
+            // (household declaration and starting tasks, as before) but
+            // must NOT begin a fresh objective run: the hub-loaded run
+            // state (latched goals, failures, qualifier registrations)
+            // is the restored truth, and the bootstrap restore path
+            // reconciles it with director and evaluator goals afterwards.
+            suppressObjectiveStart = true;
+            try
             {
-                return false;
+                if (!SwitchScenario(dto.activeScenarioId))
+                {
+                    return false;
+                }
+            }
+            finally
+            {
+                suppressObjectiveStart = false;
             }
 
             Service.ActiveState.RestoreCompletedGoalIds(dto.completedGoalIds);
@@ -206,6 +247,25 @@ namespace LandLedgers.Orchestration.Scenarios
 
             BootstrapPlayerHousehold(asset);
             EnqueueStartingTasks(asset);
+
+            // Pass XI WS1 start contract: a scenario start actually
+            // begins objective tracking for the same scenario id, and
+            // the drivers daily hook evaluates it. Bootstraps register
+            // their dated qualifiers on ScenarioStarted, after this
+            // BeginScenario cleared the previous run's qualifiers.
+            if (!suppressObjectiveStart)
+            {
+                if (ObjectiveService != null)
+                {
+                    ObjectiveService.BeginScenario(scenarioId);
+                }
+                else
+                {
+                    Debug.LogWarning("[ScenarioDirector] No ObjectiveService assigned — dated scenario objectives will not track. Assign it from scene bootstrap code.", this);
+                }
+
+                ScenarioStarted?.Invoke(scenarioId);
+            }
 
             Debug.Log($"[ScenarioDirector] Scenario '{scenarioId}' active. {Service.ActiveState.Diagnostics.Count} diagnostic(s).", this);
             foreach (string diagnostic in Service.ActiveState.Diagnostics)

@@ -68,6 +68,55 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
         public IReadOnlyCollection<string> HistoricalCompleted => historicalCompleted;
         public IReadOnlyCollection<string> PredicatesHolding => predicateHolding;
 
+        /// <summary>
+        /// Pass XI WS1: the completed set the bootstrap reconciles and
+        /// persists — historical milestones plus final-state predicates
+        /// currently holding. Final-state goals that no longer hold are
+        /// not completed, which is why restore takes both sets.
+        /// </summary>
+        public List<string> CompletedGoalIds()
+        {
+            var result = new List<string>();
+            foreach (string goalId in historicalCompleted) result.Add(goalId);
+            foreach (string goalId in predicateHolding)
+            {
+                if (!result.Contains(goalId)) result.Add(goalId);
+            }
+            return result;
+        }
+
+        /// <summary>True when the goal counts as complete in evaluator state (historical or currently holding).</summary>
+        public bool GoalHolds(string goalId)
+        {
+            return historicalCompleted.Contains(goalId) || predicateHolding.Contains(goalId);
+        }
+
+        /// <summary>
+        /// Pass XI WS1: restores evaluator state from a save. Historical
+        /// goals restore unconditionally (milestones persist); final-state
+        /// goals restore only the holding set, and the next evaluation
+        /// re-derives them from live state. Unknown ids are ignored.
+        /// </summary>
+        public void RestoreState(IEnumerable<string> historicalGoalIds, IEnumerable<string> holdingGoalIds)
+        {
+            if (historicalGoalIds != null)
+            {
+                foreach (string goalId in historicalGoalIds)
+                {
+                    if (!string.IsNullOrWhiteSpace(goalId) && HistoricalGoals.Contains(goalId))
+                        historicalCompleted.Add(goalId);
+                }
+            }
+            if (holdingGoalIds != null)
+            {
+                foreach (string goalId in holdingGoalIds)
+                {
+                    if (!string.IsNullOrWhiteSpace(goalId) && !HistoricalGoals.Contains(goalId))
+                        predicateHolding.Add(goalId);
+                }
+            }
+        }
+
         public bool IsScenarioComplete =>
             predicateHolding.Contains("crown-rank-one")
             && predicateHolding.Contains("own-all-three")

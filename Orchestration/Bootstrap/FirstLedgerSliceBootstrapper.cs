@@ -732,6 +732,11 @@ namespace LandLedgers.FirstLedger
 
             scenarioDirector.Lifecycle = playerHouseholdLifecycle;
             scenarioDirector.FounderResolver = ResolveScenarioFounders;
+            // Pass XI WS1: the director's objective hook needs the
+            // hub-owned service. The scenario bootstraps assign the same
+            // reference on Awake; this assignment covers scenes where a
+            // bootstrap awakens after the first start.
+            scenarioDirector.ObjectiveService ??= systemsHub.ScenarioObjectives;
 
             PersonState firstPerson = FindFirstLivingPerson(population);
             if (firstPerson != null)

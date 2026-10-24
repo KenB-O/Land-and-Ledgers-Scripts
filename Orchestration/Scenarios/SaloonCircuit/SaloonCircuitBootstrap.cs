@@ -155,15 +155,38 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
         {
             if (dto == null || scenarioDirector == null)
             {
+                Debug.LogError("[SaloonCircuitBootstrap] Restore skipped: no save dto or no scenario director — Saloon goals cannot be restored.");
                 return;
             }
 
-            // The First Ledger bootstrap already ran the director
-            // restore (SaveLoadManager order); this method only owns
-            // the Saloon evaluator, reconciliation, and qualifier
-            // rebuild, and only when the Saloon Circuit is active.
+            // Pass XI WS6 first-gate (M1): this restore is
+            // self-sufficient. It used to assume the First Ledger
+            // bootstrap had already run the director restore
+            // (SaveLoadManager order), so a scene holding the Saloon
+            // bootstrap without the First Ledger bootstrap never ran
+            // director restore at all, and evaluator restore,
+            // reconciliation, and qualifier rebuild silently no-op'd,
+            // dropping saved Saloon goals on load. When the director
+            // has no active scenario, run its restore here; when it
+            // already runs a scenario (e.g. the First Ledger restore
+            // ran first in SaveLoadManager order), never re-run it.
+            if (!scenarioDirector.HasActiveScenario)
+            {
+                if (!scenarioDirector.RestoreFromSaveDto(dto))
+                {
+                    Debug.LogError("[SaloonCircuitBootstrap] Restore skipped: director restore failed — Saloon evaluator, reconciliation, and qualifier rebuild did not run, so saved Saloon goals are NOT restored.");
+                    return;
+                }
+            }
+
+            // Only the Saloon evaluator, reconciliation, and qualifier
+            // rebuild belong here, and only when the Saloon Circuit is
+            // the restored scenario. A different restored scenario is
+            // a loud skip, not a silent one: a Saloon save must not
+            // seed another scenario's goals, and vice versa.
             if (!string.Equals(scenarioDirector.ActiveScenarioId, SaloonCircuitScenario.ScenarioId, StringComparison.Ordinal))
             {
+                Debug.LogError($"[SaloonCircuitBootstrap] Restore skipped: restored scenario is '{scenarioDirector.ActiveScenarioId ?? "<none>"}', not the Saloon Circuit — evaluator restore, reconciliation, and qualifier rebuild did not run.");
                 return;
             }
 

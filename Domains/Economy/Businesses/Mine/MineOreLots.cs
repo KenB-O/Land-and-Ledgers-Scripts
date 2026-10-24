@@ -174,6 +174,14 @@ namespace LandLedgers.Economy.Businesses.Mine
         /// parent (and the parent's ancestry) recorded in the child's
         /// lineage. The caller (MineOreStock.SplitLot) removes the tons
         /// from the parent and validates the request.
+        /// Pass XI WS3 (PASS9-005): the child NEVER inherits the assay.
+        /// One assay certifies one lot: the parent keeps its certificate,
+        /// and the child starts unassayed at estimate confidence, carrying
+        /// the parent's grade value only as an estimate of the same
+        /// material. Minting the parent's assay id onto the child would
+        /// certify two lots with one assay; minting a fresh id here would
+        /// be worse, inventing a certification nobody performed. The
+        /// child earns its own assay through RecordAssay, like any lot.
         /// </summary>
         public static MineOreLot CreateSplit(MineOreLot parent, EntityId newLotId, int tons)
         {
@@ -185,11 +193,11 @@ namespace LandLedgers.Economy.Businesses.Mine
                 tons = Math.Max(0, tons),
                 gradeValue = parent.gradeValue,
                 gradeUnit = parent.gradeUnit,
-                assayed = parent.assayed,
-                assayId = parent.assayId,
-                assayerPersonId = parent.assayerPersonId,
-                assayDayIndex = parent.assayDayIndex,
-                gradeConfidence01 = parent.gradeConfidence01,
+                assayed = false,
+                assayId = string.Empty,
+                assayerPersonId = EntityId.Invalid,
+                assayDayIndex = -1,
+                gradeConfidence01 = 0.3f,
                 shaftId = parent.shaftId,
                 levelId = parent.levelId,
                 veinId = parent.veinId,
@@ -532,9 +540,50 @@ namespace LandLedgers.Economy.Businesses.Mine
             var stock = new MineOreStock();
             if (dto != null)
             {
+                // Pass XI WS3 (PASS9-005) old-save migration: pre-fix
+                // splits copied the parent's assay id onto the child, so
+                // an old stockpile can carry two lots under one assay.
+                // The first lot keeps the certificate; each later lot
+                // sharing it is rebuilt unassayed at estimate confidence
+                // with a diagnostic — never silently re-certified, and
+                // never given a fresh invented assay. The caller's DTO
+                // is not mutated: the clear is applied to a copy.
+                var seenAssayIds = new HashSet<string>(StringComparer.Ordinal);
                 foreach (MineOreLotSaveDto lotDto in dto.lots)
                 {
-                    MineOreLot lot = MineOreLot.FromSaveDto(lotDto);
+                    if (lotDto == null)
+                        continue;
+                    MineOreLotSaveDto effectiveDto = lotDto;
+                    if (lotDto.assayed && !string.IsNullOrEmpty(lotDto.assayId)
+                        && !seenAssayIds.Add(lotDto.assayId))
+                    {
+                        stock.diagnostics.Add(
+                            $"MineOreStock.FromSaveDto: lot {lotDto.lotSeq} carried a duplicate of assay '{lotDto.assayId}' " +
+                            "(pre-fix split copy) — marked unassayed at estimate confidence; the first lot keeps the certificate.");
+                        effectiveDto = new MineOreLotSaveDto
+                        {
+                            lotKind = lotDto.lotKind,
+                            lotSeq = lotDto.lotSeq,
+                            mineralKind = lotDto.mineralKind,
+                            tons = lotDto.tons,
+                            gradeValue = lotDto.gradeValue,
+                            gradeUnit = lotDto.gradeUnit,
+                            assayed = false,
+                            assayId = string.Empty,
+                            assayerKind = 0,
+                            assayerSeq = 0,
+                            assayDayIndex = -1,
+                            gradeConfidence01 = 0.3f,
+                            shaftId = lotDto.shaftId,
+                            levelId = lotDto.levelId,
+                            veinId = lotDto.veinId,
+                            minedDayIndex = lotDto.minedDayIndex,
+                            stockpileCategoryId = lotDto.stockpileCategoryId,
+                            ancestryLotSeqs = lotDto.ancestryLotSeqs != null
+                                ? new List<int>(lotDto.ancestryLotSeqs) : new List<int>(),
+                        };
+                    }
+                    MineOreLot lot = MineOreLot.FromSaveDto(effectiveDto);
                     if (lot != null)
                         stock.lots.Add(lot);
                 }

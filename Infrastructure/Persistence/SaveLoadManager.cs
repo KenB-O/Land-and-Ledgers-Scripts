@@ -8,6 +8,7 @@ using LandLedgers.Economy.Financing;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Orchestration.Scenarios.FirstLedger;
+using LandLedgers.Orchestration.Scenarios.SaloonCircuit;
 using LandLedgers.Population;
 using LandLedgers.Time;
 using LandLedgers.UI;
@@ -377,6 +378,22 @@ namespace LandLedgers.Persistence
             firstSessionGuidance?.LoadFromSaveDto(save.firstSessionGuidance);
             firstLedgerBootstrap ??= FindAnyObjectByType<FirstLedgerBootstrap>();
             firstLedgerBootstrap?.RestoreFromSaveDto(save.scenario);
+            // Pass XI WS1: the Saloon bootstrap owns its own evaluator
+            // restore, reconciliation, and qualifier rebuild, and only
+            // acts when the Saloon Circuit is the restored scenario.
+            // The First Ledger restore above already ran the director
+            // restore, so this must not re-run it.
+            SaloonCircuitBootstrap saloonBootstrap = FindAnyObjectByType<SaloonCircuitBootstrap>();
+            saloonBootstrap?.RestoreFromSaveDto(save.scenario);
+            // Pass XI WS1 (PASS9-006): reset the domestic tick watermark
+            // to the loaded clock, so loading an earlier-time save in
+            // the same session does not stall domestic labor. The
+            // drivers object is found, not assumed, like the bootstraps.
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers != null && timeManager != null)
+            {
+                drivers.ResetDomesticTickWatermark(timeManager.AbsoluteGameSeconds);
+            }
             managementPanel?.Refresh();
             ConfigureFirstSessionGuidance();
 
@@ -607,6 +624,32 @@ namespace LandLedgers.Persistence
             return (cents / 100f).ToString("C0");
         }
 
+        /// <summary>
+        /// Pass XI WS1: prefers the Saloon capture only when it actually
+        /// captured the active Saloon Circuit (its dto names that
+        /// scenario); otherwise the First Ledger capture stands. A null
+        /// or non-Saloon Saloon capture never overwrites another
+        /// scenario's dto.
+        /// </summary>
+        private static ScenarioSaveDto SaloonCaptureOrDefault(
+            SaloonCircuitBootstrap saloonBootstrap, FirstLedgerBootstrap firstLedgerBootstrap)
+        {
+            ScenarioSaveDto fallback = firstLedgerBootstrap != null
+                ? firstLedgerBootstrap.CaptureSaveDto()
+                : new ScenarioSaveDto();
+            if (saloonBootstrap == null)
+            {
+                return fallback;
+            }
+            ScenarioSaveDto saloonDto = saloonBootstrap.CaptureSaveDto();
+            if (saloonDto != null && !string.IsNullOrWhiteSpace(saloonDto.activeScenarioId)
+                && string.Equals(saloonDto.activeScenarioId, SaloonCircuitScenario.ScenarioId, StringComparison.Ordinal))
+            {
+                return saloonDto;
+            }
+            return fallback;
+        }
+
         private LandLedgersSaveGameDto BuildSaveDto()
         {
             WorldSaveDto world = townWorld.CaptureSaveDto();
@@ -621,6 +664,7 @@ namespace LandLedgers.Persistence
             firstSessionGuidance ??= FindAnyObjectByType<FirstSessionGuidanceManager>();
             FirstSessionGuidanceSaveDto guidance = firstSessionGuidance != null ? firstSessionGuidance.CaptureSaveDto() : new FirstSessionGuidanceSaveDto();
             firstLedgerBootstrap ??= FindAnyObjectByType<FirstLedgerBootstrap>();
+            SaloonCircuitBootstrap saloonBootstrap = FindAnyObjectByType<SaloonCircuitBootstrap>();
 
             BusinessPortfolioSaveDto businesses = new()
             {
@@ -657,7 +701,12 @@ namespace LandLedgers.Persistence
                 debt = debt,
                 portfolio = portfolio,
                 firstSessionGuidance = guidance,
-                scenario = firstLedgerBootstrap != null ? firstLedgerBootstrap.CaptureSaveDto() : new ScenarioSaveDto(),
+                // Pass XI WS1: the Saloon capture owns the evaluator
+                // list when the Saloon Circuit is active; otherwise the
+                // First Ledger capture (which reconciles when it is
+                // active) stands. Scenario capture runs before systems
+                // capture, so the reconciled hub latched list follows.
+                scenario = SaloonCaptureOrDefault(saloonBootstrap, firstLedgerBootstrap),
                 systems = systemsHub != null ? systemsHub.CaptureSaveDto() : new SystemsSaveDto(),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto

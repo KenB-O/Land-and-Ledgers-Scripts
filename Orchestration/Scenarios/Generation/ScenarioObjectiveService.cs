@@ -4,6 +4,34 @@ using System.Collections.Generic;
 namespace LandLedgers.Orchestration.Scenarios.Generation
 {
     /// <summary>
+    /// Pass XI WS1: one persisted dated-qualifier registration. The live
+    /// qualifier predicate is a Func and can never be persisted, so the
+    /// run state stores everything needed to REBUILD it after load: the
+    /// goal id, its deadline, and a stable predicate key (scenario id
+    /// plus goal id, never a delegate or a display string). The scenario
+    /// bootstrap rebinds the live predicate from its evaluator on load;
+    /// a registration with no rebindable predicate is reported by
+    /// RebuildQualifiers, never silently dropped.
+    /// </summary>
+    [Serializable]
+    public sealed class ScenarioQualifierRegistration
+    {
+        public string GoalId = string.Empty;
+        public int DeadlineDayIndex;
+        public string PredicateKey = string.Empty;
+
+        public ScenarioQualifierRegistration Clone()
+        {
+            return new ScenarioQualifierRegistration
+            {
+                GoalId = GoalId ?? string.Empty,
+                DeadlineDayIndex = DeadlineDayIndex,
+                PredicateKey = PredicateKey ?? string.Empty,
+            };
+        }
+    }
+
+    /// <summary>
     /// Pass IX WS6 (A1-03): durable run state for scenario objectives —
     /// which scenario is running and which scenarios have FAILED. Before
     /// this pass a missed deadline was invisible: goals simply stayed
@@ -14,6 +42,13 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
     public sealed class ScenarioRunState
     {
         public string ScenarioId = string.Empty;
+        /// <summary>
+        /// Pass XI WS1 (additive): persisted dated-qualifier registrations
+        /// (see <see cref="ScenarioQualifierRegistration"/>). Old saves load
+        /// with this list empty and rebuild it from live scenario
+        /// definitions on first load.
+        /// </summary>
+        public List<ScenarioQualifierRegistration> QualifierRegistrations = new List<ScenarioQualifierRegistration>();
         /// <summary>Scenario ids that have failed. A scenario id appears at most once.</summary>
         public List<string> FailedScenarioIds = new List<string>();
         /// <summary>Goal ids whose missed deadline caused the failure(s), in failure order.</summary>
@@ -29,13 +64,19 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
 
         public ScenarioRunState Clone()
         {
-            return new ScenarioRunState
+            var clone = new ScenarioRunState
             {
                 ScenarioId = ScenarioId ?? string.Empty,
                 FailedScenarioIds = new List<string>(FailedScenarioIds ?? new List<string>()),
                 FailedGoalIds = new List<string>(FailedGoalIds ?? new List<string>()),
                 LatchedCompleteGoalIds = new List<string>(LatchedCompleteGoalIds ?? new List<string>()),
+                QualifierRegistrations = new List<ScenarioQualifierRegistration>(),
             };
+            foreach (ScenarioQualifierRegistration registration in QualifierRegistrations ?? new List<ScenarioQualifierRegistration>())
+            {
+                if (registration != null) clone.QualifierRegistrations.Add(registration.Clone());
+            }
+            return clone;
         }
     }
 
@@ -127,6 +168,113 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
                 DeadlineDayIndex = deadlineDayIndex,
                 Predicate = predicate,
             });
+            // Pass XI WS1: the registration persists; the predicate does
+            // not. Re-registering the same goal updates its persisted
+            // deadline and key instead of duplicating the registration,
+            // so the pre-existing re-register-after-load pattern keeps
+            // working and stays a single registration per goal.
+            state.QualifierRegistrations ??= new List<ScenarioQualifierRegistration>();
+            foreach (ScenarioQualifierRegistration existing in state.QualifierRegistrations)
+            {
+                if (existing != null && string.Equals(existing.GoalId, goalId, StringComparison.Ordinal))
+                {
+                    existing.DeadlineDayIndex = deadlineDayIndex;
+                    existing.PredicateKey = PredicateKeyFor(goalId);
+                    return;
+                }
+            }
+            state.QualifierRegistrations.Add(new ScenarioQualifierRegistration
+            {
+                GoalId = goalId,
+                DeadlineDayIndex = deadlineDayIndex,
+                PredicateKey = PredicateKeyFor(goalId),
+            });
+        }
+
+        /// <summary>Stable predicate key: scenario id plus goal id, never a delegate or display string.</summary>
+        public string PredicateKeyFor(string goalId)
+        {
+            return (state.ScenarioId ?? string.Empty) + ":" + (goalId ?? string.Empty);
+        }
+
+        /// <summary>Persisted registrations (live predicates are rebuilt, never stored).</summary>
+        public IReadOnlyList<ScenarioQualifierRegistration> QualifierRegistrations =>
+            state.QualifierRegistrations ?? new List<ScenarioQualifierRegistration>();
+
+        /// <summary>
+        /// Pass XI WS1: adopts fresh qualifier definitions ONLY when the
+        /// run state carries no persisted registrations (old saves, first
+        /// load). Persisted registrations always win over definitions, so
+        /// a later calibration change cannot silently move a running
+        /// scenario's deadlines. Returns true when definitions were adopted.
+        /// </summary>
+        public bool EnsureQualifierRegistrations(IEnumerable<ScenarioQualifierRegistration> definitions)
+        {
+            state.QualifierRegistrations ??= new List<ScenarioQualifierRegistration>();
+            if (state.QualifierRegistrations.Count > 0) return false;
+            if (definitions == null) return false;
+            foreach (ScenarioQualifierRegistration definition in definitions)
+            {
+                if (definition == null || string.IsNullOrEmpty(definition.GoalId)) continue;
+                state.QualifierRegistrations.Add(definition.Clone());
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Pass XI WS1: rebuilds the live qualifier list from the persisted
+        /// registrations and the caller's live predicates, keyed by goal
+        /// id. The caller is the scenario bootstrap, which owns the
+        /// evaluator the predicates read. Returns the goal ids that could
+        /// NOT be rebuilt (no live predicate supplied): the caller must
+        /// surface those loudly, because an unrebuilt goal can neither
+        /// latch nor fail and Evaluate would silently ignore it.
+        /// Rebuilding is idempotent and never un-latches or un-fails.
+        /// </summary>
+        public List<string> RebuildQualifiers(IDictionary<string, Func<bool>> livePredicates)
+        {
+            var unrebuilt = new List<string>();
+            qualifiers.Clear();
+            state.QualifierRegistrations ??= new List<ScenarioQualifierRegistration>();
+            foreach (ScenarioQualifierRegistration registration in state.QualifierRegistrations)
+            {
+                if (registration == null || string.IsNullOrEmpty(registration.GoalId)) continue;
+                Func<bool> predicate = null;
+                if (livePredicates != null) livePredicates.TryGetValue(registration.GoalId, out predicate);
+                if (predicate == null)
+                {
+                    unrebuilt.Add(registration.GoalId);
+                    continue;
+                }
+                qualifiers.Add(new DatedQualifier
+                {
+                    GoalId = registration.GoalId,
+                    DeadlineDayIndex = registration.DeadlineDayIndex,
+                    Predicate = predicate,
+                });
+            }
+            return unrebuilt;
+        }
+
+        /// <summary>
+        /// Pass XI WS1: merges latched goal ids into the run state without
+        /// ever removing one (reconciliation never un-completes a goal)
+        /// and without touching the failed sets (failure stays sticky).
+        /// Returns how many ids were newly added.
+        /// </summary>
+        public int MergeLatchedGoals(IEnumerable<string> goalIds)
+        {
+            state.LatchedCompleteGoalIds ??= new List<string>();
+            int added = 0;
+            if (goalIds == null) return added;
+            foreach (string goalId in goalIds)
+            {
+                if (string.IsNullOrEmpty(goalId)) continue;
+                if (state.LatchedCompleteGoalIds.Contains(goalId)) continue;
+                state.LatchedCompleteGoalIds.Add(goalId);
+                added++;
+            }
+            return added;
         }
 
         /// <summary>
@@ -195,6 +343,24 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
                 {
                     deadline = qualifiers[i].DeadlineDayIndex;
                     break;
+                }
+            }
+            // Pass XI WS1: after a load the live qualifier list is empty
+            // until the bootstrap rebuilds it, so fall back to the
+            // persisted registration instead of reporting -1 for a goal
+            // that has a deadline in the run state.
+            if (deadline < 0 && !string.IsNullOrEmpty(nextGoalId))
+            {
+                foreach (ScenarioQualifierRegistration registration in state.QualifierRegistrations ?? new List<ScenarioQualifierRegistration>())
+                {
+                    if (registration != null && registration.GoalId == nextGoalId)
+                    {
+                        // int.MaxValue is the no-deadline sentinel used by
+                        // qualifier definitions, and still reports as -1.
+                        deadline = registration.DeadlineDayIndex == int.MaxValue
+                            ? -1 : registration.DeadlineDayIndex;
+                        break;
+                    }
                 }
             }
             return new ScenarioHeadlineSnapshot

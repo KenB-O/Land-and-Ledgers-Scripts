@@ -65,7 +65,10 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField]
         private EntityIdRegistry idRegistry = new EntityIdRegistry();
 
-        [SerializeField]
+        // Pass XI WS1 (A-21): NOT a SerializeField. AnimalRegistry has
+        // no Serializable attribute and holds Dictionary fields Unity
+        // cannot scene-persist; the lazy Animals property owns the
+        // runtime instance and the DTO save path is unaffected.
         private AnimalRegistry animalRegistry;
 
         [SerializeField]
@@ -105,13 +108,19 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField]
         private FarmFlowLedger farmFlows = new FarmFlowLedger();
 
-        [SerializeField]
+        // Pass XI WS1 (A-21): NOT a SerializeField. BusinessCapabilityRegistry
+        // has no Serializable attribute and holds a Dictionary Unity cannot
+        // scene-persist; the lazy Capabilities property owns the runtime
+        // instance and the DTO save path is unaffected.
         private BusinessCapabilityRegistry capabilityRegistry = new BusinessCapabilityRegistry();
 
         [SerializeField]
         private BusinessOperatingLedger operatingLedger = new BusinessOperatingLedger();
 
-        [SerializeField]
+        // Pass XI WS1 (A-21): NOT a SerializeField. EmploymentRelationshipRegistry
+        // has no Serializable attribute and holds a Dictionary Unity cannot
+        // scene-persist; the lazy Employments property owns the runtime
+        // instance and the DTO save path is unaffected.
         private EmploymentRelationshipRegistry employments = new EmploymentRelationshipRegistry();
 
         [SerializeField]

@@ -167,12 +167,34 @@ namespace LandLedgers.Economy
         public IReadOnlyList<BusinessInstanceState> Businesses => businesses;
         public string Status => status;
 
+        private Action<BusinessInstanceState> preWeeklyResetCallback;
+
         /// <summary>
         /// CLN-4: invoked for each business BEFORE its weekly sales are reset, with the
         /// week's net still readable. The valuation wiring uses this to post weekly
         /// profit (event-fed, never per-frame). Null by default.
+        /// Pass XI WS1 (A-22): single-slot by design, but no longer
+        /// silently replaceable. Setting the same delegate again (the
+        /// drivers Awake plus AttachBusinessRuntime path, and Rebind)
+        /// is allowed, and clearing to null is allowed; a second
+        /// DISTINCT setter is refused with a loud diagnostic and the
+        /// installed valuation posting is kept. Drivers OnDisable still
+        /// clears only when its own delegate is installed.
         /// </summary>
-        public Action<BusinessInstanceState> PreWeeklyResetCallback { get; set; }
+        public Action<BusinessInstanceState> PreWeeklyResetCallback
+        {
+            get => preWeeklyResetCallback;
+            set
+            {
+                if (value == null || preWeeklyResetCallback == null || preWeeklyResetCallback == value)
+                {
+                    preWeeklyResetCallback = value;
+                    return;
+                }
+
+                Debug.LogError("[SharedBusinessRuntimeManager] PreWeeklyResetCallback already holds a distinct valuation posting — second setter refused, installed callback kept.");
+            }
+        }
 
         /// <summary>
         /// Gives business-specific weekly settlement authorities (currently the

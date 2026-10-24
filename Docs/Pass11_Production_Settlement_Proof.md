@@ -219,12 +219,19 @@ excluded, as logging is not state).
 
 ## Production save/load findings (reported, not hidden)
 
-The proof's restore path compensates for two fields that production
-save DTOs do not persist. Both compensations are exact for this
-scenario (the compensated values are fully determined by restored
-state), but a real Unity load would hit both gaps, so they are
-recorded here for the coordinator rather than fixed silently in the
-proof:
+AMENDMENT (Pass XI follow-up fix, after WS4 delivery): both gaps below
+are now FIXED in production (fix commit 9465fdd, proof-compensation
+removal commit 82648b6, merged into muse/continuous-development).
+The proof restore compensation described below has been REMOVED, and
+all 21 proof tests still pass, so the proof now exercises the
+production fix rather than compensating for its absence. The original
+finding text is preserved below for the record, with the fix noted on
+each item. The proof's restore path originally compensated for two
+fields that production save DTOs did not persist. Both compensations
+were exact for this scenario (the compensated values were fully
+determined by restored state), but a real Unity load would have hit
+both gaps, so they were recorded here for the coordinator rather than
+fixed silently in the proof:
 
 1. **Construction id sequence** (`ConstructionProjectExecutor.sequence`,
    `Domains/Economy/Businesses/Construction/NpcHomeConstruction.cs`):
@@ -234,8 +241,12 @@ proof:
    after restore, colliding with cabin-1). The proof restore recomputes
    the sequence as one past the largest numeric suffix among all
    restored project and package ids — exact because ids are never
-   deleted. No production code was changed for this proof; a durable
-   fix belongs in the DTO.
+   deleted. FIXED: `ConstructionProjectSaveDto` now carries additive
+   `ExecutorSequence` (default -1 = absent); restore takes
+   max(persisted, recomputed floor), so old saves without the field
+   still load without collision. Covered by
+   `Pass11Ws4SaveLoadFixTests` (uniqueness, old-save, zeroed-field,
+   persisted-ahead cases).
 2. **Freight dispatch-authority map** (`FreightShipmentService.dispatchAuthorities`,
    `Domains/Economy/Logistics/FreightShipmentService.cs`):
    `FreightServiceSaveDto` restores shipments and re-tracks them but
@@ -245,7 +256,14 @@ proof:
    stale hold (observed: ship-2 never created after a mid-shipment
    restore; lingering reservation = 1). The proof restore rebinds the
    map for every restored shipment that was already dispatched and is
-   not yet terminal. No production code was changed for this proof.
+   not yet terminal. FIXED: `FreightServiceSaveDto` now carries
+   additive `ShipmentIdsWithDispatchAuthorities`; restore rebinds the
+   map for transport-bound live shipments (empty list on old saves
+   falls back to shipment state), release stays idempotent, and
+   double restore only overwrites the same map key. Covered by
+   `Pass11Ws4SaveLoadFixTests` (restore-then-complete release,
+   double-restore release, old-save release, fresh-run control, later
+   shipment not refused, recipient credited exactly once).
 
 **Creditor-bridge wiring note (scenario-side, not a production
 defect):** `CloseOrderly` pays open obligations from the closing
@@ -316,4 +334,7 @@ payment lands in H5's ledger.
 - **Production defects fixed in this work: none** (no production file
   was edited). The two save/load gaps above are reported as findings
   for the coordinator, with exact files and the exact compensation
-  used in the proof restore path.
+  used in the proof restore path. AMENDMENT: this bullet was true at
+  WS4 delivery and is superseded by the follow-up fix above (commits
+  9465fdd and 82648b6); the gaps are now fixed in production and the
+  compensation is removed.

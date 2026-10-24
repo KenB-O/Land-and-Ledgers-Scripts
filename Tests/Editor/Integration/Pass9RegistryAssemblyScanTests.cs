@@ -216,6 +216,20 @@ namespace LandLedgers.EditorTests.Integration
             "RetailDeliveryAcceptance", "RetailRestockJob", "RetailServiceDesk", "RetailServiceDeskSaveDto",
             "RetailServiceHooks", "RoleDefinition", "RuntimeEntityDirectory", "ScenarioBootstrapComposition",
             "ScenarioBootstrapPlan", "ScenarioEconomyPolicy", "ScenarioFixedBusiness", "ScenarioHeadlineSnapshot",
+            // Pass XI coordinator integration: the three Saloon/ScenarioModels files
+            // entered the canonical harness subset so the WS6 first-gate seam tests
+            // run there. The 5 types below have genuine production callers in
+            // harness-excluded scenario files, so the scan cannot see them:
+            // ScenarioGoal and ScenarioObjective are used by ScenarioService,
+            // ScenarioAsset, and both scenario definitions; PopulationInclusionRules
+            // and PlayerHouseholdDeclaration by FirstLedgerScenario and
+            // ScenarioAsset (and the director for the declaration);
+            // SaloonCircuitGoalEvaluator by SaloonCircuitBootstrap. They are
+            // classified feature-internal on that production-caller evidence,
+            // the same subset-visibility precedent as the Reporting DTOs.
+            // This growth of the baseline is the visible review the fixture
+            // summary requires; no genuinely unwired type is hidden by it.
+            "ScenarioGoal", "ScenarioObjective", "PopulationInclusionRules", "PlayerHouseholdDeclaration", "SaloonCircuitGoalEvaluator",
             "ScenarioInventoryGrant", "ScenarioPlayerStart", "ScenarioPreset", "ScenarioPreviewReport",
             "ScenarioPropertyGrant", "ScenarioSeedPropertyGrant", "SecurityInterestRecord", "SeizedCollateralRecord",
             "SellerFinanceDecision", "SellerFinanceDecisionInput", "SellerFinanceDecisionService", "SellerFinanceNegotiationEvent",

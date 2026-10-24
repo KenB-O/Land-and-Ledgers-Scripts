@@ -906,6 +906,22 @@ namespace LandLedgers.Economy
             return record;
         }
 
+        /// <summary>
+        /// Pass XI WS2 (driver support, additive only): finds the principal's
+        /// record for a project id, so the production driver can fund a
+        /// project restored from a save without a caller-held record
+        /// reference. Returns null when the project was never commissioned
+        /// through this commissioner.
+        /// </summary>
+        public NpcConstructionRecord FindRecordForProject(string projectId)
+        {
+            if (string.IsNullOrWhiteSpace(projectId)) return null;
+            foreach (NpcConstructionRecord record in records.Values)
+                if (record != null && string.Equals(record.ProjectId, projectId, StringComparison.Ordinal))
+                    return record;
+            return null;
+        }
+
         #endregion
     }
 }

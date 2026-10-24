@@ -180,6 +180,167 @@ namespace LandLedgers.Orchestration.Systems
             return hub == null ? null : new HouseholdInventoryToolCustody(hub.HouseholdInventories);
         }
 
+        // Pass XI WS2 (A-03, RUN-002): NPC construction ports. The driver
+        // itself lives in NpcConstructionDriver and runs daily from
+        // OnDayChanged; these bindings are the production path's inputs.
+        // The labor leg is fully wired below from hub authorities. The
+        // catalog, price port, material source and parcel authority have
+        // no production implementation yet: no catalog asset is registered
+        // in source, no yard/sawmill lot adapter exists (only the
+        // household-inventory source adapter above, which fits self-supply
+        // but not the commissioner's supplier-payment leg), and no parcel
+        // authority adapter reads the real TitleAuthority. Until those
+        // adapters are bound, the driver advances already-staged packages
+        // and waits loudly on Ready packages and on completion, which
+        // needs the catalog design. Nothing here invents a port.
+        private BuildingDesignCatalog npcConstructionCatalog;
+        private IConstructionMaterialPricePort npcConstructionPricePort;
+        private IConstructionMaterialSource npcConstructionMaterialSource;
+        private IConstructionParcelAuthority npcConstructionParcelAuthority;
+        private INpcConstructionProcurementPort npcConstructionProcurement;
+
+        /// <summary>
+        /// Binds the NPC construction ports the production driver needs.
+        /// Any argument may be null; an unbound port makes the driver wait
+        /// loudly on the step that needs it instead of inventing input.
+        /// Safe to call twice: the latest binding wins.
+        /// </summary>
+        public void BindNpcConstructionPorts(
+            BuildingDesignCatalog catalog,
+            IConstructionMaterialPricePort pricePort,
+            IConstructionMaterialSource materialSource,
+            IConstructionParcelAuthority parcelAuthority,
+            INpcConstructionProcurementPort procurement)
+        {
+            npcConstructionCatalog = catalog;
+            npcConstructionPricePort = pricePort;
+            npcConstructionMaterialSource = materialSource;
+            npcConstructionParcelAuthority = parcelAuthority;
+            npcConstructionProcurement = procurement;
+        }
+
+        /// <summary>
+        /// Pass XI WS2 (A-06): binds a player-owned bank's deposit ledger
+        /// through the hub-owned binding registry. One ledger per bank,
+        /// fail-loud on a second distinct ledger; the scene hookup that
+        /// supplies the ledger object is outstanding under G4, so this
+        /// method has no production caller yet — it is the binding point,
+        /// not a binding claim.
+        /// </summary>
+        public string BindBankLedger(string businessInstanceId, BankDepositLedger ledger, List<string> diag)
+        {
+            if (hub == null) return "BindBankLedger: no hub — the binding registry is unavailable.";
+            return hub.BankLedgerBindings.BindBankLedger(businessInstanceId, ledger, diag);
+        }
+
+        /// <summary>
+        /// Queues one explicit NPC construction commission for the driver.
+        /// The driver commissions only queued requests, never on its own;
+        /// which households commission, on what evidence, is a design
+        /// decision owned outside this driver, so no automatic trigger
+        /// queues here.
+        /// </summary>
+        public void QueueNpcConstructionRequest(NpcConstructionRequest request)
+        {
+            if (request != null) npcConstructionRequests.Add(request);
+        }
+
+        private readonly List<NpcConstructionRequest> npcConstructionRequests = new List<NpcConstructionRequest>();
+
+        /// <summary>
+        /// Pass XI WS2: the daily NPC construction drive. Advances hub
+        /// projects through the production driver (fund/stage, labor,
+        /// advance, complete, occupy, cancel via the driver API) and
+        /// commissions queued requests when the parcel authority is bound.
+        /// </summary>
+        private void DriveNpcConstruction(int absoluteDayIndex)
+        {
+            if (hub == null) return;
+            ConstructionProjectExecutor executor = hub.ConstructionExecutor;
+            if (executor != null && executor.EquipmentReservations == null)
+                executor.EquipmentReservations = hub.Reservations;
+            var driver = new NpcConstructionDriver(
+                hub.NpcConstructionCommissioner, executor, npcConstructionCatalog,
+                hub.ConstructionProjects, hub.CreditCash, hub.FinancialObligations,
+                hub.Ids, hub.Housing, npcConstructionPricePort,
+                npcConstructionMaterialSource, null, npcConstructionProcurement,
+                new DriversConstructionLaborPort(this),
+                householdId => householdMemberships != null
+                    ? householdMemberships.GetActiveMembers(householdId)
+                    : new List<int>());
+            driver.MaterialSourceByHousehold = CreateHouseholdConstructionMaterialSource;
+            var diag = new List<string>();
+            if (npcConstructionParcelAuthority != null)
+            {
+                foreach (NpcConstructionRequest request in npcConstructionRequests)
+                    driver.PendingRequests.Add(request);
+                npcConstructionRequests.Clear();
+                driver.CommissionPending(npcConstructionParcelAuthority, absoluteDayIndex, diag);
+                // Refused commissions stay queued for the next day's drive
+                // (the driver keeps refused requests in its pending list).
+                foreach (NpcConstructionRequest request in driver.PendingRequests)
+                    npcConstructionRequests.Add(request);
+            }
+            else if (npcConstructionRequests.Count > 0)
+            {
+                diag.Add("[SimulationDrivers] npc construction: queued commissions wait — no parcel authority bound.");
+            }
+            driver.Drive(absoluteDayIndex, diag);
+            if (diag.Count > 0)
+                Debug.Log("[SimulationDrivers] npc construction day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diag));
+        }
+
+        /// <summary>
+        /// The driver's labor leg over hub authorities: each active member
+        /// of the commissioning household is tried in turn for own labor
+        /// through the commissioner, and worked minutes credit only as the
+        /// bound task is actually worked. A member whose time is refused
+        /// (double-booked, no tools, no budget) is skipped for the next
+        /// member; a committed member whose work fails stops the package
+        /// loudly rather than crediting phantom minutes.
+        /// </summary>
+        private sealed class DriversConstructionLaborPort : INpcConstructionLaborPort
+        {
+            private readonly SimulationDrivers drivers;
+            public DriversConstructionLaborPort(SimulationDrivers drivers) { this.drivers = drivers; }
+
+            public string WorkPackage(ConstructionProject project, WorkPackage package, int dayIndex, List<string> diag)
+            {
+                SimulationSystemsHub hub = drivers.hub;
+                if (hub == null) return "no hub — labor authorities unavailable.";
+                NpcConstructionRecord record = hub.NpcConstructionCommissioner.FindRecordForProject(project.ProjectId);
+                IHouseholdToolCustody custody = drivers.CreateHouseholdToolCustody();
+                List<int> members = drivers.householdMemberships != null
+                    ? drivers.householdMemberships.GetActiveMembers(project.HouseholdId)
+                    : new List<int>();
+                string lastRefusal = "no active household member could work the package.";
+                foreach (int personId in members)
+                {
+                    if (personId < 0) continue;
+                    string commit = hub.NpcConstructionCommissioner.CommitOwnLabor(
+                        hub.ConstructionExecutor, project, record, package, personId,
+                        hub.PersonSchedules, custody, hub.Tasks, hub.WorkTimeBudgets,
+                        dayIndex, 360, package.LaborMinutesRequired, diag);
+                    if (commit != null) { lastRefusal = commit; continue; }
+                    string taskId = null;
+                    for (int i = project.LaborTaskBindings.Count - 1; i >= 0; i--)
+                    {
+                        LaborTaskBinding binding = project.LaborTaskBindings[i];
+                        if (binding != null && string.Equals(binding.PackageId, package.PackageId, StringComparison.Ordinal))
+                        {
+                            taskId = binding.TaskId;
+                            break;
+                        }
+                    }
+                    if (string.IsNullOrWhiteSpace(taskId)) return "no labor task bound to the package.";
+                    return hub.ConstructionExecutor.WorkCommittedLabor(project, package, taskId,
+                        package.LaborMinutesRequired, hub.Tasks, hub.WorkTimeBudgets, dayIndex, diag);
+                }
+                return lastRefusal;
+            }
+        }
+
         /// <summary>
         /// Registers a scene-owned boarding-house runtime with the existing
         /// hub. The runtime remains the detailed occupancy/custody authority;
@@ -1168,6 +1329,12 @@ namespace LandLedgers.Orchestration.Systems
             // animals, chores) scheduled on real person time through the real
             // TaskAuthority, budgets, schedule tracker, and due events.
             DriveDomesticLaborDay(absoluteDayIndex);
+
+            // Pass XI WS2 (A-03, RUN-002): NPC construction advances daily
+            // through the production driver (staged packages work and
+            // advance on hub authorities; Ready packages and completion
+            // wait loudly until their material and catalog ports are bound).
+            DriveNpcConstruction(absoluteDayIndex);
 
             // Autonomous Labor: daily labor-market drives. The hub's authority
             // predicate needs the current day for delegation bounds.

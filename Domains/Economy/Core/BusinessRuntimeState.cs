@@ -866,16 +866,27 @@ namespace LandLedgers.Economy
         public string LastPayrollEligibilityFailure { get; private set; } = string.Empty;
 
         /// <summary>
-        /// Pass IX (A2-10), corrected in Pass XI WS3 (PASS9-007):
-        /// fail-CLOSED eligibility consult for payroll paths. The old
-        /// version returned false (available) when the lookup threw, so a
-        /// broken lookup paid wages to people whose eligibility was
-        /// unknown — possibly dead or off-map ghosts. Withholding a wage
-        /// on an unknown outcome fabricates nothing: no cash moves, no
-        /// liability is invented, and the wage can still be paid later
-        /// once the lookup works, through the next payroll run or
-        /// PayAgreedWage. This matches the attendance consult in this
-        /// file, which already treats a throwing check as absent.
+        /// Pass IX (A2-10), corrected in Pass XI WS3 (PASS9-007) and
+        /// again in Pass XI WS6 first-gate (M3): fail-CLOSED eligibility
+        /// consult for payroll paths. The old version returned false
+        /// (available) when the lookup threw, so a broken lookup paid
+        /// wages to people whose eligibility was unknown — possibly dead
+        /// or off-map ghosts. Withholding cash on an unknown outcome
+        /// fabricates nothing, but the WS3 claim that the wage "can
+        /// still be paid later through the next payroll run or
+        /// PayAgreedWage" was false for the weekly employment path:
+        /// the next run pays only the next week's wage, and
+        /// PayAgreedWage consults the same throwing lookup, so it
+        /// refuses too while the lookup is broken. What actually
+        /// happens now differs by outcome (callers must check
+        /// PayrollEligibilityLookupFailed right after this call):
+        /// a CONFIRMED unavailable person is refused with no liability
+        /// accrued, while a LOOKUP FAILURE in the weekly employment
+        /// path accrues the week's wage as an operating liability
+        /// (M3 option (a)) — preserved, not paid in cash, and never
+        /// re-paid by a later weekly run. This matches the attendance
+        /// consult in this file, which already treats a throwing
+        /// check as absent.
         /// </summary>
         private bool IsUnavailableForPayroll(int personId)
         {
@@ -2256,12 +2267,37 @@ namespace LandLedgers.Economy
                 // even if an Active employment record outlived them.
                 if (IsUnavailableForPayroll(employment.EmployeePersonId))
                 {
+                    if (PayrollEligibilityLookupFailed)
+                    {
+                        // Pass XI WS6 first-gate (M3), option (a): a
+                        // lookup FAILURE is not a confirmed death or
+                        // departure, so the week's wage is not forfeited
+                        // — it is preserved as an operating liability
+                        // (the same named-payable + scalar accrual as
+                        // the shortfall branch below), settleable
+                        // through the liability route. It is deliberately
+                        // NOT paid in cash here (eligibility is unknown)
+                        // and NOT re-paid by a later weekly run (weekly
+                        // payroll pays the current week only, never
+                        // arrears), so the automated paths cannot
+                        // double-pay it. The employment is deliberately
+                        // NOT suspended: a broken lookup is not an
+                        // employer payment default, and suspension
+                        // would strand every future week's wage as well
+                        // as this one. Do NOT also pay this week's wage
+                        // via PayAgreedWage once the lookup recovers —
+                        // that would duplicate this liability; settle
+                        // the liability instead.
+                        AccrueOperatingLiabilityCents(wage, $"person:{employment.EmployeePersonId}", $"payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — weekly wage preserved as liability, not paid in cash (employment {employment.Id})");
+                        lastWeeklyPayrollDiagnostics.Add(
+                            $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
+                            $"payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — wage not paid in cash, {wage}c accrued as operating liability (settle the liability; do not re-pay this week via PayAgreedWage).");
+                        SyncSlotPaidState(employment.EmployeePersonId, paid: false);
+                        continue;
+                    }
                     lastWeeklyPayrollDiagnostics.Add(
-                        PayrollEligibilityLookupFailed
-                            ? $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
-                                $"payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — wage refused, not paid, no liability accrued."
-                            : $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
-                                "person is dead or off-map — wage refused, not paid, no liability accrued.");
+                        $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
+                        "person is dead or off-map — wage refused, not paid, no liability accrued.");
                     SyncSlotPaidState(employment.EmployeePersonId, paid: false);
                     continue;
                 }

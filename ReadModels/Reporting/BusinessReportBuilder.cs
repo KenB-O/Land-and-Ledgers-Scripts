@@ -833,14 +833,86 @@ namespace LandLedgers.Reporting
                 return;
             }
 
+            // Pass XI WS5 (performance): the old code scanned the whole
+            // target list per source row (ContainsLedgerEntry), so a
+            // monthly rollup over a campaign-scale ledger was quadratic
+            // (measured: 286 ms for 4x600 rows, 105 ms for 1800 rows in
+            // the weekly path). Index the target once and keep the index
+            // current as rows are added, so the copy is linear. The
+            // identity rule mirrors AreSameLedgerEntry exactly: a
+            // non-blank ReportSummaryKey identifies by key, else a
+            // non-blank EntryId identifies by id, else (both blank) the
+            // full field comparison applies — keyed/id rows can never
+            // collide with keyless rows, because AreSameLedgerEntry
+            // compares the key (resp. id) against blank and finds them
+            // unequal. Order is unchanged: rows append in source order,
+            // duplicates are dropped in place.
+            var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+            var seenIds = new HashSet<string>(StringComparer.Ordinal);
+            var keyless = new List<LedgerEntry>();
+            foreach (LedgerEntry existing in target)
+            {
+                IndexLedgerEntry(existing, seenKeys, seenIds, keyless);
+            }
+
             for (int i = 0; i < source.Count; i++)
             {
                 LedgerEntry entry = NormalizeLedgerEntry(source[i]);
-                if (!ContainsLedgerEntry(target, entry))
+                if (IsDuplicateLedgerEntry(entry, seenKeys, seenIds, keyless))
                 {
-                    target.Add(entry);
+                    continue;
+                }
+
+                target.Add(entry);
+                IndexLedgerEntry(entry, seenKeys, seenIds, keyless);
+            }
+        }
+
+        private static void IndexLedgerEntry(
+            LedgerEntry entry,
+            HashSet<string> seenKeys,
+            HashSet<string> seenIds,
+            List<LedgerEntry> keyless)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.ReportSummaryKey))
+            {
+                seenKeys.Add(entry.ReportSummaryKey);
+            }
+            else if (!string.IsNullOrWhiteSpace(entry.EntryId))
+            {
+                seenIds.Add(entry.EntryId);
+            }
+            else
+            {
+                keyless.Add(entry);
+            }
+        }
+
+        private static bool IsDuplicateLedgerEntry(
+            LedgerEntry entry,
+            HashSet<string> seenKeys,
+            HashSet<string> seenIds,
+            List<LedgerEntry> keyless)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.ReportSummaryKey))
+            {
+                return seenKeys.Contains(entry.ReportSummaryKey);
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.EntryId))
+            {
+                return seenIds.Contains(entry.EntryId);
+            }
+
+            for (int i = 0; i < keyless.Count; i++)
+            {
+                if (AreSameLedgerEntry(keyless[i], entry))
+                {
+                    return true;
                 }
             }
+
+            return false;
         }
 
         private static bool ContainsExplicitRuntimeLedgerEntries(ICollection<LedgerEntry> entries)

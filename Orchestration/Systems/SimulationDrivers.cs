@@ -1037,6 +1037,11 @@ namespace LandLedgers.Orchestration.Systems
                     BuyerHouseholdId = -1, // no named-buyer source in production yet — sales refuse honestly
                 }
                 : null;
+            // Pass XI WS3 (PASS9-003) hook: feed the acquisition manager's dispute service
+            // into the distress-sale context so NPC distress sales record disputes through
+            // the same persisted record as the player path. Null saleContext keeps the
+            // honest no-op (disputes == null records nothing).
+            if (saleContext != null) saleContext.FeedDisputes(acquisitionMarket.PropertyDisputes);
             NpcPropertyLifeReport report = hub.NpcPropertyLife.DriveNpcPropertyLife(
                 hub.CreditCash, hub.NpcPropertyLife.Taxes, hub.FinancialObligations,
                 hub.CivicTreasury, absoluteDayIndex, diag, saleContext, hub.Ids);

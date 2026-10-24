@@ -271,6 +271,12 @@ namespace LandLedgers.World.Property
                     $"property tax payment returned — assessment refused: {payProblem}", diag);
                 return $"NpcPropertyLife.PayPropertyTax: assessment refused ({payProblem}); cash return: {(backProblem ?? "clean")}.";
             }
+            // Pass XI WS3 (PASS9-002): this leg pays the collector store
+            // directly, so the fee split it contains must still be booked
+            // on the assessment — otherwise a later AuditTaxes pass would
+            // route the same fees to the collector a second time.
+            assessment.FeesPaidCents += assessment.FeePortionOfPaymentCents(amountCents);
+            assessment.FeesPaidTracked = true;
             holding.Decisions.Add($"day {dayIndex}: paid {amountCents}c property tax on '{holding.ParcelId}' from real cash.");
             return null;
         }
@@ -332,8 +338,12 @@ namespace LandLedgers.World.Property
                         continue;
                     }
                     // Fees-first waterfall (collector keeps finder/arrears-fee income).
-                    int totalFees = Math.Max(0, assessment.PenaltiesAccruedCents + assessment.InterestAccruedCents);
-                    int feePortion = Math.Min(amount, Math.Max(0, totalFees - assessment.AmountPaidCents));
+                    // Pass XI WS3 (PASS9-002): the fee portion is read from
+                    // the assessment's separate FeesPaidCents ledger, never
+                    // from AmountPaidCents — a partial principal payment
+                    // made before fees accrued must not swallow the fees
+                    // that accrue afterwards.
+                    int feePortion = assessment.FeePortionOfPaymentCents(amount);
                     int principalPortion = amount - feePortion;
                     bool collectorPaid = false;
                     if (feePortion > 0 && cash.FindStore("County Tax Collector") != null)
@@ -375,6 +385,12 @@ namespace LandLedgers.World.Property
                         continue;
                     }
                     int absorbed = Math.Max(0, assessment.AmountPaidCents - paidBefore);
+                    // The fee split is settled by this payment: record the
+                    // fee portion actually paid so a later payment never
+                    // routes the same fees again, whichever store received
+                    // them (collector when registered, treasury fallback).
+                    assessment.FeesPaidCents += Math.Min(feePortion, absorbed);
+                    assessment.FeesPaidTracked = true;
                     // The treasury is credited exactly the portion of the
                     // absorbed payment that was debited for it — never more
                     // than was paid, never twice for the same cents.

@@ -101,14 +101,26 @@ namespace LandLedgers.World.Property
         }
 
         /// <summary>
-        /// Player-facing tax payment: spends owner cash first, then records the
-        /// payment against the assessment. Money moves before the books do.
+        /// Player-facing tax payment. Pass XI WS3 (PASS9-002): every
+        /// refusal PayTax can actually give after the checks below is
+        /// decided BEFORE owner cash moves — PayTax refuses only a
+        /// satisfied assessment (amount and assessment checks are above),
+        /// and the spend delegate has no refund, so spending first would
+        /// strand the debit on a satisfied assessment. The satisfied check
+        /// therefore happens before trySpend, not after it.
         /// Pass IX WS6 (A1-07/A1-11): when a civic treasury is supplied, the
         /// amount the assessment actually absorbed is credited to it as
         /// TaxReceived — before this pass the spent cash had no recipient and
         /// left the economy. The credit equals the increase in
         /// AmountPaidCents, so player debit == treasury credit exactly; when
         /// the assessment absorbs nothing, nothing is credited.
+        /// The player leg has no County Tax Collector cash store in its
+        /// call context, so the fee portion of a player payment still
+        /// credits the treasury (the existing recipient); the fee split
+        /// itself is now booked on the assessment (FeesPaidCents) so a
+        /// collector split can be wired later without re-routing fees
+        /// already paid. That collector wiring is the open question
+        /// recorded in the WS3 report, not a silent change here.
         /// </summary>
         public bool TryPayAssessment(string assessmentId, int amountCents, int dayIndex, out string message,
             CivicTreasuryService civicTreasury = null)
@@ -125,6 +137,11 @@ namespace LandLedgers.World.Property
                 message = "The tax payment must be positive.";
                 return false;
             }
+            if (assessment.Status == TaxAssessmentStatus.Satisfied)
+            {
+                message = $"Property-tax assessment '{assessmentId}' is already satisfied — no cash moved.";
+                return false;
+            }
             if (trySpend == null ||
                 !trySpend(amountCents, $"Property tax {assessment.TaxYear} — {assessment.ParcelId}", out message))
                 return false;
@@ -136,6 +153,8 @@ namespace LandLedgers.World.Property
                 return false;
             }
             int absorbed = Math.Max(0, assessment.AmountPaidCents - paidBefore);
+            assessment.FeesPaidCents += Math.Min(assessment.FeePortionOfPaymentCents(absorbed), absorbed);
+            assessment.FeesPaidTracked = true;
             if (civicTreasury != null && absorbed > 0)
             {
                 civicTreasury.TryCredit(absorbed, CivicLedgerEntryKind.TaxReceived, dayIndex,

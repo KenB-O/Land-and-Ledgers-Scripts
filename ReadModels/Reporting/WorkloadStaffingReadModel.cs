@@ -101,6 +101,10 @@ namespace LandLedgers.Reporting
 
         /// <summary>Remaining minutes of open tasks (planned x uncompleted share).</summary>
         public int TotalDemandMinutes;
+        /// <summary>Demand expressed in full-time equivalents at the
+        /// existing LaborDemandPlan convention of 600 workday minutes
+        /// (not a headcount target — a scale for the minute demand).</summary>
+        public float DemandFullTimeEquivalents;
         public int AssignedMinutes;
         public int UnassignedMinutes;
         public float Coverage01 = 1f;
@@ -192,6 +196,7 @@ namespace LandLedgers.Reporting
             model.Coverage01 = model.TotalDemandMinutes > 0
                 ? (float)model.AssignedMinutes / model.TotalDemandMinutes
                 : 1f;
+            model.DemandFullTimeEquivalents = model.TotalDemandMinutes / 600f;
 
             int availableTotal = 0;
             bool anyUnknownAvailability = false;

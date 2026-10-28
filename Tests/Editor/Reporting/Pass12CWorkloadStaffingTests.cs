@@ -31,6 +31,7 @@ namespace LandLedgers.Editor.Reporting
                 new List<WorkloadWageInput>());
 
             Assert.AreEqual(300, model.TotalDemandMinutes, "120 remaining on A + 180 on B; completed C excluded.");
+            Assert.AreEqual(0.5f, model.DemandFullTimeEquivalents, 0.001f, "300 minutes at the 600-minute workday convention = 0.5 FTE.");
             Assert.AreEqual(120, model.AssignedMinutes);
             Assert.AreEqual(180, model.UnassignedMinutes);
             Assert.AreEqual(0.4f, model.Coverage01, 0.001f);

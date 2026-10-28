@@ -23,9 +23,16 @@ namespace LandLedgers.EditorTests.Economy
     /// time. These tests reproduce that hole before the fix, plus the
     /// legacy-slot twin (a throwing lookup there refused with no
     /// accrual at all, so the week's wage was simply lost) and the
-    /// direct-driver twin (ResolveWeeklyPayroll itself had no
-    /// settled-week guard — only WageSettlementService did — so a
-    /// repeated direct run in one week paid twice).
+    /// automated-after-manual twin (a weekly run after a manual
+    /// partial payment paid the full agreed wage again instead of
+    /// netting the manual cash). Deliberately NOT covered here: a
+    /// repeated direct ResolveWeeklyPayroll call in one week — that
+    /// method takes no week index, production drivers run it once per
+    /// weekly cadence with PayrollDayIndex stamped, and the service
+    /// layer (WageSettlementService) already guards its own week
+    /// index; a stamp-derived guard inside ResolveWeeklyPayroll
+    /// would misfire on service settlements whose week index
+    /// advances while the stamp does not.
     /// </summary>
     [TestFixture]
     public sealed class Pass12CPayrollExactlyOnceTests
@@ -204,6 +211,8 @@ namespace LandLedgers.EditorTests.Economy
                     named = true;
             }
             Assert.IsTrue(named, "The legacy liability names the worker and the lookup failure.");
+            Assert.IsTrue(f.Business.RuntimeState.WorkerSlots[0].SuspendedForMissedPayroll,
+                "The refused legacy slot reads as unpaid, matching the employment path's slot sync.");
             bool diagnosed = false;
             foreach (string line in f.Business.RuntimeState.LastWeeklyPayrollDiagnostics)
                 if (line.Contains("lookup failed") && line.Contains("liability")) diagnosed = true;
@@ -252,36 +261,41 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void WeeklyPayroll_TwiceSameWeek_PaysOnce()
+        public void AutomatedWeeklyPay_AfterManualPay_PaysOnlyRemainder()
         {
+            // The brief's third adversarial case: a manual partial payment
+            // for a week, followed by the automated weekly run for the same
+            // week, must total exactly one agreed wage — not manual +
+            // full weekly wage.
             var f = new Fixture(withRegistry: true, cashCents: 10000);
-            f.Business.RuntimeState.PayrollDayIndex = 6; // week 0
+            Assert.IsNull(f.Business.RuntimeState.PayAgreedWage(
+                "pass12c-emp-1", 400, "mid-week start", 10, new List<string>()));
+            Assert.AreEqual(9600, f.Business.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(400, f.HouseholdBalance());
 
-            f.Business.RuntimeState.ResolveWeeklyPayroll();
-            Assert.AreEqual(9000, f.Business.RuntimeState.CurrentCashCents);
+            f.Business.RuntimeState.PayrollDayIndex = 13; // week 1, same week as day 10
             f.Business.RuntimeState.ResolveWeeklyPayroll();
             Assert.AreEqual(9000, f.Business.RuntimeState.CurrentCashCents,
-                "A repeated direct weekly run in the same week must not pay twice.");
-            Assert.AreEqual(1000, f.Business.RuntimeState.LastWeeklyPayrollCents);
-
-            f.Business.RuntimeState.PayrollDayIndex = 13; // week 1
-            f.Business.RuntimeState.ResolveWeeklyPayroll();
-            Assert.AreEqual(8000, f.Business.RuntimeState.CurrentCashCents,
-                "The next week still pays — the guard is per-week, not a latch.");
+                "Weekly payroll nets the manual cash already paid this week: 400 + 600 = 1000, once.");
+            Assert.AreEqual(1000, f.HouseholdBalance());
         }
 
         [Test]
-        public void WeeklyPayroll_TwiceSameWeek_LegacyPath_PaysOnce()
+        public void AutomatedWeeklyPay_AfterFullManualPay_PaysNothingForThatWeek()
         {
-            var f = new Fixture(withRegistry: false, cashCents: 10000);
-            f.AddSlot("1", 1000);
-            f.Business.RuntimeState.PayrollDayIndex = 6; // week 0
-
-            f.Business.RuntimeState.ResolveWeeklyPayroll();
-            Assert.AreEqual(9000, f.Business.RuntimeState.CurrentCashCents);
+            var f = new Fixture(withRegistry: true, cashCents: 10000);
+            Assert.IsNull(f.Business.RuntimeState.PayAgreedWage(
+                "pass12c-emp-1", 1000, "full week manual", 10, new List<string>()));
+            f.Business.RuntimeState.PayrollDayIndex = 13; // week 1, same week as day 10
             f.Business.RuntimeState.ResolveWeeklyPayroll();
             Assert.AreEqual(9000, f.Business.RuntimeState.CurrentCashCents,
-                "The legacy path gets the same per-week guard.");
+                "The week is already fully paid manually; the weekly run adds nothing.");
+            Assert.AreEqual(1000, f.HouseholdBalance());
+
+            f.Business.RuntimeState.PayrollDayIndex = 20; // week 2
+            f.Business.RuntimeState.ResolveWeeklyPayroll();
+            Assert.AreEqual(8000, f.Business.RuntimeState.CurrentCashCents,
+                "The next week still pays in full — netting is per-week.");
         }
 
         [Test]
@@ -298,27 +312,27 @@ namespace LandLedgers.EditorTests.Economy
         public void ExactlyOnceKeys_SurviveSaveLoad()
         {
             var f = new Fixture(withRegistry: true, cashCents: 10000);
-            f.Business.RuntimeState.PayrollDayIndex = 6; // week 0
-            f.Business.RuntimeState.ResolveWeeklyPayroll();
-            Assert.AreEqual(9000, f.Business.RuntimeState.CurrentCashCents);
             Assert.IsNull(f.Business.RuntimeState.PayAgreedWage(
                 "pass12c-emp-1", 500, "partial week", 10, new List<string>()));
-            Assert.AreEqual(8500, f.Business.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(9500, f.Business.RuntimeState.CurrentCashCents);
 
             BusinessRuntimeSaveDto dto = f.Business.RuntimeState.CaptureSaveDto();
             BusinessRuntimeState restored = BusinessRuntimeState.FromSaveDto(dto, BusinessType.Blacksmith);
             restored.EmploymentRegistry = f.Employments;
             restored.HouseholdLedgers = f.Ledgers;
             restored.PersonHouseholdIdLookup = f.Memberships.GetActiveHouseholdId;
-            restored.PayrollDayIndex = 6; // same week 0
 
-            restored.ResolveWeeklyPayroll();
-            Assert.AreEqual(8500, restored.CurrentCashCents,
-                "Restore must not re-pay the already-resolved week.");
             string repeat = restored.PayAgreedWage(
                 "pass12c-emp-1", 500, "partial week", 10, new List<string>());
             Assert.IsNotNull(repeat, "Restore must not forget a settled manual payment.");
-            Assert.AreEqual(8500, restored.CurrentCashCents);
+            Assert.AreEqual(9500, restored.CurrentCashCents);
+
+            // And the weekly netting survives restore too: the same week's
+            // weekly run nets the restored manual payment.
+            restored.PayrollDayIndex = 13; // week 1, same week as day 10
+            restored.ResolveWeeklyPayroll();
+            Assert.AreEqual(9000, restored.CurrentCashCents,
+                "500 manual + 500 weekly remainder = one agreed wage after restore.");
         }
     }
 }

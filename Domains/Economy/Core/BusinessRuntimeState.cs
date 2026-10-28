@@ -752,6 +752,34 @@ namespace LandLedgers.Economy
         public BusinessNamedPayableRecord() { }
     }
 
+    /// <summary>
+    /// Pass XII Worker C (PASS11-003): one settled manual wage payment.
+    /// PayAgreedWage is a manual, caller-driven path (partial periods,
+    /// final settlements, operator corrections), so it cannot rely on
+    /// the weekly driver's settled-week marker: the same manual
+    /// payment must never post twice, and the weekly run must net
+    /// manual cash already paid for the same employment-week instead
+    /// of paying the full agreed wage again. A record is the payment's
+    /// identity: employment + day + period label. Only cash actually
+    /// paid nets against the weekly wage; a shortfall accrual is
+    /// recorded (so the same manual period cannot accrue twice) but
+    /// nets nothing, because no cash moved. Records persist with the
+    /// runtime (see BusinessRuntimeSaveDto.manualWagePayments) so a
+    /// save/load round-trip cannot resurrect a settled payment.
+    /// </summary>
+    [Serializable]
+    public sealed class ManualWagePaymentRecord
+    {
+        public string EmploymentId = string.Empty;
+        public int PersonId = -1;
+        public int DayIndex = -1;
+        public string PeriodLabel = string.Empty;
+        public int CashPaidCents;
+        public int AccruedCents;
+
+        public ManualWagePaymentRecord() { }
+    }
+
     [Serializable]
     public sealed class BusinessRuntimeState
     {
@@ -918,6 +946,94 @@ namespace LandLedgers.Economy
         /// </summary>
         public int LastPayrollSettledWeekIndex = -1;
 
+        private readonly List<ManualWagePaymentRecord> manualWagePayments = new List<ManualWagePaymentRecord>();
+
+        /// <summary>Pass XII Worker C (PASS11-003): settled manual wage payments (see
+        /// <see cref="ManualWagePaymentRecord"/>). The weekly run nets these; PayAgreedWage
+        /// refuses repeats of them.</summary>
+        public IReadOnlyList<ManualWagePaymentRecord> ManualWagePayments => manualWagePayments;
+
+        private static string NormalizeManualWageLabel(string periodLabel)
+        {
+            return string.IsNullOrWhiteSpace(periodLabel) ? string.Empty : periodLabel.Trim().ToLowerInvariant();
+        }
+
+        private static string BuildManualWageKey(string employmentId, int dayIndex, string periodLabel)
+        {
+            return $"{employmentId ?? string.Empty}|{dayIndex}|{NormalizeManualWageLabel(periodLabel)}";
+        }
+
+        private ManualWagePaymentRecord FindManualWagePayment(string employmentId, int dayIndex, string periodLabel)
+        {
+            string key = BuildManualWageKey(employmentId, dayIndex, periodLabel);
+            for (int i = 0; i < manualWagePayments.Count; i++)
+            {
+                ManualWagePaymentRecord record = manualWagePayments[i];
+                if (record != null && string.Equals(BuildManualWageKey(record.EmploymentId, record.DayIndex, record.PeriodLabel), key, StringComparison.Ordinal))
+                {
+                    return record;
+                }
+            }
+
+            return null;
+        }
+
+        private int ManualCashPaidThisWeek(string employmentId, int weekIndex)
+        {
+            int total = 0;
+            for (int i = 0; i < manualWagePayments.Count; i++)
+            {
+                ManualWagePaymentRecord record = manualWagePayments[i];
+                if (record != null
+                    && string.Equals(record.EmploymentId ?? string.Empty, employmentId ?? string.Empty, StringComparison.Ordinal)
+                    && record.DayIndex >= 0
+                    && record.DayIndex / 7 == weekIndex)
+                {
+                    total += Math.Max(0, record.CashPaidCents);
+                }
+            }
+
+            return total;
+        }
+
+        /// <summary>
+        /// Pass XII Worker C (PASS11-003): the preserved-liability guard.
+        /// A throwing payroll-eligibility lookup in the weekly path
+        /// preserves the week's wage as a named payable (Pass XI WS6
+        /// M3) instead of paying cash. That payable is the week's wage:
+        /// while it stands unsettled, a manual PayAgreedWage for the
+        /// same worker must be refused and directed to settle the
+        /// liability, or the worker would hold cash plus the payable
+        /// and a later settlement would deduct the wage a second time.
+        /// Returns a refusal diagnostic, or null when no such payable
+        /// stands. The check scans NamedPayables, which persist with
+        /// the runtime and are removed on full settlement — so the
+        /// guard clears exactly when the liability does, with no
+        /// separate marker to go stale. It is deliberately scoped to
+        /// lookup-failure preservations only: ordinary missed-payroll
+        /// liabilities suspend the employment, and PayAgreedWage
+        /// already refuses suspended employments.
+        /// </summary>
+        private string FindPreservedLookupFailureLiability(int personId)
+        {
+            string creditor = $"person:{personId}";
+            for (int i = 0; i < namedPayables.Count; i++)
+            {
+                BusinessNamedPayableRecord record = namedPayables[i];
+                if (record != null
+                    && string.Equals(record.Creditor ?? string.Empty, creditor, StringComparison.Ordinal)
+                    && record.AmountCents > 0
+                    && !string.IsNullOrWhiteSpace(record.Reason)
+                    && record.Reason.Contains("payroll eligibility lookup failed"))
+                {
+                    return $"PayAgreedWage refused: P{personId} has an unsettled preserved wage liability " +
+                        $"({record.AmountCents}c, '{record.Reason.Trim()}') — settle the liability instead of re-paying the week in cash.";
+                }
+            }
+
+            return null;
+        }
+
         /// <summary>
         /// Worker D (Autonomous Labor, Phase F): pays one agreed wage amount for a
         /// single employment (partial period, mid-week start, final settlement on
@@ -977,11 +1093,38 @@ namespace LandLedgers.Economy
                 return null;
             }
 
+            // Pass XII Worker C (PASS11-003): exactly-once manual payment.
+            // A preserved lookup-failure liability for this worker is the
+            // week's wage already — re-paying it in cash would double it
+            // (cash now plus settlement later). And an identical manual
+            // payment already recorded must never post twice.
+            string preservedLiability = FindPreservedLookupFailureLiability(employment.EmployeePersonId);
+            if (preservedLiability != null)
+            {
+                return "PayAgreedWage refused: " + preservedLiability;
+            }
+
+            if (FindManualWagePayment(employmentId, dayIndex, periodLabel) != null)
+            {
+                return $"PayAgreedWage refused: employment '{employmentId}' already settled a manual payment " +
+                    $"for '{periodLabel}' (day {dayIndex}) — a manual period pays exactly once.";
+            }
+
             if (currentCashCents >= wage)
             {
                 currentCashCents -= wage;
+                lastWeeklyPayrollCents += wage;
                 RecordNetDelta(-wage);
                 CreditWorkerHousehold(employment, wage);
+                manualWagePayments.Add(new ManualWagePaymentRecord
+                {
+                    EmploymentId = employment.Id,
+                    PersonId = employment.EmployeePersonId,
+                    DayIndex = dayIndex,
+                    PeriodLabel = periodLabel ?? string.Empty,
+                    CashPaidCents = wage,
+                    AccruedCents = 0,
+                });
                 SyncSlotPaidState(employment.EmployeePersonId, paid: true);
                 RefreshWeeklyCashAfter();
                 return null;
@@ -992,6 +1135,15 @@ namespace LandLedgers.Economy
             employment.LifecycleState = EmploymentLifecycleState.Suspended;
             employment.SuspensionReason = EmploymentSuspensionReason.EmployerPaymentDefault;
             AccrueOperatingLiabilityCents(wage, $"person:{employment.EmployeePersonId}", $"partial-period wage default: '{periodLabel}' for {employment.RoleDisplayName} (employment {employment.Id})");
+            manualWagePayments.Add(new ManualWagePaymentRecord
+            {
+                EmploymentId = employment.Id,
+                PersonId = employment.EmployeePersonId,
+                DayIndex = dayIndex,
+                PeriodLabel = periodLabel ?? string.Empty,
+                CashPaidCents = 0,
+                AccruedCents = wage,
+            });
             SyncSlotPaidState(employment.EmployeePersonId, paid: false);
             string workerId = employment.EmployeePersonId.ToString();
             if (!lastSuspendedPayrollWorkerIds.Contains(workerId))
@@ -1829,6 +1981,27 @@ namespace LandLedgers.Economy
                 });
             }
 
+            // Pass XII Worker C (PASS11-003): settled manual wage payments
+            // persist, or a restore could re-pay them.
+            for (int i = 0; i < manualWagePayments.Count; i++)
+            {
+                ManualWagePaymentRecord record = manualWagePayments[i];
+                if (record == null)
+                {
+                    continue;
+                }
+
+                dto.manualWagePayments.Add(new ManualWagePaymentSaveDto
+                {
+                    employmentId = record.EmploymentId ?? string.Empty,
+                    personId = record.PersonId,
+                    dayIndex = record.DayIndex,
+                    periodLabel = record.PeriodLabel ?? string.Empty,
+                    cashPaidCents = Mathf.Max(0, record.CashPaidCents),
+                    accruedCents = Mathf.Max(0, record.AccruedCents),
+                });
+            }
+
             return dto;
         }
 
@@ -1929,6 +2102,31 @@ namespace LandLedgers.Economy
                         DayIndex = payableDto.dayIndex,
                         ObligationId = payableDto.obligationId ?? string.Empty,
                         CashAlreadyDeducted = payableDto.cashAlreadyDeducted,
+                    });
+                }
+            }
+
+            // Pass XII Worker C (PASS11-003): restore settled manual wage
+            // payments exactly as saved (clear-then-load, never merged).
+            state.manualWagePayments.Clear();
+            if (dto.manualWagePayments != null)
+            {
+                for (int i = 0; i < dto.manualWagePayments.Count; i++)
+                {
+                    ManualWagePaymentSaveDto paymentDto = dto.manualWagePayments[i];
+                    if (paymentDto == null)
+                    {
+                        continue;
+                    }
+
+                    state.manualWagePayments.Add(new ManualWagePaymentRecord
+                    {
+                        EmploymentId = paymentDto.employmentId ?? string.Empty,
+                        PersonId = paymentDto.personId,
+                        DayIndex = paymentDto.dayIndex,
+                        PeriodLabel = paymentDto.periodLabel ?? string.Empty,
+                        CashPaidCents = Mathf.Max(0, paymentDto.cashPaidCents),
+                        AccruedCents = Mathf.Max(0, paymentDto.accruedCents),
                     });
                 }
             }
@@ -2166,12 +2364,37 @@ namespace LandLedgers.Economy
                 }
 
                 // Pass IX (A2-10): no ghost wages on the legacy path either.
+                // Pass XII Worker C (PASS11-007): a CONFIRMED unavailable
+                // person still gets nothing, but a LOOKUP FAILURE now
+                // mirrors the employment path (Pass XI WS6 M3): the
+                // week's wage is preserved as a named operating
+                // liability instead of being silently lost. The legacy
+                // loop never pays arrears, so the accrual cannot be
+                // double-paid by a later legacy run; a later manual
+                // re-pay is blocked by PayAgreedWage's preserved-
+                // liability guard. The slot is marked unpaid (not a
+                // default suspension of an employment — there is none).
                 if (IsUnavailableForPayroll(personId))
                 {
-                    lastWeeklyPayrollDiagnostics.Add(
-                        PayrollEligibilityLookupFailed
-                            ? $"slot '{slot.SlotId}' worker P{personId} payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — wage refused, not paid."
-                            : $"slot '{slot.SlotId}' worker P{personId} is dead or off-map — wage refused, not paid.");
+                    if (PayrollEligibilityLookupFailed)
+                    {
+                        int refusedWage = slot.WeeklyWageCents;
+                        if (refusedWage > 0)
+                        {
+                            AccrueOperatingLiabilityCents(refusedWage, $"person:{personId}",
+                                $"payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — legacy slot weekly wage preserved as liability, not paid in cash (slot {BusinessId}:{slot.SlotId})");
+                        }
+
+                        lastWeeklyPayrollDiagnostics.Add(
+                            $"slot '{slot.SlotId}' worker P{personId} payroll eligibility lookup failed ({LastPayrollEligibilityFailure}) — wage not paid in cash, {Mathf.Max(0, refusedWage)}c accrued as operating liability (settle the liability; do not re-pay this week via PayAgreedWage).");
+                        SyncSlotPaidState(personId, paid: false);
+                    }
+                    else
+                    {
+                        lastWeeklyPayrollDiagnostics.Add(
+                            $"slot '{slot.SlotId}' worker P{personId} is dead or off-map — wage refused, not paid.");
+                    }
+
                     continue;
                 }
 
@@ -2315,19 +2538,44 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
-                if (currentCashCents >= wage)
+                // Pass XII Worker C (PASS11-003): net manual cash already
+                // paid for this employment-week. A mid-week manual
+                // payment (PayAgreedWage) plus a full weekly payment
+                // would otherwise pay the week twice. Only cash counts:
+                // shortfall accruals are liabilities, not payments, and
+                // manual records with an unknown day cannot be placed
+                // in a week, so they never net (their day must be
+                // stamped for netting to apply).
+                int manualCashThisWeek = PayrollDayIndex >= 0
+                    ? ManualCashPaidThisWeek(employment.Id, PayrollDayIndex / 7)
+                    : 0;
+                int wageDue = Mathf.Max(0, wage - manualCashThisWeek);
+                if (manualCashThisWeek > 0)
                 {
-                    currentCashCents -= wage;
-                    lastWeeklyPayrollCents += wage;
-                    RecordNetDelta(-wage);
-                    CreditWorkerHousehold(employment, wage);
+                    lastWeeklyPayrollDiagnostics.Add(
+                        $"P{employment.EmployeePersonId} ({employment.RoleDisplayName}, employment {employment.Id}): " +
+                        $"weekly wage {wage}c netted by {manualCashThisWeek}c manual cash already paid this week — {wageDue}c remains due.");
+                }
+
+                if (wageDue <= 0)
+                {
+                    SyncSlotPaidState(employment.EmployeePersonId, paid: true);
+                    continue;
+                }
+
+                if (currentCashCents >= wageDue)
+                {
+                    currentCashCents -= wageDue;
+                    lastWeeklyPayrollCents += wageDue;
+                    RecordNetDelta(-wageDue);
+                    CreditWorkerHousehold(employment, wageDue);
                     SyncSlotPaidState(employment.EmployeePersonId, paid: true);
                     continue;
                 }
 
                 employment.LifecycleState = EmploymentLifecycleState.Suspended;
                 employment.SuspensionReason = EmploymentSuspensionReason.EmployerPaymentDefault;
-                AccrueOperatingLiabilityCents(wage, $"person:{employment.EmployeePersonId}", $"missed payroll for {employment.RoleDisplayName} (employment {employment.Id})");
+                AccrueOperatingLiabilityCents(wageDue, $"person:{employment.EmployeePersonId}", $"missed payroll for {employment.RoleDisplayName} (employment {employment.Id})");
                 SyncSlotPaidState(employment.EmployeePersonId, paid: false);
                 string workerId = employment.EmployeePersonId.ToString();
                 if (!lastSuspendedPayrollWorkerIds.Contains(workerId))

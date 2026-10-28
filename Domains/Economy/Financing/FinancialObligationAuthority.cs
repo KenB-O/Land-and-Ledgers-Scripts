@@ -726,22 +726,177 @@ namespace LandLedgers.Economy.Financing
             return dto;
         }
 
+        /// <summary>
+        /// Pass XII (E-DEFECT-02): copy-on-load. The authority used to store
+        /// the DTO's obligation objects directly, so a run's payments, status
+        /// changes and accruals mutated the caller's snapshot and a second
+        /// restore of the same in-memory DTO loaded already-run debt. Every
+        /// record is therefore deep-copied (obligations with payments, terms
+        /// and id lists; securities, guaranties, facilities, assumptions and
+        /// links with their own fields). Clear-then-load is unchanged, and
+        /// disk loads are unaffected (fresh objects already).
+        /// </summary>
         public void LoadFromSaveDto(FinancialObligationSaveDto dto)
         {
             obligations.Clear(); securities.Clear(); guaranties.Clear(); facilities.Clear(); assumptions.Clear(); links.Clear();
             if (dto == null) return;
             if (dto.Obligations != null) foreach (FinancialObligation value in dto.Obligations)
-                if (value != null && !string.IsNullOrWhiteSpace(value.ObligationId)) obligations[value.ObligationId] = value;
+                if (value != null && !string.IsNullOrWhiteSpace(value.ObligationId)) obligations[value.ObligationId] = CloneObligation(value);
             if (dto.Securities != null) foreach (SecurityInterestRecord value in dto.Securities)
-                if (value != null && !string.IsNullOrWhiteSpace(value.SecurityInterestId)) securities[value.SecurityInterestId] = value;
+                if (value != null && !string.IsNullOrWhiteSpace(value.SecurityInterestId)) securities[value.SecurityInterestId] = CloneSecurity(value);
             if (dto.Guaranties != null) foreach (GuarantyRecord value in dto.Guaranties)
-                if (value != null && !string.IsNullOrWhiteSpace(value.GuarantyId)) guaranties[value.GuarantyId] = value;
+                if (value != null && !string.IsNullOrWhiteSpace(value.GuarantyId)) guaranties[value.GuarantyId] = CloneGuaranty(value);
             if (dto.Facilities != null) foreach (CreditFacilityRecord value in dto.Facilities)
-                if (value != null && !string.IsNullOrWhiteSpace(value.FacilityId)) facilities[value.FacilityId] = value;
+                if (value != null && !string.IsNullOrWhiteSpace(value.FacilityId)) facilities[value.FacilityId] = CloneFacility(value);
             if (dto.Assumptions != null) foreach (ObligationAssumptionRecord value in dto.Assumptions)
-                if (value != null && !string.IsNullOrWhiteSpace(value.AssumptionId)) assumptions[value.AssumptionId] = value;
+                if (value != null && !string.IsNullOrWhiteSpace(value.AssumptionId)) assumptions[value.AssumptionId] = CloneAssumption(value);
             if (dto.Links != null) foreach (ObligationLinkRecord value in dto.Links)
-                if (value != null && !string.IsNullOrWhiteSpace(value.LinkId)) links[value.LinkId] = value;
+                if (value != null && !string.IsNullOrWhiteSpace(value.LinkId)) links[value.LinkId] = CloneLink(value);
+        }
+
+        private static FinancialObligation CloneObligation(FinancialObligation o)
+        {
+            var c = new FinancialObligation
+            {
+                ObligationEntityId = o.ObligationEntityId,
+                ObligationId = o.ObligationId,
+                AgreementId = o.AgreementId,
+                Kind = o.Kind,
+                Status = o.Status,
+                Debtor = o.Debtor,
+                Creditor = o.Creditor,
+                OriginalPrincipalCents = o.OriginalPrincipalCents,
+                OutstandingPrincipalCents = o.OutstandingPrincipalCents,
+                AccruedInterestCents = o.AccruedInterestCents,
+                FeesCents = o.FeesCents,
+                IssuedDayIndex = o.IssuedDayIndex,
+                MaturityDayIndex = o.MaturityDayIndex,
+                Purpose = o.Purpose,
+                LegalRegimeId = o.LegalRegimeId,
+                Terms = o.Terms,
+                PaymentTerms = o.PaymentTerms != null ? new FinancialPaymentTerms
+                {
+                    AnnualInterestRateBps = o.PaymentTerms.AnnualInterestRateBps,
+                    Structure = o.PaymentTerms.Structure,
+                    PaymentIntervalDays = o.PaymentTerms.PaymentIntervalDays,
+                    InstallmentPrincipalCents = o.PaymentTerms.InstallmentPrincipalCents,
+                    BalloonPrincipalCents = o.PaymentTerms.BalloonPrincipalCents,
+                    AllowsEarlyPayoff = o.PaymentTerms.AllowsEarlyPayoff,
+                    PrepaymentFeeCents = o.PaymentTerms.PrepaymentFeeCents,
+                } : null,
+                ScheduleReference = o.ScheduleReference,
+                SourceEconomicEventId = o.SourceEconomicEventId,
+                LastInterestAccrualDayIndex = o.LastInterestAccrualDayIndex,
+                PredecessorObligationId = o.PredecessorObligationId,
+                SuccessorObligationId = o.SuccessorObligationId,
+                AssumptionId = o.AssumptionId,
+                OriginalDebtorReleased = o.OriginalDebtorReleased,
+                IsDemandObligation = o.IsDemandObligation,
+            };
+            if (o.LiableParties != null) c.LiableParties.AddRange(o.LiableParties);
+            if (o.AssumptionIds != null) c.AssumptionIds.AddRange(o.AssumptionIds);
+            if (o.SecurityInterestIds != null) c.SecurityInterestIds.AddRange(o.SecurityInterestIds);
+            if (o.GuarantyIds != null) c.GuarantyIds.AddRange(o.GuarantyIds);
+            if (o.Payments != null)
+            {
+                foreach (FinancialPaymentRecord p in o.Payments)
+                {
+                    if (p == null) continue;
+                    c.Payments.Add(new FinancialPaymentRecord
+                    {
+                        PaymentId = p.PaymentId,
+                        DayIndex = p.DayIndex,
+                        AmountCents = p.AmountCents,
+                        InterestCents = p.InterestCents,
+                        PrincipalCents = p.PrincipalCents,
+                        FeesCents = p.FeesCents,
+                        SourceEconomicEventId = p.SourceEconomicEventId,
+                        Payer = p.Payer,
+                        Payee = p.Payee,
+                    });
+                }
+            }
+            return c;
+        }
+
+        private static SecurityInterestRecord CloneSecurity(SecurityInterestRecord s)
+        {
+            var c = new SecurityInterestRecord
+            {
+                SecurityInterestId = s.SecurityInterestId,
+                ObligationId = s.ObligationId,
+                Creditor = s.Creditor,
+                Grantor = s.Grantor,
+                AttachmentDayIndex = s.AttachmentDayIndex,
+                LegalRegimeId = s.LegalRegimeId,
+                Priority = s.Priority,
+                PermitsJuniorInterest = s.PermitsJuniorInterest,
+                Released = s.Released,
+                EnforcementState = s.EnforcementState,
+            };
+            if (s.CollateralIds != null) c.CollateralIds.AddRange(s.CollateralIds);
+            return c;
+        }
+
+        private static GuarantyRecord CloneGuaranty(GuarantyRecord g)
+        {
+            return new GuarantyRecord
+            {
+                GuarantyId = g.GuarantyId,
+                CoveredObligationId = g.CoveredObligationId,
+                Creditor = g.Creditor,
+                PrimaryDebtor = g.PrimaryDebtor,
+                Guarantor = g.Guarantor,
+                MaximumExposureCents = g.MaximumExposureCents,
+                CalledAmountCents = g.CalledAmountCents,
+                CalledObligationId = g.CalledObligationId,
+                Called = g.Called,
+                Released = g.Released,
+                RecoveryObligationId = g.RecoveryObligationId,
+            };
+        }
+
+        private static CreditFacilityRecord CloneFacility(CreditFacilityRecord f)
+        {
+            return new CreditFacilityRecord
+            {
+                FacilityId = f.FacilityId,
+                Creditor = f.Creditor,
+                Borrower = f.Borrower,
+                AuthorizedLimitCents = f.AuthorizedLimitCents,
+                DrawnPrincipalCents = f.DrawnPrincipalCents,
+                ReviewDayIndex = f.ReviewDayIndex,
+                ExpiryDayIndex = f.ExpiryDayIndex,
+                ReborrowingAllowed = f.ReborrowingAllowed,
+                Terms = f.Terms,
+            };
+        }
+
+        private static ObligationAssumptionRecord CloneAssumption(ObligationAssumptionRecord a)
+        {
+            return new ObligationAssumptionRecord
+            {
+                AssumptionId = a.AssumptionId,
+                ObligationId = a.ObligationId,
+                IncomingDebtor = a.IncomingDebtor,
+                OriginalDebtor = a.OriginalDebtor,
+                OriginalDebtorReleased = a.OriginalDebtorReleased,
+                Novation = a.Novation,
+                CreditorConsented = a.CreditorConsented,
+                DayIndex = a.DayIndex,
+            };
+        }
+
+        private static ObligationLinkRecord CloneLink(ObligationLinkRecord l)
+        {
+            return new ObligationLinkRecord
+            {
+                LinkId = l.LinkId,
+                PredecessorObligationId = l.PredecessorObligationId,
+                SuccessorObligationId = l.SuccessorObligationId,
+                LinkKind = l.LinkKind,
+                DayIndex = l.DayIndex,
+            };
         }
 
         public List<string> Reconcile()

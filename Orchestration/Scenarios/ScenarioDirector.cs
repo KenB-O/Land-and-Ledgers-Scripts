@@ -92,6 +92,25 @@ namespace LandLedgers.Orchestration.Scenarios
         /// <summary>True while RestoreFromSaveDto runs SwitchScenario, so the start hook below is skipped on restore.</summary>
         private bool suppressObjectiveStart;
 
+        /// <summary>
+        /// Pass XII Worker A: true while RestoreFromSaveDto runs
+        /// SwitchScenario for a save whose starting activation was already
+        /// issued, so the household declaration and starting-task enqueue
+        /// are skipped on restore. The save file's world already contains
+        /// them; re-issuing would duplicate the player household and every
+        /// starting task on each load. Old saves (flag false) still issue
+        /// activation once on their first Pass XII load.
+        /// </summary>
+        private bool suppressActivationOnRestore;
+
+        /// <summary>
+        /// Pass XII Worker A: whether this run's starting activation is
+        /// settled — issued by a fresh start, previously issued and skipped
+        /// on restore, or issued by an old-save restore. Reported by
+        /// CaptureSaveDto so later loads skip re-issue.
+        /// </summary>
+        private bool currentRunActivationIssued;
+
         public ScenarioSaveDto CaptureSaveDto()
         {
             if (!HasActiveScenario)
@@ -103,7 +122,8 @@ namespace LandLedgers.Orchestration.Scenarios
             {
                 activeScenarioId = ActiveScenarioId ?? string.Empty,
                 completedGoalIds = Service.ActiveState.CaptureCompletedGoalIds(),
-                completedObjectiveIds = Service.ActiveState.CaptureCompletedObjectiveIds()
+                completedObjectiveIds = Service.ActiveState.CaptureCompletedObjectiveIds(),
+                startingActivationIssued = currentRunActivationIssued
             };
         }
 
@@ -114,13 +134,21 @@ namespace LandLedgers.Orchestration.Scenarios
                 return false;
             }
 
-            // Pass XI WS1: restore runs the same activation as a start
-            // (household declaration and starting tasks, as before) but
-            // must NOT begin a fresh objective run: the hub-loaded run
-            // state (latched goals, failures, qualifier registrations)
-            // is the restored truth, and the bootstrap restore path
-            // reconciles it with director and evaluator goals afterwards.
+            // Pass XI WS1: restore must NOT begin a fresh objective run:
+            // the hub-loaded run state (latched goals, failures, qualifier
+            // registrations) is the restored truth, and the bootstrap
+            // restore path reconciles it with director and evaluator goals
+            // afterwards.
+            // Pass XII Worker A: restore also must NOT re-issue starting
+            // activation when the save already carries it. SaveLoadManager
+            // restores population and tasks from the file BEFORE this runs,
+            // so the player household and starting tasks are already in
+            // the world; re-issuing would duplicate both on every load.
+            // Old saves (flag false) still issue activation once here,
+            // and the applied record is marked so a second restore of the
+            // same record in one load cannot re-issue either.
             suppressObjectiveStart = true;
+            suppressActivationOnRestore = dto.startingActivationIssued;
             try
             {
                 if (!SwitchScenario(dto.activeScenarioId))
@@ -131,8 +159,11 @@ namespace LandLedgers.Orchestration.Scenarios
             finally
             {
                 suppressObjectiveStart = false;
+                suppressActivationOnRestore = false;
             }
 
+            dto.startingActivationIssued = true;
+            currentRunActivationIssued = true;
             Service.ActiveState.RestoreCompletedGoalIds(dto.completedGoalIds);
             Service.ActiveState.RestoreCompletedObjectiveIds(dto.completedObjectiveIds);
             return true;
@@ -245,8 +276,15 @@ namespace LandLedgers.Orchestration.Scenarios
                 return false;
             }
 
-            BootstrapPlayerHousehold(asset);
-            EnqueueStartingTasks(asset);
+            // Pass XII Worker A: a fresh start issues activation; a
+            // restore of an already-activated save skips it (see
+            // RestoreFromSaveDto). Skipping is not a loss: the restored
+            // world already holds the household and the starting tasks.
+            if (!suppressActivationOnRestore)
+            {
+                BootstrapPlayerHousehold(asset);
+                EnqueueStartingTasks(asset);
+            }
 
             // Pass XI WS1 start contract: a scenario start actually
             // begins objective tracking for the same scenario id, and
@@ -273,6 +311,11 @@ namespace LandLedgers.Orchestration.Scenarios
                 Debug.LogWarning($"[ScenarioDirector] {diagnostic}", this);
             }
 
+            // A successful start settles this run's activation: issued
+            // just now on a fresh start or an old-save restore, or
+            // previously issued and skipped on a restore. CaptureSaveDto
+            // reports it so later loads never re-issue.
+            currentRunActivationIssued = true;
             return true;
         }
 

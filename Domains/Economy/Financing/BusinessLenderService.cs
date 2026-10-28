@@ -1025,22 +1025,66 @@ namespace LandLedgers.Economy.Financing
             charterCapitalCents = Math.Max(0, dto.CharterCapitalCents);
             charterSource = dto.CharterSource ?? string.Empty;
             depositLedger.LoadFromSaveDto(dto.DepositLedger);
+            // Pass XII (E-DEFECT-02): copy-on-load. Servicing mutates loan
+            // records, borrower memories and seized collateral in place, so
+            // storing the DTO's objects would let a run corrupt the
+            // caller's snapshot. Every record is therefore copied.
+            // ArrangedKeys store strings only and need no copy.
+            // Clear-then-load is unchanged.
             if (dto.Loans != null)
                 foreach (BusinessLoanRecord record in dto.Loans)
                     if (record != null && !string.IsNullOrWhiteSpace(record.ObligationId)
                         && !loans.ContainsKey(record.ObligationId))
-                        loans[record.ObligationId] = record;
+                        loans[record.ObligationId] = new BusinessLoanRecord
+                        {
+                            LoanKey = record.LoanKey,
+                            ObligationId = record.ObligationId,
+                            Borrower = record.Borrower,
+                            PrincipalCents = record.PrincipalCents,
+                            IssuedDayIndex = record.IssuedDayIndex,
+                            AnnualRateBps = record.AnnualRateBps,
+                            InstallmentPrincipalCents = record.InstallmentPrincipalCents,
+                            PaymentIntervalDays = record.PaymentIntervalDays,
+                            TermDays = record.TermDays,
+                            NextPaymentDayIndex = record.NextPaymentDayIndex,
+                            LastServicedDayIndex = record.LastServicedDayIndex,
+                            ConsecutiveMissedPayments = record.ConsecutiveMissedPayments,
+                            LastMissedDayIndex = record.LastMissedDayIndex,
+                            CollateralId = record.CollateralId,
+                            CollateralAppraisedCents = record.CollateralAppraisedCents,
+                            SecurityInterestId = record.SecurityInterestId,
+                            GuarantyId = record.GuarantyId,
+                            GuarantorName = record.GuarantorName,
+                            TotalCollectedCents = record.TotalCollectedCents,
+                            Status = record.Status,
+                            DefaultConsequencesDayIndex = record.DefaultConsequencesDayIndex,
+                            SettledDayIndex = record.SettledDayIndex,
+                        };
             if (dto.BorrowerMemories != null)
                 foreach (BorrowerLenderMemory memory in dto.BorrowerMemories)
                     if (memory != null && !string.IsNullOrWhiteSpace(memory.Borrower))
-                        borrowerMemory[memory.Borrower] = memory;
+                        borrowerMemory[memory.Borrower] = new BorrowerLenderMemory
+                        {
+                            Borrower = memory.Borrower,
+                            FailedFinancingCount = memory.FailedFinancingCount,
+                            Caution01 = memory.Caution01,
+                            CooldownUntilDayIndex = memory.CooldownUntilDayIndex,
+                        };
             if (dto.ArrangedKeys != null)
                 foreach (ArrangedLoanKey key in dto.ArrangedKeys)
                     if (key != null && !string.IsNullOrWhiteSpace(key.LoanKey)
                         && !arrangedKeys.ContainsKey(key.LoanKey))
                         arrangedKeys[key.LoanKey] = key.ObligationId ?? string.Empty;
             if (dto.SeizedCollateral != null)
-                seizedCollateral.AddRange(dto.SeizedCollateral);
+                foreach (SeizedCollateralRecord s in dto.SeizedCollateral)
+                    if (s != null) seizedCollateral.Add(new SeizedCollateralRecord
+                    {
+                        CollateralId = s.CollateralId,
+                        ObligationId = s.ObligationId,
+                        SecurityInterestId = s.SecurityInterestId,
+                        AppraisedCents = s.AppraisedCents,
+                        SeizedDayIndex = s.SeizedDayIndex,
+                    });
         }
     }
 }

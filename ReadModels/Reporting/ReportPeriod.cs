@@ -6,7 +6,11 @@ namespace LandLedgers.Reporting
     public enum ReportPeriodKind
     {
         Weekly = 0,
-        Monthly = 1
+        Monthly = 1,
+        // Pass XII Worker C (LL-PLAY-013): yearly and all-time rollups.
+        // Appended — never renumber.
+        Yearly = 2,
+        AllTime = 3
     }
 
     [Serializable]
@@ -47,6 +51,36 @@ namespace LandLedgers.Reporting
                 StartDate = startDate,
                 EndDate = endDate,
                 Label = $"Month {startDate.Month}, {startDate.Year}",
+                IsCompletePeriod = isCompletePeriod
+            };
+        }
+
+        public static ReportPeriod Yearly(SimulationDate startDate, SimulationDate endDate, bool isCompletePeriod = true)
+        {
+            return new ReportPeriod
+            {
+                Kind = ReportPeriodKind.Yearly,
+                Year = startDate.Year,
+                Month = 0,
+                Week = 0,
+                StartDate = startDate,
+                EndDate = endDate,
+                Label = $"Year {startDate.Year}",
+                IsCompletePeriod = isCompletePeriod
+            };
+        }
+
+        public static ReportPeriod AllTime(SimulationDate startDate, SimulationDate endDate, bool isCompletePeriod = true)
+        {
+            return new ReportPeriod
+            {
+                Kind = ReportPeriodKind.AllTime,
+                Year = startDate.Year,
+                Month = 0,
+                Week = 0,
+                StartDate = startDate,
+                EndDate = endDate,
+                Label = "All Time",
                 IsCompletePeriod = isCompletePeriod
             };
         }
@@ -94,7 +128,11 @@ namespace LandLedgers.Reporting
 
             return Kind == ReportPeriodKind.Monthly
                 ? $"Month {Month}, {Year}"
-                : $"Week {Week}, {Year}";
+                : Kind == ReportPeriodKind.Yearly
+                    ? $"Year {Year}"
+                    : Kind == ReportPeriodKind.AllTime
+                        ? "All Time"
+                        : $"Week {Week}, {Year}";
         }
 
         public string GetStableKey()

@@ -2190,9 +2190,17 @@ namespace LandLedgers.Economy
         /// ordinary businesses. Requires a named buyer principal (e.g.
         /// "household:12", "business:abc", "external:kansas-city-grain").
         /// Refuses (returns false, mutates nothing) when the buyer is missing:
-        /// no buyer, no sale. Stock declines here because a real delivery to a
-        /// real buyer happened; the buyer's payment is settled by the caller
-        /// through the authoritative ledger before or with this call.
+        /// no buyer, no sale. Pass XII Worker C (E-DEFECT-01): also refuses
+        /// when stock on hand is short of the units sold. The stock
+        /// decrement clamps inside CategoryStockState.RecordDailySales,
+        /// but the cash credit did not, so a sale larger than stock used
+        /// to mint revenue for goods never delivered. Refusal is total
+        /// (no partial delivery, no scaled revenue): a caller that wants
+        /// a smaller sale must request the smaller quantity itself, as
+        /// both production callers already do. Stock declines here because
+        /// a real delivery to a real buyer happened; the buyer's payment
+        /// is settled by the caller through the authoritative ledger
+        /// before or with this call.
         /// </summary>
         public bool ResolveSettledSale(string categoryId, int unitsSold, int revenueCents, string buyerPrincipal)
         {
@@ -2208,6 +2216,11 @@ namespace LandLedgers.Economy
             }
 
             int units = Mathf.Max(0, unitsSold);
+            if (stock.CurrentStockUnits < units)
+            {
+                return false;
+            }
+
             int revenue = Mathf.Max(0, revenueCents);
             stock.RecordDailySales(units, revenue);
             currentCashCents += revenue;

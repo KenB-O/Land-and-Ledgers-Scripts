@@ -71,6 +71,11 @@ found, the test fails loudly rather than passing silently.
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
 | ScenarioFailureNoticeBoard | Orchestration/Scenarios/Generation/ScenarioFailureNoticeBoard.cs | Orchestration/Scenarios/Generation | (none) |
+| PanelModalCoordinator | Presentation/UI/PanelModalCoordinator.cs | Presentation/UI | (none) |
+| SettlementCivicReadModel | ReadModels/Civic/SettlementCivicReadModel.cs | ReadModels/Civic | (none) |
+| ResourceObservationReadModel | ReadModels/Civic/ResourceObservationReadModel.cs | ReadModels/Civic | (none) |
+| SettlementCausalExplanation | ReadModels/Causal/SettlementCausalExplanation.cs | ReadModels/Causal | (none) |
+| PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
 
 ## Notes per entry
 
@@ -197,6 +202,20 @@ note records their audited status so the question does not reopen:
 - Pass XI WS5: `ScenarioFailureNoticeBoard` registered as unwired —
   exactly-once failure-notice surface with no production caller yet;
   live-panel wiring is Unity-session scene work (gate G4).
+- Pass XII Worker D: the five panel-contract types above are
+  source-complete read models / panel contracts (scenario HUD is NOT
+  among them: `ScenarioHudReadModel` HAS a production caller in
+  `ScenarioHudSnapshotBuilder`, in another directory, so it is
+  accounted for by caller, not by this table; the static contracts
+  `AcquisitionDealReadModel`, `StartupNoticeGate`,
+  `ScenarioGuidanceGate`, and `ScenarioHudSnapshotBuilder` are
+  scan-exempt as abstract+sealed in IL). The five registered types
+  have no production caller until Codex binds them in the scene
+  (modal coordinator, Civic tab, Resources tab, causal surface,
+  person inspection). Registering them here is accounting for
+  scene-binding-pending contracts, NOT a claim that they are
+  dormant runtimes or broken systems; do not remove a row until a
+  real production caller outside its owning directory exists.
 - Pass XI WS2: BankRuntime note updated for the delivered binding
   contract (deliberately not wired into underwriting; scene binding
   outstanding under G4); HouseholdMoveService re-confirmed caller-free

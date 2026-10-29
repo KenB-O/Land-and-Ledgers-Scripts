@@ -1,5 +1,9 @@
 # Pass VI — Living Settlement / Playtest Backlog
 
+## Pass XVIII environment note (2026-10-29)
+
+Unity 6000.4.2f1 script compilation remains unverified after repeated Bee/ILPP stalls, including in disposable trivial-script projects. A disposable Unity 6000.2.8f1 project compiled and passed one fresh EditMode test, while its PlayMode invocation discovered zero tests. No LL-PLAY item is marked fixed by this environment investigation. See the Pass XVIII reports for evidence and the required next gates.
+
 Status recorded from the Pass VI source audit. Visual statuses remain unclaimed
 until the Unity Editor can be inspected graphically.
 

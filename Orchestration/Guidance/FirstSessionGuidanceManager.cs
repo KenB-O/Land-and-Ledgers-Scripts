@@ -1,5 +1,6 @@
 using System;
 using LandLedgers.Economy;
+using LandLedgers.Orchestration.Scenarios.Generation;
 using LandLedgers.Persistence;
 using LandLedgers.Time;
 using LandLedgers.UI;
@@ -368,6 +369,15 @@ namespace LandLedgers.FirstLedger
 
         [Header("Runtime")]
         [SerializeField] private bool guidanceEnabled = true;
+        // Pass XII Worker D (LL-PLAY-004): the active scenario id, bound
+        // by Codex from ScenarioCoordinator.ActiveScenarioId (see
+        // Docs/Pass12_PlayerExperience_Contracts.md). Empty means "no
+        // scenario context bound" and keeps the legacy fail-open
+        // behaviour (guidance shows); a non-First-Ledger scenario id
+        // suppresses first-session guidance so it cannot compete with
+        // that scenario's own objectives. Not serialized into the
+        // guidance save DTO: it is scene context, rebound on load.
+        [SerializeField] private string scenarioContextId = string.Empty;
         [SerializeField] private FirstSessionObjectiveStep currentStep;
         [SerializeField] private bool salesBaselineCaptured;
         [SerializeField] private int salesBaselineDayIndex = -1;
@@ -382,6 +392,13 @@ namespace LandLedgers.FirstLedger
         private string lastBlocker = string.Empty;
 
         public FirstSessionObjectiveStep CurrentStep => currentStep;
+
+        /// <summary>Active scenario id for the LL-PLAY-004 guidance gate (Codex binds this).</summary>
+        public string ScenarioContextId
+        {
+            get => scenarioContextId ?? string.Empty;
+            set => scenarioContextId = value ?? string.Empty;
+        }
 
         public FirstSessionGuidanceSaveDto CaptureSaveDto()
         {
@@ -505,6 +522,16 @@ namespace LandLedgers.FirstLedger
         {
             AutoWire();
             if (!guidanceEnabled)
+            {
+                hudController?.ClearFirstSessionGuidance();
+                return;
+            }
+
+            // Pass XII Worker D (LL-PLAY-004): first-session steps
+            // describe the First Ledger start. Under any other active
+            // scenario the scenario HUD is authoritative and this strip
+            // must not compete with it.
+            if (!ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(scenarioContextId))
             {
                 hudController?.ClearFirstSessionGuidance();
                 return;

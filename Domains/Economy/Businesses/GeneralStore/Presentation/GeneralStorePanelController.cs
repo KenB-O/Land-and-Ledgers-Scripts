@@ -4276,7 +4276,7 @@ namespace LandLedgers.FirstLedger
             TownHallContribution contribution = civicFoundation.CurrentTownHallContribution;
             bool built = townHall.Built;
 
-            SetText(view.GovernmentTitleText, built ? $"Civic: {townHall.displayName}" : $"Civic: {townHall.displayName} Not Built");
+            SetText(view.GovernmentTitleText, $"Civic: {townHall.displayName}");
             SetText(view.GovernmentSummaryText, BuildGovernmentSummaryText(townHall));
             SetText(view.GovernmentEffectsText, BuildGovernmentEffectsText(contribution));
             SetText(view.GovernmentOwnerImplicationsText, BuildGovernmentOwnerImplicationsBodyText(civicFoundation.BuildCompactSummaryText()));
@@ -4387,7 +4387,7 @@ namespace LandLedgers.FirstLedger
                 string status = townHall != null && !string.IsNullOrWhiteSpace(townHall.civicStatusLabel)
                     ? townHall.civicStatusLabel
                     : "Civic";
-                return $"Status: Not built | Steward: {owner} | {status}\nPublic civic anchor inactive; town confidence remains mostly private-market led.";
+                return $"Status: no town hall yet | Steward: {owner} | {status}\nPublic civic anchor inactive; town confidence remains mostly private-market led.";
             }
 
             return $"Status: Built | Steward: {townHall.ownerDisplayName} | {townHall.civicStatusLabel}\nPublic civic site: Plot {townHall.plotId:000} | Building {townHall.buildingId:000}";
@@ -4404,7 +4404,7 @@ namespace LandLedgers.FirstLedger
         private static string BuildGovernmentOwnerImplicationsBodyText(string compactSummary)
         {
             string summary = string.IsNullOrWhiteSpace(compactSummary)
-                ? "Town Hall: Not built | Civic confidence +0% | Maturity +0%"
+                ? "Town Hall: no town hall yet | Civic confidence +0% | Maturity +0%"
                 : compactSummary.Trim();
             return summary.StartsWith("Implication:", StringComparison.OrdinalIgnoreCase)
                 ? summary

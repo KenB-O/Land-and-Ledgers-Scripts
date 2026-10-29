@@ -1352,6 +1352,15 @@ namespace LandLedgers.Orchestration.Systems
                 // cash AND credits worker household ledgers through the one
                 // PKG-6 path. Crediting here as well would invent cash.
                 string result = wageService.SettleWeeklyPayroll(business, employments, weekIndex, day, diag);
+                // Pass XII Worker F (D6): only sum a FRESH event. On
+                // "already-settled" or any "refused" result no new event
+                // is appended, so Events[last] would be a previous
+                // business's (or prior week's) event and its wages
+                // would be counted twice.
+                if (result != "settled" && result != "settled-arrears")
+                {
+                    continue;
+                }
                 PayrollEvent evt = wageService.Events[wageService.Events.Count - 1];
                 foreach (PayrollEntry entry in evt.Entries)
                 {

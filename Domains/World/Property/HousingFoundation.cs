@@ -771,15 +771,111 @@ namespace LandLedgers.World.Property
             };
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+        /// occupancies are mutated in place (a new occupancy for a
+        /// person ends the current one by writing UntilDayIndex), so
+        /// storing the DTO's occupancy objects would let a run corrupt
+        /// the caller's snapshot — a second restore of the same
+        /// in-memory DTO would load already-ended occupancies.
+        /// Occupancies are therefore copied. Buildings, spaces,
+        /// assignments and agreements have no in-place mutator in
+        /// this authority (they are replaced, never edited) and stay
+        /// stored-direct; re-audit them if a mutator is ever added.
+        /// Clear-then-load is unchanged.
+        /// </summary>
         public void LoadFromSaveDto(HousingSaveDto dto)
         {
             buildings.Clear(); spaces.Clear(); occupancies.Clear(); assignments.Clear(); agreements.Clear();
             if (dto == null) return;
-            foreach (var b in dto.Buildings) buildings[b.BuildingId] = b;
-            foreach (var s in dto.Spaces) spaces[s.SpaceId] = s;
-            foreach (var o in dto.Occupancies) occupancies[o.OccupancyId] = o;
-            foreach (var a in dto.Assignments) assignments[a.AssignmentId] = a;
-            foreach (var a in dto.Agreements) agreements[a.AgreementId] = a;
+            // Pass XII Worker F (copy-on-load, E-DEFECT-02 round 2): the
+            // first Worker F sweep cloned occupancies only, but buildings,
+            // spaces, assignments and agreements are ALSO mutated in place
+            // (ChangeSpaceCapacity writes SleepingCapacity, EndAgreement
+            // writes EndDayIndex, CloseBuildingWithHistory writes
+            // UntilDayIndex) — so a double restore of the same DTO would
+            // reload already-edited records. Clone all five collections.
+            // PaymentTerms is itself mutated in place (PayeeHolderId
+            // reassignment), so it is deep-copied, not shared.
+            if (dto.Buildings != null)
+                foreach (var b in dto.Buildings)
+                {
+                    if (b == null || string.IsNullOrWhiteSpace(b.BuildingId)) continue;
+                    buildings[b.BuildingId] = new Building
+                    {
+                        BuildingId = b.BuildingId,
+                        ParcelId = b.ParcelId,
+                        Kind = b.Kind,
+                        Condition01 = b.Condition01,
+                        BuiltDayIndex = b.BuiltDayIndex,
+                    };
+                }
+            if (dto.Spaces != null)
+                foreach (var s in dto.Spaces)
+                {
+                    if (s == null || string.IsNullOrWhiteSpace(s.SpaceId)) continue;
+                    spaces[s.SpaceId] = new AccommodationSpace
+                    {
+                        SpaceId = s.SpaceId,
+                        BuildingId = s.BuildingId,
+                        SleepingCapacity = s.SleepingCapacity,
+                    };
+                }
+            foreach (var o in dto.Occupancies)
+            {
+                if (o == null || string.IsNullOrWhiteSpace(o.OccupancyId)) continue;
+                occupancies[o.OccupancyId] = new ResidentialOccupancy
+                {
+                    OccupancyId = o.OccupancyId,
+                    PersonId = o.PersonId,
+                    HouseholdId = o.HouseholdId,
+                    SpaceId = o.SpaceId ?? string.Empty,
+                    Arrangement = o.Arrangement,
+                    SinceDayIndex = o.SinceDayIndex,
+                    UntilDayIndex = o.UntilDayIndex,
+                    AgreementId = o.AgreementId ?? string.Empty,
+                };
+            }
+            if (dto.Assignments != null)
+                foreach (var a in dto.Assignments)
+                {
+                    if (a == null || string.IsNullOrWhiteSpace(a.AssignmentId)) continue;
+                    assignments[a.AssignmentId] = new FunctionalSpaceAssignment
+                    {
+                        AssignmentId = a.AssignmentId,
+                        SpaceId = a.SpaceId,
+                        BusinessInstanceId = a.BusinessInstanceId,
+                        OperationDescription = a.OperationDescription,
+                        SinceDayIndex = a.SinceDayIndex,
+                        UntilDayIndex = a.UntilDayIndex,
+                    };
+                }
+            if (dto.Agreements != null)
+                foreach (var a in dto.Agreements)
+                {
+                    if (a == null || string.IsNullOrWhiteSpace(a.AgreementId)) continue;
+                    agreements[a.AgreementId] = new PropertyAgreement
+                    {
+                        AgreementId = a.AgreementId,
+                        Kind = a.Kind,
+                        GrantorName = a.GrantorName,
+                        GranteeName = a.GranteeName,
+                        SpaceOrParcelId = a.SpaceOrParcelId,
+                        Terms = a.Terms,
+                        StartDayIndex = a.StartDayIndex,
+                        EndDayIndex = a.EndDayIndex,
+                        LinkedInstrumentId = a.LinkedInstrumentId,
+                        PaymentTerms = a.PaymentTerms == null ? null : new TenancyPaymentTerms
+                        {
+                            AmountCents = a.PaymentTerms.AmountCents,
+                            PeriodDays = a.PaymentTerms.PeriodDays,
+                            DueDayOfPeriod = a.PaymentTerms.DueDayOfPeriod,
+                            StartDay = a.PaymentTerms.StartDay,
+                            PayeeHolderId = a.PaymentTerms.PayeeHolderId,
+                            TenantHouseholdId = a.PaymentTerms.TenantHouseholdId,
+                        },
+                    };
+                }
         }
         #endregion
     }

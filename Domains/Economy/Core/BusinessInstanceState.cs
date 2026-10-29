@@ -518,8 +518,19 @@ namespace LandLedgers.Economy
         [SerializeField]
         private string runtimeDisplayName;
 
+        // Pass XII Worker F (M2): the default owner is Town, never Player.
+        // Player ownership must come from an explicit grant (Create with an
+        // explicit owner, SetOwner, or TransferToPlayerOwnership). Every
+        // production creation path sets the owner explicitly (Create
+        // resolves null to Town; FromSaveDto resolves a missing owner DTO
+        // to Town), so this default is reached only by bare/default
+        // construction — which previously read as player-owned and fed
+        // the LL-PLAY-001 ghost-ownership vector. The enum order is
+        // unchanged (serialized append-only); already-serialized scene
+        // instances keep their stored value, so Codex must still audit
+        // scene instances for a stored Player owner.
         [SerializeField]
-        private BusinessOwnerIdentity owner = BusinessOwnerIdentity.Player();
+        private BusinessOwnerIdentity owner = BusinessOwnerIdentity.Town();
 
         [SerializeField]
         private BusinessControlState controlState = BusinessControlState.PlayerManaged;

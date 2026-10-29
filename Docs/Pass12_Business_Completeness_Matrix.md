@@ -13,17 +13,21 @@ shared mechanism while their detailed runtime sits unwired. That distinction
 is the single most important correction to the October 9 impression that
 there are "sixteen rigid Business options".
 
-## 1. Headline counts (28 enum values, no invented types)
+## 1. Headline counts (29 enum members, no invented types)
 
-`BusinessType` (`Domains/Economy/Core/BusinessDefinitions.cs`) has 28 values:
-GeneralStore..Lawyer (0..27) plus `Generic = 255` (classless, descriptive
-metadata only — it grants no permission by itself).
+`BusinessType` (`Domains/Economy/Core/BusinessDefinitions.cs`) has 29
+members: 28 typed values GeneralStore..Lawyer (0..27) plus
+`Generic = 255` (classless, descriptive metadata only — it grants
+no permission by itself). Classification totals 19 LIVE + 10
+PARTIAL = 29. (Worker F correction, round 2: the original §1 table
+listed 18 LIVE and omitted Mine, although §4 already classified
+Mine as LIVE (driver); the §4 rows were complete at 29.)
 
 | Classification | Count | Types |
 |---|---|---|
-| LIVE — tick executes production and settles through real counterparties | 18 | Generic, GeneralStore, Blacksmith, Butcher, Ranch, CropFarm, Sawmill, LumberYard, BoardingHouse, LiveryFreight, Builder, FuelDealer, GrainMill, Bakery, Tailor, Saloon, Barber, Wheelwright |
+| LIVE — tick executes production and settles through real counterparties | 19 | Generic, GeneralStore, Blacksmith, Butcher, Ranch, CropFarm, Mine, Sawmill, LumberYard, BoardingHouse, LiveryFreight, Builder, FuelDealer, GrainMill, Bakery, Tailor, Saloon, Barber, Wheelwright |
 | PARTIAL — weekly settlement/payroll (and usually baseline throughput) runs, but the trade itself has no tick production operation | 10 | Doctor, Tannery, PostOffice, Newspaper, Restaurant, Hotel, Logging, GrainElevator, Bank, Lawyer |
-| SOURCE-ONLY as a separate class | 0 | No business type is source-only as a whole: every type at least reaches weekly settlement/payroll (`WeeklySettlementBusinessTypes`, `SharedBusinessRuntimeManager.cs:817`). Source-only status applies to individual *models*, see §3. |
+| SOURCE-ONLY as a separate class | 0 | No business type is source-only as a whole: every type at least reaches weekly settlement/payroll. `WeeklySettlementBusinessTypes` (`SharedBusinessRuntimeManager.cs:812`) itself lists 27 types — it excludes GeneralStore (own-manager payroll) and Generic (driver/service payroll) — so the broader claim rests on those two separate payroll paths, not on that array alone. Source-only status applies to individual *models*, see §3. |
 | INTENTIONALLY DORMANT | 0 | Nothing in this matrix is dormant by an owner decision. BankRuntime stays unwired by a Pass XI *engineering* gate (binding would double-count), not by owner policy. |
 | UNSUPPORTED (no trade model at all) | 1 of the 10 partials | Lawyer has services (deeds, wills, disputes, title search) but no `*Runtime` trade model and no production operation. |
 

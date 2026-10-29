@@ -199,7 +199,15 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(1, duplicate.ReplacesSerial);
             Assert.AreEqual(MoneyOrderStatus.Duplicated, svc.FindOrder("po-a", 1).Status);
             Assert.IsNotNull(svc.RedeemOrder("po-a", 1, "Emma", 4, diag), "The replaced original can never be paid.");
-            Assert.IsNotNull(svc.IssueDuplicate("po-a", 1, 4, diag), "No duplicate of a non-live order.");
+            // Pass XII Worker F (RUN-011): the assertion polarity was
+            // inverted. The message states the governing behavior — no
+            // duplicate of a non-live order — and production implements
+            // exactly that (IssueDuplicate refuses unless Status is
+            // Issued: a Duplicated original is no longer live, and a
+            // second live replacement would double the lost order).
+            // The old IsNotNull demanded the refused duplicate exist.
+            Assert.IsNull(svc.IssueDuplicate("po-a", 1, 4, diag), "No duplicate of a non-live order.");
+            Assert.AreEqual(2, svc.Orders.Count, "No second duplicate was minted.");
             // The duplicate's own advice must arrive before it pays (due day 4).
             svc.AdvanceDay(4, diag);
             Assert.IsNull(svc.RedeemOrder("po-a", 2, "Emma", 4, diag));
@@ -274,11 +282,20 @@ namespace LandLedgers.EditorTests.Economy
             PostalSettlementPosition position = new List<PostalSettlementPosition>(svc.Positions)[0];
             Assert.AreEqual("po-a", position.DebtorOfficeId);
             Assert.AreEqual("po-b", position.CreditorOfficeId);
-            Assert.AreEqual(2500, position.NetAmountCents, "3500 − 500 netted bilaterally.");
+            // Pass XII Worker F (RUN-011): the test's own message states
+            // the correct arithmetic — 3500 − 500 = 3000 — but the
+            // literal expectation was 2500, as if the 500 were subtracted
+            // twice. Recomputed from the claims: po-b paid 2500 + 1000
+            // on po-a's orders (claims against po-a: 3500) and po-a paid
+            // 500 on po-b's order (claim against po-b: 500), so the net
+            // position is po-a owes po-b 3000. Production nets exactly
+            // this (aOwes − bOwes) and settles it in full; the fund
+            // assertions below follow from the corrected net.
+            Assert.AreEqual(3000, position.NetAmountCents, "3500 − 500 netted bilaterally.");
             Assert.AreEqual(3, position.ComprisedClaimIds.Count);
             Assert.AreEqual(PostalPositionStatus.Settled, position.Status);
-            Assert.AreEqual(500, svc.MoneyOrderCashCents("po-a"), "3000 − 2500 settled in full.");
-            Assert.AreEqual(3500, svc.MoneyOrderCashCents("po-b"), "1000 + 2500.");
+            Assert.AreEqual(0, svc.MoneyOrderCashCents("po-a"), "3000 − 3000 settled in full.");
+            Assert.AreEqual(4000, svc.MoneyOrderCashCents("po-b"), "1000 + 3000.");
             foreach (PostalMoneyOrderClaim claim in svc.Claims)
                 Assert.AreEqual(PostalClaimStatus.Settled, claim.Status);
         }

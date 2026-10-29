@@ -882,6 +882,17 @@ namespace LandLedgers.Economy
             return dto;
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+        /// commissioning mutates records in place (ContractId binding
+        /// and Decisions appends on the found record), so storing the
+        /// DTO's record objects would let a run corrupt the caller's
+        /// snapshot — a second restore would load an already-bound
+        /// record with another run's decisions. Records are therefore
+        /// deep-copied, including funding lists, overrun lists and
+        /// decisions. Clear-then-load and duplicate handling are
+        /// unchanged.
+        /// </summary>
         public void LoadFromSaveDto(NpcConstructionCommissionerSaveDto dto, List<string> diag)
         {
             diag = diag ?? diagnostics;
@@ -895,7 +906,58 @@ namespace LandLedgers.Economy
                     diag.Add($"LoadFromSaveDto: duplicate construction record '{record.RecordId}' skipped — no duplicated records.");
                     continue;
                 }
-                records[record.RecordId] = record;
+                var copy = new NpcConstructionRecord
+                {
+                    RecordId = record.RecordId,
+                    ProjectId = record.ProjectId ?? string.Empty,
+                    HouseholdId = record.HouseholdId,
+                    DesignId = record.DesignId ?? string.Empty,
+                    ParcelId = record.ParcelId ?? string.Empty,
+                    ContractId = record.ContractId ?? string.Empty,
+                    TotalEstimatedCostCents = record.TotalEstimatedCostCents,
+                    TotalActualCostCents = record.TotalActualCostCents,
+                };
+                if (record.PackageFundings != null)
+                {
+                    foreach (NpcBuildPackageFunding funding in record.PackageFundings)
+                    {
+                        if (funding == null) continue;
+                        var fundingCopy = new NpcBuildPackageFunding
+                        {
+                            PackageId = funding.PackageId ?? string.Empty,
+                            PhaseName = funding.PhaseName ?? string.Empty,
+                            EstimatedMaterialCostCents = funding.EstimatedMaterialCostCents,
+                            ActualMaterialCostCents = funding.ActualMaterialCostCents,
+                            LaborKind = funding.LaborKind,
+                            WorkerMinutesCommitted = funding.WorkerMinutesCommitted,
+                            WagesPaidCents = funding.WagesPaidCents,
+                            FreightCostCents = funding.FreightCostCents,
+                            Notes = funding.Notes ?? string.Empty,
+                        };
+                        if (funding.WorkerPersonIds != null) fundingCopy.WorkerPersonIds.AddRange(funding.WorkerPersonIds);
+                        if (funding.EmploymentIds != null) fundingCopy.EmploymentIds.AddRange(funding.EmploymentIds);
+                        copy.PackageFundings.Add(fundingCopy);
+                    }
+                }
+                if (record.Overruns != null)
+                {
+                    foreach (NpcBuildOverrunEvent overrun in record.Overruns)
+                    {
+                        if (overrun == null) continue;
+                        copy.Overruns.Add(new NpcBuildOverrunEvent
+                        {
+                            DayIndex = overrun.DayIndex,
+                            PackageId = overrun.PackageId ?? string.Empty,
+                            EstimatedCents = overrun.EstimatedCents,
+                            ActualCents = overrun.ActualCents,
+                            Resolution = overrun.Resolution,
+                            ResolutionNotes = overrun.ResolutionNotes ?? string.Empty,
+                            Resolved = overrun.Resolved,
+                        });
+                    }
+                }
+                if (record.Decisions != null) copy.Decisions.AddRange(record.Decisions);
+                records[copy.RecordId] = copy;
             }
         }
 

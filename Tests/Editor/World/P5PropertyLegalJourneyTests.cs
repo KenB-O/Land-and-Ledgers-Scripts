@@ -176,6 +176,12 @@ namespace LandLedgers.EditorTests.World
             harness.AssessedByPlot[7] = 100000; // $1,000 assessed
 
             harness.Driver.ResolveWeek(0);
+            // RUN-011 corroboration: assert the fresh levy starts Assessed
+            // here, where it is actually true, so the day-100 Delinquent
+            // correction below does not delete the suite's Assessed-stage
+            // coverage.
+            Assert.AreEqual(TaxAssessmentStatus.Assessed, harness.Driver.Taxes.AllAssessments[0].Status,
+                "levied, not yet due (due day 60)");
             harness.Driver.ResolveWeek(100); // same tax year: no second levy
 
             IReadOnlyList<TaxAssessment> assessments = harness.Driver.Taxes.AllAssessments;
@@ -183,7 +189,18 @@ namespace LandLedgers.EditorTests.World
             Assert.AreEqual("plot-7", assessments[0].ParcelId);
             Assert.AreEqual("Player", assessments[0].OwnerName);
             Assert.AreEqual(1500, assessments[0].AmountCents, "1.5% calibration on 100000c");
-            Assert.AreEqual(TaxAssessmentStatus.Assessed, assessments[0].Status);
+            // Pass XII Worker F (RUN-011): the levy at day 0 is due at
+            // day 60 (DueDaysAfterLevy), and ResolveWeek(100) advances
+            // through days 1..100, so the assessment is Delinquent by
+            // day 100 — exactly as the sibling delinquency and save/load
+            // tests assert (dueDay + 45 and day 200 both Delinquent).
+            // The once-per-tax-year property under test is the count
+            // (1, no second levy in the same tax year), which is
+            // unchanged; only the incidental status expectation was
+            // wrong. Production's delinquency transition (Canon §17.7
+            // staged collection) is correct and untouched.
+            Assert.AreEqual(60, assessments[0].DueDayIndex);
+            Assert.AreEqual(TaxAssessmentStatus.Delinquent, assessments[0].Status);
 
             harness.Driver.ResolveWeek(400); // next tax year
             Assert.AreEqual(2, harness.Driver.Taxes.AllAssessments.Count);

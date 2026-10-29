@@ -71,6 +71,9 @@ found, the test fails loudly rather than passing silently.
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
 | ScenarioFailureNoticeBoard | Orchestration/Scenarios/Generation/ScenarioFailureNoticeBoard.cs | Orchestration/Scenarios/Generation | (none) |
+| ButcherRuntime | Domains/Economy/Businesses/Butcher/ButcherRuntime.cs | Domains/Economy/Businesses/Butcher | Orchestration/Systems/SimulationSystemsHub.cs; Domains/Economy/Businesses/GeneralStore/StoreButchery.cs; Domains/Economy/Farming/FarmLivestock.cs; Domains/Economy/Farming/Integration/CullFlow.cs |
+| BlacksmithRuntime | Domains/Economy/Businesses/Blacksmith/BlacksmithRuntime.cs | Domains/Economy/Businesses/Blacksmith | Domains/Economy/Businesses/Wheelwright/WagonRepairEconomy.cs |
+| TanneryRuntime | Domains/Economy/Businesses/Tannery/TanneryRuntime.cs | Domains/Economy/Businesses/Tannery | (none) |
 | PanelModalCoordinator | Presentation/UI/PanelModalCoordinator.cs | Presentation/UI | (none) |
 | SettlementCivicReadModel | ReadModels/Civic/SettlementCivicReadModel.cs | ReadModels/Civic | (none) |
 | ResourceObservationReadModel | ReadModels/Civic/ResourceObservationReadModel.cs | ReadModels/Civic | (none) |
@@ -79,10 +82,12 @@ found, the test fails loudly rather than passing silently.
 
 ## Notes per entry
 
-- The thirteen `*Runtime` entries are the detailed per-business models
-  (roughly 32k lines combined). Each ships with its own feature helpers in
-  the same directory. None is invoked by `SimulationDrivers`,
-  `SharedBusinessRuntimeManager`, or any other production system.
+- The sixteen `*Runtime` entries are the detailed per-business models
+  (roughly 32k lines combined, plus the three Pass XII additions).
+  Each ships with its own feature helpers in the same directory. None
+  is invoked by `SimulationDrivers`, `SharedBusinessRuntimeManager`,
+  or any other production system; the three Pass XII additions are
+  additionally never instantiated (see their change-log note).
   `BankRuntime` is the thirteenth: it was missing from this registry
   until Pass XI WS1, because `Domains/Economy/Businesses/Bank` sits
   outside the Roslyn harness subset, so neither registry test could see
@@ -202,6 +207,32 @@ note records their audited status so the question does not reopen:
 - Pass XI WS5: `ScenarioFailureNoticeBoard` registered as unwired —
   exactly-once failure-notice surface with no production caller yet;
   live-panel wiring is Unity-session scene work (gate G4).
+- Pass XII Worker F: `ButcherRuntime`, `BlacksmithRuntime` and
+  `TanneryRuntime` are registered here after Worker B's referral.
+  None of the three is instantiated anywhere in production:
+  `ButcherRuntime`'s hub plumbing (`SimulationSystemsHub` list,
+  `GetOrCreateButcherRuntime`, save/load rehydration) is never
+  driven — `GetOrCreateButcherRuntime` has no production caller, so
+  the list is always empty and rehydration can never populate it;
+  the three parameter-passing helpers (`StoreButchery`,
+  `FarmLivestockMarket.ExecuteSale`, `CullFlow.CullAndSellCow`) are
+  themselves never called in production, so no instance ever flows
+  into them. `BlacksmithRuntime`'s only non-test reference is
+  `WagonRepairEconomy.FindAvailableIronwork`, and that helper is
+  itself never called in production. `TanneryRuntime` has no
+  production reference at all (only a comment mention, which the
+  registry test strips). The allowlists above cover plumbing
+  references only, NOT wiring: a future real wiring must remove
+  the allowlisted file from the row, and reviewers must check
+  `GetOrCreateButcherRuntime` callers directly, because drivers
+  iterate the hub's `ButcherRuntimes` property (not the type name)
+  and the type-name test cannot see that wiring. Butcher itself is
+  LIVE via the archetype path and Blacksmith is LIVE via the
+  archetype path; only these detailed runtime classes are unwired.
+  None of the three files is in the Roslyn harness subset, so the
+  assembly scan cannot see them — this file-based registry test is
+  their only machine check, which is why they are also added to the
+  registry test's candidate list.
 - Pass XII Worker D: the five panel-contract types above are
   source-complete read models / panel contracts (scenario HUD is NOT
   among them: `ScenarioHudReadModel` HAS a production caller in

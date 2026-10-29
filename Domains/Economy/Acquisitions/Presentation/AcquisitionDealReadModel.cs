@@ -254,10 +254,22 @@ namespace LandLedgers.Economy
             {
                 if (order[i] == stage) currentIndex = i;
             }
+            // Pass XII Worker F (D15): a Failed deal must not mark
+            // stages it never reached as "Failed". Stages before the
+            // failure stage are Complete, the failure stage itself is
+            // Failed, and later stages are Upcoming (unreached). An
+            // unknown failure stage falls back to Inquiry (the first
+            // stage) so the deal still shows exactly one Failed row.
+            int failedFromIndex = -1;
+            for (int i = 0; i < order.Length; i++)
+            {
+                if (order[i] == failedFromStage) failedFromIndex = i;
+            }
+            if (stage == DealStageKey.Failed && failedFromIndex < 0) failedFromIndex = 0;
             for (int i = 0; i < order.Length; i++)
             {
                 string state;
-                if (stage == DealStageKey.Failed) state = "Failed";
+                if (stage == DealStageKey.Failed) state = i < failedFromIndex ? "Complete" : i == failedFromIndex ? "Failed" : "Upcoming";
                 else if (stage == DealStageKey.Closed) state = "Complete";
                 else if (currentIndex < 0) state = "Upcoming";
                 else if (i < currentIndex) state = "Complete";

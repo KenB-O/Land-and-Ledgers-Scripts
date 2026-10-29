@@ -299,6 +299,13 @@ namespace LandLedgers.Population
                 return;
             }
 
+            // Pass XII Worker F (E-DEFECT-02 round 2): clear-then-load.
+            // The old code replaced ledgers present in the import but
+            // never removed ledgers absent from it, so loading a smaller
+            // save in the same session left stale household ledgers
+            // behind. (Null still means "no data section", not "empty".)
+            ledgers.Clear();
+
             foreach (HouseholdLedgerState state in inStates)
             {
                 if (state == null || state.HouseholdId < 0)

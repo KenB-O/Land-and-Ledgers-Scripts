@@ -460,11 +460,89 @@ namespace LandLedgers.Economy.Financing
         {
             requests.Clear(); offers.Clear(); evidence.Clear();
             if (dto == null) return;
+            // Pass XII Worker F (copy-on-load, E-DEFECT-02 round 2):
+            // offers are mutated in place (Status, OfferedAmountCents,
+            // NegotiationHistory appends), so the load must clone all
+            // three collections — a double restore previously reloaded
+            // post-negotiation offers and refused the original flow.
             if (dto.Requests != null) foreach (CreditRequest value in dto.Requests)
-                if (value != null && !string.IsNullOrWhiteSpace(value.RequestId)) requests[value.RequestId] = value;
+            {
+                if (value == null || string.IsNullOrWhiteSpace(value.RequestId)) continue;
+                var copy = new CreditRequest
+                {
+                    RequestId = value.RequestId,
+                    Borrower = value.Borrower,
+                    Lender = value.Lender,
+                    RequestedAmountCents = value.RequestedAmountCents,
+                    RequiredCashContributionCents = value.RequiredCashContributionCents,
+                    Purpose = value.Purpose,
+                    DesiredTermDays = value.DesiredTermDays,
+                    RequiredFundingDayIndex = value.RequiredFundingDayIndex,
+                    RepaymentSource = value.RepaymentSource,
+                    ProposedCollateral = value.ProposedCollateral,
+                    ProposedGuarantor = value.ProposedGuarantor,
+                    OriginatingDealId = value.OriginatingDealId,
+                };
+                if (value.SuppliedInformation != null) copy.SuppliedInformation.AddRange(value.SuppliedInformation);
+                requests[copy.RequestId] = copy;
+            }
             if (dto.Offers != null) foreach (CreditOffer value in dto.Offers)
-                if (value != null && !string.IsNullOrWhiteSpace(value.OfferId)) offers[value.OfferId] = value;
-            if (dto.Evidence != null) evidence.AddRange(dto.Evidence);
+            {
+                if (value == null || string.IsNullOrWhiteSpace(value.OfferId)) continue;
+                var copy = new CreditOffer
+                {
+                    OfferId = value.OfferId,
+                    RequestId = value.RequestId,
+                    Borrower = value.Borrower,
+                    Lender = value.Lender,
+                    Purpose = value.Purpose,
+                    OriginatingDealId = value.OriginatingDealId,
+                    RequestedAmountCents = value.RequestedAmountCents,
+                    OfferedAmountCents = value.OfferedAmountCents,
+                    RequiredCashContributionCents = value.RequiredCashContributionCents,
+                    AnnualInterestRateBps = value.AnnualInterestRateBps,
+                    TermDays = value.TermDays,
+                    PaymentStructure = value.PaymentStructure,
+                    PaymentIntervalDays = value.PaymentIntervalDays,
+                    FeesCents = value.FeesCents,
+                    SecurityRequired = value.SecurityRequired,
+                    GuarantorRequired = value.GuarantorRequired,
+                    Conditions = value.Conditions,
+                    ExpiryDayIndex = value.ExpiryDayIndex,
+                    StagedAdvances = value.StagedAdvances,
+                    Status = value.Status,
+                    DecisionReason = value.DecisionReason,
+                    ResultingObligationId = value.ResultingObligationId,
+                };
+                if (value.EvidenceConsidered != null) copy.EvidenceConsidered.AddRange(value.EvidenceConsidered);
+                if (value.NegotiationHistory != null)
+                    foreach (CreditOfferNegotiationRecord n in value.NegotiationHistory)
+                        if (n != null) copy.NegotiationHistory.Add(new CreditOfferNegotiationRecord
+                        {
+                            Action = n.Action,
+                            Party = n.Party,
+                            OfferedAmountCents = n.OfferedAmountCents,
+                            AnnualInterestRateBps = n.AnnualInterestRateBps,
+                            TermDays = n.TermDays,
+                            Conditions = n.Conditions,
+                            DayIndex = n.DayIndex,
+                        });
+                offers[copy.OfferId] = copy;
+            }
+            if (dto.Evidence != null) foreach (CreditEvidenceRecord value in dto.Evidence)
+            {
+                if (value == null) continue;
+                evidence.Add(new CreditEvidenceRecord
+                {
+                    EvidenceId = value.EvidenceId,
+                    Borrower = value.Borrower,
+                    ObligationId = value.ObligationId,
+                    Source = value.Source,
+                    Description = value.Description,
+                    DisclosedToLender = value.DisclosedToLender,
+                    DayIndex = value.DayIndex,
+                });
+            }
         }
     }
 

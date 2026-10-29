@@ -255,6 +255,16 @@ namespace LandLedgers.Economy.Businesses.Hotel
             return dto;
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern): the
+        /// room book mutates reservations in place (ConsumedBeds on
+        /// check-in, IsActive on release), so storing the DTO's
+        /// reservation objects would let a run corrupt the caller's
+        /// snapshot. Every reservation is therefore copied.
+        /// Clear-then-load is unchanged. NOTE: this file is outside
+        /// the Roslyn harness subset, so this change is Unity-session
+        /// verified, not harness verified.
+        /// </summary>
         public void LoadFromSaveDto(HotelRoomReservationsSaveDto dto)
         {
             reservations.Clear();
@@ -265,7 +275,21 @@ namespace LandLedgers.Economy.Businesses.Hotel
             foreach (HotelRoomReservation reservation in dto.Reservations)
             {
                 if (reservation == null || string.IsNullOrWhiteSpace(reservation.ReservationId)) continue;
-                reservations.Add(reservation);
+                reservations.Add(new HotelRoomReservation
+                {
+                    ReservationId = reservation.ReservationId,
+                    CustomerBusinessId = reservation.CustomerBusinessId ?? string.Empty,
+                    CustomerName = reservation.CustomerName ?? string.Empty,
+                    RoomClass = reservation.RoomClass,
+                    BedCount = reservation.BedCount,
+                    FromDayIndex = reservation.FromDayIndex,
+                    ToDayIndex = reservation.ToDayIndex,
+                    ReservedNightlyRateCents = reservation.ReservedNightlyRateCents,
+                    ReservedWeeklyRateCents = reservation.ReservedWeeklyRateCents,
+                    ReservedMonthlyRateCents = reservation.ReservedMonthlyRateCents,
+                    ConsumedBeds = reservation.ConsumedBeds,
+                    IsActive = reservation.IsActive,
+                });
             }
         }
         #endregion

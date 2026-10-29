@@ -627,12 +627,18 @@ namespace LandLedgers.Population
             nextPlanSequence = 0;
             if (dto == null) return;
             nextPlanSequence = Math.Max(0, dto.NextPlanSequence);
+            // Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+            // plans are mutated in place (Assign, MarkCompleted,
+            // MarkFailed, Cancel), so storing the DTO's plan objects
+            // would let a run corrupt the caller's snapshot. Every
+            // plan is therefore copied via Copy (Assign cannot copy:
+            // it forces status to Assigned).
             if (dto.Plans != null)
             {
                 foreach (HouseholdErrandPlan plan in dto.Plans)
                 {
                     if (plan == null) continue;
-                    plans.Add(plan);
+                    plans.Add(plan.Copy());
                 }
             }
 

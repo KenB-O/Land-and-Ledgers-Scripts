@@ -622,9 +622,14 @@ namespace LandLedgers.Civic
 
         public static string BuildCompactReadout(TownHallRuntimeSnapshot snapshot, TownHallNoticeSnapshot notice)
         {
+            if (!snapshot.Built)
+            {
+                return $"Not built | {BuildPrimaryContributionSummary(snapshot.Contribution)}";
+            }
+
             if (snapshot.Condition == TownHallRuntimeCondition.Ready && !snapshot.RequiresAction)
             {
-                return $"Ready | {BuildPrimaryContributionSummary(snapshot.Contribution)}";
+                return $"Built | Ready | {BuildPrimaryContributionSummary(snapshot.Contribution)}";
             }
 
             if (snapshot.Condition == TownHallRuntimeCondition.AwaitingPlacement && !snapshot.RequiresAction)

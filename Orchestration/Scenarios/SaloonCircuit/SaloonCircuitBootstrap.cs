@@ -19,6 +19,7 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
     /// delegates in the inspector or let the bootstrap find the T2G runtimes.
     /// Unwired inputs read as honest negatives, never invented positives.
     /// </summary>
+    [ExecuteAlways]
     public sealed class SaloonCircuitBootstrap : MonoBehaviour
     {
         [SerializeField, Tooltip("Found automatically if empty.")]
@@ -153,6 +154,12 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
 
         public void RestoreFromSaveDto(ScenarioSaveDto dto)
         {
+            BindSceneDependencies();
+            // EditMode restores and a scene SaveLoadManager can both reach this
+            // method before Unity has run the normal component-start sequence.
+            // The evaluator is still an owned part of this bootstrap; do not
+            // turn a binding-order gap into a silently dropped scenario restore.
+            EnsureEvaluator();
             if (dto == null || scenarioDirector == null)
             {
                 Debug.LogError("[SaloonCircuitBootstrap] Restore skipped: no save dto or no scenario director — Saloon goals cannot be restored.");
@@ -227,19 +234,16 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
 
         private void Awake()
         {
-            scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
-            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
-            drivers ??= FindAnyObjectByType<SimulationDrivers>();
-            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
-            timeManager ??= FindAnyObjectByType<TimeManager>();
+            BindSceneDependencies();
+
+            EnsureEvaluator();
 
             if (systemsHub == null)
             {
                 Debug.LogWarning("[SaloonCircuitBootstrap] No SimulationSystemsHub — goal evaluation idle.");
-                return;
             }
 
-            gameState = new SaloonCircuitGameState(
+            gameState ??= new SaloonCircuitGameState(
                 businessSource: () => sharedBusinessRuntime != null
                     ? sharedBusinessRuntime.Businesses
                     : new List<BusinessInstanceState>(),
@@ -250,9 +254,6 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
                 dayIndexSource: timeManager != null
                     ? (Func<int>)(() => timeManager.CurrentAbsoluteDayIndex)
                     : null);
-
-            evaluator = new SaloonCircuitGoalEvaluator();
-            evaluator.GoalCompleted += OnGoalCompleted;
 
             // Pass XI WS1: same director objective hook as First Ledger.
             if (scenarioDirector != null && systemsHub != null)
@@ -291,6 +292,86 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
                 Debug.LogWarning("[SaloonCircuitBootstrap] No SimulationDrivers — evaluator will not tick. " +
                     "Assign SimulationDrivers.OnScenarioTick manually.");
             }
+        }
+
+        private void EnsureEvaluator()
+        {
+            if (evaluator != null)
+            {
+                return;
+            }
+
+            evaluator = new SaloonCircuitGoalEvaluator();
+            evaluator.GoalCompleted += OnGoalCompleted;
+        }
+
+        private void BindSceneDependencies()
+        {
+            // ScenarioDirector.Instance covers the same-scene singleton during
+            // EditMode component construction; the include-inactive lookup keeps
+            // authored disabled bootstrap objects recoverable after scene load.
+            scenarioDirector ??= ScenarioDirector.Instance;
+            scenarioDirector ??= FindSceneComponent<ScenarioDirector>();
+            systemsHub ??= FindHubForDirector();
+            drivers ??= FindSceneComponent<SimulationDrivers>();
+            sharedBusinessRuntime ??= FindSceneComponent<SharedBusinessRuntimeManager>();
+            timeManager ??= TimeManager.Instance;
+            timeManager ??= FindSceneComponent<TimeManager>();
+        }
+
+        private SimulationSystemsHub FindHubForDirector()
+        {
+            SimulationSystemsHub[] candidates = FindObjectsByType<SimulationSystemsHub>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            if (scenarioDirector != null && scenarioDirector.ObjectiveService != null)
+            {
+                for (int i = 0; i < candidates.Length; i++)
+                {
+                    SimulationSystemsHub candidate = candidates[i];
+                    if (candidate != null
+                        && candidate.gameObject.scene == gameObject.scene
+                        && ReferenceEquals(candidate.ScenarioObjectives, scenarioDirector.ObjectiveService))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                SimulationSystemsHub candidate = candidates[i];
+                if (candidate != null && candidate.gameObject.scene == gameObject.scene)
+                {
+                    return candidate;
+                }
+            }
+
+            return FindSceneComponent<SimulationSystemsHub>();
+        }
+
+        private T FindSceneComponent<T>() where T : Component
+        {
+            T[] sceneObjects = FindObjectsByType<T>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < sceneObjects.Length; i++)
+            {
+                T candidate = sceneObjects[i];
+                if (candidate != null && candidate.gameObject.scene == gameObject.scene)
+                {
+                    return candidate;
+                }
+            }
+
+            // Unity's object search can be one frame behind when a component is
+            // added in an EditMode test. Resources' scene-object inventory is a
+            // read-only fallback; prefab assets are excluded by IsValid().
+            foreach (T candidate in Resources.FindObjectsOfTypeAll<T>())
+            {
+                if (candidate != null && candidate.gameObject.scene.IsValid())
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
         }
 
         private void OnDestroy()

@@ -1324,7 +1324,7 @@ namespace LandLedgers.Civic
 
         public string BuildSummaryLine()
         {
-            string core = $"Civic confidence +{FormatPercent(CivicConfidence01)} | Town maturity +{FormatPercent(TownMaturity01)} | Immigration pull +{FormatPercent(ImmigrationPull01)} | Land confidence +{FormatPercent(LandConfidence01)}";
+            string core = $"Civic confidence +{FormatPercent(CivicConfidence01)} | Maturity +{FormatPercent(TownMaturity01)} | Immigration pull +{FormatPercent(ImmigrationPull01)} | Land confidence +{FormatPercent(LandConfidence01)}";
             if (!HasSchoolhouseSpecificEffects)
             {
                 return core;

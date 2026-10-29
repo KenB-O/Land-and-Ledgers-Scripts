@@ -3392,6 +3392,7 @@ namespace LandLedgers.World
 
             GenerateAgriculturalPlots(centerX, centerZ, halfRoad);
             GenerateSawmillPlot(centerX, centerZ, halfRoad);
+            GenerateTownHallReservePlot(centerX, centerZ, halfRoad);
 
             GeneratePlotsOnRoadSide(
                 random,
@@ -3411,6 +3412,67 @@ namespace LandLedgers.World
 
             GenerateCrossStreetPlots(random, centerX, centerZ, halfRoad);
             GenerateEdgeResidentialPlots(centerX, centerZ, halfRoad);
+        }
+
+        private void GenerateTownHallReservePlot(int centerX, int centerZ, int halfRoad)
+        {
+            if (settings == null || !settings.generateTownHall || TownHallAlreadyPlaced())
+            {
+                return;
+            }
+
+            TownHallDefinition townHallDefinition = ResolveTownHallDefinition();
+            BuildingDefinition definition = townHallDefinition != null
+                ? townHallDefinition.PhysicalBuildingDefinition
+                : null;
+            if (definition == null)
+            {
+                return;
+            }
+
+            Vector2Int footprint = GetPlacementWorldFootprintSize(definition, GridDirection.East);
+            int setback = Mathf.Max(0, settings.buildingSetbackCells);
+            int plotWidth = footprint.x + setback * 2;
+            int plotDepth = footprint.y + setback * 2;
+            // Reserve a civic-sized lot before ordinary storefront lots are
+            // generated. The Town Hall prefab has a materially larger
+            // footprint than a normal business lot; shrinking the prefab or
+            // silently changing its serialized footprint would break the
+            // world/grid authority. A dedicated reserve keeps the existing
+            // plot and building authorities intact.
+            int firstZ = Mathf.Clamp(centerZ - plotDepth / 2, 0, Mathf.Max(0, grid.Depth - plotDepth));
+            for (int offset = 0; offset < grid.Depth; offset++)
+            {
+                int[] candidates = { firstZ - offset, firstZ + offset };
+                for (int i = 0; i < candidates.Length; i++)
+                {
+                    int zMin = candidates[i];
+                    if (zMin < 0 || zMin + plotDepth > grid.Depth)
+                    {
+                        continue;
+                    }
+
+                    GridRect westBounds = new(centerX - halfRoad - 1 - plotWidth + 1, zMin, plotWidth, plotDepth);
+                    GridCoord westAccess = new(centerX - halfRoad, zMin + plotDepth / 2);
+                    if (grid.IsInBounds(westAccess)
+                        && grid.GetCell(westAccess).IsRoad
+                        && grid.RectCellsAreBuildable(westBounds, false)
+                        && TryCreatePlot(westBounds, GridDirection.East, westAccess, PlotZone.Business))
+                    {
+                        return;
+                    }
+
+                    GridRect eastBounds = new(centerX + halfRoad + 1, zMin, plotWidth, plotDepth);
+                    GridCoord eastAccess = new(centerX + halfRoad, zMin + plotDepth / 2);
+                    if (grid.IsInBounds(eastAccess)
+                        && grid.GetCell(eastAccess).IsRoad
+                        && grid.RectCellsAreBuildable(eastBounds, false)
+                        && TryCreatePlot(eastBounds, GridDirection.West, eastAccess, PlotZone.Business))
+                    {
+                        return;
+                    }
+                }
+            }
         }
 
         private void GenerateCrossStreetPlots(System.Random random, int centerX, int centerZ, int halfRoad)

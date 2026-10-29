@@ -842,6 +842,11 @@ namespace LandLedgers.Economy
 
         public void ResolveWeeklySharedOperations()
         {
+            // Weekly resolution can be invoked directly by a scenario/test driver
+            // before the first Unity Update has completed. Refresh scene-owned
+            // authorities here so production paths (including agricultural field
+            // registration) never depend on Awake ordering alone.
+            AutoWire();
             InitializeIfNeeded(generalStoreRuntime != null ? generalStoreRuntime.CurrentBusiness : null);
             EnsureProfilesLoaded();
             WireEmploymentRegistryToBusinesses();
@@ -4257,6 +4262,7 @@ namespace LandLedgers.Economy
             LandLedgers.Economy.Farming.Crops.CropChain chain =
                 hub != null && hub.FarmSlice != null ? hub.FarmSlice.Crops : null;
             var diagnostics = new List<string>();
+            EnsureAgriculturalFieldRegistered(business, chain, diagnostics);
             LandLedgers.Economy.Farming.Crops.FarmCycleDriver.FarmWeeklyResult result =
                 LandLedgers.Economy.Farming.Crops.FarmCycleDriver.Shared.DriveWeekly(
                     chain, business.InstanceId, tasks, ids, dayIndex, diagnostics);
@@ -4275,6 +4281,67 @@ namespace LandLedgers.Economy
             RecordOperationSummary(business, string.IsNullOrWhiteSpace(blocked) ? resultText : $"{resultText}; blocked: {blocked}");
             AppendSummarySegment(summary, $"CropFarm {result.UnitsHarvested}");
             townWorld?.SetAgriculturalActivityCue(business.AssignedBuildingId, result.UnitsHarvested > 0, blocked);
+        }
+
+        private void EnsureAgriculturalFieldRegistered(
+            BusinessInstanceState business,
+            LandLedgers.Economy.Farming.Crops.CropChain chain,
+            List<string> diagnostics)
+        {
+            if (business == null || chain == null || townWorld == null)
+            {
+                return;
+            }
+
+            if (business.BusinessType != BusinessType.CropFarm
+                || business.AssignedBuildingId < 0
+                || !townWorld.TryGetBuildingById(business.AssignedBuildingId, out PlacedBuilding building)
+                || building == null
+                || !townWorld.TryGetPlotById(building.plotId, out TownPlot plot)
+                || plot == null)
+            {
+                return;
+            }
+
+            bool hasCropProductionSite = plot.agriculturalSiteRole == AgriculturalSiteRole.CropProductionYard
+                || (plot.zone == PlotZone.Agricultural
+                    && building.definition != null
+                    && building.definition.AgriculturalSiteRole == AgriculturalSiteRole.CropProductionYard);
+            if (!hasCropProductionSite)
+            {
+                return;
+            }
+
+            string fieldId = $"farm:{business.InstanceId}:plot:{plot.id}";
+            if (chain.Fields.GetField(fieldId) != null)
+            {
+                return;
+            }
+
+            float cellSize = townWorld.Grid != null ? townWorld.Grid.CellSizeMeters : 0f;
+            float acres = plot.bounds.Area * cellSize * cellSize / 4046.8564224f;
+            if (acres <= 0f)
+            {
+                diagnostics?.Add($"CropFarm {business.InstanceId}: agricultural plot {plot.id} has no usable area; field registration refused.");
+                return;
+            }
+
+            var field = new LandLedgers.Economy.Farming.Crops.CropFieldState(fieldId, business.InstanceId, acres)
+            {
+                LinkedPlotName = $"plot:{plot.id}",
+                OwnerFarmId = business.InstanceId,
+                Suitability01 = 0.7f,
+                Moisture01 = 0.6f,
+                Condition01 = 1f
+            };
+            string refusal = chain.Fields.RegisterField(field);
+            if (!string.IsNullOrWhiteSpace(refusal))
+            {
+                diagnostics?.Add(refusal);
+                return;
+            }
+
+            diagnostics?.Add($"CropFarm {business.InstanceId}: registered field {fieldId} from agricultural plot {plot.id} ({acres:0.###} acres).");
         }
 
         private int ResolveBoardingHouseOperations(StringBuilder summary)
@@ -8780,7 +8847,7 @@ namespace LandLedgers.Economy
         /// <summary>
         /// BIZ-1: <see cref="IBusinessCreationContext"/> backed by this manager.
         /// </summary>
-        private sealed class ManagerCreationContext : IBusinessCreationContext
+        private sealed class ManagerCreationContext : IBusinessCreationContext, IBusinessTypedPremisesContext
         {
             private readonly SharedBusinessRuntimeManager manager;
 
@@ -8814,6 +8881,58 @@ namespace LandLedgers.Economy
             public BusinessProfileDefinition BuildFallbackProfile(BusinessType type, string displayName)
             {
                 return BusinessProfileDefinition.CreateFallback(type, displayName);
+            }
+
+            public bool TryAssignPremises(BusinessType businessType, PremisesKind kind, out int buildingId)
+            {
+                buildingId = -1;
+                if (businessType != BusinessType.CropFarm && businessType != BusinessType.Ranch)
+                {
+                    return TryAssignPremises(kind, out buildingId);
+                }
+
+                if (manager.townWorld == null || manager.townWorld.Buildings == null)
+                {
+                    return false;
+                }
+
+                AgriculturalSiteRole requiredRole = businessType == BusinessType.Ranch
+                    ? AgriculturalSiteRole.LivestockYard
+                    : AgriculturalSiteRole.CropProductionYard;
+                BusinessProfileDefinition profile = manager.FindProfile(businessType);
+                PlacedBuilding best = null;
+                foreach (PlacedBuilding building in manager.townWorld.Buildings)
+                {
+                    if (building == null || building.definition == null
+                        || manager.assignedBuildingIds.Contains(building.id))
+                    {
+                        continue;
+                    }
+
+                    TownPlot plot = manager.GetPlot(building.plotId);
+                    bool roleMatch = plot != null
+                        && (plot.agriculturalSiteRole == requiredRole
+                            || (plot.zone == PlotZone.Agricultural
+                                && building.definition.AgriculturalSiteRole == requiredRole));
+                    if (!roleMatch
+                        || (profile != null && !BusinessSiteSuitabilityEvaluator.CanOperate(profile, building, plot)))
+                    {
+                        continue;
+                    }
+
+                    if (best == null || building.id < best.id)
+                    {
+                        best = building;
+                    }
+                }
+
+                if (best == null)
+                {
+                    return false;
+                }
+
+                buildingId = best.id;
+                return true;
             }
 
             public bool TryAssignPremises(PremisesKind kind, out int buildingId)

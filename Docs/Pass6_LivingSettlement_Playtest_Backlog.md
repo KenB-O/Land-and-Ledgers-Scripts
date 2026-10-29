@@ -37,3 +37,13 @@ until the Unity Editor can be inspected graphically.
 
 Visual validation is currently pending because the available environment is
 headless; no screenshot or visual-fix claim is made by this file.
+
+## Pass XV update — 2026-10-29
+
+The opening farm defect was traced to typed premises selection: the formation
+context used first-fit buildings without requiring an agricultural site role.
+Pass XV added a typed production-context selector and live field registration.
+The old four-week First Ledger Victory expectation was corrected to honest
+progress against the unchanged $15,000 threshold. Post-fix Unity validation was
+incomplete because the Unity/Bee compiler runner stalled before NUnit output;
+no visual backlog item is marked fixed from this pass.

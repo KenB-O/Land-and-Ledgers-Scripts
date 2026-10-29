@@ -128,7 +128,7 @@ namespace LandLedgers.PlayMode
         }
 
         [UnityTest, Timeout(900000)]
-        public IEnumerator FirstLedgerNormalProductionReachesTheLiveLadder()
+        public IEnumerator FirstLedgerFourWeekProductionReportsHonestProgress()
         {
             AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);
             Assert.NotNull(load, "Main Scene must be present in the build settings.");
@@ -221,9 +221,22 @@ namespace LandLedgers.PlayMode
             int equity = (int)(bootstrapType.GetProperty("PlayerOwnerEquityCents")?.GetValue(bootstrap) ?? -1);
             int employmentRegistryCount = (int)(sharedTypeForHiring.GetProperty("EmploymentRegistryCount")?.GetValue(sharedForHiring) ?? -1);
             bool complete = (bool)(bootstrapType.GetProperty("IsScenarioComplete")?.GetValue(bootstrap) ?? false);
-            Assert.IsTrue(complete,
-                $"The first authored scenario must reach Victory through ordinary production and authoritative time, not a completion flag, manual reevaluation, or valuation probe. " +
+            Assert.GreaterOrEqual(owned, 3,
+                $"Four-week production should preserve the three legitimately formed player Businesses. equity={equity}c");
+            Assert.GreaterOrEqual(employees, 3,
+                $"Four-week production should preserve the three legitimate employee relationships. equity={equity}c");
+            Assert.AreEqual(3, employmentRegistryCount,
+                "The four-week path must not duplicate the authoritative employment registry.");
+            Assert.Less(equity, FirstLedgerEquityTargetCents(),
+                "The four-week opening is an honest-progress checkpoint; it must not reach the final equity target without the required economic activity.");
+            Assert.IsFalse(complete,
+                $"First Ledger must remain incomplete until the real 1,500,000-cent equity objective is reached. " +
                 $"owned={owned}, employees={employees}, registry={employmentRegistryCount}, equity={equity}c");
+        }
+
+        private static int FirstLedgerEquityTargetCents()
+        {
+            return 1500000;
         }
 
         [UnityTest]
@@ -380,7 +393,7 @@ namespace LandLedgers.PlayMode
         }
 
         [UnityTest]
-        public IEnumerator ProductionWeeklyPassProducesFarmOutputAndQueuesRealLogistics()
+        public IEnumerator ProductionWeeklyPassRegistersFarmFieldAndRespectsWinter()
         {
             AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);
             Assert.NotNull(load, "Main Scene must be present in the build settings.");
@@ -429,15 +442,39 @@ namespace LandLedgers.PlayMode
             object cropStock = runtimeState.GetType().GetMethod("GetCategoryStock")?.Invoke(runtimeState, new object[] { "crop_food" });
             Assert.NotNull(cropStock, "Farm production must use the authored crop output category.");
             int farmOutput = (int)cropStock.GetType().GetProperty("CurrentStockUnits")?.GetValue(cropStock);
-            Assert.Greater(farmOutput, 0, "A staffed formed farm must produce physical crop inventory.");
+            Assert.AreEqual(0, farmOutput,
+                "The January opening must not create crop inventory before a valid planting and harvest cycle.");
+
+            Type hubType = RuntimeType("LandLedgers.Orchestration.Systems.SimulationSystemsHub");
+            Component hub = FindComponent(hubType);
+            Assert.NotNull(hub, "The playable scene must own the authoritative systems hub.");
+            object farmSlice = hubType.GetProperty("FarmSlice")?.GetValue(hub);
+            object crops = farmSlice?.GetType().GetProperty("Crops")?.GetValue(farmSlice);
+            object fields = crops?.GetType().GetProperty("Fields")?.GetValue(crops);
+            object allFields = fields?.GetType().GetMethod("AllFields")?.Invoke(fields, null);
+            object registeredField = null;
+            foreach (object candidate in (System.Collections.IEnumerable)allFields)
+            {
+                string candidateFarmId = candidate.GetType().GetField("FarmId")?.GetValue(candidate) as string;
+                if (string.Equals(candidateFarmId,
+                    farm.GetType().GetProperty("InstanceId")?.GetValue(farm) as string,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    registeredField = candidate;
+                    break;
+                }
+            }
+            Assert.NotNull(registeredField,
+                "A formed farm with legitimate agricultural premises must register a persistent CropFieldState.");
+            Assert.Greater((float)registeredField.GetType().GetField("Acres")?.GetValue(registeredField), 0f);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(
+                registeredField.GetType().GetField("LinkedPlotName")?.GetValue(registeredField) as string));
 
             Type logisticsType = RuntimeType("LandLedgers.Economy.LogisticsRuntimeManager");
             Component logistics = FindComponent(logisticsType);
             Assert.NotNull(logistics, "The playable scene must own the real logistics authority.");
             object shipments = logisticsType.GetProperty("Shipments")?.GetValue(logistics);
             Assert.NotNull(shipments, "The logistics authority must expose scheduled physical shipments.");
-            Assert.Greater(((System.Collections.ICollection)shipments).Count, 0,
-                "Farm output must enter the real shipment ledger before store receipt.");
             string farmId = farm.GetType().GetProperty("InstanceId")?.GetValue(farm) as string;
             string storeId = store.GetType().GetProperty("InstanceId")?.GetValue(store) as string;
             object shipment = null;
@@ -452,12 +489,8 @@ namespace LandLedgers.PlayMode
                     break;
                 }
             }
-            Assert.NotNull(shipment, "Farm output must queue a shipment addressed to the formed General Store.");
-            Assert.AreEqual("HiredFreight", shipment.GetType().GetProperty("HaulingMode")?.GetValue(shipment)?.ToString(),
-                "The route must use the formed Freight business when one is available.");
-            string carrierId = shipment.GetType().GetProperty("CarrierBusinessInstanceId")?.GetValue(shipment) as string;
-            string freightId = freight.GetType().GetProperty("InstanceId")?.GetValue(freight) as string;
-            Assert.AreEqual(freightId, carrierId, "The shipment must name the real Freight business as carrier.");
+            Assert.IsNull(shipment,
+                "No farm shipment may be created before real crop output and a legitimate buyer order exist.");
         }
 
         [UnityTest]

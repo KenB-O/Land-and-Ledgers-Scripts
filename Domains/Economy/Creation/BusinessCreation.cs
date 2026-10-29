@@ -450,6 +450,17 @@ namespace LandLedgers.Economy.Creation
     }
 
     /// <summary>
+    /// Optional production-context extension for premises selection. The original
+    /// capability-only contract remains available to existing fixtures and adapters;
+    /// live world hosts can additionally use the business kind to select a compatible
+    /// physical site (for example, agricultural land for a CropFarm).
+    /// </summary>
+    public interface IBusinessTypedPremisesContext
+    {
+        bool TryAssignPremises(BusinessType businessType, PremisesKind kind, out int buildingId);
+    }
+
+    /// <summary>
     /// BIZ-1: the Canon §3.1 universal workflow as code —
     /// intent → identity → ownership/governance → capability-driven premises →
     /// assets/working capital. Creating a business creates the entity; it does NOT make
@@ -503,7 +514,11 @@ namespace LandLedgers.Economy.Creation
             if (premises.Kind != PremisesKind.NoDedicatedPremises
                 && premises.Kind != PremisesKind.MobileRoute)
             {
-                if (!context.TryAssignPremises(premises.Kind, out int buildingId))
+                int buildingId;
+                bool premisesAssigned = context is IBusinessTypedPremisesContext typedContext
+                    ? typedContext.TryAssignPremises(intent.BusinessType, premises.Kind, out buildingId)
+                    : context.TryAssignPremises(premises.Kind, out buildingId);
+                if (!premisesAssigned)
                 {
                     diagnostics.Add(
                         $"No suitable site available for {premises.Kind}; creation refused " +

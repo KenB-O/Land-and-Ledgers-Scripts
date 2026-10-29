@@ -1,9 +1,16 @@
 # Pass XII — Final Regression Results (Worker F)
 
 Date: 2026-10-28. Tree verified: `muse/pass12-f-review` at
-`ed95de6` (Worker F final code tree). The only commit after this
-run is the commit adding this document itself (Docs-only, no code
-or test change), so the counts below stand for the final tree.
+`518b4a8` (Worker F final code tree). The full run below was
+executed on that exact tree; the only commit after it is the
+commit adding this document's final update (Docs-only, no code
+or test change), so the counts stand for the final tree.
+(An earlier full run on `ed95de6` also gave 1525/0; the
+`518b4a8` run re-confirms it after two test-only coverage
+additions — Orders.Count == 2 in the duplicate test and an
+Assessed-stage assertion after ResolveWeek(0) — which add
+assertions inside existing tests, not new tests, so the total
+stays 1525.)
 
 ## Procedure (reproducible)
 

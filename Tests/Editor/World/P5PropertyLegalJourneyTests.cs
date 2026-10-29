@@ -176,6 +176,12 @@ namespace LandLedgers.EditorTests.World
             harness.AssessedByPlot[7] = 100000; // $1,000 assessed
 
             harness.Driver.ResolveWeek(0);
+            // RUN-011 corroboration: assert the fresh levy starts Assessed
+            // here, where it is actually true, so the day-100 Delinquent
+            // correction below does not delete the suite's Assessed-stage
+            // coverage.
+            Assert.AreEqual(TaxAssessmentStatus.Assessed, harness.Driver.Taxes.AllAssessments[0].Status,
+                "levied, not yet due (due day 60)");
             harness.Driver.ResolveWeek(100); // same tax year: no second levy
 
             IReadOnlyList<TaxAssessment> assessments = harness.Driver.Taxes.AllAssessments;

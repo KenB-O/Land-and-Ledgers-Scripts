@@ -207,6 +207,7 @@ namespace LandLedgers.EditorTests.Economy
             // second live replacement would double the lost order).
             // The old IsNotNull demanded the refused duplicate exist.
             Assert.IsNull(svc.IssueDuplicate("po-a", 1, 4, diag), "No duplicate of a non-live order.");
+            Assert.AreEqual(2, svc.Orders.Count, "No second duplicate was minted.");
             // The duplicate's own advice must arrive before it pays (due day 4).
             svc.AdvanceDay(4, diag);
             Assert.IsNull(svc.RedeemOrder("po-a", 2, "Emma", 4, diag));

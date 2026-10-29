@@ -375,7 +375,18 @@ Focused verification: MoneyOrderServiceTests 20/0,
 P5PropertyLegalJourneyTests 15/0. No test deleted, no assertion
 weakened. (Note: the task brief's parenthetical attributing the
 "3500 − 500" message to production was a misattribution — it is
-the test's own AreEqual message.)
+the test's own AreEqual message.) Two coverage refinements from
+the independent RUN-011 corroboration were also applied, both
+test-only: the duplicate test now asserts Orders.Count == 2 (no
+second duplicate minted, mirroring the WS3 lock test), and the
+assessment test now asserts Assessed immediately after
+ResolveWeek(0), where it is actually true, so the day-100
+Delinquent correction does not delete the suite's Assessed-stage
+coverage. Supersession note: the Pass XI plan's "fix the bilateral
+netting arithmetic" line (Docs/Pass11_Implementation_Plan.md:248)
+is WRONG on the settlement case and must not be followed — the
+production net of 3000 is correct, and "fixing" it to 2500 would
+underpay a settled position by 500.
 
 ## 5. Residuals — explicitly carried, not silently closed
 

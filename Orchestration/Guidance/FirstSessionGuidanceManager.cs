@@ -1,5 +1,6 @@
 using System;
 using LandLedgers.Economy;
+using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Orchestration.Scenarios.Generation;
 using LandLedgers.Persistence;
 using LandLedgers.Time;
@@ -378,6 +379,7 @@ namespace LandLedgers.FirstLedger
         // that scenario's own objectives. Not serialized into the
         // guidance save DTO: it is scene context, rebound on load.
         [SerializeField] private string scenarioContextId = string.Empty;
+        private ScenarioDirector scenarioDirector;
         [SerializeField] private FirstSessionObjectiveStep currentStep;
         [SerializeField] private bool salesBaselineCaptured;
         [SerializeField] private int salesBaselineDayIndex = -1;
@@ -503,6 +505,23 @@ namespace LandLedgers.FirstLedger
             RefreshGuidance();
         }
 
+        /// <summary>
+        /// Enables or retires the legacy first-session strip. New Game scenario
+        /// objectives are presented by ScenarioStartPanelController; this strip
+        /// remains only for legacy scenes that have no scenario authority.
+        /// </summary>
+        public void SetGuidanceEnabled(bool enabled)
+        {
+            guidanceEnabled = enabled;
+            if (!enabled)
+            {
+                hudController?.ClearFirstSessionGuidance();
+                return;
+            }
+
+            RefreshGuidance();
+        }
+
         private void Awake()
         {
             AutoWire();
@@ -531,7 +550,7 @@ namespace LandLedgers.FirstLedger
             // describe the First Ledger start. Under any other active
             // scenario the scenario HUD is authoritative and this strip
             // must not compete with it.
-            if (!ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(scenarioContextId))
+            if (!ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(scenarioContextId, scenarioDirector != null))
             {
                 hudController?.ClearFirstSessionGuidance();
                 return;
@@ -1463,6 +1482,14 @@ namespace LandLedgers.FirstLedger
 
         private void AutoWire()
         {
+            scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
+            if (scenarioDirector != null)
+            {
+                scenarioContextId = scenarioDirector.HasActiveScenario
+                    ? scenarioDirector.ActiveScenarioId ?? string.Empty
+                    : string.Empty;
+            }
+
             hudController ??= FindAnyObjectByType<LandLedgersHUDController>();
             managementPanel ??= FindAnyObjectByType<GeneralStorePanelController>();
             storeRuntime ??= FindAnyObjectByType<GeneralStoreRuntimeManager>();

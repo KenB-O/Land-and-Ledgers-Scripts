@@ -39,6 +39,17 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             return string.Equals(activeScenarioId, ScenarioObjectiveService.FirstLedgerScenarioId, System.StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// Applies the legacy fail-open rule only when no scenario authority is
+        /// available. When a scenario authority exists, its objectives are the
+        /// only authoritative player goals, including for First Ledger.
+        /// </summary>
+        public static bool ShouldShowFirstSessionGuidance(string activeScenarioId, bool scenarioAuthorityAvailable)
+        {
+            if (scenarioAuthorityAvailable) return false;
+            return ShouldShowFirstSessionGuidance(activeScenarioId);
+        }
+
         /// <summary>Human-readable reason for a suppression (empty when shown).</summary>
         public static string SuppressionReason(string activeScenarioId)
         {

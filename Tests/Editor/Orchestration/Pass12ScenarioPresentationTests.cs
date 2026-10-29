@@ -147,6 +147,17 @@ namespace LandLedgers.Editor.Orchestration
         }
 
         [Test]
+        public void GuidanceGate_AuthoritativeScenarioSuppressesLegacyGuidance()
+        {
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(string.Empty, true));
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(null, true));
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("the-first-ledger", true));
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("saloon-circuit", true));
+            Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(string.Empty, false));
+            Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("the-first-ledger", false));
+        }
+
+        [Test]
         public void FailureBoard_DedupStillHoldsThroughHud()
         {
             var board = new ScenarioFailureNoticeBoard();

@@ -39,10 +39,23 @@ namespace LandLedgers.FirstLedger
         private void Start()
         {
             canvas ??= FindAnyObjectByType<Canvas>();
-            if (canvas != null && scenarioDirector != null && !scenarioDirector.HasActiveScenario)
+            if (canvas == null || scenarioDirector == null)
             {
-                BuildPanel(canvas.transform as RectTransform);
+                return;
             }
+
+            RectTransform parent = canvas.transform as RectTransform;
+            if (!scenarioDirector.HasActiveScenario)
+            {
+                BuildPanel(parent);
+                return;
+            }
+
+            // Main Scene can restore or bootstrap an active scenario before this
+            // controller starts. The previous implementation only created the
+            // objective surface after the start button was clicked, leaving
+            // already-active scenarios with no visible goals.
+            BuildObjectivePanel(parent);
         }
 
         private void BuildPanel(RectTransform parent)
@@ -93,7 +106,23 @@ namespace LandLedgers.FirstLedger
 
         private void Update()
         {
-            if (objectiveLabel == null || scenarioDirector == null || !scenarioDirector.HasActiveScenario)
+            if (scenarioDirector == null)
+            {
+                return;
+            }
+
+            if (canvas == null)
+            {
+                canvas = FindAnyObjectByType<Canvas>();
+            }
+
+            if (scenarioDirector.HasActiveScenario && objectiveLabel == null && canvas != null)
+            {
+                if (panel != null) panel.SetActive(false);
+                BuildObjectivePanel(canvas.transform as RectTransform);
+            }
+
+            if (objectiveLabel == null || !scenarioDirector.HasActiveScenario)
             {
                 return;
             }
@@ -171,9 +200,24 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            var lines = new System.Text.StringBuilder("SCENARIO OBJECTIVES\n");
+            int completed = 0;
+            int total = 0;
             foreach (ScenarioGoal goal in state.Asset.Goals)
             {
+                if (goal.Optional) continue;
+                total++;
+                if (state.IsGoalCompleted(goal.GoalId)) completed++;
+            }
+
+            string status = scenarioDirector.ObjectiveService != null && scenarioDirector.ObjectiveService.IsFailed
+                ? "FAILED"
+                : "IN PROGRESS";
+            var lines = new System.Text.StringBuilder();
+            lines.Append(state.Asset.DisplayName).Append('\n');
+            lines.Append(status).Append(" — ").Append(completed).Append(" of ").Append(total).Append(" required goals complete\n\n");
+            foreach (ScenarioGoal goal in state.Asset.Goals)
+            {
+                if (goal.Optional) continue;
                 lines.Append(state.IsGoalCompleted(goal.GoalId) ? "✓ " : "□ ");
                 lines.Append(goal.Text);
                 if (!string.IsNullOrWhiteSpace(goal.TargetText))

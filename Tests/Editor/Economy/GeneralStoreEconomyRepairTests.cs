@@ -1,6 +1,7 @@
 using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.FirstLedger;
+using LandLedgers.World;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -9,6 +10,36 @@ namespace LandLedgers.EditorTests.Economy
 {
     public sealed class GeneralStoreEconomyRepairTests
     {
+        [Test]
+        public void WeeklySettlementIsSafeBeforePlayerStoreFormation()
+        {
+            GameObject root = new("GeneralStoreRuntimeManager_NoPlayerStore");
+            try
+            {
+                TownWorldController townWorld = root.AddComponent<TownWorldController>();
+                FieldInfo gridField = typeof(TownWorldController).GetField(
+                    "grid", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(gridField);
+                gridField.SetValue(townWorld, new TownGrid(4, 4, 2f, Vector3.zero));
+
+                GeneralStoreRuntimeManager manager = root.AddComponent<GeneralStoreRuntimeManager>();
+                SetStoreDefinition(manager, LoadGeneralStoreDefinition());
+                FieldInfo townWorldField = typeof(GeneralStoreRuntimeManager).GetField(
+                    "townWorld", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(townWorldField);
+                townWorldField.SetValue(manager, townWorld);
+
+                manager.ResolveWeeklyPayrollAndReorder();
+
+                Assert.IsNull(manager.CurrentBusiness);
+                StringAssert.Contains("No player General Store has been formed yet", manager.Status);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
         [Test]
         public void LandedCostFallsBackToSeventyPercentOfBaseline()
         {

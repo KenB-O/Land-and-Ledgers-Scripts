@@ -993,6 +993,16 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            // A manager may remain in the scene before the player has formed a
+            // store. InitializeIfNeeded intentionally treats that state as valid,
+            // so weekly callbacks must not enter the legacy store settlement path
+            // until a real Business has been bound.
+            if (currentBusiness == null || runtimeState == null)
+            {
+                status = "No player General Store has been formed yet. Use Businesses > Create Business.";
+                return;
+            }
+
             // A classless Business uses Generic Retail/Procurement. Keep this
             // legacy manager as a presentation/compatibility adapter only; its
             // category reorder writer must never mutate a generic entity.

@@ -1119,6 +1119,11 @@ namespace LandLedgers.FirstLedger
                 sharedBusinessRuntime,
                 townWorld,
                 timeManager);
+
+            // The Main Scene has a ScenarioDirector and scenario objective
+            // surface. Retire the legacy General Store tutorial strip so it
+            // cannot invent a second, potentially impossible objective.
+            firstSessionGuidance.SetGuidanceEnabled(false);
         }
 
         private void ConfigureWorldInteractionController()

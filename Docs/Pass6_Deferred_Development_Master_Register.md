@@ -46,25 +46,25 @@ Full normal-game Gregorian calendar/scenario/save migration verification. Status
 
 Preserved exactly as listed. The Muse Pass VI pass does not consume Codex usage and does not fix visual/UI items. They are preserved for a later dedicated Unity pass.
 
-- LL-PLAY-001: Ghost player-owned General Store/Renting and Boarding. Tested New Game improvement requires wider verification. Status: OPEN.
-- LL-PLAY-002: Excessive PlayMode-only manager roots. Status: OPEN.
-- LL-PLAY-003: Duplicate Civic Foundation. Status: OPEN.
-- LL-PLAY-004: Obsolete first-session tutorial guidance. Status: OPEN.
-- LL-PLAY-005: Missing scenario identity, objectives and deadlines in HUD. Status: OPEN.
-- LL-PLAY-006: Blacksmith management-panel scrolling and spacing. Status: OPEN.
-- LL-PLAY-007: Seller meeting modal behavior. Status: OPEN.
-- LL-PLAY-008: Repetitive acquisition controls. Status: OPEN.
-- LL-PLAY-009: Missing sale-discovery provenance. Status: OPEN.
-- LL-PLAY-010: Rigid Build Shell / Next Shell construction workflow. Status: OPEN.
-- LL-PLAY-011: Business labels without proven real operating Tasks. Status: OPEN.
-- LL-PLAY-012: Arbitrary staffing 1/2 controls versus actual workload. Status: OPEN.
-- LL-PLAY-013: Implausible profits and incomplete financial-period presentation. Status: OPEN.
-- LL-PLAY-014: Unclear Civic count-hall language. Status: OPEN.
-- LL-PLAY-015: Unexplained resource and district metrics. Status: OPEN.
-- LL-PLAY-016: Flat terrain. Status: OPEN.
-- LL-PLAY-017: Historical weekday/date UI mismatch. Status: OPEN.
-- LL-PLAY-018: Confusing General Store startup/restocking notices. Status: OPEN.
-- LL-PLAY-019: MainMusicPlayer scene hierarchy/lifecycle. Status: OPEN.
+- LL-PLAY-001: Ghost player-owned General Store/Renting and Boarding. Tested New Game improvement requires wider verification. Status: Already implemented, source verified; Unity validation pending (Pass XII: bootstrapper suppression for all intents, M2 Town default, store flag default false; scene-instance audit + clean New Game check remain). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-002: Excessive PlayMode-only manager roots. Status: Source contract ready; Unity authoring needed (Pass XII: drivers guard + duplicate-authority audit; scene authoring remains). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-003: Duplicate Civic Foundation. Status: Source contract ready; Unity authoring needed (Pass XII: duplicate audit detects CivicFoundation; removal is scene work). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-004: Obsolete first-session tutorial guidance. Status: Source contract ready; Unity authoring needed (Pass XII: ScenarioGuidanceGate). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-005: Missing scenario identity, objectives and deadlines in HUD. Status: Source contract ready; Unity authoring needed (Pass XII: ScenarioHudReadModel + snapshot builder; HUD binding + failure-board wiring remain). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-006: Blacksmith management-panel scrolling and spacing. Status: Confirmed unresolved (Pass XII delivered no layout change). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-007: Seller meeting modal behavior. Status: Source contract ready; Unity authoring needed (Pass XII: PanelModalCoordinator). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-008: Repetitive acquisition controls. Status: Source contract ready; Unity authoring needed (Pass XII: AcquisitionDealReadModel next action). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-009: Missing sale-discovery provenance. Status: Source contract ready; Unity authoring needed (Pass XII: acquisition provenance labels + explicit unverified marker). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-010: Rigid Build Shell / Next Shell construction workflow. Status: Source contract ready; Unity authoring needed (Pass XII: generic construction/formation interface contract). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-011: Business labels without proven real operating Tasks. Status: Source contract ready; Unity authoring needed (Pass XII: Business Completeness Matrix — 17 labels, four live mechanisms, 16 registry runtimes unwired). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-012: Arbitrary staffing 1/2 controls versus actual workload. Status: Source contract ready; Unity authoring needed (Pass XII: WorkloadStaffingReadModel). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-013: Implausible profits and incomplete financial-period presentation. Status: Already implemented, source verified; Unity validation pending (Pass XII: report aggregation integrity + settled-sale stock refusal; live panel comparison remains). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-014: Unclear Civic count-hall language. Status: Source contract ready; Unity authoring needed (Pass XII: SettlementCivicReadModel + panel text). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-015: Unexplained resource and district metrics. Status: Source contract ready; Unity authoring needed (Pass XII: ResourceObservationReadModel). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-016: Flat terrain. Status: Confirmed unresolved (Pass XII delivered no terrain change). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-017: Historical weekday/date UI mismatch. Status: Already implemented, source verified; Unity validation pending (Gregorian calendar; displayed weekday check remains). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-018: Confusing General Store startup/restocking notices. Status: Source contract ready; Unity authoring needed (Pass XII: StartupNoticeGate + ghost suppression). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
+- LL-PLAY-019: MainMusicPlayer scene hierarchy/lifecycle. Status: Confirmed unresolved (Pass XII delivered no audio-lifecycle work). See Docs/Pass12_Playtest_Issue_Reconciliation.md.
 
 ## New deferred items discovered in Pass VI
 
@@ -332,6 +332,100 @@ failed. Nothing in this section is Unity verified.
   flipping it is a Canon/design decision). If it flips, the latch
   tests and the WS5 presentation-boundary comment must be updated
   together.
+
+## Pass XII resolutions (Worker F review, 2026-10-28)
+
+- PASS11-003 (P3): PARTIALLY CLOSED in Pass XII. Worker C implemented
+  the manual path: PayAgreedWage refuses a manual re-pay while a
+  preserved lookup-failure liability stands, refuses an identical
+  manual payment twice (employment+day+period key, persisted in
+  BusinessRuntimeSaveDto.manualWagePayments), and the weekly run nets
+  manual cash already paid for the same employment-week instead of
+  paying the full agreed wage again. Verified by Worker F from source
+  and by Worker C's reproduction tests. REMAINING DISTINCT HOLE,
+  deliberately not closed by a stamp guard: a direct second call to
+  BusinessRuntimeState.ResolveWeeklyPayroll for the same week is
+  unguarded (only WageSettlementService checks its SettledWeekIndex
+  map). A stamp-derived guard was rejected because it misfires on
+  legitimate service settlements whose week index advances while the
+  stamp does not (proven: week 57 settlement at day 406, 406/7 = 58).
+  See Docs/Pass12_Independent_Review.md.
+- PASS11-007 (P3): CLOSED in Pass XII. Worker C made the legacy-slot
+  payroll path mirror the employment path: a throwing eligibility
+  lookup accrues the week's wage as a named operating liability
+  (confirmed-unavailable persons still accrue nothing); the legacy
+  loop never pays arrears, so the accrual cannot double-pay there,
+  and the preserved-liability guard blocks a manual re-pay of the
+  same week. Verified by Worker F from source.
+- E-DEFECT-01 (Pass XII Worker C): CLOSED. BusinessRuntimeState.
+  ResolveSettledSale refuses a sale larger than stock on hand (total
+  refusal, no partial delivery, no scaled revenue); both production
+  callers (GeneralStoreRuntimeManager, SharedBusinessRuntimeManager)
+  go through this method, and the obsolete buyerless placeholder has
+  zero production callers. Verified by Worker F from source; tests
+  Pass12CSettledSaleStockTests.
+- E-DEFECT-02 (Pass XII Worker A, extended by Worker F): CLOSED for
+  the audited class. Worker A cloned DTO objects on load for
+  BankDeposits, FinancialObligationAuthority, HouseholdLedger,
+  BusinessLenderService, EmploymentRelationship and MoneyOrderService.
+  Worker F's sweep (same-snapshot double-restore tests,
+  Pass12FCopyOnLoadTests, 7/0) added PropertyTaxService, Housing
+  occupancies, NpcCommissionedBuild records, CreditRegistry
+  instruments, UsedEquipmentMarket listings, PersonScheduleTracker
+  reservations, HouseholdErrandPlanRegistry plans, BoardingHouse
+  reservations and HotelRoom reservations; proved copy-safe and left
+  stored-direct: civic treasury ledger entries, property dispute
+  claims, tenancy rent obligations, title records, housing
+  buildings/spaces/assignments/agreements, market sales and
+  inspections, staged-production state (registry-unwired, test-only),
+  WageSettlementService events. Boarding/hotel clones are outside the
+  harness subset and are Unity-session verified only. See
+  Docs/Pass12_Independent_Review.md for the full table.
+- RUN-011: CLOSED in Pass XII (Worker F test-correction review, brief
+  §10). All three historical failures were TEST-WRONG; production
+  untouched. MoneyOrderServiceTests.IssueDuplicate_
+  ReplacesLostOrderFree: second duplicate of an already-Duplicated
+  order now asserted refused (IsNull), matching the test's own
+  governing message. RunSettlementCycle_NetsAndSettlesInFull: net
+  corrected 2500 to 3000 (3500 - 500), funds corrected to po-a 0 and
+  po-b 4000. P5PropertyLegalJourneyTests.Driver_
+  LeviesAnnualAssessmentOncePerTaxYear: day-100 status corrected
+  Assessed to Delinquent (due day 60, Canon staged collection), with
+  the once-per-year count assertion unchanged. No test deleted, no
+  assertion weakened.
+- M2 (Pass XI residual): CLOSED in Pass XII (Worker F). Business
+  InstanceState serialized owner default flipped Player to Town;
+  every production creation path sets the owner explicitly. Enum
+  order unchanged; already-serialized scene instances keep their
+  stored value and still need a Codex scene audit.
+- GeneralStore auto-create flag (Pass XI/Worker B referral): CLOSED
+  at source default in Pass XII (Worker F). createPlayerBusiness
+  OnInitialize default flipped true to false; the bootstrapper
+  suppression remains as belt-and-braces for scene instances
+  serialized with the old default. The file is harness-excluded, so
+  this half is Unity-verified only.
+- PASS11-004: still OPEN (unchanged by Pass XII). RegisterHouse still
+  has zero production callers; the three gaps (parcel mapping,
+  boarding trigger rule, bootstrapped houses lacking
+  HousingAuthority/LodgingRegistry registration) are unchanged.
+- PASS11-005: still OPEN (unchanged by Pass XII). Worker C audited
+  and ruled out business liquidation, HousingSearch negotiations and
+  tax-sale bid name strings as buyer sources; no solvent-household
+  buyer register, appraised parcel sale-price feed or creditor
+  consent source was built.
+- PASS11-006: still OPEN as Unity scene work. Pass XII added the
+  ScenarioHudSnapshotBuilder contract consuming a failure board, but
+  it has no production caller; live panel binding remains Codex work.
+- PASS11-008: still OPEN. M1/M2 Unity-runner bootstrap tests remain
+  unrun in a real Unity Test Runner session.
+- PASS8-005: still OPEN; count language updated. The registry now
+  holds sixteen detailed business runtimes (ButcherRuntime,
+  BlacksmithRuntime, TanneryRuntime added by Worker F) plus
+  ScenarioFailureNoticeBoard (a presentation surface, not a runtime).
+- PASS9-004, PASS9-008, PASS9-010, PASS9-011, PASS9-012, PASS9-013,
+  PASS9-014, IDENT-001 remainder, PASS8-006, PASS7-003: unchanged by
+  Pass XII; still OPEN with their existing reasons. No item was
+  silently closed.
 
 ## New deferred items discovered in Pass XI
 

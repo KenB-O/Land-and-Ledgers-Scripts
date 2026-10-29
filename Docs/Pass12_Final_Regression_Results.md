@@ -1,16 +1,17 @@
 # Pass XII — Final Regression Results (Worker F)
 
 Date: 2026-10-28. Tree verified: `muse/pass12-f-review` at
-`518b4a8` (Worker F final code tree). The full run below was
+`85a7c7a` (Worker F final code tree). The full run below was
 executed on that exact tree; the only commit after it is the
 commit adding this document's final update (Docs-only, no code
 or test change), so the counts stand for the final tree.
-(An earlier full run on `ed95de6` also gave 1525/0; the
-`518b4a8` run re-confirms it after two test-only coverage
-additions — Orders.Count == 2 in the duplicate test and an
-Assessed-stage assertion after ResolveWeek(0) — which add
-assertions inside existing tests, not new tests, so the total
-stays 1525.)
+Run history: `ed95de6` gave 1525/0; `518b4a8` re-confirmed
+1525/0 after two test-only coverage additions (Orders.Count == 2
+in the duplicate test, Assessed-stage assertion after
+ResolveWeek(0) — assertions inside existing tests, not new
+tests); `85a7c7a` gives 1533/0 after round-2 reconciliation
+(8 new tests: 6 copy-on-load round-2 + 2 Failed-row tests;
+1525 + 8 = 1533).
 
 ## Procedure (reproducible)
 
@@ -37,10 +38,12 @@ stays 1525.)
   SimulationSystemsHub. Nothing in this document claims Unity
   compilation, Test Runner, or PlayMode results for them.
 
-## Full run — 1525 passed, 0 failed (exit 0)
+## Full run — 1533 passed, 0 failed (exit 0)
 
-`Roslyn harness: 1525 passed, 0 failed`, full-run output
-`/tmp/pass12f-final2.txt` (retained on the VM, not committed).
+`Roslyn harness: 1533 passed, 0 failed`, full-run output
+`/tmp/pass12f-final4.txt` (retained on the VM, not committed).
+Earlier full-run outputs (`/tmp/pass12f-final2.txt` 1525/0,
+`/tmp/pass12f-final3.txt` 1525/0) are superseded by it.
 
 Arithmetic, verified at each step (not assumed):
 - Pass XI final: 1404 passed / 3 failed (1407 tests).
@@ -55,12 +58,16 @@ Arithmetic, verified at each step (not assumed):
   corrections: 1522 passed / 3 failed — the 3 failures were NEW
   regressions from Worker F's own M2 and copy-on-load changes
   (F-05), caught by the full run, not by focused runs. After the
-  F-05 test corrections: **1525 passed / 0 failed**.
-- No test was deleted. No assertion was weakened; two test
+  F-05 test corrections: 1525 passed / 0 failed.
+- Round-2 reconciliation (delegated reports arriving after the
+  first final report) added 8 tests and 5 production fixes plus
+  3 small fixes (D7, D6, D15): 1525 + 8 = **1533 passed /
+  0 failed** on `85a7c7a`.
+- No test was deleted. No assertion was weakened; test
   corrections strengthened their assertions (tax test now also
   asserts the snapshot is untouched; RUN-011 second-duplicate
   assertion now asserts refusal instead of asserting a duplicate
-  exists).
+  exists; duplicate test now asserts Orders.Count == 2).
 
 ## Filter table (all on the final tree, 0 failures throughout)
 
@@ -71,7 +78,8 @@ Arithmetic, verified at each step (not assumed):
 | P5PropertyLegalJourneyTests | 15 / 0 | Includes the corrected assessment test. |
 | Pass12FDefaultOwnershipTests | 4 / 0 | M2 + flag tests (Worker F). |
 | Pass12BusinessOwnershipTests | 8 / 0 | Worker A ownership tests, still green after M2 flip. |
-| Pass12FCopyOnLoadTests | 7 / 0 | Same-snapshot double-restore tests. |
+| Pass12FCopyOnLoadTests | 13 / 0 | Same-snapshot double-restore tests (7 round-1 + 6 round-2: housing all collections, TaskAuthority, executor, credit workflow, condition registry, ledger-import clear). |
+| Pass12FFailedStageRowsTests | 2 / 0 | D15 Failed-row semantics (new in round 2). |
 | UnwiredSystemsRegistryTests | 3 / 0 | Includes the 3 new runtime rows. |
 | Pass9RegistryAssemblyScanTests | 2 / 0 | Assembly-scan baseline intact. |
 | BusinessLenderServiceTests | 9 / 0 | After F-05 fixture correction. |

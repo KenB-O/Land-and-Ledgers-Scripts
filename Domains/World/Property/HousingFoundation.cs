@@ -771,13 +771,40 @@ namespace LandLedgers.World.Property
             };
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+        /// occupancies are mutated in place (a new occupancy for a
+        /// person ends the current one by writing UntilDayIndex), so
+        /// storing the DTO's occupancy objects would let a run corrupt
+        /// the caller's snapshot — a second restore of the same
+        /// in-memory DTO would load already-ended occupancies.
+        /// Occupancies are therefore copied. Buildings, spaces,
+        /// assignments and agreements have no in-place mutator in
+        /// this authority (they are replaced, never edited) and stay
+        /// stored-direct; re-audit them if a mutator is ever added.
+        /// Clear-then-load is unchanged.
+        /// </summary>
         public void LoadFromSaveDto(HousingSaveDto dto)
         {
             buildings.Clear(); spaces.Clear(); occupancies.Clear(); assignments.Clear(); agreements.Clear();
             if (dto == null) return;
             foreach (var b in dto.Buildings) buildings[b.BuildingId] = b;
             foreach (var s in dto.Spaces) spaces[s.SpaceId] = s;
-            foreach (var o in dto.Occupancies) occupancies[o.OccupancyId] = o;
+            foreach (var o in dto.Occupancies)
+            {
+                if (o == null || string.IsNullOrWhiteSpace(o.OccupancyId)) continue;
+                occupancies[o.OccupancyId] = new ResidentialOccupancy
+                {
+                    OccupancyId = o.OccupancyId,
+                    PersonId = o.PersonId,
+                    HouseholdId = o.HouseholdId,
+                    SpaceId = o.SpaceId ?? string.Empty,
+                    Arrangement = o.Arrangement,
+                    SinceDayIndex = o.SinceDayIndex,
+                    UntilDayIndex = o.UntilDayIndex,
+                    AgreementId = o.AgreementId ?? string.Empty,
+                };
+            }
             foreach (var a in dto.Assignments) assignments[a.AssignmentId] = a;
             foreach (var a in dto.Agreements) agreements[a.AgreementId] = a;
         }

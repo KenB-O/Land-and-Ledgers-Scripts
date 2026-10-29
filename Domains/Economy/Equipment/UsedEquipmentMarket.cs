@@ -701,6 +701,17 @@ namespace LandLedgers.Economy.Equipment
             return dto;
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+        /// listings are mutated in place (Status moves to Withdrawn
+        /// or Sold), so storing the DTO's listing objects would let a
+        /// run corrupt the caller's snapshot — a second restore would
+        /// load an already-sold listing. Listings are therefore
+        /// copied, including both diligence snapshots (ownership
+        /// records via their own Clone). Sales and inspections are
+        /// append-only completed records with no in-place mutator and
+        /// stay stored-direct. Clear-then-load is unchanged.
+        /// </summary>
         public void LoadFromSaveDto(UsedEquipmentMarketBookDto dto)
         {
             listings.Clear();
@@ -708,10 +719,41 @@ namespace LandLedgers.Economy.Equipment
             inspections.Clear();
             if (dto == null) { disputes.LoadFromSaveDto(null); return; }
             Rules = dto.Rules ?? new UsedEquipmentMarketRules();
-            foreach (UsedEquipmentListing l in dto.Listings)
+            if (dto.Listings != null)
             {
-                if (l == null || l.ListingId.Equals(EntityId.Invalid)) continue;
-                listings[ListingKeyOf(l.ListingId)] = l;
+                foreach (UsedEquipmentListing l in dto.Listings)
+                {
+                    if (l == null || l.ListingId.Equals(EntityId.Invalid)) continue;
+                    var copy = new UsedEquipmentListing
+                    {
+                        ListingId = l.ListingId,
+                        AssetId = l.AssetId ?? string.Empty,
+                        Kind = l.Kind ?? string.Empty,
+                        DisplayName = l.DisplayName ?? string.Empty,
+                        Condition01AtListing = l.Condition01AtListing,
+                        RecordedGrade = l.RecordedGrade,
+                        AskingPriceCents = l.AskingPriceCents,
+                        PriceGuidanceCents = l.PriceGuidanceCents,
+                        PriceGuidanceNote = l.PriceGuidanceNote ?? string.Empty,
+                        SellerKind = l.SellerKind ?? string.Empty,
+                        SellerId = l.SellerId ?? string.Empty,
+                        SellerName = l.SellerName ?? string.Empty,
+                        LocationId = l.LocationId ?? string.Empty,
+                        ListedDayIndex = l.ListedDayIndex,
+                        Status = l.Status,
+                        MakerBusinessName = l.MakerBusinessName ?? string.Empty,
+                        OpenDisputeCount = l.OpenDisputeCount,
+                    };
+                    if (l.MaintenanceHistorySnapshot != null) copy.MaintenanceHistorySnapshot.AddRange(l.MaintenanceHistorySnapshot);
+                    if (l.OwnershipSnapshot != null)
+                    {
+                        foreach (EquipmentOwnershipRecord record in l.OwnershipSnapshot)
+                        {
+                            if (record != null) copy.OwnershipSnapshot.Add(record.Clone());
+                        }
+                    }
+                    listings[ListingKeyOf(copy.ListingId)] = copy;
+                }
             }
             foreach (UsedEquipmentSale s in dto.Sales)
             {

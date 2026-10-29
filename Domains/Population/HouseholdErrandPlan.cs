@@ -41,6 +41,27 @@ namespace LandLedgers.Population
             status = HouseholdErrandPlanStatus.Assigned;
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load): a faithful copy for the
+        /// errand registry's load path. Assign cannot serve as the
+        /// copier — it forces status to Assigned, which would corrupt
+        /// Proposed, Completed, Failed and Cancelled plans on restore.
+        /// Plans are mutated in place (Assign, MarkCompleted,
+        /// MarkFailed, Cancel), so the registry must never store the
+        /// DTO's plan objects directly.
+        /// </summary>
+        public HouseholdErrandPlan Copy()
+        {
+            var copy = new HouseholdErrandPlan(planId, householdId)
+            {
+                responsiblePersonId = responsiblePersonId,
+                needIds = new List<string>(needIds ?? new List<string>()),
+                reservationId = reservationId,
+                status = status,
+            };
+            return copy;
+        }
+
         public void MarkCompleted() { status = HouseholdErrandPlanStatus.Completed; }
         public void MarkFailed() { status = HouseholdErrandPlanStatus.Failed; }
         public void Cancel() { status = HouseholdErrandPlanStatus.Cancelled; }

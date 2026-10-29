@@ -466,15 +466,125 @@ namespace LandLedgers.Economy.Financing
             };
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+        /// instruments are mutated in place (Status moves to Called,
+        /// Defaulted, Satisfied or Released), so storing the DTO's
+        /// instrument objects would let a run corrupt the caller's
+        /// snapshot — a second restore would load already-satisfied
+        /// or already-defaulted instruments. Every instrument is
+        /// therefore copied (the note's collateral id list is copied
+        /// too; all other instrument fields are value or string
+        /// fields). Clear-then-load is unchanged.
+        /// </summary>
         public void LoadFromSaveDto(CreditRegistrySaveDto dto)
         {
             notes.Clear(); sellerNotes.Clear(); mortgages.Clear(); liens.Clear(); guaranties.Clear();
             if (dto == null) return;
-            foreach (var n in dto.Notes) notes[Key(n.InstrumentId)] = n;
-            foreach (var s in dto.SellerNotes) sellerNotes[Key(s.InstrumentId)] = s;
-            foreach (var m in dto.Mortgages) mortgages[Key(m.InstrumentId)] = m;
-            foreach (var l in dto.Liens) liens[Key(l.InstrumentId)] = l;
-            foreach (var g in dto.Guaranties) guaranties[Key(g.InstrumentId)] = g;
+            if (dto.Notes != null)
+            {
+                foreach (var n in dto.Notes)
+                {
+                    if (n == null) continue;
+                    var copy = new PromissoryNote
+                    {
+                        InstrumentId = n.InstrumentId,
+                        ObligationId = n.ObligationId ?? string.Empty,
+                        MakerName = n.MakerName ?? string.Empty,
+                        PayeeName = n.PayeeName ?? string.Empty,
+                        PrincipalCents = n.PrincipalCents,
+                        Terms = n.Terms ?? string.Empty,
+                        SignedDayIndex = n.SignedDayIndex,
+                        Status = n.Status,
+                        HolderName = n.HolderName ?? string.Empty,
+                    };
+                    if (n.CollateralEquipmentAssetIds != null) copy.CollateralEquipmentAssetIds.AddRange(n.CollateralEquipmentAssetIds);
+                    notes[Key(copy.InstrumentId)] = copy;
+                }
+            }
+            if (dto.SellerNotes != null)
+            {
+                foreach (var s in dto.SellerNotes)
+                {
+                    if (s == null) continue;
+                    sellerNotes[Key(s.InstrumentId)] = new SellerFinanceNote
+                    {
+                        InstrumentId = s.InstrumentId,
+                        ObligationId = s.ObligationId ?? string.Empty,
+                        SellerName = s.SellerName ?? string.Empty,
+                        BuyerName = s.BuyerName ?? string.Empty,
+                        AssetDescription = s.AssetDescription ?? string.Empty,
+                        AssetInstanceId = s.AssetInstanceId ?? string.Empty,
+                        SalePriceCents = s.SalePriceCents,
+                        DownPaymentCents = s.DownPaymentCents,
+                        FinancedCents = s.FinancedCents,
+                        Terms = s.Terms ?? string.Empty,
+                        SignedDayIndex = s.SignedDayIndex,
+                        Status = s.Status,
+                    };
+                }
+            }
+            if (dto.Mortgages != null)
+            {
+                foreach (var m in dto.Mortgages)
+                {
+                    if (m == null) continue;
+                    mortgages[Key(m.InstrumentId)] = new MortgageDeed
+                    {
+                        InstrumentId = m.InstrumentId,
+                        ObligationId = m.ObligationId ?? string.Empty,
+                        BorrowerName = m.BorrowerName ?? string.Empty,
+                        LenderName = m.LenderName ?? string.Empty,
+                        PropertyId = m.PropertyId ?? string.Empty,
+                        PropertyDescription = m.PropertyDescription ?? string.Empty,
+                        PrincipalCents = m.PrincipalCents,
+                        Terms = m.Terms ?? string.Empty,
+                        SignedDayIndex = m.SignedDayIndex,
+                        Status = m.Status,
+                    };
+                }
+            }
+            if (dto.Liens != null)
+            {
+                foreach (var l in dto.Liens)
+                {
+                    if (l == null) continue;
+                    liens[Key(l.InstrumentId)] = new PropertyLien
+                    {
+                        InstrumentId = l.InstrumentId,
+                        ObligationId = l.ObligationId ?? string.Empty,
+                        ClaimantName = l.ClaimantName ?? string.Empty,
+                        DebtorName = l.DebtorName ?? string.Empty,
+                        PropertyOrAssetId = l.PropertyOrAssetId ?? string.Empty,
+                        AmountCents = l.AmountCents,
+                        Reason = l.Reason ?? string.Empty,
+                        FiledDayIndex = l.FiledDayIndex,
+                        Status = l.Status,
+                    };
+                }
+            }
+            if (dto.Guaranties != null)
+            {
+                foreach (var g in dto.Guaranties)
+                {
+                    if (g == null) continue;
+                    guaranties[Key(g.InstrumentId)] = new GuarantyAgreement
+                    {
+                        InstrumentId = g.InstrumentId,
+                        ObligationId = g.ObligationId ?? string.Empty,
+                        GuarantorName = g.GuarantorName ?? string.Empty,
+                        CreditorName = g.CreditorName ?? string.Empty,
+                        DebtorName = g.DebtorName ?? string.Empty,
+                        CoveredInstrumentId = g.CoveredInstrumentId ?? string.Empty,
+                        FinancialGuarantyId = g.FinancialGuarantyId ?? string.Empty,
+                        MaxExposureCents = g.MaxExposureCents,
+                        Terms = g.Terms ?? string.Empty,
+                        SignedDayIndex = g.SignedDayIndex,
+                        Status = g.Status,
+                        CalledAmountCents = g.CalledAmountCents,
+                    };
+                }
+            }
         }
         #endregion
     }

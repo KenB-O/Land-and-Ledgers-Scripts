@@ -197,6 +197,17 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             return dto;
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern): the
+        /// reservation book mutates reservations in place
+        /// (ReleaseReservation sets IsActive), so storing the DTO's
+        /// reservation objects would let a run corrupt the caller's
+        /// snapshot — a release in run 1 would leave run 2's restored
+        /// book already released. Every reservation is therefore
+        /// copied. Clear-then-load is unchanged. NOTE: this file is
+        /// outside the Roslyn harness subset, so this change is
+        /// Unity-session verified, not harness verified.
+        /// </summary>
         public void LoadFromSaveDto(BoardingHouseReservationsSaveDto dto)
         {
             reservations.Clear();
@@ -207,7 +218,20 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
             foreach (BoardingBedReservation reservation in dto.Reservations)
             {
                 if (reservation == null || string.IsNullOrWhiteSpace(reservation.ReservationId)) continue;
-                reservations.Add(reservation);
+                reservations.Add(new BoardingBedReservation
+                {
+                    ReservationId = reservation.ReservationId,
+                    EmployerBusinessId = reservation.EmployerBusinessId ?? string.Empty,
+                    EmployerName = reservation.EmployerName ?? string.Empty,
+                    RoomType = reservation.RoomType,
+                    BedCount = reservation.BedCount,
+                    FromDayIndex = reservation.FromDayIndex,
+                    ToDayIndex = reservation.ToDayIndex,
+                    ReservedWeeklyRateCents = reservation.ReservedWeeklyRateCents,
+                    ReservedMonthlyRateCents = reservation.ReservedMonthlyRateCents,
+                    ReservedNightlyRateCents = reservation.ReservedNightlyRateCents,
+                    IsActive = reservation.IsActive,
+                });
             }
         }
         #endregion

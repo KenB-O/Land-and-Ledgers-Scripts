@@ -346,12 +346,29 @@ namespace LandLedgers.Population
                 return;
             }
 
+            // Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+            // reservations are mutated in place (Released on release),
+            // so storing the DTO's reservation objects would let a run
+            // corrupt the caller's snapshot. Every reservation is
+            // therefore copied before indexing.
             if (dto.reservations != null)
             {
-                reservations.AddRange(dto.reservations);
-                for (int i = 0; i < reservations.Count; i++)
+                foreach (PersonActivityReservation reservation in dto.reservations)
                 {
-                    IndexReservation(reservations[i]);
+                    if (reservation == null) continue;
+                    var copy = new PersonActivityReservation
+                    {
+                        ReservationId = reservation.ReservationId ?? string.Empty,
+                        PersonId = reservation.PersonId,
+                        Activity = reservation.Activity,
+                        DayIndex = reservation.DayIndex,
+                        StartMinuteOfDay = reservation.StartMinuteOfDay,
+                        DurationMinutes = reservation.DurationMinutes,
+                        Label = reservation.Label ?? string.Empty,
+                        Released = reservation.Released,
+                    };
+                    reservations.Add(copy);
+                    IndexReservation(copy);
                 }
             }
 

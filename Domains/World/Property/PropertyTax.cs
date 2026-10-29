@@ -465,6 +465,20 @@ namespace LandLedgers.World.Property
             };
         }
 
+        /// <summary>
+        /// Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
+        /// AdvanceDay and PayTax mutate assessments in place (status,
+        /// penalties, interest, amounts paid) and tax-sale settlement
+        /// mutates sales (recovered taxes, surplus, redemption), so
+        /// storing the DTO's objects would let a run corrupt the
+        /// caller's snapshot — a second restore of the same in-memory
+        /// DTO would load already-advanced, already-delinquent debt.
+        /// Every assessment and sale is therefore copied, and the
+        /// Pass XI old-save fee migration below runs on the copy,
+        /// never on the caller's DTO object (it previously wrote
+        /// FeesPaidCents into the DTO itself). Clear-then-load is
+        /// unchanged.
+        /// </summary>
         public void LoadFromSaveDto(PropertyTaxSaveDto dto)
         {
             assessments.Clear();
@@ -475,7 +489,25 @@ namespace LandLedgers.World.Property
                 foreach (TaxAssessment assessment in dto.Assessments)
                 {
                     if (assessment == null || string.IsNullOrEmpty(assessment.AssessmentId)) continue;
-                    if (!assessment.FeesPaidTracked)
+                    var copy = new TaxAssessment
+                    {
+                        AssessmentId = assessment.AssessmentId,
+                        ParcelId = assessment.ParcelId ?? string.Empty,
+                        OwnerName = assessment.OwnerName ?? string.Empty,
+                        TaxYear = assessment.TaxYear,
+                        AmountCents = assessment.AmountCents,
+                        DueDayIndex = assessment.DueDayIndex,
+                        PenaltyBpsMonthly = assessment.PenaltyBpsMonthly,
+                        InterestBpsAnnual = assessment.InterestBpsAnnual,
+                        PenaltiesAccruedCents = assessment.PenaltiesAccruedCents,
+                        InterestAccruedCents = assessment.InterestAccruedCents,
+                        AmountPaidCents = assessment.AmountPaidCents,
+                        FeesPaidCents = assessment.FeesPaidCents,
+                        FeesPaidTracked = assessment.FeesPaidTracked,
+                        Status = assessment.Status,
+                        TaxLienInstrumentId = assessment.TaxLienInstrumentId ?? string.Empty,
+                    };
+                    if (!copy.FeesPaidTracked)
                     {
                         // Pass XI WS3 (PASS9-002) old-save migration: the
                         // pre-fix book never tracked the fee split, so the
@@ -487,12 +519,12 @@ namespace LandLedgers.World.Property
                         // accruing after the load route under the new
                         // split. Tracked assessments keep their recorded
                         // FeesPaidCents untouched.
-                        assessment.FeesPaidCents = Math.Min(
-                            Math.Max(0, assessment.AmountPaidCents),
-                            Math.Max(0, assessment.PenaltiesAccruedCents + assessment.InterestAccruedCents));
-                        assessment.FeesPaidTracked = true;
+                        copy.FeesPaidCents = Math.Min(
+                            Math.Max(0, copy.AmountPaidCents),
+                            Math.Max(0, copy.PenaltiesAccruedCents + copy.InterestAccruedCents));
+                        copy.FeesPaidTracked = true;
                     }
-                    assessments[assessment.AssessmentId] = assessment;
+                    assessments[copy.AssessmentId] = copy;
                 }
             }
             if (dto.Sales != null)
@@ -500,7 +532,21 @@ namespace LandLedgers.World.Property
                 foreach (TaxSale sale in dto.Sales)
                 {
                     if (sale != null && !string.IsNullOrEmpty(sale.SaleId))
-                        sales[sale.SaleId] = sale;
+                        sales[sale.SaleId] = new TaxSale
+                        {
+                            SaleId = sale.SaleId,
+                            ParcelId = sale.ParcelId ?? string.Empty,
+                            OwnerName = sale.OwnerName ?? string.Empty,
+                            AssessmentId = sale.AssessmentId ?? string.Empty,
+                            BuyerName = sale.BuyerName ?? string.Empty,
+                            SalePriceCents = sale.SalePriceCents,
+                            SaleCostsCents = sale.SaleCostsCents,
+                            TaxesRecoveredCents = sale.TaxesRecoveredCents,
+                            SurplusToOwnerCents = sale.SurplusToOwnerCents,
+                            SaleDayIndex = sale.SaleDayIndex,
+                            RedemptionDeadlineDayIndex = sale.RedemptionDeadlineDayIndex,
+                            Redeemed = sale.Redeemed,
+                        };
                 }
             }
         }

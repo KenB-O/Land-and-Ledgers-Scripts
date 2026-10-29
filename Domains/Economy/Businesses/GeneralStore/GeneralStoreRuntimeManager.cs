@@ -184,8 +184,18 @@ namespace LandLedgers.FirstLedger
 
         [Header("Runtime")]
         [SerializeField]
+        // Pass XII Worker F (LL-PLAY-001 root fix): the default is false.
+        // A player General Store must be formed explicitly (Businesses >
+        // Create Business, or the player-owned-building formation path),
+        // never auto-created by a runtime's Initialize. The bootstrapper
+        // already suppresses this flag for every startup intent, which
+        // remains as belt-and-braces for scene instances serialized with
+        // the old default; Codex must still check the scene instance's
+        // stored value. NOTE: this file is outside the Roslyn harness
+        // subset, so this change is Unity-session verified, not
+        // harness verified.
         [Tooltip("When false, the scenario begins without a player-owned General Store. The player forms one through Businesses > Create Business.")]
-        private bool createPlayerBusinessOnInitialize = true;
+        private bool createPlayerBusinessOnInitialize = false;
 
         [SerializeField]
         private int storeBuildingId = -1;

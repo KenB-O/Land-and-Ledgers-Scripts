@@ -47,3 +47,12 @@ The old four-week First Ledger Victory expectation was corrected to honest
 progress against the unchanged $15,000 threshold. Post-fix Unity validation was
 incomplete because the Unity/Bee compiler runner stalled before NUnit output;
 no visual backlog item is marked fixed from this pass.
+
+## Pass XVI update — 2026-10-29
+
+The Unity runner recovery attempt regenerated the Bee cache but still stalled
+during IL post-processing of package assemblies before NUnit discovery. The
+prior cache was preserved, and no gameplay or scene changes were made. The
+Pass XV typed agricultural-premises correction remains Unity-unverified.
+The Main Scene thirty-day proof, crop Tasks, growing-season harvest, freight
+from farm output and day-15 continuation remain open.

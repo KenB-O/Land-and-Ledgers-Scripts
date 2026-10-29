@@ -39,6 +39,11 @@ namespace LandLedgers.EditorTests.Integration
         // Pass XI WS1: BankRuntime added — the thirteenth detailed runtime,
         // previously invisible to both registry tests because its directory
         // sits outside the harness subset.
+        // Pass XII Worker F: ButcherRuntime, BlacksmithRuntime and
+        // TanneryRuntime added (Worker B referral) — effectively unwired
+        // (no instance ever created in production) but previously hidden
+        // because hub plumbing counts as a reference under this test's
+        // definition; their registry rows allowlist exactly that plumbing.
         private static readonly string[] CandidateTypes =
         {
             "BakeryShopRuntime", "BarberShopRuntime", "DoctorPracticeRuntime",
@@ -46,6 +51,7 @@ namespace LandLedgers.EditorTests.Integration
             "LumberYardShopRuntime", "NewspaperRuntime", "RestaurantShopRuntime",
             "SaloonRuntime", "SawmillShopRuntime", "TailorShopRuntime",
             "BankRuntime",
+            "ButcherRuntime", "BlacksmithRuntime", "TanneryRuntime",
             "StagedProductionProcess", "ProductionDueEventDriver",
             "BakeryStagedProductionChain", "ForgeRepairChain",
             "StoreRestockService",

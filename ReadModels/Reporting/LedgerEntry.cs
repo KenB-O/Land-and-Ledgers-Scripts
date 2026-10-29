@@ -26,7 +26,10 @@ namespace LandLedgers.Reporting
         Maintenance = 5,
         Tax = 6,
         Debt = 7,
-        Other = 100
+        Other = 100,
+        // Pass XII Worker C (appended — never renumber): rent rows
+        // generated from snapshot rent expense.
+        Rent = 101
     }
 
     public enum LedgerEntrySource

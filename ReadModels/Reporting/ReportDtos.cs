@@ -45,6 +45,17 @@ namespace LandLedgers.Reporting
         // distributions and owner cash transfers, which are financing flows).
         // Appended — never reorder serialized fields.
         public int knownOperatingExpenseCents;
+        // Pass XII Worker C (appended): rent is operating expense;
+        // tax is a cash expense outside operating profit; accrued
+        // liability is owed-but-unpaid (never in payroll expense);
+        // unknown inflow is the cash-change remainder the bridge
+        // cannot explain (e.g. loan proceeds with no snapshot field)
+        // — the mirror of unknownExpenseCents, which previously
+        // clamped the unexplained direction to zero silently.
+        public int rentExpenseCents;
+        public int taxExpenseCents;
+        public int accruedLiabilityCents;
+        public int unknownInflowCents;
     }
 
     [Serializable]
@@ -198,6 +209,62 @@ namespace LandLedgers.Reporting
         public List<BusinessReportGap> gaps = new();
     }
 
+    /// <summary>
+    /// Pass XII Worker C (LL-PLAY-013): a business year rolled up
+    /// from its monthly summaries, with the same duplicate, period
+    /// and ordering guards as the monthly rollup. Best/weakest month
+    /// are month numbers within the year (see the child monthly
+    /// periods for the full date).
+    /// </summary>
+    [Serializable]
+    public sealed class BusinessYearlySummary
+    {
+        public BusinessReportHeader header = new();
+        public BusinessFinancialRollup financial = new();
+        public BusinessOperationsSummary operations = new();
+        public BusinessCapacitySummary capacity = new();
+        public BusinessInventorySummary inventory = new();
+        public BusinessStaffingSummary staffing = new();
+        public int includedMonthCount;
+        public int averageMonthlyRevenueCents;
+        public int averageMonthlyPayrollCents;
+        public int averageMonthlyReorderExpenseCents;
+        public int bestRevenueMonth;
+        public int bestRevenueMonthCents;
+        public int weakestRevenueMonth;
+        public int weakestRevenueMonthCents;
+        public List<LedgerEntry> ledgerEntries = new();
+        public List<BusinessReportGap> gaps = new();
+    }
+
+    /// <summary>
+    /// Pass XII Worker C (LL-PLAY-013): all-time business rollup,
+    /// built from monthly summaries (never from overlapping yearly
+    /// summaries — monthly children keep the dedup and containment
+    /// guards meaningful). Best/weakest month are month numbers of
+    /// the child monthly period.
+    /// </summary>
+    [Serializable]
+    public sealed class BusinessAllTimeSummary
+    {
+        public BusinessReportHeader header = new();
+        public BusinessFinancialRollup financial = new();
+        public BusinessOperationsSummary operations = new();
+        public BusinessCapacitySummary capacity = new();
+        public BusinessInventorySummary inventory = new();
+        public BusinessStaffingSummary staffing = new();
+        public int includedMonthCount;
+        public int averageMonthlyRevenueCents;
+        public int averageMonthlyPayrollCents;
+        public int averageMonthlyReorderExpenseCents;
+        public int bestRevenueMonth;
+        public int bestRevenueMonthCents;
+        public int weakestRevenueMonth;
+        public int weakestRevenueMonthCents;
+        public List<LedgerEntry> ledgerEntries = new();
+        public List<BusinessReportGap> gaps = new();
+    }
+
     [Serializable]
     public sealed class PortfolioFinancialRollup
     {
@@ -214,6 +281,11 @@ namespace LandLedgers.Reporting
         public int totalKnownExpenseCents;
         public int totalNetCashChangeCents;
         public int totalKnownProfitProxyCents;
+        // Pass XII Worker C (appended): portfolio sums of the
+        // business-level rent, tax and accrued-liability fields.
+        public int totalRentExpenseCents;
+        public int totalTaxExpenseCents;
+        public int totalAccruedLiabilityCents;
     }
 
     [Serializable]
@@ -253,6 +325,9 @@ namespace LandLedgers.Reporting
         public bool hasReportGaps;
         public int reportNoteCount;
         public int blockingReportGapCount;
+        // Pass XII Worker C (appended): per-business rent and tax.
+        public int rentExpenseCents;
+        public int taxExpenseCents;
     }
 
     [Serializable]

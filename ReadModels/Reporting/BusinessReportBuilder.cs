@@ -114,6 +114,28 @@ namespace LandLedgers.Reporting
                 return summary;
             }
 
+            // Pass XII Worker C (LL-PLAY-013): the monthly rollup
+            // previously summed whatever weeks it was handed, in caller
+            // order, with no duplicate, containment or ordering check —
+            // so one week supplied twice doubled revenue while its
+            // ledger rows deduped cleanly, a week from another month
+            // inflated the month, and opening/closing cash could come
+            // from the wrong ends. Now: weeks sort chronologically,
+            // duplicates (same business, same week span) count once,
+            // weeks with no overlap with the monthly period are
+            // excluded, and partially overlapping weeks are included
+            // in full but flagged (a week is indivisible in this
+            // model). Periods with both dates at day 0 are treated as
+            // unstamped (the legacy test/default shape) and skip the
+            // containment check, flagged as a caution.
+            validWeeks = SortDedupAndFilterWeeks(validWeeks, period, summary.gaps);
+            if (validWeeks.Count == 0)
+            {
+                AddDefaultGaps(summary.gaps);
+                AddReportGap(summary.gaps, "no_valid_weekly_summaries", "No valid weekly summaries remained for monthly aggregation after duplicate and period filtering.", BusinessReportGapSeverity.Blocking);
+                return summary;
+            }
+
             BusinessWeeklySummary first = validWeeks[0];
             BusinessWeeklySummary last = validWeeks[validWeeks.Count - 1];
             CopyHeaderForMonthly(summary.header, first.header, period, generatedOnDate);
@@ -140,6 +162,8 @@ namespace LandLedgers.Reporting
                 summary.financial.cashTransferInCents = AddCents(summary.financial.cashTransferInCents, week.financial.cashTransferInCents);
                 summary.financial.cashTransferOutCents = AddCents(summary.financial.cashTransferOutCents, week.financial.cashTransferOutCents);
                 summary.financial.otherExpenseCents = AddCents(summary.financial.otherExpenseCents, week.financial.otherExpenseCents);
+                summary.financial.rentExpenseCents = AddCents(summary.financial.rentExpenseCents, week.financial.rentExpenseCents);
+                summary.financial.taxExpenseCents = AddCents(summary.financial.taxExpenseCents, week.financial.taxExpenseCents);
                 summary.operations.unitsSold = AddNonNegativeCount(summary.operations.unitsSold, week.operations.unitsSold);
                 summary.operations.customerVisits = AddNonNegativeCount(summary.operations.customerVisits, week.operations.customerVisits);
                 summary.operations.reorderUnitsQueued = AddNonNegativeCount(summary.operations.reorderUnitsQueued, week.operations.reorderUnitsQueued);
@@ -173,6 +197,8 @@ namespace LandLedgers.Reporting
             summary.financial.netCashChangeCents = SubtractCents(summary.financial.closingCashCents, summary.financial.openingCashCents);
             summary.financial.knownProfitProxyCents = SubtractCents(summary.financial.revenueCents, summary.financial.knownOperatingExpenseCents);
             summary.financial.unknownExpenseCents = Math.Max(0, SubtractCents(ExplainedCashChangeCents(summary.financial), summary.financial.netCashChangeCents));
+            summary.financial.unknownInflowCents = Math.Max(0, SubtractCents(summary.financial.netCashChangeCents, ExplainedCashChangeCents(summary.financial)));
+            summary.financial.accruedLiabilityCents = last.financial.accruedLiabilityCents;
             summary.financial.survivalReserveCents = last.financial.survivalReserveCents;
             summary.financial.cashRunwayWeeks = last.financial.cashRunwayWeeks;
             summary.financial.primaryBlockedReason = last.financial.primaryBlockedReason;
@@ -188,8 +214,363 @@ namespace LandLedgers.Reporting
             summary.averageWeeklyReorderExpenseCents = DivideCents(summary.financial.reorderExpenseCents, validWeeks.Count);
             AddReportGap(summary.gaps, "monthly_staffing_ending_state", "Monthly staffing rows show the latest included weekly staffing state; payroll totals remain in the financial rollup.", BusinessReportGapSeverity.Informational);
             AddReportGap(summary.gaps, "monthly_capacity_ending_state", "Monthly capacity shows the latest included weekly capacity state rather than a weekly average.", BusinessReportGapSeverity.Informational);
+            AddReportGap(summary.gaps, "monthly_accrued_ending_state", "Monthly accrued liability shows the latest included weekly stock, not a sum across weeks (summing a stock across weeks would count one liability many times).", BusinessReportGapSeverity.Informational);
             AddDefaultGaps(summary.gaps);
             return summary;
+        }
+
+        private static bool IsPeriodStamped(ReportPeriod period)
+        {
+            return period.StartDate.AbsoluteDayIndex != 0 || period.EndDate.AbsoluteDayIndex != 0;
+        }
+
+        private static bool PeriodsOverlap(ReportPeriod left, ReportPeriod right)
+        {
+            return left.StartDate.AbsoluteDayIndex <= right.EndDate.AbsoluteDayIndex
+                && right.StartDate.AbsoluteDayIndex <= left.EndDate.AbsoluteDayIndex;
+        }
+
+        private static bool IsPeriodContained(ReportPeriod child, ReportPeriod parent)
+        {
+            return child.StartDate.AbsoluteDayIndex >= parent.StartDate.AbsoluteDayIndex
+                && child.EndDate.AbsoluteDayIndex <= parent.EndDate.AbsoluteDayIndex;
+        }
+
+        private static List<BusinessWeeklySummary> SortDedupAndFilterWeeks(
+            List<BusinessWeeklySummary> validWeeks, ReportPeriod period, ICollection<BusinessReportGap> gaps)
+        {
+            validWeeks.Sort((a, b) =>
+            {
+                int byStart = a.header.period.StartDate.AbsoluteDayIndex.CompareTo(b.header.period.StartDate.AbsoluteDayIndex);
+                return byStart != 0 ? byStart : a.header.period.EndDate.AbsoluteDayIndex.CompareTo(b.header.period.EndDate.AbsoluteDayIndex);
+            });
+
+            var kept = new List<BusinessWeeklySummary>(validWeeks.Count);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            bool targetStamped = IsPeriodStamped(period);
+            for (int i = 0; i < validWeeks.Count; i++)
+            {
+                BusinessWeeklySummary week = validWeeks[i];
+                string key = $"{week.header.businessId ?? string.Empty}|{week.header.period.StartDate.AbsoluteDayIndex}|{week.header.period.EndDate.AbsoluteDayIndex}";
+                if (!seen.Add(key))
+                {
+                    AddReportGap(gaps, "duplicate_weekly_summary", $"Weekly summary for week starting day {week.header.period.StartDate.AbsoluteDayIndex} was supplied more than once and was counted once.", BusinessReportGapSeverity.Blocking);
+                    continue;
+                }
+
+                if (targetStamped && IsPeriodStamped(week.header.period))
+                {
+                    if (!PeriodsOverlap(week.header.period, period))
+                    {
+                        AddReportGap(gaps, "weekly_summary_outside_period", $"Weekly summary starting day {week.header.period.StartDate.AbsoluteDayIndex} does not overlap the monthly period and was excluded.", BusinessReportGapSeverity.Blocking);
+                        continue;
+                    }
+
+                    if (!IsPeriodContained(week.header.period, period))
+                    {
+                        AddReportGap(gaps, "weekly_summary_partial_period", $"Weekly summary starting day {week.header.period.StartDate.AbsoluteDayIndex} only partially overlaps the monthly period and is included in full (a week is indivisible in this model).", BusinessReportGapSeverity.Caution);
+                    }
+                }
+                else if (!IsPeriodStamped(week.header.period))
+                {
+                    AddReportGap(gaps, "weekly_period_unstamped", "A weekly summary carried no period dates, so period containment could not be checked; it is included as supplied.", BusinessReportGapSeverity.Caution);
+                }
+
+                kept.Add(week);
+            }
+
+            return kept;
+        }
+
+        /// <summary>Shared shape of a yearly / all-time rollup over monthly summaries.</summary>
+        private sealed class LongSummaryParts
+        {
+            public BusinessReportHeader header = new();
+            public BusinessFinancialRollup financial = new();
+            public BusinessOperationsSummary operations = new();
+            public BusinessCapacitySummary capacity = new();
+            public BusinessInventorySummary inventory = new();
+            public BusinessStaffingSummary staffing = new();
+            public int includedMonthCount;
+            public int averageMonthlyRevenueCents;
+            public int averageMonthlyPayrollCents;
+            public int averageMonthlyReorderExpenseCents;
+            public int bestRevenueMonth;
+            public int bestRevenueMonthCents;
+            public int weakestRevenueMonth;
+            public int weakestRevenueMonthCents;
+            public List<LedgerEntry> ledgerEntries = new();
+            public List<BusinessReportGap> gaps = new();
+        }
+
+        public static BusinessYearlySummary BuildYearlyFromMonthlySummaries(
+            ReportPeriod period,
+            SimulationDate generatedOnDate,
+            IReadOnlyList<BusinessMonthlySummary> monthlySummaries)
+        {
+            var summary = new BusinessYearlySummary();
+            var parts = new LongSummaryParts();
+            if (!RollupMonthlySummaries(period, generatedOnDate, monthlySummaries, parts, "yearly"))
+            {
+                AddDefaultGaps(summary.gaps);
+                AddReportGap(summary.gaps, "no_valid_monthly_summaries", "No valid monthly summaries remained for yearly aggregation.", BusinessReportGapSeverity.Blocking);
+                CopyGaps(summary.gaps, parts.gaps);
+                return summary;
+            }
+
+            CopyLongParts(summary, parts, period, generatedOnDate);
+            return summary;
+        }
+
+        public static BusinessAllTimeSummary BuildAllTimeFromMonthlySummaries(
+            ReportPeriod period,
+            SimulationDate generatedOnDate,
+            IReadOnlyList<BusinessMonthlySummary> monthlySummaries)
+        {
+            var summary = new BusinessAllTimeSummary();
+            var parts = new LongSummaryParts();
+            if (!RollupMonthlySummaries(period, generatedOnDate, monthlySummaries, parts, "all-time"))
+            {
+                AddDefaultGaps(summary.gaps);
+                AddReportGap(summary.gaps, "no_valid_monthly_summaries", "No valid monthly summaries remained for all-time aggregation.", BusinessReportGapSeverity.Blocking);
+                CopyGaps(summary.gaps, parts.gaps);
+                return summary;
+            }
+
+            CopyLongParts(summary, parts, period, generatedOnDate);
+            return summary;
+        }
+
+        private static void CopyLongParts(BusinessYearlySummary summary, LongSummaryParts parts, ReportPeriod period, SimulationDate generatedOnDate)
+        {
+            summary.header = parts.header;
+            summary.header.period = period;
+            summary.header.generatedOnDate = generatedOnDate;
+            summary.header.isCompletePeriod = period.IsCompletePeriod;
+            summary.financial = parts.financial;
+            summary.operations = parts.operations;
+            summary.capacity = parts.capacity;
+            summary.inventory = parts.inventory;
+            summary.staffing = parts.staffing;
+            summary.includedMonthCount = parts.includedMonthCount;
+            summary.averageMonthlyRevenueCents = parts.averageMonthlyRevenueCents;
+            summary.averageMonthlyPayrollCents = parts.averageMonthlyPayrollCents;
+            summary.averageMonthlyReorderExpenseCents = parts.averageMonthlyReorderExpenseCents;
+            summary.bestRevenueMonth = parts.bestRevenueMonth;
+            summary.bestRevenueMonthCents = parts.bestRevenueMonthCents;
+            summary.weakestRevenueMonth = parts.weakestRevenueMonth;
+            summary.weakestRevenueMonthCents = parts.weakestRevenueMonthCents;
+            summary.ledgerEntries = parts.ledgerEntries;
+            summary.gaps = parts.gaps;
+        }
+
+        private static void CopyLongParts(BusinessAllTimeSummary summary, LongSummaryParts parts, ReportPeriod period, SimulationDate generatedOnDate)
+        {
+            summary.header = parts.header;
+            summary.header.period = period;
+            summary.header.generatedOnDate = generatedOnDate;
+            summary.header.isCompletePeriod = period.IsCompletePeriod;
+            summary.financial = parts.financial;
+            summary.operations = parts.operations;
+            summary.capacity = parts.capacity;
+            summary.inventory = parts.inventory;
+            summary.staffing = parts.staffing;
+            summary.includedMonthCount = parts.includedMonthCount;
+            summary.averageMonthlyRevenueCents = parts.averageMonthlyRevenueCents;
+            summary.averageMonthlyPayrollCents = parts.averageMonthlyPayrollCents;
+            summary.averageMonthlyReorderExpenseCents = parts.averageMonthlyReorderExpenseCents;
+            summary.bestRevenueMonth = parts.bestRevenueMonth;
+            summary.bestRevenueMonthCents = parts.bestRevenueMonthCents;
+            summary.weakestRevenueMonth = parts.weakestRevenueMonth;
+            summary.weakestRevenueMonthCents = parts.weakestRevenueMonthCents;
+            summary.ledgerEntries = parts.ledgerEntries;
+            summary.gaps = parts.gaps;
+        }
+
+        /// <summary>
+        /// Pass XII Worker C (LL-PLAY-013): yearly and all-time rollups
+        /// share one core so their guards cannot drift apart. Rules
+        /// mirror the monthly rollup: one business only, monthly
+        /// children only, chronological order, duplicate months count
+        /// once, months outside the target period are excluded,
+        /// partial overlaps are included in full but flagged, and
+        /// accrued liability / staffing / capacity are ending-state
+        /// (last child), never summed across months. Returns false
+        /// when no valid month remains.
+        /// </summary>
+        private static bool RollupMonthlySummaries(
+            ReportPeriod period,
+            SimulationDate generatedOnDate,
+            IReadOnlyList<BusinessMonthlySummary> monthlySummaries,
+            LongSummaryParts parts,
+            string targetLabel)
+        {
+            if (monthlySummaries == null || monthlySummaries.Count == 0)
+            {
+                return false;
+            }
+
+            var validMonths = new List<BusinessMonthlySummary>();
+            string businessId = string.Empty;
+            for (int i = 0; i < monthlySummaries.Count; i++)
+            {
+                BusinessMonthlySummary month = monthlySummaries[i];
+                if (month == null || month.header == null)
+                {
+                    AddReportGap(parts.gaps, "invalid_monthly_summary", $"Monthly summary at index {i} was missing and was excluded from {targetLabel} aggregation.", BusinessReportGapSeverity.Blocking);
+                    continue;
+                }
+
+                if (month.header.period.Kind != ReportPeriodKind.Monthly)
+                {
+                    AddReportGap(parts.gaps, "non_monthly_summary", $"Summary for {month.header.businessDisplayName ?? month.header.businessId ?? "unknown business"} was not monthly and was excluded from {targetLabel} aggregation.", BusinessReportGapSeverity.Blocking);
+                    continue;
+                }
+
+                string currentBusinessId = month.header.businessId ?? string.Empty;
+                if (validMonths.Count == 0)
+                {
+                    businessId = currentBusinessId;
+                }
+                else if (!string.Equals(businessId, currentBusinessId, StringComparison.Ordinal))
+                {
+                    AddReportGap(parts.gaps, "mixed_business_monthly_summaries", $"Monthly summary for business '{currentBusinessId}' was excluded from {targetLabel} aggregation for '{businessId}'.", BusinessReportGapSeverity.Blocking);
+                    continue;
+                }
+
+                validMonths.Add(month);
+            }
+
+            if (validMonths.Count == 0)
+            {
+                return false;
+            }
+
+            validMonths.Sort((a, b) =>
+            {
+                int byStart = a.header.period.StartDate.AbsoluteDayIndex.CompareTo(b.header.period.StartDate.AbsoluteDayIndex);
+                return byStart != 0 ? byStart : a.header.period.EndDate.AbsoluteDayIndex.CompareTo(b.header.period.EndDate.AbsoluteDayIndex);
+            });
+
+            var kept = new List<BusinessMonthlySummary>(validMonths.Count);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            bool targetStamped = IsPeriodStamped(period);
+            for (int i = 0; i < validMonths.Count; i++)
+            {
+                BusinessMonthlySummary month = validMonths[i];
+                string key = $"{month.header.businessId ?? string.Empty}|{month.header.period.StartDate.AbsoluteDayIndex}|{month.header.period.EndDate.AbsoluteDayIndex}";
+                if (!seen.Add(key))
+                {
+                    AddReportGap(parts.gaps, "duplicate_monthly_summary", $"Monthly summary starting day {month.header.period.StartDate.AbsoluteDayIndex} was supplied more than once and was counted once.", BusinessReportGapSeverity.Blocking);
+                    continue;
+                }
+
+                if (targetStamped && IsPeriodStamped(month.header.period))
+                {
+                    if (!PeriodsOverlap(month.header.period, period))
+                    {
+                        AddReportGap(parts.gaps, "monthly_summary_outside_period", $"Monthly summary starting day {month.header.period.StartDate.AbsoluteDayIndex} does not overlap the {targetLabel} period and was excluded.", BusinessReportGapSeverity.Blocking);
+                        continue;
+                    }
+
+                    if (!IsPeriodContained(month.header.period, period))
+                    {
+                        AddReportGap(parts.gaps, "monthly_summary_partial_period", $"Monthly summary starting day {month.header.period.StartDate.AbsoluteDayIndex} only partially overlaps the {targetLabel} period and is included in full.", BusinessReportGapSeverity.Caution);
+                    }
+                }
+                else if (!IsPeriodStamped(month.header.period))
+                {
+                    AddReportGap(parts.gaps, "monthly_period_unstamped", "A monthly summary carried no period dates, so period containment could not be checked; it is included as supplied.", BusinessReportGapSeverity.Caution);
+                }
+
+                kept.Add(month);
+            }
+
+            if (kept.Count == 0)
+            {
+                return false;
+            }
+
+            BusinessMonthlySummary first = kept[0];
+            BusinessMonthlySummary last = kept[kept.Count - 1];
+            CopyHeaderForMonthly(parts.header, first.header, period, generatedOnDate);
+            parts.financial.openingCashCents = first.financial.openingCashCents;
+            parts.financial.closingCashCents = last.financial.closingCashCents;
+            parts.includedMonthCount = kept.Count;
+
+            int bestRevenue = int.MinValue;
+            int weakestRevenue = int.MaxValue;
+            float stockHealthTotal = 0f;
+            float reliabilityTotal = 0f;
+            float competitionTotal = 0f;
+            var categoryTotals = new Dictionary<string, InventoryAccumulator>(StringComparer.Ordinal);
+
+            for (int i = 0; i < kept.Count; i++)
+            {
+                BusinessMonthlySummary month = kept[i];
+                parts.financial.revenueCents = AddCents(parts.financial.revenueCents, month.financial.revenueCents);
+                parts.financial.costOfGoodsSoldCents = AddCents(parts.financial.costOfGoodsSoldCents, month.financial.costOfGoodsSoldCents);
+                parts.financial.payrollExpenseCents = AddCents(parts.financial.payrollExpenseCents, month.financial.payrollExpenseCents);
+                parts.financial.reorderExpenseCents = AddCents(parts.financial.reorderExpenseCents, month.financial.reorderExpenseCents);
+                parts.financial.localSupplyExpenseCents = AddCents(parts.financial.localSupplyExpenseCents, month.financial.localSupplyExpenseCents);
+                parts.financial.ownerDistributionCents = AddCents(parts.financial.ownerDistributionCents, month.financial.ownerDistributionCents);
+                parts.financial.cashTransferInCents = AddCents(parts.financial.cashTransferInCents, month.financial.cashTransferInCents);
+                parts.financial.cashTransferOutCents = AddCents(parts.financial.cashTransferOutCents, month.financial.cashTransferOutCents);
+                parts.financial.otherExpenseCents = AddCents(parts.financial.otherExpenseCents, month.financial.otherExpenseCents);
+                parts.financial.rentExpenseCents = AddCents(parts.financial.rentExpenseCents, month.financial.rentExpenseCents);
+                parts.financial.taxExpenseCents = AddCents(parts.financial.taxExpenseCents, month.financial.taxExpenseCents);
+                parts.operations.unitsSold = AddNonNegativeCount(parts.operations.unitsSold, month.operations.unitsSold);
+                parts.operations.customerVisits = AddNonNegativeCount(parts.operations.customerVisits, month.operations.customerVisits);
+                parts.operations.reorderUnitsQueued = AddNonNegativeCount(parts.operations.reorderUnitsQueued, month.operations.reorderUnitsQueued);
+                parts.operations.reorderUnitsReceived = AddNonNegativeCount(parts.operations.reorderUnitsReceived, month.operations.reorderUnitsReceived);
+                parts.operations.reorderTriggered |= month.operations.reorderTriggered;
+                stockHealthTotal += Clamp01(month.inventory.stockHealth01);
+                reliabilityTotal += Clamp01(month.operations.reliability01);
+                competitionTotal += Clamp01(month.operations.competitionPressure01);
+                CopyStaffing(parts.staffing, month.staffing);
+                AccumulateInventoryCategories(categoryTotals, month.inventory);
+                CopyLedgerEntries(parts.ledgerEntries, month.ledgerEntries);
+                CopyGaps(parts.gaps, month.gaps);
+
+                if (month.financial.revenueCents > bestRevenue)
+                {
+                    bestRevenue = month.financial.revenueCents;
+                    parts.bestRevenueMonth = month.header.period.Month;
+                    parts.bestRevenueMonthCents = month.financial.revenueCents;
+                }
+
+                if (month.financial.revenueCents < weakestRevenue)
+                {
+                    weakestRevenue = month.financial.revenueCents;
+                    parts.weakestRevenueMonth = month.header.period.Month;
+                    parts.weakestRevenueMonthCents = month.financial.revenueCents;
+                }
+            }
+
+            parts.financial.knownOperatingExpenseCents = SumKnownOperatingExpenses(parts.financial);
+            parts.financial.knownExpenseCents = SumKnownExpenses(parts.financial);
+            parts.financial.netCashChangeCents = SubtractCents(parts.financial.closingCashCents, parts.financial.openingCashCents);
+            parts.financial.knownProfitProxyCents = SubtractCents(parts.financial.revenueCents, parts.financial.knownOperatingExpenseCents);
+            parts.financial.unknownExpenseCents = Math.Max(0, SubtractCents(ExplainedCashChangeCents(parts.financial), parts.financial.netCashChangeCents));
+            parts.financial.unknownInflowCents = Math.Max(0, SubtractCents(parts.financial.netCashChangeCents, ExplainedCashChangeCents(parts.financial)));
+            parts.financial.accruedLiabilityCents = last.financial.accruedLiabilityCents;
+            parts.financial.survivalReserveCents = last.financial.survivalReserveCents;
+            parts.financial.cashRunwayWeeks = last.financial.cashRunwayWeeks;
+            parts.financial.primaryBlockedReason = last.financial.primaryBlockedReason;
+            parts.financial.cashBridgeSummary = BuildCashBridgeSummary(parts.financial);
+            parts.operations.averageRevenuePerVisitCents = DivideCents(parts.financial.revenueCents, parts.operations.customerVisits);
+            parts.operations.averageRevenuePerUnitCents = DivideCents(parts.financial.revenueCents, parts.operations.unitsSold);
+            parts.operations.reliability01 = Clamp01(reliabilityTotal / kept.Count);
+            parts.operations.competitionPressure01 = Clamp01(competitionTotal / kept.Count);
+            CopyCapacity(parts.capacity, last.capacity);
+            ApplyInventoryAggregation(parts.inventory, categoryTotals, stockHealthTotal, kept.Count);
+            parts.averageMonthlyRevenueCents = DivideCents(parts.financial.revenueCents, kept.Count);
+            parts.averageMonthlyPayrollCents = DivideCents(parts.financial.payrollExpenseCents, kept.Count);
+            parts.averageMonthlyReorderExpenseCents = DivideCents(parts.financial.reorderExpenseCents, kept.Count);
+            AddReportGap(parts.gaps, "long_staffing_ending_state", "Staffing rows show the latest included monthly staffing state; payroll totals remain in the financial rollup.", BusinessReportGapSeverity.Informational);
+            AddReportGap(parts.gaps, "long_accrued_ending_state", "Accrued liability shows the latest included monthly stock, not a sum across months.", BusinessReportGapSeverity.Informational);
+            AddDefaultGaps(parts.gaps);
+            return true;
         }
 
         private static void FillHeader(BusinessReportHeader header, BusinessReportSnapshot snapshot)
@@ -233,6 +614,9 @@ namespace LandLedgers.Reporting
             financial.cashTransferInCents = Math.Max(0, snapshot.cashTransferInCents);
             financial.cashTransferOutCents = Math.Max(0, snapshot.cashTransferOutCents);
             financial.otherExpenseCents = Math.Max(0, snapshot.otherExpenseCents);
+            financial.rentExpenseCents = Math.Max(0, snapshot.rentExpenseCents);
+            financial.taxExpenseCents = Math.Max(0, snapshot.taxExpenseCents);
+            financial.accruedLiabilityCents = Math.Max(0, snapshot.accruedLiabilityCents);
             // Pass VIII circulation: the profit proxy is OPERATING profit only
             // (revenue minus operating expense). Owner cash transfers in are
             // financing inflows, not revenue; owner draws and transfers out are
@@ -244,6 +628,7 @@ namespace LandLedgers.Reporting
             financial.netCashChangeCents = SubtractCents(financial.closingCashCents, financial.openingCashCents);
             financial.knownProfitProxyCents = SubtractCents(financial.revenueCents, financial.knownOperatingExpenseCents);
             financial.unknownExpenseCents = Math.Max(0, SubtractCents(ExplainedCashChangeCents(financial), financial.netCashChangeCents));
+            financial.unknownInflowCents = Math.Max(0, SubtractCents(financial.netCashChangeCents, ExplainedCashChangeCents(financial)));
             financial.survivalReserveCents = Math.Max(0, snapshot.survivalReserveCents);
             financial.cashRunwayWeeks = snapshot.cashRunwayWeeks > 0 ? snapshot.cashRunwayWeeks : EstimateCashRunwayWeeks(financial);
             financial.primaryBlockedReason = snapshot.primaryBlockedReason ?? string.Empty;
@@ -591,6 +976,8 @@ namespace LandLedgers.Reporting
             AddLedgerEntry(entries, snapshot, cadence, "payroll", LedgerEntryKind.Expense, LedgerEntryCategory.Payroll, -Math.Max(0, snapshot.payrollExpenseCents), 0, string.Empty, $"{cadence} payroll summary");
             AddLedgerEntry(entries, snapshot, cadence, "reorder", LedgerEntryKind.Expense, LedgerEntryCategory.Reorder, -Math.Max(0, snapshot.reorderExpenseCents), Math.Max(0, snapshot.reorderUnitsReceived), "units", $"{cadence} reorder spend summary");
             AddLedgerEntry(entries, snapshot, cadence, "local_supply", LedgerEntryKind.Expense, LedgerEntryCategory.Reorder, -Math.Max(0, snapshot.localSupplyExpenseCents), 0, string.Empty, $"{cadence} local supply spend summary");
+            AddLedgerEntry(entries, snapshot, cadence, "rent", LedgerEntryKind.Expense, LedgerEntryCategory.Rent, -Math.Max(0, snapshot.rentExpenseCents), 0, string.Empty, $"{cadence} rent summary");
+            AddLedgerEntry(entries, snapshot, cadence, "tax", LedgerEntryKind.Expense, LedgerEntryCategory.Tax, -Math.Max(0, snapshot.taxExpenseCents), 0, string.Empty, $"{cadence} tax summary");
             AddLedgerEntry(entries, snapshot, cadence, "owner_draw", LedgerEntryKind.Financing, LedgerEntryCategory.Other, -Math.Max(0, snapshot.ownerDistributionCents), 0, string.Empty, $"{cadence} owner draw summary");
             AddLedgerEntry(entries, snapshot, cadence, "cash_transfer_in", LedgerEntryKind.Financing, LedgerEntryCategory.Other, Math.Max(0, snapshot.cashTransferInCents), 0, string.Empty, $"{cadence} owner cash transfer in summary");
             AddLedgerEntry(entries, snapshot, cadence, "cash_transfer_out", LedgerEntryKind.Financing, LedgerEntryCategory.Other, -Math.Max(0, snapshot.cashTransferOutCents), 0, string.Empty, $"{cadence} owner cash transfer out summary");
@@ -656,6 +1043,9 @@ namespace LandLedgers.Reporting
             FlagNegative(gaps, snapshot.payrollExpenseCents, "negative_payroll", "Payroll expense was negative and was clamped for reporting.");
             FlagNegative(gaps, snapshot.reorderExpenseCents, "negative_reorder", "Reorder expense was negative and was clamped for reporting.");
             FlagNegative(gaps, snapshot.localSupplyExpenseCents, "negative_local_supply", "Local supply expense was negative and was clamped for reporting.");
+            FlagNegative(gaps, snapshot.rentExpenseCents, "negative_rent", "Rent expense was negative and was clamped for reporting.");
+            FlagNegative(gaps, snapshot.taxExpenseCents, "negative_tax", "Tax expense was negative and was clamped for reporting.");
+            FlagNegative(gaps, snapshot.accruedLiabilityCents, "negative_accrued_liability", "Accrued liability was negative and was clamped for reporting.");
             FlagNegative(gaps, snapshot.unitsSold, "negative_units_sold", "Units sold was negative and was clamped for reporting.");
             FlagNegative(gaps, snapshot.customerVisits, "negative_customer_visits", "Customer visits was negative and was clamped for reporting.");
             if (Invalid01(snapshot.stockHealth01))
@@ -760,9 +1150,9 @@ namespace LandLedgers.Reporting
                 return;
             }
 
-            AddReportGap(gaps, "cost_detail_partial", "Cost bridge fields are shown when runtime snapshots provide them; taxes, rent, and depreciation remain outside the bridge.", BusinessReportGapSeverity.Caution);
+            AddReportGap(gaps, "cost_detail_partial", "Cost bridge fields are shown when runtime snapshots provide them; rent and tax are bridged when supplied, depreciation remains outside the bridge.", BusinessReportGapSeverity.Caution);
             AddReportGap(gaps, "supplier_history_missing", "Supplier identity, terms, and invoice history are not available yet.", BusinessReportGapSeverity.Informational);
-            AddReportGap(gaps, "non_operating_expenses_missing", "Taxes, debt, rent, maintenance, spoilage, and depreciation are not available yet.", BusinessReportGapSeverity.Caution);
+            AddReportGap(gaps, "non_operating_expenses_missing", "Debt service, maintenance, spoilage, and depreciation are not available yet; rent and tax are reported when the snapshot supplies them.", BusinessReportGapSeverity.Caution);
         }
 
         internal static void AddReportGap(ICollection<BusinessReportGap> gaps, string code, string message, BusinessReportGapSeverity severity = BusinessReportGapSeverity.Blocking)
@@ -1112,7 +1502,9 @@ namespace LandLedgers.Reporting
         {
             return AddCents(
                 SumKnownOperatingExpenses(financial),
-                AddCents(Math.Max(0, financial.ownerDistributionCents), Math.Max(0, financial.cashTransferOutCents)));
+                AddCents(
+                    AddCents(Math.Max(0, financial.ownerDistributionCents), Math.Max(0, financial.cashTransferOutCents)),
+                    Math.Max(0, financial.taxExpenseCents)));
         }
 
         /// <summary>
@@ -1128,7 +1520,9 @@ namespace LandLedgers.Reporting
                 AddCents(
                     AddCents(Math.Max(0, financial.costOfGoodsSoldCents), Math.Max(0, financial.payrollExpenseCents)),
                     Math.Max(0, financial.reorderExpenseCents)),
-                AddCents(Math.Max(0, financial.localSupplyExpenseCents), Math.Max(0, financial.otherExpenseCents)));
+                AddCents(
+                    AddCents(Math.Max(0, financial.localSupplyExpenseCents), Math.Max(0, financial.otherExpenseCents)),
+                    Math.Max(0, financial.rentExpenseCents)));
         }
 
         /// <summary>
@@ -1141,7 +1535,11 @@ namespace LandLedgers.Reporting
         {
             int operatingAndFinancingIn = AddCents(financial.knownProfitProxyCents, Math.Max(0, financial.cashTransferInCents));
             int financingOut = AddCents(Math.Max(0, financial.cashTransferOutCents), Math.Max(0, financial.ownerDistributionCents));
-            return SubtractCents(operatingAndFinancingIn, financingOut);
+            int explained = SubtractCents(operatingAndFinancingIn, financingOut);
+            // Pass XII Worker C: tax is a cash expense outside operating
+            // profit, so it must still leave the bridge explained —
+            // otherwise every taxed period shows a phantom unknown.
+            return SubtractCents(explained, Math.Max(0, financial.taxExpenseCents));
         }
 
         internal static int EstimateCashRunwayWeeks(BusinessFinancialRollup financial)
@@ -1167,7 +1565,13 @@ namespace LandLedgers.Reporting
                 return string.Empty;
             }
 
-            return $"Cash changed because: sales {FormatMoney(financial.revenueCents)}, COGS {FormatMoney(financial.costOfGoodsSoldCents)}, payroll {FormatMoney(financial.payrollExpenseCents)}, stock buys {FormatMoney(AddCents(financial.reorderExpenseCents, financial.localSupplyExpenseCents))}, owner draw {FormatMoney(financial.ownerDistributionCents)}, owner financing {FormatSignedMoney(SubtractCents(financial.cashTransferInCents, financial.cashTransferOutCents))}.";
+            string bridge = $"Cash changed because: sales {FormatMoney(financial.revenueCents)}, COGS {FormatMoney(financial.costOfGoodsSoldCents)}, payroll {FormatMoney(financial.payrollExpenseCents)}, stock buys {FormatMoney(AddCents(financial.reorderExpenseCents, financial.localSupplyExpenseCents))}, rent {FormatMoney(financial.rentExpenseCents)}, tax {FormatMoney(financial.taxExpenseCents)}, owner draw {FormatMoney(financial.ownerDistributionCents)}, owner financing {FormatSignedMoney(SubtractCents(financial.cashTransferInCents, financial.cashTransferOutCents))}.";
+            if (financial.unknownInflowCents > 0)
+            {
+                bridge += $" Unexplained inflow {FormatMoney(financial.unknownInflowCents)} (cash rose more than explained flows — e.g. loan proceeds with no snapshot field).";
+            }
+
+            return bridge;
         }
 
         internal static string FormatMoney(int cents)

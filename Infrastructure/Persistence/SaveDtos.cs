@@ -1000,6 +1000,21 @@ namespace LandLedgers.Persistence
         // reason, day, ObligationId, escrow flag) so a save/load round-trip
         // never anonymizes or drops a settleable debt.
         public List<BusinessNamedPayableSaveDto> namedPayables = new();
+        // Pass XII Worker C (additive): settled manual wage payments, so a
+        // save/load round-trip cannot resurrect a settled manual period
+        // or forget same-week netting.
+        public List<ManualWagePaymentSaveDto> manualWagePayments = new();
+    }
+
+    [Serializable]
+    public sealed class ManualWagePaymentSaveDto
+    {
+        public string employmentId = string.Empty;
+        public int personId = -1;
+        public int dayIndex = -1;
+        public string periodLabel = string.Empty;
+        public int cashPaidCents;
+        public int accruedCents;
     }
 
     [Serializable]

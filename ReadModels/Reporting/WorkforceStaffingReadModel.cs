@@ -31,6 +31,10 @@ namespace LandLedgers.Reporting
         /// <summary>
         /// Open positions. A vacancy count only - it does not fabricate workers and does not
         /// cap hiring (TECH §4.3: slots must not suppress seasonal hiring).
+        /// Pass XII Worker C: this counts unfilled TEMPLATE slots, not
+        /// uncovered work. For work uncovered, use
+        /// WorkloadStaffingReadModel.UnfilledShifts (tasks with no
+        /// assignee) — never present this slot count as workload demand.
         /// </summary>
         public int VacantPositions { get; private set; }
 

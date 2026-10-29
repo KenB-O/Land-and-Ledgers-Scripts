@@ -131,6 +131,22 @@ namespace LandLedgers.EditorTests.Integration
             "PortfolioBalanceDriftSummary", "PortfolioBusinessSummaryLine",
             "PortfolioFinancialRollup", "PortfolioMonthlySummary",
             "PortfolioReportSnapshot", "PortfolioWeeklySummary",
+            // Pass XII Worker C classification: the yearly/all-time rollup
+            // DTOs and the workload-staffing read-model types below are
+            // the same cluster as the Pass XI report DTOs above — data
+            // carriers of wired features (report builders in the same
+            // Reporting directory; the payroll authority in
+            // BusinessRuntimeState), consumed by builders and Unity
+            // presentation, not standalone unwired systems. They are
+            // feature-internal, not UnwiredSystems candidates: the
+            // yearly/all-time builders are fed by monthly summaries, the
+            // staffing model is fed by task/schedule/payroll inputs, and
+            // ManualWagePaymentRecord is the persistence record of the
+            // exactly-once wage guard inside BusinessRuntimeState.
+            "BusinessYearlySummary", "BusinessAllTimeSummary",
+            "WorkloadStaffingReadModel", "WorkloadTaskInput", "WorkloadWorkerInput",
+            "WorkloadLaborDemandInput", "WorkloadWageInput", "WorkloadWorkerRow",
+            "ManualWagePaymentRecord",
             "CapturedScenarioSelection", "CarriedGoodsBatch", "CausalDemographicEvent", "CausalEmploymentRecord",
             "CausalObligationSummary", "ChainLinkSummary", "CivicTreasuryLedgerEntry", "ConstructionAcceptanceStage",
             // Pass XI WS2 classification: the Construction feature cluster below

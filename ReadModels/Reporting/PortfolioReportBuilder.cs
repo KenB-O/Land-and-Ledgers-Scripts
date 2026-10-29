@@ -62,6 +62,7 @@ namespace LandLedgers.Reporting
 
             double stockHealthTotal = 0d;
             int validSummaryCount = 0;
+            var seenBusinessIds = new HashSet<string>(StringComparer.Ordinal);
             int maxIncludedWeekCount = 0;
             int firstIncludedWeekCount = -1;
             bool sawDirectMonthlySnapshot = false;
@@ -79,6 +80,15 @@ namespace LandLedgers.Reporting
                 if (business.header.period.Kind != ReportPeriodKind.Monthly)
                 {
                     BusinessReportBuilder.AddReportGap(summary.gaps, "non_monthly_business_summary", $"Business summary for '{business.header.businessDisplayName ?? business.header.businessId ?? "unknown business"}' was not monthly and was excluded from the portfolio rollup.", BusinessReportGapSeverity.Blocking);
+                    continue;
+                }
+
+                // Pass XII Worker C (LL-PLAY-013): duplicate business
+                // summaries double the portfolio — first wins, disclosed.
+                string summaryBusinessId = business.header.businessId ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(summaryBusinessId) && !seenBusinessIds.Add(summaryBusinessId))
+                {
+                    BusinessReportBuilder.AddReportGap(summary.gaps, "duplicate_business_summary", $"Business monthly summary for '{summaryBusinessId}' was supplied more than once and was counted once.", BusinessReportGapSeverity.Blocking);
                     continue;
                 }
 
@@ -363,11 +373,22 @@ namespace LandLedgers.Reporting
                 return;
             }
 
+            var seenBusinessIds = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < snapshots.Count; i++)
             {
                 if (snapshots[i] == null)
                 {
                     BusinessReportBuilder.AddReportGap(gaps, "missing_business_snapshot", $"Business snapshot at index {i} was missing and was excluded from the portfolio rollup.", BusinessReportGapSeverity.Blocking);
+                    continue;
+                }
+
+                // Pass XII Worker C (LL-PLAY-013): the same business
+                // snapshot twice doubled the whole portfolio. First
+                // occurrence wins; duplicates are excluded, disclosed.
+                string snapshotBusinessId = snapshots[i].businessId ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(snapshotBusinessId) && !seenBusinessIds.Add(snapshotBusinessId))
+                {
+                    BusinessReportBuilder.AddReportGap(gaps, "duplicate_business_snapshot", $"Business snapshot for '{snapshotBusinessId}' was supplied more than once and was counted once.", BusinessReportGapSeverity.Blocking);
                     continue;
                 }
 
@@ -448,6 +469,8 @@ namespace LandLedgers.Reporting
                 buildingId = header.buildingId,
                 revenueCents = financial.revenueCents,
                 costOfGoodsSoldCents = financial.costOfGoodsSoldCents,
+                rentExpenseCents = financial.rentExpenseCents,
+                taxExpenseCents = financial.taxExpenseCents,
                 knownExpenseCents = financial.knownExpenseCents,
                 netCashChangeCents = financial.netCashChangeCents,
                 closingCashCents = financial.closingCashCents,
@@ -491,6 +514,9 @@ namespace LandLedgers.Reporting
             portfolio.totalKnownExpenseCents = AddCents(portfolio.totalKnownExpenseCents, business.knownExpenseCents);
             portfolio.totalNetCashChangeCents = AddCents(portfolio.totalNetCashChangeCents, business.netCashChangeCents);
             portfolio.totalKnownProfitProxyCents = AddCents(portfolio.totalKnownProfitProxyCents, business.knownProfitProxyCents);
+            portfolio.totalRentExpenseCents = AddCents(portfolio.totalRentExpenseCents, business.rentExpenseCents);
+            portfolio.totalTaxExpenseCents = AddCents(portfolio.totalTaxExpenseCents, business.taxExpenseCents);
+            portfolio.totalAccruedLiabilityCents = AddCents(portfolio.totalAccruedLiabilityCents, business.accruedLiabilityCents);
         }
 
         private static void AddStaffingTotals(PortfolioMonthlySummary summary, BusinessStaffingSummary staffing)

@@ -12,6 +12,7 @@ using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Recruitment;
+using LandLedgers.Orchestration.Bootstrap;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Population;
@@ -100,6 +101,17 @@ namespace LandLedgers.Orchestration.Systems
         private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
+
+        /// <summary>
+        /// Pass XII Worker A (LL-PLAY-002/003): true while this instance
+        /// holds the SingleInstanceAuthorityGuard claim for
+        /// "SimulationDrivers". A duplicate drivers object never holds the
+        /// claim, never subscribes to the clock, and never wires a business
+        /// runtime, so two instances cannot both drive the same economy.
+        /// Released on disable/destroy so a re-enabled instance can reclaim.
+        /// </summary>
+        private bool hasAuthorityClaim;
+
         // G-01: weekly source-side driver for NPC business lifecycles (owned by the driver).
         private NpcBusinessLifecycleDriver npcBusinessLifecycleDriver;
 
@@ -439,6 +451,21 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public void AttachBusinessRuntime(SharedBusinessRuntimeManager runtime)
         {
+            // Pass XII Worker A: a suppressed duplicate must never wire a
+            // business runtime, even if bootstrap code hands it one. An
+            // instance whose Awake never ran (e.g. created inactive) gets
+            // one claim attempt here; only a failed claim refuses.
+            if (!hasAuthorityClaim)
+            {
+                hasAuthorityClaim = SingleInstanceAuthorityGuard.TryClaim(
+                    "SimulationDrivers", this, out string attachRefusal);
+                if (!hasAuthorityClaim)
+                {
+                    Debug.LogError($"[SimulationDrivers] AttachBusinessRuntime refused: {attachRefusal}", this);
+                    return;
+                }
+            }
+
             sharedBusinessRuntime = runtime;
             hub ??= FindAnyObjectByType<SimulationSystemsHub>();
             timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
@@ -471,9 +498,28 @@ namespace LandLedgers.Orchestration.Systems
         /// PlayerDirector is a plain C# authority and cannot be
         /// discovered from the scene; bootstrap assignment still owns it,
         /// and Rebind forwards an already-assigned one to the director.
+        /// Pass XII Worker A: Rebind gains its first production caller —
+        /// FirstLedgerSliceBootstrapper.MarkRestoredFromSave, invoked by
+        /// SaveLoadManager after every restore. It is no longer an
+        /// unwired entry point. A suppressed duplicate instance refuses
+        /// the rebind rather than rewiring over the live drivers.
         /// </summary>
         public void Rebind()
         {
+            // Pass XII Worker A: same claim rule as AttachBusinessRuntime —
+            // one claim attempt for an instance whose Awake never ran, then
+            // refusal for a genuine duplicate.
+            if (!hasAuthorityClaim)
+            {
+                hasAuthorityClaim = SingleInstanceAuthorityGuard.TryClaim(
+                    "SimulationDrivers", this, out string rebindRefusal);
+                if (!hasAuthorityClaim)
+                {
+                    Debug.LogError($"[SimulationDrivers] Rebind refused: {rebindRefusal}", this);
+                    return;
+                }
+            }
+
             hub ??= FindAnyObjectByType<SimulationSystemsHub>();
             timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
@@ -597,6 +643,20 @@ namespace LandLedgers.Orchestration.Systems
 
         private void Awake()
         {
+            // Pass XII Worker A (LL-PLAY-002/003): claim sole drivers
+            // authority before wiring anything. A second live drivers
+            // object used to subscribe to the same TimeManager events and
+            // drive the same businesses a second time. The loser logs an
+            // error and stays idle; removing the duplicate GameObject from
+            // the scene is Codex's scene work, not a runtime guess.
+            hasAuthorityClaim = SingleInstanceAuthorityGuard.TryClaim(
+                "SimulationDrivers", this, out string claimRefusal);
+            if (!hasAuthorityClaim)
+            {
+                Debug.LogError($"[SimulationDrivers] {claimRefusal}", this);
+                return;
+            }
+
             hub ??= FindAnyObjectByType<SimulationSystemsHub>();
             timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
@@ -777,7 +837,30 @@ namespace LandLedgers.Orchestration.Systems
 
         private void OnEnable()
         {
+            // Re-claim after a disable released the claim (see OnDisable).
+            // A duplicate that never held the claim stays suppressed here
+            // too, so it can never subscribe to the clock.
+            if (!hasAuthorityClaim)
+            {
+                hasAuthorityClaim = SingleInstanceAuthorityGuard.TryClaim(
+                    "SimulationDrivers", this, out string claimRefusal);
+                if (!hasAuthorityClaim)
+                {
+                    Debug.LogError($"[SimulationDrivers] {claimRefusal}", this);
+                    return;
+                }
+            }
+
             SubscribeToTimeManager();
+        }
+
+        private void OnDestroy()
+        {
+            if (hasAuthorityClaim)
+            {
+                SingleInstanceAuthorityGuard.Release("SimulationDrivers", this);
+                hasAuthorityClaim = false;
+            }
         }
 
         private void SubscribeToTimeManager()
@@ -801,6 +884,15 @@ namespace LandLedgers.Orchestration.Systems
                 timeManager.WeekChanged -= OnWeekChanged;
                 timeManager.ShortTick -= OnShortTick;
                 subscribedToTimeManager = false;
+            }
+
+            // Pass XII Worker A: disabling releases the claim, so the one
+            // live drivers object is always the one ticking. OnDestroy
+            // covers the never-enabled case, where OnDisable does not run.
+            if (hasAuthorityClaim)
+            {
+                SingleInstanceAuthorityGuard.Release("SimulationDrivers", this);
+                hasAuthorityClaim = false;
             }
 
             if (sharedBusinessRuntime != null

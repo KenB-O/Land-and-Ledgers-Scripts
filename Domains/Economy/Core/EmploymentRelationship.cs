@@ -354,6 +354,15 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>CLN-1: restores employment state from the save pipeline.</summary>
+        /// <summary>
+        /// Pass XII (E-DEFECT-02): copy-on-load. The registry stores the
+        /// relationship objects it is handed, so storing the DTO's objects
+        /// would let a run mutate the caller's snapshot (a suspended
+        /// relationship restored from the same in-memory DTO would already
+        /// read Suspended, and the suspension would never be recorded).
+        /// Every relationship is therefore copied; CompensationTerms is a
+        /// struct and copies by value. Clear-then-load is unchanged.
+        /// </summary>
         public void LoadFromSaveDto(EmploymentRegistrySaveDto dto)
         {
             byId.Clear();
@@ -366,7 +375,22 @@ namespace LandLedgers.Economy
             {
                 if (relationship != null && !string.IsNullOrWhiteSpace(relationship.Id))
                 {
-                    byId[relationship.Id] = relationship;
+                    byId[relationship.Id] = new EmploymentRelationship
+                    {
+                        Id = relationship.Id,
+                        EmployeePersonId = relationship.EmployeePersonId,
+                        EmployerBusinessId = relationship.EmployerBusinessId,
+                        RoleDisplayName = relationship.RoleDisplayName,
+                        Kind = relationship.Kind,
+                        LifecycleState = relationship.LifecycleState,
+                        Compensation = relationship.Compensation,
+                        StartDayIndex = relationship.StartDayIndex,
+                        EndDayIndex = relationship.EndDayIndex,
+                        SuspensionReason = relationship.SuspensionReason,
+                        EndReason = relationship.EndReason,
+                        Source = relationship.Source,
+                        LegacyNotes = relationship.LegacyNotes,
+                    };
                 }
             }
         }

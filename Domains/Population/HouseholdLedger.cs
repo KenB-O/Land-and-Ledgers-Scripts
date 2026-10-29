@@ -279,6 +279,19 @@ namespace LandLedgers.Population
             }
         }
 
+        /// <summary>
+        /// Pass XII (E-DEFECT-02 / E-NOTE-01): copy-on-import with replace
+        /// semantics. HouseholdLedger wraps its state object by reference, so
+        /// storing the caller's object would let later entries mutate the
+        /// caller's snapshot (a second restore of the same in-memory object
+        /// would then load already-run state). Each imported state is
+        /// therefore deep-copied, and a present ledger is REPLACED rather
+        /// than skipped: load is clear-then-load like every other authority,
+        /// so loading a second save in the same session cannot keep stale
+        /// ledgers behind a silent skip. Disk loads are unaffected (fresh
+        /// objects already); only in-memory double restores change, from
+        /// corrupt to correct.
+        /// </summary>
         public void ImportState(IEnumerable<HouseholdLedgerState> inStates)
         {
             if (inStates == null)
@@ -293,14 +306,37 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                if (ledgers.ContainsKey(state.HouseholdId))
+                var copy = new HouseholdLedgerState
                 {
-                    diagnostics.Add($"ImportState: duplicate ledger for H{state.HouseholdId} skipped.");
-                    continue;
+                    HouseholdId = state.HouseholdId,
+                    NextEntrySequence = state.NextEntrySequence,
+                    Entries = new List<HouseholdLedgerEntry>(),
+                };
+                if (state.Entries != null)
+                {
+                    foreach (HouseholdLedgerEntry entry in state.Entries)
+                    {
+                        if (entry == null)
+                        {
+                            continue;
+                        }
+
+                        copy.Entries.Add(new HouseholdLedgerEntry
+                        {
+                            EntrySequence = entry.EntrySequence,
+                            DayIndex = entry.DayIndex,
+                            AmountCents = entry.AmountCents,
+                            Source = entry.Source,
+                            SourceReference = entry.SourceReference,
+                            Reason = entry.Reason,
+                            Purpose = entry.Purpose,
+                            Counterparty = entry.Counterparty,
+                            BalanceAfterCents = entry.BalanceAfterCents,
+                        });
+                    }
                 }
 
-                state.Entries ??= new List<HouseholdLedgerEntry>();
-                ledgers[state.HouseholdId] = new HouseholdLedger(state);
+                ledgers[state.HouseholdId] = new HouseholdLedger(copy);
             }
         }
     }

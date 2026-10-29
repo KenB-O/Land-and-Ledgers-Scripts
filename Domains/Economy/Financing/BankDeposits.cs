@@ -351,6 +351,14 @@ namespace LandLedgers.Economy.Financing
             };
         }
 
+        /// <summary>
+        /// Pass XII (E-DEFECT-02): copy-on-load. Deposit/withdraw mutate
+        /// account balances in place, so storing the DTO's account objects
+        /// would let a run corrupt the caller's snapshot (a withdrawal in
+        /// run 1 would leave run 2's account empty and its withdrawal
+        /// refused). Every account is therefore copied. Clear-then-load
+        /// is unchanged.
+        /// </summary>
         public void LoadFromSaveDto(BankDepositLedgerSaveDto dto)
         {
             accounts.Clear();
@@ -361,7 +369,18 @@ namespace LandLedgers.Economy.Financing
             foreach (DepositAccount a in dto.Accounts)
             {
                 if (a == null || string.IsNullOrWhiteSpace(a.AccountId)) continue;
-                accounts[a.AccountId] = a;
+                accounts[a.AccountId] = new DepositAccount
+                {
+                    AccountId = a.AccountId,
+                    DepositorName = a.DepositorName,
+                    Kind = a.Kind,
+                    BalanceCents = a.BalanceCents,
+                    OpenedDayIndex = a.OpenedDayIndex,
+                    TermDays = a.TermDays,
+                    MaturityDayIndex = a.MaturityDayIndex,
+                    InterestRateBps = a.InterestRateBps,
+                    InterestAccruedCents = a.InterestAccruedCents,
+                };
             }
         }
         #endregion

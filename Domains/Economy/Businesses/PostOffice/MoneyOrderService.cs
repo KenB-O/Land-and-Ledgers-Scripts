@@ -794,6 +794,14 @@ namespace LandLedgers.Economy.Postal
             };
         }
 
+        /// <summary>
+        /// Pass XII (E-DEFECT-02): copy-on-load. The service mutates its
+        /// records in place (advice ReceivedDayIndex, order Status, office
+        /// funds), so storing the DTO's objects would let a run corrupt the
+        /// caller's snapshot and a second restore of the same in-memory DTO
+        /// would see advices already received and orders already paid.
+        /// Every record is therefore copied. Clear-then-load is unchanged.
+        /// </summary>
         public void LoadFromSaveDto(MoneyOrderServiceSaveDto dto)
         {
             offices.Clear();
@@ -804,20 +812,93 @@ namespace LandLedgers.Economy.Postal
             if (dto == null) return;
             if (dto.offices != null)
                 foreach (PostalMoneyOrderOffice o in dto.offices)
-                    if (o != null && !string.IsNullOrEmpty(o.OfficeId)) offices[o.OfficeId] = o;
+                    if (o != null && !string.IsNullOrEmpty(o.OfficeId)) offices[o.OfficeId] = new PostalMoneyOrderOffice
+                    {
+                        OfficeId = o.OfficeId,
+                        OfficeClass = o.OfficeClass,
+                        DepositoryOfficeId = o.DepositoryOfficeId,
+                        ReserveCents = o.ReserveCents,
+                        MoneyOrderCashCents = o.MoneyOrderCashCents,
+                        NextSerial = o.NextSerial,
+                        UncollectedFeeCents = o.UncollectedFeeCents,
+                    };
             if (dto.orders != null)
                 foreach (PostalMoneyOrder order in dto.orders)
-                    if (order != null) orders[OrderKey(order.IssuingOfficeId, order.SerialNumber)] = order;
+                    if (order != null) orders[OrderKey(order.IssuingOfficeId, order.SerialNumber)] = CloneOrder(order);
             if (dto.advices != null)
                 foreach (PostalMoneyOrderAdvice a in dto.advices)
-                    if (a != null) advices.Add(a);
+                    if (a != null) advices.Add(new PostalMoneyOrderAdvice
+                    {
+                        SerialNumber = a.SerialNumber,
+                        IssuingOfficeId = a.IssuingOfficeId,
+                        PayableOfficeId = a.PayableOfficeId,
+                        SenderName = a.SenderName,
+                        PayeeName = a.PayeeName,
+                        AmountCents = a.AmountCents,
+                        SentDayIndex = a.SentDayIndex,
+                        DueArrivalDayIndex = a.DueArrivalDayIndex,
+                        ReceivedDayIndex = a.ReceivedDayIndex,
+                    });
             if (dto.claims != null)
                 foreach (PostalMoneyOrderClaim c in dto.claims)
-                    if (c != null && !string.IsNullOrEmpty(c.ClaimId)) claims[c.ClaimId] = c;
+                    if (c != null && !string.IsNullOrEmpty(c.ClaimId)) claims[c.ClaimId] = new PostalMoneyOrderClaim
+                    {
+                        ClaimId = c.ClaimId,
+                        DebtorOfficeId = c.DebtorOfficeId,
+                        CreditorOfficeId = c.CreditorOfficeId,
+                        AmountCents = c.AmountCents,
+                        OrderSerial = c.OrderSerial,
+                        PayeeName = c.PayeeName,
+                        OriginatedDayIndex = c.OriginatedDayIndex,
+                        SettledDayIndex = c.SettledDayIndex,
+                        Status = c.Status,
+                    };
             if (dto.positions != null)
                 foreach (PostalSettlementPosition p in dto.positions)
-                    if (p != null && !string.IsNullOrEmpty(p.PositionId)) positions[p.PositionId] = p;
+                    if (p != null && !string.IsNullOrEmpty(p.PositionId)) positions[p.PositionId] = ClonePosition(p);
             sequence = Math.Max(0, dto.sequence);
+        }
+
+        private static PostalMoneyOrder CloneOrder(PostalMoneyOrder o)
+        {
+            var c = new PostalMoneyOrder
+            {
+                SerialNumber = o.SerialNumber,
+                IssuingOfficeId = o.IssuingOfficeId,
+                PayableOfficeId = o.PayableOfficeId,
+                SenderName = o.SenderName,
+                PayeeName = o.PayeeName,
+                AmountCents = o.AmountCents,
+                FeeCents = o.FeeCents,
+                IssuedDayIndex = o.IssuedDayIndex,
+                Status = o.Status,
+                IndorsedToName = o.IndorsedToName,
+                IndorsedDayIndex = o.IndorsedDayIndex,
+                BankCollectionAgent = o.BankCollectionAgent,
+                PaidDayIndex = o.PaidDayIndex,
+                PaidToName = o.PaidToName,
+                ReplacesSerial = o.ReplacesSerial,
+                FraudFlagged = o.FraudFlagged,
+                FraudNote = o.FraudNote,
+            };
+            if (o.History != null) c.History.AddRange(o.History);
+            return c;
+        }
+
+        private static PostalSettlementPosition ClonePosition(PostalSettlementPosition p)
+        {
+            var c = new PostalSettlementPosition
+            {
+                PositionId = p.PositionId,
+                DebtorOfficeId = p.DebtorOfficeId,
+                CreditorOfficeId = p.CreditorOfficeId,
+                NetAmountCents = p.NetAmountCents,
+                CycleDayIndex = p.CycleDayIndex,
+                SettledDayIndex = p.SettledDayIndex,
+                Status = p.Status,
+            };
+            if (p.ComprisedClaimIds != null) c.ComprisedClaimIds.AddRange(p.ComprisedClaimIds);
+            return c;
         }
     }
 }

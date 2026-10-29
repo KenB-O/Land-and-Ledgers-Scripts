@@ -6,6 +6,7 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Transport;
+using LandLedgers.Orchestration.Bootstrap;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Orchestration.Scenarios.Development;
 using LandLedgers.Orchestration.Player;
@@ -203,6 +204,20 @@ namespace LandLedgers.FirstLedger
 
             initializing = true;
 
+            // Pass XII Worker A (LL-PLAY-001): a New Game starts with a cash
+            // stake, never an automatic player business. Clear the store
+            // runtime's auto-create flag unconditionally, for every startup
+            // intent, before any runtime Start can initialize: the old code
+            // cleared it only when a ScenarioDirector was present, so a
+            // scene without one auto-formed "player_general_store" on the
+            // store runtime's Start and flipped an NPC building to
+            // player-owned. Continue is safe too: a restored store
+            // short-circuits initialization, while a save with no store
+            // must not invent one on load either. Execution order keeps
+            // this ahead of the store runtime (bootstrapper 240, store 260).
+            storeRuntime?.SetCreatePlayerBusinessOnInitialize(false);
+            ReportDuplicateSceneAuthorities();
+
             if (townWorld == null)
             {
                 bootstrapStatus = "Missing TownWorldController.";
@@ -298,13 +313,11 @@ namespace LandLedgers.FirstLedger
             ConfigurePlayerPortfolioManager();
             ConfigureLogisticsRuntime();
             ConfigureStoreRuntime();
-            // First Ledger starts with a cash stake, not an automatic player business.
-            // The authored town roster remains NPC-owned; the player's first business
-            // is formed explicitly through the Businesses workflow.
-            if (storeRuntime != null && FindAnyObjectByType<ScenarioDirector>() != null)
-            {
-                storeRuntime.SetCreatePlayerBusinessOnInitialize(false);
-            }
+            // The automatic player business is already suppressed for every
+            // startup intent at the top of InitializeSlice (Pass XII
+            // LL-PLAY-001); the authored town roster remains NPC-owned and
+            // the player's first business is formed explicitly through the
+            // Businesses workflow.
             storeRuntime?.InitializeIfNeeded();
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
@@ -400,6 +413,7 @@ namespace LandLedgers.FirstLedger
         public void MarkRestoredFromSave(string persistenceSummary = "")
         {
             AutoWire();
+            ReportDuplicateSceneAuthorities();
             Debug.Log("[WorldStartup] Startup path: save load; saved world state and placements are authoritative.", this);
             initialized = true;
             bootstrapStatus = "Game slice restored from save.";
@@ -425,6 +439,15 @@ namespace LandLedgers.FirstLedger
             populationPathingDirector?.ResetForLoadedState();
             opportunityPressureRuntime?.RefreshNotices();
             storePanel?.Refresh();
+            // Pass XII Worker A: the first real production caller for
+            // SimulationDrivers.Rebind. SaveLoadManager restores the hub,
+            // businesses and scenario state from the file before calling
+            // this hook, so the drivers re-discover the live authorities
+            // instead of driving through stale references. Rebind is
+            // idempotent (subscription and manager-execution guards) and
+            // forwards an already-assigned PlayerDirector without clearing
+            // one that bootstrap assignment has not set yet.
+            FindAnyObjectByType<SimulationDrivers>()?.Rebind();
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)
             {
@@ -665,6 +688,43 @@ namespace LandLedgers.FirstLedger
             totalTimer.Stop();
             lastStartupTimingSummary = $"Startup timing {context}: total {totalTimer.ElapsedMilliseconds} ms ({timing}).";
             Debug.Log($"[StartupTiming] {lastStartupTimingSummary}", this);
+        }
+
+        /// <summary>
+        /// Pass XII Worker A (LL-PLAY-002/003): counts live scene instances
+        /// of the authorities that must exist exactly once and logs an
+        /// error naming every duplicate. Detection only — the bootstrapper
+        /// keeps running on the first found instance rather than refusing
+        /// to start, and removing the extra scene object is Codex's scene
+        /// work. Runs on Start and after every restore. A zero count is
+        /// not an error here: the Configure* fallbacks create the missing
+        /// runtime object when the scene does not author it.
+        /// </summary>
+        private void ReportDuplicateSceneAuthorities()
+        {
+            var censuses = new List<BootstrapAuthorityAudit.Census>
+            {
+                BuildAuthorityCensus<SimulationSystemsHub>("SimulationSystemsHub"),
+                BuildAuthorityCensus<SimulationDrivers>("SimulationDrivers"),
+                BuildAuthorityCensus<CivicFoundationManager>("CivicFoundation"),
+                BuildAuthorityCensus<ScenarioDirector>("ScenarioDirector"),
+                BuildAuthorityCensus<FirstLedgerSliceBootstrapper>("FirstLedgerSliceBootstrapper"),
+            };
+            foreach (string error in BootstrapAuthorityAudit.DescribeDuplicates(censuses))
+            {
+                Debug.LogError($"[WorldStartup] {error}", this);
+            }
+        }
+
+        private static BootstrapAuthorityAudit.Census BuildAuthorityCensus<T>(string name) where T : UnityEngine.Object
+        {
+            var census = new BootstrapAuthorityAudit.Census { Name = name };
+            foreach (T instance in FindObjectsByType<T>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                census.ObjectNames.Add(instance != null ? instance.name : "<unnamed>");
+            }
+
+            return census;
         }
 
         private void ConfigurePopulationManager()

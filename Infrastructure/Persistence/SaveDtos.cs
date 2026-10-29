@@ -52,6 +52,17 @@ namespace LandLedgers.Persistence
         public string activeScenarioId = string.Empty;
         public List<string> completedGoalIds = new();
         public List<string> completedObjectiveIds = new();
+        /// <summary>
+        /// Pass XII Worker A: true once this run's starting activation
+        /// (player-household declaration and starting-task enqueue) has
+        /// been issued. A restore must never re-issue it: the save file's
+        /// world already contains the household and tasks from the
+        /// session that wrote it, and re-issuing would duplicate both.
+        /// Old saves read false, so their first Pass XII load issues
+        /// activation once (the pre-existing behavior) and every later
+        /// load skips it. Additive: older readers ignore it.
+        /// </summary>
+        public bool startingActivationIssued;
     }
 
     [Serializable]

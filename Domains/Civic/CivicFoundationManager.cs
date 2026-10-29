@@ -12,6 +12,24 @@ namespace LandLedgers.Civic
     [DefaultExecutionOrder(245)]
     public sealed class CivicFoundationManager : MonoBehaviour
     {
+        /// <summary>
+        /// Resolves the single scene/runtime civic authority.  Bootstrap and
+        /// persistence may initialize in either order, so both callers must
+        /// include inactive authored objects in the lookup and share this
+        /// creation boundary rather than independently creating a manager.
+        /// </summary>
+        public static CivicFoundationManager FindOrCreate()
+        {
+            CivicFoundationManager existing = FindAnyObjectByType<CivicFoundationManager>(FindObjectsInactive.Include);
+            if (existing != null)
+            {
+                return existing;
+            }
+
+            GameObject civicObject = new("Civic Foundation");
+            return civicObject.AddComponent<CivicFoundationManager>();
+        }
+
         [Header("Sources")]
         [SerializeField]
         private TownWorldController townWorld;

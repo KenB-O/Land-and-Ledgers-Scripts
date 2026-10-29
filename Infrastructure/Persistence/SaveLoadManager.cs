@@ -893,8 +893,7 @@ namespace LandLedgers.Persistence
 
             if (civicFoundation == null)
             {
-                GameObject civicObject = new("Civic Foundation");
-                civicFoundation = civicObject.AddComponent<CivicFoundationManager>();
+                civicFoundation = CivicFoundationManager.FindOrCreate();
             }
 
             if (playerDebtManager == null)

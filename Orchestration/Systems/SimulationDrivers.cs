@@ -630,7 +630,7 @@ namespace LandLedgers.Orchestration.Systems
                 sharedBusinessRuntime.WireHouseholdCashToBusinesses();
             }
 
-            var generalStore = FindAnyObjectByType<LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreRuntimeManager>();
+            var generalStore = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
             if (generalStore?.RuntimeState != null)
             {
                 weeklyAttendance.InstallOn(generalStore.RuntimeState, hub.Employments, IsPersonUnavailableForPayroll);

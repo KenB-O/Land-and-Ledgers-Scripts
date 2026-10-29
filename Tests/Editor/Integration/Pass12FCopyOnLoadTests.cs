@@ -300,8 +300,10 @@ namespace LandLedgers.EditorTests.Integration
             // StartTask requires Assigned/ResourcesReserved, so drive the
             // lifecycle directly (internal methods are visible inside
             // the single harness assembly): start + work the run-1 copy.
-            live.MarkStarted(3);
-            live.AddWorkedMinutes(30);
+            typeof(WorkTask).GetMethod("MarkStarted", BindingFlags.NonPublic | BindingFlags.Instance)
+                .Invoke(live, new object[] { 3 });
+            typeof(WorkTask).GetMethod("AddWorkedMinutes", BindingFlags.NonPublic | BindingFlags.Instance)
+                .Invoke(live, new object[] { 30 });
             Assert.AreEqual(TaskStatus.InProgress, live.Status, "setup: run-1 task started.");
             Assert.AreEqual(30, live.MinutesWorked, "setup: run-1 task worked.");
 

@@ -75,10 +75,11 @@ namespace LandLedgers.EditorTests.Economy
             var ids = new EntityIdRegistry();
             AnimalState horse = new AnimalRegistry(ids).RegisterAnimal(AnimalSpecies.Horse, "saddle", AnimalSex.Female, AnimalOwnerKind.Household, "H-1", 0, "opening stock");
             HorseAuthority.Configure(horse, HorseUseCapabilities.Saddle, "yard-1", "stable-1", 0);
-            Assert.That(TransportInteraction.Mount(horse, "P1", 0.5f, "yard-1", out _), Does.Contain("close enough"));
-            Assert.That(TransportInteraction.Mount(horse, "P1", 0.01f, "yard-1", out TransportActivity activity), Is.Null);
+            var availability = new AnimalAvailabilityAuthority(new EquipmentReservationService());
+            Assert.That(TransportInteraction.Mount(horse, "P1", 0.5f, "yard-1", availability, 0f, out _), Does.Contain("close enough"));
+            Assert.That(TransportInteraction.Mount(horse, "P1", 0.01f, "yard-1", availability, 0f, out TransportActivity activity), Is.Null);
             Assert.That(activity.HorseId, Is.EqualTo(horse.AnimalId.ToString()));
-            Assert.That(TransportInteraction.Dismount(horse, activity, "store-1"), Is.Null);
+            Assert.That(TransportInteraction.Dismount(horse, activity, "store-1", availability), Is.Null);
             Assert.That(horse.PhysicalLocationId, Is.EqualTo("store-1"));
             Assert.That(horse.CurrentUse, Is.EqualTo(HorseUseKind.None));
         }

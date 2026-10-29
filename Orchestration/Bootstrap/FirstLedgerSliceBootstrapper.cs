@@ -428,6 +428,15 @@ namespace LandLedgers.FirstLedger
             ConfigurePlayerPortfolioManager();
             ConfigureLogisticsRuntime();
             ConfigureStoreRuntime();
+            // Pass XII Worker F (LL-PLAY-001, D7): suppress AFTER the
+            // store runtime is (re-)wired, so this covers whichever
+            // instance ConfigureStoreRuntime found. InitializeSlice
+            // suppresses for every startup intent, but a restore path
+            // that reaches here without it (dev-tool restore, re-wired
+            // store instance) would otherwise leave the flag at its
+            // true default and ghost-create a player store on the next
+            // InitializeIfNeeded. Idempotent.
+            storeRuntime?.SetCreatePlayerBusinessOnInitialize(false);
             ConfigureSharedBusinessRuntime();
             ConfigurePopulationPathingDirector();
             ConfigureAcquisitionMarket();

@@ -202,6 +202,27 @@ namespace LandLedgers.Tasks
                 this.learningTags.AddRange(learningTags);
             }
         }
+
+        /// <summary>Pass XII Worker F (copy-on-load, E-DEFECT-02 round 2):
+        /// deep copy for load — definitions are mutated in place by
+        /// authoring calls, so a load must never store the DTO's objects.
+        /// Lists are new lists; materials are rebuilt (strings/ints only).</summary>
+        public TaskDefinition Copy()
+        {
+            var copy = new TaskDefinition(definitionId ?? string.Empty, displayName, baseMinutes);
+            copy.domainTags.AddRange(domainTags);
+            copy.requiredSkillId = requiredSkillId;
+            copy.requiredCapabilityTags.AddRange(requiredCapabilityTags);
+            copy.compatibleLocations.AddRange(compatibleLocations);
+            copy.equipmentClasses.AddRange(equipmentClasses);
+            copy.supportRequirementSpecs.AddRange(supportRequirementSpecs);
+            foreach (TaskMaterial m in inputs) copy.inputs.Add(new TaskMaterial(m.ItemId, m.Quantity));
+            foreach (TaskMaterial m in outputs) copy.outputs.Add(new TaskMaterial(m.ItemId, m.Quantity));
+            copy.interruptible = interruptible;
+            copy.defaultPriority = defaultPriority;
+            copy.learningTags.AddRange(learningTags);
+            return copy;
+        }
     }
 
     /// <summary>
@@ -443,6 +464,73 @@ namespace LandLedgers.Tasks
         internal void AddWorkedMinutes(int minutes)
         {
             minutesWorked += Math.Max(0, minutes);
+        }
+
+        /// <summary>Pass XII Worker F (copy-on-load, E-DEFECT-02 round 2):
+        /// deep copy for load — tasks are mutated in place throughout
+        /// their lifecycle (assign, start, work, complete), so a load
+        /// must never store the DTO's objects. EntityId is a struct
+        /// (copies by value); lists and the duration-inputs override
+        /// are new objects; materials are rebuilt.</summary>
+        public WorkTask Copy()
+        {
+            var copy = new WorkTask
+            {
+                taskId = taskId,
+                definitionId = definitionId,
+                ownerId = ownerId,
+                customerRef = customerRef,
+                targetDescription = targetDescription,
+                requiredCapability = requiredCapability,
+                locationId = locationId,
+                priority = priority,
+                plannedMinutes = plannedMinutes,
+                hasPlannedMinutesOverride = hasPlannedMinutesOverride,
+                assigneeId = assigneeId,
+                status = status,
+                outcome = outcome,
+                minutesWorked = minutesWorked,
+                interruptible = interruptible,
+                termsRef = termsRef,
+                createdDayIndex = createdDayIndex,
+                startedDayIndex = startedDayIndex,
+                completedDayIndex = completedDayIndex,
+                interruptionCount = interruptionCount,
+                reservationHandleId = reservationHandleId,
+                dueEventId = dueEventId,
+                dependencyDescription = dependencyDescription,
+            };
+            foreach (TaskMaterial m in reservedMaterials) copy.reservedMaterials.Add(new TaskMaterial(m.ItemId, m.Quantity));
+            copy.prerequisiteTaskIds.AddRange(prerequisiteTaskIds);
+            copy.followUpTaskIds.AddRange(followUpTaskIds);
+            if (durationInputsOverride != null)
+            {
+                TaskDurationInputs d = durationInputsOverride;
+                copy.durationInputsOverride = new TaskDurationInputs
+                {
+                    DefinitionId = d.DefinitionId,
+                    WorkQuantity = d.WorkQuantity,
+                    ItemCount = d.ItemCount,
+                    MassKgPerItem = d.MassKgPerItem,
+                    Bulk01 = d.Bulk01,
+                    DistanceMeters = d.DistanceMeters,
+                    AccessDifficulty01 = d.AccessDifficulty01,
+                    WorkerCapability01 = d.WorkerCapability01,
+                    WorkerFatigue01 = d.WorkerFatigue01,
+                    EquipmentMethodId = d.EquipmentMethodId,
+                    CrewSize = d.CrewSize,
+                    Congestion01 = d.Congestion01,
+                    SetupTeardownGameSeconds = d.SetupTeardownGameSeconds,
+                    Precision01 = d.Precision01,
+                    Supervision01 = d.Supervision01,
+                    Environment01 = d.Environment01,
+                    MaterialCondition01 = d.MaterialCondition01,
+                    BaseMinutes = d.BaseMinutes,
+                    SkillId = d.SkillId,
+                    WorkerPersonId = d.WorkerPersonId,
+                };
+            }
+            return copy;
         }
 
         internal void MarkComplete(TaskOutcome outcome, int dayIndex)

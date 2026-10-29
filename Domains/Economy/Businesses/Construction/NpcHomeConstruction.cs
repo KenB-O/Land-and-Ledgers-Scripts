@@ -1041,6 +1041,97 @@ namespace LandLedgers.Economy
             return dto;
         }
 
+        /// <summary>Pass XII Worker F (copy-on-load): deep copy of a
+        /// project for load. All nested lists are new lists; nested
+        /// records are rebuilt field-by-field (all scalars/strings/
+        /// enums, so no deeper sharing remains).</summary>
+        private static ConstructionProject CloneProject(ConstructionProject p)
+        {
+            var copy = new ConstructionProject
+            {
+                ProjectId = p.ProjectId,
+                DesignId = p.DesignId,
+                HouseholdId = p.HouseholdId,
+                ParcelId = p.ParcelId,
+                ContractId = p.ContractId,
+                BuildingId = p.BuildingId,
+                Status = p.Status,
+                TotalLaborMinutesCommitted = p.TotalLaborMinutesCommitted,
+                VisualPlacementPending = p.VisualPlacementPending,
+                PrefabHandoffRecordId = p.PrefabHandoffRecordId,
+                CompletedDayIndex = p.CompletedDayIndex,
+            };
+            if (p.WorkPackages != null)
+                foreach (WorkPackage w in p.WorkPackages)
+                    if (w != null) copy.WorkPackages.Add(ClonePackage(w));
+            if (p.MaterialsConsumed != null)
+                foreach (ConsumedMaterialLine l in p.MaterialsConsumed)
+                    if (l != null) copy.MaterialsConsumed.Add(new ConsumedMaterialLine
+                    {
+                        DisplayName = l.DisplayName, Units = l.Units,
+                        UnitLabel = l.UnitLabel, Provenance = l.Provenance,
+                    });
+            if (p.LaborReservationIds != null) copy.LaborReservationIds.AddRange(p.LaborReservationIds);
+            if (p.LaborTaskIds != null) copy.LaborTaskIds.AddRange(p.LaborTaskIds);
+            if (p.LaborTaskBindings != null)
+                foreach (LaborTaskBinding b in p.LaborTaskBindings)
+                    if (b != null) copy.LaborTaskBindings.Add(new LaborTaskBinding
+                    {
+                        TaskId = b.TaskId, PackageId = b.PackageId,
+                    });
+            if (p.EquipmentHolds != null)
+                foreach (EquipmentHold h in p.EquipmentHolds)
+                    if (h != null) copy.EquipmentHolds.Add(new EquipmentHold
+                    {
+                        PackageId = h.PackageId, ReservationKey = h.ReservationKey,
+                    });
+            return copy;
+        }
+
+        private static WorkPackage ClonePackage(WorkPackage w)
+        {
+            var copy = new WorkPackage
+            {
+                PackageId = w.PackageId,
+                ProjectId = w.ProjectId,
+                PhaseName = w.PhaseName,
+                Sequence = w.Sequence,
+                LaborMinutesRequired = w.LaborMinutesRequired,
+                LaborMinutesCommitted = w.LaborMinutesCommitted,
+                Status = w.Status,
+                CompletedDayIndex = w.CompletedDayIndex,
+                StagedMaterialsReturned = w.StagedMaterialsReturned,
+            };
+            if (w.Materials != null)
+                foreach (ConstructionMaterialRequirement r in w.Materials)
+                    if (r != null) copy.Materials.Add(new ConstructionMaterialRequirement
+                    {
+                        RequirementId = r.RequirementId,
+                        MaterialKind = r.MaterialKind,
+                        MaterialDisplayName = r.MaterialDisplayName,
+                        RequiredUnits = r.RequiredUnits,
+                        UnitLabel = r.UnitLabel,
+                        GradeId = r.GradeId,
+                        ProvenanceKind = r.ProvenanceKind,
+                        SupplierBusinessId = r.SupplierBusinessId,
+                        SupplierBusinessType = r.SupplierBusinessType,
+                        SupplierDisplayName = r.SupplierDisplayName,
+                        LotReferenceId = r.LotReferenceId,
+                        Notes = r.Notes,
+                    });
+            if (w.MaterialProvenance != null) copy.MaterialProvenance.AddRange(w.MaterialProvenance);
+            if (w.RequiredToolItemIds != null) copy.RequiredToolItemIds.AddRange(w.RequiredToolItemIds);
+            if (w.DependsOnPackageIds != null) copy.DependsOnPackageIds.AddRange(w.DependsOnPackageIds);
+            if (w.StagedMaterialLines != null)
+                foreach (ConsumedMaterialLine l in w.StagedMaterialLines)
+                    if (l != null) copy.StagedMaterialLines.Add(new ConsumedMaterialLine
+                    {
+                        DisplayName = l.DisplayName, Units = l.Units,
+                        UnitLabel = l.UnitLabel, Provenance = l.Provenance,
+                    });
+            return copy;
+        }
+
         public List<ConstructionProject> LoadFromSaveDto(ConstructionProjectSaveDto dto, List<string> diag)
         {
             diag = diag ?? diagnostics;
@@ -1055,9 +1146,15 @@ namespace LandLedgers.Economy
                     diag.Add($"LoadFromSaveDto: duplicate project '{project.ProjectId}' skipped — no duplicated projects.");
                     continue;
                 }
+                // Pass XII Worker F (copy-on-load, E-DEFECT-02 round 2):
+                // clone the project FIRST — the old code stored the DTO's
+                // project and rewrote its WorkPackages list in place, so
+                // a double restore reloaded already-advanced packages.
+                // Dedup runs on the copy, with identical diagnostics.
+                ConstructionProject copy = CloneProject(project);
                 var packageIds = new HashSet<string>(StringComparer.Ordinal);
                 var deduped = new List<WorkPackage>();
-                foreach (WorkPackage package in project.WorkPackages ?? new List<WorkPackage>())
+                foreach (WorkPackage package in copy.WorkPackages ?? new List<WorkPackage>())
                 {
                     if (package == null || string.IsNullOrWhiteSpace(package.PackageId)) continue;
                     if (!packageIds.Add(package.PackageId))
@@ -1067,8 +1164,8 @@ namespace LandLedgers.Economy
                     }
                     deduped.Add(package);
                 }
-                project.WorkPackages = deduped;
-                projects.Add(project);
+                copy.WorkPackages = deduped;
+                projects.Add(copy);
             }
             // Pass XI WS4 save/load fix (Gap 1): continue the id sequence
             // instead of restarting at 0 and re-minting an existing id.

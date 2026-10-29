@@ -365,7 +365,10 @@ failed. Nothing in this section is Unity verified.
   zero production callers. Verified by Worker F from source; tests
   Pass12CSettledSaleStockTests.
 - E-DEFECT-02 (Pass XII Worker A, extended by Worker F): CLOSED for
-  the audited class. Worker A cloned DTO objects on load for
+  the LOAD side of the audited class; the CAPTURE side remains
+  OPEN (see Docs/Pass12_Independent_Review.md F-RES-08: all
+  CaptureSaveDto methods are still shallow, so an in-memory
+  captured DTO shares live objects until loaded). Worker A cloned DTO objects on load for
   BankDeposits, FinancialObligationAuthority, HouseholdLedger,
   BusinessLenderService, EmploymentRelationship and MoneyOrderService.
   Worker F's sweep (same-snapshot double-restore tests,
@@ -375,12 +378,21 @@ failed. Nothing in this section is Unity verified.
   reservations, HouseholdErrandPlanRegistry plans, BoardingHouse
   reservations and HotelRoom reservations; proved copy-safe and left
   stored-direct: civic treasury ledger entries, property dispute
-  claims, tenancy rent obligations, title records, housing
-  buildings/spaces/assignments/agreements, market sales and
+  claims, tenancy rent obligations, title records, market sales and
   inspections, staged-production state (registry-unwired, test-only),
-  WageSettlementService events. Boarding/hotel clones are outside the
-  harness subset and are Unity-session verified only. See
-  Docs/Pass12_Independent_Review.md for the full table.
+  WageSettlementService events (tenancy/treasury/events carry latent
+  aliasing caveats — see the review). Boarding/hotel clones are
+  outside the harness subset and are Unity-session verified only.
+  Round 2 (delegated-review reconciliation, Pass12FCopyOnLoadTests
+  now 13/0 plus Pass12FFailedStageRowsTests 2/0): corrected the
+  housing claim — buildings/spaces/assignments/agreements ARE
+  mutated in place and are now cloned; added the missed
+  TaskAuthority, construction executor, credit workflow and
+  condition-registry loaders; fixed HouseholdLedger.ImportState to
+  clear on non-null import; fixed the D7 restore-suppression gap
+  and the D6 ASD accounting read and the D15 Failed-row
+  misattribution. See Docs/Pass12_Independent_Review.md for the
+  full table.
 - RUN-011: CLOSED in Pass XII (Worker F test-correction review, brief
   §10). All three historical failures were TEST-WRONG; production
   untouched. MoneyOrderServiceTests.IssueDuplicate_

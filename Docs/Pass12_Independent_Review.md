@@ -101,15 +101,20 @@ full re-run after those fixes, not from the focused runs.
 
 ### Worker B — business completeness matrix
 
-- Counts VERIFIED exactly from source: `BusinessType` has 28 values
-  (GeneralStore 0 through Lawyer 27) plus `Generic = 255`;
-  `AcquisitionMarketManager.ActivationBusinessTypes` has exactly 17
-  entries (GeneralStore through Wheelwright); the creation panel
-  offers `Generic` plus three templates. The LIVE/PARTIAL
-  classification (18 LIVE / 10 PARTIAL / Lawyer unsupported) is
-  accepted from B's matrix with the mechanism distinction
-  spot-checked (weekly settlement list vs archetype resolution),
-  not re-derived type-by-type.
+- Counts VERIFIED exactly from source: `BusinessType` has 29 members
+  (28 typed values GeneralStore 0 through Lawyer 27, plus
+  `Generic = 255`); `AcquisitionMarketManager.ActivationBusinessTypes`
+  has exactly 17 entries (GeneralStore through Wheelwright); the
+  creation panel offers `Generic` plus three templates.
+  CORRECTION in round 2 (delegated-review reconciliation): B's §1
+  table listed 18 LIVE and omitted Mine, although §4 already
+  classified Mine as LIVE (driver) and §4 was complete at 29 rows.
+  True classification is 19 LIVE / 10 PARTIAL / Lawyer unsupported
+  (1 of the partials); the matrix §1 table and this review's
+  LL-PLAY-011 disposition were corrected accordingly. The
+  `WeeklySettlementBusinessTypes` citation was also corrected: the
+  array lists 27 types, excluding GeneralStore (own-manager
+  payroll) and Generic (driver/service payroll).
 - B re-verified all 13 registry runtimes still unwired and did NOT
   wire the staged chains — confirmed by the registry test passing
   with all rows intact. B's referral of Butcher/Blacksmith/Tannery
@@ -151,6 +156,21 @@ full re-run after those fixes, not from the focused runs.
   independently recomputed by this reviewer; the tests are
   self-checking (conservation assertions inside each sim) and all
   pass on the final tree. That scoping is stated, not hidden.
+  Round-2 nuance (delegated review, verified by reading the
+  fixture): the large-town run adds 40 grain/week to the farm
+  from "unmodeled land" — a disclosed stand-in for farm
+  production (no FarmCycleDriver in the fixture), not a
+  stabilizer — but it means a "no injected goods" claim is
+  literally inaccurate for the large fixture, and goods
+  conservation is asserted only for small-town bread (cash
+  conservation is asserted in both). A goods cap-vaporization or
+  conversion-loss bug outside bread would pass these tests.
+  Mill grinding 100 grain to 80 flour is a modeled conversion
+  loss, not an injection. Two E comments are now stale (the
+  ImportState "silently skips" comment, superseded by Worker A's
+  replace semantics; the SupplierShortage FINDING comment
+  describing pre-fix settled-sale behavior as current) — test
+  comments only, no behavior impact.
 
 ## 3. Defects found by Worker F, fixed and tested
 
@@ -200,17 +220,27 @@ subset (their production dirs were never included), so they have
 NO harness test and are Unity-session verified only — stated
 plainly, not claimed as harness-covered.
 
-Proved copy-safe and LEFT stored-direct: civic treasury ledger
-entries (append-only history, no in-place mutator found);
-property dispute claims (append-only; RecordClaim creates new
-objects); tenancy rent obligations (the payment loop creates a NEW
-RentObligationState and replaces the dict entry); title records (no
-in-place mutator found); housing buildings/spaces/assignments/
-agreements (replaced, never edited); market sales and inspections
-(completed append-only records); staged-production state
+Proved copy-safe and LEFT stored-direct (round-1 list, corrected
+in round 2 where noted): civic treasury ledger entries
+(append-only history, no in-place mutator found — latent caveat:
+a DTO holder mutating an entry's public fields would change the
+live ledger, since entries are shared); property dispute claims
+(append-only; RecordClaim creates new objects); tenancy rent
+obligations (the internal payment loop creates a NEW
+RentObligationState and replaces the dict entry — latent caveat:
+FindObligation returns the live object, so any external caller
+mutating it mutates the DTO); title records (no in-place mutator
+found; storage itself is direct, so this is latent, not proven
+under mutation); market sales and inspections (completed
+append-only records); staged-production state
 (registry-unwired, test-only, no production double-restore hazard);
-WageSettlementService events (append-only history; settled-week
-markers are re-keyed ints, not shared objects). "Task authorities"
+WageSettlementService events (append-only history with no
+post-add mutator found — latent caveat: LoadFromSaveDto shares
+the DTO's event objects via AddRange; settled-week markers are
+re-keyed ints, not shared objects). CORRECTION: housing
+buildings/spaces/assignments/agreements were wrongly listed here
+in round 1 as "replaced, never edited" — all four ARE mutated in
+place and are now cloned on load (see F-06). "Task authorities"
 resolved to PersonScheduleTracker, DomesticLaborDriver,
 HouseholdErrandCoordinator and the staged-production machine (no
 class named TaskAuthority exists); "market import" resolved to the
@@ -283,6 +313,88 @@ assembly-scan baseline beyond the F-01 harness-sources omission.
   Business." instead of auto-creating a player store; the
   bootstrapper path is unchanged. The file is harness-excluded, so
   this half is Unity-verified only.
+
+### F-06 — Round-2 copy-on-load fixes (delegated-review reconciliation)
+
+Two delegated reports arrived after the first final report. Their
+verdicts were reconciled against this reviewer's own source reads
+before any change was made; every fix below was verified from
+source first, and every disagreement was resolved in favor of the
+source, not of either report:
+
+- Housing CORRECTION: the round-1 sweep cloned occupancies only
+  and wrongly recorded buildings/spaces/assignments/agreements as
+  "replaced, never edited". All four ARE mutated in place
+  (ChangeSpaceCapacity writes SleepingCapacity, EndAgreement
+  writes EndDayIndex, CloseBuildingWithHistory writes
+  UntilDayIndex, and agreement PaymentTerms' PayeeHolderId is
+  reassigned). All five collections are now cloned on load
+  (PaymentTerms deep-copied), with null guards. New test:
+  Housing_AllCollections_DoubleRestore.
+- TaskAuthority (missed in round 1 — the sweep wrongly reported
+  no such class; it lives in Core/Tasks): LoadFromSaveDto stored
+  DTO definitions and tasks directly, both mutated throughout
+  their lifecycle. New TaskDefinition.Copy() and WorkTask.Copy()
+  (same-class private access; EntityId is a struct; duration
+  inputs copied field-by-field) are now used on load. New test:
+  TaskAuthority_DoubleRestore. Sensitivity proven: the test FAILS
+  on unfixed code (DTO task observed InProgress/worked) and
+  passes on fixed code.
+- ConstructionProjectExecutor (missed in round 1): LoadFromSaveDto
+  stored the DTO's projects and rewrote each project's
+  WorkPackages list in place (dedup). Projects are now deep-cloned
+  (packages, consumed lines, bindings, holds, requirement
+  records) and dedup runs on the copy, with identical diagnostics.
+  New test: Executor_DoubleRestore_AndDedupRunsOnCopy (also proves
+  the DTO keeps its duplicate packages).
+- CreditOfferWorkflow (missed in round 1): requests, offers and
+  evidence were stored directly; offers are mutated in place
+  (Status, OfferedAmountCents, NegotiationHistory appends). All
+  three collections are now cloned on load. New test:
+  CreditWorkflow_DoubleRestore.
+- ResidentialConditionRegistry (missed in round 1): history records
+  were stored directly AND load wrote the quarantine UntilDayIndex
+  into the DTO object itself. Records are now cloned and the
+  quarantine runs on the copy. New test:
+  ResidenceCondition_DoubleRestore_QuarantineRunsOnCopy.
+- HouseholdLedger.ImportState (round-1 claim corrected): it
+  replaces ledgers present in the import but never cleared the
+  registry, so a smaller save loaded in the same session left
+  stale ledgers behind. It now clears on a non-null import (null
+  still means "no data section", not "empty", so old saves
+  lacking the section are not wiped). New test:
+  LedgerImport_SmallerLoad_DropsStaleLedgers.
+- D7 ghost-suppression gap: MarkRestoredFromSave never called
+  SetCreatePlayerBusinessOnInitialize(false); only InitializeSlice
+  did. Normal scene flow already suppresses (Start runs before
+  any load-menu restore), so this is defense-in-depth for
+  dev-tool restores and re-wired store instances, not a live
+  normal-path hole — but the one-line suppression (idempotent,
+  after ConfigureStoreRuntime so it covers the wired instance)
+  was applied anyway. The file is harness-excluded, so this half
+  is Unity-verified only, like the flag flip.
+- D6 ASD accounting bug (fixed, no dedicated test): SettlePayroll
+  unconditionally summed Events[last] into wagesPaidCents, so on
+  an "already-settled" or "refused" week (no new event appended)
+  it re-summed a previous business's or prior week's event. It
+  now sums only when the result is "settled" or
+  "settled-arrears". No dedicated test: driving SettlePayroll
+  needs a full ASD fixture; the existing ASD suites in the full
+  run guard regressions. Wages themselves were never affected
+  (accounting accumulator only, not cash movement).
+- D15 acquisition Failed rows (fixed + tested): a Failed deal
+  marked ALL five stage rows "Failed", including stages never
+  reached. Rows are now: before the failure stage Complete, the
+  failure stage Failed, later stages Upcoming; an unknown failure
+  stage falls back to Inquiry (exactly one Failed row). New tests:
+  Pass12FFailedStageRowsTests (2/0). No existing test asserted
+  the old all-Failed behavior (existing Failed assertions cover
+  next-action labels only).
+- The remaining delegated P2 items were verified and are carried
+  as residuals below (F-RES-08..F-RES-12), not fixed: fixing the
+  channel-sniffing allowlist, the Generic baseline loop, or the
+  capture-side deep copy each needs a design decision or a
+  larger change than the cleanup wave should carry unilaterally.
 
 ### F-05 — Regressions caused by Worker F's own fixes, caught by the final full run
 
@@ -419,15 +531,27 @@ underpay a settled position by 500.
   (SharedBusinessRuntimeManager.ResolvePayrollForType;
   GeneralStore OnWeekChanged with a subscribed-flag guard), and
   LastPayrollSettledWeekIndex is NOT persisted in
-  BusinessRuntimeSaveDto (the hub re-stamps it from
-  WageSettlementService SettledWeeks on restore). Owner/design
-  decision: whether mechanical enforcement belongs in the runtime
-  or stays with the service.
+  BusinessRuntimeSaveDto. CORRECTION in round 2: no hub-restore
+  code re-stamps it (verified: no SettledWeeks reference exists
+  outside WageSettlementService itself) — the earlier "hub
+  re-stamps" clause was wrong. The service's own SettledWeeks dict
+  is what survives restore, so only the service path is guarded
+  and any code consulting the business field alone sees -1 after
+  load. Owner/design decision: whether mechanical enforcement
+  belongs in the runtime or stays with the service; a correct
+  guard must reconcile the service week index with the runtime
+  stamp, which is exactly why the naive stamp guard was rejected.
 - F-RES-03 (latent, test-only): MineLaborRegister.SettleShiftWages
   credits any IsActive assignment without death/off-map/attendance
   checks, but it has NO production caller (only
   MineLaborRegisterTests). If a future driver calls it, it must
-  pass an eligibility-checked assignment set. Documented, not
+  pass an eligibility-checked assignment set. Additional hazard
+  found in round 2: if the business outflow succeeds but the
+  worker inflow is rejected (or the household lookup is null),
+  the code logs and still counts the shift paid — business cash
+  is gone, the worker got nothing, and unlike
+  BusinessRuntimeState.CreditWorkerHousehold there is no
+  named-payable escrow, so money is destroyed. Documented, not
   fixed against no production caller.
 - F-RES-04 (not investigated in this review): the COGS/reorder
   producer contract (which production component owns cost-of-goods
@@ -456,6 +580,81 @@ underpay a settled position by 500.
   eligibility or settlement procedure invented); A-14 late-latch
   semantics (unchanged, owner decision required to flip);
   simulation-time change (proposal only, not implemented).
+- F-RES-08 (OPEN, capture side of E-DEFECT-02): Worker A fixed the
+  LOAD side only. All six CaptureSaveDto methods are still shallow
+  (`new List<>(values)` / `AddRange(values)` — e.g.
+  FinancialObligationAuthority, MoneyOrderService, BankDeposits).
+  An in-memory captured DTO therefore shares live objects with
+  the running instance: if the original keeps running after
+  capture, its mutations leak into the "snapshot" before any load
+  happens. Disk loads are unaffected (deserialization mints fresh
+  objects), and the double-restore tests pass because the
+  captured-from instance is not run further. The load-side
+  E-DEFECT-02 closure stands; the capture side is a distinct open
+  item, and a future pass must deep-copy on capture (or document
+  capture-then-freeze as the contract) before claiming the class
+  fully closed. The master register's E-DEFECT-02 entry is
+  qualified accordingly.
+- F-RES-09 (P2, restore activation seams): old saves re-issue
+  activation on every load until re-saved (flag false is only
+  durable after a Pass XII save); ScenarioDirector.Start() calls
+  SwitchScenario(bootScenarioId) unconditionally when set, so a
+  boot scenario plus an old-save restore double-issues; and the
+  activation steps themselves never dedupe (DeclarePlayerHousehold
+  always calls FormHousehold with no existing-player-household
+  check; EnqueueStartingTasks unconditionally creates one task
+  per definition id). A retry after a failed SwitchScenario also
+  re-issues against a half-started run. The robust fix is dedupe
+  inside the activation steps; not attempted in cleanup (a
+  lifecycle behavior change, not a load clone).
+- F-RES-10 (P2 seams, verified, resting on caller discipline):
+  the settled-sale guard is vacuous at units == 0 BY DESIGN for
+  the two-step consume-then-record pattern (ExternalTradeTests
+  consumes 40 flour, then records a 0-unit cash leg) — a future
+  caller that skips the consume step mints revenue, and the
+  authority cannot distinguish the two; buyer principals are
+  unvalidated strings and HouseholdLedgerRegistry.GetOrCreate
+  fabricates a ledger for an arbitrary id (no production caller
+  currently passes a phantom); PayAgreedWage records with
+  dayIndex < 0 are recorded exactly-once by key but never net
+  against the weekly run (ManualCashPaidThisWeek requires
+  DayIndex >= 0) — double-pay if combined with a full weekly
+  payment (no production caller passes -1 today); the
+  preserved-liability guard is person-scoped, so an unsettled
+  week-N liability blocks legitimate later-week final settlements
+  until it settles; SettlePartialPeriod records Paid = true for a
+  0-cent "owes nothing" outcome; PayAgreedWage's null return
+  conflates "paid" and "nothing owed"; the WageSettlementService
+  replay additionally double-calls WeeklyAttendanceProvider (a
+  stateful provider can answer differently the second time) and
+  sets the settled marker AFTER payroll, so a mid-run exception
+  leaves the week unmarked and a retry double-pays the paid
+  portion (extending F-RES-01).
+- F-RES-11 (P2, needs an owner call): the shared-manager baseline
+  loop (ResolveWeeklySharedOperations) excludes GeneralStore,
+  CropFarm, Ranch, Butcher, Blacksmith, Doctor, Sawmill,
+  LumberYard, BoardingHouse, Mine and profession-wave types but
+  NOT Generic — so Generic businesses receive baseline
+  throughput/service from the shared manager IN ADDITION to
+  driver generic production. Path gates prevent goods
+  double-production, but two writers touch one business's weekly
+  state; whether baseline counts as "production" for a generic
+  business is a design decision, so the loop was not changed.
+- F-RES-12 (doc + Unity): the registry note says
+  ScenarioHudReadModel "HAS a production caller" (the snapshot
+  builder) and is therefore not registered unwired. True as far
+  as it goes — but ScenarioHudSnapshotBuilder.Build itself has
+  zero production callers, so the HUD chain is unwired
+  end-to-end and the registry note misleads for this chain. The
+  other five D read models are correctly registered. Live binding
+  remains Codex work (PASS11-006).
+- Acquisition channel sniffing (P2, deferred): ResolveChannel
+  treats ANY non-empty establishedChannel string as a known
+  channel by substring ("seller", "broker", "advert", "newspaper",
+  "rumor") — a free-text note like "seller refused" would render
+  as a known Seller channel. The doc's guard ("adapter must only
+  pass records that actually exist") is the only protection; an
+  allowlist fix is deferred as a string-contract change.
 - Other carried items (unchanged by Pass XII): PASS11-004 (3 gaps),
   PASS11-005 (no legitimate buyer source), PASS11-006 (panel wiring),
   PASS9-004 (postage honestly unset), PASS9-008 (G1), PASS9-010

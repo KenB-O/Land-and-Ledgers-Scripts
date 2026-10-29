@@ -689,14 +689,25 @@ namespace LandLedgers.Tasks
                 return;
             }
 
+            // Pass XII Worker F (copy-on-load, E-DEFECT-02 round 2):
+            // definitions and tasks are mutated in place throughout
+            // their lifecycle, so the load must clone them — storing
+            // the DTO's objects meant a double restore reloaded
+            // already-started, half-worked tasks instead of queued ones.
             if (dto.definitions != null)
             {
-                definitions.AddRange(dto.definitions);
+                foreach (TaskDefinition d in dto.definitions)
+                {
+                    if (d != null) definitions.Add(d.Copy());
+                }
             }
 
             if (dto.tasks != null)
             {
-                tasks.AddRange(dto.tasks);
+                foreach (WorkTask t in dto.tasks)
+                {
+                    if (t != null) tasks.Add(t.Copy());
+                }
             }
 
             RebuildLookupsIfNeeded();

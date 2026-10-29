@@ -1,9 +1,12 @@
 using System.Collections.Generic;
+using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Tasks;
 using LandLedgers.World.Property;
 using NUnit.Framework;
 
@@ -205,6 +208,236 @@ namespace LandLedgers.EditorTests.Integration
             Assert.AreEqual(HouseholdErrandPlanStatus.Proposed, run2.All[0].Status,
                 "A second restore of the same snapshot must load the still-proposed plan.");
             Assert.AreEqual(HouseholdErrandPlanStatus.Proposed, snapshot.Plans[0].Status);
+        }
+
+        // ---- Round 2 (delegated-review reconciliation): the first sweep
+        // cloned occupancies only, but buildings, spaces, assignments
+        // and agreements are also mutated in place; TaskAuthority,
+        // the construction executor, the credit workflow and the
+        // condition registry were missed entirely (TaskAuthority was
+        // wrongly reported as nonexistent — it lives in Core/Tasks).
+
+        [Test]
+        public void Housing_AllCollections_DoubleRestore()
+        {
+            var diag = new List<string>();
+            var snapshot = new HousingAuthority.HousingSaveDto
+            {
+                Buildings = new List<Building>
+                {
+                    new Building { BuildingId = "b1", ParcelId = "plot-1", Kind = "house", Condition01 = 1f, BuiltDayIndex = 0 },
+                },
+                Spaces = new List<AccommodationSpace>
+                {
+                    new AccommodationSpace { SpaceId = "s1", BuildingId = "b1", SleepingCapacity = 4 },
+                },
+                Assignments = new List<FunctionalSpaceAssignment>
+                {
+                    new FunctionalSpaceAssignment { AssignmentId = "a1", SpaceId = "s1", BusinessInstanceId = "biz-1", OperationDescription = "shop", SinceDayIndex = 0, UntilDayIndex = -1 },
+                },
+                Agreements = new List<PropertyAgreement>
+                {
+                    new PropertyAgreement
+                    {
+                        AgreementId = "g1", Kind = "lease", GrantorName = "Town", GranteeName = "Player",
+                        SpaceOrParcelId = "s1", Terms = "terms", StartDayIndex = 0, EndDayIndex = -1,
+                        PaymentTerms = new TenancyPaymentTerms { AmountCents = 5000, PeriodDays = 30, DueDayOfPeriod = 1, StartDay = 0, PayeeHolderId = "town", TenantHouseholdId = 11 },
+                    },
+                },
+            };
+
+            var run1 = new HousingAuthority();
+            run1.LoadFromSaveDto(snapshot);
+            Assert.IsNull(run1.ChangeSpaceCapacity("s1", 2, 5, diag), "setup: capacity change must succeed.");
+            Assert.IsNull(run1.EndAgreement("g1", 6, false, "test", diag), "setup: agreement end must succeed.");
+            run1.AllBuildings()[0].Condition01 = 0.5f;
+            HousingAuthority.BuildingClosureResult closed = run1.CloseBuilding("b1", 7, "test", diag);
+            Assert.AreEqual(1, closed.AssignmentsEnded, "setup: run-1 close must end the live assignment.");
+            Assert.AreEqual(2, run1.SpacesForBuilding("b1")[0].SleepingCapacity, "setup: run-1 space shrunk.");
+            Assert.AreEqual(0.5f, run1.AllBuildings()[0].Condition01, "setup: run-1 building worn.");
+
+            // The snapshot itself must be untouched by every run-1 edit.
+            Assert.AreEqual(4, snapshot.Spaces[0].SleepingCapacity);
+            Assert.AreEqual(-1, snapshot.Agreements[0].EndDayIndex);
+            Assert.AreEqual("town", snapshot.Agreements[0].PaymentTerms.PayeeHolderId);
+            Assert.AreEqual(-1, snapshot.Assignments[0].UntilDayIndex);
+            Assert.AreEqual(1f, snapshot.Buildings[0].Condition01);
+
+            var run2 = new HousingAuthority();
+            run2.LoadFromSaveDto(snapshot);
+            Assert.AreEqual(4, run2.SpacesForBuilding("b1")[0].SleepingCapacity,
+                "A second restore must load the pristine space capacity, not run 1's shrink.");
+            Assert.AreEqual(-1, run2.FindAgreement("g1").EndDayIndex,
+                "A second restore must load the still-open agreement, not run 1's ended one.");
+            Assert.AreEqual(1f, run2.AllBuildings()[0].Condition01,
+                "A second restore must load the pristine building condition, not run 1's wear.");
+            HousingAuthority.BuildingClosureResult closed2 = run2.CloseBuilding("b1", 8, "test", diag);
+            Assert.AreEqual(1, closed2.AssignmentsEnded,
+                "A second restore must load the still-active assignment, not run 1's ended one.");
+        }
+
+        [Test]
+        public void TaskAuthority_DoubleRestore()
+        {
+            var definition = new TaskDefinition("def-1", "Haul", 60);
+            var task = new WorkTask();
+            typeof(WorkTask).GetField("taskId", BindingFlags.NonPublic | BindingFlags.Instance)
+                .SetValue(task, EntityId.For(EntityKind.WorkTask, 1));
+            typeof(WorkTask).GetField("definitionId", BindingFlags.NonPublic | BindingFlags.Instance)
+                .SetValue(task, "def-1");
+            typeof(WorkTask).GetField("ownerId", BindingFlags.NonPublic | BindingFlags.Instance)
+                .SetValue(task, EntityId.For(EntityKind.Person, 7));
+            var snapshot = new TaskAuthoritySaveDto
+            {
+                definitions = new List<TaskDefinition> { definition },
+                tasks = new List<WorkTask> { task },
+            };
+
+            var run1 = new TaskAuthority();
+            run1.LoadFromSaveDto(snapshot);
+            WorkTask live = run1.FindTask(EntityId.For(EntityKind.WorkTask, 1));
+            Assert.IsNotNull(live, "setup: loaded task must be findable.");
+            // StartTask requires Assigned/ResourcesReserved, so drive the
+            // lifecycle directly (internal methods are visible inside
+            // the single harness assembly): start + work the run-1 copy.
+            live.MarkStarted(3);
+            live.AddWorkedMinutes(30);
+            Assert.AreEqual(TaskStatus.InProgress, live.Status, "setup: run-1 task started.");
+            Assert.AreEqual(30, live.MinutesWorked, "setup: run-1 task worked.");
+
+            // The snapshot task itself must still be queued and unworked.
+            Assert.AreEqual(TaskStatus.Queued, task.Status);
+            Assert.AreEqual(0, task.MinutesWorked);
+
+            var run2 = new TaskAuthority();
+            run2.LoadFromSaveDto(snapshot);
+            WorkTask reloaded = run2.FindTask(EntityId.For(EntityKind.WorkTask, 1));
+            Assert.IsNotNull(reloaded);
+            Assert.AreEqual(TaskStatus.Queued, reloaded.Status,
+                "A second restore must load the still-queued task, not run 1's started, half-worked task.");
+            Assert.AreEqual(0, reloaded.MinutesWorked);
+        }
+
+        [Test]
+        public void Executor_DoubleRestore_AndDedupRunsOnCopy()
+        {
+            var diag = new List<string>();
+            var project = new ConstructionProject
+            {
+                ProjectId = "proj-1", DesignId = "d1", HouseholdId = 11, ParcelId = "plot-1",
+                WorkPackages = new List<WorkPackage>
+                {
+                    new WorkPackage { PackageId = "pkg-1", ProjectId = "proj-1", PhaseName = "frame", Sequence = 0, LaborMinutesRequired = 100, LaborMinutesCommitted = 0, Status = WorkPackageStatus.Draft },
+                    new WorkPackage { PackageId = "pkg-1", ProjectId = "proj-1", PhaseName = "frame-duplicate", Sequence = 0, LaborMinutesRequired = 100, LaborMinutesCommitted = 0, Status = WorkPackageStatus.Draft },
+                    new WorkPackage { PackageId = "pkg-2", ProjectId = "proj-1", PhaseName = "roof", Sequence = 1, LaborMinutesRequired = 50, LaborMinutesCommitted = 0, Status = WorkPackageStatus.Draft },
+                },
+            };
+            var snapshot = new ConstructionProjectExecutor.ConstructionProjectSaveDto
+            {
+                Projects = new List<ConstructionProject> { project },
+                ExecutorSequence = 0,
+            };
+
+            var executor1 = new ConstructionProjectExecutor();
+            List<ConstructionProject> live = executor1.LoadFromSaveDto(snapshot, diag);
+            Assert.AreEqual(1, live.Count);
+            Assert.AreEqual(2, live[0].WorkPackages.Count, "setup: duplicate package deduped on load.");
+            WorkPackage livePkg = live[0].WorkPackages[0];
+            livePkg.Status = WorkPackageStatus.Complete;
+            livePkg.LaborMinutesCommitted = 120;
+
+            // Dedup must have run on the copy: the snapshot still holds
+            // all three packages, and its first package is still Draft.
+            Assert.AreEqual(3, snapshot.Projects[0].WorkPackages.Count);
+            Assert.AreEqual(WorkPackageStatus.Draft, snapshot.Projects[0].WorkPackages[0].Status);
+            Assert.AreEqual(0, snapshot.Projects[0].WorkPackages[0].LaborMinutesCommitted);
+
+            var executor2 = new ConstructionProjectExecutor();
+            List<ConstructionProject> reloaded = executor2.LoadFromSaveDto(snapshot, diag);
+            Assert.AreEqual(WorkPackageStatus.Draft, reloaded[0].WorkPackages[0].Status,
+                "A second restore must load the pristine package, not run 1's completed one.");
+            Assert.AreEqual(0, reloaded[0].WorkPackages[0].LaborMinutesCommitted);
+        }
+
+        [Test]
+        public void CreditWorkflow_DoubleRestore()
+        {
+            var offer = new CreditOffer
+            {
+                OfferId = "off-1", RequestId = "req-1", Borrower = "store-1", Lender = "bank",
+                RequestedAmountCents = 50000, OfferedAmountCents = 50000, Status = CreditOfferStatus.Proposed,
+            };
+            var snapshot = new CreditOfferWorkflowSaveDto
+            {
+                Offers = new List<CreditOffer> { offer },
+            };
+
+            var run1 = new CreditOfferWorkflow();
+            run1.LoadFromSaveDto(snapshot);
+            Assert.IsTrue(run1.CounterOffer("off-1", 45000, 500, 365, "lower", out string message),
+                "setup: countering the run-1 offer must succeed: " + message);
+            Assert.AreEqual(CreditOfferStatus.Countered, run1.FindOffer("off-1").Status, "setup: run-1 offer countered.");
+            Assert.AreEqual(45000, run1.FindOffer("off-1").OfferedAmountCents, "setup: run-1 amount moved.");
+
+            Assert.AreEqual(CreditOfferStatus.Proposed, offer.Status, "The snapshot offer must stay Proposed.");
+            Assert.AreEqual(50000, offer.OfferedAmountCents);
+            Assert.AreEqual(0, offer.NegotiationHistory.Count);
+
+            var run2 = new CreditOfferWorkflow();
+            run2.LoadFromSaveDto(snapshot);
+            Assert.AreEqual(CreditOfferStatus.Proposed, run2.FindOffer("off-1").Status,
+                "A second restore must load the still-proposed offer, not run 1's countered one.");
+            Assert.AreEqual(50000, run2.FindOffer("off-1").OfferedAmountCents);
+            Assert.AreEqual(0, run2.FindOffer("off-1").NegotiationHistory.Count);
+        }
+
+        [Test]
+        public void ResidenceCondition_DoubleRestore_QuarantineRunsOnCopy()
+        {
+            var snapshot = new ResidentialConditionRegistry.ResidentialConditionRegistrySaveDto
+            {
+                History = new List<ResidentialConditionRecord>
+                {
+                    new ResidentialConditionRecord { RecordId = "r1", PersonId = 7, HouseholdId = 11, Condition = ResidentialConditionKind.SuitablyHoused, SinceDayIndex = 0, UntilDayIndex = -1, LastEvaluatedDayIndex = 5 },
+                    new ResidentialConditionRecord { RecordId = "r2", PersonId = 7, HouseholdId = 11, Condition = ResidentialConditionKind.SuitablyHoused, SinceDayIndex = 0, UntilDayIndex = -1, LastEvaluatedDayIndex = 5 },
+                },
+            };
+
+            var run1 = new ResidentialConditionRegistry();
+            run1.LoadFromSaveDto(snapshot);
+            Assert.AreEqual("r1", run1.CurrentConditionFor(7).RecordId, "setup: first open record stays current.");
+            Assert.GreaterOrEqual(run1.History[1].UntilDayIndex, 0, "setup: duplicate open record quarantined on load.");
+
+            // The quarantine must have run on the copy: the snapshot's
+            // second record is still open.
+            Assert.AreEqual(-1, snapshot.History[1].UntilDayIndex);
+
+            var run2 = new ResidentialConditionRegistry();
+            run2.LoadFromSaveDto(snapshot);
+            Assert.AreEqual("r1", run2.CurrentConditionFor(7).RecordId);
+            Assert.GreaterOrEqual(run2.History[1].UntilDayIndex, 0,
+                "A second restore must quarantine afresh, not reload an already-quarantined record.");
+        }
+
+        [Test]
+        public void LedgerImport_SmallerLoad_DropsStaleLedgers()
+        {
+            var registry = new HouseholdLedgerRegistry();
+            registry.ImportState(new[]
+            {
+                new HouseholdLedgerState { HouseholdId = 1, NextEntrySequence = 1, Entries = new List<HouseholdLedgerEntry>() },
+                new HouseholdLedgerState { HouseholdId = 2, NextEntrySequence = 1, Entries = new List<HouseholdLedgerEntry>() },
+            });
+            Assert.IsNotNull(registry.Get(1), "setup: household 1 loaded.");
+            Assert.IsNotNull(registry.Get(2), "setup: household 2 loaded.");
+
+            registry.ImportState(new[]
+            {
+                new HouseholdLedgerState { HouseholdId = 1, NextEntrySequence = 2, Entries = new List<HouseholdLedgerEntry>() },
+            });
+            Assert.IsNotNull(registry.Get(1), "The kept household survives the smaller load.");
+            Assert.IsNull(registry.Get(2),
+                "A smaller save must not leave the dropped household's ledger behind.");
         }
     }
 }

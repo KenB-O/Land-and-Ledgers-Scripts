@@ -178,15 +178,33 @@ namespace LandLedgers.World.Property
             foreach (ResidentialConditionRecord record in dto.History)
             {
                 if (record == null || record.PersonId < 0) continue;
-                history.Add(record);
-                if (record.IsCurrent && !currentByPerson.ContainsKey(record.PersonId))
-                    currentByPerson[record.PersonId] = record;
+                // Pass XII Worker F (copy-on-load, E-DEFECT-02 round 2):
+                // clone before indexing — the old code stored the DTO's
+                // record AND wrote the quarantine UntilDayIndex into the
+                // DTO object itself, so a double restore reloaded an
+                // already-quarantined record.
+                var copy = new ResidentialConditionRecord
+                {
+                    RecordId = record.RecordId,
+                    PersonId = record.PersonId,
+                    HouseholdId = record.HouseholdId,
+                    Condition = record.Condition,
+                    SinceDayIndex = record.SinceDayIndex,
+                    UntilDayIndex = record.UntilDayIndex,
+                    LastEvaluatedDayIndex = record.LastEvaluatedDayIndex,
+                    NextSearchDayIndex = record.NextSearchDayIndex,
+                    Reason = record.Reason,
+                    Notes = record.Notes,
+                };
+                history.Add(copy);
+                if (copy.IsCurrent && !currentByPerson.ContainsKey(copy.PersonId))
+                    currentByPerson[copy.PersonId] = copy;
                 // A save with two open records for one person is corrupt data —
                 // keep the first, quarantine the rest as closed history.
-                else if (record.IsCurrent)
+                else if (copy.IsCurrent)
                 {
-                    record.UntilDayIndex = Math.Max(0, record.LastEvaluatedDayIndex);
-                    diagnostics.Add($"LoadFromSaveDto: duplicate open condition '{record.RecordId}' for P{record.PersonId} quarantined as closed.");
+                    copy.UntilDayIndex = Math.Max(0, copy.LastEvaluatedDayIndex);
+                    diagnostics.Add($"LoadFromSaveDto: duplicate open condition '{copy.RecordId}' for P{copy.PersonId} quarantined as closed.");
                 }
             }
         }

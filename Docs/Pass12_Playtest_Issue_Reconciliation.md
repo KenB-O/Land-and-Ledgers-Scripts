@@ -205,12 +205,14 @@ exact enumeration from source — `BusinessType` has 28 values plus
 `AcquisitionMarketManager.ActivationBusinessTypes` (17 entries), while
 the creation panel offers only `Generic` plus three templates, and
 behind the labels are four live mechanisms, not 17 distinct
-simulations. Classification: 18 LIVE (tick executes production and
-settles through real counterparties), 10 PARTIAL (weekly settlement/
+simulations. Classification: 19 LIVE (tick executes production and
+settles through real counterparties — the original §1 table listed
+18 and omitted Mine, corrected by Worker F in round 2; §4 already
+had Mine as LIVE), 10 PARTIAL (weekly settlement/
 payroll runs but the trade has no tick production operation), 0
 source-only as a whole type, 0 intentionally dormant, Lawyer
 unsupported as a trade model (services exist, no runtime, no
-production operation). The 13 registry runtimes are re-verified
+production operation). Total: 29 enum members (28 typed + Generic). The 13 registry runtimes are re-verified
 unwired; Worker F added ButcherRuntime, BlacksmithRuntime and
 TanneryRuntime to the registry (16 runtimes total), each with no
 production instance ever created. Bakery and smithy live-path proofs

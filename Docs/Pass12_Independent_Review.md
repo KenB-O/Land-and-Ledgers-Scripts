@@ -23,11 +23,14 @@ The integrated diff vs `02aca56` is 80 files, +8300/−62, as claimed.
 Full-harness baseline on the integrated tree before Worker F fixes:
 1511 passed, 3 failed — exactly the expected arithmetic
 (1404 + A28 + C33 + B4 + D22 + E20), and the 3 failures were exactly
-the RUN-011 set. No other regression was found in the integrated
-tree. No confirmed P0/P1 defect in the integrated diff survived
-unfixed except the Unity-only and owner-policy items listed in §5,
-which are identified with their exact reasons and are never called
-source-fixed.
+the RUN-011 set. No confirmed P0/P1 defect in the integrated diff
+survived unfixed except the Unity-only and owner-policy items
+listed in §5, which are identified with their exact reasons and
+are never called source-fixed. Worker F's OWN changes then caused
+3 regressions, caught by the final full run (not by the focused
+runs) and fixed before delivery — see F-05. This is why the final
+count in Docs/Pass12_Final_Regression_Results.md is taken from a
+full re-run after those fixes, not from the focused runs.
 
 ## 2. Worker claim verification
 
@@ -280,6 +283,51 @@ assembly-scan baseline beyond the F-01 harness-sources omission.
   Business." instead of auto-creating a player store; the
   bootstrapper path is unchanged. The file is harness-excluded, so
   this half is Unity-verified only.
+
+### F-05 — Regressions caused by Worker F's own fixes, caught by the final full run
+
+The first final full run (after F-01..F-04 and the RUN-011
+corrections) gave 1522 passed, 3 failed — three NEW failures, all
+traced to Worker F changes, none to Workers A–E:
+
+1. `BusinessLenderServiceTests.ApprovedLoan_DisbursesRealCash_
+   CreatesExactlyOneDebtRecord` and `Default_CallsGuaranty_And_
+   EnforcesCollateral`: the test fixture builds its borrower with
+   bare `new BusinessInstanceState()` and no owner, which
+   previously defaulted to Player — so the lender created a Player
+   guaranty. With the M2 Town default, no guaranty is created
+   (OwnerGuarantorName returns empty for Town). The test's intent
+   is explicitly a player-owned borrower ("owner is the player",
+   Guarantor "Player"), so the FIXTURE was corrected to call
+   `SetOwner(BusinessOwnerIdentity.Player())` with a comment
+   stating the new contract: fixtures intending player ownership
+   must set it explicitly. Production is unchanged; the M2 safety
+   fix stands. Note: many other tests also use bare
+   `new BusinessInstanceState()`, but the full run shows no other
+   outcome changed — they do not depend on the Player default —
+   and production paths always set owners explicitly. A bare
+   constructed state now yields no owner guaranty for significant
+   loans; that behavior is reachable only in test scaffolding,
+   never in production.
+2. `Pass11Ws3TaxFeeWaterfallTests.OldSave_UntrackedAssessment_
+   ReconstructionPreservesSettledFees`: the test asserted the
+   old-save fee migration ON THE DTO OBJECT ITSELF
+   (FeesPaidTracked true, FeesPaidCents 200 after load). Worker
+   F's copy-on-load change runs the migration on the live copy
+   only, so the snapshot is untouched. Both production callers of
+   the tax load (AcquisitionMarketManager, NpcPropertyLife) pass
+   deserialized DTOs and never read them afterward, so snapshot
+   mutation is unobservable in production — the test had encoded
+   the old aliasing implementation, not a contract. The test was
+   corrected to assert the reconstruction on the LIVE assessment
+   via `GetAssessment("old-1")` (same values, same intent) AND to
+   assert the snapshot is unchanged, which locks in the
+   copy-on-load contract instead of weakening the test.
+Focused verification after both corrections:
+BusinessLenderServiceTests 9/0, Pass11Ws3TaxFeeWaterfallTests 5/0.
+Lesson recorded for the coordinator: focused runs are not a
+substitute for the final full run; the M2 flip's blast radius
+included test fixtures, not just production paths.
 
 ## 4. RUN-011 test-correction review (brief §10) — production untouched in all three
 

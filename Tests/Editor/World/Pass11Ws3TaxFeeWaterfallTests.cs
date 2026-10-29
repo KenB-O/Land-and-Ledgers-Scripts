@@ -139,10 +139,18 @@ namespace LandLedgers.EditorTests.World
             {
                 Assessments = new List<TaxAssessment> { assessment },
             });
-            Assert.IsTrue(assessment.FeesPaidTracked);
-            Assert.AreEqual(200, assessment.FeesPaidCents,
+            // Pass XII Worker F (copy-on-load): load clones the DTO, so the
+            // reconstruction is asserted on the LIVE assessment, not on the
+            // snapshot object — and the snapshot itself must be untouched,
+            // so a second load of the same DTO reconstructs identically.
+            Assert.IsFalse(assessment.FeesPaidTracked, "load must not mutate its snapshot");
+            Assert.AreEqual(0, assessment.FeesPaidCents, "load must not mutate its snapshot");
+            TaxAssessment live = taxes.GetAssessment("old-1");
+            Assert.IsNotNull(live);
+            Assert.IsTrue(live.FeesPaidTracked);
+            Assert.AreEqual(200, live.FeesPaidCents,
                 "reconstruction: fees already settled under the old book stay settled; only later accruals route anew");
-            Assert.AreEqual(0, assessment.UnpaidFeesCents());
+            Assert.AreEqual(0, live.UnpaidFeesCents());
         }
 
         [Test]

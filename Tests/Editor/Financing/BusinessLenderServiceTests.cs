@@ -56,6 +56,10 @@ namespace LandLedgers.Editor.Financing
         private static BusinessInstanceState MakeBusiness(string id, int cashCents)
         {
             var business = new BusinessInstanceState();
+            // Pass XII Worker F (M2): the bare default owner is Town, so a
+            // fixture that intends a player-owned borrower must say so
+            // explicitly; the guaranty tests below assert on Player ownership.
+            business.SetOwner(BusinessOwnerIdentity.Player());
             SetField(business, "instanceId", id);
             Assert.IsTrue(business.TryAssignPremises(42), "premises assigned");
             var runtime = new BusinessRuntimeState();

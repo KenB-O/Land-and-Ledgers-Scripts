@@ -56,3 +56,11 @@ prior cache was preserved, and no gameplay or scene changes were made. The
 Pass XV typed agricultural-premises correction remains Unity-unverified.
 The Main Scene thirty-day proof, crop Tasks, growing-season harvest, freight
 from farm output and day-15 continuation remain open.
+
+## Pass XVII update — 2026-10-29
+
+Disposable controls isolated the runner failure beyond the game project: a
+clean Unity 6000.4.2f1 project without user scripts exits normally, while one
+trivial script reproduces the Bee second-stage stall. The primary project was
+not modified. The agricultural correction remains Unity-unverified pending an
+environment-level Unity/Bee repair or owner-approved engine comparison.

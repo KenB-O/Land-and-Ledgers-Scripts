@@ -47,3 +47,15 @@ The full PlayMode run includes the Main Scene scenario startup, First Ledger fou
 - A first attempt at the Sawmill filter used an incorrect namespace and wrote a valid zero-case XML; it was discarded. The qualified rerun selected exactly one NUnit case and passed.
 - No full suite failure was suppressed or removed to obtain these counts.
 - These totals do not validate Sandbox/Continue ownership matrix, complete Person day/night behavior, rent, animal feeding, crop Tasks/freight, the First Vein scenario, or RUN-004.
+
+## Final published checkpoint — 2026-10-30
+
+The final code-and-test source was committed as `85e281a12934cef714cd11ae57ebfd09a88b7335` on `integration/pass12-unity-readiness`; it is published and independently verified on the remote. Earlier notes in this file that describe the last test tree as local/unpublished are chronological and superseded by this final entry. The final source bundle is `F:\Land & Ledgers_Pass21_Backups\pass21-source-final-20261030-r10.bundle`, SHA-256 `45C1497E241708057104CC81831E77921CC6E3DBEB241C18F57A7C163EE4CE41`; `git bundle verify` reported complete history.
+
+Final-tree full Unity results: EditMode 4,052 passed / 192 failed / 0 skipped of 4,244; PlayMode 11 passed / 0 failed / 0 skipped of 11. Fresh XMLs: `pass21-editmode-full-final-tree-20261030.xml` (SHA-256 `72F099FFD6C57732B6C17A8692C981277CFB1E353E5D7A5B985DCE91AB55D80E`) and `pass21-playmode-full-final-tree-20261030.xml` (SHA-256 `BB99B48C6F139FD41254BA7451EC5E94A6E3CCCEB20CD35C7B825C63E0CD9AB7`). Both are under `F:\Land & Ledgers_Pass21_Backups\pass21-reports`. The failures remain open; no tests were removed or disabled.
+
+The fresh focused suites on this source tree include Main Scene startup 11/11, HouseholdMembershipAuthority 10/10, NewcomerSettlementSaveLoad 8/8, SimulationDriversSceneBinding 1/1, and scenario presentation 8/8. See the companion continuation report for exact focused XML hashes. The Main Scene HUD screenshot is `F:\Land & Ledgers_Pass21_Backups\pass21-reports\pass21-main-scene-first-ledger-hud-fit-20261030.png`; it demonstrates First Ledger identity, current objective list and the authentic $15,000 owner-equity goal, with dense text at the captured scale.
+
+The scene and `.meta` checksums match the post-authoring backup (`817F22A74FACDC20A2F0E2B36451AA1293571E11041484078823B25E952261B9` and `841B50C2925B4A0B459AF03D63E63F992FAFD72C547618DDCE9322A5E43BACE5`). The complete bundle and test XMLs are outside the Unity project.
+
+This checkpoint does not establish the 30-day Main Scene proof, day-15 continuation, full Person lifecycle, autonomous ordinary shopping, rent settlement, animal-feed procurement, seasonal crop Task/freight lifecycle, or all scenario HUD states. The broad 192 EditMode failures and the five General Store focused failures remain unresolved. Overall gameplay readiness remains PARTIAL.

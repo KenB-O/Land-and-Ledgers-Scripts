@@ -61,4 +61,4 @@ These results are reported as observed test failures. Each still requires source
 
 ## Preservation
 
-The project/scene checkpoint is `F:\Land & Ledgers_Pass20_Backups\checkpoint_20261029_192945`. Diagnostic NUnit results are under `F:\Land & Ledgers_Pass20_Backups\pass20-reports`. The UI prefab was not changed. Source stays on the existing integration branch; no history rewrite or main-branch update was performed.
+The pre-change project/scene checkpoint is `F:\Land & Ledgers_Pass20_Backups\checkpoint_20261029_192945`. The final modified Main Scene and its original `.meta` are also preserved at `F:\Land & Ledgers_Pass20_Backups\checkpoint_final_20261029\Assets`; both copied hashes match the working project (`Main Scene.unity`: `D70A01219AF7912F302008C2D74532F02EDD7406D4B611A2AC469792CC5C225D`; `.meta`: `841B50C2925B4A0B459AF03D63E63F992FAFD72C547618DDCE9322A5E43BACE5`). Diagnostic NUnit results are under `F:\Land & Ledgers_Pass20_Backups\pass20-reports`. The UI prefab was not changed. Source stays on the existing integration branch; no history rewrite or main-branch update was performed.

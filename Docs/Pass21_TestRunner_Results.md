@@ -1,7 +1,7 @@
 # Pass XXI — Unity Test Runner Results
 
-Date: 2026-10-30  
-Unity: 6000.4.2f1  
+Date: 2026-10-30
+Unity: 6000.4.2f1
 Source tree: local `integration/pass12-unity-readiness` worktree based on `bc29a1ebafe2bb5eff6bbbf1f157639a1be6ae2d` plus uncommitted Pass XXI modifications.
 
 ## Current GUI runs
@@ -29,4 +29,3 @@ The same run was exported to the reports folder using Unity Test Runner. The ind
 - The full EditMode XML export was unavailable for the latest run. The UI count is recorded accurately, and an earlier XML is kept distinct.
 - No full suite failure was suppressed or removed to obtain these counts.
 - These totals do not validate Sandbox/Continue ownership matrix, complete Person day/night behavior, rent, animal feeding, crop Tasks/freight, the First Vein scenario, or RUN-004.
-

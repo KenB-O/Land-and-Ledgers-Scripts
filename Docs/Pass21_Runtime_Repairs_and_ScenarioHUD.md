@@ -1,8 +1,8 @@
 # Pass XXI — Runtime Repairs and Scenario HUD
 
-Date: 2026-10-30  
-Unity: 6000.4.2f1  
-Branch: `integration/pass12-unity-readiness`  
+Date: 2026-10-30
+Unity: 6000.4.2f1
+Branch: `integration/pass12-unity-readiness`
 Starting HEAD: `bc29a1ebafe2bb5eff6bbbf1f157639a1be6ae2d`
 
 ## Scope and evidence boundary
@@ -49,4 +49,3 @@ The pre-edit CropFarm profile and `.meta` are at `F:\Land & Ledgers_Pass21_Backu
 5. Continue Person lifecycle identity/day-night/save-load work.
 6. Implement crop stage Tasks only after the runner can repeatedly verify them; then prove a seasonal cycle, legitimate buyer/freight, and save/load.
 7. Complete RUN-004 with actual Main Scene state and scoped monetary/physical reconciliation.
-

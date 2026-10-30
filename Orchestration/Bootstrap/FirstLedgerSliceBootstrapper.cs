@@ -168,9 +168,6 @@ namespace LandLedgers.FirstLedger
 
         private bool initialized;
         private bool initializing;
-        private HouseholdMembershipRegistry playerHouseholdMemberships;
-        private KinshipRegistry playerHouseholdKinship;
-        private HouseholdLifecycleManager playerHouseholdLifecycle;
 
         public string LastStartupTimingSummary => lastStartupTimingSummary ?? string.Empty;
         public WorldStartupIntent StartupIntent => startupIntent;
@@ -790,16 +787,20 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            playerHouseholdMemberships = new HouseholdMembershipRegistry();
-            playerHouseholdKinship = new KinshipRegistry();
-            playerHouseholdLifecycle = new HouseholdLifecycleManager(
-                population,
-                playerHouseholdMemberships,
-                playerHouseholdKinship,
-                systemsHub.Ids);
-            playerHouseholdLifecycle.EnsureEntityIds();
-
-            scenarioDirector.Lifecycle = playerHouseholdLifecycle;
+            // PopulationManager owns the authoritative membership, kinship, and
+            // lifecycle stack. A second lifecycle here would maintain a parallel
+            // household-membership registry and could accept identities already
+            // assigned by the population system.
+            HouseholdLifecycleManager lifecycle = populationManager.Lifecycle;
+            if (lifecycle == null)
+            {
+                Debug.LogWarning("[WorldStartup] PopulationManager has no household lifecycle authority; ScenarioDirector lifecycle remains unbound.", this);
+            }
+            else
+            {
+                lifecycle.EnsureEntityIds();
+                scenarioDirector.Lifecycle = lifecycle;
+            }
             scenarioDirector.FounderResolver = ResolveScenarioFounders;
             // Pass XI WS1: the director's objective hook needs the
             // hub-owned service. The scenario bootstraps assign the same

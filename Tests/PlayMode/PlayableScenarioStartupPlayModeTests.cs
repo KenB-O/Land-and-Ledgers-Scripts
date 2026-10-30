@@ -27,6 +27,7 @@ namespace LandLedgers.PlayMode
             Type bootstrapperType = RuntimeType("LandLedgers.FirstLedger.FirstLedgerSliceBootstrapper");
             Type directorType = RuntimeType("LandLedgers.Orchestration.Scenarios.ScenarioDirector");
             Type timeManagerType = RuntimeType("LandLedgers.Time.TimeManager");
+            Type populationManagerType = RuntimeType("LandLedgers.Population.PopulationManager");
 
             Component startPanel = FindComponent(startPanelType);
             Assert.NotNull(startPanel, "Main Scene must expose the authored scenario start panel.");
@@ -34,11 +35,17 @@ namespace LandLedgers.PlayMode
 
             Component director = FindComponent(directorType);
             Assert.NotNull(director, "Main Scene must own the real ScenarioDirector.");
+            Component populationManager = FindComponent(populationManagerType);
+            Assert.NotNull(populationManager, "Main Scene must own the authoritative PopulationManager.");
             Component timeManager = FindComponent(timeManagerType);
             Assert.NotNull(timeManager, "Main Scene must own the authoritative clock.");
 
             yield return null;
             yield return null;
+            Assert.AreSame(
+                populationManagerType.GetProperty("Lifecycle")?.GetValue(populationManager),
+                directorType.GetProperty("Lifecycle")?.GetValue(director),
+                "Scenario household declarations must use PopulationManager's authoritative lifecycle, not a parallel membership registry.");
             Assert.IsTrue((bool)timeManagerType.GetProperty("IsPaused")?.GetValue(timeManager),
                 "The first-session scenario choice promises the campaign clock will not advance before Start.");
             int dayBeforeStart = (int)timeManagerType.GetProperty("CurrentAbsoluteDayIndex")?.GetValue(timeManager);

@@ -108,7 +108,7 @@ Final Pass XX regression update: the current-source full EditMode run completed 
 
 ## Pass XXI update — 2026-10-30
 
-- Pass XXI source work is on the existing integration branch from `bc29a1ebafe2bb5eff6bbbf1f157639a1be6ae2d`; the changes remain uncommitted in the nested Scripts repository. The Main Scene, prefabs, ProjectSettings and GUIDs were not edited in this pass.
+- Pass XXI source work is on the existing integration branch from `bc29a1ebafe2bb5eff6bbbf1f157639a1be6ae2d`. Commits `7870baab`, `e47ac52e`, and `6fbda31c` are local and unpublished; the final source and records are backed by `F:\Land & Ledgers_Pass21_Backups\pass21-source-final-20261030-r2.bundle`. The Main Scene, prefabs, ProjectSettings and GUIDs were not edited in this pass.
 - `LL-PLAY-001` remains PARTIAL: the existing fresh-start correction is preserved; Pass XXI additionally prevents a generic shop selector from consuming agricultural plots and makes rollback restore the mirrored sawmill construction stock. The full scenario/Continue/duplicate-list matrix has not been completed.
 - `LL-PLAY-005` remains PARTIAL: the active First Ledger HUD is visible in the Main Scene screenshot under `F:\Land & Ledgers_Pass21_Backups\pass21-reports\pass21-main-scene-first-ledger-hud-fit-20261030.png`. Its eight objectives include the actual equity requirement. This pass only adjusted runtime panel geometry; objective rows remain runtime-generated, and Sandbox, failure, victory, reload and save/load visual cases remain unverified.
 - Person death day is now carried through the population save DTO, with the legacy default remaining `-1`; a regression covers current and older DTO data. This does not establish complete birth/death events, visual actor identity or the day/night lifecycle.

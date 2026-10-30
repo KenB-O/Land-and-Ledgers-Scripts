@@ -2,7 +2,7 @@
 
 Date: 2026-10-30
 Unity: 6000.4.2f1
-Source tree: local `integration/pass12-unity-readiness`, based on published `bc29a1ebafe2bb5eff6bbbf1f157639a1be6ae2d`, with local Pass XXI commits and the final site-role correction recorded below. The latest full results are from the final tree used by the batch Test Runner.
+Source tree: `integration/pass12-unity-readiness` at `6fbda31c505cf04fbbb917e56620937aa45194d3`, based on published `bc29a1ebafe2bb5eff6bbbf1f157639a1be6ae2d`. The final site-role correction was present in the source tree used by the batch Test Runner. The two earlier Pass XXI commits and this correction remain local and unpublished because the overall suites are red.
 
 ## GUI baseline
 

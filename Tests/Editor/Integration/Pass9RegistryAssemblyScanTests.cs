@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using LandLedgers.Economy;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace LandLedgers.EditorTests.Integration
 {
@@ -41,8 +42,8 @@ namespace LandLedgers.EditorTests.Integration
     /// wired or registered; growing it requires the classification to be
     /// visible in review, which is the point.
     ///
-    /// Run with LAND_LEDGERS_REPO pointed at the tree under test (same
-    /// convention as UnwiredSystemsRegistryTests).
+    /// LAND_LEDGERS_REPO may point at the tree under test; otherwise the active
+    /// Unity project's Assets/Scripts checkout is discovered before the legacy fallback.
     /// </summary>
     [TestFixture]
     public sealed class Pass9RegistryAssemblyScanTests
@@ -267,10 +268,24 @@ namespace LandLedgers.EditorTests.Integration
         private static string ResolveRepoRoot()
         {
             string fromEnv = Environment.GetEnvironmentVariable("LAND_LEDGERS_REPO");
-            if (!string.IsNullOrWhiteSpace(fromEnv) && System.IO.Directory.Exists(fromEnv))
-                return System.IO.Path.GetFullPath(fromEnv);
+            if (HasRegistryDocument(fromEnv))
+                return Path.GetFullPath(fromEnv);
+
+            // In the Unity project the nested Scripts checkout is Assets/Scripts.
+            // Resolve it from the active project instead of assuming an account-specific path.
+            string projectScripts = Path.GetFullPath(Path.Combine(Application.dataPath, "Scripts"));
+            if (HasRegistryDocument(projectScripts))
+                return projectScripts;
+
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            return System.IO.Path.Combine(home, "workspace", "land-and-ledgers", "repo");
+            return Path.Combine(home, "workspace", "land-and-ledgers", "repo");
+        }
+
+        private static bool HasRegistryDocument(string repoRoot)
+        {
+            return !string.IsNullOrWhiteSpace(repoRoot)
+                && System.IO.Directory.Exists(repoRoot)
+                && File.Exists(Path.Combine(repoRoot, "Docs", "UnwiredSystems.md"));
         }
 
         private sealed class SourceIndex

@@ -11,6 +11,45 @@ namespace LandLedgers.EditorTests.Population
     public sealed class NewcomerSettlementSaveLoadTests
     {
         [Test]
+        public void PopulationSaveLoadPreservesDeathAndTreatsMissingLegacyValueAsLiving()
+        {
+            GameObject sourceObject = new("Person Death Save Source");
+            GameObject targetObject = new("Person Death Save Target");
+            try
+            {
+                PopulationManager source = sourceObject.AddComponent<PopulationManager>();
+                PersonState deceased = CreatePerson(
+                    501,
+                    50,
+                    NewcomerArrivalProfile.SettledResident,
+                    SettlementArrangement.StableHousehold,
+                    -1);
+                deceased.deathDayIndex = 42;
+                source.State.people.Add(deceased);
+
+                PopulationSaveDto saved = source.CaptureSaveDto();
+                Assert.AreEqual(42, FindPersonDto(saved, 501).deathDayIndex);
+
+                PopulationManager target = targetObject.AddComponent<PopulationManager>();
+                target.LoadFromSaveDto(saved);
+                Assert.AreEqual(42, target.State.GetPerson(501).deathDayIndex);
+
+                PopulationSaveDto legacy = JsonUtility.FromJson<PopulationSaveDto>(
+                    "{\"people\":[{\"id\":501,\"firstName\":\"Legacy\",\"age\":28}]}");
+                Assert.AreEqual(-1, legacy.people[0].deathDayIndex,
+                    "A historical save with no death field must deserialize as living.");
+                target.LoadFromSaveDto(legacy);
+                Assert.AreEqual(-1, target.State.GetPerson(501).deathDayIndex,
+                    "Loading a historical save must not invent a death event.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(sourceObject);
+                Object.DestroyImmediate(targetObject);
+            }
+        }
+
+        [Test]
         public void PopulationSaveLoadRoundTripsNewcomerBoardingSettlementFields()
         {
             GameObject sourceObject = new("Settlement Save Source");

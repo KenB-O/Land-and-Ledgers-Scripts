@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace LandLedgers.EditorTests.Integration
 {
@@ -17,8 +18,9 @@ namespace LandLedgers.EditorTests.Integration
     /// not the type's own file, not under Tests/, not inside the type's owning
     /// directory (intra-feature helpers are part of the same unwired feature),
     /// and not on the entry's allowlist. Comments are stripped before matching.
-    /// The repository root comes from LAND_LEDGERS_REPO, falling back to the
-    /// default checkout path. A missing registry document fails loudly.
+    /// The repository root comes from LAND_LEDGERS_REPO, then the active Unity
+    /// project's Assets/Scripts checkout, with the legacy path as a final fallback.
+    /// A missing registry document fails loudly.
     /// </summary>
     [TestFixture]
     public sealed class UnwiredSystemsRegistryTests
@@ -61,11 +63,25 @@ namespace LandLedgers.EditorTests.Integration
         private static string ResolveRepoRoot()
         {
             string fromEnv = Environment.GetEnvironmentVariable("LAND_LEDGERS_REPO");
-            if (!string.IsNullOrWhiteSpace(fromEnv) && System.IO.Directory.Exists(fromEnv))
-                return System.IO.Path.GetFullPath(fromEnv);
+            if (HasRegistryDocument(fromEnv))
+                return Path.GetFullPath(fromEnv);
+
+            // In the Unity project the nested Scripts checkout is Assets/Scripts.
+            // Resolve it from the active project instead of assuming an account-specific path.
+            string projectScripts = Path.GetFullPath(Path.Combine(Application.dataPath, "Scripts"));
+            if (HasRegistryDocument(projectScripts))
+                return projectScripts;
+
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            string fallback = System.IO.Path.Combine(home, "workspace", "land-and-ledgers", "repo");
+            string fallback = Path.Combine(home, "workspace", "land-and-ledgers", "repo");
             return fallback;
+        }
+
+        private static bool HasRegistryDocument(string repoRoot)
+        {
+            return !string.IsNullOrWhiteSpace(repoRoot)
+                && System.IO.Directory.Exists(repoRoot)
+                && File.Exists(Path.Combine(repoRoot, "Docs", "UnwiredSystems.md"));
         }
 
         private static List<RegistryEntry> ParseRegistry(string repoRoot)

@@ -324,6 +324,10 @@ namespace LandLedgers.EditorTests.Orchestration
             {
                 var hub = hubObject.AddComponent<SimulationSystemsHub>();
                 RegisterTwoOffices(hub.Postal, diag);
+                hub.Journeys.RegisterLocation(new JourneyLocation("town-a", JourneyLocationKind.TownBuilding, "Town A", 0f, 0f));
+                hub.Journeys.RegisterLocation(new JourneyLocation("town-b", JourneyLocationKind.TownBuilding, "Town B", 8f, 0f));
+                Assert.IsNull(hub.Journeys.AddEdge("town-a", "town-b", 8.0f, "river road"),
+                    "the two registered offices need a real route before mail can dispatch");
                 MailItem item = hub.Postal.PostItem(MailKind.Letter, "Kennedy", 1, "Emma",
                     "po-a", "po-b", 0, diag);
                 Assert.IsNotNull(item);

@@ -5944,9 +5944,19 @@ namespace LandLedgers.Economy
                         continue;
                     }
 
-                    TrackBusinessCategory(
-                        owner.FindBusinessByInstanceId(allocation.businessInstanceId),
-                        DefaultLumberCategoryId);
+                    BusinessInstanceState seller = owner.FindBusinessByInstanceId(allocation.businessInstanceId);
+                    TrackBusinessCategory(seller, DefaultLumberCategoryId);
+                    if (seller != null
+                        && seller.BusinessType == BusinessType.Sawmill
+                        && owner.TryGetConstructionSupportNode(ConstructionResourceKind.Lumber, out ConstructionSupportNodeState sawmillSupport)
+                        && sawmillSupport != null)
+                    {
+                        // The shared sawmill inventory is authoritative, while the legacy
+                        // construction support node is a live mirror. Shared-seller
+                        // consumption synchronizes that mirror immediately, so a late
+                        // transaction rollback must restore it alongside the seller.
+                        TrackSupportNode(sawmillSupport);
+                    }
                 }
             }
 

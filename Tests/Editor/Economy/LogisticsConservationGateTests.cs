@@ -298,6 +298,7 @@ namespace LandLedgers.EditorTests.Economy
             try
             {
                 LocalRecurringOrderManager manager = new();
+                LogisticsRuntimeManager logistics = CreateLogisticsRuntime(cleanup);
                 BusinessInstanceState seller = CreateBusiness(BusinessType.Ranch, "seller_rec", 1);
                 BusinessInstanceState buyer = CreateBusiness(BusinessType.Butcher, "buyer_rec", 2);
                 SetStock(seller, "livestock_inputs", 10);
@@ -316,6 +317,7 @@ namespace LandLedgers.EditorTests.Economy
 
                 // Simulate delivery scheduler that fails (e.g. logistics route blocked)
                 int scheduledShipmentCalls = 0;
+                LogisticsShipmentState lastShipment = null;
                 LocalRecurringOrderFulfillmentRequest request = new()
                 {
                     Template = template,
@@ -330,8 +332,16 @@ namespace LandLedgers.EditorTests.Economy
                     ScheduleShipment = (req, units, sellPrice, buyCost) =>
                     {
                         scheduledShipmentCalls++;
-                        // Route blocked: returns 0 accepted units, representing a blocked shipment creation
-                        return 0;
+                        lastShipment = logistics.CreateLocalBusinessShipment(
+                            req.Seller,
+                            req.Template.SellerCategoryId,
+                            req.Buyer,
+                            req.Template.BuyerCategoryId,
+                            units,
+                            sellPrice,
+                            buyCost,
+                            sourceCommittedAtSchedule: true);
+                        return lastShipment != null && !lastShipment.IsPreLoadBlocked ? units : 0;
                     }
                 };
 
@@ -339,9 +349,14 @@ namespace LandLedgers.EditorTests.Economy
                 LocalRecurringOrderFulfillmentResult resultWeek1 = manager.ResolveOrder(request);
 
                 Assert.AreEqual(1, scheduledShipmentCalls);
+                Assert.IsTrue(lastShipment != null && lastShipment.IsPreLoadBlocked,
+                    "The real logistics route refusal must create a terminal zero-cargo blocked shipment.");
                 int stockAfterWeek1 = seller.RuntimeState.GetCategoryStock("livestock_inputs").CurrentStockUnits +
                                       buyer.RuntimeState.GetCategoryStock("livestock_inputs").CurrentStockUnits;
                 Assert.AreEqual(initialTotalStock, stockAfterWeek1, "Inventory conserved after failed scheduling in Week 1.");
+                Assert.AreEqual(0, lastShipment.RemainingQuantityUnits, "Blocked shipment must not duplicate the seller's restored stock.");
+                Assert.AreEqual(10, seller.RuntimeState.GetCategoryStock("livestock_inputs").CurrentStockUnits,
+                    "Rejected shipment returns all provisionally consumed seller stock.");
                 Assert.AreEqual(0, seller.RuntimeState.LastWeeklyLocalTransferRevenueCents, "No seller revenue booked on failed attempt.");
                 Assert.AreEqual(0, buyer.RuntimeState.LastWeeklyLocalTransferCostCents, "No buyer cost booked on failed attempt.");
 
@@ -350,11 +365,19 @@ namespace LandLedgers.EditorTests.Economy
                 LocalRecurringOrderFulfillmentResult resultWeek2 = manager.ResolveOrder(request);
 
                 Assert.AreEqual(2, scheduledShipmentCalls);
+                Assert.IsTrue(lastShipment != null && lastShipment.IsPreLoadBlocked,
+                    "A later retry creates a new blocked record while the route remains unavailable.");
                 int stockAfterWeek2 = seller.RuntimeState.GetCategoryStock("livestock_inputs").CurrentStockUnits +
                                       buyer.RuntimeState.GetCategoryStock("livestock_inputs").CurrentStockUnits;
                 Assert.AreEqual(initialTotalStock, stockAfterWeek2, "Inventory conserved after retry in Week 2.");
+                Assert.AreEqual(0, lastShipment.RemainingQuantityUnits, "Retry still owns no cargo before a route is available.");
                 Assert.AreEqual(0, seller.RuntimeState.LastWeeklyLocalTransferRevenueCents, "No payment duplication on retry.");
                 Assert.AreEqual(0, buyer.RuntimeState.LastWeeklyLocalTransferCostCents, "No cost duplication on retry.");
+
+                LogisticsShipmentState restored = LogisticsShipmentState.FromSaveDto(lastShipment.CaptureSaveDto());
+                restored.AdvanceGameSeconds(10000f);
+                Assert.AreEqual(LogisticsShipmentStatus.Failed, restored.Status, "A restored blocked retry remains terminal.");
+                Assert.AreEqual(0, restored.RemainingQuantityUnits, "Save/restore cannot create blocked cargo.");
             }
             finally
             {
@@ -580,12 +603,19 @@ namespace LandLedgers.EditorTests.Economy
         // =========================================================================================
         private static LogisticsRuntimeManager CreateLogisticsRuntime(List<Object> cleanup)
         {
+            // Keep an explicit non-null but ungenerated world bound to the fixture.
+            // CreateBlockedShipment refreshes the summary, which calls AutoWire; null
+            // references are therefore rediscovered from an open Main Scene and make
+            // later calls in this test accidentally route through the live world.
+            GameObject worldObject = new("Isolated Logistics World Without Grid");
+            cleanup.Add(worldObject);
+            TownWorldController isolatedWorld = worldObject.AddComponent<TownWorldController>();
+
             GameObject go = new("Logistics Runtime Test");
             cleanup.Add(go);
             LogisticsRuntimeManager runtime = go.AddComponent<LogisticsRuntimeManager>();
-            // These tests intentionally exercise missing-road-access paths. Do not let
-            // an unrelated scene-world singleton make the fixture routeable.
-            SetPrivateField(runtime, "townWorld", null);
+            // Pin the route authority so summary refresh cannot bind to another scene.
+            SetPrivateField(runtime, "townWorld", isolatedWorld);
             SetPrivateField(runtime, "pathingManager", null);
             SetPrivateField(runtime, "generalStoreRuntime", null);
             SetPrivateField(runtime, "sharedBusinessRuntime", null);

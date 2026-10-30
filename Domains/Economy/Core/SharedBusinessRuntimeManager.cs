@@ -8893,7 +8893,9 @@ namespace LandLedgers.Economy
             public bool TryAssignPremises(BusinessType businessType, PremisesKind kind, out int buildingId)
             {
                 buildingId = -1;
-                if (businessType != BusinessType.CropFarm && businessType != BusinessType.Ranch)
+                if (businessType != BusinessType.CropFarm
+                    && businessType != BusinessType.Ranch
+                    && businessType != BusinessType.Sawmill)
                 {
                     return TryAssignPremises(kind, out buildingId);
                 }
@@ -8903,9 +8905,12 @@ namespace LandLedgers.Economy
                     return false;
                 }
 
-                AgriculturalSiteRole requiredRole = businessType == BusinessType.Ranch
-                    ? AgriculturalSiteRole.LivestockYard
-                    : AgriculturalSiteRole.CropProductionYard;
+                AgriculturalSiteRole requiredRole = businessType switch
+                {
+                    BusinessType.Ranch => AgriculturalSiteRole.LivestockYard,
+                    BusinessType.Sawmill => AgriculturalSiteRole.SawmillYard,
+                    _ => AgriculturalSiteRole.CropProductionYard
+                };
                 BusinessProfileDefinition profile = manager.FindProfile(businessType);
                 PlacedBuilding best = null;
                 foreach (PlacedBuilding building in manager.townWorld.Buildings)
@@ -8962,6 +8967,15 @@ namespace LandLedgers.Economy
                     }
 
                     if (manager.assignedBuildingIds.Contains(building.id))
+                    {
+                        continue;
+                    }
+
+                    // Agricultural parcels are dedicated physical work sites. A
+                    // generic first-fit storefront/shop must not consume them before
+                    // the corresponding farm, ranch, or sawmill is formed.
+                    TownPlot plot = manager.GetPlot(building.plotId);
+                    if (plot != null && plot.zone == PlotZone.Agricultural)
                     {
                         continue;
                     }

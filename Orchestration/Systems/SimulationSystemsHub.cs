@@ -367,7 +367,19 @@ namespace LandLedgers.Orchestration.Systems
         private readonly List<BoardingHouseShopRuntime> boardingHouseRuntimes = new List<BoardingHouseShopRuntime>();
 
         /// <summary>P6: the JRN-1 journey model — the one routed distance/time authority.</summary>
-        public JourneyModel Journeys => journeyModel ??= new JourneyModel();
+        public JourneyModel Journeys
+        {
+            get
+            {
+                journeyModel ??= new JourneyModel();
+                // Awake is not guaranteed to have run when an authority is first
+                // accessed from EditMode tests, early scene bootstrap, or a lazy
+                // save/load path. Keep the non-serialized route policy attached at
+                // the ownership boundary every time the model is obtained.
+                journeyModel.ConditionProvider = RouteConditions;
+                return journeyModel;
+            }
+        }
 
         /// <summary>
         /// P6: NX-2C weather/route conditions. Wired as the journey model's

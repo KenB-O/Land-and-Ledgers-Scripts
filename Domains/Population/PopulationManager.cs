@@ -828,7 +828,8 @@ namespace LandLedgers.Population
                         nutrition = person.nutrition != null ? person.nutrition.Clone() : new PersonNutritionState(),
                         birthDate = person.birthDate,
                         isFemale = person.isFemale,
-                        isOffMap = person.isOffMap
+                        isOffMap = person.isOffMap,
+                        deathDayIndex = person.deathDayIndex
                     });
                 }
             }
@@ -1148,6 +1149,7 @@ namespace LandLedgers.Population
                         birthDate = personDto.birthDate,
                         isFemale = personDto.isFemale,
                         isOffMap = personDto.isOffMap,
+                        deathDayIndex = personDto.deathDayIndex,
                         laborAccessLevel = personDto.laborAccessLevel,
                         householdId = personDto.householdId,
                         professionId = personDto.professionId,

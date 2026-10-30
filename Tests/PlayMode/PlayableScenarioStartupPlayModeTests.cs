@@ -418,6 +418,12 @@ namespace LandLedgers.PlayMode
             Assert.NotNull(farm);
             Assert.NotNull(freight);
             Assert.NotNull(store);
+            object runtimeState = farm.GetType().GetProperty("RuntimeState")?.GetValue(farm);
+            Assert.NotNull(runtimeState, "The farm must expose its authoritative runtime state.");
+            object cropStock = runtimeState.GetType().GetMethod("GetCategoryStock")?.Invoke(runtimeState, new object[] { "crop_food" });
+            Assert.NotNull(cropStock, "Farm production must use the authored crop output category.");
+            Assert.AreEqual(0, (int)cropStock.GetType().GetProperty("CurrentStockUnits")?.GetValue(cropStock),
+                "A newly formed farm must not begin with unproven crop output before planting or harvest.");
             object[] storePremisesArguments = { store, null };
             bool storePremisesAssigned = (bool)sharedRuntimeType.GetMethod("TryAssignPlayerBusinessPremises")
                 .Invoke(sharedRuntime, storePremisesArguments);
@@ -437,10 +443,6 @@ namespace LandLedgers.PlayMode
 
             sharedRuntimeType.GetMethod("ResolveWeeklySharedOperations")?.Invoke(sharedRuntime, null);
 
-            object runtimeState = farm.GetType().GetProperty("RuntimeState")?.GetValue(farm);
-            Assert.NotNull(runtimeState, "The farm must expose its authoritative runtime state.");
-            object cropStock = runtimeState.GetType().GetMethod("GetCategoryStock")?.Invoke(runtimeState, new object[] { "crop_food" });
-            Assert.NotNull(cropStock, "Farm production must use the authored crop output category.");
             int farmOutput = (int)cropStock.GetType().GetProperty("CurrentStockUnits")?.GetValue(cropStock);
             Assert.AreEqual(0, farmOutput,
                 "The January opening must not create crop inventory before a valid planting and harvest cycle.");
@@ -515,6 +517,14 @@ namespace LandLedgers.PlayMode
             object[] createArguments = { Enum.Parse(businessType, "GeneralStore"), "Customer Ledger Store", null, null };
             Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryCreatePlayerBusiness")
                 .Invoke(sharedRuntime, createArguments), createArguments[3] as string);
+
+            object[] premisesArguments = { createArguments[2], null };
+            Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryAssignPlayerBusinessPremises")
+                .Invoke(sharedRuntime, premisesArguments), premisesArguments[1] as string);
+
+            object[] hireArguments = { createArguments[2], 0, null };
+            Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryAssignCandidateToOpenSlot")
+                .Invoke(sharedRuntime, hireArguments), hireArguments[2] as string);
 
             Type storeRuntimeType = storeRuntime.GetType();
             object[] bindArguments = { createArguments[2], null };

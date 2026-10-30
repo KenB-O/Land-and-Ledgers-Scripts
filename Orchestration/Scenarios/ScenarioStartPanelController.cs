@@ -22,6 +22,8 @@ namespace LandLedgers.FirstLedger
         private GameObject panel;
         private TMP_Text objectiveLabel;
         private RectTransform objectiveViewport;
+        private RectTransform objectivePanelRect;
+        private RectTransform objectiveCanvasRect;
         private Button objectiveToggle;
         private string objectiveHeader = "SCENARIO OBJECTIVES";
         private bool objectivesExpanded = true;
@@ -199,12 +201,13 @@ namespace LandLedgers.FirstLedger
             GameObject objectiveObject = new GameObject("ScenarioObjectivePanel", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
             panel = objectiveObject;
             RectTransform rect = objectiveObject.transform as RectTransform;
+            objectivePanelRect = rect;
+            objectiveCanvasRect = parent;
             rect.SetParent(parent, false);
             rect.anchorMin = Vector2.one;
             rect.anchorMax = Vector2.one;
             rect.pivot = Vector2.one;
-            rect.anchoredPosition = new Vector2(-24f, -214f);
-            rect.sizeDelta = new Vector2(520f, 380f);
+            ApplyObjectivePanelGeometry();
             objectiveObject.GetComponent<Image>().color = new Color(0.055f, 0.06f, 0.055f, 0.94f);
             objectiveObject.transform.SetAsLastSibling();
 
@@ -267,11 +270,7 @@ namespace LandLedgers.FirstLedger
 
             if (panel != null)
             {
-                RectTransform rect = panel.transform as RectTransform;
-                if (rect != null)
-                {
-                    rect.sizeDelta = new Vector2(520f, objectivesExpanded ? 380f : 58f);
-                }
+                ApplyObjectivePanelGeometry();
             }
 
             TMP_Text toggleLabel = objectiveToggle != null
@@ -280,6 +279,31 @@ namespace LandLedgers.FirstLedger
             if (toggleLabel != null)
             {
                 toggleLabel.text = objectiveHeader + (objectivesExpanded ? "  −" : "  +");
+            }
+        }
+
+        private void ApplyObjectivePanelGeometry()
+        {
+            if (objectivePanelRect == null || objectiveCanvasRect == null)
+            {
+                return;
+            }
+
+            Rect canvasBounds = objectiveCanvasRect.rect;
+            float topInset = Mathf.Clamp(canvasBounds.height * 0.13f, 96f, 142f);
+            float availableHeight = Mathf.Max(220f, canvasBounds.height - topInset - 24f);
+            float expandedHeight = Mathf.Min(620f, availableHeight);
+            float width = Mathf.Min(620f, Mathf.Max(300f, canvasBounds.width - 48f));
+            objectivePanelRect.anchoredPosition = new Vector2(-24f, -topInset);
+            objectivePanelRect.sizeDelta = new Vector2(width, objectivesExpanded ? expandedHeight : 58f);
+
+            if (objectiveToggle != null)
+            {
+                RectTransform toggleRect = objectiveToggle.transform as RectTransform;
+                if (toggleRect != null)
+                {
+                    toggleRect.sizeDelta = new Vector2(-20f, 42f);
+                }
             }
         }
 

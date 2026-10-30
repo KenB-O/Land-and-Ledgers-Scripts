@@ -406,6 +406,8 @@ namespace LandLedgers.Persistence
         public bool isFemale;
         /// <summary>Pass V P1-2: migrated off-map; the person keeps aging.</summary>
         public bool isOffMap;
+        /// <summary>Authoritative day of death; -1 preserves compatibility with saves predating this field.</summary>
+        public int deathDayIndex = -1;
     }
 
     [Serializable]

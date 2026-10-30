@@ -247,6 +247,10 @@ namespace LandLedgers.EditorTests.Economy
                 AddSchoolhousePopulation(population, 28, 118, 14, 24);
 
                 CivicFoundationManager civic = CreateComponent<CivicFoundationManager>("Schoolhouse Notice Civic", cleanup);
+                // The opportunity manager reads schoolhouse eligibility from the
+                // civic authority whenever one is present. Mirror the production
+                // bootstrap's population binding in this isolated fixture.
+                civic.Configure(null, population);
                 OpportunityPressureRuntimeManager manager = CreateManager(cleanup);
                 manager.Configure(null, population, null, null, null, null, null);
                 SetPrivateField(manager, "civicFoundation", civic);
@@ -274,6 +278,7 @@ namespace LandLedgers.EditorTests.Economy
                 AddSchoolhousePopulation(population, 28, 118, 14, 24, includeAvailableTeacher: false);
 
                 CivicFoundationManager civic = CreateComponent<CivicFoundationManager>("Schoolhouse Vacancy Civic", cleanup);
+                civic.Configure(null, population);
                 civic.Schoolhouse.MarkBuilt(17, 4);
 
                 OpportunityPressureRuntimeManager manager = CreateManager(cleanup);

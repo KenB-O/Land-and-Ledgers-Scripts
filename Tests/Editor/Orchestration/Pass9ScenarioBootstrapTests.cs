@@ -18,15 +18,32 @@ namespace LandLedgers.EditorTests.Orchestration
     [TestFixture]
     public sealed class Pass9ScenarioBootstrapTests
     {
+        private readonly List<GameObject> timeManagerObjects = new List<GameObject>();
+        private readonly List<SimulationTimeSettings> timeSettings = new List<SimulationTimeSettings>();
+
         [SetUp]
         public void SetUp()
         {
+            timeManagerObjects.Clear();
+            timeSettings.Clear();
             ScenarioRunStateEvents.ClearSubscribers();
         }
 
         [TearDown]
         public void TearDown()
         {
+            for (int i = timeManagerObjects.Count - 1; i >= 0; i--)
+            {
+                if (timeManagerObjects[i] != null)
+                    Object.DestroyImmediate(timeManagerObjects[i]);
+            }
+
+            for (int i = timeSettings.Count - 1; i >= 0; i--)
+            {
+                if (timeSettings[i] != null)
+                    Object.DestroyImmediate(timeSettings[i]);
+            }
+
             ScenarioRunStateEvents.ClearSubscribers();
         }
 
@@ -80,14 +97,23 @@ namespace LandLedgers.EditorTests.Orchestration
 
         // ---------- A1-01: bootstrap plan + clock ----------
 
-        private static TimeManager CreateTimeManager()
+        private TimeManager CreateTimeManager()
         {
-            var manager = new TimeManager();
+            var timeManagerObject = new GameObject("Pass9ScenarioBootstrapTests_TimeManager");
+            timeManagerObjects.Add(timeManagerObject);
+            timeManagerObject.SetActive(false);
+
+            TimeManager manager = timeManagerObject.AddComponent<TimeManager>();
             var settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            timeSettings.Add(settings);
             settings.Sanitize();
             FieldInfo field = typeof(TimeManager).GetField("settings", BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.IsNotNull(field);
             field.SetValue(manager, settings);
+
+            // Activate only after the serialized settings are installed so Awake
+            // initializes the same component/lifecycle used by the runtime clock.
+            timeManagerObject.SetActive(true);
             return manager;
         }
 

@@ -42,13 +42,13 @@ namespace LandLedgers.Population
     {
         public const string ShoppingTaskId = "shopping";
 
-        private readonly PopulationState population;
-        private readonly HouseholdMembershipRegistry membership;
+        private PopulationState population;
+        private HouseholdMembershipRegistry membership;
         private readonly HouseholdLedgerRegistry ledgers;
         private readonly HouseholdInventoryRegistry inventories;
         private readonly HouseholdNeedRegistry needs;
         private readonly SupplierDirectory suppliers;
-        private readonly JourneyModel journeys;
+        private JourneyModel journeys;
         private readonly TaskAuthority tasks;
         private readonly WorkTimeBudgetStore budgets;
         private readonly PersonScheduleTracker scheduleTracker;
@@ -110,6 +110,20 @@ namespace LandLedgers.Population
             this.entityIds = entityIds;
             this.personEntityId = personEntityId ?? (pid => EntityId.For(EntityKind.Person, pid));
             this.spendingPolicyProvider = spendingPolicyProvider;
+        }
+
+        /// <summary>
+        /// Rebinds restored population authorities without discarding trip
+        /// history or in-memory custody records owned by this loop.
+        /// </summary>
+        public void RebindPopulationAuthorities(
+            PopulationState currentPopulation,
+            HouseholdMembershipRegistry currentMembership,
+            JourneyModel currentJourneys)
+        {
+            population = currentPopulation ?? throw new ArgumentNullException(nameof(currentPopulation));
+            membership = currentMembership ?? throw new ArgumentNullException(nameof(currentMembership));
+            journeys = currentJourneys ?? throw new ArgumentNullException(nameof(currentJourneys));
         }
 
         /// <summary>Registers the TTS-2 "shopping" task definition (in-store time).</summary>

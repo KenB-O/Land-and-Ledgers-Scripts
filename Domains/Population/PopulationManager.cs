@@ -114,6 +114,9 @@ namespace LandLedgers.Population
         /// <summary>Pass V P1-3: the population-wide kinship authority.</summary>
         public KinshipRegistry Kinship => kinshipRegistry;
 
+        /// <summary>The current authoritative population household-membership registry.</summary>
+        public HouseholdMembershipRegistry Memberships => membershipRegistry;
+
         /// <summary>Pass V P0-2: the household lifecycle authority (birth/death/transfer).</summary>
         public HouseholdLifecycleManager Lifecycle => lifecycleManager;
 

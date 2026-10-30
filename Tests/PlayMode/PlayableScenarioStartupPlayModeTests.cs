@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -135,6 +136,49 @@ namespace LandLedgers.PlayMode
                 journeys, new[] { (object)sampleHomeLocation, "town-center", foot });
             Assert.IsTrue((bool)homeRoute.GetType().GetField("Found")?.GetValue(homeRoute),
                 "A generated household must have a real road route from its home to the town junction.");
+
+            object authoritativeMemberships = populationManagerType.GetProperty("Memberships")?.GetValue(populationManager);
+            Assert.NotNull(authoritativeMemberships,
+                "PopulationManager must expose the same membership authority used by household life-cycle systems.");
+            object boundMemberships = driversType.GetField("householdMemberships",
+                BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(drivers);
+            Assert.AreSame(authoritativeMemberships, boundMemberships,
+                "The production shopping loop must use PopulationManager's registry, not a parallel membership copy.");
+
+            object shoppingLoop = driversType.GetField("householdShoppingLoop",
+                BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(drivers);
+            Assert.NotNull(shoppingLoop,
+                "The daily driver must bind household needs to the real purchasing loop even when no seller can fill them.");
+            object tripHistory = shoppingLoop.GetType().GetProperty("TripHistory")?.GetValue(shoppingLoop);
+            Assert.NotNull(tripHistory);
+            Assert.Greater(((System.Collections.ICollection)tripHistory).Count, 0,
+                "Shortage needs should reach the real shopping authority and produce an explicit refusal when no stocked seller exists.");
+
+            object needs = hubType.GetProperty("PurchasingNeeds")?.GetValue(hub);
+            Assert.NotNull(needs);
+            var getOpenNeeds = needs.GetType().GetMethod("GetOpenNeeds");
+            int openNeeds = 0;
+            foreach (object household in (System.Collections.IEnumerable)householdStates)
+            {
+                int householdId = (int)household.GetType().GetField("id")?.GetValue(household);
+                var householdNeeds = getOpenNeeds?.Invoke(needs, new object[] { householdId })
+                    as System.Collections.IEnumerable;
+                if (householdNeeds == null) continue;
+                foreach (object need in householdNeeds)
+                {
+                    openNeeds++;
+                    var responses = need.GetType().GetField("SuggestedResponses")?.GetValue(need)
+                        as System.Collections.IEnumerable;
+                    if (responses == null) continue;
+                    foreach (object response in responses)
+                    {
+                        Assert.AreNotEqual("purchase", response as string,
+                            "The fresh opening has no formed, stocked, reachable retailer; need guidance must not promise a purchase.");
+                    }
+                }
+            }
+            Assert.Greater(openNeeds, 0,
+                "The actual daily shortage monitor should preserve unmet needs when the opening has no stocked seller.");
         }
 
         [UnityTest]

@@ -245,6 +245,57 @@ namespace LandLedgers.EditorTests.Population
         // ---------- the full 17-step loop ----------
 
         [Test]
+        public void RebindPopulationAuthorities_ContinuesWithRestoredPersonAndMembership()
+        {
+            Fixture f = Fixture.Create();
+            var restoredPopulation = new PopulationState();
+            restoredPopulation.people.Add(new PersonState
+            {
+                id = 9,
+                householdId = 8,
+                firstName = "Ada",
+                lastName = "Morrow",
+                age = 31,
+                ageBand = AgeBand.Adult18Plus,
+            });
+            restoredPopulation.households.Add(new HouseholdState { id = 8 });
+            var restoredMemberships = new HouseholdMembershipRegistry();
+            Assert.IsNull(restoredMemberships.Register(new HouseholdMembership
+            {
+                MembershipId = 9,
+                PersonId = 9,
+                HouseholdId = 8,
+                StartDayIndex = f.Day,
+            }));
+            var restoredJourneys = new JourneyModel();
+            restoredJourneys.RegisterLocation(new JourneyLocation("home", JourneyLocationKind.Farmstead, "Morrow Home", 0f, 0f));
+            restoredJourneys.RegisterLocation(new JourneyLocation("store", JourneyLocationKind.Store, "General Store", 1f, 0f));
+            Assert.IsNull(restoredJourneys.AddEdge("home", "store", 1f, "restored road"));
+
+            f.Knowledge.LearnSupplier(9, "store-1", "restored same-town knowledge", f.Day);
+            f.PersonLocations[9] = "home";
+            string fundingRefusal = f.Ledgers.GetOrCreate(8).RecordInflow(
+                f.Day, 10000, HouseholdIncomeSource.OwnerContribution,
+                "restored-capital", "test capital", "test restore");
+            Assert.IsNull(fundingRefusal, fundingRefusal);
+
+            f.Loop.RebindPopulationAuthorities(restoredPopulation, restoredMemberships, restoredJourneys);
+            HouseholdPurchasingNeed restoredNeed = f.Needs.CreateNeed(8, HouseholdItemCatalog.FlourId, f.Day);
+            restoredNeed.UnitsNeeded = 5;
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(restoredNeed, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(9, result.ShopperPersonId,
+                "A restored trip must select the Person in the restored authoritative membership registry.");
+            Assert.AreEqual(600, result.BuyerOutflowCents);
+            Assert.AreEqual(5, f.Inventories.GetOrCreate(8).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, restoredNeed.Status);
+            Assert.AreEqual(1, f.Loop.TripHistory.Count,
+                "Rebinding must preserve the existing loop's diagnostic history authority.");
+        }
+
+        [Test]
         public void ExecuteNeed_FullLoop_CompletesAllSeventeenStepsWithConservation()
         {
             Fixture f = Fixture.Create();

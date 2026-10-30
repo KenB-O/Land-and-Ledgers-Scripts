@@ -378,22 +378,31 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            householdShoppingLoop ??= new HouseholdShoppingLoop(
-                populationManager.State,
-                householdMemberships,
-                hub.HouseholdLedgers,
-                hub.HouseholdInventories,
-                hub.PurchasingNeeds,
-                supplierDirectory,
-                Journeys ?? hub.Journeys,
-                hub.Tasks,
-                hub.WorkTimeBudgets,
-                hub.PersonSchedules,
-                sellerKnowledge,
-                hub.FinancialObligations,
-                hub.Ids,
-                personEntityId: null,
-                spendingPolicyProvider: householdId => hub.HouseholdDecisionDriver.GetSpendingPolicy(householdId));
+            JourneyModel currentJourneys = Journeys ?? hub.Journeys;
+            if (householdShoppingLoop == null)
+            {
+                householdShoppingLoop = new HouseholdShoppingLoop(
+                    populationManager.State,
+                    householdMemberships,
+                    hub.HouseholdLedgers,
+                    hub.HouseholdInventories,
+                    hub.PurchasingNeeds,
+                    supplierDirectory,
+                    currentJourneys,
+                    hub.Tasks,
+                    hub.WorkTimeBudgets,
+                    hub.PersonSchedules,
+                    sellerKnowledge,
+                    hub.FinancialObligations,
+                    hub.Ids,
+                    personEntityId: null,
+                    spendingPolicyProvider: householdId => hub.HouseholdDecisionDriver.GetSpendingPolicy(householdId));
+            }
+            else
+            {
+                householdShoppingLoop.RebindPopulationAuthorities(
+                    populationManager.State, householdMemberships, currentJourneys);
+            }
 
             // The live store is an ordinary town seller. Seed only the
             // legitimate same-simulation knowledge graph; this does not grant
@@ -530,6 +539,10 @@ namespace LandLedgers.Orchestration.Systems
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
             townWorld ??= FindAnyObjectByType<TownWorldController>();
+            if (populationManager?.Memberships != null)
+            {
+                AttachHouseholdMemberships(populationManager.Memberships);
+            }
             SubscribeToTimeManager();
 
             if (hub == null)
@@ -2175,11 +2188,20 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // PopulationManager owns the current membership registry and may
+            // replace it on New Game or restore. Bind that authority before
+            // generating or executing household purchasing plans.
+            supplierDirectory ??= new SupplierDirectory();
+            HouseholdMembershipRegistry populationMemberships = populationManager.Memberships;
+            if (populationMemberships != null
+                && !ReferenceEquals(householdMemberships, populationMemberships))
+            {
+                householdMemberships = populationMemberships;
+            }
+            BuildHouseholdShoppingLoop();
+
             dailyNeedsService ??= new DailyNeedsService();
             consumptionPlanner ??= new HouseholdConsumptionPlanner();
-            // SupplierDirectory starts empty: scene wiring registers suppliers
-            // (T1A pattern — the general store registers its stocked categories).
-            supplierDirectory ??= new SupplierDirectory();
             // P2: wire the legacy person-int id space to HF-1 EntityIds so the
             // travel-time leg of embodied purchasing actually gates on the
             // person's TTS-1 work-time budget (previously always skipped).
@@ -3483,8 +3505,11 @@ namespace LandLedgers.Orchestration.Systems
                 int ledgerBalance = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
                 var supplyAccess = new HouseholdSupplyAccess
                 {
-                    HasGeneralStore = true,
-                    HasOffMapAccess = true,
+                    HasGeneralStore = HasReachableStockedFoodSeller(household, policy, absoluteDayIndex),
+                    // No production off-map retail supplier is currently
+                    // bound to this directory, so do not advertise access
+                    // that the commerce path cannot execute.
+                    HasOffMapAccess = false,
                     CanProduce = false,
                     HasCash = ledgerBalance > 0,
                 };
@@ -3504,6 +3529,60 @@ namespace LandLedgers.Orchestration.Systems
             {
                 diag.Add($"[SimulationDrivers] {monitorDiagnostic}");
             }
+        }
+
+        private bool HasReachableStockedFoodSeller(
+            HouseholdState household,
+            MealSchedulingPolicy policy,
+            int absoluteDayIndex)
+        {
+            if (household == null || policy == null || supplierDirectory == null
+                || householdMemberships == null || populationManager?.State == null || hub == null)
+            {
+                return false;
+            }
+
+            JourneyModel journeys = Journeys ?? hub.Journeys;
+            if (journeys == null) return false;
+            List<int> members = householdMemberships.GetActiveMembers(household.id);
+            if (members == null || members.Count == 0) return false;
+
+            for (int supplierIndex = 0; supplierIndex < supplierDirectory.All.Count; supplierIndex++)
+            {
+                IGoodsSupplier supplier = supplierDirectory.All[supplierIndex];
+                if (!(supplier is IItemResolvingSupplier itemSupplier)
+                    || string.IsNullOrWhiteSpace(itemSupplier.LocationId)
+                    || !string.IsNullOrWhiteSpace(itemSupplier.CheckTradingCapability(absoluteDayIndex, 8 * 60)))
+                {
+                    continue;
+                }
+
+                bool offersAvailableFood = false;
+                foreach (string itemId in policy.MealItemPriority)
+                {
+                    string categoryId = itemSupplier.CategoryForItem(itemId);
+                    if (string.IsNullOrWhiteSpace(categoryId)
+                        || itemSupplier.ItemStockUnits(itemId) <= 0
+                        || itemSupplier.ItemPricePerUnitCents(itemId) <= 0)
+                    {
+                        continue;
+                    }
+                    offersAvailableFood = true;
+                    break;
+                }
+                if (!offersAvailableFood) continue;
+
+                for (int memberIndex = 0; memberIndex < members.Count; memberIndex++)
+                {
+                    PersonState person = populationManager.State.GetPerson(members[memberIndex]);
+                    if (person == null || person.deathDayIndex >= 0 || person.homeBuildingId < 0) continue;
+                    string homeId = TownJourneyNetworkBuilder.LocationIdForBuilding(person.homeBuildingId);
+                    if (journeys.FindRoute(homeId, itemSupplier.LocationId, TravelMode.Foot).Found)
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         private bool IsColdSeasonMonth()

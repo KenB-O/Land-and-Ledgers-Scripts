@@ -32,6 +32,16 @@ The earlier zero-purchase day exposed a real wiring gap. `BuildHouseholdShopping
 
 Stable backlog ID `LL-PLAY-023` is now **PARTIAL**: the Main Scene loop uses the existing membership authority and passes a no-seller refusal test. The current First Ledger opening still does not provide a stocked, open, reachable food retailer to this purchasing path. A positive purchase requires connecting a legitimate seller and its existing inventory/settlement authority; no stock or buyer was fabricated here.
 
+## Follow-up — live General Store supplier registration
+
+The production bootstrap called `RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort())` before the player had formed a General Store. `BuildHouseholdTradingPort()` originally built its offers from `RuntimeState.CategoryStock`, which was empty at that moment, and captured `Staffed=false`. The supplier directory retained that port, so later forming and staffing a legitimate player store could not make the already-registered supplier offer household items or become trade-capable. This was a real source-to-runtime lifecycle defect, independent of the fresh opening's correct no-seller result.
+
+The port now derives its declared category/item offers from the authored `GeneralStoreBusinessDefinition` and reads stock, price, Business ID, and staffing from the live runtime manager. An unformed store still has zero stock and remains unstaffed. The Main Scene regression constructs the same port/adapter before formation, verifies no inventory and no trading capacity, forms a real Business, assigns premises and a real clerk through existing authorities, then verifies that the pre-existing adapter resolves the formed Business, its actual stock and a positive authoritative price, and refreshes staffing. No inventory, cash, or Business was injected by the adapter.
+
+An independent source review also found that `BuildHouseholdShoppingLoop()` taught every living Person about every supplier whenever the loop was rebuilt. That could silently disclose future non-public suppliers. It now seeds only the locally public General Store, and only after the store has a stable formed Business ID; other supplier knowledge requires an explicit information/discovery path.
+
+The Main Scene still does not provide an observed positive household purchase through the autonomous daily loop. The new regression proves that the actual supplier adapter remains live through normal formation and hiring, not that a full customer purchase, freight chain, or settlement has been completed. `LL-PLAY-023` remains **PARTIAL**.
+
 ## Regression results
 
 All results below are fresh Unity Test Runner XML on the continuation tree, Unity 6000.4.2f1:
@@ -45,9 +55,21 @@ All results below are fresh Unity Test Runner XML on the continuation tree, Unit
 | `HouseholdMembershipAuthorityTests` | 7/7 passed | `4DF51CB02245344C266181FEF23D6898F6E1748959D2D5DB0B1D2B990205D408` |
 | `PhaseBHouseholdConsumptionTests` | 20/20 passed | `7486284DCF99CDF5A390786CD87781379776084705AB12F9855A7DF304BDA3E9` |
 | `HouseholdShoppingLoopTests` (current tree) | 22/22 passed | `B514573AD635950066FFDADD5F243A8D32FEC23FF1C005AE5CDE0A8F9E4A43EE` |
-| Full available PlayMode suite (current tree) | 11/11 passed | `B3868B956AE56D320F0910BBB55DCD222D6248DDA8EF71EB3F58E59A83C67317` |
+| Full available PlayMode suite (previous continuation checkpoint) | 11/11 passed | `B3868B956AE56D320F0910BBB55DCD222D6248DDA8EF71EB3F58E59A83C67317` |
 
-The strengthened Main Scene journey/shopping test also passed within the full PlayMode suite (XML `shopping-authority-playmode-r1.xml`, 11/11, SHA-256 `82AE25DE5627F9E3C9CDE18008489F5CEC4C5006D32C79A628150E9404EA4883`). The new restore-rebind regression proves that an existing loop selects the restored Person through the restored membership authority and completes a legitimate finite-stock purchase with matching settlement. The final unfiltered PlayMode XML is `full-playmode-shopping-final.xml`; all results are under the checkpoint reports directory.
+Follow-up tests on the supplier-lifecycle correction:
+
+| Suite | Result | XML SHA-256 / notes |
+|---|---:|---|
+| `ProductionBusinessAuthorityFormsTheScenarioThreeBusinessRoute` | 1/1 passed | `store-adapter-live-regression.xml`, `089B87C21606B58B42E3816B51D9CFB5F8EE34C3651079DF2113703E4CD80EEC` |
+| `HouseholdShoppingLoopTests` EditMode | 22/22 passed | `household-shopping-editmode-final.xml`, `F80D0B493A0762875CD757E35B32DE8BDC234B94728275486B44E3F1DB4C859D` |
+| `JourneyModelTests` EditMode | 10/10 passed | `journey-model-editmode-final.xml`, `03C42FF427BC10C91E45C2F3351B76E5EE583E7DDF94ABE8D40DED4BDDAFF0A1` |
+| `FirstLedgerFourWeekProductionReportsHonestProgress` isolated repeat | 1/1 passed | `first-ledger-four-week-repro.xml`; isolated repeat passed |
+| Broad EditMode filter `GeneralStore` | 41/60 passed, 19 failed, 0 skipped | `general-store-editmode-final.xml`, SHA-256 `FD95EF7D56202D2ACF5F1FC10BF685A37B6191E7567A66145EC16D950FD18815`; the name filter selected multiple suites, including known reserve, wholesale, reorder, construction-support, settlement-coverage and HUD tests. This is not a 60-test General Store runtime suite and the failures were not changed by this port repair. |
+
+The first unfiltered PlayMode run after the code fix completed 10/11. The sole failure was `FirstLedgerFourWeekProductionReportsHonestProgress`: its randomized opening population supplied only one eligible hire, while the test attempted and did not require successful Farm/Livery hires before later asserting three employees. The same test passed when rerun alone on a fresh generated opening. A fresh unfiltered PlayMode rerun after the strengthened adapter regression completed 11/11, 0 failed, 0 skipped, in 76.97 seconds. XML: `full-playmode-final-current.xml`, SHA-256 `B9C3DEEA54E76421002095ED31B13B6BAC1AA21651469A2745E8785DF64036F8`. This resolves that observed suite run, but the earlier seed-sensitive failure remains a test reliability concern and should be made deterministic rather than erased from history.
+
+The strengthened Main Scene journey/shopping test also passed within the full PlayMode suite (XML `full-playmode-final-current.xml`). The restore-rebind regression proves that an existing loop selects the restored Person through the restored membership authority and completes a legitimate finite-stock purchase with matching settlement. The new supplier regression separately proves pre-formation port rebinding through normal formation and hiring; neither is a full autonomous Main Scene retail run.
 
 A full EditMode run was attempted on the same tree, but it did not complete and produced no NUnit XML. The log grew to approximately 25 MB and then stopped advancing at `2026-10-30 01:32:04`; by `01:35:10`, the Editor remained responsive with stable working set near 5.3 GB, while its busiest thread had accumulated over six minutes of CPU time. After preserving the log and confirming no visible suite progress, only that identified Land & Ledgers batch test process was stopped. The attempt has no pass/fail count and is not represented as a completed suite. The preserved log is `full-editmode-final.log`.
 

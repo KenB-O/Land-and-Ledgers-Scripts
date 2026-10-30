@@ -361,19 +361,23 @@ namespace LandLedgers.FirstLedger
         public GeneralStoreTradingPort BuildHouseholdTradingPort()
         {
             var offers = new List<GeneralStoreCategoryOffer>();
-            IReadOnlyList<CategoryStockState> stocks = RuntimeState != null
-                ? RuntimeState.CategoryStock
-                : Array.Empty<CategoryStockState>();
-
-            for (int i = 0; i < stocks.Count; i++)
+            // Bootstrap registers this port before the player has formed a
+            // Business. Derive its declared category-to-item offers from the
+            // authored store definition, not from the manager's then-null
+            // RuntimeState. The port reads stock and prices from the manager
+            // dynamically, so an unformed store still has zero supply.
+            ReadOnlySpan<ItemCategoryDefinition> categories = storeDefinition != null
+                ? storeDefinition.Categories
+                : ReadOnlySpan<ItemCategoryDefinition>.Empty;
+            for (int i = 0; i < categories.Length; i++)
             {
-                CategoryStockState stock = stocks[i];
-                if (stock == null)
+                ItemCategoryDefinition category = categories[i];
+                if (category == null || string.IsNullOrWhiteSpace(category.CategoryId))
                 {
                     continue;
                 }
 
-                string itemId = HouseholdItemForStoreCategory(stock.CategoryId);
+                string itemId = HouseholdItemForStoreCategory(category.CategoryId);
                 if (string.IsNullOrWhiteSpace(itemId))
                 {
                     continue;
@@ -381,16 +385,13 @@ namespace LandLedgers.FirstLedger
 
                 offers.Add(new GeneralStoreCategoryOffer
                 {
-                    CategoryId = stock.CategoryId,
+                    CategoryId = category.CategoryId,
                     OfferedItemIds = new List<string> { itemId },
                     StoreUnitsPerItemUnit = 1,
                 });
             }
 
-            var capability = new StoreTradingCapability
-            {
-                Staffed = FilledWorkerSlotCount > 0,
-            };
+            var capability = new StoreTradingCapability { Staffed = false };
             return new GeneralStoreTradingPort(this, offers, capability);
         }
 

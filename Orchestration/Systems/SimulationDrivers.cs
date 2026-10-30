@@ -404,9 +404,10 @@ namespace LandLedgers.Orchestration.Systems
                     populationManager.State, householdMemberships, currentJourneys);
             }
 
-            // The live store is an ordinary town seller. Seed only the
-            // legitimate same-simulation knowledge graph; this does not grant
-            // omniscient access to suppliers that are not registered here.
+            // A formed local General Store is a public town destination, so
+            // residents can know it through ordinary local awareness. Other
+            // supplier types require an explicit discovery/information event;
+            // registering them must not reveal them to every Person.
             if (populationManager.State.people != null)
             {
                 foreach (PersonState person in populationManager.State.people)
@@ -415,10 +416,17 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         foreach (IGoodsSupplier supplier in supplierDirectory.All)
                         {
+                            if (supplier is not LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter
+                                || string.IsNullOrWhiteSpace(supplier.SupplierBusinessId)
+                                || string.Equals(supplier.SupplierBusinessId, "general-store", StringComparison.Ordinal))
+                            {
+                                continue;
+                            }
+
                             sellerKnowledge.LearnSupplier(
                                 person.id,
                                 supplier.SupplierBusinessId,
-                                "opening-town merchant knowledge",
+                                "local public General Store",
                                 timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0);
                         }
                     }

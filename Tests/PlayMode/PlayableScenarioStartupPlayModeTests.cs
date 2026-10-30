@@ -460,6 +460,30 @@ namespace LandLedgers.PlayMode
             Type businessType = RuntimeType("LandLedgers.Economy.BusinessType");
             Component sharedRuntime = FindComponent(sharedRuntimeType);
             Assert.NotNull(sharedRuntime, "The playable scene must own the shared business authority.");
+            Type formedStoreRuntimeType = RuntimeType("LandLedgers.FirstLedger.GeneralStoreRuntimeManager");
+            Component formedStoreRuntime = FindComponent(formedStoreRuntimeType);
+            Assert.NotNull(formedStoreRuntime, "The scene must own the household retail runtime.");
+            object registeredStorePort = formedStoreRuntimeType.GetMethod("BuildHouseholdTradingPort")
+                .Invoke(formedStoreRuntime, null);
+            Assert.NotNull(registeredStorePort);
+            Assert.AreEqual("general-store", registeredStorePort.GetType().GetProperty("StoreBusinessId")?.GetValue(registeredStorePort),
+                "Before formation, the registered port is an unbound placeholder and must have no identity or stock to sell.");
+            Assert.AreEqual(0, (int)registeredStorePort.GetType().GetMethod("CategoryStockUnits")
+                .Invoke(registeredStorePort, new object[] { "staple_food" }));
+            object declaredOffers = registeredStorePort.GetType().GetProperty("CategoryOffers")?.GetValue(registeredStorePort);
+            Assert.NotNull(declaredOffers);
+            Assert.Greater(((System.Collections.ICollection)declaredOffers).Count, 0,
+                "The port should declare authored offers before formation while keeping stock at zero.");
+            Type generalStoreAdapterType = RuntimeType("LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter");
+            object supplierAdapter = Activator.CreateInstance(generalStoreAdapterType, registeredStorePort);
+            Assert.IsTrue((bool)generalStoreAdapterType.GetMethod("OffersItem").Invoke(supplierAdapter, new object[] { "flour" }),
+                "The live adapter must resolve the authored staple offer even when no Business has been formed yet.");
+            Assert.AreEqual(0, (int)generalStoreAdapterType.GetMethod("ItemStockUnits")
+                .Invoke(supplierAdapter, new object[] { "flour" }), "An unformed store still has no saleable inventory.");
+            object beforeFormationCapability = registeredStorePort.GetType().GetProperty("TradingCapability")
+                ?.GetValue(registeredStorePort);
+            Assert.IsFalse((bool)beforeFormationCapability?.GetType().GetProperty("Staffed")?.GetValue(beforeFormationCapability),
+                "A pre-registered supplier must not be treated as open before a real store and clerk exist.");
 
             var created = new List<string>();
             foreach (string typeName in new[] { "GeneralStore", "CropFarm", "LiveryFreight" })
@@ -474,13 +498,35 @@ namespace LandLedgers.PlayMode
                 Assert.NotNull(formedBusiness, $"Formation must return the {typeName} entity.");
                 if (typeName == "GeneralStore")
                 {
-                    Type formedStoreRuntimeType = RuntimeType("LandLedgers.FirstLedger.GeneralStoreRuntimeManager");
-                    Component formedStoreRuntime = FindComponent(formedStoreRuntimeType);
-                    Assert.NotNull(formedStoreRuntime, "The scene must own the real General Store runtime.");
+                    object[] premisesArguments = { formedBusiness, null };
+                    Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryAssignPlayerBusinessPremises")
+                        .Invoke(sharedRuntime, premisesArguments), premisesArguments[1] as string);
+
+                    object[] hireArguments = { formedBusiness, 0, null };
+                    Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryAssignCandidateToOpenSlot")
+                        .Invoke(sharedRuntime, hireArguments), hireArguments[2] as string);
+
                     object[] bindingArguments = { formedBusiness, null };
                     bool bound = (bool)formedStoreRuntimeType.GetMethod("TryBindFormedPlayerBusiness")
                         .Invoke(formedStoreRuntime, bindingArguments);
                     Assert.IsTrue(bound, $"The formed General Store must bind to its operating runtime: {bindingArguments[1]}");
+
+                    string businessId = formedBusiness.GetType().GetProperty("InstanceId")?.GetValue(formedBusiness) as string;
+                    Assert.AreEqual(businessId, registeredStorePort.GetType().GetProperty("StoreBusinessId")?.GetValue(registeredStorePort),
+                        "The originally registered port must follow the formed Business, rather than remaining the startup placeholder.");
+                    Assert.Greater((int)registeredStorePort.GetType().GetMethod("CategoryStockUnits")
+                        .Invoke(registeredStorePort, new object[] { "staple_food" }), 0,
+                        "The adapter must expose only the formed store's actual runtime stock.");
+                    Assert.Greater((int)generalStoreAdapterType.GetMethod("ItemStockUnits")
+                        .Invoke(supplierAdapter, new object[] { "flour" }), 0,
+                        "The already-registered supplier adapter must observe formed store inventory.");
+                    Assert.Greater((int)generalStoreAdapterType.GetMethod("ItemPricePerUnitCents")
+                        .Invoke(supplierAdapter, new object[] { "flour" }), 0,
+                        "A sale requires a positive price from the live store authority.");
+                    object afterHireCapability = registeredStorePort.GetType().GetProperty("TradingCapability")
+                        ?.GetValue(registeredStorePort);
+                    Assert.IsTrue((bool)afterHireCapability?.GetType().GetProperty("Staffed")?.GetValue(afterHireCapability),
+                        "Trading capability must refresh after a real clerk is assigned.");
                 }
                 string instanceId = formedBusiness.GetType().GetProperty("InstanceId")?.GetValue(formedBusiness) as string;
                 created.Add(instanceId);

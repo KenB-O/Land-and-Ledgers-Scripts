@@ -33,7 +33,23 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string StoreName => manager.CurrentBusiness != null ? manager.CurrentBusiness.RuntimeDisplayName : "General Store";
         public string LocationId => manager.StoreBuildingId >= 0 ? $"building:{manager.StoreBuildingId}" : "general-store";
         public IReadOnlyList<GeneralStoreCategoryOffer> CategoryOffers => offers;
-        public StoreTradingCapability TradingCapability => capability;
+        public StoreTradingCapability TradingCapability
+        {
+            get
+            {
+                // The scene registers this port before a player has formed a
+                // store. Keep the view of staffing live so the same registered
+                // supplier becomes trade-capable only after a real store and
+                // clerk exist; registration itself never opens the business.
+                if (manager != null && capability != null)
+                {
+                    capability.Staffed = manager.CurrentBusiness != null
+                        && manager.FilledWorkerSlotCount > 0;
+                }
+
+                return capability;
+            }
+        }
         public int CurrentCashCents => manager.CurrentCashCents;
         public bool OffersDelivery => false;
 

@@ -120,15 +120,49 @@ namespace LandLedgers.Economy.Farming.Integration
                 return -1;
             }
 
-            int sold = supplier.SellFeed(requestedUnits, dayIndex, diagnostics);
+            if (requestedUnits <= 0)
+            {
+                diagnostics.Add("FeedMarket: a positive quantity is required.");
+                return -1;
+            }
+
+            int pricePerUnit = supplier.PricePerUnitCents;
+            if (pricePerUnit <= 0)
+            {
+                diagnostics.Add($"FeedMarket: {supplier.SupplierName} has no positive feed price; free or invalid feed cannot be purchased.");
+                return -1;
+            }
+
+            // Check purchasing capacity before asking the supplier to decrement
+            // stock. The market is synchronous, so this preflight plus the
+            // authoritative outflow below prevents a refused payment from
+            // becoming free feed or a lost supplier lot.
+            int affordableUnits = buyerLedger.GetBalanceCents() / pricePerUnit;
+            int orderUnits = Math.Min(requestedUnits, affordableUnits);
+            if (orderUnits <= 0)
+            {
+                diagnostics.Add($"FeedMarket: buyer cannot afford one unit from {supplier.SupplierName} at {pricePerUnit}c; no stock moved.");
+                return -1;
+            }
+            if (orderUnits < requestedUnits)
+            {
+                diagnostics.Add($"FeedMarket: buyer can afford only {orderUnits}/{requestedUnits} requested units; reducing order before sale.");
+            }
+
+            int sold = supplier.SellFeed(orderUnits, dayIndex, diagnostics);
             if (sold < 0) return -1;
 
-            int costCents = sold * supplier.PricePerUnitCents;
+            int costCents = checked(sold * pricePerUnit);
             if (costCents > 0)
             {
-                buyerLedger.RecordOutflow(dayIndex, costCents,
+                string refusal = buyerLedger.RecordOutflow(dayIndex, costCents,
                     $"Feed purchase: {sold} units from {supplier.SupplierName} (via {supplier.GetType().Name})",
                     supplier.SupplierName);
+                if (refusal != null)
+                {
+                    diagnostics.Add($"FeedMarket: payment was refused after supplier stock changed; purchase not credited. {refusal}");
+                    return -1;
+                }
             }
             farmFeed.AddFeed(sold, $"purchased from {supplier.SupplierName} (day {dayIndex})");
             diagnostics.Add($"FeedMarket: bought {sold} feed units from {supplier.SupplierName} for {costCents}c.");

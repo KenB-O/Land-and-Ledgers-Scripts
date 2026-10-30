@@ -133,14 +133,39 @@ namespace LandLedgers.Economy.Farming.Integration
                 return null;
             }
 
-            int sold = supplier.SellLumber(need, dayIndex, diagnostics);
+            int pricePerUnit = supplier.PricePerUnitCents;
+            if (pricePerUnit <= 0)
+            {
+                return $"FarmConstruction: {supplier.SupplierName} has no positive lumber price; materials cannot be free.";
+            }
+
+            // Do not let a supplier transfer physical stock before the buyer can
+            // settle the purchase. HouseholdLedger rejects unaffordable outflows;
+            // preflighting here preserves the supplier's stock on refusal.
+            int affordableUnits = buyerLedger.GetBalanceCents() / pricePerUnit;
+            int orderUnits = Math.Min(need, affordableUnits);
+            if (orderUnits <= 0)
+            {
+                return $"FarmConstruction: buyer cannot afford one lumber unit from {supplier.SupplierName} at {pricePerUnit}c; no stock moved.";
+            }
+            if (orderUnits < need)
+            {
+                diagnostics.Add($"FarmConstruction: buyer can afford only {orderUnits}/{need} required lumber units; reducing order before sale.");
+            }
+
+            int sold = supplier.SellLumber(orderUnits, dayIndex, diagnostics);
             if (sold <= 0) return $"FarmConstruction: {supplier.SupplierName} could not supply {need} lumber units.";
-            int costCents = sold * supplier.PricePerUnitCents;
+            int costCents = checked(sold * pricePerUnit);
             if (costCents > 0)
             {
-                buyerLedger.RecordOutflow(dayIndex, costCents,
+                string refusal = buyerLedger.RecordOutflow(dayIndex, costCents,
                     $"Lumber for {project.Name} ({project.Kind}): {sold} units from {supplier.SupplierName}",
                     supplier.SupplierName);
+                if (refusal != null)
+                {
+                    diagnostics.Add($"FarmConstruction: payment was refused after supplier stock changed; materials were not credited. {refusal}");
+                    return refusal;
+                }
             }
 
             project.LumberAcquired += sold;

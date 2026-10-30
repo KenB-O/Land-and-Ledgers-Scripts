@@ -28,6 +28,7 @@ namespace LandLedgers.PlayMode
             Type directorType = RuntimeType("LandLedgers.Orchestration.Scenarios.ScenarioDirector");
             Type timeManagerType = RuntimeType("LandLedgers.Time.TimeManager");
             Type populationManagerType = RuntimeType("LandLedgers.Population.PopulationManager");
+            Type lifecycleType = RuntimeType("LandLedgers.Population.HouseholdLifecycleManager");
 
             Component startPanel = FindComponent(startPanelType);
             Assert.NotNull(startPanel, "Main Scene must expose the authored scenario start panel.");
@@ -55,11 +56,33 @@ namespace LandLedgers.PlayMode
             Assert.AreEqual(secondsBeforeStart, (float)timeManagerType.GetProperty("GameSecondsIntoDay")?.GetValue(timeManager),
                 0.001f, "The authoritative clock must remain fixed while the scenario choice is open.");
 
+            object populationState = populationManagerType.GetProperty("State")?.GetValue(populationManager);
+            var households = populationState?.GetType().GetField("households")?.GetValue(populationState) as System.Collections.IList;
+            Assert.NotNull(households, "The founder must be selected from the already generated authoritative households.");
+            int householdCountBeforeScenario = households.Count;
+
             startPanelType.GetMethod("StartScenario", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?.Invoke(startPanel, null);
             Assert.IsFalse((bool)timeManagerType.GetProperty("IsPaused")?.GetValue(timeManager),
                 "Selecting First Ledger should resume the existing authoritative clock.");
             Assert.AreEqual("first-ledger", directorType.GetProperty("ActiveScenarioId")?.GetValue(director));
+
+            Assert.AreEqual(householdCountBeforeScenario, households.Count,
+                "Scenario activation must adopt a real existing household rather than create an empty duplicate household.");
+            object playerHousehold = null;
+            int playerHouseholdId = -1;
+            foreach (object household in households)
+            {
+                if (!(bool)(household.GetType().GetField("isPlayerHousehold")?.GetValue(household) ?? false)) continue;
+                Assert.IsNull(playerHousehold, "Only one household may be assigned to the active First Ledger player.");
+                playerHousehold = household;
+                playerHouseholdId = (int)household.GetType().GetField("id")?.GetValue(household);
+            }
+            Assert.NotNull(playerHousehold, "First Ledger must bind its founder declaration to a real household.");
+            Assert.AreEqual("first-ledger", playerHousehold.GetType().GetField("playerScenarioId")?.GetValue(playerHousehold));
+            var members = (System.Collections.ICollection)lifecycleType.GetMethod("GetMembers")
+                ?.Invoke(directorType.GetProperty("Lifecycle")?.GetValue(director), new object[] { playerHouseholdId });
+            Assert.Greater(members?.Count ?? 0, 0, "The designated player household must contain its actual existing residents.");
 
             yield return null;
         }
@@ -728,6 +751,16 @@ namespace LandLedgers.PlayMode
             Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryCreatePlayerBusiness")
                 .Invoke(sharedRuntime, createArguments), createArguments[3] as string);
 
+            // Business formation alone does not fund a store or create saleable
+            // inventory. Use the same owner-to-business capital transfer and
+            // ordinary weekly procurement callback as the production-path test.
+            Type portfolioType = RuntimeType("LandLedgers.Economy.PlayerPortfolioManager");
+            Component portfolio = FindComponent(portfolioType);
+            Assert.NotNull(portfolio, "A player-funded store requires the authoritative portfolio manager.");
+            object[] fundingArguments = { createArguments[2], 175000, 0, null };
+            Assert.IsTrue((bool)portfolioType.GetMethod("TryTransferOwnerBusinessCash")
+                .Invoke(portfolio, fundingArguments), fundingArguments[3] as string);
+
             object[] premisesArguments = { createArguments[2], null };
             Assert.IsTrue((bool)sharedRuntimeType.GetMethod("TryAssignPlayerBusinessPremises")
                 .Invoke(sharedRuntime, premisesArguments), premisesArguments[1] as string);
@@ -740,6 +773,16 @@ namespace LandLedgers.PlayMode
             object[] bindArguments = { createArguments[2], null };
             Assert.IsTrue((bool)storeRuntimeType.GetMethod("TryBindFormedPlayerBusiness")
                 .Invoke(storeRuntime, bindArguments), bindArguments[1] as string);
+
+            sharedRuntimeType.GetMethod("ResolveWeeklySharedOperations")?.Invoke(sharedRuntime, null);
+            object formedBusiness = createArguments[2];
+            object runtimeState = formedBusiness.GetType().GetProperty("RuntimeState")?.GetValue(formedBusiness);
+            Assert.NotNull(runtimeState);
+            object stockedCategory = runtimeState.GetType().GetMethod("GetCategoryStock")
+                ?.Invoke(runtimeState, new object[] { "staple_food" });
+            Assert.NotNull(stockedCategory, "The store's authored staple inventory category must exist.");
+            Assert.Greater((int)stockedCategory.GetType().GetProperty("CurrentStockUnits")?.GetValue(stockedCategory), 0,
+                "The positive sale case must first acquire real stock through the ordinary procurement path.");
 
             storeRuntimeType.GetMethod("ResolveDailySales")?.Invoke(storeRuntime, null);
 

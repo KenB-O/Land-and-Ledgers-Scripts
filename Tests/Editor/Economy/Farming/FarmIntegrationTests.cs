@@ -117,14 +117,36 @@ namespace LandLedgers.EditorTests.Economy.Farming
             var store = new GeneralStoreFeedSupplier("store-1", "General Store", 4);
             Assert.IsNull(store.RestockFeed(100, "Grain Mill (ground from Miller's crop farm)", 90));
             var ledger = new HouseholdLedger(7);
+            Assert.IsNull(ledger.RecordInflow(99, 160, HouseholdIncomeSource.OwnerContribution,
+                "farm-owner-7", "documented working capital for livestock feed", "farm owner"));
             var diagnostics = new List<string>();
 
             int bought = FeedMarket.BuyFeed(feed, store, 40, 100, ledger, diagnostics);
 
             Assert.AreEqual(40, bought);
             Assert.AreEqual(40, feed.FeedStockUnits);
-            Assert.AreEqual(-160, ledger.GetBalanceCents(), "Feed costs real money with provenance.");
+            Assert.AreEqual(0, ledger.GetBalanceCents(), "Feed is paid from documented working capital.");
             Assert.AreEqual(60, store.FeedStockUnits, "Supplier stock is finite.");
+            Assert.AreEqual(2, ledger.Entries.Count, "Funding and purchase each have one ledger entry.");
+        }
+
+        [Test]
+        public void FeedMarket_InsufficientFundsRefusesWithoutMovingStock()
+        {
+            var feed = new FeedLoop(0);
+            var store = new GeneralStoreFeedSupplier("store-1", "General Store", 4);
+            Assert.IsNull(store.RestockFeed(100, "Grain Mill (ground from Miller's crop farm)", 90));
+            var ledger = new HouseholdLedger(7);
+            var diagnostics = new List<string>();
+
+            int bought = FeedMarket.BuyFeed(feed, store, 40, 100, ledger, diagnostics);
+
+            Assert.AreEqual(-1, bought, "An unfunded buyer cannot acquire feed.");
+            Assert.AreEqual(0, feed.FeedStockUnits, "No feed is credited to the buyer.");
+            Assert.AreEqual(100, store.FeedStockUnits, "Refusal does not consume supplier stock.");
+            Assert.AreEqual(0, ledger.GetBalanceCents(), "Refusal does not change buyer cash.");
+            Assert.IsTrue(diagnostics.Exists(x => x.Contains("cannot afford one unit")),
+                "The refusal explains the actual affordability blocker.");
         }
 
         [Test]
@@ -148,8 +170,14 @@ namespace LandLedgers.EditorTests.Economy.Farming
 
             var lumberYard = new TestLumberYard(1000, 2);
             var ledger = new HouseholdLedger(7);
+            Assert.IsNull(ledger.RecordInflow(99, 200, HouseholdIncomeSource.OwnerContribution,
+                "farm-owner-7", "documented working capital for construction lumber", "farm owner"));
             Assert.IsNull(FarmConstruction.BuyMaterials(project, lumberYard, 100, ledger, diagnostics));
             Assert.IsTrue(project.MaterialsReady);
+            Assert.AreEqual(2, ledger.Entries.Count, "Funding and lumber purchase each have one ledger entry.");
+            Assert.AreEqual(-80, ledger.Entries[ledger.Entries.Count - 1].AmountCents,
+                "Forty lumber units are paid at the supplier's actual 2c price.");
+            Assert.AreEqual(120, ledger.GetBalanceCents());
 
             Assert.IsNull(FarmConstruction.StartConstruction(project,
                 EntityId.For(EntityKind.Person, 3), 101, diagnostics));
@@ -159,7 +187,24 @@ namespace LandLedgers.EditorTests.Economy.Farming
             Assert.IsNotNull(building);
             Assert.AreEqual(FarmBuildingKind.Coop, building.Kind);
             Assert.IsTrue(building.Condition.Contains("lumber"), "Building carries material provenance.");
-            Assert.Less(ledger.GetBalanceCents(), 0, "Lumber was purchased, not conjured.");
+        }
+
+        [Test]
+        public void Construction_UnfundedMaterialPurchasePreservesSupplierStockAndProject()
+        {
+            var project = new FarmConstructionProject("coop-unfunded", FarmConstructionKind.Coop, "second coop");
+            var lumberYard = new TestLumberYard(1000, 2);
+            var ledger = new HouseholdLedger(7);
+            var diagnostics = new List<string>();
+
+            string refusal = FarmConstruction.BuyMaterials(project, lumberYard, 100, ledger, diagnostics);
+
+            Assert.IsNotNull(refusal);
+            StringAssert.Contains("cannot afford one lumber unit", refusal);
+            Assert.AreEqual(1000, lumberYard.LumberStockUnits, "Refused purchase preserves seller stock.");
+            Assert.AreEqual(0, project.LumberAcquired, "Refused purchase does not credit project materials.");
+            Assert.IsFalse(project.MaterialsReady);
+            Assert.AreEqual(0, ledger.GetBalanceCents());
         }
 
         [Test]

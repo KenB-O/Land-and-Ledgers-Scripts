@@ -323,6 +323,74 @@ namespace LandLedgers.Population
                 return null;
             }
 
+            // Scenario starts often occur after the ordinary world bootstrap has
+            // already formed real households. Reuse that household identity when
+            // all declared founders are already co-residents; creating a second
+            // household around them would leave their original household and
+            // active membership in conflict. Moving founders between different
+            // established households requires an explicit, authored household
+            // transition and is therefore refused here.
+            int establishedHouseholdId = -1;
+            for (int i = 0; i < founderPersonIds.Count; i++)
+            {
+                int founderId = founderPersonIds[i];
+                if (population.GetPerson(founderId) == null)
+                {
+                    diagnostics.Add($"DeclarePlayerHousehold: unknown founder person {founderId}.");
+                    return null;
+                }
+
+                int activeHouseholdId = memberships.GetActiveHouseholdId(founderId);
+                if (activeHouseholdId < 0)
+                {
+                    if (establishedHouseholdId >= 0)
+                    {
+                        diagnostics.Add($"DeclarePlayerHousehold: founder P{founderId} has no active household while other founders do; refusing to split existing household state.");
+                        return null;
+                    }
+
+                    continue;
+                }
+
+                if (establishedHouseholdId >= 0 && establishedHouseholdId != activeHouseholdId)
+                {
+                    diagnostics.Add("DeclarePlayerHousehold: founders belong to different active households; refusing to create conflicting memberships.");
+                    return null;
+                }
+
+                establishedHouseholdId = activeHouseholdId;
+            }
+
+            if (establishedHouseholdId >= 0)
+            {
+                for (int i = 0; i < founderPersonIds.Count; i++)
+                {
+                    if (memberships.GetActiveHouseholdId(founderPersonIds[i]) != establishedHouseholdId)
+                    {
+                        diagnostics.Add("DeclarePlayerHousehold: not all declared founders already share the same active household; refusing to rewrite household membership.");
+                        return null;
+                    }
+                }
+
+                HouseholdState established = population.GetHousehold(establishedHouseholdId);
+                if (established == null || established.lifecycleState == HouseholdLifecycleState.Dissolved)
+                {
+                    diagnostics.Add($"DeclarePlayerHousehold: established household H{establishedHouseholdId} is missing or dissolved.");
+                    return null;
+                }
+
+                if (established.isPlayerHousehold
+                    && !string.Equals(established.playerScenarioId, scenarioId ?? string.Empty, StringComparison.Ordinal))
+                {
+                    diagnostics.Add($"DeclarePlayerHousehold: household H{establishedHouseholdId} is already assigned to scenario '{established.playerScenarioId}'.");
+                    return null;
+                }
+
+                established.isPlayerHousehold = true;
+                established.playerScenarioId = scenarioId ?? string.Empty;
+                return established;
+            }
+
             HouseholdState household = FormHousehold(
                 householdName, null, founderPersonIds[0], dayIndex, HouseholdMembershipSource.Authored);
             if (household == null)

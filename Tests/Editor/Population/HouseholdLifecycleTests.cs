@@ -158,6 +158,48 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void DeclarePlayerHousehold_ReusesAnExistingHouseholdWithoutDuplicatingMemberships()
+        {
+            PersonState founder = AddPerson("Kennedy", "Morrow", 28);
+            PersonState spouse = AddPerson("Emma", "Morrow", 27);
+            HouseholdState established = lifecycle.FormHousehold(
+                "Morrow Household", "Morrow", founder.id, 0, HouseholdMembershipSource.Authored);
+            lifecycle.AddMember(established.id, spouse.id, 0, HouseholdMembershipSource.Authored, "existing family member");
+
+            HouseholdState player = lifecycle.DeclarePlayerHousehold(
+                "first-ledger", "Player Household", new List<int> { founder.id, spouse.id }, 0);
+
+            Assert.AreSame(established, player);
+            Assert.AreEqual(1, population.households.Count, "Scenario activation must not create a competing household record.");
+            Assert.IsTrue(player.isPlayerHousehold);
+            Assert.AreEqual("first-ledger", player.playerScenarioId);
+            CollectionAssert.AreEquivalent(new[] { founder.id, spouse.id }, lifecycle.GetMembers(established.id));
+            Assert.AreEqual(established.id, memberships.GetActiveHouseholdId(founder.id));
+            Assert.AreEqual(established.id, memberships.GetActiveHouseholdId(spouse.id));
+        }
+
+        [Test]
+        public void DeclarePlayerHousehold_RefusesFoundersFromDifferentEstablishedHouseholds()
+        {
+            PersonState founder = AddPerson("Kennedy", "Morrow", 28);
+            PersonState spouse = AddPerson("Emma", "Bell", 27);
+            HouseholdState first = lifecycle.FormHousehold(
+                "Morrow Household", "Morrow", founder.id, 0, HouseholdMembershipSource.Authored);
+            HouseholdState second = lifecycle.FormHousehold(
+                "Bell Household", "Bell", spouse.id, 0, HouseholdMembershipSource.Authored);
+
+            HouseholdState player = lifecycle.DeclarePlayerHousehold(
+                "first-ledger", "Player Household", new List<int> { founder.id, spouse.id }, 0);
+
+            Assert.IsNull(player, "The scenario must not silently split founders out of distinct existing households.");
+            Assert.AreEqual(2, population.households.Count);
+            Assert.IsFalse(first.isPlayerHousehold);
+            Assert.IsFalse(second.isPlayerHousehold);
+            Assert.AreEqual(first.id, memberships.GetActiveHouseholdId(founder.id));
+            Assert.AreEqual(second.id, memberships.GetActiveHouseholdId(spouse.id));
+        }
+
+        [Test]
         public void EnsureEntityIds_BackfillsLegacyHouseholds()
         {
             population.households.Add(new HouseholdState { id = 0, householdName = "Legacy" });

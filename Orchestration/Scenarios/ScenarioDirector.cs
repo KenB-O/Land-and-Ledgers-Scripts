@@ -344,12 +344,26 @@ namespace LandLedgers.Orchestration.Scenarios
             }
 
             var founderIds = new List<int>();
-            foreach (string displayName in declaration.FounderDisplayNames)
+            if (declaration.FounderDisplayNames.Count == 0)
             {
-                List<int> resolved = FounderResolver(displayName);
-                if (resolved != null)
+                // An empty authored list means the runtime world generator owns
+                // founder identity. Ask the injected resolver once for a real
+                // living Person; do not fabricate a founder or household record.
+                List<int> generatedFounders = FounderResolver(string.Empty);
+                if (generatedFounders != null)
                 {
-                    founderIds.AddRange(resolved);
+                    founderIds.AddRange(generatedFounders);
+                }
+            }
+            else
+            {
+                foreach (string displayName in declaration.FounderDisplayNames)
+                {
+                    List<int> resolved = FounderResolver(displayName);
+                    if (resolved != null)
+                    {
+                        founderIds.AddRange(resolved);
+                    }
                 }
             }
 
@@ -362,9 +376,16 @@ namespace LandLedgers.Orchestration.Scenarios
             }
 
             int dayIndex = TimeManager.Instance != null ? TimeManager.Instance.CurrentAbsoluteDayIndex : 0;
-            Lifecycle.DeclarePlayerHousehold(declaration.ScenarioPlayerId, declaration.HouseholdName, founderIds, dayIndex);
+            HouseholdState playerHousehold = Lifecycle.DeclarePlayerHousehold(
+                asset.ScenarioId, declaration.HouseholdName, founderIds, dayIndex);
+            if (playerHousehold == null)
+            {
+                Service.ActiveState.AddDiagnostic(
+                    $"Player household '{declaration.HouseholdName}' could not be declared for scenario '{asset.ScenarioId}'; lifecycle refused the founder/membership state.");
+                return;
+            }
             Service.ActiveState.AddDiagnostic(
-                $"Player household '{declaration.HouseholdName}' declared with {founderIds.Count} founder(s) (GHOST-DEF-006).");
+                $"Player household '{declaration.HouseholdName}' declared for scenario '{asset.ScenarioId}' with {founderIds.Count} founder(s) (GHOST-DEF-006).");
         }
 
         private void EnqueueStartingTasks(ScenarioAsset asset)

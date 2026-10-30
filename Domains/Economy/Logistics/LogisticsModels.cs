@@ -322,23 +322,36 @@ namespace LandLedgers.Economy
             // This created phantom cargo that could survive reload and trigger delivery.
 
             // Deterministic repair (J): Where evidence proves loading never occurred:
-            // - shipmentId starts with "blocked:" (direct CreateBlockedShipment record), OR
-            // - loadApplied is false with a blocked reason, OR
-            // - route planning / road access / carrier failure with empty route plan.
+            // - shipmentId starts with "blocked:" (the known legacy CreateBlockedShipment record), OR
+            // - both source commitment and loading are false and there is a blocked reason.
+            // A non-legacy record with sourceCommittedAtSchedule=true is contradictory
+            // when loadApplied=false. Preserve its cargo in failed custody for review;
+            // the inconsistent markers are not evidence that the source still owns it.
             bool provablyNeverLoaded =
                 (!string.IsNullOrWhiteSpace(state.shipmentId) && state.shipmentId.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase))
-                || (!state.loadApplied && !string.IsNullOrWhiteSpace(state.blockedReason))
-                || (!string.IsNullOrWhiteSpace(state.blockedReason)
-                    && (state.routePlan == null || state.routePlan.TotalTravelCells <= 0)
-                    && (state.blockedReason.Contains("road access", StringComparison.OrdinalIgnoreCase)
-                        || state.blockedReason.Contains("route planning", StringComparison.OrdinalIgnoreCase)
-                        || state.blockedReason.Contains("carrier available", StringComparison.OrdinalIgnoreCase)));
+                || (!state.sourceCommittedAtSchedule && !state.loadApplied
+                    && !string.IsNullOrWhiteSpace(state.blockedReason));
+
+            bool contradictoryCommitAndLoadMarkers =
+                !string.IsNullOrWhiteSpace(state.blockedReason)
+                && !state.deliveryApplied
+                && state.sourceCommittedAtSchedule
+                && !state.loadApplied
+                && !(!string.IsNullOrWhiteSpace(state.shipmentId)
+                    && state.shipmentId.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase));
 
             if (provablyNeverLoaded && state.remainingQuantityUnits > 0)
             {
                 state.remainingQuantityUnits = 0;
                 state.loadApplied = false;
                 state.sourceCommittedAtSchedule = false;
+                state.state = LogisticsShipmentStatus.Failed;
+            }
+            else if (contradictoryCommitAndLoadMarkers && state.remainingQuantityUnits > 0)
+            {
+                // The save does not prove whether physical loading was reflected
+                // before interruption. Quarantine the recorded cargo rather than
+                // silently returning it to source or allowing automatic delivery.
                 state.state = LogisticsShipmentStatus.Failed;
             }
 

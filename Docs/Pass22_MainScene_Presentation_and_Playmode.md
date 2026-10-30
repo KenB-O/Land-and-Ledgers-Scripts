@@ -74,3 +74,32 @@ The current source tree adds a production-order birthday regression and a real M
 - This is automated PlayMode execution of the real Main Scene, not a manually observed interactive play session. It does not validate day/night visual actor persistence, complete economic conservation, rent settlement, animal feed procurement, farming Tasks, or freight.
 
 The source changes are limited to `Domains/Population/PopulationManager.cs`, `Orchestration/Systems/SimulationDrivers.cs`, `Tests/Editor/Population/BirthdayChronologyTests.cs`, and `Tests/PlayMode/PlayableScenarioStartupPlayModeTests.cs`. No Unity scene, prefab, ScriptableObject or `.meta` asset was modified in this continuation.
+
+## Pass XXII continuation — contradictory shipment restore quarantine — 2026-10-30
+
+The v2.2 First Vein handoff's `CreateBlockedShipment(...)` conservation warning was traced through production refusal callers and save/load. Normal pre-load refusals already create terminal failed records with zero cargo; caller-side stock reservation/rollback is handled separately. A narrower legacy-restore edge remained: `LogisticsShipmentState.FromSaveDto` treated `loadApplied == false` plus any blocked reason as proof cargo had never left the source, even when `sourceCommittedAtSchedule == true`. That contradictory record can represent cargo whose source stock was already removed, so zeroing its shipment quantity could erase physical custody on restore.
+
+The migration now zeroes cargo for a non-legacy blocked save only when both source-commit and load markers are false. A non-legacy record with committed source stock, no load marker, a blocked reason, positive cargo, and no prior delivery is quarantined in `Failed` state with its cargo and contradictory markers preserved. The known historical `blocked:` records still receive the targeted phantom-cargo repair. This keeps the shipment non-deliverable while retaining physical units for investigation.
+
+Fresh Unity 6000.4.2f1 EditMode result on the modified tree: `LogisticsConservationGateTests` 17/17 passed, 0 failed, 0 skipped. This includes the new `ContradictoryCommittedShipmentSave_PreservesCargoInFailedCustody` regression and all prior zero-cargo blocked, caller rollback, retry, legacy repair, delivery refusal, and post-load recovery cases. NUnit XML: `F:\Land & Ledgers_Pass22_Backups\pass22-reports\pass22-logistics-conservation-final-tree.xml`; SHA-256 `E1D3A2A060A5120D769758A5E3A70458512201EAC2475B31F9929271D2172688`.
+
+This does not establish freight operation in the Main Scene or prove the entire economy conserved. Source/test changes are limited to `Domains/Economy/Logistics/LogisticsModels.cs` and `Tests/Editor/Economy/LogisticsConservationGateTests.cs`; no authored Unity scene, prefab, ProjectSettings, terrain or `.meta` asset changed.
+
+## Pass XXII final-tree recheck — 2026-10-30
+
+After the shipment restore change, the actual Main Scene RUN-004 PlayMode test was rerun against the same source tree: 1/1 passed, 0 failed, 0 skipped. Unity 6000.4.2f1, `PlayableScenarioStartupPlayModeTests.MainSceneFirstLedgerRunsThirtyDaysThroughAuthoritativeDrivers`. NUnit XML: `F:\Land & Ledgers_Pass22_Backups\pass22-reports\pass22-main-scene-30-day-final-tree.xml`; SHA-256 `9A98AE9881E21430FE8B31629446EBAA54BF901D69E7766B60ED0A56AD507319`.
+
+The run advanced the authoritative calendar from day 2132 to 2162 (January 1 to January 31, 1886). Opening/closing snapshot: Persons 94/94 unique; Households 28→33; Businesses 10; Business runtime cash 217,000c→321,950c; household-ledger cash 145,704c→142,617c; Business category stock 1,321u→1,143u; Tasks 0→56 (1 Complete, 55 Open); generated workplace assignments 54; formal EmploymentRelationship registry 0. The First Ledger was not forced to Victory. These partial totals remain non-reconciled and are not a conservation proof.
+
+Horse A0 received 0/2 feed units each day and degraded; the run did not create free feed. The startup still reports a same-age birthday observation on January 1, followed by dated age changes for other Persons later in the month; the chronological duplicate-dispatch assertion passed. The 1886 clock versus the authored First Ledger 1870 start remains unresolved. The task completion ratio and formal employment mapping remain open. This is automated Main Scene PlayMode, not a manual visual session or interrupted day-15 save/load run.
+
+The most recent complete `PlayableScenarioStartupPlayModeTests` class report remains 11/12 with one failure in `GeneralStoreDailySaleKeepsRealHouseholdAndPersonProvenance`. Independent source tracing classifies the positive-sale assertion as nondeterministic setup: it directly calls the store's daily resolver on the same day the bootstrap already resolved household shopping, does not establish an outstanding affordable need, and does not ensure the player store wins the legitimate seller comparison. A separate limitation remains: the reported Person ID is inferred as the first eligible adult member, not supplied by a completed shopping journey. No demand, score, or person identity was fabricated to make the assertion pass. Keep the positive autonomous retail case open until the test follows a real later shopping opportunity and actor provenance is tied to the ordinary journey/purchase authority.
+
+Final overnight handoff verification on the post-logistics source tree:
+
+- Full `PlayableScenarioStartupPlayModeTests`: 12/12 passed, 0 failed, 0 skipped in Unity 6000.4.2f1. XML: `F:\Land & Ledgers_Pass22_Backups\pass22-reports\pass22-playable-startup-postlogistics.xml`; SHA-256 `D466AEADF4ABEBB4C14E630057747C4D4D15220D7F22902BE064E2AB6EDD79B1`.
+- The 30-day Main Scene test independently passed 1/1 on this same tree; see the final-tree RUN-004 result above.
+- The positive General Store sale assertion passed in this generated run. This does not clear the broader issue: prior seeds produced zero player-store sales, and `LastCustomerPersonId` still represents an inferred eligible adult rather than a Person verified as the actual journey actor. The suite pass proves one legitimate household reserve sale was processed by the production resolver under this generated state; it does not establish repeatable positive sales across seeds or an embodied shopping journey.
+- Fresh EditMode `LogisticsConservationGateTests`: 17/17 passed on this same tree; see the shipment-restore section above.
+
+Unity batch test processes exited normally and did not leave the project in Play Mode. The next handoff state is the authored Main Scene open in Edit Mode.

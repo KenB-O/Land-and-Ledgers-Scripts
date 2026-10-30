@@ -511,6 +511,64 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(repaired.IsPreLoadBlocked, "IsPreLoadBlocked is true on repaired record.");
         }
 
+        [Test]
+        public void ContradictoryCommittedShipmentSave_PreservesCargoInFailedCustody()
+        {
+            List<Object> cleanup = new();
+            try
+            {
+                LogisticsRuntimeManager runtime = CreateLogisticsRuntime(cleanup);
+                BusinessInstanceState buyer = CreateBusiness(BusinessType.GeneralStore, "buyer_conflict", 1);
+                SetStock(buyer, "clothing", 0);
+
+                // A non-legacy shipment claims source stock was committed but its
+                // loading marker is absent. The save cannot prove the cargo was
+                // never transferred, so restore must retain it in failed custody.
+                LogisticsShipmentSaveDto dto = new()
+                {
+                    shipmentId = "local:source->buyer:clothing:commit-load-conflict",
+                    shipmentKind = LogisticsShipmentKind.LocalTradeTransfer,
+                    cargoClass = LogisticsCargoClass.PackagedGoods,
+                    supplierClass = LogisticsSupplierClass.LocalBusiness,
+                    sourceBusinessInstanceId = "source_conflict",
+                    destinationBusinessInstanceId = buyer.InstanceId,
+                    sourceCategoryId = "clothing",
+                    destinationCategoryId = "clothing",
+                    plannedQuantityUnits = 5,
+                    remainingQuantityUnits = 5,
+                    sourceCommittedAtSchedule = true,
+                    loadApplied = false,
+                    deliveryApplied = false,
+                    state = LogisticsShipmentStatus.Delayed,
+                    blockedReason = "route planning failed"
+                };
+
+                LogisticsShipmentState restored = LogisticsShipmentState.FromSaveDto(dto);
+
+                Assert.AreEqual(5, restored.RemainingQuantityUnits,
+                    "Contradictory flags are not proof that recorded cargo never left the source.");
+                Assert.IsTrue(restored.sourceCommittedAtSchedule,
+                    "The restore must preserve the evidence that source stock was committed.");
+                Assert.IsFalse(restored.loadApplied,
+                    "The restore must preserve the contradictory load marker for audit.");
+                Assert.AreEqual(LogisticsShipmentStatus.Failed, restored.Status,
+                    "Contradictory cargo is quarantined and must not keep advancing automatically.");
+
+                restored.AdvanceGameSeconds(5000f);
+                InvokeApplyDelivery(runtime, restored);
+                Assert.AreEqual(5, restored.RemainingQuantityUnits,
+                    "Quarantined cargo remains visible and is neither delivered nor erased.");
+                Assert.AreEqual(0, buyer.RuntimeState.GetCategoryStock("clothing").CurrentStockUnits,
+                    "Failed quarantine does not credit destination inventory.");
+                Assert.IsFalse(restored.deliveryApplied,
+                    "Failed contradictory cargo is never delivered automatically.");
+            }
+            finally
+            {
+                DestroyAll(cleanup);
+            }
+        }
+
         // -----------------------------------------------------------------------------------------
         // 16. Invariant K & 16: Ambiguous malformed shipment is quarantined rather than inventing history
         // -----------------------------------------------------------------------------------------

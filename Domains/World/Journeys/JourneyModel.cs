@@ -166,6 +166,86 @@ namespace LandLedgers.World.Journeys
 
         public IEnumerable<JourneyLocation> AllLocations() => locations.Values;
 
+        /// <summary>
+        /// Replaces the live TownWorld-derived nodes and their road links.
+        /// IDs beginning with "building:" plus the reserved town road-junction
+        /// IDs belong to the generated town view; unrelated authored journey
+        /// data remains intact. The route condition provider is not touched.
+        /// </summary>
+        public void ReplaceTownWorldSubgraph(
+            IReadOnlyList<JourneyLocation> townLocations,
+            IReadOnlyList<JourneyEdge> townEdges)
+        {
+            bool IsTownLocationId(string id)
+            {
+                return string.Equals(id, "town-center", StringComparison.OrdinalIgnoreCase)
+                    || id.StartsWith("town-road-component:", StringComparison.OrdinalIgnoreCase)
+                    || id.StartsWith("building:", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var replacedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string locationId in locations.Keys)
+            {
+                if (IsTownLocationId(locationId))
+                    replacedIds.Add(locationId);
+            }
+
+            var incomingTownIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (townLocations != null)
+            {
+                for (int i = 0; i < townLocations.Count; i++)
+                {
+                    if (!string.IsNullOrWhiteSpace(townLocations[i]?.LocationId))
+                        incomingTownIds.Add(townLocations[i].LocationId);
+                }
+            }
+
+            for (int i = edges.Count - 1; i >= 0; i--)
+            {
+                JourneyEdge edge = edges[i];
+                if (edge == null) continue;
+                bool fromTown = replacedIds.Contains(edge.FromLocationId);
+                bool toTown = replacedIds.Contains(edge.ToLocationId);
+                if (!fromTown && !toTown) continue;
+
+                // Keep legitimate regional/authored legs attached to stable
+                // town-center or building IDs. Internal town edges are rebuilt
+                // from the current road topology; links to removed town nodes
+                // are discarded.
+                bool retainRegionalLeg = fromTown != toTown
+                    && incomingTownIds.Contains(fromTown ? edge.FromLocationId : edge.ToLocationId);
+                if (!retainRegionalLeg)
+                {
+                    edges.RemoveAt(i);
+                }
+            }
+
+            foreach (string locationId in replacedIds)
+                locations.Remove(locationId);
+
+            if (townLocations != null)
+            {
+                for (int i = 0; i < townLocations.Count; i++)
+                {
+                    string problem = RegisterLocation(townLocations[i]);
+                    if (problem != null)
+                        throw new InvalidOperationException($"Town journey rebuild refused: {problem}");
+                }
+            }
+
+            if (townEdges != null)
+            {
+                for (int i = 0; i < townEdges.Count; i++)
+                {
+                    JourneyEdge edge = townEdges[i];
+                    if (edge == null) continue;
+                    string problem = AddEdge(edge.FromLocationId, edge.ToLocationId, edge.Miles, edge.RoadName);
+                    if (problem != null)
+                        throw new InvalidOperationException($"Town journey rebuild refused: {problem}");
+                }
+            }
+        }
+
         /// <summary>Adds a bidirectional road leg in real miles.</summary>
         public string AddEdge(string fromLocationId, string toLocationId, float miles, string roadName = "")
         {

@@ -92,7 +92,7 @@ runtime findings; see `Pass19_Runtime_Defect_and_Integration_Results.md`.
 
 | ID | Issue | Current status | Evidence / next check |
 |---|---|---|---|
-| LL-PLAY-020 | Daily needs do not have journey locations | OPEN | Main Scene log: `DailyNeedsService skipped: no journey locations registered`; connect valid location authority and test actual needs. |
+| LL-PLAY-020 | Daily needs do not have journey locations | PARTIAL | Main Scene daily driver now builds the hub JourneyModel from connected TownGrid roads and reciprocal building/plot frontage. Fresh PlayMode verified real building/home destinations and the daily service no longer skips for an empty model. That day still recorded missed meals and zero purchases, so a legitimate purchase/seller-availability case remains unverified. See `Pass21_MainScene_JourneyNetwork_Continuation.md` and fresh XML under `F:\Land & Ledgers_Pass21_Backups\journey-network-continuation_20261030_011226\reports`. |
 | LL-PLAY-021 | Animal feeding and rent authorities are missing in runtime | OPEN | Live log reports horse feeding shortfall and rent collection skipped for missing authorities; trace actual scene registration and custody. |
 | LL-PLAY-022 | Opening-day birthday events report unchanged ages | PARTIAL | Root cause: generated/migrated birthdays were constrained to dates before the opening day, concentrating Jan-1 birthdays. Generation now distributes dates across the year while preserving completed age; opening-day and leap-year regressions added. Final leap-year test result pending the current Unity run. |
 
@@ -123,3 +123,9 @@ Final Pass XX regression update: the current-source full EditMode run completed 
 - `LL-PLAY-001` remains PARTIAL; `LL-PLAY-005` remains PARTIAL. `LL-PLAY-020` and `LL-PLAY-021` remain OPEN. No 30-day economic reconciliation, day-15 continuation, full person lifecycle, rent/animal authority proof, seasonal crop Task chain or farm freight proof was completed. No visual issue is closed solely from source/test evidence.
 
 Pass XX final-source PlayMode result: 10 tests, 9 passed, 1 failed, 0 skipped. XML: `F:\Land & Ledgers_Pass20_Backups\pass20-reports\pass20-playmode-final-20261029.xml`. The failure is the authored opening world missing a real CropFarm Business; no synthetic farm was added. The first run's PlayMode result is retained separately.
+
+## Pass XXI continuation — real journey network and shopping regression — 2026-10-30
+
+- `LL-PLAY-020` moved from OPEN to PARTIAL. A connected road/building graph is now generated in the actual Main Scene daily drive from TownWorld road cells and each building's valid anchor or matching validated plot frontage. The fresh scenario-startup PlayMode class passed 11/11; its new Main Scene case observed connected building routes and verified registered household home IDs. A one-day run still had missed meals and zero purchases, so embodied commerce is not claimed complete.
+- The focused journey, P6 travel/comms, embodied purchase, shopping loop, and Main Scene startup suites passed 10/10, 10/10, 6/6, 21/21, and 11/11 respectively. Exact hashes and XML paths are in `Pass21_MainScene_JourneyNetwork_Continuation.md`.
+- The household shopping test formerly named `ExecuteNeed_UnaffordableFreight_CandidateRejected` expected total rejection although the production policy explicitly allows an affordable carry-limit partial purchase. Its expectation now verifies the real 50-unit purchase, remaining 10-unit need, 6,000-cent ledger movement, and stock/inventory conservation. No production policy or goods were injected.

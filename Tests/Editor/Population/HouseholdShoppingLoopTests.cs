@@ -498,23 +498,31 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void ExecuteNeed_UnaffordableFreight_CandidateRejected()
+        public void ExecuteNeed_UnaffordableFreight_BuysOnlyWhatShopperCanCarry()
         {
             Fixture f = Fixture.Create();
             f.Fund(10000);
             f.Port.OffersDeliveryValue = true;
             f.Port.DeliveryFeeValue = 9000; // freight alone breaks the budget
             f.Port.OffersTradeCreditValue = false;
-            // 60u exceeds the 50u carry capacity → delivery is the only way.
+            // 60u exceeds the 50u carry capacity. The whole delivery is
+            // unaffordable, but the existing partial-fill policy may settle
+            // a smaller in-person amount the household can carry and afford.
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
 
             ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
 
-            Assert.IsFalse(result.Success);
-            Assert.IsTrue(result.RejectedAlternatives.Count > 0);
-            StringAssert.Contains("freight", result.RejectedAlternatives[0].Reason.ToLower());
-            Assert.AreEqual(10000, f.Balance());
-            Assert.AreEqual(100, f.StoreStock());
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(50, result.UnitsAcquired, "The shopper may only carry the affordable partial amount.");
+            Assert.AreEqual(10, result.UnitsStillNeeded);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status,
+                "A partial purchase must leave the unmet household need open.");
+            Assert.AreEqual(6000, result.BuyerOutflowCents,
+                "The refused delivery fee must not be charged when the shopper carries the goods.");
+            Assert.AreEqual(6000, result.StoreCashInCents);
+            Assert.AreEqual(4000, f.Balance());
+            Assert.AreEqual(50, f.StoreStock());
+            Assert.AreEqual(50, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
         }
 
         [Test]

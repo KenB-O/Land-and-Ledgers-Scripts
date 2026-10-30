@@ -40,6 +40,103 @@ namespace LandLedgers.PlayMode
             yield return null;
         }
 
+        [UnityTest, Timeout(900000)]
+        public IEnumerator MainSceneDailyNeedsBuildsJourneysFromRealRoadsAndBuildingAccess()
+        {
+            AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);
+            Assert.NotNull(load, "Main Scene must be present in the build settings.");
+            while (!load.isDone) yield return null;
+
+            Type harnessType = RuntimeType("LandLedgers.Orchestration.Scenarios.Development.ScenarioValidationHarness");
+            Component harness = FindComponent(harnessType);
+            Assert.NotNull(harness, "The Main Scene must initialize its supported scenario bootstrap.");
+            yield return WaitForScenarioRegistration(harness, harnessType);
+            Assert.IsTrue((bool)harnessType.GetMethod("StartScenario")?.Invoke(harness, new object[] { "first-ledger" }),
+                "Journey verification starts through the authored scenario authority.");
+            harnessType.GetMethod("AdvanceHours")?.Invoke(harness, new object[] { 24 });
+            yield return null;
+
+            Type worldType = RuntimeType("LandLedgers.World.TownWorldController");
+            Type driversType = RuntimeType("LandLedgers.Orchestration.Systems.SimulationDrivers");
+            Type hubType = RuntimeType("LandLedgers.Orchestration.Systems.SimulationSystemsHub");
+            Component world = FindComponent(worldType);
+            Component drivers = FindComponent(driversType);
+            Component hub = FindComponent(hubType);
+            Assert.NotNull(world);
+            Assert.NotNull(drivers);
+            Assert.NotNull(hub);
+            Assert.NotNull(worldType.GetProperty("Grid")?.GetValue(world),
+                "World generation must provide the real road grid before journey wiring.");
+
+            object journeys = hubType.GetProperty("Journeys")?.GetValue(hub);
+            Assert.NotNull(journeys, "The journey authority must be the SystemsHub-owned model.");
+            object locations = journeys.GetType().GetMethod("AllLocations")?.Invoke(journeys, null);
+            Assert.NotNull(locations);
+            var townLocations = new List<string>();
+            foreach (object location in (System.Collections.IEnumerable)locations)
+            {
+                string id = location.GetType().GetField("LocationId")?.GetValue(location) as string;
+                if (!string.IsNullOrWhiteSpace(id)) townLocations.Add(id);
+            }
+
+            Assert.Contains("town-center", townLocations,
+                "The live graph must include the selected road junction nearest the real town center.");
+            string buildingLocation = townLocations.Find(id => id.StartsWith("building:", StringComparison.Ordinal));
+            Assert.IsNotNull(buildingLocation,
+                "At least one actual building with physical road access must register as a journey destination.");
+
+            Type travelModeType = RuntimeType("LandLedgers.World.Journeys.TravelMode");
+            object foot = Enum.Parse(travelModeType, "Foot");
+            object route = journeys.GetType().GetMethod("FindRoute")?.Invoke(
+                journeys, new[] { (object)"town-center", buildingLocation, foot });
+            Assert.IsTrue((bool)route.GetType().GetField("Found")?.GetValue(route),
+                "The Main Scene route must be backed by connected road cells and its building access anchor.");
+
+            object actualBuildings = worldType.GetProperty("Buildings")?.GetValue(world);
+            var actualIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (object building in (System.Collections.IEnumerable)actualBuildings)
+            {
+                int id = (int)building.GetType().GetField("id")?.GetValue(building);
+                actualIds.Add("building:" + id);
+            }
+            Assert.IsTrue(actualIds.Contains(buildingLocation),
+                "A journey destination must resolve to a real TownWorldController building identity.");
+
+            Type populationManagerType = RuntimeType("LandLedgers.Population.PopulationManager");
+            Component populationManager = FindComponent(populationManagerType);
+            object populationState = populationManagerType.GetProperty("State")?.GetValue(populationManager);
+            object householdStates = populationState?.GetType().GetField("households")?.GetValue(populationState);
+            Assert.NotNull(householdStates, "Generated households must remain in the authoritative population registry.");
+            int housedHouseholds = 0;
+            int routableHomes = 0;
+            int missingHomeRoutes = 0;
+            string sampleHomeLocation = null;
+            foreach (object household in (System.Collections.IEnumerable)householdStates)
+            {
+                int homeBuildingId = (int)household.GetType().GetField("homeBuildingId")?.GetValue(household);
+                if (homeBuildingId < 0) continue;
+                housedHouseholds++;
+                string id = "building:" + homeBuildingId;
+                if (actualIds.Contains(id) && townLocations.Contains(id))
+                {
+                    routableHomes++;
+                    sampleHomeLocation ??= id;
+                }
+                else
+                {
+                    missingHomeRoutes++;
+                }
+            }
+            Assert.Greater(housedHouseholds, 0, "The New Game must have real household home-building relationships.");
+            Assert.AreEqual(0, missingHomeRoutes,
+                "Each registered household home must resolve to its actual, road-accessible TownWorld building.");
+            Assert.Greater(routableHomes, 0);
+            object homeRoute = journeys.GetType().GetMethod("FindRoute")?.Invoke(
+                journeys, new[] { (object)sampleHomeLocation, "town-center", foot });
+            Assert.IsTrue((bool)homeRoute.GetType().GetField("Found")?.GetValue(homeRoute),
+                "A generated household must have a real road route from its home to the town junction.");
+        }
+
         [UnityTest]
         public IEnumerator EditorialValidationHarnessEnumeratesAndReportsTheAuthoredScenario()
         {

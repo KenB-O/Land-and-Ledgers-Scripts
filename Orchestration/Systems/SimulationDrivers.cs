@@ -80,6 +80,9 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField, Tooltip("Optional: drives DailyNeedsService. Found automatically if empty.")]
         private PopulationManager populationManager;
 
+        [SerializeField, Tooltip("Town grid used to derive real journeys from road cells and building access anchors.")]
+        private TownWorldController townWorld;
+
         /// <summary>
         /// NX-2C: the journey model for embodied needs execution. Assigned by
         /// scene bootstrap (like OnScenarioTick) — without it, daily needs
@@ -101,6 +104,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
+        private int lastTownJourneyWorldSignature = int.MinValue;
 
         /// <summary>
         /// Pass XII Worker A (LL-PLAY-002/003): true while this instance
@@ -525,6 +529,7 @@ namespace LandLedgers.Orchestration.Systems
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
+            townWorld ??= FindAnyObjectByType<TownWorldController>();
             SubscribeToTimeManager();
 
             if (hub == null)
@@ -671,7 +676,6 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            TownWorldController townWorld = FindAnyObjectByType<TownWorldController>();
             AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
             hub.AttachParcelWorld(townWorld, acquisitionMarket != null ? acquisitionMarket.Titles : null);
 
@@ -2158,6 +2162,7 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return; // no population yet — nothing to feed
             }
+            EnsureTownJourneyNetwork();
             // P6: fall back to the hub's journey model when the driver carries
             // no explicit one — the model is hub-owned now. An empty model (no
             // locations authored yet) still skips honestly instead of routing
@@ -2166,7 +2171,7 @@ namespace LandLedgers.Orchestration.Systems
             if (!HasAnyLocation(journeys))
             {
                 Debug.LogWarning("[SimulationDrivers] DailyNeedsService skipped: no journey locations " +
-                    "registered (author the world layout in scene bootstrap — see DRIVERS.md).");
+                    "registered from the live TownWorld road grid and building frontage.");
                 return;
             }
 
@@ -2180,7 +2185,7 @@ namespace LandLedgers.Orchestration.Systems
             // person's TTS-1 work-time budget (previously always skipped).
             purchaseExecutor ??= new EmbodiedPurchaseExecutor(
                 populationManager.State, hub.HouseholdLedgers, supplierDirectory, journeys,
-                null, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid),
+                ResolvePersonJourneyLocation, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid),
                 hub.HouseholdInventories);
 
             // P2: W2B/W2C/W3B nutrition links — count real prepared meals
@@ -3261,7 +3266,13 @@ namespace LandLedgers.Orchestration.Systems
                         absoluteDayIndex,
                         errandCtx,
                         householdShoppingLoop,
-                        new ShoppingLoopOptions { DepartureMinuteOfDay = 8 * 60, Diagnostics = diagnostics },
+                        new ShoppingLoopOptions
+                        {
+                            DepartureMinuteOfDay = 8 * 60,
+                            Diagnostics = diagnostics,
+                            PersonLocationId = ResolvePersonJourneyLocation,
+                            SetPersonLocation = SetPersonJourneyLocation
+                        },
                         diagnostics);
                     if (batch != null && !batch.TripExecuted && !string.IsNullOrWhiteSpace(batch.FailureReason))
                     {
@@ -3269,6 +3280,131 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+        }
+
+        private void EnsureTownJourneyNetwork()
+        {
+            if (hub == null) return;
+            townWorld ??= FindAnyObjectByType<TownWorldController>();
+            if (townWorld == null || townWorld.Grid == null) return;
+
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime != null
+                ? sharedBusinessRuntime.Businesses
+                : Array.Empty<BusinessInstanceState>();
+            int signature = CalculateTownJourneyWorldSignature(townWorld, businesses);
+            if (signature == lastTownJourneyWorldSignature) return;
+
+            Vector3 townCenter = townWorld.Settings != null
+                ? townWorld.Settings.worldCenter
+                : townWorld.Grid.Origin + new Vector3(
+                    townWorld.Grid.Width * townWorld.Grid.CellSizeMeters * 0.5f,
+                    0f,
+                    townWorld.Grid.Depth * townWorld.Grid.CellSizeMeters * 0.5f);
+            TownJourneyNetworkBuilder.BuildResult result = TownJourneyNetworkBuilder.Synchronize(
+                hub.Journeys, townWorld.Grid, townCenter, townWorld.Plots, townWorld.Buildings, businesses);
+            if (result.RoadComponents <= 0) return;
+
+            Journeys = hub.Journeys;
+            lastTownJourneyWorldSignature = signature;
+            if (result.RoutableBuildings <= 0)
+                Debug.LogWarning("[SimulationDrivers] " + result.Diagnostic, this);
+            else
+                Debug.Log("[SimulationDrivers] " + result.Diagnostic, this);
+        }
+
+        private static int CalculateTownJourneyWorldSignature(
+            TownWorldController world,
+            IReadOnlyList<BusinessInstanceState> businesses)
+        {
+            unchecked
+            {
+                int hash = 17;
+                hash = hash * 31 + world.GenerationPassCount;
+                hash = hash * 31 + world.Grid.Width;
+                hash = hash * 31 + world.Grid.Depth;
+                hash = hash * 31 + world.Grid.CellSizeMeters.GetHashCode();
+                for (int z = 0; z < world.Grid.Depth; z++)
+                {
+                    for (int x = 0; x < world.Grid.Width; x++)
+                    {
+                        TownCell cell = world.Grid.GetCell(new GridCoord(x, z));
+                        if (!cell.IsRoad) continue;
+                        hash = hash * 31 + x;
+                        hash = hash * 31 + z;
+                        hash = hash * 31 + (int)cell.roadType;
+                    }
+                }
+
+                IReadOnlyList<PlacedBuilding> buildings = world.Buildings;
+                hash = hash * 31 + buildings.Count;
+                for (int i = 0; i < buildings.Count; i++)
+                {
+                    PlacedBuilding building = buildings[i];
+                    if (building == null) continue;
+                    hash = hash * 31 + building.id;
+                    if (building.TryGetRoadAccessCoord(out GridCoord access))
+                    {
+                        hash = hash * 31 + access.x;
+                        hash = hash * 31 + access.z;
+                    }
+                }
+
+                IReadOnlyList<TownPlot> plots = world.Plots;
+                hash = hash * 31 + plots.Count;
+                for (int i = 0; i < plots.Count; i++)
+                {
+                    TownPlot plot = plots[i];
+                    if (plot == null) continue;
+                    hash = hash * 31 + plot.id;
+                    hash = hash * 31 + plot.buildingId;
+                    hash = hash * 31 + plot.roadAccessCell.x;
+                    hash = hash * 31 + plot.roadAccessCell.z;
+                }
+
+                hash = hash * 31 + (businesses != null ? businesses.Count : 0);
+                if (businesses != null)
+                {
+                    for (int i = 0; i < businesses.Count; i++)
+                    {
+                        BusinessInstanceState business = businesses[i];
+                        if (business == null) continue;
+                        hash = hash * 31 + StringComparer.Ordinal.GetHashCode(business.InstanceId ?? string.Empty);
+                        hash = hash * 31 + business.AssignedBuildingId;
+                    }
+                }
+                return hash;
+            }
+        }
+
+        private string ResolvePersonJourneyLocation(int personId)
+        {
+            PersonState person = populationManager?.State?.GetPerson(personId);
+            if (person == null || hub == null) return string.Empty;
+            int buildingId = person.scheduleState switch
+            {
+                PopulationScheduleState.AtHome => person.homeBuildingId,
+                PopulationScheduleState.AtWork => person.workplaceBuildingId >= 0
+                    ? person.workplaceBuildingId
+                    : person.currentDestinationBuildingId,
+                _ => person.currentDestinationBuildingId
+            };
+            if (buildingId < 0) return string.Empty;
+            string locationId = TownJourneyNetworkBuilder.LocationIdForBuilding(buildingId);
+            return hub.Journeys.GetLocation(locationId) != null ? locationId : string.Empty;
+        }
+
+        private void SetPersonJourneyLocation(int personId, string locationId)
+        {
+            PersonState person = populationManager?.State?.GetPerson(personId);
+            const string prefix = "building:";
+            if (person == null || string.IsNullOrWhiteSpace(locationId)
+                || !locationId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                || !int.TryParse(locationId.Substring(prefix.Length), out int buildingId))
+            {
+                return;
+            }
+
+            person.currentDestinationBuildingId = buildingId;
         }
 
         /// <summary>

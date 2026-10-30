@@ -316,6 +316,13 @@ namespace LandLedgers.Economy
 
             BusinessType businessType = profile.Business.BusinessType;
             bool agriculturalSiteMatch = IsMatchingAgriculturalBusinessSite(businessType, building.definition, plot);
+            if (TryGetRequiredAgriculturalSiteRole(businessType, out AgriculturalSiteRole requiredRole)
+                && !agriculturalSiteMatch)
+            {
+                reason = $"{profile.Business.DisplayName} requires a matching {requiredRole} site.";
+                return false;
+            }
+
             if (!agriculturalSiteMatch && !building.definition.IsSuitableForBusiness(businessType))
             {
                 reason = $"{building.definition.DisplayName} is not suitable for {profile.Business.DisplayName}.";

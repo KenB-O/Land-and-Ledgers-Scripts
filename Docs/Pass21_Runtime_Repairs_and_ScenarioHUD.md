@@ -25,16 +25,22 @@ The First Ledger HUD is visible in `F:\Land & Ledgers_Pass21_Backups\pass21-repo
 
 No 30-day Main Scene economic reconciliation or day-15 continuation was completed. Daily needs still report absent journey locations; rent and animal feed authority wiring remain open; farming Tasks, mature-season harvest, commercial demand and freight remain unproven in the Main Scene. Person death-date persistence is narrower than full persistent person lifecycle and visual actor identity.
 
-## Current Test Runner result
+## Final-tree Test Runner result
 
-After the current source compiled in the open Unity 6000.4.2f1 Editor, the GUI Test Runner completed:
+The GUI count below came from an earlier run and is superseded. Unity was closed before the final-tree batch runs. Fresh Unity 6000.4.2f1 Test Runner runs produced:
 
-| Platform | Discovered | Passed | Failed | Skipped | Evidence |
+| Platform / filter | Discovered | Passed | Failed | Skipped | Evidence |
 |---|---:|---:|---:|---:|---|
-| EditMode | 4,226 | 4,027 | 199 | 0 | Final GUI count. Fresh XML export did not succeed. The nearby `pass21-editmode-full-current-20261030.xml` is an earlier tree and reports 4,030/196; it is not the final run. |
-| PlayMode | 10 | 10 | 0 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\pass21-playmode-current-final-20261030.xml`, SHA-256 `E8A5E13F4C8130BA957E9DB6499273BE8779B5CCBCC7089B7CF276A004372CDC`. |
+| EditMode full assembly | 4,226 | 4,031 | 195 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\pass21-editmode-full-final-tree-20261030.xml`; SHA-256 `53E48874F4E16D27B96BAECFEA513AFBD85E90EF225ECFFA62EF0334FA54EDB1`. |
+| EditMode Sawmill role regression | 1 | 1 | 0 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\sawmill-site-role-final-qualified-20261030.xml`; SHA-256 `290D17FC891945FE21E2FCD1DBDACC170D4BD6B4799EB3F3BDC7381584FCDECF`. |
+| PlayMode full available assembly | 10 | 9 | 1 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\pass21-playmode-final-tree-20261030.xml`; SHA-256 `17A0BA7DA1967BC34AE341456211BDB502496FC583F01252C2D8728D92F303E1`. |
+| PlayMode isolated General Store provenance repeat | 1 | 0 | 1 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\general-store-person-provenance-repeat-20261030.xml`; SHA-256 `F3E7B2947CBE4FBA6D557526F6C0C84343E9917C4340036D75CFAB5CCC2355B5`. |
 
-The full EditMode result remains red. These totals are not a Roslyn run and do not establish 30-day gameplay. See `Pass21_TestRunner_Results.md` for the evidence limitations and preserved earlier XML.
+The full EditMode result is red. The final PlayMode run also has one repeatable failure: `GeneralStoreDailySaleKeepsRealHouseholdAndPersonProvenance` records no player-store customer households after one daily sales pass. The test does not establish an affordable household need or guarantee this store wins seller selection. This does not justify fabricated demand; the positive case needs a causally valid fixture or further live-demand evidence. These results are not a 30-day simulation. See `Pass21_TestRunner_Results.md` for detail.
+
+## Final-tree Sawmill site-role correction
+
+The full-run review found that generic shell suitability could allow a Sawmill on a plot without the required `SawmillYard` role. `BusinessProfileDefinition.CanOperate` now refuses a required agricultural Business type when the selected site fails typed-role matching and returns a specific explanation. The targeted matching-yard regression passes, as does the corresponding case in the full EditMode XML. This does not prove end-to-end Sawmill production.
 
 ## Preservation
 

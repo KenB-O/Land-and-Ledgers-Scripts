@@ -32,7 +32,7 @@ The GUI count below came from an earlier run and is superseded. Unity was closed
 | Platform / filter | Discovered | Passed | Failed | Skipped | Evidence |
 |---|---:|---:|---:|---:|---|
 | EditMode full assembly | 4,226 | 4,031 | 195 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\pass21-editmode-full-final-tree-20261030.xml`; SHA-256 `53E48874F4E16D27B96BAECFEA513AFBD85E90EF225ECFFA62EF0334FA54EDB1`. |
-| EditMode Sawmill role regression | 1 | 1 | 0 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\sawmill-site-role-final-qualified-20261030.xml`; SHA-256 `290D17FC891945FE21E2FCD1DBDACC170D4BD6B4799EB3F3BDC7381584FCDECF`. |
+| EditMode Sawmill role regression | 1 | 1 | 0 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\sawmill-site-role-final-qualified-20261030.xml`; SHA-256 `51FA3CD8B5C5694EFD7CEFB95C8C6F72ADC33A6AF9C04C8815E5C121DDB61E2E`. |
 | PlayMode full available assembly | 10 | 9 | 1 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\pass21-playmode-final-tree-20261030.xml`; SHA-256 `17A0BA7DA1967BC34AE341456211BDB502496FC583F01252C2D8728D92F303E1`. |
 | PlayMode isolated General Store provenance repeat | 1 | 0 | 1 | 0 | `F:\Land & Ledgers_Pass21_Backups\pass21-reports\general-store-person-provenance-repeat-20261030.xml`; SHA-256 `F3E7B2947CBE4FBA6D557526F6C0C84343E9917C4340036D75CFAB5CCC2355B5`. |
 

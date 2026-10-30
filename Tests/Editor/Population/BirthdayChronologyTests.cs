@@ -244,6 +244,31 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void OpeningDayBirthday_ReportsObservationWithoutClaimingAgeChanged()
+        {
+            PersonState person = AddPerson(30, 1862, 3, 1);
+            var diagnostics = new List<string>();
+            Assert.AreEqual(30, person.age, "Population generation has already derived the opening-day age.");
+            Assert.IsNull(scheduler.ScheduleWithEventId(
+                AgeAuthority.BirthdayEventId(person.id),
+                DueEventKind.Birthday,
+                DueSeconds(CurrentDay()),
+                person.id.ToString()));
+
+            List<DueEvent> due = scheduler.PopDue(DueSeconds(CurrentDay()));
+            Assert.AreEqual(1, due.Count);
+            Assert.IsTrue(BirthdayService.HandleBirthdayDueEvent(
+                due[0], population, scheduler, anchor, CurrentDay(), GameSecondsPerDay, diagnostics));
+
+            Assert.AreEqual(30, person.age, "Handling the birthday must preserve the birth-date-derived age.");
+            Assert.AreEqual(1, scheduler.ScheduledCount, "Exactly one next birthday remains scheduled.");
+            Assert.AreEqual(1, diagnostics.Count);
+            StringAssert.Contains("birthday observed", diagnostics[0]);
+            StringAssert.Contains("age remains 30", diagnostics[0]);
+            StringAssert.DoesNotContain("turned 30 (was 30)", diagnostics[0]);
+        }
+
+        [Test]
         public void SaveMigration_AssignsEstimatedBirthDate_ConsistentWithAge()
         {
             var person = new PersonState

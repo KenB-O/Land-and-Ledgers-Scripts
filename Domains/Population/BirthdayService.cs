@@ -166,7 +166,9 @@ namespace LandLedgers.Population
             }
             else
             {
-                diagnostics?.Add($"BirthdayService: P{personId} turned {person.age} (was {ageBefore}) on {year:D4}-{month:D2}-{day:D2}.");
+                diagnostics?.Add(person.age == ageBefore
+                    ? $"BirthdayService: P{personId} birthday observed on {year:D4}-{month:D2}-{day:D2}; age remains {person.age}."
+                    : $"BirthdayService: P{personId} turned {person.age} (was {ageBefore}) on {year:D4}-{month:D2}-{day:D2}.");
             }
 
             return true;

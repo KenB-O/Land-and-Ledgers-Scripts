@@ -34,6 +34,18 @@ namespace LandLedgers.PlayMode
             Assert.NotNull(startPanel, "Main Scene must expose the authored scenario start panel.");
             Assert.NotNull(FindComponent(bootstrapperType), "Main Scene must own the real world bootstrapper.");
 
+            GameObject authoredObjectivePanel = startPanelType
+                .GetField("authoredObjectivePanel", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(startPanel) as GameObject;
+            object authoredObjectiveLabel = startPanelType
+                .GetField("authoredObjectiveLabel", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(startPanel);
+            Assert.NotNull(authoredObjectivePanel,
+                "The Main Scene must serialize the authored objective panel instead of relying on a runtime-only hierarchy.");
+            Assert.NotNull(authoredObjectiveLabel, "The authored objective label must be wired on the scene controller.");
+            Assert.IsFalse(authoredObjectivePanel.activeSelf,
+                "The objective HUD starts hidden while the scenario selection card is open.");
+
             Component director = FindComponent(directorType);
             Assert.NotNull(director, "Main Scene must own the real ScenarioDirector.");
             Component populationManager = FindComponent(populationManagerType);
@@ -63,6 +75,17 @@ namespace LandLedgers.PlayMode
 
             startPanelType.GetMethod("StartScenario", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?.Invoke(startPanel, null);
+            Assert.IsTrue(authoredObjectivePanel.activeSelf,
+                "Activating First Ledger must reveal the authored objective HUD.");
+            Assert.AreSame(authoredObjectivePanel.transform, authoredObjectivePanel.transform.parent.Find(authoredObjectivePanel.name),
+                "The live objective HUD remains the authored Canvas child.");
+            string objectiveText = authoredObjectiveLabel.GetType().GetProperty("text")?.GetValue(authoredObjectiveLabel) as string;
+            StringAssert.Contains("First Ledger", objectiveText);
+            StringAssert.Contains("$15,000", objectiveText,
+                "The HUD must show the scenario's genuine final owner-equity target.");
+            Transform[] authoredHudChildren = authoredObjectivePanel.transform.parent.GetComponentsInChildren<Transform>(true);
+            Assert.IsFalse(authoredHudChildren.Any(child => child.name == "ScenarioObjectivePanel"),
+                "An authored HUD must not be shadowed by a duplicate runtime-created objective panel.");
             Assert.IsFalse((bool)timeManagerType.GetProperty("IsPaused")?.GetValue(timeManager),
                 "Selecting First Ledger should resume the existing authoritative clock.");
             Assert.AreEqual("first-ledger", directorType.GetProperty("ActiveScenarioId")?.GetValue(director));
@@ -114,6 +137,12 @@ namespace LandLedgers.PlayMode
             Assert.NotNull(hub);
             Assert.NotNull(worldType.GetProperty("Grid")?.GetValue(world),
                 "World generation must provide the real road grid before journey wiring.");
+
+            object parcelAuthority = hubType.GetProperty("Parcels")?.GetValue(hub);
+            Assert.NotNull(parcelAuthority, "The SystemsHub must expose its single parcel authority.");
+            Assert.AreSame(worldType.GetProperty("Grid")?.GetValue(world),
+                parcelAuthority.GetType().GetProperty("Grid")?.GetValue(parcelAuthority),
+                "Fresh New Game must attach the generated TownGrid to the hub-owned parcel authority.");
 
             object journeys = hubType.GetProperty("Journeys")?.GetValue(hub);
             Assert.NotNull(journeys, "The journey authority must be the SystemsHub-owned model.");

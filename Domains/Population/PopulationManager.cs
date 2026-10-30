@@ -361,7 +361,44 @@ namespace LandLedgers.Population
                 return;
             }
 
-            lifecycleManager = new HouseholdLifecycleManager(state, membershipRegistry, kinshipRegistry, entityIds);
+            lifecycleManager = new HouseholdLifecycleManager(
+                state, membershipRegistry, kinshipRegistry, entityIds, SynchronizeLegacyMembershipMirrors);
+        }
+
+        private void SynchronizeLegacyMembershipMirrors()
+        {
+            if (state == null || membershipRegistry == null)
+            {
+                return;
+            }
+
+            if (state.people != null)
+            {
+                for (int i = 0; i < state.people.Count; i++)
+                {
+                    PersonState person = state.people[i];
+                    if (person != null)
+                    {
+                        person.householdId = membershipRegistry.GetActiveHouseholdId(person.id);
+                    }
+                }
+            }
+
+            if (state.households != null)
+            {
+                for (int i = 0; i < state.households.Count; i++)
+                {
+                    HouseholdState household = state.households[i];
+                    if (household == null)
+                    {
+                        continue;
+                    }
+
+                    household.memberIds ??= new System.Collections.Generic.List<int>();
+                    household.memberIds.Clear();
+                    household.memberIds.AddRange(membershipRegistry.GetActiveMembers(household.id));
+                }
+            }
         }
 
         /// <summary>
@@ -784,6 +821,8 @@ namespace LandLedgers.Population
                 return dto;
             }
 
+            EnsureDemographicStack();
+            SynchronizeLegacyMembershipMirrors();
             RefreshSettlementMetrics();
             if (state.people != null)
             {
@@ -1065,8 +1104,8 @@ namespace LandLedgers.Population
             dto.nextHouseholdId = state.NextHouseholdId;
 
             // Pass V P0-2/P1-2: persist the kinship graph, in-flight
-            // pregnancies, and opened estates (clear-then-load restores them).
-            EnsureDemographicStack();
+            // pregnancies, opened estates, and authoritative membership history.
+            dto.householdMemberships = membershipRegistry?.CaptureSaveDto();
             if (kinshipRegistry != null)
             {
                 foreach (KinshipEdge edge in kinshipRegistry.AllEdges)
@@ -1358,8 +1397,9 @@ namespace LandLedgers.Population
         /// <summary>
         /// Pass V P0-2/P1-2: restores kinship edges, pregnancies, and estates
         /// from the save DTO; assigns estimated birth dates where the save
-        /// predates the birth-date authority; rebuilds the membership registry;
-        /// re-establishes birthday scheduling (idempotent across save/load).
+        /// predates the birth-date authority; restores saved memberships or
+        /// migrates legacy household copies; and re-establishes birthday
+        /// scheduling (idempotent across save/load).
         /// </summary>
         private void RestoreDemographicStackFromSaveDto(PopulationSaveDto dto)
         {
@@ -1406,8 +1446,89 @@ namespace LandLedgers.Population
                 Debug.Log($"[Population] {diagnostic}", this);
             }
 
-            RebuildMembershipRegistry();
+            if (dto.householdMemberships != null)
+            {
+                RestoreMembershipRegistry(dto.householdMemberships);
+            }
+            else
+            {
+                RebuildMembershipRegistry();
+            }
+            SynchronizeLegacyMembershipMirrors();
             EnsureBirthdayScheduling("save load");
+        }
+
+        private void RestoreMembershipRegistry(HouseholdMembershipRegistrySaveDto dto)
+        {
+            EnsureDemographicStack();
+            membershipRegistry = new HouseholdMembershipRegistry();
+            RebuildLifecycleManager();
+
+            var valid = new HouseholdMembershipRegistrySaveDto();
+            int maxMembershipId = -1;
+            if (dto?.memberships != null)
+            {
+                for (int i = 0; i < dto.memberships.Count; i++)
+                {
+                    HouseholdMembership saved = dto.memberships[i];
+                    if (saved == null)
+                    {
+                        continue;
+                    }
+
+                    maxMembershipId = Mathf.Max(maxMembershipId, saved.MembershipId);
+                    HouseholdMembership restored = new()
+                    {
+                        MembershipId = saved.MembershipId,
+                        PersonId = saved.PersonId,
+                        HouseholdId = saved.HouseholdId,
+                        Lifecycle = saved.Lifecycle,
+                        StartDayIndex = saved.StartDayIndex,
+                        EndDayIndex = saved.EndDayIndex,
+                        Source = saved.Source,
+                        LegacyDiagnostic = saved.LegacyDiagnostic ?? string.Empty,
+                    };
+
+                    if (restored.IsActive)
+                    {
+                        PersonState person = state != null ? state.GetPerson(restored.PersonId) : null;
+                        HouseholdState household = state != null ? state.GetHousehold(restored.HouseholdId) : null;
+                        if (person == null || household == null)
+                        {
+                            Debug.LogWarning(
+                                $"[Population] Ignored active household membership {restored.MembershipId}: " +
+                                $"missing Person P{restored.PersonId} or Household H{restored.HouseholdId}.", this);
+                            continue;
+                        }
+
+                        if (person.deathDayIndex >= 0)
+                        {
+                            restored.Lifecycle = HouseholdMembershipLifecycle.Ended;
+                            restored.EndDayIndex = person.deathDayIndex;
+                            restored.LegacyDiagnostic = string.IsNullOrWhiteSpace(restored.LegacyDiagnostic)
+                                ? "Migrated active membership to Ended because the Person is recorded deceased."
+                                : restored.LegacyDiagnostic + " | migrated to Ended for recorded death";
+                        }
+                    }
+
+                    valid.memberships.Add(restored);
+                }
+            }
+
+            membershipRegistry.LoadFromSaveDto(valid);
+            foreach (string diagnostic in membershipRegistry.Diagnostics)
+            {
+                Debug.LogWarning($"[Population] {diagnostic}", this);
+            }
+
+            int nextMembershipId = maxMembershipId == int.MaxValue ? int.MaxValue : maxMembershipId + 1;
+            if (maxMembershipId == int.MaxValue)
+            {
+                Debug.LogWarning(
+                    "[Population] Household membership identity space is exhausted; no new membership IDs can be allocated.", this);
+            }
+            entityIds.RestoreCursor(EntityKind.Membership, nextMembershipId);
+            RebuildLifecycleManager();
         }
 
         public int NormalizeTransientScheduleStates()

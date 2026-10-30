@@ -298,7 +298,15 @@ namespace LandLedgers.World.Journeys
             var dist = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
             var prev = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var id in locations.Keys) dist[id] = float.PositiveInfinity;
+            // Dictionary enumeration order is an implementation detail. Stable
+            // location/edge ordering makes equal-cost routes reproducible across
+            // saves, runtimes, and registration order.
+            var orderedLocationIds = new List<string>(locations.Keys);
+            orderedLocationIds.Sort(CompareLocationIds);
+            var orderedEdges = new List<JourneyEdge>(edges);
+            orderedEdges.Sort(CompareJourneyEdges);
+            for (int i = 0; i < orderedLocationIds.Count; i++)
+                dist[orderedLocationIds[i]] = float.PositiveInfinity;
             dist[fromLocationId] = 0f;
             bool conditioned = false;
 
@@ -306,20 +314,26 @@ namespace LandLedgers.World.Journeys
             {
                 string current = null;
                 float best = float.PositiveInfinity;
-                foreach (var kvp in dist)
+                for (int i = 0; i < orderedLocationIds.Count; i++)
                 {
-                    if (!visited.Contains(kvp.Key) && kvp.Value < best)
+                    string candidate = orderedLocationIds[i];
+                    float candidateDistance = dist[candidate];
+                    if (!visited.Contains(candidate)
+                        && (candidateDistance < best
+                            || (candidateDistance == best
+                                && (current == null || CompareLocationIds(candidate, current) < 0))))
                     {
-                        best = kvp.Value;
-                        current = kvp.Key;
+                        best = candidateDistance;
+                        current = candidate;
                     }
                 }
                 if (current == null) break; // unreachable remainder
                 if (string.Equals(current, toLocationId, StringComparison.OrdinalIgnoreCase)) break;
                 visited.Add(current);
 
-                foreach (var edge in edges)
+                for (int edgeIndex = 0; edgeIndex < orderedEdges.Count; edgeIndex++)
                 {
+                    JourneyEdge edge = orderedEdges[edgeIndex];
                     string neighbor = null;
                     if (string.Equals(edge.FromLocationId, current, StringComparison.OrdinalIgnoreCase))
                     {
@@ -396,6 +410,35 @@ namespace LandLedgers.World.Journeys
                 }
             }
             return 0f;
+        }
+
+        private static int CompareLocationIds(string left, string right)
+        {
+            int insensitive = string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
+            return insensitive != 0 ? insensitive : string.CompareOrdinal(left, right);
+        }
+
+        private static int CompareJourneyEdges(JourneyEdge left, JourneyEdge right)
+        {
+            if (ReferenceEquals(left, right)) return 0;
+            if (left == null) return -1;
+            if (right == null) return 1;
+
+            string leftFirst = CompareLocationIds(left.FromLocationId, left.ToLocationId) <= 0
+                ? left.FromLocationId : left.ToLocationId;
+            string leftSecond = leftFirst == left.FromLocationId
+                ? left.ToLocationId : left.FromLocationId;
+            string rightFirst = CompareLocationIds(right.FromLocationId, right.ToLocationId) <= 0
+                ? right.FromLocationId : right.ToLocationId;
+            string rightSecond = rightFirst == right.FromLocationId
+                ? right.ToLocationId : right.FromLocationId;
+
+            int compare = CompareLocationIds(leftFirst, rightFirst);
+            if (compare != 0) return compare;
+            compare = CompareLocationIds(leftSecond, rightSecond);
+            if (compare != 0) return compare;
+            compare = left.Miles.CompareTo(right.Miles);
+            return compare != 0 ? compare : string.Compare(left.RoadName, right.RoadName, StringComparison.Ordinal);
         }
 
         /// <summary>Straight-line miles between two locations (for authored estimates).</summary>

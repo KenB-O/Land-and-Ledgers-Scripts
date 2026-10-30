@@ -5287,19 +5287,18 @@ namespace LandLedgers.FirstLedger
         private string BuildOwnedSignature()
         {
             ownedEntries.Clear();
-            if (storeRuntime != null)
+            BusinessInstanceState playerStore = GetFormedPlayerStore(storeRuntime);
+            if (playerStore != null)
             {
                 int buildingId = storeRuntime.StoreBuildingId;
                 PlacedBuilding building = GetBuilding(buildingId);
-                string name = storeRuntime.CurrentBusiness != null
-                    ? storeRuntime.CurrentBusiness.RuntimeDisplayName
-                    : (storeRuntime.StoreDefinition != null ? storeRuntime.StoreDefinition.Business.DisplayName : "General Store");
+                string name = playerStore.RuntimeDisplayName;
                 ownedEntries.Add(new OwnedEntry(OwnedKind.Store, buildingId, building != null ? building.plotId : -1, name));
             }
 
             if (townWorld != null)
             {
-                int storeBuildingId = storeRuntime != null ? storeRuntime.StoreBuildingId : -1;
+                int storeBuildingId = playerStore != null ? storeRuntime.StoreBuildingId : -1;
                 for (int i = 0; i < townWorld.Buildings.Count; i++)
                 {
                     PlacedBuilding building = townWorld.Buildings[i];
@@ -5307,6 +5306,14 @@ namespace LandLedgers.FirstLedger
                         || !building.playerOwned
                         || building.id == storeBuildingId
                         || building.publicSiteRole == PublicSiteRole.TownHall)
+                    {
+                        continue;
+                    }
+
+                    BusinessInstanceState buildingBusiness = GetBusinessForBuilding(building.id);
+                    if (playerStore != null
+                        && buildingBusiness != null
+                        && string.Equals(buildingBusiness.InstanceId, playerStore.InstanceId, StringComparison.Ordinal))
                     {
                         continue;
                     }
@@ -5341,6 +5348,7 @@ namespace LandLedgers.FirstLedger
                     if (business == null
                         || business.Owner == null
                         || business.Owner.OwnerKind != BusinessOwnerKind.Player
+                        || (playerStore != null && string.Equals(business.InstanceId, playerStore.InstanceId, StringComparison.Ordinal))
                         || business.AssignedBuildingId >= 0)
                     {
                         continue;
@@ -7466,9 +7474,21 @@ namespace LandLedgers.FirstLedger
 
         private int GetOwnedBusinessCount()
         {
-            int playerStoreCount = storeRuntime != null ? 1 : 0;
+            int playerStoreCount = GetFormedPlayerStore(storeRuntime) != null ? 1 : 0;
             int acquiredBusinessCount = acquisitionMarket != null ? acquisitionMarket.OwnedBusinessCount : 0;
             return playerStoreCount + acquiredBusinessCount;
+        }
+
+        private static BusinessInstanceState GetFormedPlayerStore(GeneralStoreRuntimeManager runtime)
+        {
+            BusinessInstanceState business = runtime != null ? runtime.CurrentBusiness : null;
+            return business != null
+                && !string.IsNullOrWhiteSpace(business.InstanceId)
+                && business.BusinessType == BusinessType.GeneralStore
+                && business.Owner != null
+                && business.Owner.OwnerKind == BusinessOwnerKind.Player
+                    ? business
+                    : null;
         }
 
         private TownPlot GetPlot(int plotId)

@@ -77,6 +77,88 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void BusinessPanelDoesNotProjectAnUnformedStoreAsPlayerOwnership()
+        {
+            GameObject root = new("GeneralStorePanel_NoGhostStore");
+            root.SetActive(false);
+            try
+            {
+                GeneralStoreRuntimeManager runtime = root.AddComponent<GeneralStoreRuntimeManager>();
+                GeneralStorePanelController panel = root.AddComponent<GeneralStorePanelController>();
+                SetPrivateField(runtime, "currentBusiness", null);
+                SetPrivateField(panel, "storeRuntime", runtime);
+
+                string signature = (string)InvokePrivate(panel, "BuildOwnedSignature");
+                int count = (int)InvokePrivate(panel, "GetOwnedBusinessCount");
+
+                Assert.AreEqual(string.Empty, signature,
+                    "An authored runtime coordinator without a formed Business is not a player holding.");
+                Assert.AreEqual(0, count);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void BusinessPanelDoesNotProjectIdentitylessPlayerStoreShellAsOwnership()
+        {
+            GameObject root = new("GeneralStorePanel_IdentitylessStoreShell");
+            root.SetActive(false);
+            try
+            {
+                GeneralStoreRuntimeManager runtime = root.AddComponent<GeneralStoreRuntimeManager>();
+                GeneralStorePanelController panel = root.AddComponent<GeneralStorePanelController>();
+                BusinessInstanceState identitylessShell = new();
+                SetPrivateField(identitylessShell, "businessType", BusinessType.GeneralStore);
+                SetPrivateField(identitylessShell, "owner", BusinessOwnerIdentity.Player());
+                SetPrivateField(runtime, "currentBusiness", identitylessShell);
+                SetPrivateField(panel, "storeRuntime", runtime);
+
+                string signature = (string)InvokePrivate(panel, "BuildOwnedSignature");
+                int count = (int)InvokePrivate(panel, "GetOwnedBusinessCount");
+
+                Assert.AreEqual(string.Empty, signature,
+                    "A Player owner flag without a stable Business identity is not ownership evidence.");
+                Assert.AreEqual(0, count);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void BusinessPanelProjectsOneFormedPlayerGeneralStore()
+        {
+            GameObject root = new("GeneralStorePanel_RealPlayerStore");
+            root.SetActive(false);
+            try
+            {
+                GeneralStoreRuntimeManager runtime = root.AddComponent<GeneralStoreRuntimeManager>();
+                GeneralStorePanelController panel = root.AddComponent<GeneralStorePanelController>();
+                BusinessInstanceState business = new();
+                SetPrivateField(business, "instanceId", "player-general-store-test");
+                SetPrivateField(business, "businessType", BusinessType.GeneralStore);
+                SetPrivateField(business, "owner", BusinessOwnerIdentity.Player());
+                SetPrivateField(runtime, "currentBusiness", business);
+                SetPrivateField(panel, "storeRuntime", runtime);
+
+                string signature = (string)InvokePrivate(panel, "BuildOwnedSignature");
+                int count = (int)InvokePrivate(panel, "GetOwnedBusinessCount");
+
+                StringAssert.Contains("Store:-1:-1:", signature);
+                StringAssert.Contains("Player General Store", signature);
+                Assert.AreEqual(1, count);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
         public void LandedCostFallsBackToSeventyPercentOfBaseline()
         {
             RetailPricingDefinition pricing = new()
@@ -753,6 +835,22 @@ namespace LandLedgers.EditorTests.Economy
                 "Assets/Core/Economy/GeneralStoreBusinessDefinition.asset");
             Assert.NotNull(definition);
             return definition;
+        }
+
+        private static object InvokePrivate(object target, string methodName)
+        {
+            MethodInfo method = target.GetType().GetMethod(methodName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(method, $"Expected private method {methodName}.");
+            return method.Invoke(target, null);
+        }
+
+        private static void SetPrivateField(object target, string fieldName, object value)
+        {
+            FieldInfo field = target.GetType().GetField(fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(field, $"Expected private field {fieldName}.");
+            field.SetValue(target, value);
         }
 
         private static void SetStoreDefinition(GeneralStoreRuntimeManager manager, GeneralStoreBusinessDefinition definition)

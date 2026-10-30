@@ -294,6 +294,12 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            // The authored SimulationDrivers component can Awake before this
+            // bootstrap creates the TownGrid. Rebind after world generation so
+            // hub-owned parcel services receive the actual live grid on a fresh
+            // New Game, not only after a later save restore.
+            FindAnyObjectByType<SimulationDrivers>()?.Rebind();
+
             ConfigurePopulationManager();
             ConfigureCivicFoundation();
             AppendStartupTiming(timing, stepTimer, "population/civic configure");

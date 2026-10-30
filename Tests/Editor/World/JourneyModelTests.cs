@@ -50,6 +50,24 @@ namespace LandLedgers.EditorTests.World
         }
 
         [Test]
+        public void FindRoute_EqualCostAlternativesAreStableAcrossRegistrationOrder()
+        {
+            JourneyModel first = BuildEqualCostRouteModel(false);
+            JourneyModel reversed = BuildEqualCostRouteModel(true);
+
+            JourneyRoute firstRoute = first.FindRoute("start", "destination", TravelMode.Foot);
+            JourneyRoute reversedRoute = reversed.FindRoute("start", "destination", TravelMode.Foot);
+
+            Assert.IsTrue(firstRoute.Found, firstRoute.Diagnostic);
+            Assert.IsTrue(reversedRoute.Found, reversedRoute.Diagnostic);
+            CollectionAssert.AreEqual(new[] { "start", "alpha", "destination" }, firstRoute.LegLocationIds);
+            CollectionAssert.AreEqual(firstRoute.LegLocationIds, reversedRoute.LegLocationIds,
+                "Equal-cost routing must not depend on location or edge registration order.");
+            Assert.AreEqual(2f, firstRoute.TotalMiles, 0.0001f);
+            Assert.AreEqual(firstRoute.TotalMinutes, reversedRoute.TotalMinutes);
+        }
+
+        [Test]
         public void FindRoute_UnreachableIsHonest()
         {
             var model = new JourneyModel();
@@ -220,6 +238,39 @@ namespace LandLedgers.EditorTests.World
                 grid.SetCell(new GridCoord(x, z), cell);
             }
             return grid;
+        }
+
+        private static JourneyModel BuildEqualCostRouteModel(bool reverseRegistration)
+        {
+            var model = new JourneyModel();
+            JourneyLocation[] locations =
+            {
+                new JourneyLocation("start", JourneyLocationKind.TownBuilding, "Start", 0f, 0f),
+                new JourneyLocation("alpha", JourneyLocationKind.Waypoint, "Alpha", 0f, 0f),
+                new JourneyLocation("beta", JourneyLocationKind.Waypoint, "Beta", 0f, 0f),
+                new JourneyLocation("destination", JourneyLocationKind.TownBuilding, "Destination", 0f, 0f)
+            };
+            JourneyEdge[] edges =
+            {
+                new JourneyEdge("start", "beta", 1f, "beta road"),
+                new JourneyEdge("beta", "destination", 1f, "beta road"),
+                new JourneyEdge("start", "alpha", 1f, "alpha road"),
+                new JourneyEdge("alpha", "destination", 1f, "alpha road")
+            };
+
+            for (int i = 0; i < locations.Length; i++)
+            {
+                int index = reverseRegistration ? locations.Length - 1 - i : i;
+                Assert.IsNull(model.RegisterLocation(locations[index]));
+            }
+            for (int i = 0; i < edges.Length; i++)
+            {
+                int index = reverseRegistration ? edges.Length - 1 - i : i;
+                Assert.IsNull(model.AddEdge(edges[index].FromLocationId, edges[index].ToLocationId,
+                    edges[index].Miles, edges[index].RoadName));
+            }
+
+            return model;
         }
 
         private static PlacedBuilding Building(int id, GridCoord roadAccess)

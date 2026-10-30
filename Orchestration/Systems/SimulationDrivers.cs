@@ -559,6 +559,9 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
+            hub.AttachParcelWorld(townWorld, acquisitionMarket != null ? acquisitionMarket.Titles : null);
+
             if (scenarioDirector != null)
             {
                 scenarioDirector.TaskAuthority = hub.Tasks;
@@ -690,6 +693,7 @@ namespace LandLedgers.Orchestration.Systems
             // auto-discovery is not available here. Bootstrap code may assign it.
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
+            townWorld ??= FindAnyObjectByType<TownWorldController>();
 
             if (hub == null)
             {

@@ -2880,6 +2880,7 @@ namespace LandLedgers.Editor.Economy
 
                 settings.guaranteeLocalCarpenter = true;
                 restored.AddStock(200, false);
+                Assert.IsTrue(restored.IsProjectLikelyStartReady(settings, 20, 0, out string readiness), readiness);
                 string ready = restored.ApplyWeeklyProjectReview(settings, definition, 0, 20);
                 StringAssert.Contains("Constraint score", ready);
                 Assert.GreaterOrEqual(restored.ReadyProjectReviewCount, 1);

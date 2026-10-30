@@ -64,9 +64,9 @@ namespace LandLedgers.Population
         /// </summary>
         public string Register(HouseholdMembership membership)
         {
-            if (membership == null || membership.PersonId < 0 || membership.HouseholdId < 0)
+            if (membership == null || membership.MembershipId < 0 || membership.PersonId < 0 || membership.HouseholdId < 0)
             {
-                string diagnostic = "Rejected household membership registration: null or invalid person/household id.";
+                string diagnostic = "Rejected household membership registration: null or invalid membership/person/household id.";
                 diagnostics.Add(diagnostic);
                 return diagnostic;
             }
@@ -189,10 +189,16 @@ namespace LandLedgers.Population
         /// <summary>Save support (CLN-1 pattern): capture.</summary>
         public HouseholdMembershipRegistrySaveDto CaptureSaveDto()
         {
-            return new HouseholdMembershipRegistrySaveDto
+            var dto = new HouseholdMembershipRegistrySaveDto
             {
-                memberships = AllMemberships(),
+                memberships = new List<HouseholdMembership>(),
             };
+            List<HouseholdMembership> all = AllMemberships();
+            for (int i = 0; i < all.Count; i++)
+            {
+                dto.memberships.Add(Clone(all[i]));
+            }
+            return dto;
         }
 
         /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
@@ -201,26 +207,41 @@ namespace LandLedgers.Population
             activeByPerson.Clear();
             byMembershipId.Clear();
             ended.Clear();
+            diagnostics.Clear();
             if (dto == null || dto.memberships == null)
             {
                 return;
             }
+
+            var ordered = new List<HouseholdMembership>();
             foreach (HouseholdMembership membership in dto.memberships)
             {
-                if (membership == null)
+                if (membership != null)
                 {
-                    continue;
-                }
-                byMembershipId[membership.MembershipId] = membership;
-                if (membership.IsActive)
-                {
-                    activeByPerson[membership.PersonId] = membership;
-                }
-                else
-                {
-                    ended.Add(membership);
+                    ordered.Add(Clone(membership));
                 }
             }
+            ordered.Sort((left, right) => left.MembershipId.CompareTo(right.MembershipId));
+
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                Register(ordered[i]);
+            }
+        }
+
+        private static HouseholdMembership Clone(HouseholdMembership membership)
+        {
+            return membership == null ? null : new HouseholdMembership
+            {
+                MembershipId = membership.MembershipId,
+                PersonId = membership.PersonId,
+                HouseholdId = membership.HouseholdId,
+                Lifecycle = membership.Lifecycle,
+                StartDayIndex = membership.StartDayIndex,
+                EndDayIndex = membership.EndDayIndex,
+                Source = membership.Source,
+                LegacyDiagnostic = membership.LegacyDiagnostic ?? string.Empty,
+            };
         }
     }
 

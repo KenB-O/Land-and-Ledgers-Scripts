@@ -1,4 +1,5 @@
 using LandLedgers.Orchestration.Scenarios;
+using LandLedgers.Orchestration.Scenarios.Generation;
 using LandLedgers.UI;
 using LandLedgers.Time;
 using TMPro;
@@ -19,6 +20,11 @@ namespace LandLedgers.FirstLedger
         [SerializeField] private ScenarioAsset scenarioAsset;
         [SerializeField] private ScenarioDirector scenarioDirector;
         [SerializeField] private Canvas canvas;
+        [Header("Authored objective HUD")]
+        [SerializeField] private GameObject authoredObjectivePanel;
+        [SerializeField] private TMP_Text authoredObjectiveLabel;
+        [SerializeField] private RectTransform authoredObjectiveViewport;
+        [SerializeField] private Button authoredObjectiveToggle;
 
         private GameObject panel;
         private TMP_Text objectiveLabel;
@@ -213,8 +219,43 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            if (authoredObjectivePanel != null
+                && authoredObjectiveLabel != null
+                && authoredObjectiveViewport != null
+                && authoredObjectiveToggle != null)
+            {
+                panel = authoredObjectivePanel;
+                objectivePanelRect = authoredObjectivePanel.transform as RectTransform;
+                objectiveCanvasRect = parent;
+                objectiveViewport = authoredObjectiveViewport;
+                objectiveToggle = authoredObjectiveToggle;
+                objectiveLabel = authoredObjectiveLabel;
+
+                if (objectivePanelRect == null)
+                {
+                    Debug.LogError("[ScenarioHUD] The authored objective panel requires a RectTransform.", authoredObjectivePanel);
+                    objectiveLabel = null;
+                    return;
+                }
+
+                if (objectivePanelRect.parent != parent)
+                {
+                    objectivePanelRect.SetParent(parent, false);
+                }
+
+                authoredObjectivePanel.SetActive(true);
+                objectiveToggle.onClick.RemoveListener(ToggleObjectives);
+                objectiveToggle.onClick.AddListener(ToggleObjectives);
+                ApplyObjectivePanelGeometry();
+                RenderObjectives();
+                return;
+            }
+
+            Debug.LogWarning("[ScenarioHUD] Authored objective HUD references are incomplete; using the compatibility runtime panel.", this);
+
             GameObject objectiveObject = new GameObject("ScenarioObjectivePanel", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
             panel = objectiveObject;
+            authoredObjectivePanel = objectiveObject;
             RectTransform rect = objectiveObject.transform as RectTransform;
             objectivePanelRect = rect;
             objectiveCanvasRect = parent;
@@ -266,6 +307,7 @@ namespace LandLedgers.FirstLedger
             ScrollRectInputRelay.Install(viewport, scroll);
 
             objectiveLabel = CreateText(content, string.Empty, 15f, FontStyles.Normal);
+            authoredObjectiveLabel = objectiveLabel;
             objectiveLabel.alignment = TextAlignmentOptions.TopLeft;
             LayoutElement element = objectiveLabel.GetComponent<LayoutElement>();
             element.minHeight = 0f;
@@ -354,24 +396,56 @@ namespace LandLedgers.FirstLedger
                 if (state.IsGoalCompleted(goal.GoalId)) completed++;
             }
 
-            string status = scenarioDirector.ObjectiveService != null && scenarioDirector.ObjectiveService.IsFailed
-                ? "FAILED"
+            ScenarioObjectiveService objectiveService = scenarioDirector.ObjectiveService;
+            bool failed = objectiveService != null && objectiveService.IsFailed;
+            string status = failed ? "FAILED"
+                : total == 0 ? "SANDBOX"
+                : completed == total ? "VICTORY"
                 : "IN PROGRESS";
             var lines = new System.Text.StringBuilder();
             lines.Append(state.Asset.DisplayName).Append('\n');
-            lines.Append(status).Append(" — ").Append(completed).Append(" of ").Append(total).Append(" required goals complete\n\n");
+            if (total > 0)
+            {
+                lines.Append(status).Append(" — ").Append(completed).Append(" of ").Append(total).Append(" required goals complete\n\n");
+            }
+            else
+            {
+                lines.Append("SANDBOX — no mandatory objectives\n\n");
+            }
+
+            int currentDayIndex = TimeManager.Instance != null ? TimeManager.Instance.CurrentAbsoluteDayIndex : 0;
+            var presentationGoals = new System.Collections.Generic.List<ScenarioObjectivePresentation.GoalRow>();
             foreach (ScenarioGoal goal in state.Asset.Goals)
             {
                 if (goal.Optional) continue;
-                lines.Append(state.IsGoalCompleted(goal.GoalId) ? "✓ " : "□ ");
-                lines.Append(goal.Text);
-                if (!string.IsNullOrWhiteSpace(goal.TargetText))
+                int deadlineDayIndex = -1;
+                foreach (ScenarioQualifierRegistration registration in objectiveService?.State?.QualifierRegistrations
+                    ?? new System.Collections.Generic.List<ScenarioQualifierRegistration>())
                 {
-                    lines.Append(" — ");
-                    lines.Append(goal.TargetText);
+                    if (registration == null || !string.Equals(registration.GoalId, goal.GoalId, System.StringComparison.Ordinal)) continue;
+                    deadlineDayIndex = registration.DeadlineDayIndex == int.MaxValue ? -1 : registration.DeadlineDayIndex;
+                    break;
                 }
-                lines.Append('\n');
+
+                string goalText = string.IsNullOrWhiteSpace(goal.TargetText)
+                    ? goal.Text
+                    : goal.Text + " — " + goal.TargetText;
+                presentationGoals.Add(new ScenarioObjectivePresentation.GoalRow
+                {
+                    GoalId = goal.GoalId,
+                    Text = goalText,
+                    DeadlineDayIndex = deadlineDayIndex,
+                });
             }
+
+            ScenarioHeadlineSnapshot headline = objectiveService != null
+                ? objectiveService.BuildHeadlineSnapshot(state.Asset.DisplayName, completed, total, string.Empty)
+                : new ScenarioHeadlineSnapshot { Title = state.Asset.DisplayName };
+            lines.Append(ScenarioObjectivePresentation.BuildObjectiveLines(
+                headline,
+                presentationGoals,
+                state.CaptureCompletedGoalIds(),
+                currentDayIndex));
 
             // Pass XI WS5 (UI refresh performance): this runs every 0.5s
             // while a scenario is active. Assigning identical text still

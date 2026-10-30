@@ -224,18 +224,21 @@ namespace LandLedgers.Population
         private readonly HouseholdMembershipRegistry memberships;
         private readonly KinshipRegistry kinship;
         private readonly EntityIdRegistry ids;
+        private readonly Action membershipChanged;
         private readonly List<string> diagnostics = new List<string>();
 
         public HouseholdLifecycleManager(
             PopulationState population,
             HouseholdMembershipRegistry memberships,
             KinshipRegistry kinship,
-            EntityIdRegistry ids)
+            EntityIdRegistry ids,
+            Action membershipChanged = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.memberships = memberships ?? throw new ArgumentNullException(nameof(memberships));
             this.kinship = kinship ?? throw new ArgumentNullException(nameof(kinship));
             this.ids = ids ?? throw new ArgumentNullException(nameof(ids));
+            this.membershipChanged = membershipChanged;
         }
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
@@ -444,7 +447,9 @@ namespace LandLedgers.Population
         /// <summary>Removes a member (departure / move-out / split).</summary>
         public bool RemoveMember(int personId, int dayIndex, string reason)
         {
-            return memberships.EndMembership(personId, dayIndex, reason);
+            bool ended = memberships.EndMembership(personId, dayIndex, reason);
+            if (ended) membershipChanged?.Invoke();
+            return ended;
         }
 
         /// <summary>
@@ -460,7 +465,9 @@ namespace LandLedgers.Population
             }
 
             int nextMembershipId = ids.Allocate(EntityKind.Membership).Id;
-            return memberships.TransferMembership(personId, toHouseholdId, dayIndex, nextMembershipId);
+            string refusal = memberships.TransferMembership(personId, toHouseholdId, dayIndex, nextMembershipId);
+            if (refusal == null) membershipChanged?.Invoke();
+            return refusal;
         }
 
         /// <summary>
@@ -529,6 +536,7 @@ namespace LandLedgers.Population
 
             person.deathDayIndex = dayIndex;
             memberships.EndMembership(personId, dayIndex, $"death: {cause}");
+            membershipChanged?.Invoke();
             return true;
         }
 
@@ -560,6 +568,7 @@ namespace LandLedgers.Population
             }
 
             household.lifecycleState = HouseholdLifecycleState.Dissolved;
+            membershipChanged?.Invoke();
             return true;
         }
 
@@ -633,6 +642,10 @@ namespace LandLedgers.Population
             if (rejection != null)
             {
                 diagnostics.Add(rejection);
+            }
+            else
+            {
+                membershipChanged?.Invoke();
             }
 
             return rejection;

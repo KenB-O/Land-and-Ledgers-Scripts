@@ -295,6 +295,11 @@ namespace LandLedgers.Persistence
     {
         public List<PersonSaveDto> people = new();
         public List<HouseholdSaveDto> households = new();
+        /// <summary>
+        /// PKG-8: authoritative household membership history. Null identifies a legacy save
+        /// that predates this field; in that case membership is migrated from legacy copies.
+        /// </summary>
+        public HouseholdMembershipRegistrySaveDto householdMemberships;
         public int nextPersonId;
         public int nextHouseholdId;
         /// <summary>

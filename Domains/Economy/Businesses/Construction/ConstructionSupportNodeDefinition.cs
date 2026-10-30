@@ -511,20 +511,15 @@ namespace LandLedgers.Economy
             int required = Mathf.Max(0, requiredLumberUnits);
             int queue = Mathf.Max(0, queueProjectsAhead);
             bool materialTight = required > 0 && CurrentStockUnits < required;
-            bool blocked = !string.IsNullOrWhiteSpace(LastWeeklyBlockedReason);
             bool builderThin = settings != null && !settings.guaranteeLocalCarpenter && queue > 0;
-            bool ready = !materialTight && !blocked && !builderThin;
+            // LastWeeklyBlockedReason is historical diagnostic text. It must not
+            // remain an active gate after the material or builder conditions recover.
+            bool ready = !materialTight && !builderThin;
 
             if (ready)
             {
                 reason = "Ready to start under current local builder and material conditions.";
                 return true;
-            }
-
-            if (blocked)
-            {
-                reason = $"Delayed by last weekly blocker: {LastWeeklyBlockedReason}.";
-                return false;
             }
 
             if (materialTight)

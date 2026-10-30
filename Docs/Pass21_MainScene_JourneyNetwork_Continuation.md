@@ -42,6 +42,14 @@ An independent source review also found that `BuildHouseholdShoppingLoop()` taug
 
 The Main Scene still does not provide an observed positive household purchase through the autonomous daily loop. The new regression proves that the actual supplier adapter remains live through normal formation and hiring, not that a full customer purchase, freight chain, or settlement has been completed. `LL-PLAY-023` remains **PARTIAL**.
 
+## Follow-up — first-session clock and live scenario presentation
+
+An actual graphical Main Scene Play Mode inspection showed the authored First Ledger entry panel while the top-bar clock was already advancing; the panel said the campaign clock would start only after pressing Start. After Start, the Main Scene visibly displayed the authoritative First Ledger objective ladder (0/8 complete, all eight goals including the $15,000 owner-equity target). The scenario HUD is therefore visibly present in this runtime path, although it is still created dynamically rather than fully authored as a child hierarchy.
+
+`ScenarioStartPanelController` now pauses the authoritative `TimeManager` when no scenario is active and the first-session choice panel is displayed, then resumes its prior non-paused speed only after `ScenarioDirector.SwitchScenario` succeeds. Already-active restored runs do not get paused by this change. A new Main Scene PlayMode regression holds the choice open for real-time frames, verifies the absolute day and in-day seconds do not advance, invokes the same Start action, and verifies the clock resumes under `first-ledger`.
+
+The separate date mismatch remains open: `FirstLedger.asset` authors `1870-01-01`, its description begins “1870,” but the actual Main Scene runtime clock displayed `1886-01-01`. The controller only switches the scenario; it does not invoke the authored starting-world date/generation coordinator. Changing the narration to 1886 or jumping the clock after population/world creation would conceal or compound the authority mismatch, so neither was done. Track it as `LL-PLAY-024` pending repair at the supported New Game/world-bootstrap boundary.
+
 ## Regression results
 
 All results below are fresh Unity Test Runner XML on the continuation tree, Unity 6000.4.2f1:
@@ -65,11 +73,15 @@ Follow-up tests on the supplier-lifecycle correction:
 | `HouseholdShoppingLoopTests` EditMode | 22/22 passed | `household-shopping-editmode-final.xml`, `F80D0B493A0762875CD757E35B32DE8BDC234B94728275486B44E3F1DB4C859D` |
 | `JourneyModelTests` EditMode | 10/10 passed | `journey-model-editmode-final.xml`, `03C42FF427BC10C91E45C2F3351B76E5EE583E7DDF94ABE8D40DED4BDDAFF0A1` |
 | `FirstLedgerFourWeekProductionReportsHonestProgress` isolated repeat | 1/1 passed | `first-ledger-four-week-repro.xml`; isolated repeat passed |
+| `MainSceneLoadsTheAuthoredScenarioEntryAndStartsFirstLedger` | 1/1 passed | `scenario-clock-start-playmode.xml`, SHA-256 `C3D26B8326B43682DA57641807094BFAB47F28283364A4C6A08336426C1047FA` |
+| Full available PlayMode after scenario clock correction | 11/11 passed, 0 failed, 0 skipped | `full-playmode-clock-final.xml`, SHA-256 `E2080BEA8CC95EEDE382164ACBB50F2918FDCD396B5315053392D1EEEA3F4F32` |
 | Broad EditMode filter `GeneralStore` | 41/60 passed, 19 failed, 0 skipped | `general-store-editmode-final.xml`, SHA-256 `FD95EF7D56202D2ACF5F1FC10BF685A37B6191E7567A66145EC16D950FD18815`; the name filter selected multiple suites, including known reserve, wholesale, reorder, construction-support, settlement-coverage and HUD tests. This is not a 60-test General Store runtime suite and the failures were not changed by this port repair. |
 
 The first unfiltered PlayMode run after the code fix completed 10/11. The sole failure was `FirstLedgerFourWeekProductionReportsHonestProgress`: its randomized opening population supplied only one eligible hire, while the test attempted and did not require successful Farm/Livery hires before later asserting three employees. The same test passed when rerun alone on a fresh generated opening. A fresh unfiltered PlayMode rerun after the strengthened adapter regression completed 11/11, 0 failed, 0 skipped, in 76.97 seconds. XML: `full-playmode-final-current.xml`, SHA-256 `B9C3DEEA54E76421002095ED31B13B6BAC1AA21651469A2745E8785DF64036F8`. This resolves that observed suite run, but the earlier seed-sensitive failure remains a test reliability concern and should be made deterministic rather than erased from history.
 
 The strengthened Main Scene journey/shopping test also passed within the full PlayMode suite (XML `full-playmode-final-current.xml`). The restore-rebind regression proves that an existing loop selects the restored Person through the restored membership authority and completes a legitimate finite-stock purchase with matching settlement. The new supplier regression separately proves pre-formation port rebinding through normal formation and hiring; neither is a full autonomous Main Scene retail run.
+
+The clock-start correction was followed by a fresh full available PlayMode run on the modified source tree: 11/11 passed, 0 failed, 0 skipped. Its XML is `F:\Land & Ledgers_Pass21_Backups\journey-network-continuation_20261030_011226\reports\full-playmode-clock-final.xml` (SHA-256 recorded above). The focused clock test XML is in the same directory. The Unity GUI was returned to Edit Mode and closed without saving; no authored scene asset changed.
 
 A full EditMode run was attempted on the same tree, but it did not complete and produced no NUnit XML. The log grew to approximately 25 MB and then stopped advancing at `2026-10-30 01:32:04`; by `01:35:10`, the Editor remained responsive with stable working set near 5.3 GB, while its busiest thread had accumulated over six minutes of CPU time. After preserving the log and confirming no visible suite progress, only that identified Land & Ledgers batch test process was stopped. The attempt has no pass/fail count and is not represented as a completed suite. The preserved log is `full-editmode-final.log`.
 

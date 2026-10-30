@@ -26,16 +26,32 @@ namespace LandLedgers.PlayMode
             Type startPanelType = RuntimeType("LandLedgers.FirstLedger.ScenarioStartPanelController");
             Type bootstrapperType = RuntimeType("LandLedgers.FirstLedger.FirstLedgerSliceBootstrapper");
             Type directorType = RuntimeType("LandLedgers.Orchestration.Scenarios.ScenarioDirector");
+            Type timeManagerType = RuntimeType("LandLedgers.Time.TimeManager");
 
-            Assert.NotNull(FindComponent(startPanelType), "Main Scene must expose the authored scenario start panel.");
+            Component startPanel = FindComponent(startPanelType);
+            Assert.NotNull(startPanel, "Main Scene must expose the authored scenario start panel.");
             Assert.NotNull(FindComponent(bootstrapperType), "Main Scene must own the real world bootstrapper.");
 
             Component director = FindComponent(directorType);
             Assert.NotNull(director, "Main Scene must own the real ScenarioDirector.");
+            Component timeManager = FindComponent(timeManagerType);
+            Assert.NotNull(timeManager, "Main Scene must own the authoritative clock.");
 
-            object started = directorType.GetMethod("SwitchScenario")?.Invoke(director, new object[] { "first-ledger" });
-            Assert.IsTrue(started is bool && (bool)started,
-                "The authored First Ledger scenario must be registered and startable through the runtime director.");
+            yield return null;
+            yield return null;
+            Assert.IsTrue((bool)timeManagerType.GetProperty("IsPaused")?.GetValue(timeManager),
+                "The first-session scenario choice promises the campaign clock will not advance before Start.");
+            int dayBeforeStart = (int)timeManagerType.GetProperty("CurrentAbsoluteDayIndex")?.GetValue(timeManager);
+            float secondsBeforeStart = (float)timeManagerType.GetProperty("GameSecondsIntoDay")?.GetValue(timeManager);
+            yield return new WaitForSecondsRealtime(0.25f);
+            Assert.AreEqual(dayBeforeStart, (int)timeManagerType.GetProperty("CurrentAbsoluteDayIndex")?.GetValue(timeManager));
+            Assert.AreEqual(secondsBeforeStart, (float)timeManagerType.GetProperty("GameSecondsIntoDay")?.GetValue(timeManager),
+                0.001f, "The authoritative clock must remain fixed while the scenario choice is open.");
+
+            startPanelType.GetMethod("StartScenario", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.Invoke(startPanel, null);
+            Assert.IsFalse((bool)timeManagerType.GetProperty("IsPaused")?.GetValue(timeManager),
+                "Selecting First Ledger should resume the existing authoritative clock.");
             Assert.AreEqual("first-ledger", directorType.GetProperty("ActiveScenarioId")?.GetValue(director));
 
             yield return null;

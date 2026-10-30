@@ -1,5 +1,6 @@
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.UI;
+using LandLedgers.Time;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -64,6 +65,15 @@ namespace LandLedgers.FirstLedger
             Debug.Log($"[ScenarioHUD] Bound Canvas '{canvas.name}' (mode={canvas.renderMode}, order={canvas.sortingOrder}); activeScenario={scenarioDirector.HasActiveScenario}.", this);
             if (!scenarioDirector.HasActiveScenario)
             {
+                // The start panel promises that a fresh campaign clock begins
+                // only after scenario selection. Hold the authoritative clock
+                // while that choice is on screen; restored active runs keep
+                // their serialized pause/speed state.
+                if (TimeManager.Instance != null)
+                {
+                    TimeManager.Instance.SetPaused(true);
+                }
+
                 BuildPanel(parent);
                 return;
             }
@@ -112,6 +122,11 @@ namespace LandLedgers.FirstLedger
 
             if (scenarioDirector.SwitchScenario(scenarioAsset.ScenarioId))
             {
+                if (TimeManager.Instance != null)
+                {
+                    TimeManager.Instance.SetPaused(false);
+                }
+
                 if (panel != null)
                 {
                     panel.SetActive(false);

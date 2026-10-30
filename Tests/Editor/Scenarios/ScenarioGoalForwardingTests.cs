@@ -113,6 +113,44 @@ namespace LandLedgers.EditorTests.Scenarios
         }
 
         [Test]
+        public void Awake_DoesNotLogDuplicateWhenBootstrapAlreadyRegisteredSameAuthoredAsset()
+        {
+            ScenarioAsset asset = BuildAsset("first-ledger-pre-registered", "first-goal");
+            Assert.IsTrue(director.RegisterScenarioAsset(asset));
+
+            FieldInfo registryField = typeof(ScenarioDirector).GetField("scenarioRegistry",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(registryField);
+            registryField.SetValue(director, new List<ScenarioAsset> { asset });
+
+            string duplicateError = null;
+            void CaptureError(string condition, string stackTrace, LogType type)
+            {
+                if (type == LogType.Error && condition != null && condition.Contains("Duplicate scenario id"))
+                    duplicateError = condition;
+            }
+
+            Application.logMessageReceived += CaptureError;
+            try
+            {
+                MethodInfo awake = typeof(ScenarioDirector).GetMethod("Awake",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.IsNotNull(awake);
+                awake.Invoke(director, null);
+
+                Assert.IsNull(duplicateError,
+                    "Awake must treat prior registration of the identical asset as idempotent.");
+                Assert.AreEqual(1, director.Service.ListScenarioIds().FindAll(
+                    id => id == "first-ledger-pre-registered").Count);
+            }
+            finally
+            {
+                Application.logMessageReceived -= CaptureError;
+                UnityEngine.Object.DestroyImmediate(asset);
+            }
+        }
+
+        [Test]
         public void RecordLiveGoalCompletion_RejectsBlankInputs()
         {
             BeginFirstLedger();

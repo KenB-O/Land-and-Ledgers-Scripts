@@ -214,10 +214,12 @@ namespace LandLedgers.Orchestration.Scenarios
                     continue;
                 }
 
-                if (!Service.RegisterScenario(asset, out string rejectionReason))
-                {
-                    Debug.LogError($"[ScenarioDirector] {rejectionReason}", this);
-                }
+                // A bootstrap or development harness can discover and register
+                // the same authored asset before this Awake runs. Reuse the
+                // identity-aware registration path so that exact asset is
+                // idempotent while a different asset reusing its scenario ID
+                // still produces the existing duplicate-ID error.
+                RegisterScenarioAsset(asset);
             }
 
             // Keep the authored registry resilient to one-scene bootstrap ordering and

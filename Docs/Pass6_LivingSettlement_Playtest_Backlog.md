@@ -1,5 +1,13 @@
 # Pass VI — Living Settlement / Playtest Backlog
 
+## Pass XXII Main Scene presentation checkpoint (2026-10-30)
+
+The actual Main Scene was opened in Unity 6000.4.2f1 and exercised in Play Mode. A fresh First Ledger start displayed the scenario objective HUD with the authoritative eight objectives, the $15,000 owner-equity target, and `0 of 8 required goals complete`; the HUD remained visible after the real `ScenarioDirector` activation. The observed clock was January 1, 1886, despite the scenario asset's 1870 start date. No calendar jump was applied because `TimeManager` clamps dates before its 1880-03-01 epoch; save-compatible correction remains open.
+
+The Main Scene's referenced `DefaultTownGenerationSettings 1.asset` now disables regional debug markers, plot outlines, resource-district/proto-site overlays, agricultural detail props, and procedural forest dressing. The underlying resource/parcel/terrain data was preserved. Roads and buildings remain visible. The change is backed up before and after at `F:\Land & Ledgers_Pass22_Backups\20261030_pre_world_generation_settings` and `F:\Land & Ledgers_Pass22_Backups\20261030_post_presentation_settings`; the post-edit asset hash is `6E2FA579BBF2EAE40244EE2FDC8D22BDAD714BD079CB8CD926596561A049F796`, and the existing `.meta` GUID is unchanged. This does not gate the separate deterministic `BuildAgriculturalWorkingSiteVisuals` path.
+
+The same Play Mode session showed two visible Person actors moving on the road, but no stable IDs or day/night continuity were inspected. The Console showed zero errors and 15 warnings; at least two warnings identify negative scale on a BoxCollider under a mirrored Doctor House window hierarchy. The warning set was not fully triaged. No new NUnit run or 30-day simulation completed: the Editor reached about 5.6 GB working set and the machine had under 300 MB physical memory free. See `Pass22_MainScene_Presentation_and_Playmode.md`. This is not a full playtest or conservation proof.
+
 ## Pass XVIII environment note (2026-10-29)
 
 Unity 6000.4.2f1 script compilation remains unverified after repeated Bee/ILPP stalls, including in disposable trivial-script projects. A disposable Unity 6000.2.8f1 project compiled and passed one fresh EditMode test, while its PlayMode invocation discovered zero tests. No LL-PLAY item is marked fixed by this environment investigation. See the Pass XVIII reports for evidence and the required next gates.
@@ -13,7 +21,7 @@ until the Unity Editor can be inspected graphically.
 | LL-PLAY-002 | Excessive PlayMode-generated scene roots | Not tested | Requires Edit Mode vs Play Mode hierarchy inspection. |
 | LL-PLAY-003 | Duplicate Civic Foundation | PARTIAL | One `CivicFoundationManager` is now authored on Main Scene `Game Systems`; the bootstrap resolves the existing component through its shared `FindOrCreate` boundary. The scene YAML has one such script reference and the saved scene is backed up. An expanded Play Mode hierarchy census has not yet confirmed the runtime count. See Pass XXI continuation record. |
 | LL-PLAY-004 | Obsolete tutorial guidance | PARTIAL | Fresh First Ledger after Start showed no universal “hire first store worker” strip and authentic scenario objectives instead. Legacy guidance was visible in a separate stale/test-runner view; confirm all routes and restored saves. |
-| LL-PLAY-005 | Missing scenario HUD | PARTIAL | Main Scene serializes an authored objective panel, label, viewport and toggle under the existing Canvas. Fresh PlayMode tests pass 11/11 and assert the active First Ledger title, authentic $15,000 goal, authored visibility and no duplicate fallback panel. Manual GUI Play Mode showed the start card, active objective panel, and working collapse/expand control. Sandbox, failed/victory, scene reload and save/load visual cases are not yet verified; no screenshot file was exported. |
+| LL-PLAY-005 | Missing scenario HUD | PARTIAL | Main Scene serializes an authored objective panel, label, viewport and toggle under the existing Canvas. Fresh PlayMode tests pass 11/11 and assert the active First Ledger title, authentic $15,000 goal, authored visibility and no duplicate fallback panel. Pass XXII independently observed the start card followed by the live eight-goal HUD at `0 of 8`, after the real scenario activation log. Sandbox, failed/victory, scene reload and save/load visual cases remain unverified; no screenshot file was exported. |
 | LL-PLAY-006 | Blacksmith management panel layout | Not tested | Visual Editor check required. |
 | LL-PLAY-007 | Seller meeting modal behavior | Not tested | UI interaction check required. |
 | LL-PLAY-008 | Repetitive acquisition buttons | Not tested | UI interaction check required. |
@@ -24,7 +32,7 @@ until the Unity Editor can be inspected graphically.
 | LL-PLAY-013 | Implausible profits / unclear periods | Not tested | Requires live event-backed report comparison. |
 | LL-PLAY-014 | Civic tab language | Not tested | Requires current UI state inspection. |
 | LL-PLAY-015 | Resource and district displays | Not tested | Requires current UI state inspection. |
-| LL-PLAY-016 | Flat terrain | Not tested | Visual/world-generation assessment deferred until Editor access. |
+| LL-PLAY-016 | Flat terrain | PARTIAL | Pass XXII hid the resource/region overlays, plot outlines, agricultural detail props and procedural forest dressing in the Main Scene's actual referenced generation settings, preserving underlying world data. A fresh Play Mode view showed the colored resource rectangles absent in the sampled opening view. Ground composition remains flat/unfinished, building-footprint treatment is not implemented, and the independent working-site dressing path remains active. |
 | LL-PLAY-017 | Calendar weekday mismatch | Source covered; runtime pending | Gregorian tests passed previously; verify displayed Main Scene date/weekday. |
 | LL-PLAY-018 | General Store startup/notices | PARTIAL | The observed fresh route had no player holding; legacy weekly settlement now safely reports no player store. Full notice classification and duplicate UI projection remain unverified. |
 | LL-PLAY-019 | MainMusicPlayer lifecycle | Not tested | Requires Edit/Play hierarchy and console inspection. |

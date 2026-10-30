@@ -269,6 +269,34 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void DailyRevalidationAfterBirthday_DoesNotRequeueSameDayEvent()
+        {
+            PersonState person = AddPerson(30, 1862, 3, 1);
+            int anniversary = anchor.ToAbsoluteDay(1892, 3, 1);
+            Assert.IsNull(BirthdayService.EnsureScheduledForPerson(
+                person, scheduler, anchor, anniversary - 1, GameSecondsPerDay));
+
+            List<DueEvent> due = scheduler.PopDue(DueSeconds(anniversary));
+            Assert.AreEqual(1, due.Count);
+            Assert.IsTrue(BirthdayService.HandleBirthdayDueEvent(
+                due[0], population, scheduler, anchor, anniversary, GameSecondsPerDay, null));
+
+            // Production drains due events before the daily demographic driver.
+            // Its population-wide revalidation must preserve the next-year event.
+            BirthdayService.EnsureScheduledForPopulation(
+                population, scheduler, anchor, anniversary + 1, GameSecondsPerDay, null);
+            Assert.AreEqual(0, scheduler.PopDue(DueSeconds(anniversary)).Count,
+                "A same-day short tick must not dispatch the birthday again.");
+            Assert.AreEqual(1, scheduler.ScheduledCount);
+
+            int nextAnniversary = AgeAuthority.NextBirthdayAbsoluteDay(
+                person.birthDate, anniversary + 1, anchor.Year, anchor.Month, anchor.Day);
+            Assert.AreEqual(0, scheduler.PopDue(DueSeconds(nextAnniversary - 1)).Count,
+                "The next birthday remains scheduled for next year.");
+            Assert.AreEqual(1, scheduler.PopDue(DueSeconds(nextAnniversary)).Count);
+        }
+
+        [Test]
         public void SaveMigration_AssignsEstimatedBirthDate_ConsistentWithAge()
         {
             var person = new PersonState

@@ -574,8 +574,14 @@ namespace LandLedgers.Population
             };
             DemographicDriverSchedule.EvaluateDay(ctx);
             DemographicDriverSchedule.EvaluateMonth(ctx);
+            // DayChanged drains events before driving the demographic day. If
+            // this day is someone's birthday, revalidating from today would
+            // replace the just-rescheduled next-year event with another event
+            // due immediately, causing repeated birthday dispatches on every
+            // short tick. Newborns are scheduled separately by the birth
+            // driver and still retain an opening-day birthday where applicable.
             BirthdayService.EnsureScheduledForPopulation(
-                state, ctx.Scheduler, anchor, absoluteDayIndex, secondsPerDay, demographicDiagnostics);
+                state, ctx.Scheduler, anchor, absoluteDayIndex + 1, secondsPerDay, demographicDiagnostics);
             FlushDemographicDiagnostics($"day {absoluteDayIndex}");
         }
 

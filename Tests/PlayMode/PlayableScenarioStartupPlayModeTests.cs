@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -83,6 +84,10 @@ namespace LandLedgers.PlayMode
             StringAssert.Contains("First Ledger", objectiveText);
             StringAssert.Contains("$15,000", objectiveText,
                 "The HUD must show the scenario's genuine final owner-equity target.");
+            StringAssert.Contains("[ ]", objectiveText,
+                "Incomplete objective markers must use glyphs supported by the bundled HUD font.");
+            Assert.IsFalse(objectiveText.Contains("✓") || objectiveText.Contains("□"),
+                "Unsupported check/square glyphs render as replacement boxes in the Main Scene HUD.");
             Transform[] authoredHudChildren = authoredObjectivePanel.transform.parent.GetComponentsInChildren<Transform>(true);
             Assert.IsFalse(authoredHudChildren.Any(child => child.name == "ScenarioObjectivePanel"),
                 "An authored HUD must not be shadowed by a duplicate runtime-created objective panel.");
@@ -822,6 +827,173 @@ namespace LandLedgers.PlayMode
                 "A household sale must retain the real acting adult Person, not only an anonymous household count.");
             Assert.Greater((int)storeRuntimeType.GetProperty("LastCustomerSaleUnits")?.GetValue(storeRuntime), 0);
             Assert.Greater((int)storeRuntimeType.GetProperty("LastCustomerSaleRevenueCents")?.GetValue(storeRuntime), 0);
+        }
+
+        [UnityTest, Timeout(900000)]
+        public IEnumerator MainSceneFirstLedgerRunsThirtyDaysThroughAuthoritativeDrivers()
+        {
+            AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);
+            Assert.NotNull(load, "Main Scene must be present in the build settings.");
+            while (!load.isDone) yield return null;
+            yield return null;
+            yield return null;
+
+            Type startPanelType = RuntimeType("LandLedgers.FirstLedger.ScenarioStartPanelController");
+            Component startPanel = FindComponent(startPanelType);
+            Assert.NotNull(startPanel, "A normal New Game must start from the authored scenario selector.");
+            startPanelType.GetMethod("StartScenario", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.Invoke(startPanel, null);
+
+            Type timeType = RuntimeType("LandLedgers.Time.TimeManager");
+            Type populationType = RuntimeType("LandLedgers.Population.PopulationManager");
+            Type sharedType = RuntimeType("LandLedgers.Economy.SharedBusinessRuntimeManager");
+            Type hubType = RuntimeType("LandLedgers.Orchestration.Systems.SimulationSystemsHub");
+            Type harnessType = RuntimeType("LandLedgers.Orchestration.Scenarios.Development.ScenarioValidationHarness");
+            Component time = FindComponent(timeType);
+            Component populationManager = FindComponent(populationType);
+            Component shared = FindComponent(sharedType);
+            Component hub = FindComponent(hubType);
+            Component harness = FindComponent(harnessType);
+            Assert.NotNull(time, "Main Scene must use its authoritative TimeManager.");
+            Assert.NotNull(populationManager, "Main Scene must use its authoritative PopulationManager.");
+            Assert.NotNull(shared, "Main Scene must use its authoritative Business registry.");
+            Assert.NotNull(hub, "Main Scene must use its SystemsHub.");
+            Assert.NotNull(harness, "The scene's validation control must drive the production clock, not a second simulation.");
+            Assert.IsFalse((bool)timeType.GetProperty("IsPaused")?.GetValue(time),
+                "Starting the scenario must resume the ordinary game clock.");
+
+            int startDay = (int)timeType.GetProperty("CurrentAbsoluteDayIndex")?.GetValue(time);
+            string opening = CaptureOrdinaryMainSceneSnapshot(populationManager, populationType, shared, sharedType, hub, hubType);
+            Debug.Log($"[Pass22 RUN-004] opening day={startDay}; {opening}");
+
+            MethodInfo advanceHours = harnessType.GetMethod("AdvanceHours");
+            Assert.NotNull(advanceHours, "The harness must delegate accelerated validation to TimeManager.AdvanceForValidation.");
+            var birthdayDispatchCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            Application.LogCallback observeBirthdayDispatch = (message, stackTrace, type) =>
+            {
+                if (type != LogType.Warning || string.IsNullOrEmpty(message)) return;
+                foreach (Match match in Regex.Matches(
+                    message,
+                    @"BirthdayService: P(?<person>\d+).*? on (?<date>\d{4}-\d{2}-\d{2})"))
+                {
+                    string key = match.Groups["person"].Value + "|" + match.Groups["date"].Value;
+                    birthdayDispatchCounts[key] = birthdayDispatchCounts.TryGetValue(key, out int count) ? count + 1 : 1;
+                }
+            };
+            Application.logMessageReceived += observeBirthdayDispatch;
+            try
+            {
+                advanceHours.Invoke(harness, new object[] { 24 * 30 });
+                yield return null;
+            }
+            finally
+            {
+                Application.logMessageReceived -= observeBirthdayDispatch;
+            }
+
+            int endDay = (int)timeType.GetProperty("CurrentAbsoluteDayIndex")?.GetValue(time);
+            string closing = CaptureOrdinaryMainSceneSnapshot(populationManager, populationType, shared, sharedType, hub, hubType);
+            Debug.Log($"[Pass22 RUN-004] closing day={endDay}; {closing}");
+            Assert.AreEqual(startDay + 30, endDay,
+                "Thirty consecutive day boundaries must reach the ordinary daily/weekly/monthly production callbacks.");
+            Assert.IsFalse((bool)(FindComponent(RuntimeType("LandLedgers.Orchestration.Scenarios.FirstLedger.FirstLedgerBootstrap"))
+                ?.GetType().GetProperty("IsScenarioComplete")?.GetValue(
+                    FindComponent(RuntimeType("LandLedgers.Orchestration.Scenarios.FirstLedger.FirstLedgerBootstrap"))) ?? false),
+                "A no-action 30-day run must not award First Ledger Victory without its real conditions.");
+            Assert.Greater(birthdayDispatchCounts.Count, 0,
+                "The Main Scene run should observe at least one birthday event to validate its daily event lifecycle.");
+            foreach (KeyValuePair<string, int> dispatch in birthdayDispatchCounts)
+            {
+                Assert.LessOrEqual(dispatch.Value, 1,
+                    $"A birthday due event must dispatch once per Person and calendar date ({dispatch.Key}).");
+            }
+        }
+
+        private static string CaptureOrdinaryMainSceneSnapshot(
+            Component populationManager,
+            Type populationType,
+            Component sharedRuntime,
+            Type sharedType,
+            Component hub,
+            Type hubType)
+        {
+            object population = populationType.GetProperty("State")?.GetValue(populationManager);
+            var people = population?.GetType().GetField("people")?.GetValue(population) as System.Collections.IList;
+            var households = population?.GetType().GetField("households")?.GetValue(population) as System.Collections.IList;
+            Assert.NotNull(people);
+            Assert.NotNull(households);
+
+            var personIds = new HashSet<int>();
+            int workplaceAssignments = 0;
+            for (int i = 0; i < people.Count; i++)
+            {
+                object person = people[i];
+                int id = (int)person.GetType().GetField("id")?.GetValue(person);
+                Assert.IsTrue(personIds.Add(id), $"The live population contains duplicate Person ID {id}.");
+                int workplace = (int)person.GetType().GetField("workplaceBuildingId")?.GetValue(person);
+                if (workplace >= 0) workplaceAssignments++;
+            }
+
+            var householdIds = new HashSet<int>();
+            for (int i = 0; i < households.Count; i++)
+            {
+                object household = households[i];
+                int id = (int)household.GetType().GetField("id")?.GetValue(household);
+                Assert.IsTrue(householdIds.Add(id), $"The live population contains duplicate Household ID {id}.");
+            }
+
+            var businesses = sharedType.GetProperty("Businesses")?.GetValue(sharedRuntime) as System.Collections.IEnumerable;
+            Assert.NotNull(businesses);
+            int businessCount = 0;
+            long businessCashCents = 0;
+            long businessCategoryStockUnits = 0;
+            foreach (object business in businesses)
+            {
+                if (business == null) continue;
+                businessCount++;
+                object state = business.GetType().GetProperty("RuntimeState")?.GetValue(business);
+                if (state == null) continue;
+                businessCashCents += (int)state.GetType().GetProperty("CurrentCashCents")?.GetValue(state);
+                var stocks = state.GetType().GetProperty("CategoryStock")?.GetValue(state) as System.Collections.IEnumerable;
+                if (stocks == null) continue;
+                foreach (object stock in stocks)
+                    businessCategoryStockUnits += Math.Max(0, (int)stock.GetType().GetProperty("CurrentStockUnits")?.GetValue(stock));
+            }
+
+            object systems = hubType.GetProperty("Tasks")?.GetValue(hub);
+            object taskSave = systems?.GetType().GetMethod("CaptureSaveDto")?.Invoke(systems, null);
+            var tasks = taskSave?.GetType().GetField("tasks")?.GetValue(taskSave) as System.Collections.ICollection;
+            Assert.NotNull(tasks, "TaskAuthority must expose its persisted work history for the run snapshot.");
+            int completedTasks = 0;
+            int openTasks = 0;
+            foreach (object task in tasks)
+            {
+                string state = task?.GetType().GetProperty("Status")?.GetValue(task)?.ToString();
+                if (string.Equals(state, "Complete", StringComparison.Ordinal)) completedTasks++;
+                if (string.Equals(state, "Queued", StringComparison.Ordinal)
+                    || string.Equals(state, "Assigned", StringComparison.Ordinal)
+                    || string.Equals(state, "InProgress", StringComparison.Ordinal)
+                    || string.Equals(state, "ResourcesReserved", StringComparison.Ordinal)) openTasks++;
+            }
+
+            object ledgerRegistry = hubType.GetProperty("HouseholdLedgers")?.GetValue(hub);
+            Type ledgerStateType = RuntimeType("LandLedgers.Population.HouseholdLedgerState");
+            Type ledgerStateListType = typeof(List<>).MakeGenericType(ledgerStateType);
+            var ledgerStates = Activator.CreateInstance(ledgerStateListType) as System.Collections.IList;
+            ledgerRegistry?.GetType().GetMethod("ExportState")?.Invoke(ledgerRegistry, new object[] { ledgerStates });
+            long householdLedgerCashCents = 0;
+            foreach (object ledger in ledgerStates)
+            {
+                var entries = ledger?.GetType().GetField("Entries")?.GetValue(ledger) as System.Collections.IList;
+                if (entries == null) continue;
+                for (int i = 0; i < entries.Count; i++)
+                    householdLedgerCashCents += (int)entries[i].GetType().GetField("AmountCents")?.GetValue(entries[i]);
+            }
+
+            return $"Persons={people.Count} (unique={personIds.Count}), Households={households.Count} (unique={householdIds.Count}), " +
+                   $"Businesses={businessCount}, businessCash={businessCashCents}c, householdLedgerCash={householdLedgerCashCents}c, " +
+                   $"businessCategoryStock={businessCategoryStockUnits}u, Tasks={tasks.Count} (complete={completedTasks}, open={openTasks}), " +
+                   $"workplaceAssignments={workplaceAssignments}, EmploymentRegistry={sharedType.GetProperty("EmploymentRegistryCount")?.GetValue(sharedRuntime)}";
         }
 
         // Save/load intentionally runs last: it restores a full campaign snapshot and

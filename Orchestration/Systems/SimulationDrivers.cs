@@ -2922,11 +2922,22 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            int dayIndex = timeManager.CurrentAbsoluteDayIndex;
             var diag = new List<string>();
             foreach (DueEvent dueEvent in due)
             {
-                DispatchDueEvent(dueEvent, dayIndex, diag);
+                // ShortTick is emitted immediately before the day rollover.
+                // A due event exactly at midnight can therefore be dispatched
+                // while TimeManager still exposes yesterday's calendar date.
+                // Use the event's own absolute timestamp so date-sensitive
+                // handlers (birthdays, deadlines) advance from the date the
+                // event actually belongs to.
+                float secondsPerDay = timeManager.Settings != null
+                    ? Mathf.Max(1f, timeManager.Settings.GameSecondsPerDay)
+                    : 86400f;
+                int dueDayIndex = dueEvent != null && dueEvent.DueGameSeconds >= 0f
+                    ? Mathf.FloorToInt(dueEvent.DueGameSeconds / secondsPerDay)
+                    : timeManager.CurrentAbsoluteDayIndex;
+                DispatchDueEvent(dueEvent, dueDayIndex, diag);
             }
 
             if (diag.Count > 0)

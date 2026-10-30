@@ -7,7 +7,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
     /// <summary>
     /// Pass XI WS5 (player-facing): the Unity-free text a scenario panel
     /// shows for dated objectives. The StartPanel previously rendered only
-    /// the director's goal list — every goal ✓/□, no deadline, and a
+    /// the director's goal list — every goal marked [X] or [ ], no deadline, and a
     /// failed run indistinguishable from an unfinished one. This builder
     /// is the single place that turns a <see cref="ScenarioHeadlineSnapshot"/>
     /// plus the latched-goal set into panel lines, so the panel, the
@@ -45,8 +45,8 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
         }
 
         /// <summary>
-        /// Builds the panel text: one line per goal (✓ when latched,
-        /// otherwise □, each with its deadline text when it has one),
+        /// Builds the panel text: one line per goal ([X] when latched,
+        /// otherwise [ ], each with its deadline text when it has one),
         /// plus a failure banner naming the failed goal and its deadline
         /// when the headline reports a failure. A failed run can never
         /// again render as merely unfinished.
@@ -72,7 +72,10 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
                 {
                     if (goal == null) continue;
                     string goalId = goal.GoalId ?? string.Empty;
-                    lines.Append(latched.Contains(goalId) ? "✓ " : "□ ");
+                    // Keep the HUD glyphs inside the bundled TMP font's
+                    // supported ASCII range; the previous check/square symbols
+                    // rendered as replacement boxes in the actual Main Scene.
+                    lines.Append(latched.Contains(goalId) ? "[X] " : "[ ] ");
                     lines.Append(string.IsNullOrWhiteSpace(goal.Text) ? goalId : goal.Text);
                     if (goal.DeadlineDayIndex >= 0 && goal.DeadlineDayIndex != int.MaxValue)
                     {

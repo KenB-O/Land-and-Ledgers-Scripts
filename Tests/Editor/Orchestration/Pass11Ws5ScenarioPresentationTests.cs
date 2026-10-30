@@ -103,9 +103,10 @@ namespace LandLedgers.Editor.Orchestration
             };
             string text = ScenarioObjectivePresentation.BuildObjectiveLines(
                 headline, goals, new List<string> { "goal-done" }, 10);
-            Assert.IsTrue(text.Contains("✓ Done goal"), text);
-            Assert.IsTrue(text.Contains("□ Timed goal — Due today"), text);
-            Assert.IsTrue(text.Contains("□ Open goal — Due in 2 days"), text);
+            Assert.IsTrue(text.Contains("[X] Done goal"), text);
+            Assert.IsTrue(text.Contains("[ ] Timed goal — Due today"), text);
+            Assert.IsTrue(text.Contains("[ ] Open goal — Due in 2 days"), text);
+            Assert.IsFalse(text.Contains("✓") || text.Contains("□"), text);
             Assert.IsTrue(text.Contains("SCENARIO FAILED — goal 'goal-deadline' missed its deadline (day 10)."), text);
         }
 

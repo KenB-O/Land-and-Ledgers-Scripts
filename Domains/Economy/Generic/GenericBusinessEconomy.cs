@@ -622,8 +622,123 @@ namespace LandLedgers.Economy
             foreach (string productId in SuggestedProductIds ?? new List<string>())
             {
                 if (!string.IsNullOrWhiteSpace(productId))
-                    configuration.Retail.AddOrReplaceLine(new GenericRetailProductLine(productId, "storage", 0f, 0f, 0f, 0));
+                {
+                    // A preset is a composition suggestion, not permission to sell.
+                    // Keep the line disabled until a real price and stock plan are
+                    // established through the operating workflow.
+                    var line = new GenericRetailProductLine(productId, "storage", 0f, 0f, 0f, 0);
+                    line.SetEnabledForSale(false);
+                    configuration.Retail.AddOrReplaceLine(line);
+                }
             }
+        }
+    }
+
+    /// <summary>
+    /// Player-facing setup presets for a broad commercial Business identity.
+    /// Product IDs are drawn from the authored General Store item catalog. Presets
+    /// configure policy only; they never grant stock, money, equipment, premises,
+    /// workers, or operating status.
+    /// </summary>
+    public static class GenericBusinessSetupTemplateCatalog
+    {
+        public const string BlankId = "blank_commercial";
+        public const string GeneralMerchandiseId = "general_merchandise_assortment";
+        public const string BakeryId = "bakery_retail_setup";
+        public const string SmithyId = "prairie_fork_smithy_setup";
+
+        public static IReadOnlyList<GenericBusinessSetupTemplate> CreateDefaults()
+        {
+            return new List<GenericBusinessSetupTemplate>
+            {
+                new GenericBusinessSetupTemplate
+                {
+                    TemplateId = BlankId,
+                    DisplayName = "Blank commercial concern",
+                },
+                new GenericBusinessSetupTemplate
+                {
+                    TemplateId = GeneralMerchandiseId,
+                    DisplayName = "General merchandise storefront",
+                    SuggestCustomerFacingSpace = true,
+                    SuggestedProductIds = new List<string>
+                    {
+                        "flour", "bread", "potatoes", "salt", "sugar", "coffee", "tea",
+                        "beef", "bacon", "cheese", "basic_cloth", "flannel", "workwear",
+                        "boots", "blanket", "hat", "soap", "candles", "lamp_oil", "lantern",
+                        "thread", "buttons", "nails_hardware_lot", "hand_tool", "farm_tool",
+                        "patent_remedy", "medicine_bottle",
+                    },
+                },
+                new GenericBusinessSetupTemplate
+                {
+                    TemplateId = BakeryId,
+                    DisplayName = "Bakery retail setup",
+                    SuggestCustomerFacingSpace = true,
+                    SuggestedProductIds = new List<string> { "bread" },
+                    SuggestedEquipmentKinds = new List<string> { "oven" },
+                    SuggestedProductionMethodIds = new List<string> { "bake-flour-bread" },
+                },
+                new GenericBusinessSetupTemplate
+                {
+                    TemplateId = SmithyId,
+                    DisplayName = "Prairie Fork smithy setup",
+                    SuggestCustomerFacingSpace = true,
+                    SuggestedProductIds = new List<string>
+                    {
+                        "8d-cut-nails", "hinges", "straps", "brackets", "hooks",
+                        "simple-latches", "bolts", "pins",
+                    },
+                    SuggestedEquipmentKinds = new List<string> { "forge", "anvil", "bellows" },
+                },
+            };
+        }
+
+        public static GenericBusinessSetupTemplate Find(string templateId)
+        {
+            foreach (GenericBusinessSetupTemplate template in CreateDefaults())
+            {
+                if (string.Equals(template.TemplateId, templateId ?? string.Empty, StringComparison.Ordinal))
+                    return template;
+            }
+            return null;
+        }
+
+        public static bool TryApply(BusinessInstanceState business, string templateId, out string message)
+        {
+            if (business == null || business.BusinessType != BusinessType.Generic)
+            {
+                message = "Setup presets apply only to a formed commercial Business.";
+                return false;
+            }
+
+            GenericBusinessSetupTemplate template = Find(templateId);
+            if (template == null)
+            {
+                message = "The selected setup preset is unavailable.";
+                return false;
+            }
+
+            business.GenericConfiguration.SetSetupTemplateId(template.TemplateId);
+            switch (template.TemplateId)
+            {
+                case GeneralMerchandiseId:
+                    template.ApplyPolicyOnly(business.GenericConfiguration);
+                    break;
+                case BakeryId:
+                    GenericBusinessVerticalService.ConfigureBakery(business);
+                    break;
+                case SmithyId:
+                    GenericBusinessVerticalService.ConfigurePrairieForkSmithy(business);
+                    break;
+            }
+
+            message = template.TemplateId == GeneralMerchandiseId
+                ? "Merchandise assortment saved as a setup plan. No goods, prices, premises, equipment, or workers were granted."
+                : template.TemplateId == BlankId
+                    ? "Blank commercial concern formed. Configure its real activity and requirements next."
+                    : $"{template.DisplayName} policy attached. Premises, inputs, equipment, workers, and stock remain to be established.";
+            return true;
         }
     }
 
@@ -1111,6 +1226,7 @@ namespace LandLedgers.Economy
     [Serializable]
     public sealed class GenericBusinessConfiguration
     {
+        [SerializeField] private string setupTemplateId = string.Empty;
         [SerializeField] private GenericRetailConfiguration retail = new();
         [SerializeField] private List<string> equipmentAssetIds = new();
         [SerializeField] private List<string> workspaceIds = new();
@@ -1123,6 +1239,7 @@ namespace LandLedgers.Economy
         [SerializeField] private List<string> receivedShipmentIds = new();
 
         public GenericRetailConfiguration Retail => retail ??= new GenericRetailConfiguration();
+        public string SetupTemplateId => setupTemplateId ?? string.Empty;
         public IReadOnlyList<string> EquipmentAssetIds => equipmentAssetIds;
         public IReadOnlyList<string> WorkspaceIds => workspaceIds;
         public IReadOnlyList<GenericEquipmentInstallationState> EquipmentInstallations => equipmentInstallations;
@@ -1136,6 +1253,11 @@ namespace LandLedgers.Economy
         public void AddEquipmentReference(string assetId)
         {
             if (!string.IsNullOrWhiteSpace(assetId) && !equipmentAssetIds.Contains(assetId)) equipmentAssetIds.Add(assetId);
+        }
+
+        public void SetSetupTemplateId(string templateId)
+        {
+            setupTemplateId = templateId?.Trim() ?? string.Empty;
         }
 
         /// <summary>
@@ -1341,6 +1463,7 @@ namespace LandLedgers.Economy
         {
             return new GenericBusinessConfigurationSaveDto
             {
+                setupTemplateId = SetupTemplateId,
                 retail = retail,
                 equipmentAssetIds = new List<string>(equipmentAssetIds ?? new List<string>()),
                 workspaceIds = new List<string>(workspaceIds ?? new List<string>()),
@@ -1358,6 +1481,7 @@ namespace LandLedgers.Economy
         {
             var configuration = new GenericBusinessConfiguration();
             if (dto == null) return configuration;
+            configuration.setupTemplateId = dto.setupTemplateId ?? string.Empty;
             configuration.retail = dto.retail ?? new GenericRetailConfiguration();
             configuration.equipmentAssetIds = dto.equipmentAssetIds ?? new List<string>();
             configuration.workspaceIds = dto.workspaceIds ?? new List<string>();
@@ -1375,6 +1499,7 @@ namespace LandLedgers.Economy
     [Serializable]
     public sealed class GenericBusinessConfigurationSaveDto
     {
+        public string setupTemplateId = string.Empty;
         public GenericRetailConfiguration retail = new();
         public List<string> equipmentAssetIds = new();
         public List<string> workspaceIds = new();

@@ -22,17 +22,20 @@ namespace LandLedgers.FirstLedger
         private GeneralStoreRuntimeManager storeRuntime;
         private GeneralStorePanelController managementController;
         private ManagementPanelView view;
-        private Button createButton;
-        private GameObject overlay;
-        private TMP_Dropdown typeDropdown;
-        private TMP_Dropdown templateDropdown;
-        private Button clearButton;
+        [SerializeField] private Button createButton;
+        [SerializeField] private GameObject overlay;
+        [SerializeField] private TMP_Dropdown typeDropdown;
+        [SerializeField] private TMP_Dropdown templateDropdown;
+        [SerializeField] private Button clearButton;
+        [SerializeField] private Button confirmButton;
+        [SerializeField] private Button cancelButton;
         private BusinessType[] businessTypes = Array.Empty<BusinessType>();
         private int selectedTypeIndex;
-        private TMP_InputField nameInput;
-        private TMP_Text statusText;
+        [SerializeField] private TMP_InputField nameInput;
+        [SerializeField] private TMP_Text statusText;
         private bool configured;
         private string draftName = string.Empty;
+        private IReadOnlyList<GenericBusinessSetupTemplate> setupTemplates = Array.Empty<GenericBusinessSetupTemplate>();
 
         public bool IsOpen => overlay != null && overlay.activeSelf;
 
@@ -48,7 +51,12 @@ namespace LandLedgers.FirstLedger
             configured = sharedBusinessRuntime != null && view != null;
             if (configured)
             {
+                businessTypes = new[] { BusinessType.Generic };
+                setupTemplates = GenericBusinessSetupTemplateCatalog.CreateDefaults();
+                selectedTypeIndex = 0;
                 EnsureControls();
+                RefreshTemplateOptions();
+                BindUiEvents();
                 SetBusinessesTabActive(false);
             }
         }
@@ -83,13 +91,82 @@ namespace LandLedgers.FirstLedger
                 rect.pivot = new Vector2(1f, 1f);
                 rect.anchoredPosition = new Vector2(-18f, -16f);
                 rect.sizeDelta = new Vector2(164f, 32f);
-                createButton.onClick.AddListener(OpenForm);
             }
 
             if (overlay == null)
             {
                 BuildOverlay(view.PanelRoot);
             }
+            else
+            {
+                ResolveAuthoredOverlayControls();
+            }
+        }
+
+        private void BindUiEvents()
+        {
+            if (createButton != null)
+            {
+                createButton.onClick.RemoveListener(OpenForm);
+                createButton.onClick.AddListener(OpenForm);
+            }
+            if (typeDropdown != null)
+            {
+                typeDropdown.onValueChanged.RemoveListener(SelectBusinessType);
+                typeDropdown.onValueChanged.AddListener(SelectBusinessType);
+            }
+            if (templateDropdown != null)
+            {
+                templateDropdown.onValueChanged.RemoveListener(SelectSetupTemplate);
+                templateDropdown.onValueChanged.AddListener(SelectSetupTemplate);
+            }
+            if (confirmButton != null)
+            {
+                confirmButton.onClick.RemoveListener(Submit);
+                confirmButton.onClick.AddListener(Submit);
+            }
+            if (cancelButton != null)
+            {
+                cancelButton.onClick.RemoveListener(CloseForm);
+                cancelButton.onClick.AddListener(CloseForm);
+            }
+            if (clearButton != null)
+            {
+                clearButton.onClick.RemoveListener(ClearDraft);
+                clearButton.onClick.AddListener(ClearDraft);
+            }
+        }
+
+        private void ResolveAuthoredOverlayControls()
+        {
+            if (overlay == null)
+            {
+                return;
+            }
+
+            typeDropdown ??= FindChild<TMP_Dropdown>(overlay.transform, "BusinessTypeDropdown");
+            templateDropdown ??= FindChild<TMP_Dropdown>(overlay.transform, "BusinessSetupTemplateDropdown");
+            nameInput ??= overlay.GetComponentInChildren<TMP_InputField>(true);
+            clearButton ??= FindChild<Button>(overlay.transform, "CreateBusiness_Clear");
+            confirmButton ??= FindChild<Button>(overlay.transform, "CreateBusiness_Confirm");
+            cancelButton ??= FindChild<Button>(overlay.transform, "CreateBusiness_Cancel");
+            statusText ??= FindChild<TMP_Text>(overlay.transform, "CreateBusiness_Status");
+        }
+
+        private static T FindChild<T>(Transform root, string objectName) where T : Component
+        {
+            if (root == null)
+            {
+                return null;
+            }
+            foreach (T component in root.GetComponentsInChildren<T>(true))
+            {
+                if (component != null && string.Equals(component.gameObject.name, objectName, StringComparison.Ordinal))
+                {
+                    return component;
+                }
+            }
+            return null;
         }
 
         private void BuildOverlay(RectTransform parent)
@@ -139,30 +216,20 @@ namespace LandLedgers.FirstLedger
 
             CreateText(overlay.transform, "Setup template (optional)", 12f, FontStyles.Normal);
             templateDropdown = CreateDropdown(overlay.transform, "BusinessSetupTemplateDropdown");
-            templateDropdown.AddOptions(new List<TMP_Dropdown.OptionData>
-            {
-                new TMP_Dropdown.OptionData("Blank Business"),
-                new TMP_Dropdown.OptionData("Merchant assortment"),
-                new TMP_Dropdown.OptionData("Bakery policy"),
-                new TMP_Dropdown.OptionData("Prairie Fork smithing"),
-            });
-            templateDropdown.value = 0;
-            templateDropdown.RefreshShownValue();
+            RefreshTemplateOptions();
 
             nameInput = CreateInput(overlay.transform, "Business name (optional)");
             statusText = CreateText(overlay.transform, string.Empty, 13f, FontStyles.Normal);
+            statusText.gameObject.name = "CreateBusiness_Status";
 
             HorizontalLayoutGroup buttons = new GameObject("CreateBusiness_Buttons", typeof(RectTransform), typeof(HorizontalLayoutGroup)).GetComponent<HorizontalLayoutGroup>();
             buttons.transform.SetParent(overlay.transform, false);
             buttons.spacing = 10f;
             buttons.childControlWidth = true;
             buttons.childForceExpandWidth = true;
-            Button confirm = CreateButton(buttons.transform, "CreateBusiness_Confirm", "FORM BUSINESS");
-            Button cancel = CreateButton(buttons.transform, "CreateBusiness_Cancel", "CANCEL");
+            confirmButton = CreateButton(buttons.transform, "CreateBusiness_Confirm", "FORM BUSINESS");
+            cancelButton = CreateButton(buttons.transform, "CreateBusiness_Cancel", "CANCEL");
             clearButton = CreateButton(buttons.transform, "CreateBusiness_Clear", "CLEAR");
-            confirm.onClick.AddListener(Submit);
-            cancel.onClick.AddListener(CloseForm);
-            clearButton.onClick.AddListener(ClearDraft);
             overlay.SetActive(false);
         }
 
@@ -206,6 +273,13 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            string templateId = GetSelectedTemplateId();
+            if (GenericBusinessSetupTemplateCatalog.Find(templateId) == null)
+            {
+                statusText.text = "Choose an available setup preset.";
+                return;
+            }
+
             if (!sharedBusinessRuntime.TryCreatePlayerBusiness(
                     businessTypes[typeDropdown.value],
                     nameInput != null ? nameInput.text : string.Empty,
@@ -216,10 +290,17 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            ApplySetupTemplate(business, templateDropdown != null ? templateDropdown.value : 0);
+            if (!GenericBusinessSetupTemplateCatalog.TryApply(business, templateId, out string setupMessage))
+            {
+                statusText.text = setupMessage;
+                return;
+            }
 
-            statusText.text = $"{business.RuntimeDisplayName} formed. Configure the operation in Businesses.";
-            if ((business.BusinessType == BusinessType.GeneralStore || business.BusinessType == BusinessType.Generic)
+            statusText.text = $"{business.RuntimeDisplayName} formed. {setupMessage}";
+            // The classless formation path owns the Generic configuration model.
+            // Do not project every new commercial entity into the legacy,
+            // single-General-Store runtime.
+            if (business.BusinessType == BusinessType.GeneralStore
                 && storeRuntime != null
                 && storeRuntime.TryBindFormedPlayerBusiness(business, out string bindingMessage))
             {
@@ -232,6 +313,19 @@ namespace LandLedgers.FirstLedger
         private void SelectBusinessType(int index)
         {
             selectedTypeIndex = Mathf.Clamp(index, 0, Mathf.Max(0, businessTypes.Length - 1));
+        }
+
+        private void SelectSetupTemplate(int index)
+        {
+            if (statusText == null || index < 0 || setupTemplates == null || index >= setupTemplates.Count)
+                return;
+
+            GenericBusinessSetupTemplate template = setupTemplates[index];
+            statusText.text = template.TemplateId == GenericBusinessSetupTemplateCatalog.GeneralMerchandiseId
+                ? $"{template.SuggestedProductIds.Count} catalog items suggested. No stock or sale prices are added."
+                : template.TemplateId == GenericBusinessSetupTemplateCatalog.BlankId
+                    ? "Start with a blank commercial concern and configure its real activity later."
+                    : $"Preset: {template.DisplayName}. Requirements and stock are not supplied.";
         }
 
         private void ClearDraft()
@@ -266,22 +360,29 @@ namespace LandLedgers.FirstLedger
             }
         }
 
-        private static void ApplySetupTemplate(BusinessInstanceState business, int templateIndex)
+        private string GetSelectedTemplateId()
         {
-            if (business == null || business.BusinessType != BusinessType.Generic) return;
-            switch (templateIndex)
-            {
-                case 1:
-                    GenericBusinessVerticalService.AddMerchantProductLine(business, "flour", 20f, 40f, 8f, 35);
-                    GenericBusinessVerticalService.AddMerchantProductLine(business, "coffee", 10f, 20f, 4f, 85);
-                    break;
-                case 2:
-                    GenericBusinessVerticalService.ConfigureBakery(business);
-                    break;
-                case 3:
-                    GenericBusinessVerticalService.ConfigurePrairieForkSmithy(business);
-                    break;
-            }
+            if (setupTemplates == null || setupTemplates.Count == 0)
+                setupTemplates = GenericBusinessSetupTemplateCatalog.CreateDefaults();
+            int index = Mathf.Clamp(templateDropdown != null ? templateDropdown.value : 0, 0, setupTemplates.Count - 1);
+            return setupTemplates[index].TemplateId;
+        }
+
+        private void RefreshTemplateOptions()
+        {
+            if (templateDropdown == null)
+                return;
+            if (setupTemplates == null || setupTemplates.Count == 0)
+                setupTemplates = GenericBusinessSetupTemplateCatalog.CreateDefaults();
+
+            int selected = Mathf.Clamp(templateDropdown.value, 0, Mathf.Max(0, setupTemplates.Count - 1));
+            var options = new List<TMP_Dropdown.OptionData>(setupTemplates.Count);
+            foreach (GenericBusinessSetupTemplate template in setupTemplates)
+                options.Add(new TMP_Dropdown.OptionData(template.DisplayName));
+            templateDropdown.ClearOptions();
+            templateDropdown.AddOptions(options);
+            templateDropdown.value = selected;
+            templateDropdown.RefreshShownValue();
         }
 
         private static TMP_Dropdown CreateDropdown(Transform parent, string objectName)

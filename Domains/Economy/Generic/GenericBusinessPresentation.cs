@@ -11,7 +11,13 @@ namespace LandLedgers.Economy
             if (business == null) return "<b>Generic Business</b>\nBusiness unavailable.";
             GenericBusinessConfiguration config = business.GenericConfiguration;
             var builder = new StringBuilder();
-            builder.AppendLine("<b>Generic Business Operations</b>");
+            builder.AppendLine("<b>Commercial Business</b>");
+            GenericBusinessSetupTemplate setup = GenericBusinessSetupTemplateCatalog.Find(config.SetupTemplateId);
+            builder.AppendLine($"Setup plan: {(setup != null ? setup.DisplayName : "Custom configuration")}");
+            if (setup != null && setup.SuggestedProductIds.Count > 0)
+            {
+                builder.AppendLine($"Suggested assortment: {setup.SuggestedProductIds.Count} catalog items (not stocked by this plan)");
+            }
             builder.AppendLine($"Methods {config.ProductionMethods.Count} | Policies {config.ProductionPolicies.Count} | Processes {config.ActiveProcesses.Count}");
             builder.AppendLine($"Equipment {config.EquipmentAssetIds.Count} | Workspaces {config.WorkspaceIds.Count}");
             builder.AppendLine("Inventory");

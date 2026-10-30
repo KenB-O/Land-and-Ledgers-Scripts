@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Primitives;
@@ -337,7 +338,59 @@ namespace LandLedgers.EditorTests.Economy
             var configuration = new GenericBusinessConfiguration();
             template.ApplyPolicyOnly(configuration);
             Assert.AreEqual(1, configuration.Retail.ProductLines.Count);
+            Assert.IsFalse(configuration.Retail.ProductLines[0].EnabledForSale,
+                "A setup suggestion must not silently authorize sales at a zero price.");
+            Assert.AreEqual(0f, configuration.GetInventoryQuantity("bread"), 0.001f);
             Assert.IsEmpty(configuration.EquipmentAssetIds);
+        }
+
+        [Test]
+        public void GeneralMerchandisePresetUsesAuthoredCatalogWithoutCreatingStockOrSales()
+        {
+            BusinessInstanceState business = new BusinessInstanceStateTestFactory().CreateGeneric();
+
+            Assert.IsTrue(GenericBusinessSetupTemplateCatalog.TryApply(
+                business, GenericBusinessSetupTemplateCatalog.GeneralMerchandiseId, out string message), message);
+
+            Assert.AreEqual(GenericBusinessSetupTemplateCatalog.GeneralMerchandiseId,
+                business.GenericConfiguration.SetupTemplateId);
+            Assert.AreEqual(27, business.GenericConfiguration.Retail.ProductLines.Count,
+                "The preset must use the authored retail catalog assortment.");
+            Assert.IsTrue(business.GenericConfiguration.Retail.ProductLines.All(line => !line.EnabledForSale),
+                "Suggested products must remain inactive until real prices and inventory are configured.");
+            Assert.IsEmpty(business.GenericConfiguration.Inventory,
+                "A template must not grant goods.");
+            Assert.IsEmpty(business.GenericConfiguration.EquipmentAssetIds,
+                "A template must not grant equipment.");
+
+            GenericBusinessConfiguration restored = GenericBusinessConfiguration.FromSaveDto(
+                business.GenericConfiguration.CaptureSaveDto());
+            Assert.AreEqual(GenericBusinessSetupTemplateCatalog.GeneralMerchandiseId, restored.SetupTemplateId,
+                "The selected composition preset must survive save/load.");
+            Assert.AreEqual(27, restored.Retail.ProductLines.Count);
+            Assert.IsTrue(restored.Retail.ProductLines.All(line => !line.EnabledForSale));
+
+            Assert.IsTrue(GenericBusinessSetupTemplateCatalog.TryApply(
+                business, GenericBusinessSetupTemplateCatalog.GeneralMerchandiseId, out _),
+                "Reapplying a preset should update the same product lines, not duplicate them.");
+            Assert.AreEqual(27, business.GenericConfiguration.Retail.ProductLines.Count);
+
+            string readout = GenericBusinessPresentation.BuildReadout(business);
+            StringAssert.Contains("Setup plan: General merchandise storefront", readout);
+            StringAssert.Contains("27 catalog items (not stocked by this plan)", readout);
+            StringAssert.Contains("flour: disabled", readout);
+        }
+
+        [Test]
+        public void UnknownSetupPresetDoesNotMutateCommercialBusiness()
+        {
+            BusinessInstanceState business = new BusinessInstanceStateTestFactory().CreateGeneric();
+
+            Assert.IsFalse(GenericBusinessSetupTemplateCatalog.TryApply(business, "missing-preset", out _));
+
+            Assert.AreEqual(string.Empty, business.GenericConfiguration.SetupTemplateId);
+            Assert.IsEmpty(business.GenericConfiguration.Retail.ProductLines);
+            Assert.IsEmpty(business.GenericConfiguration.Inventory);
         }
 
         [Test]

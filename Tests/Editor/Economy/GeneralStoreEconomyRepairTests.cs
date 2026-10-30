@@ -41,6 +41,42 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void FreshStartupDiscardsSerializedPlayerBusinessPlaceholderWithoutIdentity()
+        {
+            GameObject root = new("GeneralStoreRuntimeManager_SerializedPlaceholder");
+            try
+            {
+                TownWorldController townWorld = root.AddComponent<TownWorldController>();
+                FieldInfo gridField = typeof(TownWorldController).GetField(
+                    "grid", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(gridField);
+                gridField.SetValue(townWorld, new TownGrid(4, 4, 2f, Vector3.zero));
+
+                GeneralStoreRuntimeManager manager = root.AddComponent<GeneralStoreRuntimeManager>();
+                SetStoreDefinition(manager, LoadGeneralStoreDefinition());
+                typeof(GeneralStoreRuntimeManager).GetField("townWorld", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .SetValue(manager, townWorld);
+
+                BusinessInstanceState serializedPlaceholder = new();
+                typeof(BusinessInstanceState).GetField("owner", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .SetValue(serializedPlaceholder, BusinessOwnerIdentity.Player());
+                typeof(GeneralStoreRuntimeManager).GetField("currentBusiness", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .SetValue(manager, serializedPlaceholder);
+
+                Assert.AreEqual(BusinessOwnerKind.Player, serializedPlaceholder.Owner.OwnerKind,
+                    "The regression fixture represents the old serialized owner default.");
+                Assert.IsTrue(manager.InitializeIfNeeded());
+                Assert.IsNull(manager.CurrentBusiness,
+                    "A serialized shell with no stable entity ID is not player ownership.");
+                StringAssert.Contains("No player General Store has been formed yet", manager.Status);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
         public void LandedCostFallsBackToSeventyPercentOfBaseline()
         {
             RetailPricingDefinition pricing = new()

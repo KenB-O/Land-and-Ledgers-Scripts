@@ -345,7 +345,10 @@ namespace LandLedgers.FirstLedger
         private readonly Dictionary<string, HouseholdBusinessAffinityState> householdAffinitiesByKey = new();
 
         public BusinessRuntimeState RuntimeState => runtimeState;
-        public BusinessInstanceState CurrentBusiness => currentBusiness;
+        public BusinessInstanceState CurrentBusiness => currentBusiness != null
+            && !string.IsNullOrWhiteSpace(currentBusiness.InstanceId)
+                ? currentBusiness
+                : null;
         public GeneralStoreBusinessDefinition StoreDefinition => storeDefinition;
         public int StoreBuildingId => storeBuildingId;
 
@@ -662,6 +665,19 @@ namespace LandLedgers.FirstLedger
         {
             AutoWire();
             storeMarginAdjustment01 = ClampStoreMarginAdjustment(storeMarginAdjustment01);
+
+            // Older scene instances can serialize a default BusinessInstanceState
+            // into this slot. That placeholder may carry the historical Player
+            // owner enum while having no entity identity or runtime. It is not a
+            // formed Business and must never cross into the shared registry.
+            if (currentBusiness != null && string.IsNullOrWhiteSpace(currentBusiness.InstanceId))
+            {
+                Debug.LogWarning("[GeneralStore] Discarding a serialized Business placeholder with no stable identity; no player store is formed.", this);
+                currentBusiness = null;
+                runtimeState = null;
+                storeBuildingId = -1;
+            }
+
             if (runtimeState != null)
             {
                 return true;

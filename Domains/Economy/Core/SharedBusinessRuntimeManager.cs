@@ -731,6 +731,13 @@ namespace LandLedgers.Economy
         public void InitializeIfNeeded(BusinessInstanceState existingPlayerGeneralStore = null)
         {
             AutoWire();
+            if (existingPlayerGeneralStore != null
+                && string.IsNullOrWhiteSpace(existingPlayerGeneralStore.InstanceId))
+            {
+                Debug.LogWarning("[SharedBusinessRuntimeManager] Ignoring a General Store placeholder without a stable Business ID; it is not an owned entity.", this);
+                existingPlayerGeneralStore = null;
+            }
+
             if (businesses.Count > 0)
             {
                 EnsureProfilesLoaded();

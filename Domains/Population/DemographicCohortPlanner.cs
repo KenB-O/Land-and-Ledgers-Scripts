@@ -228,20 +228,14 @@ namespace LandLedgers.Population
 
             for (int i = 0; i < plan.Count; i++)
             {
-                int birthYear = startYear - Math.Max(0, plan[i].age);
-
-                // The anniversary in the start year must fall on or before the
-                // start date so the derived age reproduces the planned age:
-                // draw the month in [1, startMonth], and when the month equals
-                // the start month cap the day at the start day of month.
-                int birthMonth = 1 + random.Next(0, startMonth);
-                int maxDay = GregorianDateMath.DaysInMonth(birthYear, birthMonth);
-                if (birthMonth == startMonth)
-                {
-                    maxDay = Math.Min(maxDay, startDay);
-                }
-
-                int birthDay = 1 + random.Next(0, maxDay);
+                // Distribute birthdays across the full calendar year. If the
+                // chosen anniversary has not happened yet in the start year,
+                // place the birth one year earlier so completed-years age still
+                // matches the demographic plan. Restricting birthdays to dates
+                // before the start date concentrated an entire Jan-1 opening
+                // cohort onto Jan 1 and caused a mass opening-day birthday run.
+                DrawBirthDate(plan[i].age, startYear, startMonth, startDay,
+                    random, out int birthYear, out int birthMonth, out int birthDay);
                 dates.Add(new BirthDate(
                     birthYear, birthMonth, birthDay,
                     BirthDateProvenance.GeneratedExact,
@@ -278,15 +272,8 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                int birthYear = year - Math.Max(0, person.age);
-                int birthMonth = 1 + random.Next(0, month);
-                int maxDay = GregorianDateMath.DaysInMonth(birthYear, birthMonth);
-                if (birthMonth == month)
-                {
-                    maxDay = Math.Max(1, Math.Min(maxDay, day));
-                }
-
-                int birthDay = 1 + random.Next(0, maxDay);
+                DrawBirthDate(person.age, year, month, day,
+                    random, out int birthYear, out int birthMonth, out int birthDay);
                 person.birthDate = new BirthDate(
                     birthYear, birthMonth, birthDay,
                     BirthDateProvenance.GeneratedExact,
@@ -296,6 +283,39 @@ namespace LandLedgers.Population
             }
 
             return stamped;
+        }
+
+        private static void DrawBirthDate(
+            int age, int referenceYear, int referenceMonth, int referenceDay,
+            Random random, out int birthYear, out int birthMonth, out int birthDay)
+        {
+            birthMonth = 1 + random.Next(0, 12);
+            int daysInReferenceMonth = GregorianDateMath.DaysInMonth(referenceYear, birthMonth);
+            birthDay = 1 + random.Next(0, daysInReferenceMonth);
+
+            // The candidate date can be Feb 29 in a leap reference year while
+            // the age-preserving birth year is not a leap year. Clamp to a valid
+            // day for that birth year, then recompute the anniversary side of
+            // the reference date (which can change the selected birth year).
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                bool anniversaryPassed = birthMonth < referenceMonth
+                    || (birthMonth == referenceMonth && birthDay <= referenceDay);
+                birthYear = referenceYear - Math.Max(0, age) - (anniversaryPassed ? 0 : 1);
+                int validDays = GregorianDateMath.DaysInMonth(birthYear, birthMonth);
+                if (birthDay <= validDays)
+                {
+                    return;
+                }
+
+                birthDay = validDays;
+            }
+
+            // Gregorian month lengths can require at most one clamp, but keep
+            // the final output internally consistent if calendar rules expand.
+            bool finalAnniversaryPassed = birthMonth < referenceMonth
+                || (birthMonth == referenceMonth && birthDay <= referenceDay);
+            birthYear = referenceYear - Math.Max(0, age) - (finalAnniversaryPassed ? 0 : 1);
         }
 
         private static List<PlannedPerson> PlanFamilyUnit(int unitIndex, int maxMembers, Random random)

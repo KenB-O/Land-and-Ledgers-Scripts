@@ -12,6 +12,7 @@ namespace LandLedgers.FirstLedger
     /// actual run to ScenarioDirector.
     /// </summary>
     [DisallowMultipleComponent]
+    [DefaultExecutionOrder(260)]
     public sealed class ScenarioStartPanelController : MonoBehaviour
     {
         [SerializeField] private ScenarioAsset scenarioAsset;
@@ -20,14 +21,20 @@ namespace LandLedgers.FirstLedger
 
         private GameObject panel;
         private TMP_Text objectiveLabel;
+        private RectTransform objectiveViewport;
+        private Button objectiveToggle;
+        private string objectiveHeader = "SCENARIO OBJECTIVES";
+        private bool objectivesExpanded = true;
         private float nextObjectiveRefreshTime;
 
         private void Awake()
         {
-            scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
+            scenarioDirector ??= FindFirstObjectByType<ScenarioDirector>();
             if (scenarioDirector == null)
             {
-                scenarioDirector = gameObject.AddComponent<ScenarioDirector>();
+                Debug.LogError("[ScenarioHUD] No authoritative ScenarioDirector is present. The HUD will not create a competing scenario authority.", this);
+                enabled = false;
+                return;
             }
 
             if (scenarioAsset != null)
@@ -38,13 +45,21 @@ namespace LandLedgers.FirstLedger
 
         private void Start()
         {
-            canvas ??= FindAnyObjectByType<Canvas>();
+            canvas = ResolveGameplayCanvas(canvas);
             if (canvas == null || scenarioDirector == null)
             {
+                Debug.LogError("[ScenarioHUD] Could not resolve the active gameplay Canvas; scenario presentation was not created.", this);
                 return;
             }
 
             RectTransform parent = canvas.transform as RectTransform;
+            if (parent == null)
+            {
+                Debug.LogError($"[ScenarioHUD] Canvas '{canvas.name}' has no RectTransform.", canvas);
+                return;
+            }
+
+            Debug.Log($"[ScenarioHUD] Bound Canvas '{canvas.name}' (mode={canvas.renderMode}, order={canvas.sortingOrder}); activeScenario={scenarioDirector.HasActiveScenario}.", this);
             if (!scenarioDirector.HasActiveScenario)
             {
                 BuildPanel(parent);
@@ -113,7 +128,7 @@ namespace LandLedgers.FirstLedger
 
             if (canvas == null)
             {
-                canvas = FindAnyObjectByType<Canvas>();
+                canvas = ResolveGameplayCanvas(null);
             }
 
             if (scenarioDirector.HasActiveScenario && objectiveLabel == null && canvas != null)
@@ -136,6 +151,44 @@ namespace LandLedgers.FirstLedger
             RenderObjectives();
         }
 
+        private static Canvas ResolveGameplayCanvas(Canvas configured)
+        {
+            if (configured != null && configured.isActiveAndEnabled && configured.gameObject.activeInHierarchy)
+            {
+                return configured;
+            }
+
+            Canvas[] canvases = FindObjectsByType<Canvas>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            for (int i = 0; i < canvases.Length; i++)
+            {
+                Canvas candidate = canvases[i];
+                if (candidate != null
+                    && candidate.isActiveAndEnabled
+                    && candidate.gameObject.activeInHierarchy
+                    && candidate.renderMode == RenderMode.ScreenSpaceOverlay
+                    && string.Equals(candidate.gameObject.name, "UI Canvas", System.StringComparison.Ordinal))
+                {
+                    return candidate;
+                }
+            }
+
+            // The authored HUD may be renamed by a scene-specific variant. In that
+            // case, prefer an active overlay over world-space or camera-space canvases.
+            for (int i = 0; i < canvases.Length; i++)
+            {
+                Canvas candidate = canvases[i];
+                if (candidate != null
+                    && candidate.isActiveAndEnabled
+                    && candidate.gameObject.activeInHierarchy
+                    && candidate.renderMode == RenderMode.ScreenSpaceOverlay)
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
         private void BuildObjectivePanel(RectTransform parent)
         {
             if (parent == null || objectiveLabel != null)
@@ -144,22 +197,34 @@ namespace LandLedgers.FirstLedger
             }
 
             GameObject objectiveObject = new GameObject("ScenarioObjectivePanel", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
+            panel = objectiveObject;
             RectTransform rect = objectiveObject.transform as RectTransform;
             rect.SetParent(parent, false);
-            rect.anchorMin = new Vector2(0f, 1f);
-            rect.anchorMax = new Vector2(0f, 1f);
-            rect.pivot = new Vector2(0f, 1f);
-            rect.anchoredPosition = new Vector2(24f, -24f);
-            rect.sizeDelta = new Vector2(390f, 260f);
+            rect.anchorMin = Vector2.one;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = Vector2.one;
+            rect.anchoredPosition = new Vector2(-24f, -214f);
+            rect.sizeDelta = new Vector2(520f, 380f);
             objectiveObject.GetComponent<Image>().color = new Color(0.055f, 0.06f, 0.055f, 0.94f);
+            objectiveObject.transform.SetAsLastSibling();
+
+            objectiveToggle = CreateButton(objectiveObject.transform, "SCENARIO OBJECTIVES  −");
+            RectTransform toggleRect = objectiveToggle.transform as RectTransform;
+            toggleRect.anchorMin = new Vector2(0f, 1f);
+            toggleRect.anchorMax = new Vector2(1f, 1f);
+            toggleRect.pivot = new Vector2(0.5f, 1f);
+            toggleRect.anchoredPosition = new Vector2(0f, -8f);
+            toggleRect.sizeDelta = new Vector2(-20f, 42f);
+            objectiveToggle.onClick.AddListener(ToggleObjectives);
 
             GameObject viewportObject = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
             RectTransform viewport = viewportObject.transform as RectTransform;
             viewport.SetParent(rect, false);
-            viewport.anchorMin = Vector2.zero;
+            viewport.anchorMin = new Vector2(0f, 0f);
             viewport.anchorMax = Vector2.one;
             viewport.offsetMin = new Vector2(12f, 12f);
-            viewport.offsetMax = new Vector2(-12f, -12f);
+            viewport.offsetMax = new Vector2(-12f, -56f);
+            objectiveViewport = viewport;
 
             GameObject contentObject = new GameObject("Content", typeof(RectTransform), typeof(ContentSizeFitter));
             RectTransform content = contentObject.transform as RectTransform;
@@ -192,12 +257,53 @@ namespace LandLedgers.FirstLedger
             RenderObjectives();
         }
 
+        private void ToggleObjectives()
+        {
+            objectivesExpanded = !objectivesExpanded;
+            if (objectiveViewport != null)
+            {
+                objectiveViewport.gameObject.SetActive(objectivesExpanded);
+            }
+
+            if (panel != null)
+            {
+                RectTransform rect = panel.transform as RectTransform;
+                if (rect != null)
+                {
+                    rect.sizeDelta = new Vector2(520f, objectivesExpanded ? 380f : 58f);
+                }
+            }
+
+            TMP_Text toggleLabel = objectiveToggle != null
+                ? objectiveToggle.GetComponentInChildren<TMP_Text>()
+                : null;
+            if (toggleLabel != null)
+            {
+                toggleLabel.text = objectiveHeader + (objectivesExpanded ? "  −" : "  +");
+            }
+        }
+
         private void RenderObjectives()
         {
             ScenarioRuntimeState state = scenarioDirector.Service.ActiveState;
             if (state == null || objectiveLabel == null)
             {
                 return;
+            }
+
+            objectiveHeader = string.IsNullOrWhiteSpace(state.Asset.DisplayName)
+                ? "SCENARIO OBJECTIVES"
+                : state.Asset.DisplayName.ToUpperInvariant() + "  ·  OBJECTIVES";
+            TMP_Text toggleLabel = objectiveToggle != null
+                ? objectiveToggle.GetComponentInChildren<TMP_Text>()
+                : null;
+            if (toggleLabel != null)
+            {
+                string header = objectiveHeader + (objectivesExpanded ? "  −" : "  +");
+                if (!string.Equals(toggleLabel.text, header, System.StringComparison.Ordinal))
+                {
+                    toggleLabel.text = header;
+                }
             }
 
             int completed = 0;

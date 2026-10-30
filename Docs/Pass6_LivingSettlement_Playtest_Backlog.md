@@ -9,11 +9,11 @@ until the Unity Editor can be inspected graphically.
 
 | ID | Issue | Current status | Evidence / next check |
 |---|---|---|---|
-| LL-PLAY-001 | Incorrect starting ownership / ghost Businesses | PARTIAL | A fresh Main Scene route showed $2,500 cash and no holdings; prior runtime status said no player store. Alternate scenarios, Continue, duplicate projections and UI lists still need checks. |
+| LL-PLAY-001 | Incorrect starting ownership / ghost Businesses | PARTIAL | Root cause found: serialized identityless BusinessInstanceState carried Player owner and entered the shared registry. Startup now rejects identityless placeholders; fresh First Ledger Play Mode showed zero player holdings and an EditMode regression passed. Alternate scenario/Continue matrix and duplicate projection still need checks. |
 | LL-PLAY-002 | Excessive PlayMode-generated scene roots | Not tested | Requires Edit Mode vs Play Mode hierarchy inspection. |
 | LL-PLAY-003 | Duplicate Civic Foundation | Not tested | Requires Main Scene runtime inspection and authority-count trace. |
-| LL-PLAY-004 | Obsolete tutorial guidance | PARTIAL | Main Scene bootstrap now disables the legacy strip; a fresh live view showed it absent. Scenario HUD is not yet visible, so actual objectives are not yet replacing it. |
-| LL-PLAY-005 | Missing scenario HUD | OPEN | Source controller now handles active-at-start and late activation, but Main Scene Play Mode did not show the objective panel. Scene wiring/Canvas lookup and visual presentation remain unverified. |
+| LL-PLAY-004 | Obsolete tutorial guidance | PARTIAL | Fresh First Ledger after Start showed no universal “hire first store worker” strip and authentic scenario objectives instead. Legacy guidance was visible in a separate stale/test-runner view; confirm all routes and restored saves. |
+| LL-PLAY-005 | Missing scenario HUD | PARTIAL | Main Scene now serializes the authored UI Canvas into ScenarioStartPanelController; live First Ledger showed the 0/8 objectives and authentic $15,000 equity goal in a readable collapsible panel. Runtime panel contents are still generated dynamically; Sandbox, failed/victory states, reload and save/load visual cases remain unverified. |
 | LL-PLAY-006 | Blacksmith management panel layout | Not tested | Visual Editor check required. |
 | LL-PLAY-007 | Seller meeting modal behavior | Not tested | UI interaction check required. |
 | LL-PLAY-008 | Repetitive acquisition buttons | Not tested | UI interaction check required. |
@@ -94,4 +94,16 @@ runtime findings; see `Pass19_Runtime_Defect_and_Integration_Results.md`.
 |---|---|---|---|
 | LL-PLAY-020 | Daily needs do not have journey locations | OPEN | Main Scene log: `DailyNeedsService skipped: no journey locations registered`; connect valid location authority and test actual needs. |
 | LL-PLAY-021 | Animal feeding and rent authorities are missing in runtime | OPEN | Live log reports horse feeding shortfall and rent collection skipped for missing authorities; trace actual scene registration and custody. |
-| LL-PLAY-022 | Opening-day birthday events report unchanged ages | OPEN | Runtime log reported many Persons “turned N (was N)” on the opening date; verify age calculation and seed birthday semantics without suppressing legitimate events. |
+| LL-PLAY-022 | Opening-day birthday events report unchanged ages | PARTIAL | Root cause: generated/migrated birthdays were constrained to dates before the opening day, concentrating Jan-1 birthdays. Generation now distributes dates across the year while preserving completed age; opening-day and leap-year regressions added. Final leap-year test result pending the current Unity run. |
+
+## Pass XX update — 2026-10-29
+
+- Fresh Unity Editor Test Runner baseline on the pre-leap-fix source: EditMode 4,224 total / 4,010 passed / 214 failed / 0 skipped. PlayMode 10 total / 9 passed / 1 failed / 0 skipped. Artifacts: `F:\Land & Ledgers_Pass20_Backups\pass20-reports\pass20-editmode-20261029.xml` and `pass20-playmode-20261029.xml`.
+- The PlayMode failure is `ProductionWeeklyPassRegistersFarmFieldAndRespectsWinter`: the ordinary authored opening world has no CropFarm Business. No synthetic farm was introduced. Winter field registration therefore remains unverified in Main Scene.
+- Actual Main Scene Canvas binding was repaired and the First Ledger objective HUD was visibly demonstrated after scenario start. LL-PLAY-005 is partial pending broader scenario/save/reload cases and scene-authored panel elements.
+- An identityless serialized General Store placeholder was rejected before ownership registration. Fresh First Ledger showed no player Business; broader scenario/continue cases remain open.
+- Demographic birth-date generation was changed to distribute birthdays through the calendar year while preserving planned age. Leap-year validation was added; the final current-tree regression passed, as recorded in the Pass XX report.
+- LL-PLAY-020 journey destinations, LL-PLAY-021 rent/animal authorities, Person lifecycle, farming Tasks/freight, and the RUN-004 30-day economic reconciliation remain OPEN. No claim of full simulation or playtest readiness is made.
+Final Pass XX regression update: the current-source full EditMode run completed 4,225 tests (4,011 passed, 214 failed, 0 skipped). The identityless General Store, January birthday-distribution and leap-year birthday regressions passed. Fresh XML and failure CSV are stored under `F:\Land & Ledgers_Pass20_Backups\pass20-reports`. The full suite remains red; failures were not suppressed. A final-source PlayMode rerun completed 9/10; `ProductionWeeklyPassRegistersFarmFieldAndRespectsWinter` failed because the authored opening world has no CropFarm Business.
+
+Pass XX final-source PlayMode result: 10 tests, 9 passed, 1 failed, 0 skipped. XML: `F:\Land & Ledgers_Pass20_Backups\pass20-reports\pass20-playmode-final-20261029.xml`. The failure is the authored opening world missing a real CropFarm Business; no synthetic farm was added. The first run's PlayMode result is retained separately.

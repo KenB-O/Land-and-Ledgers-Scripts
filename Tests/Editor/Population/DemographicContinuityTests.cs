@@ -107,6 +107,78 @@ namespace LandLedgers.EditorTests.Population
             kinship.AddSpouses(fatherB.id, motherB.id, "test-setup");
         }
 
+        [Test]
+        public void JanuaryFirstPopulationGeneration_DistributesBirthdaysWithoutChangingPlannedAges()
+        {
+            const int year = 1886;
+            const int cohortSize = 200;
+            var plan = new List<PlannedPerson>(cohortSize);
+            for (int i = 0; i < cohortSize; i++)
+            {
+                plan.Add(new PlannedPerson { age = i % 70 });
+            }
+
+            List<BirthDate> dates = DemographicCohortPlanner.AssignBirthDates(
+                plan, year, 1, 1, WorldSeed, "January-first regression");
+
+            Assert.AreEqual(cohortSize, dates.Count);
+            Assert.Greater(dates.Select(birth => birth.Month).Distinct().Count(), 9,
+                "A Jan 1 scenario opening must not force the entire cohort's birthdays into January.");
+            Assert.LessOrEqual(dates.Count(birth => birth.Month == 1 && birth.Day == 1), 3,
+                "Only the small, naturally sampled Jan 1 share may have an opening-day birthday.");
+
+            for (int i = 0; i < cohortSize; i++)
+            {
+                Assert.AreEqual(plan[i].age,
+                    AgeAuthority.CompletedYears(dates[i], year, 1, 1),
+                    $"Generated P{i} retains the planned completed-years age.");
+            }
+
+            var missingDates = plan.Select((person, index) => new PersonState
+            {
+                id = index,
+                age = person.age,
+            }).ToList();
+            int assigned = DemographicCohortPlanner.AssignMissingBirthDates(
+                missingDates, year, 1, 1, WorldSeed, "January-first save migration regression");
+
+            Assert.AreEqual(cohortSize, assigned);
+            Assert.Greater(missingDates.Select(person => person.birthDate.Month).Distinct().Count(), 9,
+                "Missing-date migration must use the same non-concentrated birthday distribution.");
+            foreach (PersonState person in missingDates)
+            {
+                Assert.AreEqual(person.age,
+                    AgeAuthority.CompletedYears(person.birthDate, year, 1, 1),
+                    $"Migrated P{person.id} retains its saved age.");
+            }
+        }
+
+        [Test]
+        public void LeapYearPopulationBirthdaysRemainValidInAgePreservingBirthYears()
+        {
+            const int year = 1888;
+            const int month = 2;
+            const int day = 28;
+            var plan = Enumerable.Range(0, 500)
+                .Select(index => new PlannedPerson { age = index % 80 })
+                .ToList();
+
+            List<BirthDate> dates = DemographicCohortPlanner.AssignBirthDates(
+                plan, year, month, day, WorldSeed + 19, "leap-year regression");
+
+            Assert.AreEqual(plan.Count, dates.Count);
+            for (int i = 0; i < dates.Count; i++)
+            {
+                BirthDate birth = dates[i];
+                Assert.LessOrEqual(birth.Day,
+                    GregorianDateMath.DaysInMonth(birth.Year, birth.Month),
+                    $"P{i} must receive a valid Gregorian date even when the opening year is leap.");
+                Assert.AreEqual(plan[i].age,
+                    AgeAuthority.CompletedYears(birth, year, month, day),
+                    $"P{i} retains the planned completed-years age at the scenario opening.");
+            }
+        }
+
         private void RunDays(int days)
         {
             for (int i = 0; i < days; i++)

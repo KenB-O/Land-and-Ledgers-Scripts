@@ -497,6 +497,31 @@ namespace LandLedgers.EditorTests.Animals
         }
 
         [Test]
+        public void CareDay_ConsumesOnlyTheOwningBusinessesFeedStock()
+        {
+            var f = new Fixture();
+            AnimalState first = f.AddHorse(AnimalOwnerKind.Business, "livery-a");
+            AnimalState second = f.AddHorse(AnimalOwnerKind.Business, "livery-b");
+            var firstStock = new StubFeedStock(2);
+            var secondStock = new StubFeedStock(2);
+            var diagnostics = new List<string>();
+
+            int unfed = HorseCareDriver.CareDay(
+                f.Registry,
+                horse => horse.OwnerId == "livery-a" ? firstStock : secondStock,
+                _ => false,
+                12,
+                diagnostics);
+
+            Assert.That(unfed, Is.EqualTo(0));
+            Assert.That(firstStock.FeedStockUnits, Is.EqualTo(0));
+            Assert.That(secondStock.FeedStockUnits, Is.EqualTo(0));
+            Assert.That(first.LastCareDayIndex, Is.EqualTo(12));
+            Assert.That(second.LastCareDayIndex, Is.EqualTo(12));
+            Assert.That(diagnostics, Is.Empty);
+        }
+
+        [Test]
         public void WorkPlowSession_AccruesRealConditionCost()
         {
             var f = new Fixture();

@@ -281,6 +281,9 @@ namespace LandLedgers.Persistence
     {
         public SimulationDate currentDate;
         public int absoluteDayIndex;
+        // Additive timeline offset. Older saves omit this field and retain the
+        // established 1880-03-01 calendar epoch (zero).
+        public int calendarDayOffset;
         public float timeOfDay01;
         public float gameSecondsIntoDay;
         public int shortTickIndex;

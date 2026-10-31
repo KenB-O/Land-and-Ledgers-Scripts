@@ -55,15 +55,25 @@ namespace LandLedgers.Animals
             int dayIndex,
             List<string> diagnostics)
         {
+            return CareDay(registry, _ => feedStock, isWorking, dayIndex, diagnostics);
+        }
+
+        public static int CareDay(
+            AnimalRegistry registry,
+            Func<AnimalState, IHorseFeedStock> feedStockForHorse,
+            Func<AnimalState, bool> isWorking,
+            int dayIndex,
+            List<string> diagnostics)
+        {
             diagnostics = diagnostics ?? new List<string>();
             if (registry == null)
             {
                 diagnostics.Add("HorseCareDriver: no animal registry — horses went unfed.");
                 return 0;
             }
-            if (feedStock == null)
+            if (feedStockForHorse == null)
             {
-                diagnostics.Add("HorseCareDriver: no feed stock — horses went unfed.");
+                diagnostics.Add("HorseCareDriver: no owner feed resolver — horses went unfed.");
                 return 0;
             }
 
@@ -79,6 +89,16 @@ namespace LandLedgers.Animals
                 if (horse.LastCareDayIndex >= dayIndex) continue;
 
                 bool working = isWorking != null && isWorking(horse);
+                IHorseFeedStock feedStock = feedStockForHorse(horse);
+                if (feedStock == null)
+                {
+                    unfedCount++;
+                    horse.Nutrition01 = Math.Max(0f, horse.Nutrition01 - StarvationNutritionLoss01);
+                    horse.Fatigue01 = Math.Min(1f, horse.Fatigue01 + StarvationFatigueGain01);
+                    horse.LastCareDayIndex = dayIndex;
+                    diagnostics.Add($"HorseCareDriver: horse {horse.AnimalId} has no feed stock registered for owner '{horse.OwnerId}' on day {dayIndex}; condition degrades, no care applied.");
+                    continue;
+                }
                 float need = working ? DailyFeedUnitsPerWorkingHorse : DailyFeedUnitsPerHorse;
                 int needUnits = Math.Max(1, (int)Math.Ceiling(need));
                 int taken = Math.Max(0, feedStock.TakeFeedUnits(needUnits));

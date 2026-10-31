@@ -989,7 +989,10 @@ namespace LandLedgers.FirstLedger
                 household.lastStoreSpendCents = 0;
                 household.lastDailyReserveLocalPurchaseUnits = 0;
                 household.lastDailyReserveOffMapPurchaseUnits = 0;
-                HouseholdReserveEvaluator.ResolveDailyUse(household, absoluteDay);
+                HouseholdReserveEvaluator.ResolveDailyUse(
+                    household,
+                    absoluteDay,
+                    timeManager != null ? timeManager.TimelineAnchor : CalendarAnchor.Default);
                 HouseholdDemandSnapshot demand = HouseholdReserveEvaluator.BuildDemandSnapshot(household);
                 household.demandSnapshot = demand;
 

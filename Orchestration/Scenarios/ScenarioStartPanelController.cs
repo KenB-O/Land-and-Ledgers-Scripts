@@ -1,5 +1,6 @@
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Orchestration.Scenarios.Generation;
+using LandLedgers.Persistence;
 using LandLedgers.UI;
 using LandLedgers.Time;
 using TMPro;
@@ -165,11 +166,22 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            if (scenarioDirector.SwitchScenario(scenarioAsset.ScenarioId))
+            TimeManager clock = TimeManager.Instance;
+            TimeSaveDto previousClock = clock != null ? clock.CaptureSaveDto() : null;
+            bool hasScenarioStart = scenarioAsset.StartingWorld != null;
+            string startDateLabel = hasScenarioStart
+                ? $"{scenarioAsset.StartingWorld.StartYear:D4}-{scenarioAsset.StartingWorld.StartMonth:D2}-{scenarioAsset.StartingWorld.StartDay:D2}"
+                : "missing from the scenario asset";
+            bool clockStarted = hasScenarioStart && clock != null && clock.StartNewScenarioAtDate(
+                scenarioAsset.StartingWorld.StartYear,
+                scenarioAsset.StartingWorld.StartMonth,
+                scenarioAsset.StartingWorld.StartDay);
+
+            if (clockStarted && scenarioDirector.SwitchScenario(scenarioAsset.ScenarioId))
             {
-                if (TimeManager.Instance != null)
+                if (clock != null)
                 {
-                    TimeManager.Instance.SetPaused(false);
+                    clock.SetPaused(false);
                 }
 
                 if (panel != null)
@@ -179,6 +191,27 @@ namespace LandLedgers.FirstLedger
 
                 BuildObjectivePanel(canvas != null ? canvas.transform as RectTransform : null);
             }
+            else if (clock != null && previousClock != null)
+            {
+                clock.LoadFromSaveDto(previousClock);
+                Debug.LogError($"[ScenarioHUD] Scenario '{scenarioAsset.ScenarioId}' could not start; its start date is {startDateLabel}. The prior clock state was restored.", this);
+            }
+        }
+
+        /// <summary>
+        /// Sets the selected scenario's calendar before New Game population and
+        /// economic state are generated. The scenario is not activated here;
+        /// the player's Start action still owns activation.
+        /// </summary>
+        public bool PrepareScenarioClockForWorldGeneration()
+        {
+            if (scenarioAsset == null || scenarioAsset.StartingWorld == null || TimeManager.Instance == null)
+            {
+                return false;
+            }
+
+            StartingWorldConfiguration start = scenarioAsset.StartingWorld;
+            return TimeManager.Instance.StartNewScenarioAtDate(start.StartYear, start.StartMonth, start.StartDay);
         }
 
         private void Update()

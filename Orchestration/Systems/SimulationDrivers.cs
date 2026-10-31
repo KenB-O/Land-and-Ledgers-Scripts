@@ -2272,7 +2272,7 @@ namespace LandLedgers.Orchestration.Systems
             var diagnostics = new List<string>();
             int unfed = HorseCareDriver.CareDay(
                 hub.Animals,
-                new HorseFeedStockAdapter(hub.FarmSlice.Feed),
+                ResolveHorseFeedStock,
                 horse => horse != null && hub.DraftPower.IsAnimalReserved(horse.AnimalId),
                 absoluteDayIndex,
                 diagnostics);
@@ -2281,6 +2281,32 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.Log("[SimulationDrivers] horse care day " + absoluteDayIndex + ": " +
                     unfed + " unfed | " + string.Join(" | ", diagnostics));
             }
+        }
+
+        private IHorseFeedStock ResolveHorseFeedStock(AnimalState horse)
+        {
+            if (horse == null) return null;
+            if (horse.OwnerKind == AnimalOwnerKind.Business
+                && horse.OwnerId != null
+                && horse.OwnerId.StartsWith("farm:", StringComparison.Ordinal))
+            {
+                return new HorseFeedStockAdapter(hub.FarmSlice.Feed);
+            }
+
+            if (horse.OwnerKind == AnimalOwnerKind.Business
+                && sharedBusinessRuntime != null
+                && sharedBusinessRuntime.TryFindByInstanceId(horse.OwnerId, out BusinessInstanceState owner)
+                && owner?.RuntimeState != null)
+            {
+                if (owner.BusinessType == BusinessType.LiveryFreight
+                    && owner.RuntimeState.GetCategoryStock("livery_feed_upkeep") != null)
+                {
+                    return new BusinessHorseFeedStockAdapter(owner.RuntimeState);
+                }
+
+            }
+
+            return null;
         }
 
         private void DriveHouseholdAutonomy(int absoluteDayIndex, List<string> diag)
@@ -3007,7 +3033,7 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            CalendarAnchor anchor = timeManager.Settings != null ? timeManager.Settings.Anchor : CalendarAnchor.Default;
+            CalendarAnchor anchor = timeManager.Settings != null ? timeManager.TimelineAnchor : CalendarAnchor.Default;
             float secondsPerDay = timeManager.Settings != null ? timeManager.Settings.GameSecondsPerDay : 86400f;
             BirthdayService.HandleBirthdayDueEvent(
                 dueEvent, populationManager.State, hub.DueEvents, anchor, dayIndex, secondsPerDay, diag);

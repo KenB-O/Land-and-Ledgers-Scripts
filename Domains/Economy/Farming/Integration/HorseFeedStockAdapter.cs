@@ -1,4 +1,5 @@
 using LandLedgers.Animals;
+using LandLedgers.Economy;
 
 namespace LandLedgers.Economy.Farming.Integration
 {
@@ -24,6 +25,29 @@ namespace LandLedgers.Economy.Farming.Integration
         {
             if (feedLoop == null) return 0;
             return feedLoop.TakeFeedUnits(requestedUnits);
+        }
+    }
+
+    /// <summary>Finite feed/upkeep stock adapter for a horse-owning livery Business.</summary>
+    public sealed class BusinessHorseFeedStockAdapter : IHorseFeedStock
+    {
+        private const string FeedCategoryId = "livery_feed_upkeep";
+        private readonly BusinessRuntimeState business;
+
+        public BusinessHorseFeedStockAdapter(BusinessRuntimeState business)
+        {
+            this.business = business;
+        }
+
+        public int FeedStockUnits => business?.GetCategoryStock(FeedCategoryId)?.CurrentStockUnits ?? 0;
+
+        public int TakeFeedUnits(int requestedUnits)
+        {
+            int requested = System.Math.Max(0, requestedUnits);
+            return business != null && requested > 0
+                && business.TryConsumeCategoryStockUnits(FeedCategoryId, requested, out int consumed)
+                    ? consumed
+                    : 0;
         }
     }
 }

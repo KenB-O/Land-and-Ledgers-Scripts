@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Text;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.FirstLedger;
@@ -90,6 +92,31 @@ namespace LandLedgers.Editor.Economy
             Assert.Greater(blacksmith.RuntimeState.CurrentCashCents, blacksmithCashBefore);
             Assert.Greater(sawmill.RuntimeState.LastWeeklyLocalTransferRevenueCents, 0);
             Assert.Greater(sawmill.RuntimeState.CurrentCashCents, sawmillCashBefore);
+        }
+
+        [Test]
+        public void UnmatchedArchetypeMarketDemandRetainsStockAndPostsNoSellerOnlyRevenue()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
+            context.SetBlacksmithHardwareStock(40);
+            int cashBefore = blacksmith.RuntimeState.CurrentCashCents;
+            int stockBefore = context.GetBlacksmithHardwareStock();
+            MethodInfo sellLocalMarketOutput = typeof(SharedBusinessRuntimeManager).GetMethod(
+                "SellLocalMarketOutput", BindingFlags.Instance | BindingFlags.NonPublic,
+                null, new[] { typeof(BusinessInstanceState), typeof(string), typeof(int), typeof(StringBuilder) }, null);
+            Assert.NotNull(sellLocalMarketOutput, "The existing local-market outlet must remain covered.");
+
+            int sold = (int)sellLocalMarketOutput.Invoke(
+                context.SharedBusinessRuntime,
+                new object[] { blacksmith, "hardware", 20, new StringBuilder() });
+
+            Assert.AreEqual(0, sold);
+            Assert.AreEqual(stockBefore, context.GetBlacksmithHardwareStock(),
+                "Without a funded, named buyer, physical hardware remains in seller custody.");
+            Assert.AreEqual(cashBefore, blacksmith.RuntimeState.CurrentCashCents,
+                "Unmatched modeled demand cannot credit seller cash.");
+            Assert.AreEqual(0, blacksmith.RuntimeState.LastWeeklyLocalTransferRevenueCents);
         }
 
         [Test]

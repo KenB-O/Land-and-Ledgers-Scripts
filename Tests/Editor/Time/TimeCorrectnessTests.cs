@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
+using LandLedgers.Persistence;
+using LandLedgers.Population;
 using LandLedgers.Time;
 using NUnit.Framework;
 using UnityEngine;
@@ -68,6 +70,50 @@ namespace LandLedgers.EditorTests.Time
             Assert.AreEqual(36f * interval, GetField<float>(manager, "shortTickAccumulatorGameSeconds"), 0.001f,
                 "overflow seconds must be deferred to later frames, never discarded");
             Assert.AreEqual(36, manager.CompressedShortTicksLastFrame);
+        }
+
+        [Test]
+        public void ScenarioStartBeforeCalendarEpoch_UsesPositiveCampaignDaysAndRestoresDate()
+        {
+            var settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            var root = new GameObject("Scenario Date Test Clock");
+            try
+            {
+                settings.startingTimeOfDay01 = 0f;
+                TimeManager manager = root.AddComponent<TimeManager>();
+                SetField(manager, "settings", settings);
+
+                Assert.IsTrue(manager.StartNewScenarioAtDate(1870, 1, 1));
+                Assert.AreEqual(1870, manager.CurrentDate.Year);
+                Assert.AreEqual(1, manager.CurrentDate.Month);
+                Assert.AreEqual(1, manager.CurrentDate.DayOfMonth);
+                Assert.AreEqual(1870, manager.TimelineAnchor.Year,
+                    "Calendar-based population and finance consumers must share the scenario epoch.");
+                Assert.AreEqual(1, HouseholdHeatingEvaluator.GetMonthFromAbsoluteDay(
+                    manager.CurrentAbsoluteDayIndex, manager.TimelineAnchor),
+                    "A January scenario start must remain winter to calendar-dependent simulation systems.");
+                Assert.AreEqual(0, manager.CurrentAbsoluteDayIndex,
+                    "Scenario event indices remain non-negative even when the Gregorian date predates the shared epoch.");
+
+                TimeSaveDto save = manager.CaptureSaveDto();
+                Assert.Less(save.calendarDayOffset, 0, "The pre-epoch calendar offset must be preserved in saves.");
+                manager.AdvanceForValidation(settings.GameSecondsPerDay);
+                Assert.AreEqual(2, manager.CurrentDate.DayOfMonth);
+                Assert.AreEqual(1, manager.CurrentAbsoluteDayIndex);
+
+                manager.LoadFromSaveDto(save);
+                Assert.AreEqual(1870, manager.CurrentDate.Year);
+                Assert.AreEqual(1, manager.CurrentDate.Month);
+                Assert.AreEqual(1, manager.CurrentDate.DayOfMonth);
+                Assert.AreEqual(1870, manager.TimelineAnchor.Year,
+                    "The active calendar epoch must survive save/load with the scenario date.");
+                Assert.AreEqual(0, manager.CurrentAbsoluteDayIndex);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+                Object.DestroyImmediate(settings);
+            }
         }
 
         [Test]

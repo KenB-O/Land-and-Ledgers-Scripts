@@ -357,6 +357,12 @@ namespace LandLedgers.Population
 
         public static int ResolveDailyHeatingUse(HouseholdState household, HouseholdReserveState reserve, int absoluteDayIndex)
         {
+            return ResolveDailyHeatingUse(household, reserve, absoluteDayIndex, CalendarAnchor.Default);
+        }
+
+        public static int ResolveDailyHeatingUse(
+            HouseholdState household, HouseholdReserveState reserve, int absoluteDayIndex, CalendarAnchor anchor)
+        {
             if (household == null)
             {
                 return 0;
@@ -372,12 +378,13 @@ namespace LandLedgers.Population
 
             reserve.ApplyDefinition(HouseholdReserveCatalog.Get(HouseholdReserveCatalog.FuelWoodCategoryId), household);
 
-            int requiredFuelUnits = CalculateDailyFuelUseUnits(household, absoluteDayIndex);
+            int requiredFuelUnits = CalculateDailyFuelUseUnits(household, absoluteDayIndex, anchor);
             int consumedUnits = Mathf.Min(requiredFuelUnits, Mathf.Max(0, reserve.currentUnits));
             reserve.currentUnits = Mathf.Max(0, reserve.currentUnits - consumedUnits);
 
             int shortfallUnits = Mathf.Max(0, requiredFuelUnits - consumedUnits);
-            float winterStrain01 = CalculateEffectiveWinterStrain01(household, GetMonthFromAbsoluteDay(absoluteDayIndex));
+            float winterStrain01 = CalculateEffectiveWinterStrain01(
+                household, GetMonthFromAbsoluteDay(absoluteDayIndex, anchor));
             float pressure01 = CalculateHeatingPressure01(household, winterStrain01, requiredFuelUnits, shortfallUnits);
 
             reserve.lastDailyUseUnits = consumedUnits;
@@ -390,12 +397,18 @@ namespace LandLedgers.Population
 
         public static int CalculateDailyFuelUseUnits(HouseholdState household, int absoluteDayIndex)
         {
+            return CalculateDailyFuelUseUnits(household, absoluteDayIndex, CalendarAnchor.Default);
+        }
+
+        public static int CalculateDailyFuelUseUnits(
+            HouseholdState household, int absoluteDayIndex, CalendarAnchor anchor)
+        {
             if (household == null)
             {
                 return 0;
             }
 
-            float seasonStrain01 = GetSeasonStrain01(GetMonthFromAbsoluteDay(absoluteDayIndex));
+            float seasonStrain01 = GetSeasonStrain01(GetMonthFromAbsoluteDay(absoluteDayIndex, anchor));
             if (seasonStrain01 <= 0f)
             {
                 return 0;
@@ -524,6 +537,12 @@ namespace LandLedgers.Population
     {
         public static int ResolveDailyUse(HouseholdState household, int absoluteDayIndex)
         {
+            return ResolveDailyUse(household, absoluteDayIndex, CalendarAnchor.Default);
+        }
+
+        public static int ResolveDailyUse(
+            HouseholdState household, int absoluteDayIndex, CalendarAnchor anchor)
+        {
             if (household == null)
             {
                 return 0;
@@ -552,7 +571,8 @@ namespace LandLedgers.Population
 
                 if (HouseholdHeatingEvaluator.IsFuelReserve(definition))
                 {
-                    totalUsed += HouseholdHeatingEvaluator.ResolveDailyHeatingUse(household, reserve, absoluteDayIndex);
+                    totalUsed += HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
+                        household, reserve, absoluteDayIndex, anchor);
                     continue;
                 }
 

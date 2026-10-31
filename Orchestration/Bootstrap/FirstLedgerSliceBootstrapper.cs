@@ -308,6 +308,15 @@ namespace LandLedgers.FirstLedger
             ConfigureCivicFoundation();
             AppendStartupTiming(timing, stepTimer, "population/civic configure");
 
+            // Population birth dates, derived ages, seasonal demand and due
+            // events must be generated against the selected scenario date.
+            // The scenario remains inactive until the player's Start action.
+            ScenarioStartPanelController scenarioStart = FindAnyObjectByType<ScenarioStartPanelController>();
+            if (scenarioStart != null && !scenarioStart.PrepareScenarioClockForWorldGeneration())
+            {
+                Debug.LogError("[WorldStartup] The selected scenario date could not be applied before population generation.", this);
+            }
+
             // PopulationManager.GeneratePopulationSnapshot initializes the shared
             // Business runtime while building the initial settlement. Apply the
             // selected roster before that call; applying it after population
@@ -336,6 +345,7 @@ namespace LandLedgers.FirstLedger
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
+            sharedBusinessRuntime?.ReconcileGeneratedWorkplaceAssignments();
             // Register the live store with the shared supplier directory. The
             // household membership binding remains an explicit scenario/world
             // concern; registering the seller alone cannot execute a purchase.

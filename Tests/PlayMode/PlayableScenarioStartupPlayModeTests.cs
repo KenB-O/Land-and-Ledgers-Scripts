@@ -965,7 +965,50 @@ namespace LandLedgers.PlayMode
             Assert.IsFalse((bool)timeType.GetProperty("IsPaused")?.GetValue(time),
                 "Starting the scenario must resume the ordinary game clock.");
 
+            object populationState = populationType.GetProperty("State")?.GetValue(populationManager);
+            System.Collections.IList people = populationState?.GetType().GetField("people")?.GetValue(populationState) as System.Collections.IList;
+            System.Collections.IEnumerable businesses = sharedType.GetProperty("Businesses")?.GetValue(shared) as System.Collections.IEnumerable;
+            object employments = hubType.GetProperty("Employments")?.GetValue(hub);
+            MethodInfo activeByEmployee = employments?.GetType().GetMethod("GetActiveByEmployee");
+            Assert.NotNull(people);
+            Assert.NotNull(businesses);
+            Assert.NotNull(activeByEmployee, "The active employment registry must be the authority for workplace claims.");
+            int formalWorkplaces = 0;
+            foreach (object person in people)
+            {
+                int buildingId = (int)person.GetType().GetField("workplaceBuildingId").GetValue(person);
+                if (buildingId < 0) continue;
+                int personId = (int)person.GetType().GetField("id").GetValue(person);
+                object personEmployments = activeByEmployee.Invoke(employments, new object[] { personId });
+                Assert.NotNull(personEmployments);
+                bool matched = false;
+                foreach (object relationship in (System.Collections.IEnumerable)personEmployments)
+                {
+                    string employerId = relationship.GetType().GetField("EmployerBusinessId")?.GetValue(relationship) as string;
+                    foreach (object business in businesses)
+                    {
+                        if (business == null) continue;
+                        int assignedBuilding = (int)(business.GetType().GetProperty("AssignedBuildingId")?.GetValue(business) ?? -1);
+                        string businessId = business.GetType().GetProperty("InstanceId")?.GetValue(business) as string;
+                        if (assignedBuilding == buildingId && string.Equals(employerId, businessId, StringComparison.Ordinal))
+                        {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (matched) break;
+                }
+                Assert.IsTrue(matched,
+                    $"Person {personId}'s workplace building {buildingId} must resolve to an active EmploymentRelationship and its real employer Business.");
+                formalWorkplaces++;
+            }
+            Assert.Greater(formalWorkplaces, 0,
+                "The authored opening Businesses should retain valid initial worker contracts where generated workplace offers match them.");
+
             int startDay = (int)timeType.GetProperty("CurrentAbsoluteDayIndex")?.GetValue(time);
+            object currentDate = timeType.GetProperty("CurrentDate")?.GetValue(time);
+            Assert.AreEqual(1870, currentDate.GetType().GetProperty("Year")?.GetValue(currentDate),
+                "First Ledger's live clock must use the authored January 1870 opening date.");
             string opening = CaptureOrdinaryMainSceneSnapshot(populationManager, populationType, shared, sharedType, hub, hubType);
             Debug.Log($"[Pass22 RUN-004] opening day={startDay}; {opening}");
 

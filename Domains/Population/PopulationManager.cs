@@ -452,7 +452,7 @@ namespace LandLedgers.Population
         {
             if (timeManager != null && timeManager.Settings != null)
             {
-                return timeManager.Settings.Anchor;
+                return timeManager.TimelineAnchor;
             }
 
             return CalendarAnchor.Default;
@@ -462,7 +462,7 @@ namespace LandLedgers.Population
         {
             if (timeManager != null && timeManager.Settings != null)
             {
-                return timeManager.Settings.GetScenarioStartAbsoluteDayIndex();
+                return timeManager.CurrentAbsoluteDayIndex;
             }
 
             return 0;

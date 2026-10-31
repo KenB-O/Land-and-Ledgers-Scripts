@@ -336,6 +336,128 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
+        /// Resolves population-generation workplace offers against the actual
+        /// opening NPC businesses. A generated workplace hint becomes a real
+        /// job only when its building has an authored business, an open worker
+        /// slot and positive posted compensation; all unmatched hints are
+        /// cleared so they cannot masquerade as employment or household income.
+        /// </summary>
+        public int ReconcileGeneratedWorkplaceAssignments()
+        {
+            AutoWire();
+            PopulationState population = populationManager != null ? populationManager.State : null;
+            if (population?.people == null || EmploymentRegistry == null)
+            {
+                return 0;
+            }
+
+            WireEmploymentRegistryToBusinesses();
+            int registered = 0;
+            for (int personIndex = 0; personIndex < population.people.Count; personIndex++)
+            {
+                PersonState person = population.people[personIndex];
+                if (person == null || person.deathDayIndex >= 0 || person.isOffMap || person.workplaceBuildingId < 0)
+                {
+                    continue;
+                }
+
+                BusinessInstanceState employer = null;
+                for (int businessIndex = 0; businessIndex < businesses.Count; businessIndex++)
+                {
+                    BusinessInstanceState candidate = businesses[businessIndex];
+                    if (candidate != null
+                        && candidate.AssignedBuildingId == person.workplaceBuildingId
+                        && candidate.Owner?.OwnerKind == BusinessOwnerKind.Npc)
+                    {
+                        employer = candidate;
+                        break;
+                    }
+                }
+
+                List<EmploymentRelationship> existing = EmploymentRegistry.GetActiveByEmployee(person.id);
+                if (existing.Count > 0)
+                {
+                    EmploymentRelationship actual = existing[0];
+                    BusinessInstanceState actualEmployer = null;
+                    for (int businessIndex = 0; businessIndex < businesses.Count; businessIndex++)
+                    {
+                        BusinessInstanceState candidate = businesses[businessIndex];
+                        if (candidate != null && string.Equals(candidate.InstanceId, actual.EmployerBusinessId, StringComparison.Ordinal))
+                        {
+                            actualEmployer = candidate;
+                            break;
+                        }
+                    }
+
+                    if (actualEmployer != null && actualEmployer.AssignedBuildingId >= 0)
+                    {
+                        // EmploymentRelationship is authoritative. Repair only its
+                        // legacy PersonState mirrors; never clear a real contract
+                        // because a population-generation hint points elsewhere.
+                        person.workplaceBuildingId = actualEmployer.AssignedBuildingId;
+                        if (!string.IsNullOrWhiteSpace(actual.RoleDisplayName))
+                        {
+                            person.professionName = actual.RoleDisplayName;
+                        }
+                        person.wage = new WageSnapshot
+                        {
+                            weeklyWage = Mathf.CeilToInt(Mathf.Max(0, actual.Compensation.AgreedWeeklyWageCents) / 100f),
+                            stabilityPercent = person.wage.stabilityPercent,
+                            currencyId = "dollars"
+                        };
+                    }
+                    else
+                    {
+                        // Keep the live contract and its compensation intact even
+                        // if this generated town has no matching runtime Business;
+                        // clear only the orphaned location hint.
+                        person.workplaceBuildingId = -1;
+                    }
+                    continue;
+                }
+
+                WorkerSlotState openSlot = null;
+                if (employer?.RuntimeState?.WorkerSlots != null)
+                {
+                    foreach (WorkerSlotState slot in employer.RuntimeState.WorkerSlots)
+                    {
+                        if (slot != null && !slot.IsFilled)
+                        {
+                            openSlot = slot;
+                            break;
+                        }
+                    }
+                }
+
+                if (employer == null || openSlot == null || openSlot.WeeklyWageCents <= 0)
+                {
+                    ClearUnresolvedGeneratedWorkplace(person);
+                    continue;
+                }
+
+                AssignPersonToBusinessSlot(employer, openSlot, person, 75);
+                registered++;
+            }
+
+            populationManager.RecalculateHouseholdIncomeAndSummaries(
+                $"Resolved {registered} generated workplace offer(s) against active NPC Business contracts.");
+            return registered;
+        }
+
+        private static void ClearUnresolvedGeneratedWorkplace(PersonState person)
+        {
+            if (person == null) return;
+            if (!string.IsNullOrWhiteSpace(person.professionName))
+            {
+                person.RecordFormerVisibleWorkerRole(person.professionName, Mathf.Max(0, person.wage.weeklyWage) * 100);
+            }
+            person.workplaceBuildingId = -1;
+            person.professionId = string.Empty;
+            person.professionName = "Unemployed";
+            person.wage = new WageSnapshot { currencyId = "dollars" };
+        }
+
+        /// <summary>
         /// Phase B (Real People): the household-cash authority. Assigned by
         /// bootstrap (SimulationDrivers sets this from the hub's
         /// HouseholdLedgerRegistry). When set, doctor-service payments and wage
@@ -6757,37 +6879,20 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
-            BusinessProfileDefinition sourceProfile = FindProfile(source.BusinessType);
-            int unitPriceCents = GetAverageCategoryTransferPriceCents(source, sourceProfile, sourceCategoryId);
             CategoryStockState sourceStock = source.RuntimeState.GetCategoryStock(sourceCategoryId);
-            int baselineUnitCostCents = GetAverageCategoryLandedCostCents(sourceProfile, sourceCategoryId);
-            float capture01 = CalculateLocalMarketCapture01(source, sourceCategoryId, unitPriceCents, baselineUnitCostCents);
-            int localDemandUnits = Mathf.RoundToInt(Mathf.Max(0, maxUnits) * capture01);
-            int offMapOrCompetitorUnits = Mathf.Max(0, Mathf.Max(0, maxUnits) - localDemandUnits);
-            int units = sourceStock != null ? Mathf.Min(localDemandUnits, sourceStock.CurrentStockUnits) : 0;
-            if (units <= 0 || unitPriceCents <= 0)
+            int available = sourceStock != null ? sourceStock.CurrentStockUnits : 0;
+            if (available > 0 && maxUnits > 0)
             {
-                if (offMapOrCompetitorUnits > 0)
-                {
-                    source.RuntimeState.AppendWeeklyTransferSummary($"{offMapOrCompetitorUnits} {sourceCategoryId} demand went off-map or to competitors at current price");
-                }
-
-                return 0;
+                // This legacy outlet used a modeled capture percentage to consume
+                // stock and credit revenue without naming/debiting a buyer. Until
+                // a real local order or bounded external counterparty exists,
+                // retain goods and report demand as unfilled instead of creating
+                // seller-only economic activity.
+                string note = $"{sourceCategoryId}: {Mathf.Min(available, maxUnits)} units potentially marketable, but no funded named buyer/order is registered; stock retained and no revenue posted.";
+                source.RuntimeState.AppendWeeklyTransferSummary(note);
+                AppendSummarySegment(summary, $"{GetBusinessSummaryLabel(source)}->{note}");
             }
-
-            if (!source.RuntimeState.TryConsumeCategoryStockUnits(sourceCategoryId, units, out int consumed) || consumed <= 0)
-            {
-                return 0;
-            }
-
-            int revenue = consumed * unitPriceCents;
-            source.RuntimeState.AddWeeklyLocalTransferRevenue(
-                revenue,
-                $"sold {consumed} {sourceCategoryId} through local market for {FormatMoney(revenue)}; {offMapOrCompetitorUnits} demand went off-map/competitors");
-            source.RefreshCapacityState();
-            AppendTransferToOperationSummary(source, $"; sold {consumed} {sourceCategoryId} through local market for {FormatMoney(revenue)}; {offMapOrCompetitorUnits} off-map/competitors");
-            AppendSummarySegment(summary, $"{GetBusinessSummaryLabel(source)}->LocalMarket {consumed} {FormatMoney(revenue)} ({capture01:P0} capture)");
-            return consumed;
+            return 0;
         }
 
         private int TransferBetweenBusinesses(

@@ -64,6 +64,9 @@ namespace LandLedgers.Time
         private int cappedShortTickFrames;
 
         private int absoluteDayIndex;
+        // Keeps economic event indices non-negative while allowing a scenario's
+        // Gregorian calendar to begin before the shared calendar epoch.
+        private int calendarDayOffset;
         private float shortTickAccumulatorGameSeconds;
         private bool initialized;
         private bool shortTickCapHitThisFrame;
@@ -81,6 +84,22 @@ namespace LandLedgers.Time
         public SimulationTimeSettings Settings => settings;
         public SimulationSpeed CurrentSpeed => currentSpeed;
         public SimulationDate CurrentDate => currentDate;
+        /// <summary>
+        /// Calendar epoch for the current campaign timeline. A new scenario can
+        /// begin before the shared serialized settings epoch; keeping its own
+        /// runtime epoch lets all date-index consumers (birthdays, seasons and
+        /// demographic events) agree with the date shown by the clock without
+        /// assigning negative campaign day IDs.
+        /// </summary>
+        public CalendarAnchor TimelineAnchor
+        {
+            get
+            {
+                if (settings == null) return CalendarAnchor.Default;
+                settings.Anchor.FromAbsoluteDay(calendarDayOffset, out int year, out int month, out int day);
+                return new CalendarAnchor(year, month, day);
+            }
+        }
         public int CurrentDayIndex => currentDate.DayOfWeekIndex;
         public int CurrentAbsoluteDayIndex => absoluteDayIndex;
         public string CurrentDayName => currentDayName;
@@ -220,12 +239,38 @@ namespace LandLedgers.Time
                 1,
                 GregorianDateMath.DaysInMonth(clampedYear, clampedMonth));
 
+            calendarDayOffset = 0;
             absoluteDayIndex = Mathf.Max(0, settings.Anchor.ToAbsoluteDay(clampedYear, clampedMonth, dayOfMonth));
-            currentDate = settings.BuildDateFromAbsoluteDay(absoluteDayIndex);
+            currentDate = BuildTimelineDate();
             ApplyTimeOfDay(Mathf.Clamp(newTimeOfDay01, 0f, 0.999f) * settings.GameSecondsPerDay);
             ResetShortTickStateForCurrentTimeOfDay();
             ResetFrameDiagnostics();
             RefreshDebugState();
+        }
+
+        /// <summary>
+        /// Begins a fresh scenario on its authored Gregorian date. The campaign
+        /// day index starts at zero, so existing economic authorities that use
+        /// non-negative day indices and -1 sentinels remain save-compatible.
+        /// </summary>
+        public bool StartNewScenarioAtDate(int year, int month, int day)
+        {
+            if (settings == null || year < 1 || month < 1 || month > 12
+                || day < 1 || day > GregorianDateMath.DaysInMonth(year, month))
+            {
+                return false;
+            }
+
+            settings.Sanitize();
+            calendarDayOffset = settings.Anchor.ToAbsoluteDay(year, month, day);
+            absoluteDayIndex = 0;
+            currentDate = BuildTimelineDate();
+            ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
+            ResetShortTickStateForCurrentTimeOfDay();
+            ResetFrameDiagnostics();
+            initialized = true;
+            RefreshDebugState();
+            return currentDate.Year == year && currentDate.Month == month && currentDate.DayOfMonth == day;
         }
 
         public TimeSaveDto CaptureSaveDto()
@@ -234,6 +279,7 @@ namespace LandLedgers.Time
             {
                 currentDate = currentDate,
                 absoluteDayIndex = absoluteDayIndex,
+                calendarDayOffset = calendarDayOffset,
                 timeOfDay01 = timeOfDay01,
                 gameSecondsIntoDay = gameSecondsIntoDay,
                 shortTickIndex = shortTickIndex,
@@ -257,9 +303,8 @@ namespace LandLedgers.Time
             }
 
             absoluteDayIndex = Mathf.Max(0, dto.absoluteDayIndex);
-            currentDate = settings != null
-                ? settings.BuildDateFromAbsoluteDay(absoluteDayIndex)
-                : dto.currentDate;
+            calendarDayOffset = dto.calendarDayOffset;
+            currentDate = settings != null ? BuildTimelineDate() : dto.currentDate;
 
             if (settings != null)
             {
@@ -399,8 +444,9 @@ namespace LandLedgers.Time
             // Pass V P0-1: the clock starts on the scenario start date derived
             // from the Gregorian anchor (default 1892-03-01). absoluteDayIndex
             // remains the persisted truth; the start is an anchor offset now.
+            calendarDayOffset = 0;
             absoluteDayIndex = settings.GetScenarioStartAbsoluteDayIndex();
-            currentDate = settings.BuildDateFromAbsoluteDay(absoluteDayIndex);
+            currentDate = BuildTimelineDate();
             ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
             ResetShortTickStateForCurrentTimeOfDay();
             currentSpeed = settings.startingSpeed;
@@ -564,7 +610,7 @@ namespace LandLedgers.Time
             gameSecondsIntoDay -= settings.GameSecondsPerDay;
             SimulationDate previousDate = currentDate;
             absoluteDayIndex++;
-            currentDate = settings.BuildDateFromAbsoluteDay(absoluteDayIndex);
+            currentDate = BuildTimelineDate();
             ResetShortTickStateForCurrentTimeOfDay();
 
             DayChanged?.Invoke(new SimulationDateChangedContext(previousDate, currentDate));
@@ -584,6 +630,27 @@ namespace LandLedgers.Time
                 RefreshDebugState();
                 Debug.Log($"Simulation date advanced to {GetReadableDate()}.", this);
             }
+        }
+
+        private SimulationDate BuildTimelineDate()
+        {
+            if (settings == null)
+            {
+                return currentDate;
+            }
+
+            settings.Anchor.FromAbsoluteDay(calendarDayOffset + absoluteDayIndex,
+                out int year, out int month, out int day);
+            int weekday = GregorianDateMath.DayOfWeekMondayZero(year, month, day);
+            int week = absoluteDayIndex / 7 + 1;
+            return new SimulationDate(
+                absoluteDayIndex,
+                weekday,
+                day,
+                week,
+                (day - 1) / 7 + 1,
+                month,
+                year);
         }
 
         private void ApplyTimeOfDay(float newGameSecondsIntoDay)

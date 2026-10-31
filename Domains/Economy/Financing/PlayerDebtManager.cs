@@ -2338,6 +2338,14 @@ namespace LandLedgers.Economy.Financing
         /// </summary>
         private CalendarAnchor GetCalendarAnchor()
         {
+            object timelineAnchor = timeManager != null
+                ? GetMemberValue(timeManager, "TimelineAnchor", "timelineAnchor")
+                : null;
+            if (timelineAnchor is CalendarAnchor activeCalendarAnchor && activeCalendarAnchor.IsValid)
+            {
+                return activeCalendarAnchor;
+            }
+
             object settings = GetTimeSettingsObject();
             if (settings == null)
             {
@@ -2355,6 +2363,14 @@ namespace LandLedgers.Economy.Financing
 
         private SimulationDate BuildDate(int absoluteDayIndex)
         {
+            object timelineAnchor = timeManager != null
+                ? GetMemberValue(timeManager, "TimelineAnchor", "timelineAnchor")
+                : null;
+            if (timelineAnchor is CalendarAnchor activeCalendarAnchor && activeCalendarAnchor.IsValid)
+            {
+                return activeCalendarAnchor.BuildDate(Mathf.Max(0, absoluteDayIndex));
+            }
+
             object settings = GetTimeSettingsObject();
             if (settings != null)
             {

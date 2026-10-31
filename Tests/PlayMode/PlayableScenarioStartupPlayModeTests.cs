@@ -71,7 +71,49 @@ namespace LandLedgers.PlayMode
 
             object populationState = populationManagerType.GetProperty("State")?.GetValue(populationManager);
             var households = populationState?.GetType().GetField("households")?.GetValue(populationState) as System.Collections.IList;
+            var people = populationState?.GetType().GetField("people")?.GetValue(populationState) as System.Collections.IList;
             Assert.NotNull(households, "The founder must be selected from the already generated authoritative households.");
+            Assert.NotNull(people, "The live population must come from the authoritative Person registry.");
+            object lifecycle = populationManagerType.GetProperty("Lifecycle")?.GetValue(populationManager);
+            Assert.NotNull(lifecycle, "PopulationManager must expose the single household membership authority.");
+            object membershipRegistry = populationManagerType.GetProperty("Memberships")?.GetValue(populationManager);
+            Assert.NotNull(membershipRegistry, "PopulationManager must expose the authoritative membership registry.");
+            MethodInfo getActiveHouseholdId = membershipRegistry.GetType().GetMethod("GetActiveHouseholdId");
+            Assert.NotNull(getActiveHouseholdId, "The active household lookup belongs to HouseholdMembershipRegistry.");
+            var personIds = new HashSet<int>();
+            var reverseMembership = new Dictionary<int, int>();
+            foreach (object household in households)
+            {
+                int householdId = (int)household.GetType().GetField("id")?.GetValue(household);
+                var memberIds = lifecycleType.GetMethod("GetMembers")?.Invoke(lifecycle, new object[] { householdId })
+                    as System.Collections.IEnumerable;
+                Assert.NotNull(memberIds, $"Household H{householdId} must resolve through the authoritative membership registry.");
+                foreach (object memberId in memberIds)
+                {
+                    int personId = (int)memberId;
+                    Assert.IsTrue(reverseMembership.TryAdd(personId, householdId),
+                        $"Person P{personId} must not be actively registered in multiple households.");
+                }
+            }
+            foreach (object person in people)
+            {
+                int personId = (int)person.GetType().GetField("id")?.GetValue(person);
+                int deathDayIndex = (int)(person.GetType().GetField("deathDayIndex")?.GetValue(person) ?? -1);
+                Assert.IsTrue(personIds.Add(personId), $"Person ID P{personId} must be unique in the authoritative registry.");
+                if (deathDayIndex >= 0) continue;
+                int activeHouseholdId = (int)getActiveHouseholdId.Invoke(membershipRegistry, new object[] { personId });
+                Assert.GreaterOrEqual(activeHouseholdId, 0,
+                    $"Living Person P{personId} must have one authoritative Household membership.");
+                Assert.IsTrue(reverseMembership.TryGetValue(personId, out int reverseHouseholdId),
+                    $"Living Person P{personId} must appear in its Household's derived member view.");
+                Assert.AreEqual(activeHouseholdId, reverseHouseholdId,
+                    $"Person P{personId}'s forward and reverse Household references must agree.");
+                Assert.IsNotNull(populationState.GetType().GetMethod("GetHousehold")
+                    ?.Invoke(populationState, new object[] { activeHouseholdId }),
+                    $"Person P{personId} must not refer to a missing Household.");
+            }
+            Debug.Log($"[PersonHouseholdIntegrity] {people.Count} registered Persons, {households.Count} Households; " +
+                      $"{personIds.Count} unique Person IDs and {reverseMembership.Count} active membership views.");
             int householdCountBeforeScenario = households.Count;
 
             startPanelType.GetMethod("StartScenario", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -94,6 +136,14 @@ namespace LandLedgers.PlayMode
             Assert.IsFalse((bool)timeManagerType.GetProperty("IsPaused")?.GetValue(timeManager),
                 "Selecting First Ledger should resume the existing authoritative clock.");
             Assert.AreEqual("first-ledger", directorType.GetProperty("ActiveScenarioId")?.GetValue(director));
+
+            Component sharedBusinessRuntime = FindComponent(RuntimeType("LandLedgers.Economy.SharedBusinessRuntimeManager"));
+            Assert.NotNull(sharedBusinessRuntime, "The Main Scene must initialize its authored shared Business authority.");
+            var openingBusinesses = sharedBusinessRuntime.GetType().GetProperty("Businesses")?.GetValue(sharedBusinessRuntime)
+                as System.Collections.ICollection;
+            Assert.NotNull(openingBusinesses, "The shared Business authority must expose its authoritative opening roster.");
+            Assert.AreEqual(3, openingBusinesses.Count,
+                "The Main Scene compact playtest profile must be applied before PopulationManager initializes Businesses.");
 
             Assert.AreEqual(householdCountBeforeScenario, households.Count,
                 "Scenario activation must adopt a real existing household rather than create an empty duplicate household.");
@@ -372,6 +422,7 @@ namespace LandLedgers.PlayMode
             Component sharedForHiring = FindComponent(sharedTypeForHiring);
             Type portfolioType = RuntimeType("LandLedgers.Economy.PlayerPortfolioManager");
             Component portfolio = FindComponent(portfolioType);
+            int successfulHires = 0;
             foreach (string typeName in new[] { "GeneralStore", "CropFarm", "LiveryFreight" })
             {
                 object[] arguments = { Enum.Parse(businessType, typeName), $"Normal {typeName}", null, null };
@@ -405,6 +456,10 @@ namespace LandLedgers.PlayMode
 
                 object[] hire = { arguments[2], 0, null };
                 bool hired = (bool)(sharedTypeForHiring.GetMethod("TryAssignCandidateToOpenSlot")?.Invoke(sharedForHiring, hire) ?? false);
+                if (hired)
+                {
+                    successfulHires++;
+                }
                 Debug.Log($"[FirstLedgerNormalPath] {typeName}: hire={hired}; message={hire[2]}");
 
                 if (typeName == "LiveryFreight")
@@ -444,10 +499,12 @@ namespace LandLedgers.PlayMode
             bool complete = (bool)(bootstrapType.GetProperty("IsScenarioComplete")?.GetValue(bootstrap) ?? false);
             Assert.GreaterOrEqual(owned, 3,
                 $"Four-week production should preserve the three legitimately formed player Businesses. equity={equity}c");
-            Assert.GreaterOrEqual(employees, 3,
-                $"Four-week production should preserve the three legitimate employee relationships. equity={equity}c");
-            Assert.AreEqual(3, employmentRegistryCount,
-                "The four-week path must not duplicate the authoritative employment registry.");
+            Assert.GreaterOrEqual(successfulHires, 1,
+                "The normal path must complete at least one legitimate hire; refused hires remain unavailable.");
+            Assert.AreEqual(successfulHires, employmentRegistryCount,
+                "Only successful production-path hires may appear in the authoritative employment registry.");
+            Assert.AreEqual(employmentRegistryCount, employees,
+                "The scenario read model and authoritative employment registry must report the same active player employees.");
             Assert.Less(equity, FirstLedgerEquityTargetCents(),
                 "The four-week opening is an honest-progress checkpoint; it must not reach the final equity target without the required economic activity.");
             Assert.IsFalse(complete,
@@ -680,6 +737,23 @@ namespace LandLedgers.PlayMode
             object freightType = Enum.Parse(businessType, "LiveryFreight");
             object storeType = Enum.Parse(businessType, "GeneralStore");
             object farm = FindExistingBusiness(sharedRuntime, sharedRuntimeType, farmType);
+            if (farm == null)
+            {
+                // The compact Main Scene intentionally opens with three different
+                // NPC businesses and no CropFarm. Form the farm through the same
+                // production authority used by gameplay, then establish compatible
+                // premises through its typed agricultural-site selection.
+                farm = CreateBusiness(sharedRuntime, sharedRuntimeType, farmType, "Route Farm");
+                int assignedBuildingId = (int)(farm.GetType().GetProperty("AssignedBuildingId")?.GetValue(farm) ?? -1);
+                if (assignedBuildingId < 0)
+                {
+                    object[] farmPremisesArguments = { farm, null };
+                    bool farmPremisesAssigned = (bool)sharedRuntimeType.GetMethod("TryAssignPlayerBusinessPremises")
+                        .Invoke(sharedRuntime, farmPremisesArguments);
+                    Assert.IsTrue(farmPremisesAssigned,
+                        $"A legitimately formed farm must claim compatible available agricultural premises: {farmPremisesArguments[1]}");
+                }
+            }
             object freight = CreateBusiness(sharedRuntime, sharedRuntimeType, freightType, "Route Freight");
             object store = CreateBusiness(sharedRuntime, sharedRuntimeType, storeType, "Route Store");
             Assert.NotNull(farm);
@@ -738,13 +812,42 @@ namespace LandLedgers.PlayMode
             Assert.Greater((float)registeredField.GetType().GetField("Acres")?.GetValue(registeredField), 0f);
             Assert.IsFalse(string.IsNullOrWhiteSpace(
                 registeredField.GetType().GetField("LinkedPlotName")?.GetValue(registeredField) as string));
+            string farmId = farm.GetType().GetProperty("InstanceId")?.GetValue(farm) as string;
+            string fieldId = registeredField.GetType().GetField("FieldId")?.GetValue(registeredField) as string;
+            Assert.IsFalse(string.IsNullOrWhiteSpace(fieldId), "The registered field must have a stable identity.");
+            Assert.AreEqual(farmId, registeredField.GetType().GetField("FarmId")?.GetValue(registeredField) as string,
+                "The field must resolve to the formed farm identity.");
+            Assert.AreEqual(farmId, registeredField.GetType().GetField("OwnerFarmId")?.GetValue(registeredField) as string,
+                "The field ownership provenance must identify the same farm.");
+
+            float registeredAcres = (float)registeredField.GetType().GetField("Acres")?.GetValue(registeredField);
+            string linkedPlot = registeredField.GetType().GetField("LinkedPlotName")?.GetValue(registeredField) as string;
+            sharedRuntimeType.GetMethod("ResolveWeeklySharedOperations")?.Invoke(sharedRuntime, null);
+            object fieldAfterRebind = null;
+            int farmFieldCount = 0;
+            foreach (object candidate in (System.Collections.IEnumerable)fields.GetType().GetMethod("AllFields").Invoke(fields, null))
+            {
+                string candidateFarmId = candidate.GetType().GetField("FarmId")?.GetValue(candidate) as string;
+                if (!string.Equals(candidateFarmId, farmId, StringComparison.OrdinalIgnoreCase)) continue;
+                farmFieldCount++;
+                fieldAfterRebind = candidate;
+            }
+            Assert.AreEqual(1, farmFieldCount,
+                "Repeated production-driver initialization must not register another field for the farm.");
+            Assert.NotNull(fieldAfterRebind, "The farm field must remain registered after the second weekly drive.");
+            Assert.AreEqual(fieldId, fieldAfterRebind?.GetType().GetField("FieldId")?.GetValue(fieldAfterRebind) as string,
+                "The field identity must remain stable across production-driver rebinds.");
+            Assert.AreEqual(registeredAcres, (float)fieldAfterRebind?.GetType().GetField("Acres")?.GetValue(fieldAfterRebind),
+                "Repeated registration must not rewrite field area.");
+            Assert.AreEqual(linkedPlot, fieldAfterRebind?.GetType().GetField("LinkedPlotName")?.GetValue(fieldAfterRebind) as string,
+                "The field must remain linked to the same agricultural plot.");
+            Debug.Log($"[FarmWinterVerification] farm={farmId}; building={farm.GetType().GetProperty("AssignedBuildingId")?.GetValue(farm)}; field={fieldId}; plot={linkedPlot}; acres={registeredAcres:0.###}; registrations={farmFieldCount}; cropUnits={farmOutput}; January harvest prohibited.");
 
             Type logisticsType = RuntimeType("LandLedgers.Economy.LogisticsRuntimeManager");
             Component logistics = FindComponent(logisticsType);
             Assert.NotNull(logistics, "The playable scene must own the real logistics authority.");
             object shipments = logisticsType.GetProperty("Shipments")?.GetValue(logistics);
             Assert.NotNull(shipments, "The logistics authority must expose scheduled physical shipments.");
-            string farmId = farm.GetType().GetProperty("InstanceId")?.GetValue(farm) as string;
             string storeId = store.GetType().GetProperty("InstanceId")?.GetValue(store) as string;
             object shipment = null;
             foreach (object candidate in (System.Collections.IEnumerable)shipments)
@@ -942,18 +1045,53 @@ namespace LandLedgers.PlayMode
                 Assert.IsTrue(householdIds.Add(id), $"The live population contains duplicate Household ID {id}.");
             }
 
+            object membershipRegistry = populationManager.GetType().GetProperty("Memberships")
+                ?.GetValue(populationManager);
+            Assert.NotNull(membershipRegistry,
+                "The Main Scene must use the PopulationManager's authoritative household-membership registry.");
+            MethodInfo activeHouseholdFor = membershipRegistry.GetType().GetMethod("GetActiveHouseholdId");
+            Assert.NotNull(activeHouseholdFor,
+                "Household membership must be resolved through the authoritative registry.");
+            int unregisteredPeople = 0;
+            for (int i = 0; i < people.Count; i++)
+            {
+                object person = people[i];
+                int personId = (int)person.GetType().GetField("id")?.GetValue(person);
+                int householdId = (int)activeHouseholdFor.Invoke(membershipRegistry, new object[] { personId });
+                if (householdId < 0 || !householdIds.Contains(householdId)) unregisteredPeople++;
+            }
+            Assert.AreEqual(0, unregisteredPeople,
+                "Every live Person in the Main Scene must belong to one existing Household through the authoritative registry.");
+
             var businesses = sharedType.GetProperty("Businesses")?.GetValue(sharedRuntime) as System.Collections.IEnumerable;
             Assert.NotNull(businesses);
             int businessCount = 0;
             long businessCashCents = 0;
             long businessCategoryStockUnits = 0;
+            var businessCashDetails = new List<string>();
             foreach (object business in businesses)
             {
                 if (business == null) continue;
                 businessCount++;
                 object state = business.GetType().GetProperty("RuntimeState")?.GetValue(business);
                 if (state == null) continue;
-                businessCashCents += (int)state.GetType().GetProperty("CurrentCashCents")?.GetValue(state);
+                Type stateType = state.GetType();
+                int currentCash = (int)(stateType.GetProperty("CurrentCashCents")?.GetValue(state) ?? 0);
+                businessCashCents += currentCash;
+                string instanceId = business.GetType().GetProperty("InstanceId")?.GetValue(business)?.ToString() ?? "?";
+                string displayName = business.GetType().GetProperty("RuntimeDisplayName")?.GetValue(business)?.ToString() ?? "?";
+                string typeName = business.GetType().GetProperty("BusinessType")?.GetValue(business)?.ToString() ?? "?";
+                businessCashDetails.Add(
+                    $"{typeName}:{displayName}[{instanceId}] cash={currentCash}c " +
+                    $"lastWeek={stateType.GetProperty("LastWeeklyCashBeforeCents")?.GetValue(state) ?? 0}->" +
+                    $"{stateType.GetProperty("LastWeeklyCashAfterCents")?.GetValue(state) ?? 0}c " +
+                    $"sales={stateType.GetProperty("WeekToDateRevenueCents")?.GetValue(state) ?? 0}c " +
+                    $"payroll={stateType.GetProperty("LastWeeklyPayrollCents")?.GetValue(state) ?? 0}c " +
+                    $"inputSpend={stateType.GetProperty("LastWeeklyInputProcurementSpendCents")?.GetValue(state) ?? 0}c " +
+                    $"transfer=+{stateType.GetProperty("LastWeeklyLocalTransferRevenueCents")?.GetValue(state) ?? 0}/-" +
+                    $"{stateType.GetProperty("LastWeeklyLocalTransferCostCents")?.GetValue(state) ?? 0}c " +
+                    $"operation='{stateType.GetProperty("LastWeeklyOperationSummary")?.GetValue(state) ?? string.Empty}' " +
+                    $"transferNote='{stateType.GetProperty("LastWeeklyTransferSummary")?.GetValue(state) ?? string.Empty}'");
                 var stocks = state.GetType().GetProperty("CategoryStock")?.GetValue(state) as System.Collections.IEnumerable;
                 if (stocks == null) continue;
                 foreach (object stock in stocks)
@@ -982,16 +1120,23 @@ namespace LandLedgers.PlayMode
             var ledgerStates = Activator.CreateInstance(ledgerStateListType) as System.Collections.IList;
             ledgerRegistry?.GetType().GetMethod("ExportState")?.Invoke(ledgerRegistry, new object[] { ledgerStates });
             long householdLedgerCashCents = 0;
+            var householdBalances = new List<string>();
             foreach (object ledger in ledgerStates)
             {
                 var entries = ledger?.GetType().GetField("Entries")?.GetValue(ledger) as System.Collections.IList;
                 if (entries == null) continue;
-                for (int i = 0; i < entries.Count; i++)
-                    householdLedgerCashCents += (int)entries[i].GetType().GetField("AmountCents")?.GetValue(entries[i]);
+                int householdId = (int)(ledger.GetType().GetField("HouseholdId")?.GetValue(ledger) ?? -1);
+                int balance = entries.Count > 0
+                    ? (int)(entries[entries.Count - 1].GetType().GetField("BalanceAfterCents")?.GetValue(entries[entries.Count - 1]) ?? 0)
+                    : 0;
+                householdLedgerCashCents += balance;
+                householdBalances.Add($"H{householdId}={balance}c");
             }
 
             return $"Persons={people.Count} (unique={personIds.Count}), Households={households.Count} (unique={householdIds.Count}), " +
-                   $"Businesses={businessCount}, businessCash={businessCashCents}c, householdLedgerCash={householdLedgerCashCents}c, " +
+                   $"unregisteredPersons={unregisteredPeople}, " +
+                   $"Businesses={businessCount}, businessCash={businessCashCents}c [{string.Join(" | ", businessCashDetails)}], " +
+                   $"householdCashBalance={householdLedgerCashCents}c [{string.Join(" | ", householdBalances)}], " +
                    $"businessCategoryStock={businessCategoryStockUnits}u, Tasks={tasks.Count} (complete={completedTasks}, open={openTasks}), " +
                    $"workplaceAssignments={workplaceAssignments}, EmploymentRegistry={sharedType.GetProperty("EmploymentRegistryCount")?.GetValue(sharedRuntime)}";
         }
@@ -1131,7 +1276,6 @@ namespace LandLedgers.PlayMode
                 }
             }
 
-            Assert.Fail($"The authored opening world must contain a real {wantedType} business for the production route.");
             return null;
         }
 

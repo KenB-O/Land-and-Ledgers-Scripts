@@ -58,6 +58,24 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void Registry_TransferWithReusedMembershipId_PreservesCurrentMembership()
+        {
+            var registry = new HouseholdMembershipRegistry();
+            registry.Register(ActiveMembership(0, 1, 10));
+
+            string refusal = registry.TransferMembership(
+                personId: 1, toHouseholdId: 11, startDayIndex: 50, nextMembershipId: 0);
+
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(10, registry.GetActiveHouseholdId(1));
+            Assert.AreEqual(0, registry.GetActiveMembership(1).MembershipId);
+            Assert.AreEqual(HouseholdMembershipLifecycle.Active,
+                registry.GetActiveMembership(1).Lifecycle);
+            Assert.AreEqual(1, registry.AllMemberships().Count,
+                "A rejected transfer must not end the existing relationship.");
+        }
+
+        [Test]
         public void Registry_EndMembership_AllowsReRegistration()
         {
             var registry = new HouseholdMembershipRegistry();

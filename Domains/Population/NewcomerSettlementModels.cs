@@ -536,7 +536,7 @@ namespace LandLedgers.Population
                 ? boarders > 0 ? 1f : 0f
                 : Mathf.Clamp01((boarders - household.boardingCapacity) / (float)Mathf.Max(1, household.boardingCapacity));
             household.kinAbsorptionPressure01 = household.hasKinAbsorptionPressure
-                ? Mathf.Clamp01((occupants - ComfortableHouseholdOccupants) / 3f)
+                ? Mathf.Clamp01(0.15f + Mathf.Max(0, occupants - ComfortableHouseholdOccupants) / 3f)
                 : 0f;
 
             float friction = Mathf.Clamp01(
@@ -623,11 +623,11 @@ namespace LandLedgers.Population
 
             person.settlementPressure = SettlementPressureState.Create(
                 person.settlementArrangement,
-                GetDefaultSettlementStability(person.settlementArrangement),
-                GetDefaultHousingFriction(person.settlementArrangement),
+                person.settlementPressure.stability01,
+                housingFriction,
                 readiness,
                 person.settlementPressure.weeksInArrangement,
-                GetDefaultHomeAmbition(person.settlementArrangement),
+                person.settlementPressure.homeAmbition01,
                 person.settlementPressure.summary);
             return person.settlementPressure.laborReadiness01;
         }

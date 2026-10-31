@@ -188,9 +188,9 @@ namespace LandLedgers.FirstLedger
             layout.childForceExpandWidth = true;
             layout.childControlHeight = false;
 
-            CreateText(overlay.transform, "Create a business", 19f, FontStyles.Bold);
+            CreateText(overlay.transform, "Form a commercial Business", 19f, FontStyles.Bold);
             CreateText(overlay.transform,
-                "Formation creates the legal/economic business first. It does not buy land or make the business operational.",
+                "A General Store is an operating setup, not a separate entity type. Establish its premises, real stock, prices, staff, and services before it can trade.",
                 12f, FontStyles.Normal);
 
             // Formation is intentionally classless. Legacy BusinessType values remain
@@ -199,7 +199,7 @@ namespace LandLedgers.FirstLedger
             businessTypes = new[] { BusinessType.Generic };
             selectedTypeIndex = 0;
             CreateText(overlay.transform,
-                "Trade class: none. Configure premises, equipment, people, inventory, and policies after formation.",
+                "The general-merchandise preset suggests a catalog assortment only. It grants no inventory, prices, premises, workers, or operating status.",
                 12f, FontStyles.Italic);
             typeDropdown = CreateDropdown(overlay.transform, "BusinessTypeDropdown");
             typeDropdown.onValueChanged.AddListener(SelectBusinessType);
@@ -214,7 +214,7 @@ namespace LandLedgers.FirstLedger
             typeDropdown.RefreshShownValue();
             typeDropdown.gameObject.SetActive(false);
 
-            CreateText(overlay.transform, "Setup template (optional)", 12f, FontStyles.Normal);
+            CreateText(overlay.transform, "Trade setup plan (optional)", 12f, FontStyles.Normal);
             templateDropdown = CreateDropdown(overlay.transform, "BusinessSetupTemplateDropdown");
             RefreshTemplateOptions();
 
@@ -322,7 +322,7 @@ namespace LandLedgers.FirstLedger
 
             GenericBusinessSetupTemplate template = setupTemplates[index];
             statusText.text = template.TemplateId == GenericBusinessSetupTemplateCatalog.GeneralMerchandiseId
-                ? $"{template.SuggestedProductIds.Count} catalog items suggested. No stock or sale prices are added."
+                ? $"{template.SuggestedProductIds.Count} catalog items suggested. The Business remains unstocked and cannot sell until real inventory and prices are established."
                 : template.TemplateId == GenericBusinessSetupTemplateCatalog.BlankId
                     ? "Start with a blank commercial concern and configure its real activity later."
                     : $"Preset: {template.DisplayName}. Requirements and stock are not supplied.";

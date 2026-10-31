@@ -275,7 +275,18 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            EnsureSellerMeetingController()?.OpenForListing(currentListing.listingId);
+            // The seller meeting replaces the dossier while it is active.
+            // Keeping both full-canvas views open stacked the same deal twice
+            // and obscured the scenario HUD.
+            AcquisitionSellerMeetingController meeting = EnsureSellerMeetingController();
+            if (meeting == null)
+            {
+                RefreshAcquisition();
+                return;
+            }
+
+            view?.SetVisible(false);
+            meeting.OpenForListing(currentListing.listingId);
             LLFeedbackService.Play(LLFeedbackKind.UIPanel, "seller meeting open from formal workflow", canvas);
             RefreshAcquisition();
         }
@@ -315,6 +326,12 @@ namespace LandLedgers.FirstLedger
             }
 
             view.SetLoanMode(false);
+            view.SetInspectionMode(!hasLiveWorkflowLead);
+            view.SetLeadActionVisibility(hasLiveWorkflowLead);
+            if (view.PrimaryButton != null)
+            {
+                view.PrimaryButton.gameObject.SetActive(hasLiveWorkflowLead);
+            }
             SetText(view.TitleText, currentListing != null ? currentListing.title : "Property Inspection");
 
             string actionLabel = hasLiveWorkflowLead && acquisitionMarket != null
@@ -345,7 +362,12 @@ namespace LandLedgers.FirstLedger
             SetButtonInteractable(view.ReliabilityButton, hasLiveWorkflowLead);
             SetButtonInteractable(view.SeriousnessButton, hasLiveWorkflowLead);
             SetButtonInteractable(view.StanceButton, hasLiveWorkflowLead);
-            SetButtonLabel(view.WatchButton, hasLiveWorkflowLead && acquisitionMarket != null && acquisitionMarket.IsSelectedListingWatched(currentSection) ? "Unmark" : "Mark Later");
+            string watchLabel = !hasLiveWorkflowLead
+                ? "Inspection Only"
+                : acquisitionMarket != null && acquisitionMarket.IsSelectedListingWatched(currentSection)
+                    ? "Unmark"
+                    : "Mark Later";
+            SetButtonLabel(view.WatchButton, watchLabel);
             UpdateDiligenceButtonLabels();
 
             QueueStablePreview(currentPlotId, currentBuildingId);
@@ -354,6 +376,12 @@ namespace LandLedgers.FirstLedger
         private void RefreshArchivedWorkflowSnapshot(WorkflowSnapshot snapshot)
         {
             view.SetLoanMode(false);
+            view.SetInspectionMode(true);
+            view.SetLeadActionVisibility(false);
+            if (view.PrimaryButton != null)
+            {
+                view.PrimaryButton.gameObject.SetActive(false);
+            }
             string actionLabel = NormalizeAcquisitionActionLabel(snapshot.ActionLabel);
             bool closed = string.Equals(actionLabel, "Closed", StringComparison.OrdinalIgnoreCase);
 
@@ -416,6 +444,11 @@ namespace LandLedgers.FirstLedger
             }
 
             view.SetLoanMode(true);
+            view.SetInspectionMode(false);
+            if (view.PrimaryButton != null)
+            {
+                view.PrimaryButton.gameObject.SetActive(true);
+            }
             SetText(view.TitleText, "Formal Loan Application");
             SetText(view.StageText, playerDebtManager != null && playerDebtManager.HasPendingApplication
                 ? "Application pending bank review."
@@ -959,23 +992,29 @@ namespace LandLedgers.FirstLedger
 
         private void HandleSellerMeetingConversationStateChanged(string listingId)
         {
-            if (loanMode || view == null || view.Root == null || !view.Root.gameObject.activeInHierarchy)
+            if (loanMode || view == null || view.Root == null || currentListing == null)
             {
                 return;
             }
 
             // Cleared-state broadcasts are used when the meeting cannot open or loses its lead.
             // Refresh the formal workflow so it can fall back to its own continuity messaging.
-            if (string.IsNullOrWhiteSpace(listingId))
+            if (!string.IsNullOrWhiteSpace(listingId)
+                && !string.Equals(currentListingId, listingId, StringComparison.Ordinal))
             {
-                RefreshAcquisition();
                 return;
             }
 
-            if (!string.IsNullOrWhiteSpace(currentListingId) && string.Equals(currentListingId, listingId, StringComparison.Ordinal))
+            if (sellerMeetingController != null && sellerMeetingController.IsVisible)
             {
-                RefreshAcquisition();
+                view.SetVisible(false);
+                return;
             }
+
+            // Closing the meeting returns to the same formal file. Reopen the
+            // dossier from its current authoritative market/read-model state.
+            view.SetVisible(true);
+            RefreshAcquisition();
         }
 
         private void BindSellerMeetingEvents()

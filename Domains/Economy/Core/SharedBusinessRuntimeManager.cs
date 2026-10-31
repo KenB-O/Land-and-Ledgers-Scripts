@@ -131,6 +131,8 @@ namespace LandLedgers.Economy
         [Tooltip("BIZ-1: operating status ledger — a business becomes operating only through recorded commerce (Canon §3.2).")]
         private BusinessOperatingLedger operatingLedger = new BusinessOperatingLedger();
 
+        private List<OpeningRosterEntry> openingBusinessRosterOverride;
+
         /// <summary>BIZ-1: HF-1 identity registry for business entity IDs (never reused).</summary>
         private readonly EntityIdRegistry businessIdRegistry = new EntityIdRegistry();
 
@@ -166,6 +168,14 @@ namespace LandLedgers.Economy
 
         public IReadOnlyList<BusinessInstanceState> Businesses => businesses;
         public string Status => status;
+
+        /// <summary>Supplies an authored opening roster before startup initialization.</summary>
+        public void ConfigureOpeningBusinessRoster(IReadOnlyList<OpeningRosterEntry> roster)
+        {
+            openingBusinessRosterOverride = roster == null || roster.Count == 0
+                ? null
+                : new List<OpeningRosterEntry>(roster);
+        }
 
         private Action<BusinessInstanceState> preWeeklyResetCallback;
 
@@ -2284,7 +2294,7 @@ namespace LandLedgers.Economy
 
             int visitPriceCents = GetAverageCategoryTransferPriceCents(doctor, profile, CategoryMedicalService);
             int remedyPriceCents = GetAverageCategoryTransferPriceCents(doctor, profile, CategoryMedicineRemedies);
-            List<PersonState> patients = BuildDoctorPatientList(population);
+            List<PersonState> patients = BuildDoctorPatientList(population, doctor);
             int treated = 0;
             int medicalSpend = 0;
             int doctorRevenue = 0;
@@ -2985,6 +2995,7 @@ namespace LandLedgers.Economy
             builder.AppendLine(GetBusinessManagementHeading(business.BusinessType));
             string autoTransfer = business.CashTransferRule.AutoTransferEnabled ? "on" : "off";
             builder.AppendLine($"Owner: {GetOwnerDisplayName(business)} | Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount} | Efficiency {GetHealthAdjustedOperatingEfficiency01(business):P0}");
+            AppendHealthStaffingLine(builder, runtime);
             builder.AppendLine($"Working capital: cash {FormatMoney(runtime.CurrentCashCents)} | protected {FormatMoney(GetLocalTradeAdjustedSurvivalCashReserveCents(business))} | payroll {FormatMoney(runtime.FilledWeeklyPayrollCents)} | input reserve {FormatMoney(runtime.LastWeeklyReorderBudgetCents)} | auto transfer {autoTransfer}");
             builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(business));
             builder.AppendLine(BuildFocusLine(business));
@@ -3026,6 +3037,34 @@ namespace LandLedgers.Economy
 
             AppendWorkerSelection(builder, business, selectedWorkerIndex);
             return builder.ToString();
+        }
+
+        private void AppendHealthStaffingLine(StringBuilder builder, BusinessRuntimeState runtime)
+        {
+            if (builder == null || runtime?.WorkerSlots == null)
+            {
+                return;
+            }
+
+            List<string> restrictions = new();
+            for (int i = 0; i < runtime.WorkerSlots.Count; i++)
+            {
+                WorkerSlotState slot = runtime.WorkerSlots[i];
+                PersonState worker = slot != null ? FindPersonForWorkerSlot(slot) : null;
+                PersonHealthState health = PopulationHealthEvaluator.EnsureHealthInitialized(worker);
+                if (health == null || !health.HasActiveCondition)
+                {
+                    continue;
+                }
+
+                string condition = $"{health.severity.ToString().ToLowerInvariant()} {health.conditionKind.ToString().ToLowerInvariant()}";
+                restrictions.Add($"{worker.DisplayName}: {condition}, {health.laborCapacityPercent}% labor capacity");
+            }
+
+            if (restrictions.Count > 0)
+            {
+                builder.AppendLine($"Health staffing: {string.Join("; ", restrictions)}");
+            }
         }
 
         public string BuildBusinessInventoryText(BusinessInstanceState business)
@@ -7453,7 +7492,7 @@ namespace LandLedgers.Economy
             return best;
         }
 
-        private static List<PersonState> BuildDoctorPatientList(PopulationState population)
+        private static List<PersonState> BuildDoctorPatientList(PopulationState population, BusinessInstanceState doctor)
         {
             List<PersonState> patients = new();
             if (population == null || population.people == null)
@@ -7461,10 +7500,28 @@ namespace LandLedgers.Economy
                 return patients;
             }
 
+            HashSet<int> attendingPhysicianIds = new();
+            IReadOnlyList<WorkerSlotState> doctorSlots = doctor?.RuntimeState?.WorkerSlots;
+            if (doctorSlots != null)
+            {
+                for (int i = 0; i < doctorSlots.Count; i++)
+                {
+                    WorkerSlotState slot = doctorSlots[i];
+                    if (slot != null
+                        && string.Equals(slot.SlotId, "physician", StringComparison.OrdinalIgnoreCase)
+                        && int.TryParse(slot.AssignedWorkerId, out int physicianId))
+                    {
+                        attendingPhysicianIds.Add(physicianId);
+                    }
+                }
+            }
+
             for (int i = 0; i < population.people.Count; i++)
             {
                 PersonState person = population.people[i];
-                if (PopulationHealthEvaluator.HasActiveCondition(person))
+                if (person != null
+                    && !attendingPhysicianIds.Contains(person.id)
+                    && PopulationHealthEvaluator.HasActiveCondition(person))
                 {
                     patients.Add(person);
                 }
@@ -8714,7 +8771,7 @@ namespace LandLedgers.Economy
             var context = new ManagerCreationContext(this);
             var diagnostics = new List<string>();
             int created = OpeningBusinessRoster.EnsureViaFormationWorkflow(
-                OpeningBusinessRoster.Default(),
+                openingBusinessRosterOverride ?? OpeningBusinessRoster.Default(),
                 authority,
                 context,
                 HasBusinessOfType,

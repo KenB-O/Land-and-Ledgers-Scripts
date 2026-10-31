@@ -2189,15 +2189,18 @@ namespace LandLedgers.Orchestration.Systems
             }
             EnsureTownJourneyNetwork();
             // P6: fall back to the hub's journey model when the driver carries
-            // no explicit one — the model is hub-owned now. An empty model (no
-            // locations authored yet) still skips honestly instead of routing
-            // embodied purchases through nothing.
+            // no explicit one — the model is hub-owned now. Missing locations
+            // block embodied errands, but not household inventory consumption.
             JourneyModel journeys = Journeys ?? hub.Journeys;
             if (!HasAnyLocation(journeys))
             {
-                Debug.LogWarning("[SimulationDrivers] DailyNeedsService skipped: no journey locations " +
-                    "registered from the live TownWorld road grid and building frontage.");
-                return;
+                // A missing route network prevents embodied errands, but it
+                // must not suppress local, lot-backed meal consumption. The
+                // needs service can still settle food already held by the
+                // household; the shopping loop will leave any unmet purchase
+                // need open when no valid destination can be reached.
+                Debug.LogWarning("[SimulationDrivers] No journey locations are registered; " +
+                    "daily needs will consume eligible household stock, while new errands remain blocked.");
             }
 
             // PopulationManager owns the current membership registry and may
@@ -2242,7 +2245,7 @@ namespace LandLedgers.Orchestration.Systems
                 populationManager.State, consumptionPlanner, dailyPurchaseExecutor,
                 absoluteDayIndex, diag, hub.WorkTimeBudgets,
                 restaurantMeals, boardingMeals, hotelMeals,
-                hub.HouseholdInventories, hub.MealLog, null);
+                hub.HouseholdInventories, hub.MealLog, null, populationMemberships);
             if (report.MealsMissed > 0 || report.PurchasesMade > 0)
             {
                 Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
@@ -3026,7 +3029,11 @@ namespace LandLedgers.Orchestration.Systems
             float now = timeManager.AbsoluteGameSeconds;
             foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
             {
-                if (task == null || task.Status != TaskStatus.InProgress || !task.HasAssignee)
+                // DomesticLaborDriver already scheduled a fixed elapsed-time
+                // completion event. Replacing it here on every short tick
+                // continually moves the due time forward and prevents the
+                // household work from ever receiving credit.
+                if (!hub.DomesticLaborDriver.RequiresGenericCompletionBackstop(task))
                 {
                     continue;
                 }

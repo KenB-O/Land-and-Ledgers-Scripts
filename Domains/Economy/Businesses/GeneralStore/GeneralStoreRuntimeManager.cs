@@ -378,7 +378,10 @@ namespace LandLedgers.FirstLedger
                 }
 
                 string itemId = HouseholdItemForStoreCategory(category.CategoryId);
-                if (string.IsNullOrWhiteSpace(itemId))
+                if (string.IsNullOrWhiteSpace(itemId)
+                    || !TryResolveSingleItemForCategory(storeDefinition, category.CategoryId, out string authoredItemId)
+                    || !string.Equals(itemId, authoredItemId, StringComparison.OrdinalIgnoreCase)
+                    || !category.ContainsItem(itemId))
                 {
                     continue;
                 }
@@ -393,6 +396,45 @@ namespace LandLedgers.FirstLedger
 
             var capability = new StoreTradingCapability { Staffed = false };
             return new GeneralStoreTradingPort(this, offers, capability);
+        }
+
+        /// <summary>
+        /// The legacy Business stock authority stores one aggregate count per
+        /// category. It can only be exposed through an item-resolved household
+        /// offer when the authored profile contains exactly one SKU in that
+        /// category. Mapping a multi-SKU category's aggregate to one item would
+        /// sell unlike goods under a false product identity.
+        /// </summary>
+        internal static bool TryResolveSingleItemForCategory(
+            GeneralStoreBusinessDefinition definition,
+            string categoryId,
+            out string itemId)
+        {
+            itemId = string.Empty;
+            if (definition == null || string.IsNullOrWhiteSpace(categoryId))
+            {
+                return false;
+            }
+
+            ReadOnlySpan<ItemDefinition> items = definition.Items;
+            for (int i = 0; i < items.Length; i++)
+            {
+                ItemDefinition item = items[i];
+                if (item == null || !string.Equals(item.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(itemId))
+                {
+                    itemId = string.Empty;
+                    return false;
+                }
+
+                itemId = item.ItemId;
+            }
+
+            return !string.IsNullOrWhiteSpace(itemId);
         }
 
         private static string HouseholdItemForStoreCategory(string categoryId)

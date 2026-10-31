@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using LandLedgers.FirstLedger;
+using LandLedgers.Population;
 using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -52,6 +53,13 @@ namespace LandLedgers.EditorTools
                 return;
             }
 
+            RectTransform panelRect = panel.transform as RectTransform;
+            panelRect.anchorMin = new Vector2(0f, 1f);
+            panelRect.anchorMax = new Vector2(0f, 1f);
+            panelRect.pivot = new Vector2(0f, 1f);
+            panelRect.anchoredPosition = new Vector2(24f, -140f);
+            panelRect.sizeDelta = new Vector2(460f, 520f);
+            panelRect.SetAsLastSibling();
             panel.SetActive(false);
             SerializedObject serialized = new SerializedObject(controller);
             serialized.FindProperty("canvas").objectReferenceValue = canvas;
@@ -64,6 +72,55 @@ namespace LandLedgers.EditorTools
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
             EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene());
             Debug.Log("[ScenarioHUD] Authored objective hierarchy and controller bindings saved to Main Scene.", panel);
+        }
+
+        [MenuItem("Land & Ledgers/Author Compact Playtest Settlement")]
+        public static void AuthorCompactPlaytestSettlement()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode
+                || EditorSceneManager.GetActiveScene().name != "Main Scene")
+            {
+                Debug.LogError("Open Main Scene in Edit Mode before authoring the compact playtest settlement.");
+                return;
+            }
+
+            const string settingsPath = "Assets/Core/Population/CompactPlaytestPopulationSettings.asset";
+            PopulationGenerationSettings settings = AssetDatabase.LoadAssetAtPath<PopulationGenerationSettings>(settingsPath);
+            if (settings == null)
+            {
+                settings = ScriptableObject.CreateInstance<PopulationGenerationSettings>();
+                AssetDatabase.CreateAsset(settings, settingsPath);
+            }
+
+            settings.seedOffset = 511;
+            settings.householdOccupancyRate = 0.92f;
+            settings.minHouseholdSize = 1;
+            settings.maxHouseholdSize = 6;
+            settings.minimumStartingHouseholds = 8;
+            settings.maximumStartingHouseholds = 10;
+            settings.minimumStartingResidents = 22;
+            settings.targetStartingResidents = 26;
+            settings.maximumStartingResidents = 30;
+            settings.newcomerArrivalRate = 0.05f;
+            settings.minimumNewcomerArrivalHouseholds = 0;
+            settings.Sanitize();
+            EditorUtility.SetDirty(settings);
+
+            FirstLedgerSliceBootstrapper bootstrapper = FindUnique<FirstLedgerSliceBootstrapper>("Game Systems");
+            if (bootstrapper == null)
+            {
+                Debug.LogError("Compact playtest profile was saved, but Main Scene needs exactly one Game Systems bootstrapper.");
+                return;
+            }
+
+            SerializedObject serialized = new SerializedObject(bootstrapper);
+            serialized.FindProperty("populationSettings").objectReferenceValue = settings;
+            serialized.FindProperty("useCompactPlaytestOpeningRoster").boolValue = true;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            AssetDatabase.SaveAssets();
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene());
+            Debug.Log("[CompactPlaytest] Main Scene now uses an 8–10 household, 22–30 resident profile and three legitimate opening Businesses. Canonical defaults remain unchanged.", bootstrapper);
         }
 
         private static T FindUnique<T>(string objectName) where T : Component
@@ -89,11 +146,11 @@ namespace LandLedgers.EditorTools
             Undo.RegisterCreatedObjectUndo(root, "Author Scenario Objective HUD");
             RectTransform rootRect = root.GetComponent<RectTransform>();
             rootRect.SetParent(canvas, false);
-            rootRect.anchorMin = Vector2.one;
-            rootRect.anchorMax = Vector2.one;
-            rootRect.pivot = Vector2.one;
-            rootRect.anchoredPosition = new Vector2(-24f, -110f);
-            rootRect.sizeDelta = new Vector2(520f, 520f);
+            rootRect.anchorMin = new Vector2(0f, 1f);
+            rootRect.anchorMax = new Vector2(0f, 1f);
+            rootRect.pivot = new Vector2(0f, 1f);
+            rootRect.anchoredPosition = new Vector2(24f, -140f);
+            rootRect.sizeDelta = new Vector2(460f, 520f);
             root.GetComponent<Image>().color = new Color(0.055f, 0.06f, 0.055f, 0.95f);
 
             GameObject header = new GameObject("Header", typeof(RectTransform));

@@ -261,6 +261,22 @@ namespace LandLedgers.Tasks
             return true;
         }
 
+        /// <summary>Returns the same skill-scaled duration AssignTask will commit for a worker.</summary>
+        public int EstimateMinutesForWorker(string definitionId, EntityId workerId)
+        {
+            TaskDefinition definition = GetDefinition(definitionId);
+            return Math.Max(1, durationEstimator.EstimateMinutes(definition, workerId));
+        }
+
+        /// <summary>Returns the remaining skill-scaled duration for an existing task and worker.</summary>
+        public int EstimateRemainingMinutesForWorker(EntityId taskId, EntityId workerId)
+        {
+            WorkTask task = FindTask(taskId);
+            if (task == null) return 1;
+            TaskDefinition definition = GetDefinition(task.DefinitionId);
+            return Math.Max(1, EstimatePlannedMinutes(task, definition, workerId));
+        }
+
         /// <summary>
         /// Assigned -&gt; InProgress (or ResourcesReserved -&gt; InProgress). Work actually begins.
         ///

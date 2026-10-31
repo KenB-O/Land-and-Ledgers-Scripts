@@ -188,6 +188,20 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void OpeningRoster_CompactPlaytest_IsThreeDistinctBusinesses()
+        {
+            List<OpeningRosterEntry> roster = OpeningBusinessRoster.CompactPlaytest();
+
+            Assert.AreEqual(3, roster.Count);
+            CollectionAssert.AreEquivalent(
+                new[] { BusinessType.GeneralStore, BusinessType.Blacksmith, BusinessType.LiveryFreight },
+                new[] { roster[0].BusinessType, roster[1].BusinessType, roster[2].BusinessType });
+            Assert.Greater(roster[0].StartingCapitalCents, 0);
+            Assert.Greater(roster[1].StartingCapitalCents, 0);
+            Assert.Greater(roster[2].StartingCapitalCents, 0);
+        }
+
+        [Test]
         public void OpeningRoster_EnsureViaWorkflow_SkipsExistingTypes()
         {
             var authority = new BusinessCreationAuthority();

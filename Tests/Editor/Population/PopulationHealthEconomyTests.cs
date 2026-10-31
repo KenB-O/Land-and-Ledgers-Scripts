@@ -62,8 +62,9 @@ namespace LandLedgers.EditorTests.Population
                 household.lifetimeMedicalSpendCents = 500;
                 source.State.people.Add(worker);
                 source.State.households.Add(household);
-                source.RecalculateHouseholdIncomeAndSummaries("Health save source.");
-
+                // This is a save-contract test for already-recorded weekly
+                // fields. Recalculating operating snapshots here would
+                // correctly replace the explicit historical value above.
                 PopulationSaveDto dto = source.CaptureSaveDto();
                 PopulationManager target = targetObject.AddComponent<PopulationManager>();
                 target.LoadFromSaveDto(dto);
@@ -212,8 +213,8 @@ namespace LandLedgers.EditorTests.Population
 
                 population.RecalculateHouseholdIncomeAndSummaries("Health labor loss.");
 
-                Assert.AreEqual(10, household.weeklyIncomeSnapshot);
-                Assert.AreEqual(1000, household.lastWeeklyLaborLossCents);
+                Assert.AreEqual(11, household.weeklyIncomeSnapshot);
+                Assert.AreEqual(900, household.lastWeeklyLaborLossCents);
             }
             finally
             {
@@ -361,7 +362,8 @@ namespace LandLedgers.EditorTests.Population
                 SharedBusinessRuntimeManager runtime = runtimeObject.AddComponent<SharedBusinessRuntimeManager>();
                 runtime.Configure(null, new[] { blacksmithProfile }, population);
 
-                Assert.AreEqual(0.15f, runtime.GetHealthAdjustedOperatingEfficiency01(blacksmith), 0.0001f);
+                Assert.AreEqual(0.12f, runtime.GetHealthAdjustedOperatingEfficiency01(blacksmith), 0.0001f,
+                    "The 15% health-limited labor capacity is multiplied by the required-role baseline efficiency of 80%.");
 
                 worker.health.ApplyTreatment(33, 6, "Recovered for test.");
                 Assert.Greater(runtime.GetHealthAdjustedOperatingEfficiency01(blacksmith), 0f);
@@ -423,7 +425,7 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void DoctorTreatmentPrioritizesSeriousLaborCasesAndStepsSeverityDown()
+        public void DoctorTreatmentPrioritizesSeriousLaborCasesWithoutFalselyPromisingImmediateRecovery()
         {
             GameObject populationObject = new("Doctor Triage Population");
             GameObject runtimeObject = new("Doctor Triage Runtime");
@@ -441,17 +443,24 @@ namespace LandLedgers.EditorTests.Population
                 PersonState mildPatient = CreatePerson(20, 25, 20);
                 mildPatient.health.ApplyCondition(HealthConditionKind.Illness, HealthConditionSeverity.Mild, 2, "Mild patient.");
 
+                PersonState secondMildPatient = CreatePerson(21, 26, 20);
+                secondMildPatient.health.ApplyCondition(HealthConditionKind.Illness, HealthConditionSeverity.Mild, 2, "Second mild patient.");
+
                 HouseholdState seriousHousehold = CreateHousehold(24, seriousPatient.id);
                 HouseholdState mildHousehold = CreateHousehold(25, mildPatient.id);
+                HouseholdState secondMildHousehold = CreateHousehold(26, secondMildPatient.id);
                 seriousHousehold.spendingMoneyCents = 10000;
                 mildHousehold.spendingMoneyCents = 10000;
+                secondMildHousehold.spendingMoneyCents = 10000;
 
                 population.State.people.Add(doctorWorker);
                 population.State.people.Add(seriousPatient);
                 population.State.people.Add(mildPatient);
+                population.State.people.Add(secondMildPatient);
                 population.State.households.Add(CreateHousehold(23, doctorWorker.id));
                 population.State.households.Add(seriousHousehold);
                 population.State.households.Add(mildHousehold);
+                population.State.households.Add(secondMildHousehold);
 
                 BusinessProfileDefinition doctorProfile = LoadProfile(BusinessType.Doctor);
                 BusinessInstanceState doctor = BusinessInstanceState.Create(
@@ -467,17 +476,32 @@ namespace LandLedgers.EditorTests.Population
 
                 SharedBusinessRuntimeManager runtime = runtimeObject.AddComponent<SharedBusinessRuntimeManager>();
                 runtime.Configure(null, new[] { doctorProfile }, population);
+                HouseholdLedgerRegistry patientLedgers = new();
+                Assert.IsNull(patientLedgers.GetOrCreate(24).RecordInflow(
+                    0, 10000, HouseholdIncomeSource.OtherDocumented, "triage-test-capital", "test patient funding", "test source"));
+                Assert.IsNull(patientLedgers.GetOrCreate(25).RecordInflow(
+                    0, 10000, HouseholdIncomeSource.OtherDocumented, "triage-test-capital", "test patient funding", "test source"));
+                Assert.IsNull(patientLedgers.GetOrCreate(26).RecordInflow(
+                    0, 10000, HouseholdIncomeSource.OtherDocumented, "triage-test-capital", "test patient funding", "test source"));
+                runtime.HouseholdLedgers = patientLedgers;
                 SetBusinesses(runtime, new List<BusinessInstanceState> { doctor });
 
                 PopulationHealthDailySnapshot snapshot = runtime.ResolveDailyDoctorTreatments(population.State, 41);
 
+                Assert.AreEqual(4, snapshot.activeCases, "The sick physician and three patient cases are all counted in the population snapshot.");
                 Assert.AreEqual(1, snapshot.treatedCases);
-                Assert.AreEqual(1, snapshot.untreatedCases);
-                Assert.AreEqual(HealthConditionSeverity.Mild, seriousPatient.health.severity);
+                Assert.AreEqual(3, snapshot.untreatedCases);
+                Assert.AreEqual(-1, doctorWorker.health.lastTreatedDayIndex, "A physician cannot consume their own clinic's visit capacity treating themself.");
+                Assert.AreEqual(HealthConditionSeverity.Serious, seriousPatient.health.severity,
+                    "A paid visit reduces the remaining illness duration; it does not immediately downgrade a serious condition.");
                 Assert.AreEqual(41, seriousPatient.health.lastTreatedDayIndex);
                 Assert.AreEqual(2, seriousPatient.health.remainingDays);
                 Assert.AreEqual(HealthConditionSeverity.Mild, mildPatient.health.severity);
-                Assert.AreEqual(-1, mildPatient.health.lastTreatedDayIndex);
+                Assert.AreEqual(-1, mildPatient.health.lastTreatedDayIndex,
+                    "The serious case is served before either mild case when reduced staffing leaves one visit.");
+                Assert.AreEqual(HealthConditionSeverity.Mild, secondMildPatient.health.severity);
+                Assert.AreEqual(-1, secondMildPatient.health.lastTreatedDayIndex,
+                    "The capacity-limited second mild case remains untreated after the serious labor case is prioritized.");
             }
             finally
             {

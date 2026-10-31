@@ -87,7 +87,7 @@ namespace LandLedgers.FirstLedger
         private float shoppingHouseholdShare = 0.5f;
 
         [SerializeField, Min(0)]
-        private int minimumVisibleStreetAgents = 4;
+        private int minimumVisibleStreetAgents;
 
         [SerializeField, Min(1)]
         private int ambientRouteAttemptBudget = 24;
@@ -452,7 +452,7 @@ namespace LandLedgers.FirstLedger
             for (int i = 0; i < state.people.Count && agents.Count < maxActiveAgents; i++)
             {
                 PersonState person = state.people[i];
-                if (person.workplaceBuildingId < 0 && person.householdId % 4 != 0)
+                if (!CanRepresentOnMap(person, state))
                 {
                     continue;
                 }
@@ -478,6 +478,23 @@ namespace LandLedgers.FirstLedger
                 loggedNoManagedAgents = true;
                 Debug.LogWarning("PopulationPathingDirector did not create any visible-agent pool entries. Check generated population homes and front-door anchors.", this);
             }
+        }
+
+        /// <summary>
+        /// A visual street actor is a view of a living, housed, on-map Person.
+        /// Historical/departed records remain in PopulationState but must never
+        /// be manifested as local residents. The simulation record, not this
+        /// predicate or the GameObject, remains the identity authority.
+        /// </summary>
+        public static bool CanRepresentOnMap(PersonState person, PopulationState population)
+        {
+            return person != null
+                && population != null
+                && person.id >= 0
+                && person.deathDayIndex < 0
+                && !person.isOffMap
+                && person.householdId >= 0
+                && population.GetHousehold(person.householdId) != null;
         }
 
         private int SendRouteForState(PopulationScheduleState fromState, PopulationScheduleState nextState, Predicate<PersonState> filter, Func<PersonState, int> targetBuildingId)
@@ -955,6 +972,9 @@ namespace LandLedgers.FirstLedger
             GameObject prefab = person.id % 2 == 0 ? maleAgentVisualPrefab : femaleAgentVisualPrefab;
             GameObject agentObject = new($"Person {person.id:000} {person.DisplayName}");
             agentObject.transform.SetParent(EnsureAgentRoot(), false);
+
+            PersonVisualIdentityBinding identity = agentObject.AddComponent<PersonVisualIdentityBinding>();
+            identity.Bind(person.id);
 
             GameObject visualObject = prefab != null
                 ? TryInstantiateGameObject(prefab, agentObject.transform, $"person {person.id:000} visual")

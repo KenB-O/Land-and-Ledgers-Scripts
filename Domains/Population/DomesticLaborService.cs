@@ -47,7 +47,8 @@ namespace LandLedgers.Population
             TaskDefinition definition = tasks.GetDefinition(definitionId);
             if (definition == null)
                 return Refuse(diag, "DomesticLabor: definition '" + definitionId + "' not registered.");
-            int plannedMinutes = definition.BaseMinutes;
+            int plannedMinutes = tasks.EstimateMinutesForWorker(
+                definitionId, EntityId.For(EntityKind.Person, personId));
 
             // Person-time reservation FIRST: domestic work competes with
             // employment availability through the same exclusive tracker.
@@ -96,6 +97,59 @@ namespace LandLedgers.Population
             if (diag != null) diag.Add(string.Format(
                 "DomesticLabor: P{0} scheduled '{1}' ({2} min) for household {3} on day {4}",
                 personId, definition.DisplayName, plannedMinutes, householdId, dayIndex));
+            return null;
+        }
+
+        /// <summary>
+        /// Resumes the same requeued domestic Task after a start refusal. The
+        /// Task identity and any recorded work remain authoritative; recovery
+        /// never creates a replacement Task for the same open demand.
+        /// </summary>
+        public string ResumeDomesticWork(EntityId taskId, int householdId, int personId,
+            int dayIndex, int startMinuteOfDay, TaskAuthority tasks,
+            WorkTimeBudgetStore budgets, PersonScheduleTracker schedules, List<string> diag)
+        {
+            if (tasks == null || budgets == null || schedules == null)
+                return Refuse(diag, "DomesticLabor: task authority, budget store, or schedule tracker missing.");
+            WorkTask task = tasks.FindTask(taskId);
+            EntityId owner = EntityId.For(EntityKind.Household, householdId);
+            if (task == null || !task.IsOpen || task.Status != TaskStatus.Queued
+                || task.OwnerId != owner || !DomesticTaskCatalog.IsDomesticDefinition(task.DefinitionId))
+                return Refuse(diag, "DomesticLabor: requeued task is missing, closed, or owned by another authority.");
+            if (personId < 0)
+                return Refuse(diag, "DomesticLabor: no real Person — only a real Person does domestic work.");
+
+            int plannedMinutes = tasks.EstimateRemainingMinutesForWorker(taskId, EntityId.For(EntityKind.Person, personId));
+            TaskDefinition definition = tasks.GetDefinition(task.DefinitionId);
+            PersonActivityKind activity = string.Equals(task.DefinitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal)
+                ? PersonActivityKind.Cooking : PersonActivityKind.Work;
+            string reservationRefusal = schedules.TryReserve(personId, activity, dayIndex,
+                startMinuteOfDay, plannedMinutes,
+                "domestic: " + (definition != null ? definition.DisplayName : task.DefinitionId) + " (household " + householdId + ")");
+            if (reservationRefusal != null)
+                return Refuse(diag, "DomesticLabor: " + reservationRefusal);
+            string reservationId = LastReservationId(schedules, personId, dayIndex);
+            EntityId worker = EntityId.For(EntityKind.Person, personId);
+            if (!tasks.AssignTask(taskId, worker, budgets, dayIndex, out string rejection))
+            {
+                schedules.Release(reservationId);
+                return Refuse(diag, "DomesticLabor: requeued task assignment refused — " + rejection);
+            }
+            if (!tasks.StartTask(taskId, dayIndex, out rejection))
+            {
+                schedules.Release(reservationId);
+                budgets.GetOrCreate(worker).ReleaseCommitment(task.PlannedMinutes);
+                return Refuse(diag, "DomesticLabor: requeued task start refused — " + rejection);
+            }
+
+            assignments.Add(new DomesticAssignment
+            {
+                TaskId = taskId, HouseholdId = householdId, PersonId = personId,
+                DefinitionId = task.DefinitionId, DayIndex = dayIndex,
+                ReservationId = reservationId, Completed = false,
+            });
+            if (diag != null) diag.Add("DomesticLabor: resumed existing task " + taskId +
+                " for P" + personId + " (" + plannedMinutes + " min), preserving task identity.");
             return null;
         }
 

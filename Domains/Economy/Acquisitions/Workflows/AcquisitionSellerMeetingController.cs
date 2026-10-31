@@ -21,6 +21,10 @@ namespace LandLedgers.FirstLedger
         private int selectedResponseIndex = -1;
 
         public event Action<string> ConversationStateChanged;
+
+        public bool IsVisible => view != null
+            && view.Root != null
+            && view.Root.gameObject.activeInHierarchy;
         public string CurrentListingId => currentListingId ?? string.Empty;
 
         private void Awake()

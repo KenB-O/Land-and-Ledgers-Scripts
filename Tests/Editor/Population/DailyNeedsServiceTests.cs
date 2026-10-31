@@ -148,5 +148,42 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(4, report1.MealsEaten + report1.MealsMissed,
                 "Every meal is accounted for: eaten or missed.");
         }
+
+        [Test]
+        public void DailyNeeds_UsesAuthoritativeHouseholdMembershipInsteadOfLegacyMemberMirror()
+        {
+            // The household's compatibility member list is deliberately stale.
+            // The registry remains the sole authority for who receives meals.
+            population.people.Add(Adult(3, "Cal", householdId: -1));
+            population.people[0].laborAccessLevel = LaborAccessLevel.None;
+            population.people[0].nutrition.nutrition01 = 0.4f;
+            population.people[2].nutrition.nutrition01 = 0.4f;
+            population.households[0].memberIds.Clear();
+            population.households[0].memberIds.Add(1);
+            population.households[0].reserves[0].currentUnits = 100;
+
+            var memberships = new HouseholdMembershipRegistry();
+            Assert.IsNull(memberships.Register(new HouseholdMembership
+            {
+                MembershipId = 1,
+                PersonId = 3,
+                HouseholdId = 7,
+                Lifecycle = HouseholdMembershipLifecycle.Active,
+                StartDayIndex = 0,
+            }));
+
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                population, planner, executor, 0, diag,
+                memberships: memberships);
+
+            Assert.AreEqual(2, report.MealsEaten,
+                "Only the single registry member should receive two daily meals.");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.AreEqual(98, population.households[0].reserves[0].currentUnits);
+            Assert.That(population.people[0].nutrition.nutrition01, Is.EqualTo(0.4f),
+                "The stale legacy household member must not receive a meal.");
+            Assert.That(population.people[2].nutrition.nutrition01, Is.EqualTo(0.7f).Within(0.000001f),
+                "The current registry member receives two meals and recovers once.");
+        }
     }
 }

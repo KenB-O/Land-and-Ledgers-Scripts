@@ -28,6 +28,8 @@ namespace LandLedgers.UI
             var existing = canvas.GetComponentInChildren<UITooltipController>(true);
             if (existing != null)
             {
+                existing.EnsureInitialized();
+                existing.BuildVisuals(canvas);
                 return existing;
             }
 
@@ -117,16 +119,21 @@ namespace LandLedgers.UI
             layoutElement.preferredWidth = MaxWidth;
             layoutElement.flexibleWidth = 0f;
 
-            titleText = CreateText("Title", 15f, FontStyles.Bold, new Color(0.94f, 0.89f, 0.74f, 1f));
-            bodyText = CreateText("Body", 13.5f, FontStyles.Normal, new Color(0.86f, 0.87f, 0.8f, 1f));
+            titleText = EnsureText("Title", 15f, FontStyles.Bold, new Color(0.94f, 0.89f, 0.74f, 1f));
+            bodyText = EnsureText("Body", 13.5f, FontStyles.Normal, new Color(0.86f, 0.87f, 0.8f, 1f));
         }
 
-        private TextMeshProUGUI CreateText(string name, float size, FontStyles style, Color color)
+        private TextMeshProUGUI EnsureText(string name, float size, FontStyles style, Color color)
         {
-            var child = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
-            child.transform.SetParent(transform, false);
+            Transform existing = transform.Find(name);
+            TextMeshProUGUI text = existing != null ? existing.GetComponent<TextMeshProUGUI>() : null;
+            if (text == null)
+            {
+                var child = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+                child.transform.SetParent(transform, false);
+                text = child.GetComponent<TextMeshProUGUI>();
+            }
 
-            var text = child.GetComponent<TextMeshProUGUI>();
             text.fontSize = size;
             text.fontStyle = style;
             LandLedgersTypography.ApplyRole(text, name == "Title" ? LandLedgersTypography.TextRole.TooltipTitle : LandLedgersTypography.TextRole.TooltipBody);
@@ -143,6 +150,8 @@ namespace LandLedgers.UI
         {
             rectTransform ??= transform as RectTransform;
             canvasRect ??= GetComponentInParent<Canvas>()?.transform as RectTransform;
+            titleText ??= transform.Find("Title")?.GetComponent<TextMeshProUGUI>();
+            bodyText ??= transform.Find("Body")?.GetComponent<TextMeshProUGUI>();
         }
 
         private void PositionNear(RectTransform anchor)

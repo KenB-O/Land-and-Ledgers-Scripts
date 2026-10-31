@@ -1395,7 +1395,10 @@ namespace LandLedgers.Population
             // and re-establish idempotent birthday scheduling.
             RestoreDemographicStackFromSaveDto(dto);
             NormalizeTransientScheduleStates();
-            RecalculateHouseholdIncomeSnapshots();
+            // Restore the saved weekly labor-loss observation as history. The
+            // current income projection can be rebuilt from Persons, but doing
+            // so must not erase the last completed week's recorded loss.
+            RecalculateHouseholdIncomeSnapshots(updateWeeklyLaborLoss: false);
             ApplySettlementMetricsFromSaveDto(dto);
             RefreshSummaryFields("Population restored from save.");
         }
@@ -1932,7 +1935,7 @@ namespace LandLedgers.Population
             }
         }
 
-        private void RecalculateHouseholdIncomeSnapshots()
+        private void RecalculateHouseholdIncomeSnapshots(bool updateWeeklyLaborLoss = true)
         {
             if (state == null || state.households == null)
             {
@@ -1962,7 +1965,10 @@ namespace LandLedgers.Population
                 }
 
                 household.weeklyIncomeSnapshot = weeklyIncome;
-                household.lastWeeklyLaborLossCents = weeklyLaborLossCents;
+                if (updateWeeklyLaborLoss)
+                {
+                    household.lastWeeklyLaborLossCents = weeklyLaborLossCents;
+                }
             }
         }
 

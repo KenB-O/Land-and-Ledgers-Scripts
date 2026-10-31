@@ -18,11 +18,12 @@ namespace LandLedgers.UI
         private static readonly Color DialogueSelectedColor = new(0.24f, 0.19f, 0.10f, 1f);
         private static readonly Color DialogueBorderNormalColor = new(0.20f, 0.21f, 0.19f, 1f);
         private static readonly Color DialogueBorderSelectedColor = new(0.72f, 0.59f, 0.33f, 1f);
-        private const int MaxVisibleResponseOptions = 6;
-        private const float ResponseRowHeight = 82f;
-        private const float ResponseRowSpacing = 8f;
+        private const int MaxVisibleResponseOptions = 4;
+        private const float ResponseRowHeight = 68f;
+        private const float ResponseRowSpacing = 6f;
 
         [SerializeField] private RectTransform root;
+        [SerializeField] private RectTransform contentRoot;
         [SerializeField] private TMP_Text titleText;
         [SerializeField] private TMP_Text stageText;
         [SerializeField] private TMP_Text sellerIdentityText;
@@ -105,6 +106,11 @@ namespace LandLedgers.UI
             }
 
             Root.gameObject.SetActive(visible);
+            if (visible)
+            {
+                Root.SetAsLastSibling();
+                ResetBodyScrollPosition();
+            }
         }
 
         public void Render(AcquisitionConversationState state)
@@ -230,6 +236,7 @@ namespace LandLedgers.UI
                 Build();
             }
 
+            contentRoot ??= FindNamedComponent<RectTransform>("SellerMeeting_Window");
             titleText ??= FindNamedComponent<TMP_Text>("SellerMeeting_Title");
             stageText ??= FindNamedComponent<TMP_Text>("SellerMeeting_Stage");
             sellerIdentityText ??= FindNamedComponent<TMP_Text>("SellerMeeting_SellerIdentity");
@@ -332,24 +339,30 @@ namespace LandLedgers.UI
             root.offsetMax = Vector2.zero;
 
             Image backdrop = GetComponent<Image>();
-            backdrop.color = BackdropColor;
+            backdrop.color = new Color(BackdropColor.r, BackdropColor.g, BackdropColor.b, 0.38f);
             backdrop.raycastTarget = true;
 
-            VerticalLayoutGroup layout = gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(34, 34, 26, 26);
-            layout.spacing = 10f;
+            contentRoot = CreatePanel("SellerMeeting_Window", root);
+            contentRoot.anchorMin = new Vector2(0.42f, 0.035f);
+            contentRoot.anchorMax = new Vector2(0.985f, 0.965f);
+            contentRoot.offsetMin = Vector2.zero;
+            contentRoot.offsetMax = Vector2.zero;
+            contentRoot.GetComponent<Image>().color = new Color(0.035f, 0.038f, 0.035f, 0.99f);
+            VerticalLayoutGroup layout = contentRoot.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(20, 20, 16, 16);
+            layout.spacing = 7f;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
 
-            titleText = CreateText("SellerMeeting_Title", root, "Formal Seller Meeting", 25f, FontStyles.Bold);
+            titleText = CreateText("SellerMeeting_Title", contentRoot, "Seller Meeting", 22f, FontStyles.Bold);
             LandLedgersTypography.ApplyRole(titleText, LandLedgersTypography.TextRole.ModalTitle);
             AddLayout(titleText.rectTransform, -1f, 34f, 1f, 0f);
 
-            RectTransform headerPanel = CreatePanel("SellerMeeting_HeaderPanel", root);
-            AddLayout(headerPanel, -1f, 86f, 1f, 0f);
-            ConfigureAutoHeight(headerPanel, 86f);
+            RectTransform headerPanel = CreatePanel("SellerMeeting_HeaderPanel", contentRoot);
+            AddLayout(headerPanel, -1f, 76f, 1f, 0f);
+            ConfigureAutoHeight(headerPanel, 76f);
             VerticalLayoutGroup headerLayout = headerPanel.gameObject.AddComponent<VerticalLayoutGroup>();
             headerLayout.padding = new RectOffset(14, 14, 10, 10);
             headerLayout.spacing = 4f;
@@ -373,9 +386,9 @@ namespace LandLedgers.UI
             selectedFileText.color = new Color(0.82f, 0.84f, 0.78f, 0.96f);
             ConfigureAutoHeight(selectedFileText.rectTransform, 22f);
 
-            RectTransform processPanel = CreatePanel("SellerMeeting_ProcessPanel", root);
-            AddLayout(processPanel, -1f, 154f, 1f, 0f);
-            ConfigureAutoHeight(processPanel, 154f);
+            RectTransform processPanel = CreatePanel("SellerMeeting_ProcessPanel", contentRoot);
+            AddLayout(processPanel, -1f, 116f, 1f, 0f);
+            ConfigureAutoHeight(processPanel, 116f);
             VerticalLayoutGroup processLayout = processPanel.gameObject.AddComponent<VerticalLayoutGroup>();
             processLayout.padding = new RectOffset(16, 16, 12, 12);
             processLayout.spacing = 8f;
@@ -395,15 +408,15 @@ namespace LandLedgers.UI
 
             processRailRoot = CreateRect("SellerMeeting_ProcessRail", processPanel);
             HorizontalLayoutGroup processRailLayout = processRailRoot.gameObject.AddComponent<HorizontalLayoutGroup>();
-            processRailLayout.spacing = 8f;
+            processRailLayout.spacing = 5f;
             processRailLayout.childAlignment = TextAnchor.MiddleLeft;
             processRailLayout.childControlWidth = true;
             processRailLayout.childControlHeight = true;
             processRailLayout.childForceExpandWidth = true;
             processRailLayout.childForceExpandHeight = false;
-            AddLayout(processRailRoot, -1f, 72f, 1f, 0f);
+            AddLayout(processRailRoot, -1f, 44f, 1f, 0f);
 
-            RectTransform body = CreatePanel("SellerMeeting_ContentPanel", root);
+            RectTransform body = CreatePanel("SellerMeeting_ContentPanel", contentRoot);
             AddLayout(body, -1f, -1f, 1f, 1f);
 
             bodyViewport = CreateRect("SellerMeeting_ContentViewport", body);
@@ -466,13 +479,13 @@ namespace LandLedgers.UI
             responseLayout.childControlHeight = true;
             responseLayout.childForceExpandWidth = true;
             responseLayout.childForceExpandHeight = false;
-            AddLayout(responseRoot, -1f, 160f, 1f, 0f);
+            AddLayout(responseRoot, -1f, 142f, 1f, 0f);
 
             responseReadoutText = CreateText("SellerMeeting_ResponseReadout", bodyContent, string.Empty, 14f, FontStyles.Normal);
             LandLedgersTypography.ApplyRole(responseReadoutText, LandLedgersTypography.TextRole.LogBody);
             ConfigureAutoHeight(responseReadoutText.rectTransform, 88f);
 
-            RectTransform footer = CreateRect("SellerMeeting_Footer", root);
+            RectTransform footer = CreateRect("SellerMeeting_Footer", contentRoot);
             HorizontalLayoutGroup footerLayout = footer.gameObject.AddComponent<HorizontalLayoutGroup>();
             footerLayout.spacing = 8f;
             footerLayout.childAlignment = TextAnchor.MiddleRight;
@@ -505,14 +518,14 @@ namespace LandLedgers.UI
             {
                 AcquisitionConversationProcessStep step = state.ProcessSteps[i];
                 RectTransform card = CreatePanel($"SellerMeeting_ProcessStep_{i}", processRailRoot);
-                AddLayout(card, -1f, 72f, 1f, 0f);
+                AddLayout(card, -1f, 36f, 1f, 0f);
 
                 Image cardImage = card.GetComponent<Image>();
                 cardImage.color = ResolveRailColor(step != null ? step.Status : AcquisitionConversationProcessStatus.Upcoming);
 
                 VerticalLayoutGroup layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-                layout.padding = new RectOffset(10, 10, 8, 8);
-                layout.spacing = 2f;
+                layout.padding = new RectOffset(6, 6, 5, 5);
+                layout.spacing = 1f;
                 layout.childControlWidth = true;
                 layout.childControlHeight = true;
                 layout.childForceExpandWidth = true;
@@ -520,17 +533,12 @@ namespace LandLedgers.UI
 
                 TMP_Text label = CreateText("Label", card, step != null ? step.Label : "Step", 13f, FontStyles.Bold);
                 LandLedgersTypography.ApplyRole(label, LandLedgersTypography.TextRole.ButtonLabel);
-                AddLayout(label.rectTransform, -1f, 18f, 1f, 0f);
+                AddLayout(label.rectTransform, -1f, 15f, 1f, 0f);
 
                 TMP_Text status = CreateText("Status", card, ResolveRailStatusLabel(step != null ? step.Status : AcquisitionConversationProcessStatus.Upcoming), 12f, FontStyles.Normal);
                 LandLedgersTypography.ApplyRole(status, LandLedgersTypography.TextRole.Metadata);
                 status.color = new Color(0.90f, 0.90f, 0.86f, 0.92f);
-                AddLayout(status.rectTransform, -1f, 18f, 1f, 0f);
-
-                TMP_Text summary = CreateText("Summary", card, step != null ? step.Summary : string.Empty, 11.5f, FontStyles.Normal);
-                LandLedgersTypography.ApplyRole(summary, LandLedgersTypography.TextRole.HelperText);
-                summary.color = new Color(0.84f, 0.86f, 0.82f, 0.84f);
-                AddLayout(summary.rectTransform, -1f, 24f, 1f, 0f);
+                AddLayout(status.rectTransform, -1f, 14f, 1f, 0f);
             }
         }
 

@@ -108,6 +108,24 @@ namespace LandLedgers.Economy.Creation
         }
 
         /// <summary>
+        /// Compact authored roster for the Main Scene playtest profile. These are
+        /// three NPC-owned businesses formed through the same authority; the roster
+        /// grants no inventory or operating income.
+        /// </summary>
+        public static List<OpeningRosterEntry> CompactPlaytest()
+        {
+            return new List<OpeningRosterEntry>
+            {
+                new OpeningRosterEntry(BusinessType.GeneralStore, "Opening General Store", "Town",
+                    new PremisesRequirement(customerFacing: true, minAreaSqFt: 800), 15000),
+                new OpeningRosterEntry(BusinessType.Blacksmith, "Opening Blacksmith", "Town",
+                    new PremisesRequirement(workshop: true, yardStorage: true, minAreaSqFt: 600), 8000),
+                new OpeningRosterEntry(BusinessType.LiveryFreight, "Opening Livery & Freight", "Town",
+                    new PremisesRequirement(animalHousing: true, yardStorage: true, minAreaSqFt: 2000), 12000),
+            };
+        }
+
+        /// <summary>
         /// Creates each roster entry through the formation workflow, skipping types that
         /// already exist. Returns the number created. Failures are diagnostic, never fatal.
         /// </summary>

@@ -99,7 +99,8 @@ namespace LandLedgers.Population
             IHotelMealDaySource hotelMeals = null,
             HouseholdInventoryRegistry inventories = null,
             HouseholdMealLogRegistry mealLog = null,
-            MealSchedulingPolicy mealPolicy = null)
+            MealSchedulingPolicy mealPolicy = null,
+            HouseholdMembershipRegistry memberships = null)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -113,7 +114,7 @@ namespace LandLedgers.Population
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy, memberships);
             }
             return report;
         }
@@ -128,9 +129,10 @@ namespace LandLedgers.Population
             IHotelMealDaySource hotelMeals,
             HouseholdInventoryRegistry inventories,
             HouseholdMealLogRegistry mealLog,
-            MealSchedulingPolicy mealPolicy)
+            MealSchedulingPolicy mealPolicy,
+            HouseholdMembershipRegistry memberships)
         {
-            int actingPersonId = FindActingAdult(population, household);
+            int actingPersonId = FindActingAdult(population, household, memberships);
             if (actingPersonId < 0)
             {
                 diag.Add($"DailyNeedsService: H{household.id} has no acting adult — needs unmet, nothing faked.");
@@ -140,8 +142,11 @@ namespace LandLedgers.Population
 
             // Member states for per-person allocation (NX-1B).
             var members = new List<PersonState>();
-            if (household.memberIds != null)
-                foreach (int memberId in household.memberIds)
+            List<int> memberIds = memberships != null
+                ? memberships.GetActiveMembers(household.id)
+                : household.memberIds;
+            if (memberIds != null)
+                foreach (int memberId in memberIds)
                 {
                     PersonState p = population.GetPerson(memberId);
                     if (p != null) members.Add(p);
@@ -411,10 +416,16 @@ namespace LandLedgers.Population
                 diag.Add($"DailyNeedsService: H{household.id} missed {result.MealsMissed} meals on day {dayIndex} ({undernourished} undernourished) — larder empty. Hardship logged; shortage monitor raises purchasing needs.");
         }
 
-        private int FindActingAdult(PopulationState population, HouseholdState household)
+        private int FindActingAdult(
+            PopulationState population,
+            HouseholdState household,
+            HouseholdMembershipRegistry memberships)
         {
-            if (household.memberIds == null) return -1;
-            foreach (int memberId in household.memberIds)
+            List<int> memberIds = memberships != null
+                ? memberships.GetActiveMembers(household.id)
+                : household.memberIds;
+            if (memberIds == null) return -1;
+            foreach (int memberId in memberIds)
             {
                 PersonState p = population.GetPerson(memberId);
                 if (p != null && p.ageBand == AgeBand.Adult18Plus && p.laborAccessLevel != LaborAccessLevel.None)

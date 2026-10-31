@@ -349,6 +349,8 @@ namespace LandLedgers.EditorTests.Economy
         {
             BusinessInstanceState business = new BusinessInstanceStateTestFactory().CreateGeneric();
 
+            Assert.AreEqual(BusinessType.Generic, business.BusinessType,
+                "A merchandise setup plan configures the broad commercial entity; it must not create a separate General Store Business type.");
             Assert.IsTrue(GenericBusinessSetupTemplateCatalog.TryApply(
                 business, GenericBusinessSetupTemplateCatalog.GeneralMerchandiseId, out string message), message);
 

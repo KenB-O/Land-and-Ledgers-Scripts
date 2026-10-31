@@ -73,6 +73,81 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void RepeatedDriveDay_DoesNotDuplicateSameDayHouseholdTasks()
+        {
+            var f = new Fixture();
+            var inputs = f.Inputs(7, 3, 4);
+            var diag = new List<string>();
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+            int planned = f.Driver.Pending.Count;
+
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+
+            Assert.AreEqual(planned, f.Driver.Pending.Count,
+                "repeated day-boundary delivery must not multiply household Tasks");
+        }
+
+        [Test]
+        public void RequeuedTask_ResumesSameIdentityAndCompletesOnce()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int day = 100;
+            WorkTask original = f.Tasks.CreateTask(DomesticTaskCatalog.ChoresId,
+                EntityId.For(EntityKind.Household, 7), day);
+            Assert.IsTrue(f.Tasks.AssignTask(original.TaskId, EntityId.For(EntityKind.Person, 3),
+                f.Budgets, day, out string rejection), rejection);
+
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.MealsAtHomeCount = 0;
+            f.Driver.DriveDay(inputs, day, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, f.Driver.Pending.Count,
+                "the requeued Task should be adopted instead of creating a replacement");
+            Assert.AreEqual(original.TaskId, f.Driver.Pending[0].ExistingTaskId);
+
+            float start = day * 86400f + 660 * 60f;
+            f.Driver.AdvanceTick(start, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+            foreach (DueEvent ev in f.DueEvents.PopDue(start + original.PlannedMinutes * 60f))
+                f.Driver.HandleDueEvent(ev, f.Tasks, f.Budgets, f.Schedules,
+                    f.Domestic, f.FamilyLabor, f.DueEvents, day, diag);
+
+            Assert.AreEqual(TaskStatus.Complete, original.Status);
+            Assert.AreEqual(1, f.FamilyLabor.ContributionCount);
+            Assert.AreEqual(original.TaskId, f.Domestic.Assignments[0].TaskId,
+                "recovery must preserve the existing authoritative Task ID");
+        }
+
+        [Test]
+        public void NewTask_DoesNotAdoptAnOlderClosedAssignmentWithTheSameDefinition()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int oldDay = 100;
+            string refusal = f.Domestic.ScheduleDomesticWork(7, 3, DomesticTaskCatalog.ChoresId,
+                oldDay, 660, f.Tasks, f.Budgets, f.Schedules, diag);
+            Assert.IsNull(refusal, refusal);
+            EntityId oldTaskId = f.Domestic.Assignments[0].TaskId;
+            Assert.IsTrue(f.Tasks.CompleteTask(oldTaskId, TaskOutcome.Success, oldDay, f.Budgets),
+                "simulate the owning Task authority closing an older assignment before its stale due event is observed");
+
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.MealsAtHomeCount = 0;
+            int newDay = oldDay + 1;
+            f.Driver.DriveDay(inputs, newDay, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            float start = newDay * 86400f + 660 * 60f;
+            f.Driver.AdvanceTick(start, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+
+            Assert.AreEqual(1, f.Driver.InFlight.Count, string.Join("\n", diag));
+            Assert.AreNotEqual(oldTaskId, f.Driver.InFlight[0].TaskId,
+                "the driver must track the newly started Task, never a stale same-definition assignment");
+            Assert.AreEqual(TaskStatus.InProgress, f.Tasks.FindTask(f.Driver.InFlight[0].TaskId).Status);
+        }
+
+        [Test]
         public void DriveDay_ColdSeasonAndAnimals_AddFuelAndAnimalCare()
         {
             var f = new Fixture();
@@ -135,6 +210,60 @@ namespace LandLedgers.Editor.Population
 
             Assert.AreEqual(small, large, "due-event-driven completion must not depend on tick size");
             Assert.AreEqual(2, small);
+        }
+
+        [Test]
+        public void GenericCompletionBackstop_DoesNotPostponeDomesticDueEvent()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int day = 100;
+            float start = day * 86400f + 660 * 60f;
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.MealsAtHomeCount = 0; // isolate the single baseline-chores Task
+            f.Driver.DriveDay(inputs, day, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+
+            // Start the planned domestic work at its real scheduled window.
+            f.Driver.AdvanceTick(start, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+            DomesticAssignment chores = null;
+            foreach (DomesticAssignment assignment in f.Domestic.Assignments)
+            {
+                if (assignment != null && assignment.DefinitionId == DomesticTaskCatalog.ChoresId)
+                {
+                    chores = assignment;
+                    break;
+                }
+            }
+            Assert.IsNotNull(chores, "the household's real chores task should be in flight");
+            WorkTask task = f.Tasks.FindTask(chores.TaskId);
+            Assert.IsNotNull(task);
+
+            // Exercise the same ownership policy used by SimulationDrivers on
+            // a later tick. It must preserve the original scheduled deadline.
+            Assert.IsFalse(f.Driver.RequiresGenericCompletionBackstop(task));
+            float laterTick = start + 10 * 60f;
+            if (f.Driver.RequiresGenericCompletionBackstop(task))
+            {
+                string ignored;
+                f.DueEvents.Schedule(DueEventKind.TaskCompletionDue,
+                    laterTick + task.MinutesRemaining * 60f, task.TaskId.ToString(), out ignored);
+            }
+
+            List<DueEvent> due = f.DueEvents.PopDue(start + task.PlannedMinutes * 60f);
+            bool choresDue = false;
+            foreach (DueEvent dueEvent in due)
+            {
+                if (dueEvent.PayloadRef == task.TaskId.ToString()) choresDue = true;
+                f.Driver.HandleDueEvent(dueEvent, f.Tasks, f.Budgets, f.Schedules,
+                    f.Domestic, f.FamilyLabor, f.DueEvents, day, diag);
+            }
+
+            Assert.IsTrue(choresDue, "the domestic completion event must remain at its original due time");
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+            Assert.AreEqual(1, f.FamilyLabor.ContributionCount);
+            Assert.AreEqual(0, f.Driver.InFlight.Count);
         }
 
         private static int RunDay(int tickSeconds)

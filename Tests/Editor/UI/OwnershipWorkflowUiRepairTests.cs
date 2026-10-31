@@ -22,16 +22,54 @@ namespace LandLedgers.EditorTests.UI
                 Canvas canvas = canvasObject.GetComponent<Canvas>();
                 OwnershipWorkflowView view = OwnershipWorkflowView.GetOrCreate(canvas);
 
-                RectTransform notesPanel = FindRect(view.transform, "Workflow_NotesPanel");
-                ScrollRect scroll = notesPanel.GetComponent<ScrollRect>();
-                RectTransform content = FindRect(view.transform, "Workflow_NotesContent");
+                RectTransform window = FindRect(view.transform, "Workflow_Window");
+                Assert.NotNull(window);
+                Assert.AreEqual(0.42f, window.anchorMin.x, 0.001f);
+                Assert.AreEqual(0.985f, window.anchorMax.x, 0.001f);
 
+                RectTransform notesPanel = FindRect(view.transform, "Workflow_NotesPanel");
+                ScrollRect scroll = FindRect(view.transform, "Workflow_InfoColumn").GetComponent<ScrollRect>();
+                RectTransform content = FindRect(view.transform, "Workflow_InfoContent");
+
+                Assert.NotNull(notesPanel);
                 Assert.NotNull(scroll);
                 Assert.AreSame(content, scroll.content);
+                Assert.AreSame(content, notesPanel.parent);
                 Assert.IsFalse(scroll.horizontal);
                 Assert.IsTrue(scroll.vertical);
                 Assert.AreEqual(ScrollRect.MovementType.Clamped, scroll.movementType);
                 Assert.GreaterOrEqual(scroll.scrollSensitivity, 24f);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(canvasObject);
+            }
+        }
+
+        [Test]
+        public void SiteInspectionUsesCompactDrawerAndDimsTheWorldLessThanFormalWorkflow()
+        {
+            GameObject canvasObject = new("Workflow Inspection Layout Test Canvas", typeof(RectTransform), typeof(Canvas));
+            try
+            {
+                Canvas canvas = canvasObject.GetComponent<Canvas>();
+                OwnershipWorkflowView view = OwnershipWorkflowView.GetOrCreate(canvas);
+                RectTransform window = FindRect(view.transform, "Workflow_Window");
+                Image backdrop = view.GetComponent<Image>();
+
+                view.SetInspectionMode(true);
+
+                Assert.AreEqual(0.54f, window.anchorMin.x, 0.001f);
+                Assert.AreEqual(0.985f, window.anchorMax.x, 0.001f);
+                Assert.AreEqual(0.08f, window.anchorMin.y, 0.001f);
+                Assert.AreEqual(0.92f, window.anchorMax.y, 0.001f);
+                Assert.AreEqual(0.16f, backdrop.color.a, 0.001f);
+
+                view.SetInspectionMode(false);
+
+                Assert.AreEqual(0.42f, window.anchorMin.x, 0.001f);
+                Assert.AreEqual(0.035f, window.anchorMin.y, 0.001f);
+                Assert.AreEqual(0.38f, backdrop.color.a, 0.001f);
             }
             finally
             {
@@ -50,13 +88,34 @@ namespace LandLedgers.EditorTests.UI
 
                 RectTransform actionRoot = FindRect(view.transform, "Workflow_Actions");
                 VerticalLayoutGroup actionLayout = actionRoot.GetComponent<VerticalLayoutGroup>();
-                LayoutElement actionElement = actionRoot.GetComponent<LayoutElement>();
+                ContentSizeFitter actionFitter = actionRoot.GetComponent<ContentSizeFitter>();
 
                 Assert.NotNull(actionLayout);
                 Assert.GreaterOrEqual(actionRoot.childCount, 3);
-                Assert.GreaterOrEqual(actionElement.preferredHeight, 138f);
+                Assert.NotNull(actionFitter);
+                Assert.AreEqual(ContentSizeFitter.FitMode.PreferredSize, actionFitter.verticalFit);
+                view.SetLeadActionVisibility(true);
+                Canvas.ForceUpdateCanvases();
+                Assert.IsTrue(actionRoot.GetChild(0).gameObject.activeSelf);
+                Assert.IsTrue(actionRoot.GetChild(1).gameObject.activeSelf);
+                Assert.IsTrue(actionRoot.GetChild(2).gameObject.activeSelf);
+                Assert.AreEqual("Workflow_ProcessActions", actionRoot.GetChild(0).name);
+                Assert.AreEqual("Workflow_DiligenceActions", actionRoot.GetChild(1).name);
+                Assert.AreEqual("Workflow_FooterActions", actionRoot.GetChild(2).name);
+                Assert.AreSame(actionRoot.GetChild(2), view.PrimaryButton.transform.parent);
+                Assert.AreSame(actionRoot.GetChild(2), view.CloseButton.transform.parent);
+                Assert.AreEqual(38f, actionRoot.GetChild(0).GetComponent<LayoutElement>().preferredHeight);
+                Assert.AreEqual(38f, actionRoot.GetChild(1).GetComponent<LayoutElement>().preferredHeight);
+                Assert.AreEqual(38f, actionRoot.GetChild(2).GetComponent<LayoutElement>().preferredHeight);
+                Assert.IsTrue(view.PrimaryButton.gameObject.activeSelf);
+                Assert.IsTrue(view.CloseButton.gameObject.activeSelf);
                 Assert.NotNull(view.PrimaryButton);
                 Assert.NotNull(view.CloseButton);
+
+                view.SetLeadActionVisibility(false);
+                Assert.IsFalse(actionRoot.GetChild(0).gameObject.activeSelf);
+                Assert.IsFalse(actionRoot.GetChild(1).gameObject.activeSelf);
+                Assert.IsTrue(actionRoot.GetChild(2).gameObject.activeSelf);
             }
             finally
             {
@@ -112,6 +171,7 @@ namespace LandLedgers.EditorTests.UI
 
                 RectTransform body = FindRect(view.transform, "AcquisitionBody");
                 RectTransform topRow = FindRect(view.transform, "Acquisition_TopRow");
+                RectTransform quietRow = FindRect(view.transform, "Acquisition_QuietRow");
                 RectTransform bottomRow = FindRect(view.transform, "Acquisition_BottomRow");
                 TMP_Text activeHeader = FindText(view.transform, "AcquisitionForSale_Section_HeaderText");
                 TMP_Text quietHeader = FindText(view.transform, "AcquisitionOffMarket_Section_HeaderText");
@@ -120,13 +180,14 @@ namespace LandLedgers.EditorTests.UI
 
                 Assert.NotNull(body);
                 Assert.NotNull(topRow);
+                Assert.NotNull(quietRow);
                 Assert.NotNull(bottomRow);
                 Assert.AreEqual("Active Leads", activeHeader.text);
                 Assert.AreEqual("Quiet / Off-Market Leads", quietHeader.text);
                 Assert.AreEqual("Selected Lead / Readiness", selectedHeader.text);
                 Assert.AreEqual("Process Ledger / Next Action", ledgerHeader.text);
                 Assert.AreSame(topRow, view.AcquisitionForSaleText.transform.parent.parent);
-                Assert.AreSame(topRow, view.AcquisitionOffMarketText.transform.parent.parent);
+                Assert.AreSame(quietRow, view.AcquisitionOffMarketText.transform.parent.parent);
                 Assert.AreSame(bottomRow, view.AcquisitionSelectedLeadText.transform.parent.parent);
                 Assert.AreSame(bottomRow, view.AcquisitionHistoryText.transform.parent.parent);
                 Assert.Less(body.GetSiblingIndex(), actions.GetSiblingIndex());
@@ -196,7 +257,7 @@ namespace LandLedgers.EditorTests.UI
                 staffing.text = string.Join("\n", new string[18].Select((_, i) => $"Worker and counter detail line {i + 1}"));
                 stock.text = string.Join("\n", new string[18].Select((_, i) => $"Stock and reorder detail line {i + 1}"));
 
-                InvokePrivate(view, "EnsureBusinessCashTransferControls", true);
+                InvokeMethod(view, "EnsureBusinessCashTransferControls", true);
                 view.RefreshPropertyDetailLayout();
 
                 RectTransform scrollRoot = FindRect(view.transform, "PropertyDetail_BodyScroll");
@@ -266,12 +327,14 @@ namespace LandLedgers.EditorTests.UI
                 content.sizeDelta = new Vector2(content.sizeDelta.x, 900f);
                 content.anchoredPosition = new Vector2(0f, 280f);
                 scrollRect.verticalNormalizedPosition = 0.35f;
+                float expectedAnchoredY = content.anchoredPosition.y;
+                float expectedNormalizedPosition = scrollRect.verticalNormalizedPosition;
 
                 view.EnsurePropertyDetailScrollBody(true);
 
                 Assert.AreEqual(900f, content.sizeDelta.y);
-                Assert.AreEqual(280f, content.anchoredPosition.y);
-                Assert.AreEqual(0.35f, scrollRect.verticalNormalizedPosition, 0.001f);
+                Assert.AreEqual(expectedAnchoredY, content.anchoredPosition.y, 0.001f);
+                Assert.AreEqual(expectedNormalizedPosition, scrollRect.verticalNormalizedPosition, 0.001f);
             }
             finally
             {
@@ -334,6 +397,10 @@ namespace LandLedgers.EditorTests.UI
             {
                 Canvas canvas = canvasObject.GetComponent<Canvas>();
                 AcquisitionSellerMeetingView view = AcquisitionSellerMeetingView.GetOrCreate(canvas);
+                RectTransform meetingWindow = FindRect(view.transform, "SellerMeeting_Window");
+                Assert.NotNull(meetingWindow);
+                Assert.AreEqual(0.42f, meetingWindow.anchorMin.x, 0.001f);
+                Assert.AreEqual(0.985f, meetingWindow.anchorMax.x, 0.001f);
                 AcquisitionConversationState state = new()
                 {
                     Title = "Town Edge Holding",
@@ -348,8 +415,9 @@ namespace LandLedgers.EditorTests.UI
                 Assert.NotNull(view.PrimaryActionButton);
                 Assert.NotNull(view.CloseButton);
                 Assert.NotNull(view.ResponseRoot);
-                Assert.AreEqual("Town Edge Holding", view.TitleText.text);
-                Assert.AreEqual("Continue Review", view.ProcessActionText.text);
+                Assert.AreEqual("Formal Seller Meeting", view.TitleText.text);
+                StringAssert.Contains("Town Edge Holding", view.SelectedFileText.text);
+                StringAssert.StartsWith("Continue Review:", view.ProcessActionText.text);
                 Assert.NotNull(FindRect(view.transform, "SellerMeeting_ProcessRail"));
                 Assert.LessOrEqual(view.ResponseButtons.Count, 4);
             }
@@ -786,6 +854,13 @@ namespace LandLedgers.EditorTests.UI
         {
             MethodInfo method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.NotNull(method, $"Missing private method '{methodName}'.");
+            method.Invoke(target, args);
+        }
+
+        private static void InvokeMethod(object target, string methodName, params object[] args)
+        {
+            MethodInfo method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.NotNull(method, $"Missing method '{methodName}'.");
             method.Invoke(target, args);
         }
     }

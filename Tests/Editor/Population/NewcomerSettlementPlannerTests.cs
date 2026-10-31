@@ -119,7 +119,8 @@ namespace LandLedgers.EditorTests.Population
             Assert.GreaterOrEqual(created, 1);
             Assert.Greater(state.people.Count, initialPeople);
             Assert.IsTrue(host.hasKinAbsorptionPressure);
-            Assert.Greater(host.kinAbsorptionPressure01, 0f);
+            Assert.Greater(host.kinAbsorptionPressure01, 0f,
+                $"Kin pressure should survive settlement refresh. Flag={host.hasKinAbsorptionPressure}, members={host.MemberCount}, arrangement={host.settlementArrangement}, dwelling={host.dwellingKind}.");
             Assert.GreaterOrEqual(CountPeopleInArrangement(state, SettlementArrangement.Kin), 1);
             Object.DestroyImmediate(settings);
         }
@@ -231,7 +232,9 @@ namespace LandLedgers.EditorTests.Population
             int moved = NewcomerSettlementPlanner.ResolveWeeklySettlementProgression(state, settings, homes, new System.Random(29));
 
             HouseholdState movedHousehold = state.GetHousehold(12);
-            Assert.AreEqual(2, moved);
+            string applicantStatus = state.rentalApplicants.Count > 0 ? state.rentalApplicants[0].status : "no applicant record";
+            Assert.AreEqual(2, moved,
+                $"Kin household should qualify for the listed vacancies. Applicants={state.rentalApplicantCount}, status={applicantStatus}, weeks={movedHousehold?.settlementPressure.weeksInArrangement}, savings={movedHousehold?.settlementReserveStrengthCents}/{movedHousehold?.spendingMoneyCents}, income={movedHousehold?.weeklyIncomeSnapshot}.");
             Assert.NotNull(movedHousehold);
             Assert.AreEqual(SettlementArrangement.Renting, movedHousehold.settlementArrangement);
             Assert.AreEqual(31, movedHousehold.homeBuildingId);
@@ -239,7 +242,8 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(2, movedHousehold.memberIds.Count);
             Assert.AreEqual(0, CountPeopleInArrangement(state, SettlementArrangement.Kin));
             Assert.AreEqual(1, state.renterHouseholdCount);
-            Assert.AreEqual(1, state.rentalApplicantCount);
+            Assert.AreEqual(0, state.rentalApplicantCount, "An accepted household is no longer an active rental applicant.");
+            Assert.AreEqual(1, state.rentalApplicants.Count, "The weekly result keeps the accepted application for its outcome readout.");
             Assert.IsTrue(state.rentalApplicants[0].acceptedLastWeek);
             Object.DestroyImmediate(settings);
         }

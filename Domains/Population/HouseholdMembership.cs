@@ -123,6 +123,23 @@ namespace LandLedgers.Population
         /// <summary>Atomic household transfer: ends the current active membership and registers the new one.</summary>
         public string TransferMembership(int personId, int toHouseholdId, int startDayIndex, int nextMembershipId)
         {
+            // Validate every condition that Register can reject before ending
+            // the current relationship. A failed transfer must not orphan a
+            // real Person from their household.
+            if (personId < 0 || toHouseholdId < 0 || nextMembershipId < 0)
+            {
+                string diagnostic = "Rejected household membership transfer: person, target household, and new membership ids must be valid.";
+                diagnostics.Add(diagnostic);
+                return diagnostic;
+            }
+
+            if (byMembershipId.ContainsKey(nextMembershipId))
+            {
+                string diagnostic = $"Rejected household membership transfer for P{personId}: membership id {nextMembershipId} is already used.";
+                diagnostics.Add(diagnostic);
+                return diagnostic;
+            }
+
             EndMembership(personId, startDayIndex, $"Transferred to H{toHouseholdId}");
             return Register(new HouseholdMembership
             {

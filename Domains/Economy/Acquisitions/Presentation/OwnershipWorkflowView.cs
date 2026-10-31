@@ -8,6 +8,7 @@ namespace LandLedgers.UI
     public sealed class OwnershipWorkflowView : MonoBehaviour
     {
         [SerializeField] private RectTransform root;
+        [SerializeField] private RectTransform contentRoot;
         [SerializeField] private TMP_Text titleText;
         [SerializeField] private TMP_Text stageText;
         [SerializeField] private RawImage previewImage;
@@ -126,6 +127,32 @@ namespace LandLedgers.UI
             ApplyActionModeVisibility();
         }
 
+        public void SetInspectionMode(bool inspectionOnly)
+        {
+            EnsureRuntimeState();
+            if (contentRoot == null || root == null)
+            {
+                return;
+            }
+
+            contentRoot.anchorMin = inspectionOnly
+                ? new Vector2(0.54f, 0.08f)
+                : new Vector2(0.42f, 0.035f);
+            contentRoot.anchorMax = inspectionOnly
+                ? new Vector2(0.985f, 0.92f)
+                : new Vector2(0.985f, 0.965f);
+            contentRoot.offsetMin = Vector2.zero;
+            contentRoot.offsetMax = Vector2.zero;
+
+            Image backdrop = root.GetComponent<Image>();
+            if (backdrop != null)
+            {
+                backdrop.color = new Color(0.025f, 0.027f, 0.025f, inspectionOnly ? 0.16f : 0.38f);
+            }
+
+            LayoutRebuilder.MarkLayoutForRebuild(contentRoot);
+        }
+
         private void Build()
         {
             root = transform as RectTransform;
@@ -135,28 +162,34 @@ namespace LandLedgers.UI
             root.offsetMax = Vector2.zero;
 
             Image backdrop = GetComponent<Image>();
-            backdrop.color = new Color(0.025f, 0.027f, 0.025f, 0.965f);
+            backdrop.color = new Color(0.025f, 0.027f, 0.025f, 0.38f);
             backdrop.raycastTarget = true;
 
-            VerticalLayoutGroup layout = gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(24, 24, 20, 20);
-            layout.spacing = 10f;
+            contentRoot = CreatePanel("Workflow_Window", root);
+            contentRoot.anchorMin = new Vector2(0.42f, 0.035f);
+            contentRoot.anchorMax = new Vector2(0.985f, 0.965f);
+            contentRoot.offsetMin = Vector2.zero;
+            contentRoot.offsetMax = Vector2.zero;
+            contentRoot.GetComponent<Image>().color = new Color(0.035f, 0.038f, 0.035f, 0.98f);
+            VerticalLayoutGroup layout = contentRoot.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(20, 20, 16, 16);
+            layout.spacing = 8f;
             layout.childControlHeight = true;
             layout.childControlWidth = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
 
-            titleText = CreateText("Workflow_Title", root, "Formal Process", 24f, FontStyles.Bold);
+            titleText = CreateText("Workflow_Title", contentRoot, "Formal Acquisition", 22f, FontStyles.Bold);
             LandLedgersTypography.ApplyRole(titleText, LandLedgersTypography.TextRole.ModalTitle);
             titleText.margin = new Vector4(0f, 0f, 0f, 4f);
             AddLayout(titleText.rectTransform, -1f, 34f, 1f, 0f);
 
-            stageText = CreateText("Workflow_Stage", root, "Stage", 15f, FontStyles.Bold);
+            stageText = CreateText("Workflow_Stage", contentRoot, "Stage", 14f, FontStyles.Bold);
             LandLedgersTypography.ApplyRole(stageText, LandLedgersTypography.TextRole.SectionHeader);
             stageText.color = new Color(0.82f, 0.86f, 0.8f, 1f);
             ConfigureAutoHeight(stageText.rectTransform, 24f);
 
-            RectTransform body = CreateRect("Workflow_Body", root);
+            RectTransform body = CreateRect("Workflow_Body", contentRoot);
             HorizontalLayoutGroup bodyLayout = body.gameObject.AddComponent<HorizontalLayoutGroup>();
             bodyLayout.spacing = 14f;
             bodyLayout.childAlignment = TextAnchor.UpperLeft;
@@ -167,7 +200,7 @@ namespace LandLedgers.UI
             AddLayout(body, -1f, -1f, 1f, 1f);
 
             RectTransform previewColumn = CreatePanel("Workflow_PreviewPanel", body);
-            AddLayout(previewColumn, 520f, -1f, 0f, 1f);
+            AddLayout(previewColumn, 240f, -1f, 0f, 1f);
             VerticalLayoutGroup previewLayout = previewColumn.gameObject.AddComponent<VerticalLayoutGroup>();
             previewLayout.padding = new RectOffset(10, 10, 10, 10);
             previewLayout.spacing = 8f;
@@ -181,7 +214,7 @@ namespace LandLedgers.UI
             AddLayout(previewHeading.rectTransform, -1f, 24f, 1f, 0f);
 
             RectTransform previewFrame = CreatePanel("Workflow_PreviewFrame", previewColumn);
-            AddLayout(previewFrame, -1f, 360f, 1f, 0f);
+            AddLayout(previewFrame, -1f, 180f, 1f, 0f);
             AspectRatioFitter previewAspect = previewFrame.gameObject.AddComponent<AspectRatioFitter>();
             previewAspect.aspectMode = AspectRatioFitter.AspectMode.WidthControlsHeight;
             previewAspect.aspectRatio = 4f / 3f;
@@ -249,21 +282,21 @@ namespace LandLedgers.UI
             notesScrollRect.movementType = ScrollRect.MovementType.Clamped;
             notesScrollRect.scrollSensitivity = 28f;
 
-            RectTransform leadPanel = CreateSectionPanel("Workflow_LeadPanel", infoContent, "Lead Summary", out summaryText, 126f);
+            RectTransform leadPanel = CreateSectionPanel("Workflow_LeadPanel", infoContent, "The Opportunity", out summaryText, 82f);
             AddLayout(leadPanel, -1f, -1f, 1f, 0f);
             summaryText.fontSize = 14f;
 
-            RectTransform sitePanel = CreateSectionPanel("Workflow_SitePanel", infoContent, "Site Inspection", out siteText, 140f);
+            RectTransform sitePanel = CreateSectionPanel("Workflow_SitePanel", infoContent, "Premises & Condition", out siteText, 86f);
             AddLayout(sitePanel, -1f, -1f, 1f, 0f);
             siteText.fontSize = 13.5f;
 
-            RectTransform posturePanel = CreateSectionPanel("Workflow_PosturePanel", infoContent, "Funding & Readiness", out postureText, 164f);
+            RectTransform posturePanel = CreateSectionPanel("Workflow_PosturePanel", infoContent, "Readiness & Funding", out postureText, 96f);
             AddLayout(posturePanel, -1f, -1f, 1f, 0f);
             postureText.fontSize = 13.5f;
 
             RectTransform notesPanel = CreatePanel("Workflow_NotesPanel", infoContent);
             AddLayout(notesPanel, -1f, -1f, 1f, 0f);
-            ConfigureAutoHeight(notesPanel, 220f);
+            ConfigureAutoHeight(notesPanel, 128f);
             VerticalLayoutGroup notesLayout = notesPanel.gameObject.AddComponent<VerticalLayoutGroup>();
             notesLayout.padding = new RectOffset(12, 12, 12, 12);
             notesLayout.spacing = 8f;
@@ -279,10 +312,10 @@ namespace LandLedgers.UI
 
             ledgerText = CreateText("Workflow_Ledger", notesPanel, string.Empty, 13.5f, FontStyles.Normal);
             LandLedgersTypography.ApplyRole(ledgerText, LandLedgersTypography.TextRole.LogBody);
-            ConfigureAutoHeight(ledgerText.rectTransform, 160f);
+            ConfigureAutoHeight(ledgerText.rectTransform, 88f);
             AddLayout(ledgerText.rectTransform, -1f, -1f, 1f, 0f);
 
-            actionRoot = CreateRect("Workflow_Actions", root);
+            actionRoot = CreateRect("Workflow_Actions", contentRoot);
             VerticalLayoutGroup actions = actionRoot.gameObject.AddComponent<VerticalLayoutGroup>();
             actions.spacing = 8f;
             actions.childControlWidth = true;
@@ -302,12 +335,12 @@ namespace LandLedgers.UI
             seriousnessButton = CreateButton("Workflow_Seriousness", processActionRow, "Seriousness", 118f);
             stanceButton = CreateButton("Workflow_Stance", processActionRow, "Stance", 102f);
 
-            conditionButton = CreateButton("Workflow_Condition", diligenceActionRow, "Condition", 110f);
-            staffingButton = CreateButton("Workflow_Staffing", diligenceActionRow, "Staffing", 102f);
-            supplierButton = CreateButton("Workflow_Supplier", diligenceActionRow, "Supplier", 102f);
-            demandButton = CreateButton("Workflow_Demand", diligenceActionRow, "Demand", 98f);
-            valueButton = CreateButton("Workflow_Value", diligenceActionRow, "Value", 92f);
-            reliabilityButton = CreateButton("Workflow_Reliability", diligenceActionRow, "Reliability", 118f);
+            conditionButton = CreateButton("Workflow_Condition", diligenceActionRow, "Condition", 92f);
+            staffingButton = CreateButton("Workflow_Staffing", diligenceActionRow, "Staffing", 82f);
+            supplierButton = CreateButton("Workflow_Supplier", diligenceActionRow, "Supplier", 82f);
+            demandButton = CreateButton("Workflow_Demand", diligenceActionRow, "Demand", 82f);
+            valueButton = CreateButton("Workflow_Value", diligenceActionRow, "Value", 72f);
+            reliabilityButton = CreateButton("Workflow_Reliability", diligenceActionRow, "Reliability", 96f);
 
             loanMinusHundredButton = CreateButton("Workflow_LoanMinus100", footerActionRow, "-$100", 78f);
             loanMinusTenButton = CreateButton("Workflow_LoanMinus10", footerActionRow, "-$10", 72f);
@@ -331,6 +364,8 @@ namespace LandLedgers.UI
             {
                 Build();
             }
+
+            contentRoot ??= FindNamedComponent<RectTransform>("Workflow_Window");
 
             titleText ??= FindNamedComponent<TMP_Text>("Workflow_Title");
             stageText ??= FindNamedComponent<TMP_Text>("Workflow_Stage");

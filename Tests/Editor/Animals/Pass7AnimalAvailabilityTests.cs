@@ -472,6 +472,31 @@ namespace LandLedgers.EditorTests.Animals
         }
 
         [Test]
+        public void CareDay_RepeatedSameDayDoesNotConsumeOrApplyCareTwice()
+        {
+            var f = new Fixture();
+            AnimalState horse = f.AddHorse();
+            horse.Nutrition01 = 0.5f;
+            horse.Fatigue01 = 0.6f;
+            var stock = new StubFeedStock(2);
+            var diagnostics = new List<string>();
+
+            int firstResult = HorseCareDriver.CareDay(f.Registry, stock, _ => false, 10, diagnostics);
+            float nutritionAfterFirstCare = horse.Nutrition01;
+            float fatigueAfterFirstCare = horse.Fatigue01;
+            int stockAfterFirstCare = stock.FeedStockUnits;
+
+            int repeatedResult = HorseCareDriver.CareDay(f.Registry, stock, _ => false, 10, diagnostics);
+
+            Assert.That(firstResult, Is.EqualTo(0));
+            Assert.That(repeatedResult, Is.EqualTo(0));
+            Assert.That(horse.LastCareDayIndex, Is.EqualTo(10));
+            Assert.That(stock.FeedStockUnits, Is.EqualTo(stockAfterFirstCare));
+            Assert.That(horse.Nutrition01, Is.EqualTo(nutritionAfterFirstCare));
+            Assert.That(horse.Fatigue01, Is.EqualTo(fatigueAfterFirstCare));
+        }
+
+        [Test]
         public void WorkPlowSession_AccruesRealConditionCost()
         {
             var f = new Fixture();

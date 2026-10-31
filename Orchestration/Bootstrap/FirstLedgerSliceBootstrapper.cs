@@ -4,6 +4,7 @@ using System.Text;
 using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.BoardingHouse;
+using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Orchestration.Bootstrap;
@@ -103,6 +104,9 @@ namespace LandLedgers.FirstLedger
 
         [SerializeField]
         private PopulationGenerationSettings populationSettings;
+
+        [SerializeField, Tooltip("Enables the small three-business roster for focused Main Scene playtesting; canonical opening defaults remain unchanged.")]
+        private bool useCompactPlaytestOpeningRoster;
 
         [SerializeField]
         private GeneralStoreBusinessDefinition storeDefinition;
@@ -303,6 +307,12 @@ namespace LandLedgers.FirstLedger
             ConfigurePopulationManager();
             ConfigureCivicFoundation();
             AppendStartupTiming(timing, stepTimer, "population/civic configure");
+
+            // PopulationManager.GeneratePopulationSnapshot initializes the shared
+            // Business runtime while building the initial settlement. Apply the
+            // selected roster before that call; applying it after population
+            // generation silently leaves the canonical default roster in place.
+            ConfigureOpeningBusinessRoster();
 
             if (generatePopulationOnPlay && populationManager != null)
             {
@@ -953,6 +963,14 @@ namespace LandLedgers.FirstLedger
             }
 
             sharedBusinessRuntime.Configure(townWorld, null, populationManager, timeManager, storeRuntime, playerPortfolioManager);
+            ConfigureOpeningBusinessRoster();
+        }
+
+        private void ConfigureOpeningBusinessRoster()
+        {
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            sharedBusinessRuntime?.ConfigureOpeningBusinessRoster(
+                useCompactPlaytestOpeningRoster ? OpeningBusinessRoster.CompactPlaytest() : null);
         }
 
         /// <summary>

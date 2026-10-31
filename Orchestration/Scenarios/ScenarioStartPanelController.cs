@@ -93,6 +93,21 @@ namespace LandLedgers.FirstLedger
 
         private void BuildPanel(RectTransform parent)
         {
+            Transform authoredPanel = parent.Find("ScenarioStartPanel");
+            if (authoredPanel != null)
+            {
+                panel = authoredPanel.gameObject;
+                Button authoredStartButton = panel.GetComponentInChildren<Button>(true);
+                if (authoredStartButton != null)
+                {
+                    authoredStartButton.onClick.RemoveListener(StartScenario);
+                    authoredStartButton.onClick.AddListener(StartScenario);
+                }
+
+                panel.SetActive(true);
+                return;
+            }
+
             panel = new GameObject("ScenarioStartPanel", typeof(RectTransform), typeof(Image));
             RectTransform rect = panel.transform as RectTransform;
             rect.SetParent(parent, false);
@@ -118,6 +133,30 @@ namespace LandLedgers.FirstLedger
             Button start = CreateButton(panel.transform, "START FIRST LEDGER");
             start.onClick.AddListener(StartScenario);
         }
+
+#if UNITY_EDITOR
+        public GameObject AuthorStartPanelForScene()
+        {
+            if (canvas == null)
+            {
+                canvas = ResolveGameplayCanvas(null);
+            }
+
+            RectTransform parent = canvas != null ? canvas.transform as RectTransform : null;
+            if (parent == null)
+            {
+                return null;
+            }
+
+            BuildPanel(parent);
+            if (panel != null)
+            {
+                panel.SetActive(false);
+            }
+
+            return panel;
+        }
+#endif
 
         private void StartScenario()
         {
@@ -244,6 +283,10 @@ namespace LandLedgers.FirstLedger
                 }
 
                 authoredObjectivePanel.SetActive(true);
+                // The objective panel is an authored HUD layer. Put it above
+                // dashboard windows so the active scenario remains available
+                // while the player reviews another interface.
+                objectivePanelRect.SetAsLastSibling();
                 objectiveToggle.onClick.RemoveListener(ToggleObjectives);
                 objectiveToggle.onClick.AddListener(ToggleObjectives);
                 ApplyObjectivePanelGeometry();
@@ -260,9 +303,9 @@ namespace LandLedgers.FirstLedger
             objectivePanelRect = rect;
             objectiveCanvasRect = parent;
             rect.SetParent(parent, false);
-            rect.anchorMin = Vector2.one;
-            rect.anchorMax = Vector2.one;
-            rect.pivot = Vector2.one;
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
             ApplyObjectivePanelGeometry();
             objectiveObject.GetComponent<Image>().color = new Color(0.055f, 0.06f, 0.055f, 0.94f);
             objectiveObject.transform.SetAsLastSibling();
@@ -350,8 +393,11 @@ namespace LandLedgers.FirstLedger
             float topInset = Mathf.Clamp(canvasBounds.height * 0.13f, 96f, 142f);
             float availableHeight = Mathf.Max(220f, canvasBounds.height - topInset - 24f);
             float expandedHeight = Mathf.Min(620f, availableHeight);
-            float width = Mathf.Min(620f, Mathf.Max(300f, canvasBounds.width - 48f));
-            objectivePanelRect.anchoredPosition = new Vector2(-24f, -topInset);
+            float width = Mathf.Min(460f, Mathf.Max(280f, canvasBounds.width * 0.25f));
+            objectivePanelRect.anchorMin = new Vector2(0f, 1f);
+            objectivePanelRect.anchorMax = new Vector2(0f, 1f);
+            objectivePanelRect.pivot = new Vector2(0f, 1f);
+            objectivePanelRect.anchoredPosition = new Vector2(24f, -topInset);
             objectivePanelRect.sizeDelta = new Vector2(width, objectivesExpanded ? expandedHeight : 58f);
 
             if (objectiveToggle != null)

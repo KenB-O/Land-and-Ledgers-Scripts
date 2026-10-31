@@ -71,6 +71,13 @@ namespace LandLedgers.Animals
             foreach (AnimalState horse in registry.ActiveAnimals)
             {
                 if (horse == null || horse.Species != AnimalSpecies.Horse || !horse.IsActive) continue;
+                // Care is a daily physical transaction. Replayed daily events,
+                // duplicate driver registration, or restoring and reprocessing
+                // the same date must not consume a second ration or apply a
+                // second condition change. LastCareDayIndex is persisted with
+                // the animal state, so it is the idempotency marker here.
+                if (horse.LastCareDayIndex >= dayIndex) continue;
+
                 bool working = isWorking != null && isWorking(horse);
                 float need = working ? DailyFeedUnitsPerWorkingHorse : DailyFeedUnitsPerHorse;
                 int needUnits = Math.Max(1, (int)Math.Ceiling(need));

@@ -13,6 +13,7 @@ namespace LandLedgers.UI
         private const int MaximumPreviewHeight = 2048;
 
         private Camera previewCamera;
+        private bool ownsPreviewCamera;
         private RenderTexture previewTexture;
         private PreviewFrame pendingFrame;
         private bool hasPendingFrame;
@@ -121,8 +122,13 @@ namespace LandLedgers.UI
 
             if (previewCamera != null)
             {
-                Object.Destroy(previewCamera.gameObject);
+                previewCamera.targetTexture = null;
+                if (ownsPreviewCamera)
+                {
+                    Object.Destroy(previewCamera.gameObject);
+                }
                 previewCamera = null;
+                ownsPreviewCamera = false;
             }
         }
 
@@ -200,14 +206,38 @@ namespace LandLedgers.UI
                 return;
             }
 
+            Camera[] sceneCameras = Object.FindObjectsByType<Camera>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < sceneCameras.Length; i++)
+            {
+                Camera candidate = sceneCameras[i];
+                if (candidate != null && string.Equals(candidate.gameObject.name, "Property Preview Camera", System.StringComparison.Ordinal))
+                {
+                    previewCamera = candidate;
+                    ownsPreviewCamera = false;
+                    ConfigurePreviewCamera(previewCamera);
+                    return;
+                }
+            }
+
             GameObject cameraObject = new("Property Preview Camera");
             previewCamera = cameraObject.AddComponent<Camera>();
-            previewCamera.enabled = false;
-            previewCamera.clearFlags = CameraClearFlags.SolidColor;
-            previewCamera.backgroundColor = new Color(0.17f, 0.19f, 0.17f, 1f);
-            previewCamera.allowHDR = false;
-            previewCamera.allowMSAA = true;
-            previewCamera.useOcclusionCulling = false;
+            ownsPreviewCamera = true;
+            ConfigurePreviewCamera(previewCamera);
+        }
+
+        private static void ConfigurePreviewCamera(Camera camera)
+        {
+            if (camera == null)
+            {
+                return;
+            }
+
+            camera.enabled = false;
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = new Color(0.17f, 0.19f, 0.17f, 1f);
+            camera.allowHDR = false;
+            camera.allowMSAA = true;
+            camera.useOcclusionCulling = false;
         }
 
         private void EnsureRenderTexture(int width, int height)

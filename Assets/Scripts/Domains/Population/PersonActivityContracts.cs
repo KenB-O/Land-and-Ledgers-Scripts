@@ -38,6 +38,9 @@ namespace LandLedgers.Population
                 case PersonActivityKind.Building:
                 case PersonActivityKind.Cooking:
                     return false;
+                // Pass 2: Idle is instantly preemptible by design.
+                case PersonActivityKind.Idle:
+                    return true;
                 default:
                     return true;
             }
@@ -62,6 +65,9 @@ namespace LandLedgers.Population
                 case PersonActivityKind.Managing:
                 case PersonActivityKind.FamilyWork:
                     return true;
+                // Pass 2: Idle never consumes the work-time budget.
+                case PersonActivityKind.Idle:
+                    return false;
                 default:
                     return false;
             }
@@ -85,6 +91,7 @@ namespace LandLedgers.Population
                 case PersonActivityKind.Socializing: return "Social activity";
                 case PersonActivityKind.Managing: return "Management responsibilities";
                 case PersonActivityKind.FamilyWork: return "Unpaid family work and chores";
+                case PersonActivityKind.Idle: return "Standing by (idle, no assigned task)";
                 default: return kind.ToString();
             }
         }

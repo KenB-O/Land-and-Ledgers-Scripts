@@ -102,6 +102,81 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             return total;
         }
 
+        /// <summary>
+        /// Pass 2 (task system): one fuel dispense line — a FIFO slice of a
+        /// named intake lot, with its provenance carried forward. This is the
+        /// real dispense API for the Fuel Dealer. Callers must use it instead
+        /// of deducting FIFO in place (the ThreeBusinessSlice bridge pattern,
+        /// which this API replaces as the production model; the bridge itself
+        /// is left untouched for its orchestrator tests).
+        /// </summary>
+        [Serializable]
+        public sealed class FuelYardDispenseLine
+        {
+            public string LotId = string.Empty;
+            public int UnitsTaken;
+            public string ProvenanceChain = string.Empty;
+
+            public FuelYardDispenseLine() { }
+        }
+
+        /// <summary>
+        /// Pass 2: dispenses fuel-wood units FIFO (oldest lot first) from a
+        /// named Fuel Dealer's intake. Returns null with a diagnostic when
+        /// the dealer, the request, or the stock cannot support the dispense
+        /// (unknown dealer, non-positive units, or shortfall) — shortfall
+        /// dispenses NOTHING, never a partial lot, so a sale either moves
+        /// whole or moves nothing. Emptied lots are removed, so a lot at
+        /// zero units is never re-sold. Provenance is preserved per line.
+        /// </summary>
+        public List<FuelYardDispenseLine> TryDispenseUnits(
+            string fuelDealerBusinessId, int units, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (string.IsNullOrWhiteSpace(fuelDealerBusinessId))
+            {
+                diag.Add("FuelYardByproductIntake: dispense refused — no FuelDealer business named.");
+                return null;
+            }
+            if (units <= 0)
+            {
+                diag.Add("FuelYardByproductIntake: dispense refused — positive unit count required.");
+                return null;
+            }
+            List<SlabOffcutFuelLot> held;
+            if (!lotsByFuelDealer.TryGetValue(fuelDealerBusinessId, out held))
+            {
+                diag.Add($"FuelYardByproductIntake: dispense refused — FuelDealer '{fuelDealerBusinessId}' holds no intake lots.");
+                return null;
+            }
+            if (TotalFuelWoodUnitsFor(fuelDealerBusinessId) < units)
+            {
+                diag.Add($"FuelYardByproductIntake: dispense refused — FuelDealer '{fuelDealerBusinessId}' holds "
+                    + $"{TotalFuelWoodUnitsFor(fuelDealerBusinessId)} fuel-wood units, {units} requested; nothing dispensed.");
+                return null;
+            }
+
+            var lines = new List<FuelYardDispenseLine>();
+            int remaining = units;
+            foreach (var lot in held)
+            {
+                if (remaining <= 0) break;
+                if (lot == null || lot.FuelWoodUnits <= 0) continue;
+                int taken = Math.Min(lot.FuelWoodUnits, remaining);
+                lines.Add(new FuelYardDispenseLine
+                {
+                    LotId = lot.LotId.ToString(),
+                    UnitsTaken = taken,
+                    ProvenanceChain = lot.ProvenanceChain(),
+                });
+                lot.FuelWoodUnits -= taken;
+                remaining -= taken;
+            }
+            held.RemoveAll(lot => lot == null || lot.FuelWoodUnits <= 0);
+            diag.Add($"FuelYardByproductIntake: FuelDealer '{fuelDealerBusinessId}' dispensed {units} fuel-wood units (day {dayIndex}).");
+            return lines;
+        }
+
         /// <summary>W4A save contract: lives inside the owning intake class.</summary>
         [Serializable]
         public sealed class FuelYardByproductIntakeSaveDto

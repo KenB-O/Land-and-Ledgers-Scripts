@@ -55,6 +55,15 @@ namespace LandLedgers.Population
         /// never renumbered.
         /// </summary>
         FamilyWork = 13,
+        /// <summary>
+        /// Pass 2 (task system): standing by with no assigned task. A schedule
+        /// activity, NOT a WorkTask. Interruptible, does not consume the
+        /// work-time budget, and must be excluded from hiring-pressure
+        /// accounting (see Pass2IdleActivity). Idle behaviour (wait in place,
+        /// wander, usual spot, near workplace) is a Kennedy decision and is
+        /// NOT encoded here. Value appended, never renumbered.
+        /// </summary>
+        Idle = 14,
     }
 
     /// <summary>Phase C: one reserved activity window for a Person on one day.</summary>

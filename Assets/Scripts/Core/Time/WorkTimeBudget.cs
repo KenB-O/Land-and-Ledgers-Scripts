@@ -12,9 +12,15 @@ namespace LandLedgers.Time
     /// TTS-1: the minute is the base unit of work in Land &amp; Ledgers.
     ///
     /// Every job/task duration is expressed in whole minutes with a minimum of one
-    /// minute (Kennedy's rule). Skill moves durations down toward the floor but never
-    /// below it. The 24-hour clock (<see cref="TimeManager"/>) is the shared reference;
-    /// these helpers convert between clock seconds and whole work minutes.
+    /// minute. CORRECTION (Pass 2): the one-minute floor is a code convention
+    /// in this file, NOT a Kennedy decision — an earlier comment mislabelled
+    /// it "Kennedy's rule" and that label is removed here. Whether sub-minute
+    /// work moves to a seconds-native model (small additive option vs full
+    /// migration) is an OPEN Kennedy decision; until it is decided, no
+    /// sub-minute task is authored on the strength of this floor. Skill moves
+    /// durations down toward the floor but never below it. The 24-hour clock
+    /// (<see cref="TimeManager"/>) is the shared reference; these helpers
+    /// convert between clock seconds and whole work minutes.
     /// </summary>
     public static class WorkTimeMath
     {

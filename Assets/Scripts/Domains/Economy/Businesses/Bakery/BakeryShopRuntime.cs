@@ -853,6 +853,83 @@ namespace LandLedgers.Economy.Businesses.Bakery
             return records;
         }
 
+        /// <summary>
+        /// Pass 2 (task system): SURVIVING BAKERY MODEL decision. The shop
+        /// runtime (PlanBatch / WorkDay, used by the slice runs) is the
+        /// production bakery model. The staged 9-step chain is NOT a second
+        /// production model: it is a batch-execution path whose finished
+        /// goods reach customers ONLY through this transfer. A staged lot
+        /// is converted, once, into a sellable shop-runtime lot.
+        /// </summary>
+        private readonly List<string> transferredStagedLotIds = new List<string>();
+
+        /// <summary>Staged lot ids already transferred into this shop shelf (idempotence guard).</summary>
+        public IReadOnlyList<string> TransferredStagedLotIds => transferredStagedLotIds;
+
+        /// <summary>
+        /// Pass 2: closes F16 (staged-to-sellable transfer). Converts one
+        /// staged bread lot into a sellable shop-runtime lot and records its
+        /// staged id so the same staged lot can never transfer twice.
+        /// Aging is preserved from the BAKED day, not reset to the transfer
+        /// day: a loaf baked yesterday is day-old when transferred today,
+        /// never fresh again. That choice is recorded here and in the Pass 2
+        /// review doc; if Kennedy wants transfer-day aging instead, this
+        /// method is the single place to change it. Refuses unknown products,
+        /// non-positive units, and already-transferred staged ids, moving
+        /// nothing in any refusal case. The caller (Pass2BakeryStagedTransfer)
+        /// removes the staged lot from the staged shelf only after this
+        /// method succeeds, so a failed transfer leaves staged stock intact.
+        /// </summary>
+        public BakeryBreadLot ReceiveTransferredBreadLot(
+            BakeryStagedBreadLot staged, int dayIndex, EntityIdRegistry idRegistry, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (staged == null)
+            {
+                diag.Add("BakeryShopRuntime: staged transfer refused — no staged lot supplied.");
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(staged.LotId))
+            {
+                diag.Add("BakeryShopRuntime: staged transfer refused — staged lot has no id.");
+                return null;
+            }
+            if (transferredStagedLotIds.Contains(staged.LotId))
+            {
+                diag.Add($"BakeryShopRuntime: staged transfer refused — staged lot '{staged.LotId}' already transferred; no second lot.");
+                return null;
+            }
+            if (!BakeryBreadCatalog.IsKnownProduct(staged.ProductId))
+            {
+                diag.Add($"BakeryShopRuntime: staged transfer refused — unknown product '{staged.ProductId}'.");
+                return null;
+            }
+            if (staged.Units <= 0)
+            {
+                diag.Add($"BakeryShopRuntime: staged transfer refused — staged lot '{staged.LotId}' has no units.");
+                return null;
+            }
+
+            var lot = new BakeryBreadLot
+            {
+                LotId = idRegistry != null ? idRegistry.Allocate(EntityKind.Lot) : EntityId.Invalid,
+                ProductId = staged.ProductId,
+                BakedDayIndex = staged.BakedDayIndex,
+                UnitCount = staged.Units,
+                Condition = BakeryGoodsCondition.Fresh,
+            };
+            if (staged.InputProvenance != null) lot.InputProvenance.AddRange(staged.InputProvenance);
+            lot.InputProvenance.Add($"transferred from staged lot {staged.LotId} (batch {staged.BatchId})");
+            // Age to the TRANSFER day from the preserved baked day: a loaf
+            // baked yesterday is day-old when transferred today, never fresh.
+            lot.AgeToDay(dayIndex);
+            breadShelf.Add(lot);
+            transferredStagedLotIds.Add(staged.LotId);
+            diag.Add($"BakeryShopRuntime: staged lot '{staged.LotId}' transferred as shop lot {lot.LotId} "
+                + $"({staged.Units} {staged.ProductId}, baked day {staged.BakedDayIndex}).");
+            return lot;
+        }
+
         #region D1D Wholesale accounts (Canon §7.3E)
 
         /// <summary>
@@ -1395,6 +1472,9 @@ namespace LandLedgers.Economy.Businesses.Bakery
             public List<BakeryOven> Ovens = new List<BakeryOven>();
             public List<BakeryDoughBatch> Batches = new List<BakeryDoughBatch>();
             public List<BakeryBreadLot> BreadShelf = new List<BakeryBreadLot>();
+
+            /// <summary>Pass 2: staged lot ids already transferred (additive; old saves load empty).</summary>
+            public List<string> TransferredStagedLotIds = new List<string>();
             public List<BakerySaleRecord> Sales = new List<BakerySaleRecord>();
             public List<BakeryWasteRecord> Waste = new List<BakeryWasteRecord>();
             public List<string> WasteNotedLotIds = new List<string>();
@@ -1452,6 +1532,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
             }
 
             dto.BreadShelf.AddRange(breadShelf);
+            dto.TransferredStagedLotIds.AddRange(transferredStagedLotIds);
             dto.Sales.AddRange(sales);
             dto.Waste.AddRange(waste);
             dto.WasteNotedLotIds.AddRange(wasteNotedLotIds);
@@ -1526,6 +1607,12 @@ namespace LandLedgers.Economy.Businesses.Bakery
             if (dto.WasteNotedLotIds != null)
             {
                 wasteNotedLotIds.AddRange(dto.WasteNotedLotIds);
+            }
+
+            transferredStagedLotIds.Clear();
+            if (dto.TransferredStagedLotIds != null)
+            {
+                transferredStagedLotIds.AddRange(dto.TransferredStagedLotIds);
             }
 
             wholesaleAccounts.Clear();

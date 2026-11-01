@@ -51,6 +51,23 @@ namespace LandLedgers.Population
         public List<PregnancyRecord> Pregnancies = new List<PregnancyRecord>();
         public List<string> Diagnostics = new List<string>();
         public float GameSecondsPerDay = 86400f;
+
+        /// <summary>
+        /// Pass XL vertical slice: when false, MigrationDriver skips new
+        /// migrant ARRIVALS only. Default true, so ordinary scenarios are
+        /// byte-for-byte unchanged. Departures (MigrateOut) and births are
+        /// NOT gated by this flag: Kennedy's slice request was "no
+        /// immigration", not "no departures, no births", and births cannot
+        /// occur inside a 30-day slice anyway (marriage plus 280-day
+        /// gestation). Gating births/departures is a separate decision for
+        /// Kennedy if a longer sealed run is ever wanted.
+        /// PopulationManager sets this false for the six-person
+        /// development fixture on New Game (see SuppressMigrantArrivals);
+        /// it is NOT persisted into saves, so a Continue currently falls
+        /// back to ordinary immigration - Codex must persist/restore it
+        /// for Continue (see the final report).
+        /// </summary>
+        public bool AllowNewArrivals = true;
     }
 
     /// <summary>

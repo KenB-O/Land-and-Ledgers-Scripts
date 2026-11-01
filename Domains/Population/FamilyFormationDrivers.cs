@@ -292,6 +292,15 @@ namespace LandLedgers.Population
                 }
             }
 
+            if (!ctx.AllowNewArrivals)
+            {
+                // Pass XL vertical slice: six-person profile, no immigration.
+                // Arrivals only - departures above still run, births are
+                // untouched. See DemographicDriverContext.AllowNewArrivals.
+                ctx.Diagnostics.Add("MigrationDriver: migrant arrivals suppressed (no-immigration slice).");
+                return;
+            }
+
             double arrivalDraw = DemographicRng.Draw01(ctx.WorldSeed, ctx.CurrentDayIndex, -1, "migrate-in");
             if (arrivalDraw < MonthlyArrivalProbability)
             {

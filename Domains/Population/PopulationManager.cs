@@ -111,6 +111,23 @@ namespace LandLedgers.Population
         private readonly List<string> demographicDiagnostics = new List<string>();
         private int demographicWorldSeed;
 
+        /// <summary>
+        /// Pass XL vertical slice: when true, DriveDemographicDay builds its
+        /// DemographicDriverContext with AllowNewArrivals = false, so the
+        /// monthly MigrationDriver adds no newcomers. Set by
+        /// GeneratePopulationSnapshot(SixPersonDevelopmentFixture) on New
+        /// Game when a six-person fixture is supplied. Default false, so
+        /// ordinary scenarios are byte-for-byte unchanged.
+        /// LIMITATION, STATED PLAINLY: this is runtime state on the manager,
+        /// not save state. The bootstrapper's six-person profile is ignored
+        /// on Continue and is not persisted into the save, so a Continue
+        /// currently falls back to ordinary immigration. Codex must persist
+        /// and restore this flag (or the six-person profile choice) in the
+        /// save path if Continue must stay sealed; until then, do not claim
+        /// a continued six-person game is immigration-free.
+        /// </summary>
+        public bool SuppressMigrantArrivals { get; set; }
+
         /// <summary>Pass V P1-3: the population-wide kinship authority.</summary>
         public KinshipRegistry Kinship => kinshipRegistry;
 
@@ -193,6 +210,10 @@ namespace LandLedgers.Population
         /// </summary>
         public void GeneratePopulationSnapshot(SixPersonDevelopmentFixture developmentFixture)
         {
+            // Pass XL vertical slice: a supplied six-person fixture seals
+            // the town against later migrant arrivals (New Game only; see
+            // SuppressMigrantArrivals for the Continue limitation).
+            SuppressMigrantArrivals = developmentFixture != null;
             AutoWireReferences();
 
             sharedBusinessRuntime?.InitializeIfNeeded();
@@ -589,6 +610,7 @@ namespace LandLedgers.Population
                 Pregnancies = pregnancies,
                 Diagnostics = demographicDiagnostics,
                 GameSecondsPerDay = secondsPerDay,
+                AllowNewArrivals = !SuppressMigrantArrivals,
             };
             DemographicDriverSchedule.EvaluateDay(ctx);
             DemographicDriverSchedule.EvaluateMonth(ctx);

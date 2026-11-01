@@ -74,6 +74,17 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField, Tooltip("Optional: driven with whole minutes per ShortTick. Found automatically if empty.")]
         private PlayerDirector playerDirector;
 
+        // Pass XL vertical slice, playtest only: when true, the player person
+        // is driven only by the NPC household/business/domestic drivers.
+        // Player-issued travel, player-issued task advancement, and player
+        // owner-labour accounting are skipped (see PlayerNpcPlaytestPolicy).
+        // Default false: ordinary player behaviour, byte-for-byte unchanged.
+        // Codex: expose this bool in the Inspector on this component. It is
+        // a scene value, not a save-DTO field, so it resets to the scene
+        // value on reload unless a bootstrapper bool forwards it.
+        [SerializeField, Tooltip("Playtest only: treat the player as a regular NPC; skip player-issued travel, player-task advancement, and player owner-labour accounting.")]
+        private bool treatPlayerAsNpc;
+
         [SerializeField, Tooltip("Optional: weekly profit posts hook into its reset. Found automatically if empty.")]
         private SharedBusinessRuntimeManager sharedBusinessRuntime;
 
@@ -461,6 +472,26 @@ namespace LandLedgers.Orchestration.Systems
                     scenarioDirector.PlayerDirector = value;
                 }
             }
+        }
+
+        /// <summary>
+        /// Pass XL vertical slice: the player-as-NPC playtest flag. Codex
+        /// exposes the serialized backing field in the Inspector; this
+        /// property is the testable / bootstrapper-facing seam. Default false.
+        /// When true, SimulationDrivers skips player-issued travel, player
+        /// task advancement, and player owner-labour accounting, while the
+        /// autonomous drivers still drive the player person as any NPC.
+        /// </summary>
+        public bool TreatPlayerAsNpc
+        {
+            get => treatPlayerAsNpc;
+            set => treatPlayerAsNpc = value;
+        }
+
+        /// <summary>Testable form of the flag rule (see PlayerNpcPlaytestPolicy).</summary>
+        public bool ShouldAdvancePlayerWork()
+        {
+            return !treatPlayerAsNpc;
         }
 
         /// <summary>
@@ -1024,7 +1055,10 @@ namespace LandLedgers.Orchestration.Systems
 
             // CLN-4: owner labor — the player's accumulated weekly worked minutes feed
             // the valuation for each player-owned business (real work-time path).
-            if (playerDirector != null && weeklyPlayerWorkedMinutes > 0
+            // Pass XL player-as-NPC playtest: skipped when the flag is on.
+            // The accumulator is still reset below, so turning the flag on
+            // mid-week does not carry stale player minutes into a later week.
+            if (!treatPlayerAsNpc && playerDirector != null && weeklyPlayerWorkedMinutes > 0
                 && sharedBusinessRuntime != null)
             {
                 float weeklyHours = weeklyPlayerWorkedMinutes / 60f;
@@ -1377,7 +1411,9 @@ namespace LandLedgers.Orchestration.Systems
 
             // CLN-4: accumulate the player's daily worked minutes for the weekly
             // owner-labor valuation post. Read BEFORE EnsureDay resets the day.
-            if (playerDirector != null && playerDirector.PlayerPersonId.IsValid)
+            // Pass XL player-as-NPC playtest: skipped when the flag is on, so
+            // no player owner-labour minutes accumulate in NPC mode.
+            if (!treatPlayerAsNpc && playerDirector != null && playerDirector.PlayerPersonId.IsValid)
             {
                 var budget = hub.WorkTimeBudgets.GetOrCreate(playerDirector.PlayerPersonId);
                 weeklyPlayerWorkedMinutes += budget.MinutesWorked;
@@ -3172,6 +3208,15 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         private void AdvancePlayerWork(int wholeMinutes, int dayIndex)
         {
+            // Pass XL player-as-NPC playtest: when the flag is on, player-
+            // issued tasks do not advance on the player path. Autonomous
+            // advancement (AdvanceAutonomousWork) is untouched, and NPC
+            // drivers still generate and drive their own work.
+            if (treatPlayerAsNpc)
+            {
+                return;
+            }
+
             if (hub == null || playerDirector == null || wholeMinutes <= 0)
             {
                 return;
@@ -3697,24 +3742,22 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             // Player travel advances with the clock (whole minutes only).
-            if (playerDirector != null)
+            // Pass XL player-as-NPC playtest: when the flag is on, player-
+            // issued travel does not advance. Autonomous work advancement
+            // is unconditional in both branches (it was already called in
+            // both branches before this change); only the player travel
+            // call is gated, so restructuring here changes no autonomous
+            // behaviour.
+            int tickWholeMinutes = Mathf.FloorToInt(context.TickIntervalGameSeconds / 60f);
+            if (tickWholeMinutes > 0)
             {
-                int wholeMinutes = Mathf.FloorToInt(context.TickIntervalGameSeconds / 60f);
-                if (wholeMinutes > 0)
+                if (playerDirector != null && !treatPlayerAsNpc)
                 {
-                    playerDirector.RecordMovementProgress(wholeMinutes, hub.WorkTimeBudgets);
-                    AdvanceAutonomousWork(wholeMinutes, context.Date.AbsoluteDayIndex,
-                        Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
+                    playerDirector.RecordMovementProgress(tickWholeMinutes, hub.WorkTimeBudgets);
                 }
-            }
-            else
-            {
-                int wholeMinutes = Mathf.FloorToInt(context.TickIntervalGameSeconds / 60f);
-                if (wholeMinutes > 0)
-                {
-                    AdvanceAutonomousWork(wholeMinutes, context.Date.AbsoluteDayIndex,
-                        Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
-                }
+
+                AdvanceAutonomousWork(tickWholeMinutes, context.Date.AbsoluteDayIndex,
+                    Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
             }
 
             // Pass IV (Worker 1): player-issued tasks progress in real time instead of

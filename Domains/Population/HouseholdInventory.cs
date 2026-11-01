@@ -72,6 +72,29 @@ namespace LandLedgers.Population
             new(SoapId, "Soap", "bar", "household_goods", 0, false),
             new(ClothingTextilesId, "Clothing/Textiles", "yd", "clothing", 0, false),
             new(SaltId, "Salt", "lb", "household_goods", 0, false),
+            // Pass XL phase 3, item 4 (append-only, no renames): sugar,
+            // coffee, and tea were in the authored staple_food category
+            // pool but missing from this catalog, so AddLot rejected
+            // them. Secondary = household/house goods. Tertiary =
+            // luxury goods. No prices live here; retail prices are in
+            // the GeneralStoreBusinessDefinition asset (outside repo).
+            new("sugar", "Sugar", "lb", "staple_food", 1, true),
+            new("coffee", "Coffee", "lb", "staple_food", 1, true),
+            new("tea", "Tea", "lb", "staple_food", 1, true),
+            new("candle", "Candle", "each", "household_goods", 0, false),
+            new("lamp_oil", "Lamp Oil", "gal", "household_goods", 0, false),
+            new("cookware", "Cookware", "each", "household_goods", 0, false),
+            new("bedding", "Bedding", "set", "household_goods", 0, false),
+            new("tool_hand", "Hand Tool", "each", "household_goods", 0, false),
+            new("tableware", "Tableware", "set", "household_goods", 0, false),
+            new("cigarettes", "Cigarettes", "pack", "luxury_goods", 0, false),
+            new("tobacco", "Tobacco", "lb", "luxury_goods", 0, false),
+            new("whiskey", "Whiskey", "bottle", "luxury_goods", 0, false),
+            new("book", "Book", "each", "luxury_goods", 0, false),
+            new("jewelry", "Jewelry", "each", "luxury_goods", 0, false),
+            new("perfume", "Perfume", "bottle", "luxury_goods", 0, false),
+            new("chocolate", "Chocolate", "bar", "luxury_goods", 0, true),
+            new("silk_cloth", "Silk Cloth", "yd", "luxury_goods", 0, false),
             new(UnspecifiedStapleFoodId, "Staple Food (legacy, composition unspecified)", "unit", "staple_food", 2, true),
         };
 

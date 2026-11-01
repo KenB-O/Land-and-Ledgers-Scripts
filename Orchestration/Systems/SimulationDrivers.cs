@@ -542,6 +542,27 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Main Scene bootstrap hook. Registers the town General Store as a
+        /// postal origin only after the actual town journey graph and formed
+        /// Business are available. No office or location is fabricated.
+        /// </summary>
+        public void EnsureGeneralStorePostOfficeForCurrentWorld()
+        {
+            if (hub == null) hub = FindAnyObjectByType<SimulationSystemsHub>();
+            if (sharedBusinessRuntime == null) sharedBusinessRuntime = FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (townWorld == null) townWorld = FindAnyObjectByType<TownWorldController>();
+            if (hub == null) return;
+
+            EnsureTownJourneyNetwork();
+            var diagnostics = new List<string>();
+            EnsureGeneralStorePostOffice(diagnostics);
+            foreach (string diagnostic in diagnostics)
+            {
+                Debug.LogWarning($"[SimulationDrivers] {diagnostic}", this);
+            }
+        }
+
+        /// <summary>
         /// Pass XI WS1: the production entry point for rebinding drivers
         /// after load or restore, or when a drivers object is created
         /// after bootstrap. Re-runs the FindAnyObjectByType discovery
@@ -1944,6 +1965,14 @@ namespace LandLedgers.Orchestration.Systems
             if (hub == null) return;
             var diag = new List<string>();
 
+            // The Main Scene's General Store is the real town post office.
+            // Rebuild the town-derived journey graph first, then register the
+            // office against that actual building node before recruitment or
+            // other daily postal activity can post a letter. The stable office
+            // id and duplicate guard make New Game/Continue rebinds idempotent.
+            EnsureTownJourneyNetwork();
+            EnsureGeneralStorePostOffice(diag);
+
             hub.RouteConditions.AdvanceDay(absoluteDayIndex, hub.WeatherSeed, diag);
             if (hub.RouteConditions.IsBlizzard())
             {
@@ -1994,6 +2023,58 @@ namespace LandLedgers.Orchestration.Systems
             {
                 hub.Recruiting.AdvanceDay(
                     populationManager.State, hub.Employments, absoluteDayIndex, diag, hub.Postal);
+            }
+        }
+
+        private void EnsureGeneralStorePostOffice(List<string> diagnostics)
+        {
+            if (hub == null || sharedBusinessRuntime == null || townWorld == null)
+            {
+                return;
+            }
+
+            foreach (PostalOffice existing in hub.Postal.Offices)
+            {
+                if (existing != null && string.Equals(existing.OfficeId, "general-store", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            BusinessInstanceState store = null;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business != null && business.BusinessType == BusinessType.GeneralStore
+                    && business.AssignedBuildingId >= 0)
+                {
+                    store = business;
+                    break;
+                }
+            }
+
+            if (store == null)
+            {
+                return;
+            }
+
+            string locationId = TownJourneyNetworkBuilder.LocationIdForBuilding(store.AssignedBuildingId);
+            if (hub.Journeys.GetLocation(locationId) == null)
+            {
+                diagnostics?.Add($"Postal office registration deferred: General Store {store.InstanceId} has no registered journey location '{locationId}'.");
+                return;
+            }
+
+            int seed = townWorld.Settings != null ? townWorld.Settings.seed : 0;
+            string refusal = hub.Postal.RegisterOffice(
+                "general-store",
+                locationId,
+                store.InstanceId,
+                departureWeekdays: null,
+                seed: seed,
+                diag: diagnostics);
+            if (refusal != null)
+            {
+                diagnostics?.Add(refusal);
             }
         }
 

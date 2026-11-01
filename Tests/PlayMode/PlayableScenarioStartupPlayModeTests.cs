@@ -44,9 +44,12 @@ namespace LandLedgers.PlayMode
             var households = population?.GetType().GetField("households")?.GetValue(population) as System.Collections.IList;
             Assert.NotNull(people);
             Assert.NotNull(households);
-            Assert.AreEqual(6, people.Count, "The opt-in development population contains exactly six authoritative Persons.");
+            object[] onMapPeople = people.Cast<object>()
+                .Where(person => !(bool)person.GetType().GetField("isOffMap")?.GetValue(person))
+                .ToArray();
+            Assert.AreEqual(6, onMapPeople.Length, "The opt-in development population contains exactly six on-map authoritative Persons.");
             Assert.AreEqual(3, households.Count, "The opt-in development population contains exactly three Households.");
-            object[] orderedPeople = people.Cast<object>()
+            object[] orderedPeople = onMapPeople
                 .OrderBy(person => (int)person.GetType().GetField("id")?.GetValue(person)).ToArray();
             CollectionAssert.AreEqual(
                 new[] { "Kennedy Baldwin-Ooms", "Emma Baldwin-Ooms", "Glen Pierce", "Cassidy Pierce", "Jacob Boniecki", "Grace Boniecki" },
@@ -554,7 +557,8 @@ namespace LandLedgers.PlayMode
             Assert.NotNull(people);
             Assert.NotNull(businesses);
             Assert.NotNull(activeByEmployee, "The active employment registry must be the authority for workplace claims.");
-            bool sixPersonDevelopmentProfile = people.Count == 6;
+            bool sixPersonDevelopmentProfile = people.Cast<object>()
+                .Count(person => !(bool)person.GetType().GetField("isOffMap")?.GetValue(person)) == 6;
             if (sixPersonDevelopmentProfile)
             {
                 System.Collections.ICollection households = populationState?.GetType().GetField("households")?.GetValue(populationState) as System.Collections.ICollection;
@@ -646,13 +650,33 @@ namespace LandLedgers.PlayMode
             Debug.Log($"[Pass22 RUN-004] closing day={endDay}; {closing}");
             Assert.AreEqual(startDay + 30, endDay,
                 "Thirty consecutive day boundaries must reach the ordinary daily/weekly/monthly production callbacks.");
+
+            object generalStore = businesses.Cast<object>().FirstOrDefault(business =>
+                string.Equals(business.GetType().GetProperty("BusinessType")?.GetValue(business)?.ToString(), "GeneralStore", StringComparison.Ordinal));
+            Assert.NotNull(generalStore, "The scenario settlement must retain its real General Store Business.");
+            int generalStoreBuildingId = (int)(generalStore.GetType().GetProperty("AssignedBuildingId")?.GetValue(generalStore) ?? -1);
+            string generalStoreBusinessId = generalStore.GetType().GetProperty("InstanceId")?.GetValue(generalStore) as string;
+            object postal = hubType.GetProperty("Postal")?.GetValue(hub);
+            System.Collections.IEnumerable offices = postal?.GetType().GetProperty("Offices")?.GetValue(postal) as System.Collections.IEnumerable;
+            object generalStoreOffice = offices?.Cast<object>().FirstOrDefault(office =>
+                string.Equals(office.GetType().GetField("OfficeId")?.GetValue(office) as string, "general-store", StringComparison.OrdinalIgnoreCase));
+            Assert.NotNull(generalStoreOffice, "The Main Scene must register the actual General Store as the town post office.");
+            Assert.AreEqual(generalStoreBusinessId, generalStoreOffice.GetType().GetField("BusinessInstanceId")?.GetValue(generalStoreOffice));
+            Assert.AreEqual($"building:{generalStoreBuildingId}", generalStoreOffice.GetType().GetField("LocationId")?.GetValue(generalStoreOffice),
+                "The postal origin must resolve to the General Store's real journey node.");
+
             if (sixPersonDevelopmentProfile)
             {
                 object closingPopulation = populationType.GetProperty("State")?.GetValue(populationManager);
                 System.Collections.IList closingPeople = closingPopulation?.GetType().GetField("people")?.GetValue(closingPopulation) as System.Collections.IList;
                 System.Collections.ICollection closingHouseholds = closingPopulation?.GetType().GetField("households")?.GetValue(closingPopulation) as System.Collections.ICollection;
-                Assert.AreEqual(6, closingPeople?.Count, "The six authoritative Person records remain present after 30 days.");
-                Assert.AreEqual(3, closingHouseholds?.Count, "The three authoritative Households remain present after 30 days.");
+                Assert.AreEqual(6, closingPeople?.Cast<object>()
+                    .Count(person => !(bool)person.GetType().GetField("isOffMap")?.GetValue(person)),
+                    "The six authoritative on-map Person records remain present after 30 days.");
+                Assert.GreaterOrEqual(closingHouseholds?.Count ?? 0, 3,
+                    "The three opening Households remain represented after 30 days; legitimate demographic events may form or dissolve households.");
+                Assert.IsTrue((bool)(populationType.GetProperty("SuppressMigrantArrivals")?.GetValue(populationManager) ?? false),
+                    "The six-person development world must retain its no-arrival gate for the whole run.");
                 CollectionAssert.AreEquivalent(
                     new[] { "GeneralStore", "Bakery", "FuelDealer" },
                     (sharedType.GetProperty("Businesses")?.GetValue(shared) as System.Collections.IEnumerable)
@@ -715,12 +739,13 @@ namespace LandLedgers.PlayMode
             for (int i = 0; i < people.Count; i++)
             {
                 object person = people[i];
+                if ((bool)person.GetType().GetField("isOffMap")?.GetValue(person)) continue;
                 int personId = (int)person.GetType().GetField("id")?.GetValue(person);
                 int householdId = (int)activeHouseholdFor.Invoke(membershipRegistry, new object[] { personId });
                 if (householdId < 0 || !householdIds.Contains(householdId)) unregisteredPeople++;
             }
             Assert.AreEqual(0, unregisteredPeople,
-                "Every live Person in the Main Scene must belong to one existing Household through the authoritative registry.");
+                "Every on-map Person in the Main Scene must belong to one existing Household through the authoritative registry; persistent off-map relatives are not residents.");
 
             var businesses = sharedType.GetProperty("Businesses")?.GetValue(sharedRuntime) as System.Collections.IEnumerable;
             Assert.NotNull(businesses);

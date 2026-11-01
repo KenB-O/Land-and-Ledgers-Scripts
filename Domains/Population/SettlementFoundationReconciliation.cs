@@ -39,6 +39,15 @@ namespace LandLedgers.Population
                     continue;
                 }
 
+                // Off-map relatives are persistent Person identities, but
+                // they are not residents and must not have a local
+                // Household or accommodation building until the real
+                // arrival-settlement path materialises them.
+                if (person.isOffMap)
+                {
+                    continue;
+                }
+
                 if (person.deathDayIndex < 0 && population.GetHousehold(person.householdId) == null)
                 {
                     errors.Add($"Living Person {person.id} has no Household {person.householdId}.");

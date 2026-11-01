@@ -67,6 +67,27 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void OffMapRelativeRemainsRegisteredWithoutResidentHouseholdOrAccommodation()
+        {
+            var population = new PopulationState();
+            population.people.Add(new PersonState
+            {
+                id = population.AllocateNextPersonId(),
+                isOffMap = true,
+                householdId = -1,
+                homeBuildingId = -1,
+                deathDayIndex = -1,
+                firstName = "Elias",
+                lastName = "Test"
+            });
+
+            SettlementFoundationReconciliation result = SettlementFoundationReconciliation.Check(
+                population, new List<BusinessInstanceState>());
+
+            Assert.IsTrue(result.IsValid, result.BuildSummary());
+        }
+
+        [Test]
         public void OpeningFormationIntentCanCarryARealPersonOwner()
         {
             OpeningRosterEntry entry = new OpeningRosterEntry(

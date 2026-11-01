@@ -419,6 +419,35 @@ namespace LandLedgers.FirstLedger
             }
             AppendStartupTiming(timing, stepTimer, "population generation");
 
+            // FamilyTreeBuilder is intentionally separate from population
+            // generation: its off-map relatives share PopulationState.people
+            // and must not be mistaken for residents or migrant arrivals.
+            // Build the authoritative kinship links once the generated
+            // residents exist, before any save can capture this New Game.
+            if (populationManager?.State != null && populationManager.Kinship != null)
+            {
+                int familySeed = townWorld.Settings != null ? townWorld.Settings.seed : 0;
+                int referenceYear = timeManager != null ? timeManager.CurrentDate.Year : 0;
+                if (referenceYear > 0)
+                {
+                    var familyDiagnostics = new System.Collections.Generic.List<string>();
+                    FamilyTreeBuilder.Report familyReport = FamilyTreeWiring.ApplyAfterGeneration(
+                        populationManager.State,
+                        populationManager.Kinship,
+                        familySeed,
+                        referenceYear,
+                        familyDiagnostics);
+                    Debug.Log($"[WorldStartup] Family tree wired from generated residents: " +
+                              $"{familyReport.PersonsProcessed} residents, " +
+                              $"{familyReport.OffMapRelativesCreated} off-map relatives, " +
+                              $"{familyReport.SiblingEdgesAdded} sibling links.", this);
+                }
+                else
+                {
+                    Debug.LogWarning("[WorldStartup] Family-tree wiring skipped because the authoritative scenario year is unavailable.", this);
+                }
+            }
+
             ConfigureScenarioAuthorities();
 
             // Phase 2: forward the playtest bool on New Game startup.
@@ -449,6 +478,7 @@ namespace LandLedgers.FirstLedger
             {
                 simulationDrivers.RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort());
             }
+            simulationDrivers?.EnsureGeneralStorePostOfficeForCurrentWorld();
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
             RegisterLiveBoardingHouseRuntimes(simulationDrivers);
             OpeningTransportStock.Ensure(
@@ -961,7 +991,7 @@ namespace LandLedgers.FirstLedger
             for (int i = 0; i < population.people.Count; i++)
             {
                 PersonState person = population.people[i];
-                if (person == null || person.deathDayIndex >= 0)
+                if (person == null || person.deathDayIndex >= 0 || person.isOffMap)
                 {
                     continue;
                 }
@@ -990,7 +1020,7 @@ namespace LandLedgers.FirstLedger
             for (int i = 0; i < population.people.Count; i++)
             {
                 PersonState person = population.people[i];
-                if (person != null && person.deathDayIndex < 0)
+                if (person != null && person.deathDayIndex < 0 && !person.isOffMap)
                 {
                     return person;
                 }

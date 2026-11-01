@@ -407,7 +407,23 @@ namespace LandLedgers.EditorTools
         private static void SetReference(SerializedObject serialized, string propertyName, UnityEngine.Object value)
         {
             SerializedProperty property = serialized.FindProperty(propertyName);
-            if (property != null && value != null) property.objectReferenceValue = value;
+            if (property == null) return;
+            if (value != null)
+            {
+                property.objectReferenceValue = value;
+                return;
+            }
+
+            FieldInfo backingField = serialized.targetObject != null
+                ? serialized.targetObject.GetType().GetField(
+                    propertyName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                : null;
+            string expectedType = backingField != null ? backingField.FieldType.Name : "scene object";
+            Debug.LogWarning(
+                $"[SceneAuthoring] {serialized.targetObject?.GetType().Name}.{propertyName} remains unassigned: " +
+                $"no unique {expectedType} target was found in the Main Scene.",
+                serialized.targetObject);
         }
     }
 }

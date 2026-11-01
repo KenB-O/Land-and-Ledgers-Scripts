@@ -165,8 +165,8 @@ Decision, with reasons (also in the `ThreeBusinessSlice` file header):
   six-person fixture; its lumber stays at the mill and is not sold in
   this run.
 - N4 BUSINESS SEEDS STILL INPUTS: store, bakery, and fuel dealer start
-  with caller-supplied owner equity, not slice earnings. A 0-capital
-  business cannot order, buy fuel, or sell before it has cash. Whether
+  with caller-supplied owner equity, not slice earnings. A business
+  with no cash cannot order, buy fuel, or sell before it has cash. Whether
   a business seed is still needed for the first cycle is a Kennedy
   decision (section 9, D-P8-4); removing it needs either a production
   owner-equity injection path or a TradeCredit first order plus a
@@ -714,8 +714,9 @@ is owned by a LiveryFreight business or farm instead, which changes who
 Kennedy is in the fiction.
 
 Pros: self-collect becomes testable, freight becomes testable from day
-1, horse care and feed become real slice costs. Cons: granted asset
-breaks the 0 capital fiction, feed source is undecided, and a wagon
+1, horse care and feed become real slice costs. Cons: a granted asset
+is an extra starting input on top of the run's caller-supplied seeds,
+feed source is undecided, and a wagon
 without a freight business or a route is just an asset, not an economy.
 
 Kennedy decisions flagged, not guessed (D-P8-11): approve or reject the

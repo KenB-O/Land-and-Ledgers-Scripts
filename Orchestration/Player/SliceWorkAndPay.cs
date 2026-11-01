@@ -56,7 +56,7 @@ namespace LandLedgers.Orchestration.Player
     /// reconciling at every step. The second purchase is funded by
     /// earnings drawn from the first cycle, not by a fresh household
     /// run input. The first cycle's business seed is still an input
-    /// and is labelled as one: a store with 0 capital cannot order
+    /// and is labelled as one: a store with no cash cannot order
     /// stock on CashOnArrival, and this pass does not pretend
     /// otherwise (see the report's SeamsStopped).
     ///
@@ -502,7 +502,7 @@ namespace LandLedgers.Orchestration.Player
 
     /// <summary>
     /// Composed earn-then-spend run for the General Store only. The
-    /// Baldwin-Ooms household starts at 0. Business seed is owner
+    /// Baldwin-Ooms household starts at 0 in this run. Business seed is owner
     /// equity (labelled, NOT wages). Draw 1 funds purchase 1; draw 2
     /// (from cycle-1 sale margin) funds purchase 2. See the file
     /// header for what is NOT proved here.
@@ -527,7 +527,7 @@ namespace LandLedgers.Orchestration.Player
             report.SeamsStopped.Add("Fuel Dealer owner earnings: no Task to tree depletion to wood lot to sale path; no draw proved for Jacob.");
             report.SeamsStopped.Add("Employee payroll for slice residents: the six-person slice has no non-founder employees; employee wages are proved separately with a non-slice test employee, not a slice resident.");
             report.SeamsStopped.Add("Daily/weekly tick driver: run steps are called explicitly here; no Main Scene tick driver is proved.");
-            report.SeamsStopped.Add("First-cycle business seed: the store starts with caller-supplied owner equity, not slice earnings; a 0-capital store cannot order on CashOnArrival, and this run does not pretend otherwise.");
+            report.SeamsStopped.Add("First-cycle business seed: the store starts with caller-supplied owner equity, not slice earnings; a store with no cash cannot order on CashOnArrival, and this run does not pretend otherwise.");
             report.SeamsStopped.Add("Business cash persistence: runtime cash is in-memory here; production maps it to its own save path and must register the procurement service with SaveLoadManager (phase 4 F19).");
 
             var personHousehold = new Dictionary<int, int> { { 1, 1 }, { 2, 1 }, { 3, 2 }, { 4, 2 }, { 5, 3 }, { 6, 3 } };

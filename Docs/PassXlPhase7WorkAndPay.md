@@ -8,7 +8,8 @@ Pass 7 is the second of three separate sequential vertical-slice passes
 
 Pass 6 proved flour to meals with save/restore, but opening cash was an
 explicit run input simulating prior earnings, booked as OtherDocumented
-inflows. The fixture itself is 0 capital. Pass 7 asks: can the slice
+inflows. Starting amounts are caller-supplied test inputs, variable
+between runs, not a canon starting condition. Pass 7 asks: can the slice
 earn its own cash inside the slice, so earnings stop being a run input?
 
 Short answer, honestly split in two:
@@ -161,8 +162,8 @@ test parameters, never canon):
   employment record, real attendance) in a later pass or in Main
   Scene, not a founder reclassified as an employee.
 - **No first-cycle self-sufficiency.** The business seed (5000c
-  owner equity) is still an input. A 0-capital store cannot order
-  on CashOnArrival, and a 0-cash household cannot buy before it
+  owner equity) is still an input. A store with no cash cannot order
+  on CashOnArrival, and a household with no cash cannot buy before it
   has drawn or earned. What pass 7 removes is the HOUSEHOLD run
   input (phase 6 gave the household 10000c directly); the second
   purchase is funded by cycle-1 earnings, not by a fresh input.

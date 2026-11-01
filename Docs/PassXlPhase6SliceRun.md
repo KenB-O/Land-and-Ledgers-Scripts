@@ -29,8 +29,9 @@ order. Codex must still wire a real daily tick driver in Main Scene.
 - Business cash input: 5000c. Household cash input: 10000c per household.
   Both are explicit run inputs simulating prior earnings, booked as named
   `OtherDocumented` inflows with source reference
-  `passxl-phase6-run-input`. The fixture itself gives the three businesses
-  0 starting capital and no granted inventory or cash, so this run does
+  `passxl-phase6-run-input`. Starting cash and stock are caller-supplied
+  test inputs for this run (business 5000c, households 10000c each),
+  variable between runs and not a canon starting condition, so this run does
   NOT claim the store or households earned their opening cash inside the
   slice. Work and pay inside the slice is a seam below, and is pass 7's
   most important missing leg if a payroll path can be wired safely.

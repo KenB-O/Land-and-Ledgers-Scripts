@@ -9,7 +9,8 @@ using NUnit.Framework;
 /// All numbers below are explicit test parameters for the run, never canon:
 /// 100u flour at 10c goods + 250c seller-paid freight = 1250c, transit 3 days,
 /// 40u sold at 20c = 800c, business cash 5000c input, household cash 10000c
-/// input (prior earnings simulated; the fixture itself is 0 capital).
+/// input (prior earnings simulated; seed amounts are caller-supplied
+/// test inputs, variable between runs, not canon).
 /// Meal actuals follow the default policy exactly: day 1 has 3.33 staple
 /// days of supply, so midday is served (6 meals, 12 lb); days 2-3 fall below
 /// the 3-day midday threshold, so only morning + evening are served

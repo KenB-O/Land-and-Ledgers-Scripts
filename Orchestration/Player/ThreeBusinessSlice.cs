@@ -511,7 +511,8 @@ namespace LandLedgers.Orchestration.Player
     /// <summary>
     /// Composed three-business run. All numbers are caller-supplied
     /// test parameters. Business seeds are labelled owner-equity run
-    /// inputs (the fixture is 0 capital); households start at 0 and
+    /// inputs (seed amounts are caller-supplied test inputs, variable
+    /// between runs, not canon); households start at 0 in this run and
     /// earn only through draws and sales in this run. Returns null
     /// only when a step that must succeed fails; diagnostics say why.
     /// </summary>
@@ -566,14 +567,14 @@ namespace LandLedgers.Orchestration.Player
             report.SeamsStopped.Add("Notions supply: notions arrive as a labelled run input through a named import order; no store SKU or miller path exists for notions yet.");
             report.SeamsStopped.Add("Equipment gates: fuel chain runs with gate null; axe, wagon, and saw-line possession are NOT proved and must be supplied by a production driver.");
             report.SeamsStopped.Add("Daily/weekly tick driver, residence assignment, postal office, production supplier registration, Main Scene wiring: Codex-only, as in phases 6-7.");
-            report.SeamsStopped.Add("First-cycle business seeds: stores, bakery, and fuel dealer start with caller-supplied owner equity, not slice earnings; a 0-capital business cannot order, bake fuel, or sell before it has cash.");
+            report.SeamsStopped.Add("First-cycle business seeds: stores, bakery, and fuel dealer start with caller-supplied owner equity, not slice earnings; a business with no cash cannot order, bake fuel, or sell before it has cash.");
             report.SeamsStopped.Add("Sawmill: the mill is an upstream supplier outside the six-person fixture; its lumber stays at the mill and is not sold in this run.");
 
             var diag = new List<string>();
             var ids = new EntityIdRegistry();
             int arrivalDay = startDay + transitDays;
 
-            // Business runtimes (cash holders) and households (0 cash).
+            // Business runtimes (cash holders) and households (0 cash in this run).
             var store = new BusinessRuntimeState();
             store.BindBusinessIdentity("general-store-1");
             store.AddCashCents(Math.Max(0, storeSeedCents));

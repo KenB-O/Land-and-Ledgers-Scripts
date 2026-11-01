@@ -31,8 +31,11 @@ namespace LandLedgers.Orchestration.Player
     /// Main Scene slice.
     ///
     /// CASH IS A RUN INPUT, NOT SLICE EARNINGS (read this first):
-    /// The fixture gives the three businesses 0 starting capital and no
-    /// granted inventory or cash. This run therefore does NOT claim the
+    /// Starting cash and stock are caller-supplied test inputs,
+    /// variable between runs, not a canon starting condition
+    /// (Technical Bible XIV §3.1 specifies no amount; the development
+    /// roster's 0 values are one test roster, never selected by
+    /// ordinary scenarios). This run therefore does NOT claim the
     /// store or the households earned their opening cash inside the
     /// slice. Business cash and household cash are explicit run inputs,
     /// booked as named OtherDocumented inflows with a source reference
@@ -414,7 +417,7 @@ namespace LandLedgers.Orchestration.Player
             string problem = ledger.RecordInflow(
                 dayIndex, balanceCents, HouseholdIncomeSource.OtherDocumented,
                 "passxl-phase6-run-input",
-                "run input: prior earnings simulated for the composed run; NOT fixture starting capital (fixture is 0)",
+                "run input: prior earnings simulated for the composed run; NOT a canon starting condition - seed is a caller-supplied test input",
                 "run-input");
             if (problem != null)
             {

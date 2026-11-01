@@ -265,6 +265,11 @@ namespace LandLedgers.FirstLedger
             SetVisible(true);
         }
 
+        public void CloseManagementPanel()
+        {
+            SetVisible(false);
+        }
+
         public void OpenOwnedBuildingManagement(int buildingId)
         {
             AutoWireSources();

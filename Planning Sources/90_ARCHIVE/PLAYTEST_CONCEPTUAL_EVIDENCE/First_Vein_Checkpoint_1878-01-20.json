@@ -1,0 +1,127 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "Conceptual fictional simulation, aligned to Oct 19 realism audit, no actual Unity game-state action",
+  "checkpoint": "VEIN-IV-1878-01-20",
+  "date": "1878-01-20",
+  "time": "17:00",
+  "calendar_days_advanced_since_1877_12_16": 35,
+  "authority": "Pre-existing standing orders authorize routine manager activities, research/negotiations, and normal expenses within reserves; NO new lending, purchase, property transfer, major capital, or land construction without player authorization. Ordinary arm-length ore sale delegated to Amos, but no new ore was produced this period.",
+  "opening_source": "First_Vein_Checkpoint_1877-12-16_Realism_Audit_Addendum.json",
+  "owner_ledger": {
+    "opening": "308.85",
+    "paid_amos_one_day": "4.50",
+    "land_office_title_fees": "3.25",
+    "ore_revenue": "0.00",
+    "closing": "301.10",
+    "wages_payable": "0.00",
+    "older_personal_expenses_continuity_gap": "unresolved"
+  },
+  "freight_ledger": {
+    "opening": "142.25",
+    "outside_customer_receipts": "85.00",
+    "eli_paid_days": 11,
+    "wages_paid": "33.00",
+    "feed_livery": "39.00",
+    "routine_supplies_repair": "10.00",
+    "closing": "145.25",
+    "wages_payable": "0.00",
+    "contracted_capacity_overrun": false
+  },
+  "combined": {
+    "opening": "451.10",
+    "closing": "446.35",
+    "movement": "-4.75"
+  },
+  "mine": {
+    "employees": 5,
+    "active_roster": [
+      "Amos Polk",
+      "Jonas Calder",
+      "Calvin Briggs",
+      "Ezra Harlan",
+      "Miles Fenwick"
+    ],
+    "departed": [
+      {
+        "name": "Rafael Soto",
+        "date": "1878-01-09",
+        "reason": "accepted a more reliably paid mining post near Lead; no wages/penalty due"
+      }
+    ],
+    "daily_payroll_if_all_scheduled": "16.75",
+    "six_workday_payroll": "100.50",
+    "new_excavation_lb": 0,
+    "new_mineral_sales": "0.00",
+    "mine_activity": "Amos paid one day verifying land and prospective ore-buyer terms; no funded six-day mine week possible under wagon repayment reserve"
+  },
+  "inventory": {
+    "cumulative_excavated_lb": 91900,
+    "untreated_site_lb": 68572,
+    "remaining_quartz_lb": 0,
+    "remaining_mixed_lb": 15372,
+    "waste_lb": 53200,
+    "cumulative_sold_raw_ore_lb": 23284,
+    "cumulative_raw_ore_receipts": "95.25",
+    "processed_hand_trial_lb": 20,
+    "laboratory_samples_lb": 24,
+    "recovered_unsold_gold_oz_approx": "0.0044",
+    "recovered_sold_gold_oz": "0.00",
+    "conservation": "68572+23284+20+24=91900"
+  },
+  "debt": {
+    "wagon_due_1878_01_26": "293.27",
+    "wagon_principal": "265.00",
+    "mine_note_due_1878_09_17": "354.00",
+    "mine_note_principal": "300.00",
+    "total_principal": "565.00",
+    "total_existing_maturities": "647.27",
+    "unrestricted_owner_above_original_wagon_reserve": "7.83"
+  },
+  "proposed_wagon_note_extension_unaccepted": {
+    "seller": "Elias Voss",
+    "old_total_due": "293.27",
+    "existing_due": "1878-01-26",
+    "proposed_cash_paid_1878_01_26": "60.00",
+    "of_which_old_obligation_paid": "55.00",
+    "new_filing_fee": "5.00",
+    "new_principal_1878_01_26": "238.27",
+    "new_simple_annual_interest_percent": "18",
+    "new_term_months": 12,
+    "new_maturity": "1879-01-26",
+    "new_maturity_amount": "281.16",
+    "collateral": "existing wagon and two mules/harness; personal liability",
+    "status": "negotiated executable conditional option, requires player approval and signatures, no cash moved or loan altered"
+  },
+  "mill_site": {
+    "property": "Willow Crossing Yard",
+    "seller": "Edith Kessler",
+    "price": "210.00",
+    "seller_financed_down": "50.00",
+    "proposed_seller_note": "160.00",
+    "interest_percent": 12,
+    "term_months": 18,
+    "proposed_maturity": "188.80",
+    "legal_finding": "Seller certificate/patent reference cannot be reliably matched to the parcel. Historical Black Hills land patents can follow years after initial entries; fee-simple title NOT VERIFIED. No purchase authorized/executed.",
+    "water_rights": "not perfected; separate from land",
+    "tailings_rights": "not established",
+    "purchase_status": "blocked by owner full-title condition"
+  },
+  "mill_equipment_quote": {
+    "vendor": "Merrick Millwright & Supply",
+    "total": "260.00",
+    "proposed_down": "65.00",
+    "financed": "195.00",
+    "18month_maturity": "230.10",
+    "status": "unaccepted, subject to site rights"
+  },
+  "research_reference": "Deffeback v. Hawke (1885) describes 1878 Deadwood entry and 1882 patent; no assumption that unverified local filing grants title",
+  "population": 22,
+  "objectives_complete": 2,
+  "objectives_total": 7,
+  "pending_owner_decisions": [
+    "Refinance wagon before January 26 to preserve working capital or pay existing balance in full",
+    "How to finance continuing mine payroll after satisfying wagon obligation",
+    "Full-title mill-site purchase remains blocked by documentary chain; no construction without title/use rights"
+  ],
+  "playtest_finding": "VEIN-VALID-023: Under genuine payroll solvency and protected debt repayment, delegation cannot make an unprofitable unfunded mine operate; show consolidated solvency decision and demonstrate historical land-title delays. VEIN-UX-015: Combined financing/operations decision, not weekly microapprovals."
+}

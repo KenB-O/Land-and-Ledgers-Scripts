@@ -39,6 +39,9 @@ namespace LandLedgers.UI
         private Button speed1xButton;
 
         [SerializeField]
+        private Button realTimeButton;
+
+        [SerializeField]
         private Button speed2xButton;
 
         [SerializeField]
@@ -525,6 +528,7 @@ namespace LandLedgers.UI
         {
             pauseButton?.onClick.AddListener(OnPauseButtonClicked);
             speed1xButton?.onClick.AddListener(OnSpeed1xButtonClicked);
+            realTimeButton?.onClick.AddListener(OnRealTimeButtonClicked);
             speed2xButton?.onClick.AddListener(OnSpeed2xButtonClicked);
             speed4xButton?.onClick.AddListener(OnSpeed4xButtonClicked);
             speed6xButton?.onClick.AddListener(OnSpeed6xButtonClicked);
@@ -538,6 +542,7 @@ namespace LandLedgers.UI
         {
             pauseButton?.onClick.RemoveListener(OnPauseButtonClicked);
             speed1xButton?.onClick.RemoveListener(OnSpeed1xButtonClicked);
+            realTimeButton?.onClick.RemoveListener(OnRealTimeButtonClicked);
             speed2xButton?.onClick.RemoveListener(OnSpeed2xButtonClicked);
             speed4xButton?.onClick.RemoveListener(OnSpeed4xButtonClicked);
             speed6xButton?.onClick.RemoveListener(OnSpeed6xButtonClicked);
@@ -558,6 +563,7 @@ namespace LandLedgers.UI
             });
 
             AttachSpeedTooltip(speed1xButton, "1x Speed", SimulationSpeed.Speed1x, "Run the town clock at normal speed.");
+            AttachSpeedTooltip(realTimeButton, "Real Time", SimulationSpeed.RealTime, "Advance exactly one simulated second per real second.");
             AttachSpeedTooltip(speed2xButton, "2x Speed", SimulationSpeed.Speed2x, "Run the town clock at a steady fast pace.");
             AttachSpeedTooltip(speed4xButton, "4x Speed", SimulationSpeed.Speed4x, "Fast-forward through short waits.");
             AttachSpeedTooltip(speed6xButton, "6x Speed", SimulationSpeed.Speed6x, "Fast-forward through routine town activity.");
@@ -589,6 +595,11 @@ namespace LandLedgers.UI
         private void OnSpeed1xButtonClicked()
         {
             timeManager?.SetSpeed(SimulationSpeed.Speed1x);
+        }
+
+        private void OnRealTimeButtonClicked()
+        {
+            timeManager?.SetSpeed(SimulationSpeed.RealTime);
         }
 
         private void OnSpeed2xButtonClicked()
@@ -756,6 +767,7 @@ namespace LandLedgers.UI
             RefreshPauseButtonLabel(speed);
             ApplyButtonState(pauseButton, speed == SimulationSpeed.Paused);
             ApplyButtonState(speed1xButton, speed == SimulationSpeed.Speed1x);
+            ApplyButtonState(realTimeButton, speed == SimulationSpeed.RealTime);
             ApplyButtonState(speed2xButton, speed == SimulationSpeed.Speed2x);
             ApplyButtonState(speed4xButton, speed == SimulationSpeed.Speed4x);
             ApplyButtonState(speed6xButton, speed == SimulationSpeed.Speed6x);
@@ -822,6 +834,7 @@ namespace LandLedgers.UI
             LandLedgersTypography.ApplyRole(systemStatusMessageText, LandLedgersTypography.TextRole.HelperText);
             ApplySpeedButtonTypography(pauseButton);
             ApplySpeedButtonTypography(speed1xButton);
+            ApplySpeedButtonTypography(realTimeButton);
             ApplySpeedButtonTypography(speed2xButton);
             ApplySpeedButtonTypography(speed4xButton);
             ApplySpeedButtonTypography(speed6xButton);
@@ -939,6 +952,7 @@ namespace LandLedgers.UI
             dateText ??= FindChildComponent<TMP_Text>("HUD_DateText");
             pauseButton ??= FindChildComponent<Button>("HUD_TimeSpeed_Pause");
             speed1xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_1x");
+            realTimeButton ??= FindChildComponent<Button>("HUD_TimeSpeed_RealTime");
             speed2xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_2x");
             speed4xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_4x");
             speed6xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_6x");

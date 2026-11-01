@@ -1,0 +1,183 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "checkpoint": "VEIN-IV-1877-06-09",
+  "date": "1877-06-09",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-06-08.json",
+  "status": "Soft Continuity: beginning-to-date owner cash incomplete due to earlier subsistence/living-expense gap; this period balances independently",
+  "population_permanent": 22,
+  "cash": {
+    "owner_recorded_open": "979.95",
+    "owner_recorded_close": "979.95",
+    "freight_business_open": "84.35",
+    "freight_business_close": "83.25",
+    "mine_business_cash": "not applicable: no separate mine Business created"
+  },
+  "financial_movements": [
+    {
+      "entity": "Mercer Freight & Cartage",
+      "event": "feed and animal care June 9",
+      "amount": "-1.10",
+      "type": "expense, settled"
+    },
+    {
+      "entity": "Owner mining operation",
+      "event": "Amos workday June 9",
+      "amount": "4.50",
+      "type": "wage accrued, unpaid; not a cash movement"
+    },
+    {
+      "entity": "Mercer Freight & Cartage",
+      "event": "Eli workday June 9",
+      "amount": "3.00",
+      "type": "wage accrued, unpaid; not a cash movement"
+    }
+  ],
+  "obligations": {
+    "owner_secured_wagon_note_principal": "265.00",
+    "interest_accrued_approx_as_of_checkpoint": "1.63",
+    "due_date": "1878-01-26",
+    "contract_maturity_payment": "293.27",
+    "owner_mine_wages_payable": "4.50",
+    "freight_business_wages_payable": "18.00",
+    "other_note": "Owner historical personal expenses remain under review and are not forced into cash by a balancing entry"
+  },
+  "personnel": {
+    "Amos Polk": {
+      "employer": "player personally, mining operation (no mine Business entity yet)",
+      "role": "Lead Miner",
+      "agreement_date": "1877-06-08",
+      "start_date": "1877-06-09",
+      "indefinite": true,
+      "wage_per_worked_day": "4.50",
+      "schedule": "6 days/week (Mon–Sat), approx. 9 hours/day, when assigned",
+      "pay": "weekly for work done",
+      "wages_accrued_current_agreement": "4.50",
+      "wages_paid_current_agreement": "0.00",
+      "delegated_authority": [
+        "routine work preparation, inspection and staffing referrals",
+        "plan access and labor arrangements"
+      ],
+      "prohibited_without_player_approval": [
+        "hire additional employees",
+        "sign supply/purchase agreements",
+        "start substantial excavation",
+        "borrow money or acquire equipment"
+      ]
+    },
+    "Eli Ward": {
+      "employer": "Mercer Freight & Cartage",
+      "role": "acting manager and driver",
+      "wage_per_day": "3.00",
+      "freight_payroll_due": "18.00",
+      "status": "trial active through June 10; managerial authority as previously instructed"
+    }
+  },
+  "recruitment": {
+    "referred_person": "Jonas Calder",
+    "existing_resident": true,
+    "relation": "Known earlier guide and local timber worker; Amos contacted him by referral",
+    "proposed_daily_wage": "3.25",
+    "availability": "Potential June 11 if household timber duties permit",
+    "status": "interested but no offer accepted or employment created",
+    "qualification": "experienced with timber and manual carrying; underground mining ability unverified"
+  },
+  "mining": {
+    "site": "Juniper No. 1",
+    "right": "recorded unpatented lode claim; legal validity subject to underlying law",
+    "deposit_size_player": "Not enough information",
+    "workfront": "existing shallow open cut; development not authorized",
+    "stockpile_ore_tons": 0,
+    "ore_extracted_tons": 0,
+    "gold_recovered_oz": 0,
+    "gold_sold_oz": 0,
+    "material": {
+      "creek_staging_lbs": 700,
+      "workfront_lbs": 0,
+      "components": {
+        "mine_tools_and_sacks_lbs": 105,
+        "timber_lbs": 595
+      },
+      "staging_to_workfront_distance_miles": "0.35"
+    },
+    "assessment": "Foot path inspected; manual carrying and team-lift of heavy pieces necessary; budget not yet authorized for extra hand or major ground support. No movement recorded.",
+    "proposed_plan": {
+      "crew": "Amos + one hired laborer",
+      "time_to_move_supplies": "approx 1-2 workdays after worker and route preparations",
+      "estimate_only": true,
+      "trial_excavation_authorized": false
+    }
+  },
+  "freight": {
+    "business_name": "Mercer Freight & Cartage",
+    "manager": "Eli Ward",
+    "business_cash": "83.25",
+    "assets_held_by": "Owner personally",
+    "assets_used_under": "existing usage agreement; loan stays with owner",
+    "new_revenue": "0.00",
+    "workload_alert": "no over-capacity alert"
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "name": "Legitimate prospect control, two in-situ samples and independent assay",
+      "complete": true,
+      "completion_date": "1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "name": "First settled mineral material or recovered-gold sale",
+      "progress": "0/1"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "name": "Six consecutive full months with at least $400 consolidated mine operating profit and >=4 profitable months",
+      "progress": "0 qualifying windows"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "name": "650 troy oz cumulatively recovered and sold",
+      "progress": "0/650"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "name": "Two independent newly established NPC businesses, >=90 days and five paid external transactions each",
+      "progress": "0/2"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "name": "850 troy oz recovered and sold in a consecutive 12 months with positive mine operating profit",
+      "progress": "0/850"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "name": "90 permanent residents maintained 60 consecutive days",
+      "progress": "22/90"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "name": "5,500 troy oz cumulative recovery/sales and $18,000 reconciled cost-basis owner equity",
+      "progress": "0/5500 oz; equity not audited"
+    }
+  ],
+  "findings_new": [
+    {
+      "id": "VEIN-VALID-007",
+      "status": "validated (conceptual)",
+      "title": "Lead miner hire preserves employer, authority and wage accrual without instant work-front material teleportation"
+    },
+    {
+      "id": "VEIN-UX-009",
+      "status": "provisional",
+      "title": "Work planning should expose logistics labor, arrival at work front and authority limits before the player authorizes excavation"
+    }
+  ]
+}

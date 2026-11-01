@@ -1,0 +1,258 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "checkpoint": "VEIN-IV-1877-06-27",
+  "date": "1877-06-27",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-06-19.json",
+  "mode": "Fictional conceptual autonomous simulation, NOT observed Unity runtime, real merchants or historical quotations",
+  "continuity": "SOFT owner cash: inherited unresolved personal living expense gap; period movements arithmetically reconciled",
+  "elapsed": {
+    "calendar_days": 8,
+    "dates": "1877-06-20 through 1877-06-27",
+    "sunday_rest": "1877-06-24",
+    "mine_paid_days": {
+      "Amos": [
+        "1877-06-20",
+        "1877-06-27"
+      ],
+      "Jonas": [
+        "1877-06-20"
+      ]
+    },
+    "other_days": "no mine work assigned/paid; previous contract day-rate without minimum guarantee"
+  },
+  "population": {
+    "permanent_persons": 22,
+    "new_residents": 0
+  },
+  "cash": {
+    "owner_open_recorded": "922.45",
+    "prior_mine_wages_paid": "15.50",
+    "new_mine_wages_accrued_and_paid": "12.25",
+    "assay_lab_fees_paid": "17.00",
+    "sampling_packaging_supplies_paid": "1.00",
+    "owner_to_freight_business_payment_for_custody_transport": "3.00",
+    "owner_total_disbursements": "48.75",
+    "owner_close_recorded": "873.70",
+    "freight_business_open": "65.05",
+    "freight_external_customer_cash_receipts": "24.00",
+    "freight_internal_sample_courier_receipt": "3.00",
+    "freight_prior_wages_settled": "6.00",
+    "freight_current_wages_paid": "12.00",
+    "freight_feed_and_care_paid": "8.80",
+    "freight_operating_supplies_paid": "0.95",
+    "freight_close_cash": "64.30",
+    "consolidation": "internal sample courier payment $3 is a transfer between player mine and wholly owned freight business; exclude from combined third-party income; record actual operating costs once"
+  },
+  "owner_obligations": {
+    "mine_wages_payable_open": "15.50",
+    "mine_wages_accrued_new": "12.25",
+    "mine_wages_paid_total": "27.75",
+    "mine_wages_payable_close": "0.00",
+    "wagon_secured_note_principal": "265.00",
+    "note_maturity_date": "1878-01-26",
+    "note_total_due_if_performed": "293.27",
+    "interest_accrued_through_date_estimate": "3.72",
+    "interest_payable_at_maturity": "term balloon; no current installment"
+  },
+  "freight": {
+    "name": "Mercer Freight & Cartage",
+    "manager": "Eli Ward",
+    "delegation": "autonomous ordinary freight, no new outfit/staff/capital without player",
+    "business_cash_open": "65.05",
+    "current_paid_workdays": 4,
+    "shipments": [
+      {
+        "id": "FRT-009",
+        "origin": "Juniper Gulch",
+        "destination": "Deadwood",
+        "external_goods": "280 lb merchant goods",
+        "associated_player_samples": "8 lb JN1 assay samples sealed under distinct custody",
+        "external_freight_received": "10.50",
+        "status": "delivered; samples handed to independent assay office June 22"
+      },
+      {
+        "id": "FRT-010",
+        "origin": "Deadwood",
+        "destination": "Juniper Gulch",
+        "external_goods": "430 lb dry merchandise",
+        "external_freight_received": "13.50",
+        "status": "delivered/paid June 27 with returned assay certificates"
+      }
+    ],
+    "previous_wages_owed": "6.00",
+    "current_wages_accrued": "12.00",
+    "wages_paid_total": "18.00",
+    "wages_payable_close": "0.00",
+    "cash_close": "64.30",
+    "manager_capacity_alert": false,
+    "growth_capital_authorized": false,
+    "wagon_title": "personal property subject to secured $265 note, under business use agreement"
+  },
+  "mining": {
+    "site": "Juniper No. 1",
+    "legal_interest": "unpatented mineral possessory claim, not full land title",
+    "new_excavation_authorized": false,
+    "new_broken_rock_short_tons": "0.00",
+    "crew": {
+      "Amos Polk": {
+        "pay_per_day": "4.50",
+        "new_workdays": 2,
+        "new_wages": "9.00"
+      },
+      "Jonas Calder": {
+        "pay_per_day": "3.25",
+        "new_workdays": 1,
+        "new_wages": "3.25"
+      }
+    },
+    "assay_and_transport_budget": "25.00",
+    "assay_and_transport_committed_and_paid": "21.00",
+    "unspent_authorized": "4.00",
+    "stockpiles_end": [
+      {
+        "id": "JN1-Q001",
+        "source_mass_lb": 1320,
+        "sampling_transfer_lb": 4,
+        "at_workfront_lb": 1316,
+        "at_workfront_short_tons": "0.658",
+        "grade_fire_assay_oz_per_short_ton": "0.56",
+        "representativeness": "single multi-increment stockpile composite; provisional"
+      },
+      {
+        "id": "JN1-M001",
+        "source_mass_lb": 1480,
+        "sampling_transfer_lb": 4,
+        "at_workfront_lb": 1476,
+        "at_workfront_short_tons": "0.738",
+        "grade_fire_assay_oz_per_short_ton": "0.07",
+        "representativeness": "single multi-increment stockpile composite; provisional"
+      },
+      {
+        "id": "JN1-W001",
+        "source_mass_lb": 4400,
+        "sampling_transfer_lb": 0,
+        "at_workfront_lb": 4400,
+        "at_workfront_short_tons": "2.200",
+        "grade_fire_assay_oz_per_short_ton": null,
+        "representativeness": "unassayed visual waste"
+      }
+    ],
+    "physical_samples": [
+      {
+        "id": "JN1-SQ001",
+        "parent_lot": "JN1-Q001",
+        "quantity_lb": 4,
+        "collection": "1877-06-20",
+        "location": "Deadwood independent assay office lab splits/residues, processed/retained; no return to stockpile",
+        "result_oz_per_short_ton": "0.56",
+        "source": "multi-increment across sorted stockpile; NOT earlier in-situ spot assay"
+      },
+      {
+        "id": "JN1-SM001",
+        "parent_lot": "JN1-M001",
+        "quantity_lb": 4,
+        "collection": "1877-06-20",
+        "location": "Deadwood independent assay office lab splits/residues, processed/retained; no return to stockpile",
+        "result_oz_per_short_ton": "0.07",
+        "source": "multi-increment across mixed stockpile; NOT earlier in-situ spot assay"
+      }
+    ],
+    "sample_manifest": "8 lb shipped under freight tracking and lab receipt; lab certificates returned June 27",
+    "mass_conservation_lb": "1316+1476+4400 at mine + 8 assayed samples=7200 original lb; no new rock, losses, metal recovered or sales",
+    "safety": "loose edge still requires revised safe bench-back/support plan before excavation",
+    "geology_size_public_knowledge": "Not enough information",
+    "actual_recovered_gold_troy_oz": "0.00",
+    "actual_sold_gold_troy_oz": "0.00",
+    "buying_offers": [
+      {
+        "counterparty": "Reese Ore Agency, Deadwood (fictional NPC)",
+        "goods": "JN1-Q001, remaining 1316 lb 0.658 short ton",
+        "price_for_lot": "2.50",
+        "delivery": "delivered to Deadwood buyers yard, at buyer scale",
+        "verification": "subject to lot inspection and check assay; written terms and price confirmation before dispatch",
+        "deadline": "1877-07-07",
+        "buyer_custody_status": "none; quote only",
+        "cost_barrier": "two wagon loads at conservative 1000-lb load limit plus mine-to-creek labor, much higher than bid"
+      },
+      {
+        "counterparty": "Deadwood Custom Stamp Works (fictional NPC)",
+        "goods": "sorted candidate rock lots",
+        "price": "$6.00 per short ton; $18.00 minimum treatment charge per batch; buyer does not guarantee gold recovery",
+        "minimum": "will accept up to current 1.396 t as paid trial batch under $18 minimum per lot, but requires separate handling to avoid blended assays",
+        "delivery": "buyer mill in Deadwood, freight additional, separate lot handling terms need agreement",
+        "status": "nonbinding service offer; no processing authorized"
+      }
+    ],
+    "approx_gross_gold_content_illustrative": "JN1-Q001 0.658 * 0.56 = 0.36848 troy oz, JN1-M001 0.738 * 0.07 = 0.05166, sum 0.42014 troy oz (assay extrapolation only; NOT recovered or certified saleable)",
+    "economic_note": "At approximately $20.67/oz nominal gold, illustrative gross metal content is $8.68 before extraction/recovery/haul/processing/discounts; tiny lots uneconomic for existing 2-load transfer",
+    "gold_recovered": "0",
+    "gold_sold": "0"
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "description": "Legally control mineral prospect, two documented in-situ samples and independent assay",
+      "status": "complete",
+      "completed_on": "1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "description": "First actual paid recovered gold or mineral sale",
+      "progress": "0/1"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "description": "Mine operating profit >= $400 over six consecutive full months with four individually profitable months",
+      "progress": "0 qualifying six-month windows"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "description": "650 cumulative recovered-and-sold troy oz",
+      "progress": "0/650 oz"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "description": "Two new independently NPC-owned businesses operating 90 days and each with five outside paid transactions",
+      "progress": "0/2"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "description": "850 recovered-and-sold troy oz in 12 consecutive months with positive mine operating profit",
+      "progress": "0/850 oz"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "description": "90 permanent residents sustained 60 days",
+      "progress": "22/90 residents"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "description": "5,500 cumulative recovered-and-sold troy oz and $18,000 cost-basis reconciled owner equity",
+      "progress": "0/5500 oz; equity not audited"
+    }
+  ],
+  "findings_new": [
+    {
+      "id": "VEIN-VALID-010",
+      "name": "Stockpile composite assays consume/separate sampled physical mass, not duplicate gold or apply spot assays to all rock"
+    },
+    {
+      "id": "VEIN-CAL-005",
+      "name": "Small hand-mined parcel transport/custody costs overwhelm contained metal; show landed unit economics before paid sale"
+    },
+    {
+      "id": "VEIN-UX-011",
+      "name": "Assay result cards display sample provenance, assay uncertainty and stockpile grades separate from recovered gold"
+    }
+  ],
+  "next_decision": "Choose loss-making small delivery sale, evaluate controlled improved-grade sampling/physical treatment, or authorize ground-edge stabilization and economically sized extraction; no sale, no excavation currently authorized."
+}

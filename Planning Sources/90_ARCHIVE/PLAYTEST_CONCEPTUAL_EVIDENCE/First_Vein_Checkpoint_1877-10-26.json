@@ -1,0 +1,214 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "Fictional autonomous conceptual playtest; not actual Unity execution",
+  "checkpoint": "VEIN-IV-1877-10-26",
+  "date": "1877-10-26",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-10-05.json",
+  "days_advanced": 21,
+  "user_authorization": "Accept conditional $39.50 Black Hills Ore Syndicate claim-side sale of Q005+Q006, total 9592 lb, only at full price with buyer-paid handling/transport and physical delivery/payment. In parallel South Road Bench full title/water/tailings and seek mill-related seller finance/capital terms without commitment. Amos and Eli autonomous routine operations, hiring/sales/major transactions retained to owner.",
+  "sale": {
+    "id": "ORE-SALE-003",
+    "buyer": "Black Hills Ore Syndicate",
+    "inspection_date": "1877-10-08",
+    "buyer_accepted_full_price": true,
+    "physical_collection_complete": "1877-10-11",
+    "cash_collected_date": "1877-10-11",
+    "buyer_paid_handling_transport": true,
+    "no_price_reduction": true,
+    "lots": [
+      {
+        "lot": "JN1-Q005",
+        "qty_lb": 5596,
+        "receipt_allocation_usd": "12.00"
+      },
+      {
+        "lot": "JN1-Q006",
+        "qty_lb": 3996,
+        "receipt_allocation_usd": "27.50"
+      }
+    ],
+    "total_sold_lb": 9592,
+    "owner_cash_collected_usd": "39.50",
+    "contract_status": "Closed after physical handoff and collected cash; neither buyer stock nor freight revenue double-counted",
+    "new_gold_recovered_sold_oz": "0.00"
+  },
+  "mine_material_conservation": {
+    "opening_untreated_at_site_lb": 78164,
+    "sold_this_period_lb": 9592,
+    "new_excavation_lb": 0,
+    "closing_quartz_lb": 0,
+    "closing_mixed_lb": 15372,
+    "closing_waste_lb": 53200,
+    "closing_untreated_at_site_lb": 68572,
+    "historical_ore_sold_cumulative_lb": 23284,
+    "historical_hand_processed_lb": 20,
+    "historical_laboratory_sample_lb": 24,
+    "all_time_excavated_lb": 91900,
+    "conservation_check": "68572+23284+20+24=91900 lb",
+    "unsold_physically_recovered_gold_troy_oz_provisional": "0.0044",
+    "recovered_and_sold_gold_troy_oz": "0.00",
+    "paid_raw_ore_sales_cumulative_usd": "95.25"
+  },
+  "mine_management": {
+    "manager": "Amos Polk",
+    "current_employees": [
+      "Amos Polk",
+      "Rafael Soto",
+      "Jonas Calder",
+      "Calvin Briggs",
+      "Ezra Harlan",
+      "Miles Fenwick"
+    ],
+    "working_status": "No full-crew excavation scheduled owing to protected wagon-balloon reserve and lack of viable ore-treatment economics; three paid Amos days for sale/land diligence; five other miners on unscheduled terms, no unpaid idle wage accrued under established arrangement, retention risk persists.",
+    "additional_amos_workdays_paid": 3,
+    "mine_wages_paid_usd": "13.50",
+    "mine_wages_payable_usd": "0.00",
+    "new_excavation_authorized": false,
+    "new_staff_authorized": false,
+    "sale_approval_remains_player_only": true
+  },
+  "land_due_diligence": {
+    "site": "South Road Bench",
+    "seller": "Eleanor Rusk",
+    "asking_price_usd": "165.00",
+    "area": "100x120 ft",
+    "verified": "physical boundary and wagon access; seller has registered local transfer/land office filing",
+    "critical_title_defect": "Source cited as patent was an ENTRY/APPLICATION reference, not proof of issued full legal fee title. Rusk presently cannot convey the verifiable full ownership demanded. No final purchase permitted.",
+    "fee_simple_title_established": false,
+    "water_use_rights_secured": false,
+    "tailings_use_secured": false,
+    "land_purchase_or_deposit_paid_usd": "0.00",
+    "seller_finance_indicative_unaccepted": {
+      "price_usd": "165.00",
+      "down_usd": "45.00",
+      "deferred_principal_usd": "120.00",
+      "simple_annual_interest": "12%",
+      "suggested_term": "12 months after conditional closing",
+      "deferred_payment_due_usd": "134.40",
+      "contingency": "only if transferable full title and water/tailings/legal conditions ultimately cured"
+    },
+    "alternative_path": "1872 Mining Law: a qualifying nonmineral separate millsite for lode work may be located with a possible patent application (up to five acres). Not instant fee-simple ownership, requires eligibility/survey/notice/no adverse claims, site use and water and tailings separately. No location made yet.",
+    "purchase_status": "No purchase, lease, deposit or site location"
+  },
+  "mill_financing_prospect": {
+    "counterparty": "Merrick Millwright & Supply (fictional in-world contractor)",
+    "offer_status": "Indicative proposal only; no contract/loan/credit executed",
+    "turnkey_cost_usd": "260.00",
+    "down_at_approval_usd": "100.00",
+    "seller_financed_principal_usd": "160.00",
+    "seller_financing_rate_simple_annual": "12%",
+    "term_months": 12,
+    "deferred_due_usd": "179.20",
+    "security": "Proposed lien on installed works/machinery plus owner recourse, not current claim or freight wagon",
+    "conditions": "Site and water/tailings rights, qualified installer/land arrangements, acceptance subject to credible construction schedule and actual contractor delivery",
+    "comparison": "Prior multi-vendor unfinanced build estimate $238; financed turnkey $260 before debt interest, site cost or animal/wages",
+    "no_money_received_or_spent": true
+  },
+  "freight": {
+    "manager": "Eli Ward",
+    "outside_receipts_usd": "49.00",
+    "internal_courier_receipts_usd": "2.50",
+    "driver_worked_days": 8,
+    "wages_paid_usd": "24.00",
+    "wages_payable_usd": "0.00",
+    "animal_care_paid_usd": "21.00",
+    "supplies_paid_usd": "5.50",
+    "no_new_hiring_expansion_or_loan": true,
+    "physical_equipment": "1 wagon + 2 mules personally owned and contractually used by freight business",
+    "cash_opening_usd": "110.75",
+    "cash_closing_usd": "111.75"
+  },
+  "cash_ledger": {
+    "owner_opening_usd": "340.85",
+    "owner_outside_ore_revenue_usd": "39.50",
+    "owner_amos_paid_wages_usd": "13.50",
+    "owner_title_record_fees_usd": "5.50",
+    "owner_water_tailings_enquiries_usd": "6.50",
+    "owner_internal_freight_courier_paid_usd": "2.50",
+    "owner_closing_usd": "352.35",
+    "freight_opening_usd": "110.75",
+    "freight_outside_customer_cash_usd": "49.00",
+    "freight_internal_courier_cash_usd": "2.50",
+    "freight_wages_paid_usd": "24.00",
+    "freight_animal_care_paid_usd": "21.00",
+    "freight_operating_supplies_paid_usd": "5.50",
+    "freight_closing_usd": "111.75",
+    "combined_opening_usd": "451.60",
+    "combined_closing_usd": "464.10",
+    "combined_change_usd": "12.50",
+    "internal_courier_consolidated_elimination_usd": "2.50",
+    "known_personal_living_expense_gap": "Preexisting unreconciled; absolute opening owner cash still provisional",
+    "unpaid_mine_wages_usd": "0.00",
+    "unpaid_freight_wages_usd": "0.00"
+  },
+  "debt": {
+    "wagon_principal_usd": "265.00",
+    "wagon_balloon_due_usd": "293.27",
+    "wagon_due": "1878-01-26",
+    "wagon_interest_accrued_approx_usd": "17.78",
+    "mine_note_principal_usd": "300.00",
+    "mine_balloon_due_usd": "354.00",
+    "mine_due": "1878-09-17",
+    "mine_note_interest_accrued_approx_usd": "5.77",
+    "total_principal_usd": "565.00",
+    "total_contractually_due_usd": "647.27",
+    "principal_cash_payments_in_period_usd": "0.00",
+    "protected_owner_reserve_usd": "293.27",
+    "owner_cash_above_reserve_usd": "59.08",
+    "interest_note": "Accrual is inside quoted final balloon amounts, not an additional charge or current cash expense."
+  },
+  "population": 22,
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Control claim, collect two in-situ samples, obtain independent assay",
+      "status": "complete"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First paid mineral or recovered gold sale",
+      "status": "complete Aug 2, 1877"
+    },
+    {
+      "id": 3,
+      "deadline": "1882-12-31",
+      "goal": "Recover and sell 650 cumulative troy ounces of gold",
+      "status": "0 / 650"
+    },
+    {
+      "id": 4,
+      "deadline": "1884-12-31",
+      "goal": "Two independent NPC-owned businesses each 90-day operation and 5 paid outside transactions",
+      "status": "0 / 2"
+    },
+    {
+      "id": 5,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered-and-sold troy ounces in one consecutive 12-month period with positive mine operating profit",
+      "status": "0 / 850"
+    },
+    {
+      "id": 6,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents sustained 60 consecutive days",
+      "status": "22 / 90"
+    },
+    {
+      "id": 7,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered-and-sold troy ounces plus $18000 reconciled owner equity",
+      "status": "0 / 5500; equity not audited"
+    }
+  ],
+  "completed_objectives": 2,
+  "total_objectives": 7,
+  "findings_added": [
+    "VEIN-VALID-020: physically completed buyer-collected sale with accepted full price and lot mass conserved; no recovered-ounce credit for raw rock",
+    "VEIN-RES-003: 1877 Black Hills title entry vs issued patent; investigate historic millsite patent path under 1872 law, no false immediate fee ownership",
+    "VEIN-CAL-015: raw ore sales cannot fund six-person payroll or a mill while maintaining pledged maturity reserves"
+  ],
+  "next_decisions": "Resolve owner acceptable property title path (including federal millsite patent, or more distant verified title); consider contractor financing vs investor capital; approve any further paid extraction using protected reserve or another funding solution. No further sale/excavation/land or mill purchase automatic."
+}

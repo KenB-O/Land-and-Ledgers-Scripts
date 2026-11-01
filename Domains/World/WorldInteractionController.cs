@@ -1,8 +1,13 @@
 using LandLedgers.CameraSystem;
 using LandLedgers.FirstLedger;
+using LandLedgers.Population;
+using LandLedgers.Reporting;
+using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
+using System.Text;
 
 namespace LandLedgers.World
 {
@@ -13,9 +18,15 @@ namespace LandLedgers.World
         [SerializeField] private StrategyCameraController strategyCamera;
         [SerializeField] private TownWorldController townWorld;
         [SerializeField] private GeneralStorePanelController managementPanel;
+        [SerializeField] private PopulationManager populationManager;
         [SerializeField] private LayerMask raycastMask = ~0;
         [SerializeField, Min(1f)] private float raycastDistance = 2000f;
         [SerializeField] private bool logTargetDiagnostics = false;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        [SerializeField] private bool showDevelopmentPersonDetails = true;
+#else
+        [SerializeField] private bool showDevelopmentPersonDetails;
+#endif
 
         [Header("Runtime Diagnostics")]
         [SerializeField] private int lastRaycastHitCount;
@@ -28,6 +39,27 @@ namespace LandLedgers.World
 
         private const float TargetDistanceTieTolerance = 0.08f;
         private readonly RaycastHit[] hits = new RaycastHit[32];
+        [SerializeField] private RectTransform personInspectionRoot;
+        [SerializeField] private TMP_Text personInspectionTitle;
+        [SerializeField] private TMP_Text personInspectionBody;
+        [SerializeField] private Button personInspectionCloseButton;
+
+        private void Awake()
+        {
+            AutoWire();
+            if (personInspectionCloseButton != null)
+            {
+                personInspectionCloseButton.onClick.AddListener(ClosePersonInspection);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (personInspectionCloseButton != null)
+            {
+                personInspectionCloseButton.onClick.RemoveListener(ClosePersonInspection);
+            }
+        }
 
         public int LastRaycastHitCount => lastRaycastHitCount;
         public int LastInspectableCandidateCount => lastInspectableCandidateCount;
@@ -36,11 +68,6 @@ namespace LandLedgers.World
         public float LastSelectedTargetDistance => lastSelectedTargetDistance;
         public string LastSelectedTargetSummary => lastSelectedTargetSummary;
         public string LastRouteSummary => lastRouteSummary;
-
-        private void Awake()
-        {
-            AutoWire();
-        }
 
         private void Update()
         {
@@ -151,6 +178,13 @@ namespace LandLedgers.World
                 return;
             }
 
+            if (target.Kind == WorldInspectableTargetKind.Person && target.PersonId >= 0)
+            {
+                ShowPersonInspection(target.PersonId);
+                lastRouteSummary = $"Person inspection for P{target.PersonId:000}.";
+                return;
+            }
+
             if (managementPanel == null)
             {
                 lastRouteSummary = $"No management panel available for {BuildTargetSummary(target)}.";
@@ -244,6 +278,11 @@ namespace LandLedgers.World
                 priority += 300;
             }
 
+            if (target.Kind == WorldInspectableTargetKind.Person)
+            {
+                priority += 500;
+            }
+
             if (target.PlotId >= 0)
             {
                 priority += 100;
@@ -264,7 +303,8 @@ namespace LandLedgers.World
                 return "none";
             }
 
-            return $"{target.Kind} target | plot {target.PlotId:000} | building {target.BuildingId:000}";
+            string person = target.PersonId >= 0 ? $" | person {target.PersonId:000}" : string.Empty;
+            return $"{target.Kind} target | plot {target.PlotId:000} | building {target.BuildingId:000}{person}";
         }
 
         private static bool IsInspectionOnlyTarget(WorldInspectableTarget target)
@@ -293,6 +333,123 @@ namespace LandLedgers.World
             strategyCamera ??= FindAnyObjectByType<StrategyCameraController>();
             townWorld ??= FindAnyObjectByType<TownWorldController>();
             managementPanel ??= FindAnyObjectByType<GeneralStorePanelController>();
+            populationManager ??= FindAnyObjectByType<PopulationManager>();
+        }
+
+        private void ShowPersonInspection(int personId)
+        {
+            AutoWire();
+            PersonState person = populationManager != null && populationManager.State != null
+                ? populationManager.State.GetPerson(personId)
+                : null;
+            if (person == null)
+            {
+                lastRouteSummary = $"Person P{personId:000} is not present in the authoritative population registry.";
+                return;
+            }
+
+            managementPanel?.CloseManagementPanel();
+
+            if (personInspectionRoot == null || personInspectionTitle == null || personInspectionBody == null)
+            {
+                lastRouteSummary = "Person inspection panel is not authored or its serialized references are incomplete.";
+                return;
+            }
+
+            personInspectionTitle.text = string.IsNullOrWhiteSpace(person.DisplayName) ? "Resident" : person.DisplayName.Trim();
+            personInspectionBody.text = BuildPersonInspectionText(person);
+            personInspectionRoot.gameObject.SetActive(true);
+            personInspectionRoot.SetAsLastSibling();
+        }
+
+        private string BuildPersonInspectionText(PersonState person)
+        {
+            PopulationState state = populationManager.State;
+            HouseholdState household = person.householdId >= 0 ? state.GetHousehold(person.householdId) : null;
+            var text = new StringBuilder(512);
+            AppendPersonField(text, "Person ID", $"P{person.id:000}", showDevelopmentPersonDetails);
+            AppendPersonField(text, "Age", person.age >= 0 ? $"{person.age} years" : null, true);
+            AppendPersonField(text, "Household", household != null ? household.householdName : null, showDevelopmentPersonDetails || household != null);
+            AppendPersonField(text, "Occupation", !string.IsNullOrWhiteSpace(person.professionName) ? person.professionName : person.professionId, showDevelopmentPersonDetails || !string.IsNullOrWhiteSpace(person.professionName));
+            AppendPersonField(text, "Schedule", person.scheduleState.ToString(), showDevelopmentPersonDetails);
+            AppendPersonField(text, "Home building", person.homeBuildingId >= 0 ? person.homeBuildingId.ToString("000") : null, showDevelopmentPersonDetails);
+            AppendPersonField(text, "Workplace", person.workplaceBuildingId >= 0 ? person.workplaceBuildingId.ToString("000") : null, showDevelopmentPersonDetails);
+            AppendPersonField(text, "Destination", person.currentDestinationBuildingId >= 0 ? person.currentDestinationBuildingId.ToString("000") : null, showDevelopmentPersonDetails);
+
+            AppendRelations(text, person);
+            AppendCapabilityEvidence(text, person);
+
+            if (showDevelopmentPersonDetails)
+            {
+                text.AppendLine();
+                text.AppendLine("DEVELOPMENT DETAILS");
+                AppendPersonField(text, "Status", person.deathDayIndex >= 0 ? $"Deceased on day {person.deathDayIndex}" : person.isOffMap ? "Off map" : "Living, on map", true);
+                AppendPersonField(text, "Wage snapshot", person.wage.weeklyWage > 0 ? $"{person.wage.weeklyWage} cents per week" : null, person.wage.weeklyWage > 0);
+            }
+
+            return text.ToString().TrimEnd();
+        }
+
+        private static void AppendPersonField(StringBuilder text, string label, string value, bool isKnown)
+        {
+            text.Append(label).Append(": ").AppendLine(isKnown && !string.IsNullOrWhiteSpace(value) ? value : "Unknown");
+        }
+
+        private void AppendRelations(StringBuilder text, PersonState person)
+        {
+            text.AppendLine();
+            text.AppendLine("RELATIONS");
+            KinshipRegistry kinship = populationManager != null ? populationManager.Kinship : null;
+            if (kinship == null)
+            {
+                AppendPersonField(text, "Family connections", null, false);
+                return;
+            }
+
+            AppendRelationGroup(text, "Spouse", kinship.GetSpouses(person.id));
+            AppendRelationGroup(text, "Parents", kinship.GetParents(person.id));
+            AppendRelationGroup(text, "Children", kinship.GetChildren(person.id));
+            AppendRelationGroup(text, "Siblings", kinship.GetRelated(person.id, KinshipRelation.Sibling));
+        }
+
+        private void AppendRelationGroup(StringBuilder text, string label, System.Collections.Generic.List<int> relatedIds)
+        {
+            if (relatedIds == null || relatedIds.Count == 0)
+            {
+                AppendPersonField(text, label, showDevelopmentPersonDetails ? "No recorded relation" : null, showDevelopmentPersonDetails);
+                return;
+            }
+
+            var names = new StringBuilder();
+            for (int i = 0; i < relatedIds.Count; i++)
+            {
+                PersonState relative = populationManager.State.GetPerson(relatedIds[i]);
+                if (i > 0) names.Append(", ");
+                names.Append(relative != null ? relative.DisplayName.Trim() : $"P{relatedIds[i]:000}");
+                if (showDevelopmentPersonDetails) names.Append($" [P{relatedIds[i]:000}]");
+            }
+
+                AppendPersonField(text, label, names.ToString(), true);
+        }
+
+        private static void AppendCapabilityEvidence(StringBuilder text, PersonState person)
+        {
+            LandLedgers.Skills.CapabilityEvidenceReading reading = CapabilityPresentation.FromPerson(person);
+            string value = CapabilityPresentation.FormatReading(reading);
+            bool isKnown = reading != null && reading.Confidence != LandLedgers.Skills.CapabilityConfidence.Insufficient;
+            AppendPersonField(text, "Work capability estimate", value, isKnown);
+            if (isKnown && !string.IsNullOrWhiteSpace(reading.Basis))
+            {
+                AppendPersonField(text, "Evidence", reading.Basis, true);
+            }
+        }
+
+        private void ClosePersonInspection()
+        {
+            if (personInspectionRoot != null)
+            {
+                personInspectionRoot.gameObject.SetActive(false);
+            }
         }
     }
 }

@@ -1,0 +1,23 @@
+Topic,Exact_relative_path,Description,Status
+Start,0000_START_HERE_READ_ME_FIRST.md,Current root navigation,MUST READ FIRST
+Agent instructions,AGENTS.md,"Agent behaviour, version/authority and deployment",MUST READ SECOND
+Gameplay governing,01_GOVERNING_ORIGINALS/Canonical_Bible_XXXI_Source_2026-10-07.pdf,"Complete governing Canon, 346 PDF pages",AUTHORITATIVE
+Gameplay searchable,01_GOVERNING_ORIGINALS/Canonical_Bible_XXXI_Source_2026-10-07_FULL_PAGINATED.txt,Full text / page markers for Canon,SEARCH AID ONLY
+Technical governing,01_GOVERNING_ORIGINALS/Technical_Bible_XIV_Source_2026-10-07.pdf,"Complete governing Technical, 170 PDF pages",AUTHORITATIVE SUBORDINATE TO CANON
+Technical searchable,01_GOVERNING_ORIGINALS/Technical_Bible_XIV_Source_2026-10-07_FULL_PAGINATED.txt,Full text / page markers for Technical,SEARCH AID ONLY
+Approved 1-105,02_APPROVED_AND_SOURCE_BACKED_UPDATES/01_APPROVED_PROPOSALS_001_TO_105.md,Decision register summaries,APPROVED DESIGN DIRECTION
+First Vein Canon source,02_APPROVED_AND_SOURCE_BACKED_UPDATES/02_FIRST_VEIN_CANON_RECONCILIATION_SOURCE.md,Source-backed integration proposal,DESIGN INPUT; APPLY THROUGH AUTHORITY REVIEW
+First Vein Technical source,02_APPROVED_AND_SOURCE_BACKED_UPDATES/03_FIRST_VEIN_TECHNICAL_REQUIREMENTS_SOURCE.md,Implementation requirements pending code audit,TEST/IMPLEMENTATION TARGETS
+Pending 106-145,02_APPROVED_AND_SOURCE_BACKED_UPDATES/04_PENDING_PROPOSALS_106_TO_145.md,Do not silently promote,PENDING
+Historical events,03_CURRENT_SPECIALIST_REFERENCES/03_Historical_Events_and_Timeline.pdf,Historical-regime research and dated events,REFERENCE
+Legal history,03_CURRENT_SPECIALIST_REFERENCES/04_Historical_Law_Land_and_Institutions.pdf,"Historical laws, rights and research holds",REFERENCE
+Occupations,03_CURRENT_SPECIALIST_REFERENCES/05_Occupations_Demography_and_Workforce.pdf,112 occupational descriptions + workforce,REFERENCE
+Construction,03_CURRENT_SPECIALIST_REFERENCES/06_Historical_Construction_and_Infrastructure.pdf,Work productivity and building elapsed-time calibration,REFERENCE
+Economy,03_CURRENT_SPECIALIST_REFERENCES/07_Historical_Economy_and_Prices.pdf,Source-backed economic evidence + gaps,REFERENCE
+Scenarios,03_CURRENT_SPECIALIST_REFERENCES/08_Scenarios_and_Playtests.pdf,All peer scenarios and conceptual tests,"REFERENCE, NOT UNITY RESULT"
+Decisions,03_CURRENT_SPECIALIST_REFERENCES/09_Implementation_Decisions_and_Roadmap.pdf,Prior P0-P2 roadmaps,HISTORICAL WORKING REFERENCE
+Full text source anchors,05_TRACEABILITY/ALL_5046_SOURCE_ANCHORS_COVERAGE.csv,Anchor rows each with PDF source page,PROVISIONAL INDEX
+Corrected tests,06_SCENARIOS_AND_TESTS/CORRECTED_16_REGRESSION_FIXTURE_REFERENCES.csv,Source checked fixtures,TEST SPECIFICATIONS
+First Vein 7 goals,06_SCENARIOS_AND_TESTS/FIRST_VEIN_SEVEN_GOALS_SOURCE.md,Seven exact game goals and conceptual results,SCENARIO SOURCE; NOT UNITY VERIFIED
+Codex P0 handoff,07_CODEX_IMPLEMENTATION_HANDOFF/READ_FIRST_IMPLEMENTATION_PRIORITIES.md,Prioritized repository audit and implementation roadmap,ACTIONABLE HANDOFF
+Past file preservation,90_ARCHIVE/PRIOR_PACKAGE_CONTENT_MAP.csv,Older v2.1/2.2/2.3 contents mapped by SHA,ARCHIVAL EVIDENCE

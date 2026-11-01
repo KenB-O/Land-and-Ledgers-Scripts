@@ -28,29 +28,35 @@ namespace LandLedgers.Economy.Creation
         [SerializeField, Min(0)]
         private int startingCapitalCents;
 
+        [SerializeField, Min(-1), Tooltip("Optional stable Person ID for an explicitly authored development founder. -1 keeps normal occupation-based founder resolution.")]
+        private int ownerPersonId = -1;
+
         public BusinessType BusinessType => businessType;
         public string DisplayName => displayName ?? string.Empty;
         public string OwnerDisplayName => ownerDisplayName ?? "Town";
         public PremisesRequirement PremisesRequirement => premisesRequirement ?? new PremisesRequirement();
         public int StartingCapitalCents => Mathf.Max(0, startingCapitalCents);
+        public int OwnerPersonId => ownerPersonId;
 
         public OpeningRosterEntry(
             BusinessType businessType,
             string displayName,
             string ownerDisplayName,
             PremisesRequirement premisesRequirement,
-            int startingCapitalCents = 0)
+            int startingCapitalCents = 0,
+            int ownerPersonId = -1)
         {
             this.businessType = businessType;
             this.displayName = displayName ?? string.Empty;
             this.ownerDisplayName = ownerDisplayName ?? "Town";
             this.premisesRequirement = premisesRequirement ?? new PremisesRequirement();
             this.startingCapitalCents = Mathf.Max(0, startingCapitalCents);
+            this.ownerPersonId = ownerPersonId;
         }
 
         public CreateBusinessIntent ToIntent()
         {
-            return ToIntent(BusinessOwnerIdentity.Npc(-1, ownerDisplayName, ownerDisplayName));
+            return ToIntent(BusinessOwnerIdentity.Npc(ownerPersonId, ownerDisplayName, ownerDisplayName));
         }
 
         /// <summary>
@@ -122,6 +128,25 @@ namespace LandLedgers.Economy.Creation
                     new PremisesRequirement(workshop: true, yardStorage: true, minAreaSqFt: 600), 8000),
                 new OpeningRosterEntry(BusinessType.LiveryFreight, "Opening Livery & Freight", "Town",
                     new PremisesRequirement(animalHousing: true, yardStorage: true, minAreaSqFt: 2000), 12000),
+            };
+        }
+
+        /// <summary>
+        /// Opt-in, no-capital development roster for the six-person vertical
+        /// slice. Stable founder IDs map to Kennedy (P001), Glen (P003), and
+        /// Jacob (P005). It creates no starting inventory or cash and is never
+        /// selected by ordinary scenarios.
+        /// </summary>
+        public static List<OpeningRosterEntry> SixPersonDevelopment()
+        {
+            return new List<OpeningRosterEntry>
+            {
+                new OpeningRosterEntry(BusinessType.GeneralStore, "Baldwin-Ooms General Store", "Kennedy Baldwin-Ooms",
+                    new PremisesRequirement(customerFacing: true, minAreaSqFt: 800), 0, 1),
+                new OpeningRosterEntry(BusinessType.Bakery, "Pierce Bakery", "Glen Pierce",
+                    new PremisesRequirement(customerFacing: true, foodHandling: true, minAreaSqFt: 500), 0, 3),
+                new OpeningRosterEntry(BusinessType.FuelDealer, "Boniecki Fuel Dealer", "Jacob Boniecki",
+                    new PremisesRequirement(yardStorage: true, minAreaSqFt: 600), 0, 5),
             };
         }
 

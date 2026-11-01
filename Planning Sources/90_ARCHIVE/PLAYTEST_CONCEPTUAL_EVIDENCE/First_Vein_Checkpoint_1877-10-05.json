@@ -1,0 +1,238 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "Fictional autonomous conceptual playtest; not actual Unity execution",
+  "checkpoint": "VEIN-IV-1877-10-05",
+  "date": "1877-10-05",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-09-14.json",
+  "days_advanced": 21,
+  "user_authorization": "Accept Deadwood Commercial Exchange loan of $300 at 18% simple annual, 12 mo, $9 fee and $354 due; conditional on documented transferable mineral claim interest. If funded, let Amos resume safe economically disciplined surface mining with existing 6 staff, maintain protected $293.27 wagon balloon reserve, ordinary sampling and land-search research. No new hires, ore sales, land purchase or mill building.",
+  "finance_and_lender": {
+    "name": "Deadwood Commercial Exchange",
+    "loan_status": "Funded",
+    "closing_date": "1877-09-17",
+    "gross_principal_usd": "300.00",
+    "fee_withheld_usd": "9.00",
+    "owner_cash_net_received_usd": "291.00",
+    "annual_simple_interest": "18%",
+    "total_interest_over_12_months_usd": "54.00",
+    "contractual_total_at_maturity_usd": "354.00",
+    "maturity_date": "1878-09-17",
+    "security": "First recorded security interest ONLY in the legally transferable Juniper No. 1 unpatented mineral claim possessory interest. Chain from Caleb Wainwright to owner in local records found unencumbered in the documented record search; federal validity/full fee title not established or implied.",
+    "guaranty": "Owner personal recourse per the signed note",
+    "assets_not_pledged": "Freight wagon, mules, harness and putative mill land excluded; pre-existing $265 personally secured wagon note continues separately.",
+    "no_equity_transferred": true,
+    "contract_terms_changed": false,
+    "new_note_interest_accrued_to_date_approx_usd": "2.66"
+  },
+  "mine_operations": {
+    "manager": "Amos Polk",
+    "employees": [
+      "Amos Polk",
+      "Rafael Soto",
+      "Jonas Calder",
+      "Calvin Briggs",
+      "Ezra Harlan",
+      "Miles Fenwick"
+    ],
+    "all_six_scheduled_days": 11,
+    "operating_dates": "Sep 18-22 (5), Sep 24-29 (6); Sunday off",
+    "all_six_daily_pay_usd": "21.00",
+    "all_six_wages_paid_usd": "231.00",
+    "additional_amos_paid_days": 2,
+    "additional_amos_wages_paid_usd": "9.00",
+    "wages_payable_usd": "0.00",
+    "mine_cash_supplies_usd": "18.50",
+    "mine_cash_assay_tests_usd": "17.00",
+    "mine_cash_internal_sample_courier_usd": "3.00",
+    "land_record_investigation_usd": "6.00",
+    "mine_work_types": "Safety check, surface benching/support, limited daylight hand-tool extraction and separate sorting; two lot-specific composite assays; no blasting, shafts, underground workings, major equipment, hiring or sales",
+    "safety_stop": "After Sep 29 stop new excavation due protected loan maturity reserve and another planned face support evaluation; not unsafe work authorized",
+    "new_lots": [
+      {
+        "id": "JN1-Q005",
+        "material": "Quartz-bearing candidate ore",
+        "gross_excavated_lb": 5600,
+        "lab_sample_lb": 4,
+        "remaining_lb": 5596,
+        "fire_assay_oz_per_short_ton": 0.31
+      },
+      {
+        "id": "JN1-M005",
+        "material": "Mixed altered rock",
+        "gross_excavated_lb": 3400,
+        "lab_sample_lb": 0,
+        "remaining_lb": 3400,
+        "fire_assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-W007",
+        "material": "Waste/overburden",
+        "gross_excavated_lb": 11800,
+        "lab_sample_lb": 0,
+        "remaining_lb": 11800
+      },
+      {
+        "id": "JN1-Q006",
+        "material": "Quartz-bearing candidate ore, separate exposure",
+        "gross_excavated_lb": 4000,
+        "lab_sample_lb": 4,
+        "remaining_lb": 3996,
+        "fire_assay_oz_per_short_ton": 2.4
+      },
+      {
+        "id": "JN1-M006",
+        "material": "Mixed altered rock",
+        "gross_excavated_lb": 2600,
+        "lab_sample_lb": 0,
+        "remaining_lb": 2600,
+        "fire_assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-W008",
+        "material": "Waste rock",
+        "gross_excavated_lb": 10000,
+        "lab_sample_lb": 0,
+        "remaining_lb": 10000
+      }
+    ],
+    "new_extraction_lb": 37400,
+    "new_extraction_short_tons": "18.70",
+    "new_laboratory_sample_lb": 8,
+    "lot_grade_caution": "Each grade only a representative composite of its sorted lot; not proven recovery, deposit average, continuation, or extracted gold",
+    "commercial": "Contacted ore agents for buyer inspection only; no acceptance. A $39.50 indication from Black Hills Ore Syndicate for both remaining quartz lots subject to on-site buyer inspection and buyer-paid collection, requires owner approval. Not counted as cash or receivable.",
+    "unresolved": "No known total deposit size, no proven scalable free-milling recovery, mine payroll unsustainable on claim-side raw-ore offers alone."
+  },
+  "mine_material_conservation": {
+    "opening_untreated_at_site_lb": 40772,
+    "new_broken_rock_lb": 37400,
+    "new_laboratory_sample_lb": 8,
+    "closing_untreated_at_site_lb": 78164,
+    "closing_quartz_lb": 9592,
+    "closing_mixed_lb": 15372,
+    "closing_waste_lb": 53200,
+    "historical_ore_sold_cumulative_lb": 13692,
+    "historical_hand_processed_lb": 20,
+    "historical_lab_samples_and_current_lb": 24,
+    "all_time_excavation_lb": 91900,
+    "check": "78164 current+13692 sold+20 hand processed+24 lab samples=91900 lb total excavated; no remaining quartz from prior already-sold Q001 to Q004",
+    "gold_recovered_provisional_unsold_troy_oz": "0.0044",
+    "gold_recovered_and_sold_troy_oz": "0.00",
+    "raw_ore_sale_revenue_cumulative_usd": "55.75"
+  },
+  "land_search": {
+    "south_road_bench": {
+      "seller": "Eleanor Rusk",
+      "asking_cash_price_usd": "165.00",
+      "approx_dimensions": "100 x 120 ft",
+      "status": "potential fee-title lot, not purchased. Deed chain and land-office patent reference preliminarily cross-matched, but complete title opinion/boundary and road easement formalities not obtained. Milling-water rights and tailings containment/disposal permissions remain separate and unsettled.",
+      "construction_not_authorized": true
+    },
+    "upper_road_terrace": "Prior Shaw $140 offer expired with unresolved title, no transfer",
+    "finch_creek_bench": "Finch title still evidence of only possessory interest; no acquisition",
+    "arrastra_quote_uncommitted_usd": "238.00",
+    "land_purchase_cash_paid": "0.00",
+    "mill_construction_cash_paid": "0.00"
+  },
+  "freight_operations": {
+    "manager": "Eli Ward",
+    "freight_status": "autonomous",
+    "external_customer_cash_collected_usd": "73.50",
+    "sample_courier_internal_cash_collected_usd": "3.00",
+    "wages_paid_usd": "36.00",
+    "wages_payable_usd": "0.00",
+    "animal_feed_and_care_paid_usd": "21.00",
+    "operating_supplies_paid_usd": "5.40",
+    "net_business_cash_change_usd": "14.10",
+    "no_additional_team_or_hiring": true
+  },
+  "finance_reconciliation": {
+    "owner_opening_cash_usd": "334.35",
+    "lender_net_cash_received_usd": "291.00",
+    "gross_loan_new_liability_usd": "300.00",
+    "fee_withheld_non_cash_again_usd": "9.00",
+    "owner_mine_workers_11_workdays_wages_paid_usd": "231.00",
+    "owner_amos_extra_wages_paid_usd": "9.00",
+    "owner_mine_supplies_paid_usd": "18.50",
+    "owner_fire_assay_paid_usd": "17.00",
+    "owner_internal_freight_paid_usd": "3.00",
+    "owner_land_search_paid_usd": "6.00",
+    "owner_closing_cash_usd": "340.85",
+    "freight_opening_cash_usd": "96.65",
+    "external_customer_cash_collected_usd": "73.50",
+    "internal_courier_cash_collected_usd": "3.00",
+    "freight_wages_paid_usd": "36.00",
+    "freight_animal_care_paid_usd": "21.00",
+    "freight_supplies_paid_usd": "5.40",
+    "freight_closing_cash_usd": "110.75",
+    "combined_opening_cash_usd": "431.00",
+    "combined_closing_cash_usd": "451.60",
+    "combined_cash_movement_usd": "20.60",
+    "protected_owner_reserve_usd": "293.27",
+    "owner_cash_above_reserve_usd": "47.58",
+    "wagon_principal_usd": "265.00",
+    "wagon_balloon_total_due_usd": "293.27",
+    "wagon_maturity": "1878-01-26",
+    "wagon_interest_accrued_approx_usd": "15.33",
+    "deadwood_loan_principal_usd": "300.00",
+    "deadwood_loan_balloon_usd": "354.00",
+    "deadwood_loan_maturity": "1878-09-17",
+    "current_mine_wages_payable_usd": "0.00",
+    "freight_wages_payable_usd": "0.00",
+    "personal_living_expense_gap": "Preexisting; not reconciled. Absolute owner cash not audited."
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Control claim, collect two in-situ samples, obtain independent assay",
+      "status": "complete"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First paid mineral or recovered gold sale",
+      "status": "complete Aug 2, 1877"
+    },
+    {
+      "id": 3,
+      "deadline": "1882-12-31",
+      "goal": "Recover and sell 650 cumulative troy ounces of gold",
+      "status": "0 / 650"
+    },
+    {
+      "id": 4,
+      "deadline": "1884-12-31",
+      "goal": "Two independent NPC-owned businesses each 90-day operation and 5 paid outside transactions",
+      "status": "0 / 2"
+    },
+    {
+      "id": 5,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered-and-sold troy ounces in one consecutive 12-month period with positive mine operating profit",
+      "status": "0 / 850"
+    },
+    {
+      "id": 6,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents sustained 60 consecutive days",
+      "status": "22 / 90"
+    },
+    {
+      "id": 7,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered-and-sold troy ounces plus $18000 reconciled owner equity",
+      "status": "0 / 5500; equity not audited"
+    }
+  ],
+  "completed_objectives": 2,
+  "total_objectives": 7,
+  "population": 22,
+  "player_restricted_actions": "No sale of ore, no staffing changes, no land purchase, no mill construction, no further loan/equity commitment without user approval.",
+  "findings": [
+    "VEIN-VALID-019: loan security attaches to claimant possessory interest, not assumed land fee title or wagon assets",
+    "VEIN-CAL-014: debt-funded labor buys output, but raw-rock receipts cannot sustain six-person payroll, requiring recovery value, productivity or strategy shift",
+    "VEIN-DES-011: autonomous foreman stops before protected liquidity floor while offering batched sale/property decisions"
+  ],
+  "next_decision": "Approve or decline buyer-collected raw quartz offer; decide whether reserve can be released or source new capital; continue legally clean owned mill-site option once water/tailings/easement terms are determined. No pending additional work without new cash/authority."
+}

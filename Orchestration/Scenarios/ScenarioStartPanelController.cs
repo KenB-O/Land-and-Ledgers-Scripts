@@ -179,6 +179,7 @@ namespace LandLedgers.FirstLedger
 
             if (clockStarted && scenarioDirector.SwitchScenario(scenarioAsset.ScenarioId))
             {
+                Debug.Log($"[ScenarioHUD] Started '{scenarioAsset.ScenarioId}' from asset '{scenarioAsset.name}' requesting {startDateLabel}; clock={clock.CurrentDate.Year:D4}-{clock.CurrentDate.Month:D2}-{clock.CurrentDate.DayOfMonth:D2} (dayIndex={clock.CurrentAbsoluteDayIndex}, timelineAnchor={clock.TimelineAnchor.Year:D4}-{clock.TimelineAnchor.Month:D2}-{clock.TimelineAnchor.Day:D2}).", this);
                 if (clock != null)
                 {
                     clock.SetPaused(false);

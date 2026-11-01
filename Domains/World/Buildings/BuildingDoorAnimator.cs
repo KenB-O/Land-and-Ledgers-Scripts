@@ -1,4 +1,5 @@
 using UnityEngine;
+using LandLedgers.Time;
 
 namespace LandLedgers.World
 {
@@ -14,6 +15,8 @@ namespace LandLedgers.World
         private bool setupValidated;
         private bool hasDoorActionTrigger;
         private int lastTriggerFrame = -1;
+        private float authoredAnimatorSpeed = 1f;
+        private bool authoredSpeedCaptured;
 
         public void TriggerDoorAction()
         {
@@ -47,6 +50,27 @@ namespace LandLedgers.World
             {
                 doorAnimator = GetComponentInChildren<Animator>(true);
             }
+
+            if (doorAnimator != null && !authoredSpeedCaptured)
+            {
+                authoredAnimatorSpeed = doorAnimator.speed;
+                authoredSpeedCaptured = true;
+            }
+        }
+
+        private void Update()
+        {
+            EnsureAnimator();
+            if (doorAnimator == null || !authoredSpeedCaptured)
+            {
+                return;
+            }
+
+            TimeManager clock = TimeManager.Instance;
+            doorAnimator.speed = SimulationAnimationScale.Resolve(
+                authoredAnimatorSpeed,
+                clock != null && clock.IsPaused,
+                clock != null ? clock.CurrentGameSecondsPerRealSecond : 1f);
         }
 
         private void ValidateSetup()
@@ -99,6 +123,14 @@ namespace LandLedgers.World
         {
             setupValidated = false;
             EnsureAnimator();
+        }
+
+        private void OnDisable()
+        {
+            if (doorAnimator != null && authoredSpeedCaptured)
+            {
+                doorAnimator.speed = authoredAnimatorSpeed;
+            }
         }
     }
 }

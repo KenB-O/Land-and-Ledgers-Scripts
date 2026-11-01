@@ -123,6 +123,119 @@ namespace LandLedgers.EditorTools
             Debug.Log("[CompactPlaytest] Main Scene now uses an 8–10 household, 22–30 resident profile and three legitimate opening Businesses. Canonical defaults remain unchanged.", bootstrapper);
         }
 
+        [MenuItem("Land & Ledgers/Author Six-Person Development Fixture")]
+        public static void AuthorSixPersonDevelopmentFixture()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                Debug.LogError("Exit Play Mode before authoring the six-person development fixture.");
+                return;
+            }
+
+            const string scenePath = "Assets/Main Scene.unity";
+            if (EditorSceneManager.GetActiveScene().path != scenePath)
+            {
+                if (!Application.isBatchMode)
+                {
+                    Debug.LogError("Open Assets/Main Scene.unity in Edit Mode before authoring the six-person development fixture.");
+                    return;
+                }
+
+                EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
+            }
+
+            const string fixturePath = "Assets/Core/Population/SixPersonDevelopmentFixture.asset";
+            SixPersonDevelopmentFixture fixture = AssetDatabase.LoadAssetAtPath<SixPersonDevelopmentFixture>(fixturePath);
+            if (fixture == null)
+            {
+                fixture = ScriptableObject.CreateInstance<SixPersonDevelopmentFixture>();
+                AssetDatabase.CreateAsset(fixture, fixturePath);
+            }
+
+            if (!fixture.Validate(out string fixtureError))
+            {
+                Debug.LogError($"Six-person fixture asset is invalid: {fixtureError}", fixture);
+                return;
+            }
+
+            FirstLedgerSliceBootstrapper bootstrapper = FindUnique<FirstLedgerSliceBootstrapper>("Game Systems");
+            if (bootstrapper == null)
+            {
+                Debug.LogError("Fixture asset was preserved, but Main Scene needs exactly one Game Systems bootstrapper.");
+                return;
+            }
+
+            SerializedObject serialized = new SerializedObject(bootstrapper);
+            SerializedProperty fixtureReference = serialized.FindProperty("developmentPopulationFixture");
+            SerializedProperty fixtureToggle = serialized.FindProperty("enableDevelopmentPopulationFixture");
+            if (fixtureReference == null || fixtureToggle == null)
+            {
+                Debug.LogError("The current bootstrapper does not expose the development fixture fields; the scene was not changed.", bootstrapper);
+                return;
+            }
+
+            fixtureReference.objectReferenceValue = fixture;
+            // The fixture is wired and inspectable but remains opt-in. Normal
+            // First Ledger and Sandbox starts therefore keep their own population.
+            fixtureToggle.boolValue = false;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(fixture);
+            AssetDatabase.SaveAssets();
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene());
+            Debug.Log("[PassXL] Six-person fixture assigned on Main Scene and left opt-in; enable it on Game Systems only for the isolated development startup.", bootstrapper);
+        }
+
+        [MenuItem("Land & Ledgers/Enable Six-Person Fixture for Verification")]
+        public static void EnableSixPersonFixtureForVerification() => SetSixPersonFixtureEnabled(true);
+
+        [MenuItem("Land & Ledgers/Restore Normal Main Scene Population")]
+        public static void RestoreNormalMainScenePopulation() => SetSixPersonFixtureEnabled(false);
+
+        private static void SetSixPersonFixtureEnabled(bool enabled)
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                Debug.LogError("Change the development population profile only in Edit Mode.");
+                return;
+            }
+
+            const string scenePath = "Assets/Main Scene.unity";
+            if (EditorSceneManager.GetActiveScene().path != scenePath)
+            {
+                if (!Application.isBatchMode)
+                {
+                    Debug.LogError("Open Assets/Main Scene.unity in Edit Mode before changing the development population profile.");
+                    return;
+                }
+                EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
+            }
+
+            FirstLedgerSliceBootstrapper bootstrapper = FindUnique<FirstLedgerSliceBootstrapper>("Game Systems");
+            if (bootstrapper == null)
+            {
+                Debug.LogError("Main Scene needs exactly one Game Systems bootstrapper.");
+                return;
+            }
+
+            SerializedObject serialized = new SerializedObject(bootstrapper);
+            SerializedProperty fixtureReference = serialized.FindProperty("developmentPopulationFixture");
+            SerializedProperty fixtureToggle = serialized.FindProperty("enableDevelopmentPopulationFixture");
+            if (fixtureReference == null || fixtureReference.objectReferenceValue == null || fixtureToggle == null)
+            {
+                Debug.LogError("The six-person fixture must be authored before it can be enabled.", bootstrapper);
+                return;
+            }
+
+            fixtureToggle.boolValue = enabled;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene());
+            Debug.Log(enabled
+                ? "[PassXL] Six-person development profile enabled for verification. Restore normal Main Scene population after the test."
+                : "[PassXL] Normal Main Scene population restored; six-person development profile remains assigned but opt-in.", bootstrapper);
+        }
+
         private static T FindUnique<T>(string objectName) where T : Component
         {
             T[] matches = Object.FindObjectsByType<T>();

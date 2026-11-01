@@ -352,6 +352,7 @@ namespace LandLedgers.Economy
             }
 
             WireEmploymentRegistryToBusinesses();
+            int ownerOperatorsBound = ReconcileOwnerOperatorPersonMirrors(population);
             int registered = 0;
             for (int personIndex = 0; personIndex < population.people.Count; personIndex++)
             {
@@ -416,6 +417,15 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
+                if (employer != null && HasOwnerOperatorSlot(employer, person.id))
+                {
+                    // Ownership-based operation is not a wage contract. Its
+                    // slot is explicit in the Business runtime; preserve the
+                    // Person's workplace/activity mirror without inventing an
+                    // EmploymentRelationship or payroll obligation.
+                    continue;
+                }
+
                 WorkerSlotState openSlot = null;
                 if (employer?.RuntimeState?.WorkerSlots != null)
                 {
@@ -440,8 +450,57 @@ namespace LandLedgers.Economy
             }
 
             populationManager.RecalculateHouseholdIncomeAndSummaries(
-                $"Resolved {registered} generated workplace offer(s) against active NPC Business contracts.");
+                $"Resolved {registered} generated workplace offer(s); bound {ownerOperatorsBound} named owner-operator(s) without creating wages.");
             return registered;
+        }
+
+        private int ReconcileOwnerOperatorPersonMirrors(PopulationState population)
+        {
+            if (population?.people == null || businesses == null || EmploymentRegistry == null) return 0;
+
+            int bound = 0;
+            foreach (BusinessInstanceState business in businesses)
+            {
+                if (business?.RuntimeState?.WorkerSlots == null
+                    || business.Owner?.OwnerKind != BusinessOwnerKind.Npc
+                    || business.Owner.PersonId < 0
+                    || business.AssignedBuildingId < 0
+                    || !HasOwnerOperatorSlot(business, business.Owner.PersonId))
+                {
+                    continue;
+                }
+
+                PersonState person = population.GetPerson(business.Owner.PersonId);
+                if (person == null || person.deathDayIndex >= 0 || person.isOffMap
+                    || EmploymentRegistry.GetActiveByEmployee(person.id).Count > 0)
+                {
+                    continue;
+                }
+
+                string typeName = business.BusinessType.ToString();
+                person.workplaceBuildingId = business.AssignedBuildingId;
+                person.professionId = $"owner_operator_{typeName.ToLowerInvariant()}";
+                person.professionName = $"Owner-operator, {BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)}";
+                person.wage = WageSnapshot.None();
+                bound++;
+            }
+
+            return bound;
+        }
+
+        private static bool HasOwnerOperatorSlot(BusinessInstanceState business, int personId)
+        {
+            if (business?.RuntimeState?.WorkerSlots == null || personId < 0) return false;
+            string ownerSlotId = $"owner:{personId}";
+            foreach (WorkerSlotState slot in business.RuntimeState.WorkerSlots)
+            {
+                if (slot != null && slot.IsFilled
+                    && string.Equals(slot.AssignedWorkerId, ownerSlotId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static void ClearUnresolvedGeneratedWorkplace(PersonState person)
@@ -800,7 +859,14 @@ namespace LandLedgers.Economy
             }
 
             int startupRepairs = NormalizeSharedBusinessStartupState("restore");
-            int created = EnsureOpeningBusinesses();
+            // A non-empty save is the authority for which Businesses exist.
+            // Filling missing entries from the current opening roster here
+            // makes a cold Continue depend on whichever roster happens to be
+            // configured in memory, and can silently add businesses that the
+            // saved campaign never owned. Only genuinely legacy saves with no
+            // saved Business entities use the opening roster migration.
+            bool hasSavedBusinessEntities = businesses.Count > 0;
+            int created = hasSavedBusinessEntities ? 0 : EnsureOpeningBusinesses();
             if (created > 0)
             {
                 startupRepairs += NormalizeSharedBusinessStartupState("restore core-fill");
@@ -827,7 +893,9 @@ namespace LandLedgers.Economy
                 ? "No owned transfer agreements resolved yet."
                 : savedTransferAgreementSummary;
             WireEmploymentRegistryToBusinesses();
-            status = $"Shared businesses restored. Total={businesses.Count}, CoreCreated={created}, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}.";
+            status = hasSavedBusinessEntities
+                ? $"Shared businesses restored from authoritative save. Total={businesses.Count}, RosterFill=0, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}."
+                : $"Shared businesses restored from legacy save. Total={businesses.Count}, CoreCreated={created}, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}.";
         }
 
         public void Configure(
@@ -4623,6 +4691,24 @@ namespace LandLedgers.Economy
         {
             if (business != null && business.BusinessType == BusinessType.Sawmill)
             {
+                return;
+            }
+
+            if (business?.RuntimeState != null
+                && (business.BusinessType == BusinessType.Bakery || business.BusinessType == BusinessType.FuelDealer))
+            {
+                // These businesses have detailed Task-backed production
+                // authorities, but the shared weekly category converter is not
+                // connected to them. Running the converter here would purchase
+                // aggregate inputs without a supplier/custody record and credit
+                // fixed-ratio output without the baker/fuel-yard operator doing
+                // work. Keep stock and cash untouched until their production
+                // drivers are bound to the shared Task and inventory authorities.
+                const string taskDriverBlockedReason = "Task-backed production driver is not connected; weekly category conversion is disabled";
+                business.ApplyWeeklyOperationResult(0);
+                business.RuntimeState.RecordWeeklyOperation(0, 0, "No production completed", taskDriverBlockedReason);
+                RecordOperationSummary(business, taskDriverBlockedReason);
+                AppendSummarySegment(summary, $"{business.BusinessType} production pending Task integration");
                 return;
             }
 
@@ -8915,6 +9001,15 @@ namespace LandLedgers.Economy
             if (entry == null)
             {
                 return null;
+            }
+
+            // Explicit development founders are stable registry references, not
+            // occupation hints. The population fixture is generated in this
+            // same bootstrap pass, so the authored ID must survive the earlier
+            // business-formation phase unchanged.
+            if (entry.OwnerPersonId >= 0)
+            {
+                return entry.ToIntent();
             }
 
             PersonState founder = FindOpeningFounder(entry.BusinessType);

@@ -140,6 +140,183 @@ namespace LandLedgers.Population
             return new PopulationGenerationResult(state, summary, hasErrors);
         }
 
+        /// <summary>
+        /// Builds the explicit Pass XL development cohort against actual
+        /// residential buildings in the generated TownWorld. This path is
+        /// intentionally separate from the calibrated ordinary population
+        /// generator and is only called when a development fixture is opted in.
+        /// </summary>
+        public static PopulationGenerationResult GenerateDevelopmentFixture(
+            TownWorldController townWorld,
+            PopulationGenerationSettings settings,
+            SixPersonDevelopmentFixture fixture,
+            KinshipRegistry kinship,
+            int startYear,
+            int startMonth,
+            int startDay)
+        {
+            PopulationState state = new();
+            if (townWorld == null || townWorld.Grid == null || townWorld.Buildings == null)
+            {
+                state.validationMessages.Add("ERROR: The six-person development fixture requires a generated TownWorld.");
+                return new PopulationGenerationResult(state, "Development population fixture failed: missing TownWorld.", true);
+            }
+
+            if (settings == null)
+            {
+                state.validationMessages.Add("ERROR: The six-person development fixture requires PopulationGenerationSettings for shared Person initialization.");
+                return new PopulationGenerationResult(state, "Development population fixture failed: missing population settings.", true);
+            }
+
+            if (fixture == null)
+            {
+                state.validationMessages.Add("ERROR: The six-person development fixture reference is null.");
+                return new PopulationGenerationResult(state, "Development population fixture failed validation.", true);
+            }
+
+            if (!fixture.Validate(out string fixtureError))
+            {
+                state.validationMessages.Add($"ERROR: Invalid six-person development fixture: {fixtureError}");
+                return new PopulationGenerationResult(state, "Development population fixture failed validation.", true);
+            }
+
+            List<BuildingRuntimeInfo> buildings = BuildRuntimeInfo(townWorld);
+            List<BuildingRuntimeInfo> residentialHomes = new();
+            List<BuildingRuntimeInfo> workplaces = new();
+            for (int i = 0; i < buildings.Count; i++)
+            {
+                BuildingRuntimeInfo building = buildings[i];
+                if (building.isHome && building.plotZone == PlotZone.Residential)
+                {
+                    residentialHomes.Add(building);
+                }
+
+                if (building.isWorkplace)
+                {
+                    workplaces.Add(building);
+                }
+            }
+
+            residentialHomes.Sort((left, right) => left.buildingId.CompareTo(right.buildingId));
+            if (residentialHomes.Count < fixture.Households.Count)
+            {
+                state.validationMessages.Add(
+                    $"ERROR: Fixture requires {fixture.Households.Count} distinct residential home buildings; " +
+                    $"the generated TownWorld has {residentialHomes.Count} residential household slots represented by buildings.");
+                return new PopulationGenerationResult(state, "Development population fixture failed: insufficient real homes.", true);
+            }
+
+            int seed = (townWorld.Settings != null ? townWorld.Settings.seed : 0) + settings.seedOffset + 0x51A6;
+            System.Random random = new(seed);
+            // This fixture is a fresh, isolated world. The ordinary generator's
+            // zero-based allocator remains unchanged.
+            state.RestorePersonIdAllocator(1);
+            state.RestoreHouseholdIdAllocator(1);
+
+            for (int householdIndex = 0; householdIndex < fixture.Households.Count; householdIndex++)
+            {
+                SixPersonDevelopmentFixture.HouseholdDefinition definition = fixture.Households[householdIndex];
+                if (definition.homeBuildingOrdinal >= residentialHomes.Count)
+                {
+                    state.validationMessages.Add(
+                        $"ERROR: Fixture Household '{definition.surname}' requests residential home ordinal " +
+                        $"{definition.homeBuildingOrdinal}, but only {residentialHomes.Count} real homes exist.");
+                    return new PopulationGenerationResult(state, "Development population fixture failed: home binding missing.", true);
+                }
+
+                BuildingRuntimeInfo home = residentialHomes[definition.homeBuildingOrdinal];
+                int householdId = state.AllocateNextHouseholdId();
+                HouseholdState household = new()
+                {
+                    id = householdId,
+                    surname = definition.surname,
+                    householdName = $"{definition.surname} Household",
+                    homeBuildingId = home.buildingId,
+                    demandSnapshot = HouseholdDemandSnapshot.Empty(),
+                    arrivalProfile = NewcomerArrivalProfile.SettledResident,
+                    settlementArrangement = SettlementArrangement.StableHousehold,
+                    baseBoardingCapacity = NewcomerSettlementPlanner.GetBaseBoardingCapacity(settings, home.isMixedUseHome, true),
+                    settlementReserveStrengthCents = 0,
+                    lastSettlementSummary = "Pass XL six-person development fixture"
+                };
+
+                for (int memberIndex = 0; memberIndex < definition.personIndexes.Length; memberIndex++)
+                {
+                    SixPersonDevelopmentFixture.PersonDefinition personDefinition =
+                        fixture.People[definition.personIndexes[memberIndex]];
+                    int personId = state.AllocateNextPersonId();
+                    PersonState person = CreateSettlementPerson(
+                        personId,
+                        householdId,
+                        definition.surname,
+                        home.buildingId,
+                        memberIndex,
+                        settings,
+                        random,
+                        NewcomerArrivalProfile.SettledResident,
+                        SettlementArrangement.StableHousehold,
+                        personDefinition.age,
+                        0.45f,
+                        6,
+                        string.Empty,
+                        0,
+                        householdId,
+                        0,
+                        personDefinition.isFemale);
+
+                    person.firstName = personDefinition.firstName;
+                    person.lastName = personDefinition.lastName;
+                    person.professionId = "unemployed";
+                    person.professionName = "Unemployed";
+                    person.wage = WageSnapshot.None();
+                    person.workplaceBuildingId = -1;
+                    person.homeBuildingId = home.buildingId;
+                    person.scheduleState = PopulationScheduleState.AtHome;
+                    person.currentDestinationBuildingId = home.buildingId;
+                    household.memberIds.Add(personId);
+                    state.people.Add(person);
+                }
+
+                household.EnsureHouseholdReservesInitialized(true);
+                household.settlementReserveStrengthCents = Mathf.Max(
+                    household.settlementReserveStrengthCents, household.spendingMoneyCents);
+                NewcomerSettlementEvaluator.RefreshHouseholdPressures(household);
+                state.households.Add(household);
+            }
+
+            DemographicCohortPlanner.AssignMissingBirthDates(
+                state.people,
+                startYear,
+                startMonth,
+                startDay,
+                seed ^ 0x5EED,
+                $"Pass XL development fixture '{fixture.ProfileId}'; generated exact fixture age.");
+            foreach (PersonState person in state.people)
+            {
+                person?.RefreshDerivedAge(startYear, startMonth, startDay);
+            }
+
+            RecalculateHouseholdIncome(state);
+            NewcomerSettlementPlanner.RefreshSettlementMetrics(
+                state,
+                NewcomerSettlementPlanner.BuildHomeOptions(townWorld, settings));
+            Validate(state, residentialHomes, workplaces, kinship, startYear, startMonth, startDay);
+
+            bool hasErrors = false;
+            for (int i = 0; i < state.validationMessages.Count; i++)
+            {
+                if (state.validationMessages[i].StartsWith("ERROR:", StringComparison.Ordinal))
+                {
+                    hasErrors = true;
+                    break;
+                }
+            }
+
+            string summary = $"Development fixture '{fixture.ProfileId}': {state.people.Count} Persons, " +
+                $"{state.households.Count} Households, three distinct TownWorld homes; no newcomer generation.";
+            return new PopulationGenerationResult(state, summary, hasErrors);
+        }
+
         private static List<BuildingRuntimeInfo> BuildRuntimeInfo(TownWorldController townWorld)
         {
             Dictionary<int, TownPlot> plotsById = new();

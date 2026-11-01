@@ -1,0 +1,111 @@
+# Approved design direction register — proposals 001–105
+
+**Authority provenance:** the user explicitly approved the numbered 1–105 proposals in the Land & Ledgers documentation conversation (prior to 2026-10-31). These descriptions are the preserved **proposal register summaries**, not warranted verbatim transcripts of the user's original 105 one-sentence proposals. Compare source Canon XXXI where a summary appears to override a more specific older rule.
+
+**No Unity implementation evidence is asserted.** The 40 proposals numbered 106–145 are retained separately as pending and cannot be promoted merely by publishing v3.0.
+
+- **001** — Remove BusinessType action permissions (previous v2.3 cross-reference: `CAN-CE1-02.1`, NOT itself a governing-source clause).
+- **002** — Operations and capability registries are descriptive (previous v2.3 cross-reference: `CAN-CE1-02.1`, NOT itself a governing-source clause).
+- **003** — Trade identities are inferred labels or templates (previous v2.3 cross-reference: `CAN-CE1-02.1`, NOT itself a governing-source clause).
+- **004** — Templates materialize ordinary economic state (previous v2.3 cross-reference: `CAN-CE1-02.1`, NOT itself a governing-source clause).
+- **005** — Operating state derives from executable activity (previous v2.3 cross-reference: `CAN-CE1-02.2`, NOT itself a governing-source clause).
+- **006** — One Business combines compatible activities (previous v2.3 cross-reference: `CAN-CE1-02.1, CAN-CE1-02.2`, NOT itself a governing-source clause).
+- **007** — Opportunity starts from unmet needs and capacity gaps (previous v2.3 cross-reference: `CAN-CE1-11.3`, NOT itself a governing-source clause).
+- **008** — Incumbent expansion competes with new formation (previous v2.3 cross-reference: `CAN-CE1-11.3`, NOT itself a governing-source clause).
+- **009** — Multiple causal responses to an unmet need (previous v2.3 cross-reference: `CAN-CE1-11.3`, NOT itself a governing-source clause).
+- **010** — NPC startup assembles actual venture inputs (previous v2.3 cross-reference: `CAN-CE1-11.2, CAN-CE1-02.1`, NOT itself a governing-source clause).
+- **011** — No balance-mandated rival spawning (previous v2.3 cross-reference: `CAN-CE1-11.2`, NOT itself a governing-source clause).
+- **012** — Retail offer is stock, price, channel and capacity (previous v2.3 cross-reference: `CAN-CE1-07.1`, NOT itself a governing-source clause).
+- **013** — No merchandise whitelist by business identity (previous v2.3 cross-reference: `CAN-CE1-07.1`, NOT itself a governing-source clause).
+- **014** — Merchandise categories describe actual assortment (previous v2.3 cross-reference: `CAN-CE1-07.1`, NOT itself a governing-source clause).
+- **015** — Retail is not restricted to a storefront (previous v2.3 cross-reference: `CAN-CE1-07.1, CAN-CE1-05.2`, NOT itself a governing-source clause).
+- **016** — Services arise from actually available capacity (previous v2.3 cross-reference: `CAN-CE1-02.1, CAN-CE1-09.1`, NOT itself a governing-source clause).
+- **017** — Mixed activities cannot duplicate capacity (previous v2.3 cross-reference: `CAN-CE1-02.1, CAN-CE1-06.2`, NOT itself a governing-source clause).
+- **018** — Change, pivot or close from economics and agency (previous v2.3 cross-reference: `CAN-CE1-02.2, CAN-CE1-11.4`, NOT itself a governing-source clause).
+- **019** — No automatic closure from fixed negative-profit timer (previous v2.3 cross-reference: `CAN-CE1-11.4, CAN-CE1-12.6`, NOT itself a governing-source clause).
+- **020** — Acquired businesses retain inherited operating problems (previous v2.3 cross-reference: `CAN-CE1-05.3, CAN-CE1-02.3`, NOT itself a governing-source clause).
+- **021** — Enterprise grouping is not a merger (previous v2.3 cross-reference: `CAN-CE1-02.3`, NOT itself a governing-source clause).
+- **022** — Occupation is descriptive rather than a class (previous v2.3 cross-reference: `CAN-CE1-03.2`, NOT itself a governing-source clause).
+- **023** — People can perform secondary and seasonal work (previous v2.3 cross-reference: `CAN-CE1-03.2, CAN-CE1-03.4`, NOT itself a governing-source clause).
+- **024** — Ordinary task attempts depend on method, not occupation (previous v2.3 cross-reference: `CAN-CE1-03.2, CAN-CE1-06.1`, NOT itself a governing-source clause).
+- **025** — True physical/legal specialist prerequisites remain (previous v2.3 cross-reference: `CAN-CE1-03.2, CAN-CE1-14.2`, NOT itself a governing-source clause).
+- **026** — EmploymentRelationship one wage-employment authority (previous v2.3 cross-reference: `CAN-CE1-03.4, CAN-CE1-18.2`, NOT itself a governing-source clause).
+- **027** — Real workload drives staffing (previous v2.3 cross-reference: `CAN-CE1-03.4`, NOT itself a governing-source clause).
+- **028** — One Person may serve multiple compatible functions (previous v2.3 cross-reference: `CAN-CE1-03.4`, NOT itself a governing-source clause).
+- **029** — Family work counts as actual labor (previous v2.3 cross-reference: `CAN-CE1-03.4`, NOT itself a governing-source clause).
+- **030** — Portfolio labor may be assigned across businesses (previous v2.3 cross-reference: `CAN-CE1-03.4, CAN-CE1-13.1`, NOT itself a governing-source clause).
+- **031** — Manager title expresses authority, not a tier (previous v2.3 cross-reference: `CAN-CE1-13.1`, NOT itself a governing-source clause).
+- **032** — Manager quality arises from decisions (previous v2.3 cross-reference: `CAN-CE1-13.2`, NOT itself a governing-source clause).
+- **033** — No universal Morale causal bar (previous v2.3 cross-reference: `CAN-CE1-03.6`, NOT itself a governing-source clause).
+- **034** — Labor pressure is derived evidence (previous v2.3 cross-reference: `CAN-CE1-03.5, CAN-CE1-11.3`, NOT itself a governing-source clause).
+- **035** — FunctionalSpace features are not a new type gate (previous v2.3 cross-reference: `CAN-CE1-05.2`, NOT itself a governing-source clause).
+- **036** — UseRelationship and physical conversion govern room use (previous v2.3 cross-reference: `CAN-CE1-05.2`, NOT itself a governing-source clause).
+- **037** — No universal commercial/residential permission class (previous v2.3 cross-reference: `CAN-CE1-05.2`, NOT itself a governing-source clause).
+- **038** — Conversion demands actual work where needed (previous v2.3 cross-reference: `CAN-CE1-05.2, CAN-CE1-06.4`, NOT itself a governing-source clause).
+- **039** — Multiuse, multitenant premises are normal (previous v2.3 cross-reference: `CAN-CE1-05.2`, NOT itself a governing-source clause).
+- **040** — Business can occupy multiple sites (previous v2.3 cross-reference: `CAN-CE1-02.1, CAN-CE1-05.2`, NOT itself a governing-source clause).
+- **041** — Accommodation categories are arrangements, not tiers (previous v2.3 cross-reference: `CAN-CE1-04.2`, NOT itself a governing-source clause).
+- **042** — Housing suitability is household- and season-specific (previous v2.3 cross-reference: `CAN-CE1-04.2`, NOT itself a governing-source clause).
+- **043** — Crowding creates consequences, not a simple wall (previous v2.3 cross-reference: `CAN-CE1-04.2`, NOT itself a governing-source clause).
+- **044** — Rent is an agreement rather than a floating price (previous v2.3 cross-reference: `CAN-CE1-04.2`, NOT itself a governing-source clause).
+- **045** — Real property leads rather than omniscient for-sale pool (previous v2.3 cross-reference: `CAN-CE1-05.3`, NOT itself a governing-source clause).
+- **046** — Seller willingness must remain meaningful (previous v2.3 cross-reference: `CAN-CE1-05.3`, NOT itself a governing-source clause).
+- **047** — No TownLevel permission architecture (previous v2.3 cross-reference: `CAN-CE1-05.1, CAN-CE1-11.1`, NOT itself a governing-source clause).
+- **048** — Settlement roles describe history/economic position (previous v2.3 cross-reference: `CAN-CE1-05.1, CAN-CE1-11.1`, NOT itself a governing-source clause).
+- **049** — Institutional openings depend on real feasibility (previous v2.3 cross-reference: `CAN-CE1-05.1, CAN-CE1-14.3`, NOT itself a governing-source clause).
+- **050** — Distinguish resident, transient, worker and catchment counts (previous v2.3 cross-reference: `CAN-CE1-04.3, CAN-CE1-11.1`, NOT itself a governing-source clause).
+- **051** — Catchments derive from travel and economic links (previous v2.3 cross-reference: `CAN-CE1-11.1`, NOT itself a governing-source clause).
+- **052** — Population does not mechanically post profit (previous v2.3 cross-reference: `CAN-CE1-11.1, CAN-CE1-07.4`, NOT itself a governing-source clause).
+- **053** — Demand intent is not automatic business revenue (previous v2.3 cross-reference: `CAN-CE1-07.4, CAN-CE1-11.1`, NOT itself a governing-source clause).
+- **054** — Local purchases and services consume Person/labor capacity (previous v2.3 cross-reference: `CAN-CE1-03.1, CAN-CE1-07.4`, NOT itself a governing-source clause).
+- **055** — Queues/stockouts/workloads drive expansion demand (previous v2.3 cross-reference: `CAN-CE1-11.3`, NOT itself a governing-source clause).
+- **056** — Opportunity reports include known pipeline responses (previous v2.3 cross-reference: `CAN-CE1-11.3`, NOT itself a governing-source clause).
+- **057** — Oversupply distinct from shortage resolution (previous v2.3 cross-reference: `CAN-CE1-11.3, CAN-CE1-11.4`, NOT itself a governing-source clause).
+- **058** — Multiple investors can create genuine overbuilding (previous v2.3 cross-reference: `CAN-CE1-11.4`, NOT itself a governing-source clause).
+- **059** — NPC rivals use ordinary player-equivalent systems (previous v2.3 cross-reference: `CAN-CE1-11.2`, NOT itself a governing-source clause).
+- **060** — Competitor plans require credible information (previous v2.3 cross-reference: `CAN-CE1-13.4, CAN-CE1-11.2`, NOT itself a governing-source clause).
+- **061** — Commercial standing depends on relationship memory (previous v2.3 cross-reference: `CAN-CE1-13.4, CAN-CE1-11.2`, NOT itself a governing-source clause).
+- **062** — Advertising changes awareness, not raw profit modifiers (previous v2.3 cross-reference: `CAN-CE1-13.4, CAN-CE1-11.3`, NOT itself a governing-source clause).
+- **063** — ProductionMethod governs methods rather than shop recipe lists (previous v2.3 cross-reference: `CAN-CE1-06.1`, NOT itself a governing-source clause).
+- **064** — Reserve physical resources once across all domains (previous v2.3 cross-reference: `CAN-CE1-06.1, CAN-CE1-06.2, CAN-CE1-10.1`, NOT itself a governing-source clause).
+- **065** — Inventory uses actual storage/display capacity (previous v2.3 cross-reference: `CAN-CE1-07.3`, NOT itself a governing-source clause).
+- **066** — Perishable lot provenance and processing continuity (previous v2.3 cross-reference: `CAN-CE1-07.3, CAN-CE1-09.3`, NOT itself a governing-source clause).
+- **067** — Supplier-first procurement with real terms (previous v2.3 cross-reference: `CAN-CE1-07.2`, NOT itself a governing-source clause).
+- **068** — Supply agreements cannot generate stock (previous v2.3 cross-reference: `CAN-CE1-07.2, CAN-CE1-07.4`, NOT itself a governing-source clause).
+- **069** — Backup suppliers, subcontracting and overbooking retain risk (previous v2.3 cross-reference: `CAN-CE1-07.2, CAN-CE1-10.2`, NOT itself a governing-source clause).
+- **070** — Transport services compose across ordinary assets (previous v2.3 cross-reference: `CAN-CE1-10.1, CAN-CE1-10.4`, NOT itself a governing-source clause).
+- **071** — Route infrastructure and operated service differ (previous v2.3 cross-reference: `CAN-CE1-10.1, CAN-CE1-10.3`, NOT itself a governing-source clause).
+- **072** — Warehouse needs real physical space and handling (previous v2.3 cross-reference: `CAN-CE1-10.2`, NOT itself a governing-source clause).
+- **073** — Construction time derives from WorkPackages (previous v2.3 cross-reference: `CAN-CE1-06.4, CAN-CE1-06.5`, NOT itself a governing-source clause).
+- **074** — Contractor qualification is evidence-based, not level-based (previous v2.3 cross-reference: `CAN-CE1-06.4`, NOT itself a governing-source clause).
+- **075** — Crews use real Person assignments and time (previous v2.3 cross-reference: `CAN-CE1-06.4, CAN-CE1-06.5`, NOT itself a governing-source clause).
+- **076** — Technology is access/supportability, not universal unlock (previous v2.3 cross-reference: `CAN-CE1-10.5`, NOT itself a governing-source clause).
+- **077** — Asset condition includes domain-specific defects (previous v2.3 cross-reference: `CAN-CE1-06.3`, NOT itself a governing-source clause).
+- **078** — Maintenance/failure creates real corrective consequences (previous v2.3 cross-reference: `CAN-CE1-06.3`, NOT itself a governing-source clause).
+- **079** — Financial service mix is composable (previous v2.3 cross-reference: `CAN-CE1-12.1`, NOT itself a governing-source clause).
+- **080** — Genuine legal bank forms remain distinct (previous v2.3 cross-reference: `CAN-CE1-12.1, CAN-CE1-14.1`, NOT itself a governing-source clause).
+- **081** — Underwriting is evidence-based, not CreditScore (previous v2.3 cross-reference: `CAN-CE1-12.2`, NOT itself a governing-source clause).
+- **082** — Bank safety derives from assets/liabilities and policy (previous v2.3 cross-reference: `CAN-CE1-12.5`, NOT itself a governing-source clause).
+- **083** — Reserves are classifications, not duplicate cash (previous v2.3 cross-reference: `CAN-CE1-02.3, CAN-CE1-12.5`, NOT itself a governing-source clause).
+- **084** — Shared Agreement/Obligation grammar (previous v2.3 cross-reference: `CAN-CE1-02.5, CAN-CE1-07.4`, NOT itself a governing-source clause).
+- **085** — Distinct property, security, employment and service rights (previous v2.3 cross-reference: `CAN-CE1-02.5, CAN-CE1-05.2`, NOT itself a governing-source clause).
+- **086** — Subsidiary and minority entities remain separate (previous v2.3 cross-reference: `CAN-CE1-02.3, CAN-CE1-12.3`, NOT itself a governing-source clause).
+- **087** — Actual transfer/consent required for merger (previous v2.3 cross-reference: `CAN-CE1-02.3`, NOT itself a governing-source clause).
+- **088** — Corporate funds subject to governance and shareholder rights (previous v2.3 cross-reference: `CAN-CE1-12.3`, NOT itself a governing-source clause).
+- **089** — Distress means declining real options, not health meter (previous v2.3 cross-reference: `CAN-CE1-12.6, CAN-CE1-11.4`, NOT itself a governing-source clause).
+- **090** — Default/foreclosure/bankruptcy are persistent workflows (previous v2.3 cross-reference: `CAN-CE1-12.6`, NOT itself a governing-source clause).
+- **091** — Recruit from contactable real Persons (previous v2.3 cross-reference: `CAN-CE1-03.5`, NOT itself a governing-source clause).
+- **092** — Information retains source/date/observer/confidence (previous v2.3 cross-reference: `CAN-CE1-13.4`, NOT itself a governing-source clause).
+- **093** — Migration has awareness, feasibility, travel, residence stages (previous v2.3 cross-reference: `CAN-CE1-04.3`, NOT itself a governing-source clause).
+- **094** — Generate people and kin before synthetic households (previous v2.3 cross-reference: `CAN-CE1-04.1`, NOT itself a governing-source clause).
+- **095** — Age transitions do not automatically create life events (previous v2.3 cross-reference: `CAN-CE1-04.1, CAN-CE1-03.1`, NOT itself a governing-source clause).
+- **096** — Population changes follow Person/residence events (previous v2.3 cross-reference: `CAN-CE1-04.1, CAN-CE1-04.3`, NOT itself a governing-source clause).
+- **097** — Continuous clock and scheduling remain authoritative (previous v2.3 cross-reference: `CAN-CE1-03.4, CAN-CE1-06.1`, NOT itself a governing-source clause).
+- **098** — Owner attention emerges from management load (previous v2.3 cross-reference: `CAN-CE1-13.1, CAN-CE1-13.3`, NOT itself a governing-source clause).
+- **099** — Dashboards and scores are read models (previous v2.3 cross-reference: `CAN-CE1-02.4, CAN-CE1-17.1`, NOT itself a governing-source clause).
+- **100** — Scenario objectives observe, never manufacture (previous v2.3 cross-reference: `CAN-CE1-16.1`, NOT itself a governing-source clause).
+- **101** — Historical events inject causes, not arbitrary percentage results (previous v2.3 cross-reference: `CAN-CE1-15.3`, NOT itself a governing-source clause).
+- **102** — Scenario/settlement profiles are priors, not fixed rosters (previous v2.3 cross-reference: `CAN-CE1-05.1, CAN-CE1-11.1`, NOT itself a governing-source clause).
+- **103** — Off-map movement and economy preserve identity and truth (previous v2.3 cross-reference: `CAN-CE1-03.1, CAN-CE1-10.1`, NOT itself a governing-source clause).
+- **104** — Local physical presentation must match real event (previous v2.3 cross-reference: `CAN-CE1-10.2, CAN-CE1-17.1`, NOT itself a governing-source clause).
+- **105** — Industries reuse common Person/Task/Asset/Agreement systems (previous v2.3 cross-reference: `CAN-CE1-09.1, CAN-CE1-06.1`, NOT itself a governing-source clause).

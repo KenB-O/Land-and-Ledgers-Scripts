@@ -123,6 +123,19 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private int scheduledPathFailuresToday;
 
+        [Header("Resident Actor Diagnostics")]
+        [SerializeField]
+        private int populationRecordsExamined;
+
+        [SerializeField]
+        private int recordsRejectedAsNonLocalResidents;
+
+        [SerializeField]
+        private int residentsMissingHomeDoorAnchors;
+
+        [SerializeField]
+        private int residentActorEntriesCreated;
+
         [SerializeField]
         private string lastRouteFailure;
 
@@ -173,7 +186,7 @@ namespace LandLedgers.FirstLedger
                 ? $", ScheduledBlocked={scheduledRoutesBlockedToday}, ScheduledFailures(start/target/path)={scheduledMissingStartFailuresToday}/{scheduledMissingTargetFailuresToday}/{scheduledPathFailuresToday}, LastRouteFailure={LastRouteFailure}"
                 : string.Empty;
 
-            return $"{readiness} Managed={managedPeople}, Visible={visibleStreetAgents}, WorkIssued={workRoutesIssued}, ShoppingIssued={shoppingRoutesIssued}, HomeIssued={homeRoutesIssued}, AmbientStarted={ambientRoutesStartedToday}, AmbientFailures(anchor/path)={ambientAnchorFailuresToday}/{ambientPathFailuresToday}{scheduledFailures}, Last={LastMovementStatus}";
+            return $"{readiness} Managed={managedPeople}, Visible={visibleStreetAgents}, ResidentsScanned={populationRecordsExamined}, NonLocalOrInvalid={recordsRejectedAsNonLocalResidents}, MissingHomeDoors={residentsMissingHomeDoorAnchors}, ActorEntriesCreated={residentActorEntriesCreated}, WorkIssued={workRoutesIssued}, ShoppingIssued={shoppingRoutesIssued}, HomeIssued={homeRoutesIssued}, AmbientStarted={ambientRoutesStartedToday}, AmbientFailures(anchor/path)={ambientAnchorFailuresToday}/{ambientPathFailuresToday}{scheduledFailures}, Last={LastMovementStatus}";
         }
 
         public void InitializeIfNeeded()
@@ -229,6 +242,10 @@ namespace LandLedgers.FirstLedger
                     GameObject child = agentRoot.GetChild(i).gameObject;
                     if (Application.isPlaying)
                     {
+                        // Destroy is deferred until frame end. Hide the previous
+                        // presentation immediately so a restore never renders two
+                        // actors for the same persistent Person identity.
+                        child.SetActive(false);
                         Destroy(child);
                     }
                     else
@@ -434,7 +451,10 @@ namespace LandLedgers.FirstLedger
                 SendShoppersToStore();
             }
 
-            if (!homeRoutesIssued && context.TimeOfDay01 >= 0.62f)
+            // Keep checking after the return window begins. A long valid commute
+            // can arrive after the nominal return time; it should leave on the
+            // next simulation tick rather than miss the entire day.
+            if (context.TimeOfDay01 >= 0.62f)
             {
                 routesStartedToday += SendDueWorkersHome(context.TimeOfDay01);
                 if (context.TimeOfDay01 >= 0.86f)
@@ -448,27 +468,46 @@ namespace LandLedgers.FirstLedger
 
         private void PopulateManagedAgents()
         {
+            populationRecordsExamined = 0;
+            recordsRejectedAsNonLocalResidents = 0;
+            residentsMissingHomeDoorAnchors = 0;
+            residentActorEntriesCreated = 0;
             PopulationState state = populationManager.State;
             for (int i = 0; i < state.people.Count && agents.Count < maxActiveAgents; i++)
             {
                 PersonState person = state.people[i];
+                populationRecordsExamined++;
                 if (!CanRepresentOnMap(person, state))
                 {
+                    recordsRejectedAsNonLocalResidents++;
                     continue;
                 }
 
                 BuildingAnchor homeAnchor;
                 if (!TryGetDoorAnchor(person.homeBuildingId, out homeAnchor))
                 {
+                    residentsMissingHomeDoorAnchors++;
                     continue;
+                }
+
+                // After restore, transient travel states are normalized to their
+                // legitimate arrival state and this stable destination is the
+                // authoritative visual location. New residents still default to
+                // home; missing destination anchors safely fall back to home.
+                BuildingAnchor currentAnchor = homeAnchor;
+                if (person.currentDestinationBuildingId >= 0
+                    && TryGetDoorAnchor(person.currentDestinationBuildingId, out BuildingAnchor destinationAnchor))
+                {
+                    currentAnchor = destinationAnchor;
                 }
 
                 AgentMover mover = CreateAgent(person);
                 mover.Configure(pathingManager);
-                mover.transform.position = pathingManager.CoordToPathWorld(homeAnchor.coord);
-                mover.HideImmediately();
+                mover.transform.position = pathingManager.CoordToPathWorld(currentAnchor.coord);
+                mover.ShowAtCurrentLocation();
 
                 agents.Add(new ManagedPersonAgent(person, mover, homeAnchor));
+                residentActorEntriesCreated++;
             }
 
             managedPeople = agents.Count;
@@ -527,8 +566,7 @@ namespace LandLedgers.FirstLedger
             int sent = SendRouteForState(
                 PopulationScheduleState.ReturningHome,
                 person => person.homeBuildingId >= 0
-                    && person.scheduleState != PopulationScheduleState.AtHome
-                    && person.scheduleState != PopulationScheduleState.ReturningHome
+                    && IsEligibleForScheduledWorkReturn(person.scheduleState)
                     && timeOfDay01 >= GetWorkReturnTime01(person),
                 person => person.homeBuildingId);
             if (sent > 0)
@@ -537,6 +575,14 @@ namespace LandLedgers.FirstLedger
             }
 
             return sent;
+        }
+
+        public static bool IsEligibleForScheduledWorkReturn(PopulationScheduleState scheduleState)
+        {
+            // Only a worker who actually reached work may be sent home by the
+            // workday schedule. Retargeting GoingToWork used to replace the
+            // active route and visually teleport the actor to the workplace.
+            return scheduleState == PopulationScheduleState.AtWork;
         }
 
         private static float GetWorkDepartureTime01(PersonState person)
@@ -652,7 +698,11 @@ namespace LandLedgers.FirstLedger
                 return false;
             }
 
-            if (!managed.mover.BeginDoorToDoor(startAnchor, targetAnchor, true, startBuilding?.doorAnimator, targetBuilding?.doorAnimator))
+            // Keep the same actor visible when it reaches home or work. The
+            // authoritative Person location changes on arrival; until the world
+            // has authored interiors/occupancy rendering, hiding every arrived
+            // actor makes residents vanish from the simulation's visible town.
+            if (!managed.mover.BeginDoorToDoor(startAnchor, targetAnchor, false, startBuilding?.doorAnimator, targetBuilding?.doorAnimator))
             {
                 failureKind = ScheduledRouteFailureKind.PathFailed;
                 return false;
@@ -731,7 +781,7 @@ namespace LandLedgers.FirstLedger
                 return false;
             }
 
-            if (!managed.mover.BeginDoorToDoor(startAnchor, targetAnchor, true, startBuilding?.doorAnimator, targetBuilding?.doorAnimator))
+            if (!managed.mover.BeginDoorToDoor(startAnchor, targetAnchor, false, startBuilding?.doorAnimator, targetBuilding?.doorAnimator))
             {
                 failureKind = AmbientRouteFailureKind.PathFailed;
                 return false;
@@ -759,7 +809,7 @@ namespace LandLedgers.FirstLedger
                 return false;
             }
 
-            if (!managed.mover.BeginDoorToDoor(startAnchor, targetAnchor, true, startBuilding?.doorAnimator, targetBuilding?.doorAnimator))
+            if (!managed.mover.BeginDoorToDoor(startAnchor, targetAnchor, false, startBuilding?.doorAnimator, targetBuilding?.doorAnimator))
             {
                 ambientPathFailuresToday++;
                 ClearAmbientRoute(managed);
@@ -969,12 +1019,19 @@ namespace LandLedgers.FirstLedger
 
         private AgentMover CreateAgent(PersonState person)
         {
-            GameObject prefab = person.id % 2 == 0 ? maleAgentVisualPrefab : femaleAgentVisualPrefab;
+            GameObject prefab = ResolveAgentVisualPrefab(person, maleAgentVisualPrefab, femaleAgentVisualPrefab);
             GameObject agentObject = new($"Person {person.id:000} {person.DisplayName}");
             agentObject.transform.SetParent(EnsureAgentRoot(), false);
 
             PersonVisualIdentityBinding identity = agentObject.AddComponent<PersonVisualIdentityBinding>();
             identity.Bind(person.id);
+            WorldInspectableTarget inspectable = agentObject.AddComponent<WorldInspectableTarget>();
+            inspectable.ConfigurePerson(person.id);
+            CapsuleCollider selectionCollider = agentObject.AddComponent<CapsuleCollider>();
+            selectionCollider.center = new Vector3(0f, 0.9f, 0f);
+            selectionCollider.radius = 0.28f;
+            selectionCollider.height = 1.8f;
+            selectionCollider.isTrigger = true;
 
             GameObject visualObject = prefab != null
                 ? TryInstantiateGameObject(prefab, agentObject.transform, $"person {person.id:000} visual")
@@ -998,6 +1055,19 @@ namespace LandLedgers.FirstLedger
             mover.ArrivedAtDestination -= HandleAgentArrivedAtDestination;
             mover.ArrivedAtDestination += HandleAgentArrivedAtDestination;
             return mover;
+        }
+
+        private static GameObject ResolveAgentVisualPrefab(
+            PersonState person,
+            GameObject malePrefab,
+            GameObject femalePrefab)
+        {
+            if (person == null)
+            {
+                return null;
+            }
+
+            return person.isFemale ? femalePrefab : malePrefab;
         }
 
         private void HandleAgentArrivedAtDestination(AgentMover mover)

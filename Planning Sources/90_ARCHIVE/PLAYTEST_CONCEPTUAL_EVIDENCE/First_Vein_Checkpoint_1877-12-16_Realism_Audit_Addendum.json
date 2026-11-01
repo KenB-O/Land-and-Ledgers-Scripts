@@ -1,0 +1,267 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "Conceptual playtest; realism/economy and agreement rules audit; no actual new economic events simulated",
+  "checkpoint": "VEIN-IV-1877-12-16-REALISM-AUDIT-ADDENDUM",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-12-16_Autonomy_Revision.json",
+  "date": "1877-12-16",
+  "time": "17:00",
+  "days_advanced": 30,
+  "authorized_actions": "Advance routine land and mill equipment negotiations, research, mine operational coordination and autonomous freight only. No new capital transactions, property purchase, ore sale, construction, hiring or personnel termination by player/manager.",
+  "standing_preferences": {
+    "mine_ownership": "Player retains 100% equity; no dilution",
+    "mill_financing": "Prefer seller-financed equipment and purchase-money land mortgages; pursue player 100% ownership if possible; no mill equity partner automatically",
+    "land": "Player seeks full transferable land ownership rather than terminable lease; seller note/mortgage acceptable subject to foreclosure risk",
+    "decision_authority": "Owner reserves hiring, dismissal, salary changes, new financing, property and major mill capital. Amos can execute ordinary production, routine supplies, assays, and physically settled raw ore sales at commercially reasonable terms within spending limits. Eli runs freight independently.",
+    "pacing": "Run six-day mine weeks when safe and funded, use event-driven manager delegation, batch monthly reports and pause only for true strategic decisions or financial distress."
+  },
+  "cash_ledger": {
+    "owner_opening_usd": "321.35",
+    "owner_amos_paid_one_day_usd": "4.50",
+    "owner_records_and_communications_usd": "8.00",
+    "owner_closing_usd": "308.85",
+    "freight_opening_usd": "120.25",
+    "freight_external_receipts_usd": "105.00",
+    "freight_paid_wages_usd": "42.00",
+    "freight_feed_care_usd": "32.00",
+    "freight_supplies_usd": "9.00",
+    "freight_closing_usd": "142.25",
+    "combined_opening_usd": "441.60",
+    "combined_closing_usd": "451.10",
+    "combined_change_usd": "+9.50",
+    "internal_transfer_usd": "0.00",
+    "personal_historical_cash_uncertainty": "Still unresolved, do not claim full audit."
+  },
+  "mine": {
+    "status": "Idle after cash preservation; Amos made one paid day of consolidated land/mill and staffing enquiries. Five other miners unscheduled/no wages. No excavation, assay, sale or processing.",
+    "employees_count": 6,
+    "roster": [
+      "Amos Polk",
+      "Rafael Soto",
+      "Jonas Calder",
+      "Calvin Briggs",
+      "Ezra Harlan",
+      "Miles Fenwick"
+    ],
+    "at_risk": "Rafael may leave if no paid mine work soon; no resignation or dismissal yet.",
+    "mine_wages_payable_usd": "0.00",
+    "no_new_ore_extracted_lb": 0
+  },
+  "material_inventory": {
+    "opening_untreated_at_site_lb": 78164,
+    "sold_this_period_lb": 9592,
+    "new_excavation_lb": 0,
+    "closing_quartz_lb": 0,
+    "closing_mixed_lb": 15372,
+    "closing_waste_lb": 53200,
+    "closing_untreated_at_site_lb": 68572,
+    "historical_ore_sold_cumulative_lb": 23284,
+    "historical_hand_processed_lb": 20,
+    "historical_laboratory_sample_lb": 24,
+    "all_time_excavated_lb": 91900,
+    "conservation_check": "68572+23284+20+24=91900 lb",
+    "unsold_physically_recovered_gold_troy_oz_provisional": "0.0044",
+    "recovered_and_sold_gold_troy_oz": "0.00",
+    "paid_raw_ore_sales_cumulative_usd": "95.25"
+  },
+  "freight": {
+    "manager": "Eli Ward",
+    "outside_deliveries": 8,
+    "driver_worked_days": 14,
+    "external_revenue_usd": "105.00",
+    "wages_paid_usd": "42.00",
+    "feed_and_care_usd": "32.00",
+    "supplies_usd": "9.00",
+    "cash_start_usd": "120.25",
+    "cash_end_usd": "142.25",
+    "payroll_due_usd": "0.00",
+    "workload_status": "No sustained 100%+ capacity shortage; no expansion alert"
+  },
+  "mill_property_leads": {
+    "pine_bend": "Near mine 1.3-acre proposed nonmineral millsite; federal patent not yet secured; no full ownership",
+    "south_road_bench": "Title-defective prior offer, not bought",
+    "new_conditional_candidate": {
+      "name": "Willow Crossing Yard",
+      "seller": "Edith Kessler (fictional)",
+      "size_ft": [
+        100,
+        120
+      ],
+      "mine_road_distance_mi": 2.2,
+      "asking_price_usd": "210.00",
+      "down_usd": "50.00",
+      "purchase_money_note_principal_usd": "160.00",
+      "simple_annual_interest": "12%",
+      "note_term_months": 18,
+      "total_seller_note_maturity_usd": "188.80",
+      "title": "Record of prior issued patent and seller deed discovered. Preliminary chain fits intended full conveyance; final title opinion, encumbrance check and exact boundaries outstanding. Seller would convey title at closing with mortgage/note as collateral.",
+      "water": "No included water ownership; Weller shared-use proposal potentially extendable but capacity agreement and transfer/use verification needed.",
+      "tailings": "Requires contained settling area and lawful use/disposal; $18\u2013$25 prior estimate not contracted.",
+      "commitment": "Nonbinding quotation, no option, escrow, deposit, deed, note or land transfer"
+    }
+  },
+  "mill_plant_terms": {
+    "supplier": "Merrick Millwright & Supply",
+    "price_usd": "260.00",
+    "negotiated_proposed_down_usd": "65.00",
+    "seller_note_principal_usd": "195.00",
+    "simple_annual_interest": "12%",
+    "term_months": 18,
+    "balloon_after_18mo_usd": "230.10",
+    "status": "Counteroffer only, conditional on lawful operational site; no order, deposit, loan or equipment transfer",
+    "expected_operating_drawbacks": "Need dependable ore, mill labor, animal power, water and tailings rights; current remaining ore mixed low grade."
+  },
+  "wagon_extension_offer": {
+    "counterparty": "Elias Voss",
+    "existing_due_usd": "293.27",
+    "existing_due_date": "1878-01-26",
+    "proposal": "Discuss a six-month extension; seller would require at least $50 on Jan 26 and an added interest/fee payment schedule; no firm agreed quote as of checkpoint.",
+    "no_change_executed": true
+  },
+  "existing_debt": {
+    "wagon_principal_usd": "265.00",
+    "wagon_full_balloon_due_usd": "293.27",
+    "wagon_due": "1878-01-26",
+    "wagon_interest_accrued_approx_usd": "23.70",
+    "mine_principal_usd": "300.00",
+    "mine_full_balloon_due_usd": "354.00",
+    "mine_due": "1878-09-17",
+    "mine_interest_accrued_approx_usd": "13.32",
+    "total_loan_principal_usd": "565.00",
+    "total_contractual_maturities_usd": "647.27",
+    "owner_cash_excess_above_wagon_reserve_usd": "28.08",
+    "note": "Accrued interest is included in contractual balloon totals, not extra cash payable in addition.",
+    "interest_accrual_note": "Corrected as-of 1877-12-16 using simple actual-days/365 estimate (204 days on wagon since 1877-05-26; 90 days on mine since 1877-09-17). These values are included within original contracted maturity amounts, not additional fees."
+  },
+  "objective_progress": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Control claim, collect two in-situ samples, obtain independent assay",
+      "status": "complete"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First paid mineral or recovered gold sale",
+      "status": "complete Aug 2, 1877"
+    },
+    {
+      "id": 3,
+      "deadline": "1882-12-31",
+      "goal": "Recover and sell 650 cumulative troy ounces of gold",
+      "status": "0 / 650"
+    },
+    {
+      "id": 4,
+      "deadline": "1884-12-31",
+      "goal": "Two independent NPC-owned businesses each 90-day operation and 5 paid outside transactions",
+      "status": "0 / 2"
+    },
+    {
+      "id": 5,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered-and-sold troy ounces in one consecutive 12-month period with positive mine operating profit",
+      "status": "0 / 850"
+    },
+    {
+      "id": 6,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents sustained 60 consecutive days",
+      "status": "22 / 90"
+    },
+    {
+      "id": 7,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered-and-sold troy ounces plus $18000 reconciled owner equity",
+      "status": "0 / 5500; equity not audited"
+    }
+  ],
+  "objectives_complete": 2,
+  "objectives_total": 7,
+  "population": 22,
+  "approvals_still_required": [
+    "Accept new credit or restructure wagon debt",
+    "Close a titled land purchase and its note",
+    "Commit mill equipment or construction",
+    "Spend protected repayment reserve if no external working capital",
+    "Hire/fire or vary wages"
+  ],
+  "findings_added": [
+    "VEIN-UX-012: Strategic batching and pause-on-exception to avoid menu-driven micro-turns",
+    "VEIN-DES-011: Owner-equity-preserving purchase-money mortgage and chattel financing for vertical integration",
+    "VEIN-CAL-017: Financing construction does not finance ore production; working capital must be independently viable",
+    "VEIN-UX-013: Continuous delegated production plus automatic routine sales, exception-only interruption, and truthful solvency checks; repetitive owner approvals are a playtest failure",
+    "VEIN-CAL-018",
+    "VEIN-CAL-019",
+    "VEIN-CAL-020",
+    "VEIN-CAL-021",
+    "VEIN-VALID-022",
+    "VEIN-DES-012",
+    "VEIN-DES-013",
+    "VEIN-UX-014"
+  ],
+  "revision_no_time_advanced": true,
+  "mine_operating_mandate": {
+    "effective": "1877-12-16 17:00 (standing order only; no work performed or money moved by this revision)",
+    "target_schedule": "Up to six workdays per week using existing six employees, subject to actual shifts and realistic operating cash",
+    "manager": "Amos Polk",
+    "authority": [
+      "Set daily staffing and shifts with existing employees",
+      "Supervise safe surface mining and stabilization within practical limits",
+      "Buy routine consumables only within available authorized cash",
+      "Take ordinary representative samples and order proportionate assays",
+      "Negotiate and close ordinary arm's-length raw-ore sales, transfer physical lots and collect payment",
+      "Seek buyers for quartz and mixed rock separately; waste has no automatic commercial value",
+      "Coordinate with Eli for haulage and combine loads when economical"
+    ],
+    "owner_reserves": [
+      "Hire/fire employees or change wages",
+      "Buy property, borrow, pledge collateral or issue equity",
+      "Build processing works or authorize major equipment",
+      "Unusual or long-term exclusive sales contracts",
+      "Decisions needed to cross the protected wagon balloon cash reserve"
+    ],
+    "commercial_disciplines": [
+      "Do not fabricate buyers for low-grade mixed ore or waste",
+      "Do not treat assayed contained gold as recovered metal",
+      "Compare raw sale net realization with plausible mill-feed retention; prioritize owner strategy",
+      "No sale or production if rights/safety are deficient"
+    ],
+    "cash_floor_usd": "293.27",
+    "cash_above_floor_usd": "15.58",
+    "full_crew_wages_per_workday_usd": "21.00",
+    "six_day_wages_usd": "126.00",
+    "finance_priority": "Pursue refinance or extension of wagon note and non-dilutive working capital before claiming uninterrupted mine production",
+    "status": "Manager instructed to run continuously when funded; no representation that continuous work is currently solvent or that financing was approved"
+  },
+  "audit_asof_real_world": "2026-10-19",
+  "calibration_audit": {
+    "report": "First_Vein_Realism_Economy_and_Contract_Audit_2026-10-19.md",
+    "historical_wages_status": "broadly plausible, local evidence not exact",
+    "mine_actual_payroll_usd_per_six_days": "126.00",
+    "mine_actual_legacy_output": "~0.20-0.30 short tons all rock per miner-day; often 25-30% visually mineralized ore",
+    "realized_raw_sales_cumulative_usd": "95.25",
+    "realized_ore_weight_lb": 23284,
+    "realized_blended_usd_per_short_ton": "8.18",
+    "future_hypothetical_week_only": {
+      "all_rock_tons": "14-22 conditional on face accessibility",
+      "payable_ore_tons": "8-12 only if underlying geology supports",
+      "buyer_paid_raw_ore_usd_per_ton": "17.50 assumption needing verified grade and mill margin",
+      "revenue_usd": "175.00 for 10 short tons",
+      "true_week_cost_own_wagon_usd": "163.00",
+      "indicative_contribution_own_wagon_usd": "12.00",
+      "illustrative_external_small_freight_extra_usd": "10.00",
+      "conditional_not_executed": true
+    },
+    "physical_wagon_bulk_ore": "1000 lb conservative cargo means min 20 loaded runs for 10 short tons, no automatic ore haul",
+    "arrastra_output": "~0.25-0.50 t per 8-10h working day vs period example around 1 t per 24h; small mill not a high-throughput stamp mill",
+    "recalibration_policy": "preserve completed sales, inventory, workers and paid balances; do not retcon discovered gold, create buyer receipts or guarantee mine profit. Retune future scenario generation, credible offers, production-method parameters and managerial adaptive work.",
+    "owner_cash_usd": "308.85 provisional, unchanged",
+    "freight_cash_usd": "142.25 unchanged",
+    "combined_cash_usd": "451.10 unchanged",
+    "debt_principal_usd": "565.00 unchanged",
+    "loan_maturity_total_usd": "647.27 unchanged",
+    "reserve_policy_cash_floor_usd": "293.27 unchanged",
+    "user_new_design_interests": "tenant improvements compensation and landlord sale, oral vs written agreement, preservation and loss of documents"
+  }
+}

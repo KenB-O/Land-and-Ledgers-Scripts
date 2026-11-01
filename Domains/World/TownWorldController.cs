@@ -217,6 +217,8 @@ namespace LandLedgers.World
         [Header("Generation")]
         [SerializeField]
         private TownGenerationSettings settings;
+        private TownGenerationSettings runtimeDevelopmentSettings;
+        private int runtimeDevelopmentBusinessBuildingLimit = -1;
 
         [SerializeField]
         private bool generateOnStart = false;
@@ -373,6 +375,58 @@ namespace LandLedgers.World
         public RegionalWorldState RegionalWorld => regionalWorld;
         public RegionalResourceSnapshot RegionalResources => regionalResources ??= new RegionalResourceSnapshot();
         public string RegionalFoundationSummary => generatedRegionalFoundationSummary;
+
+        /// <summary>
+        /// Applies an isolated fresh-world development override without mutating
+        /// the authored TownGenerationSettings asset. The override is rejected
+        /// after generation so saved/authored world state cannot be silently
+        /// reshaped.
+        /// </summary>
+        public bool TryApplyDevelopmentResidentialHomeCount(
+            int requiredHomes,
+            out string reason,
+            int requiredBusinessBuildings = -1)
+        {
+            reason = string.Empty;
+            if (grid != null || generationPassCount > 0)
+            {
+                reason = "Town generation has already started; the development override must be applied before the fresh world pass.";
+                return false;
+            }
+
+            if (settings == null)
+            {
+                reason = "TownGenerationSettings is missing.";
+                return false;
+            }
+
+            int clampedHomes = Mathf.Clamp(requiredHomes, 0, 4);
+            if (runtimeDevelopmentSettings == null)
+            {
+                runtimeDevelopmentSettings = Instantiate(settings);
+                runtimeDevelopmentSettings.name = settings.name + " (Runtime Development Copy)";
+                runtimeDevelopmentSettings.hideFlags = HideFlags.DontSave;
+                settings = runtimeDevelopmentSettings;
+            }
+
+            runtimeDevelopmentSettings.edgeHouseCount = clampedHomes;
+            runtimeDevelopmentBusinessBuildingLimit = requiredBusinessBuildings < 0
+                ? -1
+                : Mathf.Clamp(requiredBusinessBuildings, 0, 32);
+            reason = $"Using a runtime-only town settings copy with {clampedHomes} generated edge-house lots; authored asset unchanged.";
+            if (runtimeDevelopmentBusinessBuildingLimit >= 0)
+            {
+                reason += $" Commercial building cap={runtimeDevelopmentBusinessBuildingLimit}.";
+            }
+            return true;
+        }
+
+        private void OnDestroy()
+        {
+            if (runtimeDevelopmentSettings == null) return;
+            Destroy(runtimeDevelopmentSettings);
+            runtimeDevelopmentSettings = null;
+        }
         public WorldSeedResolution LastSeedResolution => lastSeedResolution;
         public WorldStartupMode CurrentStartupMode => currentStartupMode;
         public string TerrainProfileId => terrainProfileId ?? string.Empty;
@@ -3573,7 +3627,19 @@ namespace LandLedgers.World
                     GridDirection.North,
                     new GridCoord(eastX + frontage / 2, centerZ - halfRoad),
                     PlotZone.Residential,
-                    1)
+                    1),
+                new(
+                    new GridRect(eastX, northZ, frontage, depth),
+                    GridDirection.South,
+                    new GridCoord(eastX + frontage / 2, centerZ + halfRoad),
+                    PlotZone.Residential,
+                    2),
+                new(
+                    new GridRect(westX, southZ, frontage, depth),
+                    GridDirection.North,
+                    new GridCoord(westX + frontage / 2, centerZ - halfRoad),
+                    PlotZone.Residential,
+                    3)
             };
 
             int created = 0;
@@ -4112,6 +4178,7 @@ namespace LandLedgers.World
             PlaceTownHall();
 
             HashSet<int> reservedLandPlotIds = DetermineLandMarketReservations();
+            int placedCommercialBuildings = 0;
             for (int i = 0; i < plots.Count; i++)
             {
                 TownPlot plot = plots[i];
@@ -4128,6 +4195,14 @@ namespace LandLedgers.World
 
                 BuildingDefinition definition = PickDefinitionForPlot(catalog, plot, i);
                 if (definition == null)
+                {
+                    continue;
+                }
+
+                bool commercialBuilding = definition.CanHostWorkplace
+                    && definition.PrimaryUse != BuildingUseType.Civic;
+                if (commercialBuilding && runtimeDevelopmentBusinessBuildingLimit >= 0
+                    && placedCommercialBuildings >= runtimeDevelopmentBusinessBuildingLimit)
                 {
                     continue;
                 }
@@ -4154,6 +4229,7 @@ namespace LandLedgers.World
                 buildings.Add(building);
                 plot.buildingId = building.id;
                 plot.intendedBuildingFootprintCells = ResolvePlacementFootprintSizeCells(definition);
+                if (commercialBuilding) placedCommercialBuildings++;
             }
         }
 

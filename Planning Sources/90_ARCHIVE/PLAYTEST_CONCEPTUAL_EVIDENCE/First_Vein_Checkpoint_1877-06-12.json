@@ -1,0 +1,107 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "checkpoint": "VEIN-IV-1877-06-12",
+  "date": "1877-06-12",
+  "time": "16:30",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-06-09.json",
+  "continuity": "SOFT: prior owner subsistence/living expense gap remains unreconciled; June 10-12 transactions and material balances separately reconciled",
+  "scenario_progress": "1/8",
+  "population": {"permanent_persons":22, "new_residents":0},
+  "cash": {
+    "owner_open_recorded": "979.95",
+    "owner_new_receipts": "0.00",
+    "owner_new_disbursements": "0.00",
+    "owner_close_recorded": "979.95",
+    "freight_business_open": "83.25",
+    "freight_business_new_receipts": "0.00",
+    "freight_business_new_disbursements": "3.30",
+    "freight_business_close": "79.95",
+    "mine_business_cash": "not applicable: no distinct mining Business was formed"
+  },
+  "owner_obligations": {
+    "mine_wages_payable_open": "4.50",
+    "Amos_June_11_and_12": "9.00",
+    "Jonas_June_11_and_12": "6.50",
+    "mine_wages_payable_close": "20.00",
+    "wagon_secured_note_principal": "265.00",
+    "note_maturity_date": "1878-01-26",
+    "note_due_at_maturity_unchanged": "293.27",
+    "note_interest_accrued_approx": "1.96"
+  },
+  "freight": {
+    "business": "Mercer Freight & Cartage",
+    "management": "Eli Ward, acting autonomous manager; no authorization to add a second outfit/employee without owner",
+    "freight_wages_payable_open": "18.00",
+    "Eli_two_workdays_June_11_and_12": "6.00",
+    "freight_wages_payable_close": "24.00",
+    "animal_feed_and_care_paid_June_10_to_12": "3.30",
+    "revenue_earned_new": "0.00",
+    "wagon_owned_by": "owner personally, available to business under use agreement",
+    "current_capacity_alert": "none",
+    "trial_review": "Original probationary period through June 10 concluded; continued same terms under previously established autonomous operation, no wage increase"
+  },
+  "Jonas_Calder": {
+    "person_persistent": true,
+    "household": "Calder",
+    "residency_count_unchanged": true,
+    "employer": "player personally, Juniper No.1 mine operation",
+    "agreement_date": "1877-06-09",
+    "start_date": "1877-06-11",
+    "status": "accepted and employed as general mine laborer",
+    "wage_per_worked_day": "3.25",
+    "worked_days": 2,
+    "wages_accrued": "6.50",
+    "wages_paid": "0.00",
+    "authority": "execute assigned carrying/preparation tasks; no hiring or procurement rights",
+    "known_capability": "outdoor and timber handling; underground mining not established"
+  },
+  "Amos_Polk": {
+    "role": "Lead Miner",
+    "wage_per_worked_day":"4.50",
+    "worked_in_period":2,
+    "new_wages_accrued":"9.00",
+    "previous_wages_payable":"4.50",
+    "total_wages_payable":"13.50",
+    "authority":"supervise safe staging and carrying, not excavation, procurement or new worker hiring"
+  },
+  "mining": {
+    "site": "Juniper No. 1",
+    "claim": "recorded unpatented lode claim, validity subject to governing law",
+    "deposit_size_player_knowledge": "Not enough information",
+    "workfront": "existing shallow open cut; no new excavation or production",
+    "materials": {
+      "unit": "lb",
+      "at_creek_start": 700,
+      "at_workfront_start": 0,
+      "tools_sacks_moved": 105,
+      "timber_moved": 595,
+      "creek_end": 0,
+      "workfront_end": 700,
+      "consumed_or_disposed": 0,
+      "conservation_check": "700 + 0 - 700 = 0 at creek; 0 + 700 = 700 at workfront",
+      "timber_status": "stacked at workfront, no support installed",
+      "tools_status": "unpacked and inspected at workfront, no excavation started"
+    },
+    "labor_event": "Jun 11-12; two workers manually carried staged goods 0.35 miles uphill on confirmed access track, including two-person timber handling; no machine capacity or explosives",
+    "ore_rock_broken_short_tons":0,
+    "ore_stockpile_short_tons":0,
+    "ore_shipped_short_tons":0,
+    "recovered_gold_troy_oz":0,
+    "sold_gold_troy_oz":0,
+    "development_authorized":false
+  },
+  "objectives": [
+    {"id":1,"deadline":"1877-12-31","status":"complete","completed_on":"1877-05-20"},
+    {"id":2,"deadline":"1878-12-31","status":"not yet","progress":"0/1 settled sale"},
+    {"id":3,"deadline":"1880-12-31","status":"not yet","progress":"0 qualifying six-month windows"},
+    {"id":4,"deadline":"1882-12-31","status":"not yet","progress":"0/650 oz"},
+    {"id":5,"deadline":"1884-12-31","status":"not yet","progress":"0/2 independently established NPC businesses"},
+    {"id":6,"deadline":"1886-12-31","status":"not yet","progress":"0/850 oz in trailing 12 months"},
+    {"id":7,"deadline":"1888-12-31","status":"not yet","progress":"22/90 permanent, not maintained"},
+    {"id":8,"deadline":"1890-12-31","status":"not yet","progress":"0/5500 oz, $18k owner equity not audited"}
+  ],
+  "findings_new": [
+    {"id":"VEIN-VALID-008","title":"Explicit player authorization of new worker and physical movement preserves inventory and payroll continuity","status":"conceptual validation"},
+    {"id":"VEIN-UX-010","title":"Mine scene should display staging versus workfront inventories and development authorizations separately","status":"design recommendation"}
+  ]
+}

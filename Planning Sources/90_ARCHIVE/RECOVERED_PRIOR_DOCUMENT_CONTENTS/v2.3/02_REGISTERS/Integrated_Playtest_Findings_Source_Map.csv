@@ -1,0 +1,12 @@
+source_finding,subject,canonical_location,technical_location,scenario_or_test,origin
+FV-CAN-001,Strategic delegation and time jumps,"Canon 13.2,13.3,17.1","Technical T032,T040",Scenarios SCN-009,"First Vein Part 1,4.2"
+FV-CAN-002,Owner equity preference scenario policy,"Canon 12.1,13.2",Technical T040,Scenarios SCN-009,First Vein Part 1
+FV-CAN-003,Owner escalation thresholds,Canon 13.2,"Technical T032,T040",QA-022,First Vein Part 1
+FV-CAN-004,Seller financing and fee interests,"Canon 05.4,12.1","Technical T015,T039",QA-021,First Vein Part 5.5
+FV-CAN-005,Mine economic uncertainty,Canon 09.5,Technical T037,"QA-017,QA-029",First Vein Part 5.3
+FV-CAN-006,Ore recovery and sale distinction,"Canon 09.3,07.4","Technical T038,T009","QA-018,QA-019",First Vein Part 2.4
+FV-CAN-007,Open action registry and referrals,"Canon 17.1,11.3",Technical T022,QA-023,First Vein Part 5.6
+FV-CAN-008,Oral and written contract evidence,Canon 14.2,Technical T039,QA-028,First Vein Part 5.7
+FV-CAN-009,Independent NPC and resident truth,"Canon 11.3,16.1",Technical T034,"QA-024,QA-026",First Vein Part 2.4
+FV-CAN-010,Precise seven objectives,Canon 16.1,"Technical T034,T035","SCN-009,QA-025,QA-027",First Vein Part 2.4
+FV-CAN-011,Pacing and plain-language UX,"Canon 13.3,17.1","Technical T032,T022",QA-023,"VEIN-UX-011,012"

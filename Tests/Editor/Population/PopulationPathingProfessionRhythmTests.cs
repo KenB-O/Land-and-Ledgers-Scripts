@@ -53,6 +53,16 @@ namespace LandLedgers.EditorTests.Population
             Assert.Greater(lodgingReturn, sawyerReturn);
         }
 
+        [TestCase(PopulationScheduleState.AtWork, true)]
+        [TestCase(PopulationScheduleState.GoingToWork, false)]
+        [TestCase(PopulationScheduleState.GoingShopping, false)]
+        [TestCase(PopulationScheduleState.AtHome, false)]
+        [TestCase(PopulationScheduleState.ReturningHome, false)]
+        public void ScheduledWorkReturnOnlyRetargetsWorkersWhoReachedWork(PopulationScheduleState state, bool expected)
+        {
+            Assert.AreEqual(expected, PopulationPathingDirector.IsEligibleForScheduledWorkReturn(state));
+        }
+
         [Test]
         public void LocalVisualEligibilityExcludesOffMapDeadAndUnhousedRecords()
         {
@@ -83,10 +93,40 @@ namespace LandLedgers.EditorTests.Population
                 Assert.IsTrue(binding.TryResolve(population, out PersonState resolved));
                 Assert.AreSame(resident, resolved);
                 Assert.AreEqual(resident.id, binding.PersonId);
+                Assert.IsTrue(binding.Bind(resident.id), "Binding the same stable identity is idempotent.");
+                Assert.IsFalse(binding.Bind(74), "A visual actor cannot silently become a different Person.");
+                Assert.AreEqual(resident.id, binding.PersonId);
             }
             finally
             {
                 Object.DestroyImmediate(actor);
+            }
+        }
+
+        [TestCase(2, true)]
+        [TestCase(3, false)]
+        public void VisualPrefabSelectionUsesPersonAppearanceInsteadOfIdentityParity(int personId, bool isFemale)
+        {
+            GameObject malePrefab = new("Male appearance test prefab");
+            GameObject femalePrefab = new("Female appearance test prefab");
+            try
+            {
+                PersonState person = new() { id = personId, isFemale = isFemale };
+                MethodInfo method = typeof(PopulationPathingDirector).GetMethod(
+                    "ResolveAgentVisualPrefab",
+                    BindingFlags.NonPublic | BindingFlags.Static);
+
+                Assert.NotNull(method);
+                GameObject selected = (GameObject)method.Invoke(
+                    null,
+                    new object[] { person, malePrefab, femalePrefab });
+
+                Assert.AreSame(isFemale ? femalePrefab : malePrefab, selected);
+            }
+            finally
+            {
+                Object.DestroyImmediate(malePrefab);
+                Object.DestroyImmediate(femalePrefab);
             }
         }
 

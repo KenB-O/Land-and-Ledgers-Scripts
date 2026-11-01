@@ -1,0 +1,17 @@
+﻿Fixture_ID,Fixture,Required_outcome,Source_trail,Canon_Reference
+QA-001,Generic Business,"Create Business with no type, then supply merchandise/forge; classification may change while action feasibility follows actual state",TECH XIV pp.6–7,CAN-CE1-02.1
+QA-002,Worker autonomy,Physically possible but unsafe/out-of-contract assignment permits refusal,TECH XIV p.7,CAN-CE1-03.2
+QA-003,Employment contactability,Person is not globally recruitable; a real introduction/referral creates contact and response latency,TECH XIV p.7,CAN-CE1-04.3
+QA-004,Active work vs contract signatures,Count actual labor assignments and overlapping Work intervals rather than agreement dates,TECH XIV preserved Rev V; Canon XXXI pp.108–112,CAN-CE1-05.3
+QA-005,Chicken provenance,Owned source animal -> lawful transformation -> shipment -> kitchen output -> sale to real customer; outside purchase fails internally sourced objective,TECH XIV preserved Rev IV pp.4–5,CAN-CE1-07.3
+QA-006,Blocked shipment,No fabricated loaded cargo can coexist with source-stock restoration across failed dispatch and save/load,TECH XIV preserved Rev IV pp.4–5,CAN-CE1-07.3
+QA-007,Business ownership,Independently owned NPC-business objective does not count controlled subsidiaries,TECH XIV pp.6–7,CAN-CE1-17.1
+QA-008,Equity,"Borrowing increases cash and debt equally, not owner equity; starting asset inclusion is scenario-defined","Canon XXXI p.7, TECH XIV p.6",CAN-CE1-12.1
+QA-009,Historical toggle,"Disabled authored Panic cannot inject effect, endogenous distress still possible",TECH XIV pp.6–7,CAN-CE1-16.1
+QA-010,Operating state,Constructed building/Business identity does not satisfy OperatingBusiness,TECH XIV p.6,CAN-CE1-02.2
+QA-011,NPC continuity,"Population from actual Person arrivals and residence, not project or housing completion",TECH XIV preserved Rev XIII; Canon XXXI pp.4–8,CAN-CE1-08.3
+QA-012,True asset reorganization,"Merger transfers underlying obligations, cash, property and employees once; grouping does not",TECH XIV pp.5–7,CAN-CE1-02.5
+QA-013,Portfolio autonomy,"Extended ordinary operation with zero owner clicks, real manager activities and owner-locked decisions respected","TECH XIV p.7, Canon XXXI pp.4–5",CAN-CE1-05.1
+QA-014,Record reconciliation,"Known ledger correction carries explicit adjustment evidence, never silently rewritten history",TECH XIV pp.6–7,CAN-CE1-12.3
+QA-015,Rail service opening,"Survey, financing, grade, tracks, facilities and actual train service remain separate",TECH XIV preserved Rev VIII; Canon XXXI pp.70–82,CAN-CE1-10.2
+QA-016,Save/load idempotence,"Active recruitment, queued work, shipment, reorganization, biological incubation and historical event injection do not double-fire",TECH XIV p.7,CAN-CE1-18.1

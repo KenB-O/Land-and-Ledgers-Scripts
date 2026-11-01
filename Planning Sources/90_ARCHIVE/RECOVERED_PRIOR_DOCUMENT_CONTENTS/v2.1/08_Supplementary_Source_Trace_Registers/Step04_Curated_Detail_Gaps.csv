@@ -1,0 +1,19 @@
+ID,Detail risk,Source PDF page,Source term,Intended addendum,Disposition,Grounded correction
+G01,Grain custody and receipts,28,warehouse receipts,CAN-CE1-07.6,EXPAND,"Grain ownership, custody, grade, weights and receipts must remain distinct, including transferable/pledgeable receipts where dated law permits."
+G02,Commission/consignment agency,89,consignment,CAN-CE1-07.7,EXPAND,"Commission merchants can coordinate consigned livestock/produce sales with custody, shipment, yard costs, commissions and settlement without owning the stock."
+G03,Commercial memory types,299,Commercial memory types,CAN-CE1-13.5,EXPAND,"Distinguish personal, relational, recorded and procedural memory; ownership transfer cannot erase all evidence or staff knowledge."
+G04,Federal bankruptcy chronology,30,1878-1898,CAN-CE1-12.7,EXPAND,The federal bankruptcy gap 1878-1898 is a real legal change; the 1898 Act does not create modern bankruptcy procedures.
+G05,Mail order and parcel-post chronology,77,Parcel Post,CAN-CE1-10.6,EXPAND,"Mail order may expand discovery/order channels from 1872, but goods require actual carriers and Parcel Post is outside 1870-1905."
+G06,"Construction liens, bonds, claims",46,performance bond,CAN-CE1-06.6,EXPAND,"Building contracts may include liens, performance security, risk allocations, defects, claims and dated public procurement procedures."
+G07,Cooperatives and mutuals,30,Cooperative/mutual,CAN-CE1-12.8,EXPAND,Cooperatives and mutual organizations pool capital for real member services without being a universal institution bonus.
+G08,Seasonal production and workforce,89,Seasonal Markets,CAN-CE1-08.6,EXPAND,"Farm/livestock seasons affect output, feed, roads, handling and labor; seasonal prices emerge from those states."
+G09,Sources versus world-generation quotas,30,Historical,CAN-CE1-18.4,EXPAND,"Historical Census/database counts represent observation with coverage bias, not hard quantities of NPC firms/workers."
+G10,Player/NPC information scope,299,Personal memory,CAN-CE1-13.6,EXPAND,"Private awareness and commercial rumors must retain observer and source, not be shown as simulation omniscience."
+G11,Secured movable-property debt,29,Chattel mortgages,CAN-CE1-12.9,EXPAND,Chattel security applies to identified movable property and foreclosure/enforcement must respect dated rights.
+G12,Public land and treaty geography,27,public land,CAN-CE1-05.6,EXPAND,"Public-domain acquisition, treaty/reservation status, railroad lands, filed claims and patents are distinct states, not a map-is-empty test."
+G13,Financial instrument individuality,29,Multiple credit institutions,CAN-CE1-12.10,EXPAND,"Trade credit, mortgages, deposit obligations, association shares and outside notes retain parties and powers."
+G14,"Risk of loss, accepted construction",46,risk of loss,CAN-CE1-06.7,EXPAND,"Partial construction progress, contractor default and replacement work may preserve physical site state; a bond is not a progress shortcut."
+G15,Technical integrity defect,0,CreateBlockedShipment,CAN-CE1-07.8,TECHNICAL FOLLOW-UP,Technical XIV already records a P0 blocked-shipment source/loaded-cargo double count; do not imply it is repaired.
+G16,Legal versus mechanically feasible actions,0,intentional unlaw,CAN-CE1-14.5,WORDING REVIEW,Canon XXX and XXXI support physical feasibility independent of legality and worker response; no blanket legality ban.
+G17,Historical observation vs synthesis,1,Playtest,CAN-CE1-18.5,EXPAND,"Keep observation, historical source, modeled estimate, scenario value and design invariant explicitly distinguishable."
+G18,Quotations and rates with unit scope,7,Production,CAN-CE1-06.8,EXPAND,"Construction and transport estimates require task scope, crew, material state and distinctions among four timing clocks."

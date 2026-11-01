@@ -1,0 +1,298 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "simulation_mode": "Fictional conceptual playtest; in-world quotations are simulated, not historic prices",
+  "checkpoint": "VEIN-IV-1877-07-28",
+  "date": "1877-07-28",
+  "time": "16:30",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-07-24.json",
+  "elapsed": {
+    "calendar_days": 4,
+    "start": "1877-07-25",
+    "end": "1877-07-28",
+    "mine_excavation_days": 0,
+    "ore_processed_lb": 0,
+    "Amos_investigation_paid_days": 2,
+    "Jonas_paid_days": 0,
+    "Eli_paid_days": 3,
+    "note": "Jul 25 and Jul 27 Amos investigated the mill site and collected proposals; Eli completed one pre-existing July 26/27 outbound freight delivery; no ore was transported."
+  },
+  "owner_cash": {
+    "opening_recorded": "732.60",
+    "closing_recorded": "717.60",
+    "Amos_investigation_wages_paid": "9.00",
+    "millwright_consultation_paid": "2.50",
+    "water_land_records_enquiry_paid": "1.00",
+    "freight_business_courier_paid": "2.50",
+    "new_mine_wages_payable": "0.00",
+    "continuity_flag": "Historical personal-living-expense reconciliation still incomplete; balances are provisional."
+  },
+  "freight_business": {
+    "name": "Mercer Freight & Cartage",
+    "manager": "Eli Ward",
+    "autonomy": true,
+    "opening_cash": "77.90",
+    "outside_shipment": {
+      "id": "FRT-006",
+      "cargo_lb": 220,
+      "origin": "Juniper Gulch",
+      "destination": "Deadwood",
+      "paid_revenue": "9.00",
+      "status": "delivered, collected; ordinary outside freight"
+    },
+    "outside_receipts": "9.00",
+    "owner_mill_research_courier_receipt": "2.50",
+    "prior_driver_wages_paid": "18.00",
+    "new_driver_wages_incurred_unpaid": "9.00",
+    "feed_animal_care_paid": "4.80",
+    "livery_paid": "1.20",
+    "consumables_paid": "0.80",
+    "closing_wages_payable": "9.00",
+    "closing_cash": "64.60",
+    "expansion_alert": false,
+    "wagon_payload_lb_conservative": 1000
+  },
+  "personal_wagon_loan": {
+    "principal": "265.00",
+    "interest_rate_simple_annual": "0.16",
+    "accrued_interest_approx": "7.31",
+    "due_date": "1878-01-26",
+    "contract_balloon": "293.27",
+    "no_payment": true,
+    "property": "Owner personally holds wagon, 2 mules, harness; subject to secured note; company uses outfit by agreement."
+  },
+  "mine": {
+    "people_employed": [
+      {
+        "name": "Amos Polk",
+        "role": "Lead Miner",
+        "wage_day": "4.50"
+      },
+      {
+        "name": "Jonas Calder",
+        "role": "General Laborer",
+        "wage_day": "3.25"
+      }
+    ],
+    "new_excavation_lb": 0,
+    "new_assay": false,
+    "new_processing_lb": 0,
+    "new_sales": 0,
+    "gold_recovered_oz_provisional": "0.0044",
+    "gold_sold_oz": "0",
+    "geological_size": "Not enough information",
+    "workfront_inventory": [
+      {
+        "id": "JN1-Q001",
+        "category": "quartz",
+        "remaining_mass_lb": 1316,
+        "assay_oz_per_short_ton": "0.56"
+      },
+      {
+        "id": "JN1-M001",
+        "category": "mixed rock",
+        "remaining_mass_lb": 1476,
+        "assay_oz_per_short_ton": "0.07"
+      },
+      {
+        "id": "JN1-W001",
+        "category": "waste",
+        "remaining_mass_lb": 4400,
+        "assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-W002",
+        "category": "waste",
+        "remaining_mass_lb": 3400,
+        "assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-Q002",
+        "category": "quartz",
+        "remaining_mass_lb": 2176,
+        "assay_oz_per_short_ton": "1.92"
+      },
+      {
+        "id": "JN1-M002",
+        "category": "mixed rock",
+        "remaining_mass_lb": 1796,
+        "assay_oz_per_short_ton": "0.09"
+      },
+      {
+        "id": "JN1-W003",
+        "category": "waste",
+        "remaining_mass_lb": 4800,
+        "assay_oz_per_short_ton": null
+      }
+    ],
+    "untreated_workfront_stockpiles_lb": 19364,
+    "processed_batch_unchanged": {
+      "source_lot": "JN1-Q002",
+      "batch_id": "JN1-PR001",
+      "source_mass_lb": "20.0000",
+      "tailings": {
+        "lot_id": "JN1-T001",
+        "mass_lb": "19.6197",
+        "status": "wet crushed tails, dry-equivalent modeled mass; mine-side covered tub"
+      },
+      "heavy_concentrate": {
+        "lot_id": "JN1-C001",
+        "mass_lb": "0.3800",
+        "status": "pan heavy concentrate, not purified gold; mine-side sealed"
+      },
+      "free_gold": {
+        "lot_id": "JN1-G001",
+        "troy_oz_est": "0.0044",
+        "grams_est": "0.1369",
+        "avoirdupois_lb_equivalent": "0.0003",
+        "status": "trace flakes in owner-controlled packet, exact weight unverified without precision balance"
+      },
+      "rounding_note": "Dry-equivalent ledger rounded to 0.0001 lb: 19.6197 + 0.3800 + 0.0003 = 20.0000 lb. Wetness not treated as material creation."
+    },
+    "sample_depletion_lb_cumulative": 16,
+    "excavated_lb_cumulative": 19400,
+    "mass_reconciliation": "19,364 lb untreated + 20 lb physical processed products + 16 lb laboratory samples = 19,400 lb excavated",
+    "ore_offer_action": "No acceptance, dispatch or sale; expired Black Hills quote and Reese open through Aug 12"
+  },
+  "arrastra_research": {
+    "status": "Investigated only; no new Business, buildings, hires, animal leases, deposits, processing or capital purchase",
+    "in_world_quote_status": "Simulated in-world vendor offers; require final verification and player authorization",
+    "mill_type": "New eight-foot animal-powered arrastra, gravity-only planned configuration; historical arrastras often used mercury but none authorized",
+    "construction_quotes": {
+      "stone_floor_and_drag_stones": 54,
+      "finch_timber_and_framing": 42,
+      "harper_forge_fittings": 32,
+      "deadwood_millwright_assembly": 64,
+      "water_troughs_and_settling": 26,
+      "placement_transport": 20,
+      "total": 238
+    },
+    "lead_time_workdays": "12-18 after securing site and rights",
+    "site": "Candidate creek-side bench near wagon roadhead; possession or lease unconfirmed, no full water-use right, no tailings disposal agreement",
+    "power": "Dedicated animal required; livery quote $1.25 per workday plus feed ~$0.60; not hired/leased",
+    "suggested_staffing": "Competent mill attendant ~$3.50/day market indication, not hired or contracted",
+    "operating_per_workday_prehandling": {
+      "mill_attendant": 3.5,
+      "draft_animal_rent": 1.25,
+      "draft_animal_feed": 0.6,
+      "wear_and_sundries": 0.55,
+      "total": 5.9
+    },
+    "throughput_short_tons_per_workday_est": "0.25-0.50 (unverified contractor estimate, gravity-only, excludes additional prebreak and handling bottlenecks)",
+    "existing_quartz_stockpiles": [
+      {
+        "id": "JN1-Q001",
+        "lb": 1316,
+        "short_tons": "0.658",
+        "assay_oz_per_ton": "0.56"
+      },
+      {
+        "id": "JN1-Q002",
+        "lb": 2176,
+        "short_tons": "1.088",
+        "assay_oz_per_ton": "1.92"
+      }
+    ],
+    "total_quartz_short_tons": "1.746",
+    "assay_implied_gold_troy_oz": "2.4574",
+    "assay_implied_metal_value_approx": "50.80",
+    "hypothetical_recovery_values": {
+      "30pct": 15.24,
+      "50pct": 25.4,
+      "70pct": 35.56
+    },
+    "custom_mill_terms": "$6/short ton; $18 minimum for each distinct batch; two-lot $36 min before hauling, no recovery guarantee",
+    "no_established_recovery_rate": true,
+    "cash_quote_not_authorized": true,
+    "commercial_offers": {
+      "Reese": "$19.30 for 2,176 lb JN1-Q002 delivered by 1877-08-12, still open, unaccepted",
+      "Black Hills": "$11.10 for same lot buyer-pickup expired 1877-07-25, unaccepted"
+    }
+  },
+  "investigation_budget": {
+    "authorized": "15.00",
+    "labor_Amos": "9.00",
+    "millwright_consultation": "2.50",
+    "records_check": "1.00",
+    "intercompany_courier": "2.50",
+    "incurred": "15.00",
+    "remaining": "0.00"
+  },
+  "cash_reconciliation": {
+    "opening_owner_plus_freight_cash": "810.50",
+    "owner_outflows_including_internal_courier": "-15.00",
+    "outside_freight_receipts": "+9.00",
+    "internal_courier_freight_receipt": "+2.50",
+    "freight_prior_wages_paid": "-18.00",
+    "animal_care": "-4.80",
+    "livery": "-1.20",
+    "supplies": "-0.80",
+    "closing_owner_plus_freight_cash": "782.20",
+    "net_change": "-28.30",
+    "consolidated_net_excludes_internal_courier": "-28.30",
+    "unpaid_freight_wages": "9.00",
+    "unpaid_mine_wages": "0.00",
+    "unpaid_interest_approx": "7.31",
+    "reconciliation_note": "Difference 782.20 - 810.50 = -28.30; interest accrual not cash."
+  },
+  "population_permanent": 22,
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Control prospect, two in-situ samples and independent assay",
+      "status": "complete 1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First paid mineral or recovered gold sale",
+      "status": "0/1"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "goal": "$400 mining operating profit across six consecutive full months, four individually profitable",
+      "status": "0 qualifying windows"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "goal": "650 cumulative recovered and sold troy ounces",
+      "status": "0/650"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "goal": "2 genuinely independent new NPC owned businesses active 90 days with 5 external paid transactions each",
+      "status": "0/2"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered and sold troy oz in consecutive 12 months with positive mine operating profit",
+      "status": "0/850"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents maintained 60 days",
+      "status": "22/90"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered and sold troy oz and $18000 cost-basis owner equity",
+      "status": "0/5500; equity unaudited"
+    }
+  ],
+  "pending_choices": [
+    "Investigate site title/lease and lawful water rights before construction",
+    "Cost qualified pilot gravity test to establish metallurgical recovery and handling",
+    "Pursue current ore sale via Reese or renegotiate claim-side buyer to achieve Objective 2"
+  ],
+  "findings": [
+    "VEIN-CAL-011: A small arrastra has a material fixed-cost and throughput threshold; ownership does not convert contained metal into recovered metal.",
+    "VEIN-VALID-013: Distinguish unpatented claim, millsite possession, priority water use and tailings rights; no implied title or diversion authorization.",
+    "VEIN-DES-007 followup: Player-owned mills are real businesses with operating staffing, power, replenishment and optional third-party custom milling."
+  ]
+}

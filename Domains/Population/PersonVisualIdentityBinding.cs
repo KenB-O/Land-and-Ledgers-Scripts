@@ -20,8 +20,16 @@ namespace LandLedgers.Population
         {
             if (stablePersonId < 0)
             {
-                personId = -1;
                 return false;
+            }
+
+            // A view may not change which persistent Person it represents.
+            // The current director does not pool actors; any future pooling must
+            // add an explicit unbind/rebind lifecycle rather than silently
+            // transferring identity here.
+            if (personId >= 0)
+            {
+                return personId == stablePersonId;
             }
 
             personId = stablePersonId;

@@ -1,0 +1,11 @@
+﻿Blocker_ID,Severity,Topic,Evidence,Gate,Next_action
+REL-001,CRITICAL,Canon no-loss certification,"3,069 old-source anchors mapped automatically; manual semantic proof incomplete",Canon XXXI remains gameplay authority,Line-by-line expert reviewer or source clause reconciliation
+REL-002,CRITICAL,Technical no-loss certification,"1,880 old-source anchors mapped automatically; manual semantic proof incomplete",Technical XIV remains implementation authority,Manual rule-by-rule technical review and checks
+REL-003,CRITICAL,Unity repository evidence,No repository checkout/source is supplied; 36 authority mappings are conceptual,Do not claim code migrated,Conduct actual source and test suite audit
+REL-004,CRITICAL,Shipment duplicate cargo,Technical XIV records blocked-shipment duplicate-lot defect; repair status not rechecked,QA release blocker for provenance objectives,Repair and run dispatch/save-load idempotency tests
+REL-005,HIGH,Scenario runnable definitions,Only cumulative Canon playtest descriptions were available,Scenario objective packs are not certified,Provide full authored scenario definitions
+REL-006,HIGH,Historical statutory tables,Territorial interest/municipal/law variants not exhaustively researched,Maintain dated legal holds,Primary statute and jurisdiction audit
+REL-007,HIGH,Historical calibration coverage,12 qualitative quantitative price/wage/freight/commodity holds remain,No universal fabricated rates,Dated source series and material-grade verification
+REL-008,MEDIUM,Research compatibility,Original occupation/work report headers cite older Canon/Tech revisions,Compatibility addenda issued; originals preserved,Ongoing linked revision checks
+REL-009,HIGH,Pending 106–145 design directions,40 proposals never explicitly individually approved,Do not silently promote new ideas,Future design sign-off or explicit blanket acceptance
+REL-010,MEDIUM,Cross-document ID stability,Consolidated Canon section IDs temporary CE1; Technical crosswalk uses them,Keep provisional version prefixes,Freeze IDs only after semantic no-loss approval

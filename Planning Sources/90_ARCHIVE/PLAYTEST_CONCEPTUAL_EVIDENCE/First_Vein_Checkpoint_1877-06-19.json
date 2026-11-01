@@ -1,0 +1,248 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "checkpoint": "VEIN-IV-1877-06-19",
+  "date": "1877-06-19",
+  "time": "16:45",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-06-12.json",
+  "mode": "conceptual autonomous playtest, not Unity runtime",
+  "continuity": "SOFT: owner living/subsistence opening historical gap remains; June 13-19 transactions internally reconciled",
+  "calendar": {
+    "advanced_calendar_days": 7,
+    "mine_workdays": [
+      "1877-06-13",
+      "1877-06-14",
+      "1877-06-15",
+      "1877-06-16",
+      "1877-06-18",
+      "1877-06-19"
+    ],
+    "rest_day": "1877-06-17"
+  },
+  "population": {
+    "permanent_persons": 22,
+    "new_residents": 0
+  },
+  "cash": {
+    "owner_open_recorded": "979.95",
+    "owner_new_receipts": "0.00",
+    "owner_mine_prior_wages_paid": "20.00",
+    "owner_current_phase_wages_paid": "31.00",
+    "owner_minor_consumables_paid": "6.50",
+    "owner_new_disbursements": "57.50",
+    "owner_close_recorded": "922.45",
+    "freight_business_open": "79.95",
+    "freight_business_external_receipts": "29.50",
+    "freight_wages_paid": "36.00",
+    "freight_animal_feed_care_paid": "8.40",
+    "freight_business_close": "65.05",
+    "mine_business_cash": "no separate mine Business; player-personal claim operation"
+  },
+  "owner_obligations": {
+    "mine_wages_payable_open": "20.00",
+    "mine_wages_accrued_June_13_to_19": "46.50",
+    "mine_wages_paid": "51.00",
+    "mine_wages_payable_close": "15.50",
+    "mine_wages_remaining_breakdown": {
+      "Amos_June_18_19": "9.00",
+      "Jonas_June_18_19": "6.50"
+    },
+    "wagon_secured_note_principal": "265.00",
+    "note_maturity_date": "1878-01-26",
+    "total_note_due_at_maturity_if_performed": "293.27",
+    "note_interest_accrued_approx": "2.79",
+    "note_security": "personally owned wagon, two mules, harness"
+  },
+  "freight": {
+    "business": "Mercer Freight & Cartage",
+    "manager": "Eli Ward",
+    "autonomous_ordinary_freight": true,
+    "driver_wage_per_day": "3.00",
+    "new_workdays": 6,
+    "shipments": [
+      {
+        "id": "FRT-006",
+        "cargo": "310 lb merchandise/returns",
+        "origin": "Juniper Gulch",
+        "destination": "Deadwood",
+        "earned_paid": "9.50",
+        "status": "delivered and settled"
+      },
+      {
+        "id": "FRT-007",
+        "cargo": "460 lb boarding house supplies",
+        "origin": "Deadwood",
+        "destination": "Juniper Gulch",
+        "earned_paid": "12.00",
+        "status": "delivered and settled"
+      },
+      {
+        "id": "FRT-008",
+        "cargo": "250 lb hardware for forge",
+        "origin": "Deadwood",
+        "destination": "Juniper Gulch",
+        "earned_paid": "8.00",
+        "status": "delivered and settled"
+      }
+    ],
+    "vehicle_capacity_used_peak_lb": 710,
+    "vehicle_location_end": "Juniper Gulch",
+    "external_freight_receipts": "29.50",
+    "new_wages_accrued": "18.00",
+    "wages_payable_open": "24.00",
+    "wages_paid": "36.00",
+    "wages_payable_close": "6.00",
+    "feed_and_care_paid": "8.40",
+    "operating_margin_new_revenue_minus_new_labor_and_feed_before_other_costs": "3.10",
+    "business_cash_close": "65.05",
+    "capacity_alert": false,
+    "expansion_not_authorized": true,
+    "truck_or_wagon_asset_title": "owner personally, business under use agreement",
+    "ownership_transfer": false
+  },
+  "mining": {
+    "site": "Juniper No. 1",
+    "claim": "unpatented lode possessory claim, not full land title",
+    "deposit_size_player_knowledge": "Not enough information",
+    "authorization": {
+      "limited_safe_surface_trial_extraction": true,
+      "days_max": 6,
+      "additional_total_budget": "70.00",
+      "no_blasting": true,
+      "no_shaft": true,
+      "no_unsupported_excavation": true,
+      "major_equipment_purchase": false
+    },
+    "crew": [
+      {
+        "name": "Amos Polk",
+        "role": "Lead Miner",
+        "wage_workday": "4.50",
+        "worked_days_new": 6,
+        "wages_accrued_new": "27.00"
+      },
+      {
+        "name": "Jonas Calder",
+        "role": "General mine laborer",
+        "wage_workday": "3.25",
+        "worked_days_new": 6,
+        "wages_accrued_new": "19.50"
+      }
+    ],
+    "new_phase_expenses": {
+      "wages": "46.50",
+      "consumables_tool_upkeep": "6.50",
+      "total": "53.00",
+      "unspent_limit": "17.00"
+    },
+    "extraction_rock_lots": [
+      {
+        "id": "JN1-Q001",
+        "provenance": "June 13-19 shallow existing cut, visually quartz-bearing zone",
+        "label": "candidate visually mineralized quartz, NOT assayed bulk ore",
+        "short_tons": "0.66",
+        "pounds": 1320,
+        "location": "sorted loose stockpile at work front",
+        "sold": false,
+        "gold_content_known": false
+      },
+      {
+        "id": "JN1-M001",
+        "provenance": "June 13-19 shallow existing cut altered/wall rock",
+        "label": "mixed rock of uncertain mineral content",
+        "short_tons": "0.74",
+        "pounds": 1480,
+        "location": "separate loose stockpile at work front",
+        "sold": false,
+        "gold_content_known": false
+      },
+      {
+        "id": "JN1-W001",
+        "provenance": "June 13-19 shallow existing cut overburden",
+        "label": "visually barren waste/cover not assayed",
+        "short_tons": "2.20",
+        "pounds": 4400,
+        "location": "local waste dump at work front",
+        "sold": false,
+        "gold_content_known": false
+      }
+    ],
+    "material_mass_conservation": "0.66+0.74+2.20=3.60 short tons = 7200 lb; 0 shipped, 0 milled, 0 recovered",
+    "geology_observed": "several additional feet of quartz-bearing zone visible; variable width; fractured and altered wall rock, not representative deposit estimate",
+    "safety_observed": "upper edge loosened; Amos stopped further advance at safe shallow trial limit; future advance needs safe bench-back or suitable ground-support plan and authorization",
+    "timber_at_workfront_lb": 595,
+    "tools_and_sacks_original_at_workfront_lb": 105,
+    "stockpile_short_tons": "3.60",
+    "candidate_quartz_short_tons": "0.66",
+    "candidate_mixed_short_tons": "0.74",
+    "waste_short_tons": "2.20",
+    "shipped_short_tons": "0.00",
+    "recovered_gold_troy_oz": "0.00",
+    "sold_gold_troy_oz": "0.00",
+    "total_sale_proceeds": "0.00",
+    "first_sale_status": "not complete; representative sorted-lot testing and commercial terms remain to be established"
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "description": "Legally control mineral prospect, two documented in-situ samples and independent assay",
+      "status": "complete",
+      "completed_on": "1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "description": "First actual paid recovered gold or mineral sale",
+      "progress": "0/1"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "description": "Mine operating profit >= $400 over six consecutive full months with four individually profitable months",
+      "progress": "0 qualifying six-month windows"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "description": "650 cumulative recovered-and-sold troy oz",
+      "progress": "0/650 oz"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "description": "Two new independently NPC-owned businesses operating 90 days and each with five outside paid transactions",
+      "progress": "0/2"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "description": "850 recovered-and-sold troy oz in 12 consecutive months with positive mine operating profit",
+      "progress": "0/850 oz"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "description": "90 permanent residents sustained 60 days",
+      "progress": "22/90 residents"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "description": "5,500 cumulative recovered-and-sold troy oz and $18,000 cost-basis reconciled owner equity",
+      "progress": "0/5500 oz; equity not audited"
+    }
+  ],
+  "next_decision": "Obtain separate representative lot sampling and independent assays plus practical small-lot buyers/custom-mill terms, or authorize safe shallow benching and further development; no further excavation approved",
+  "findings_new": [
+    {
+      "id": "VEIN-VALID-009",
+      "name": "Hand-excavation stockpiles conserve rock lot mass and provenance; assay samples not misapplied as commercial grades",
+      "status": "conceptual simulation validation"
+    },
+    {
+      "id": "VEIN-CAL-004",
+      "name": "Manual shallow open-cut excavation cost and small trial-lot commercial viability requires downstream assay/mill/freight price discovery",
+      "status": "calibration watch"
+    }
+  ]
+}

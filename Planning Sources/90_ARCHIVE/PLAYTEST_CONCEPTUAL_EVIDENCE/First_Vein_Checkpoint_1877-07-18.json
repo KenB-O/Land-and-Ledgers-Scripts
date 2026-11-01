@@ -1,0 +1,296 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "checkpoint": "VEIN-IV-1877-07-18",
+  "date": "1877-07-18",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-07-11.json",
+  "simulation_mode": "Fictional conceptual playtest, not a live executable game build or historic real-world quotes",
+  "continuity_note": "Prior recorded owner cash inherited historic unresolved personal living expense gap; July 12\u201318 transactions are reconciled to recorded opening figures.",
+  "elapsed": {
+    "calendar_days": 7,
+    "begin": "1877-07-12",
+    "end": "1877-07-18",
+    "mine_paid_work": {
+      "Amos Polk": [
+        "1877-07-12",
+        "1877-07-17"
+      ],
+      "Jonas Calder": [
+        "1877-07-12"
+      ]
+    },
+    "no_excavation": true
+  },
+  "owner_cash": {
+    "opening_recorded": "791.35",
+    "prior_mine_payroll_paid": "23.25",
+    "new_mine_payroll_accrued_and_paid": "12.25",
+    "external_independent_assays_paid": "17.00",
+    "sample_packaging_paid": "1.50",
+    "internal_mine_to_freight_sample_courier_paid": "3.00",
+    "closing_recorded": "734.35",
+    "mine_payroll_payable_end": "0.00",
+    "assay_project_incremental_spending": "33.75",
+    "assay_project_budget_limit": "50.00",
+    "unused_authorization": "16.25"
+  },
+  "freight_business": {
+    "name": "Mercer Freight & Cartage",
+    "manager": "Eli Ward",
+    "autonomous": true,
+    "cash_open": "80.80",
+    "external_freight_receipts": "25.00",
+    "internal_sample_courier_receipt": "3.00",
+    "driver_wage_accrual": "12.00",
+    "driver_wages_paid": "15.00",
+    "wages_payable_open": "6.00",
+    "wages_payable_close": "3.00",
+    "animal_feed_and_care_paid": "6.30",
+    "supplies_paid": "1.20",
+    "cash_close": "86.30",
+    "operating_contribution_including_internal_freight_before_depreciation_and_wagon_finance": "8.50",
+    "net_consolidated_internal_courier_revenue": "0.00",
+    "shipments": [
+      {
+        "id": "FRT-015",
+        "cargo": "260 lb merchant freight",
+        "customer_cash_collected": "13.00",
+        "status": "delivered and settled"
+      },
+      {
+        "id": "FRT-016",
+        "cargo": "390 lb merchant freight",
+        "customer_cash_collected": "12.00",
+        "status": "delivered and settled"
+      },
+      {
+        "id": "FRT-017",
+        "cargo": "8 lb of sealed mine assay samples Q002/M002",
+        "internal_cash_payment": "3.00",
+        "status": "delivered to independent Deadwood laboratory; no mine cargo loss beyond sampled 8 lb"
+      }
+    ],
+    "capacity_alert": false,
+    "hire_or_capital_commitment": false
+  },
+  "personal_wagon_loan": {
+    "principal": "265.00",
+    "annual_interest_simple": "16%",
+    "accrued_interest_to_date": "6.16",
+    "balloon_due": "1878-01-26",
+    "contractual_balloon": "293.27",
+    "payment_in_period": "0.00"
+  },
+  "mine": {
+    "status": "Assayed two new physical lots; no extraction, sale, recovery or new mine commitments",
+    "current_workfront_lots": [
+      {
+        "id": "JN1-Q001",
+        "category": "quartz",
+        "initial_mass_lb": 1316,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 1316,
+        "composite_gold_assay_oz_per_short_ton": "0.56"
+      },
+      {
+        "id": "JN1-M001",
+        "category": "mixed rock",
+        "initial_mass_lb": 1476,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 1476,
+        "composite_gold_assay_oz_per_short_ton": "0.07"
+      },
+      {
+        "id": "JN1-W001",
+        "category": "waste",
+        "initial_mass_lb": 4400,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 4400,
+        "composite_gold_assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-W002",
+        "category": "waste",
+        "initial_mass_lb": 3400,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 3400,
+        "composite_gold_assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-Q002",
+        "category": "quartz",
+        "initial_mass_lb": 2200,
+        "sample_removed_this_period_lb": 4,
+        "remaining_mass_lb": 2196,
+        "composite_gold_assay_oz_per_short_ton": "1.92"
+      },
+      {
+        "id": "JN1-M002",
+        "category": "mixed rock",
+        "initial_mass_lb": 1800,
+        "sample_removed_this_period_lb": 4,
+        "remaining_mass_lb": 1796,
+        "composite_gold_assay_oz_per_short_ton": "0.09"
+      },
+      {
+        "id": "JN1-W003",
+        "category": "waste",
+        "initial_mass_lb": 4800,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 4800,
+        "composite_gold_assay_oz_per_short_ton": null
+      }
+    ],
+    "workfront_mass_prior_lb": 19392,
+    "sample_mass_this_period_lb": 8,
+    "workfront_mass_now_lb": 19384,
+    "cumulative_excavated_lb": 19400,
+    "prior_samples_off_workfront_lb": 8,
+    "cumulative_samples_removed_off_workfront_lb": 16,
+    "material_balance_note": "19,384 lb of unsold stockpiles at work front + 16 lb of laboratory samples/retained residues and assay-use accounting = 19,400 lb broken rock from both phases. The sample mass is not unprocessed saleable ore.",
+    "new_assays": [
+      {
+        "lot": "JN1-Q002",
+        "gold_oz_per_short_ton": "1.92",
+        "sampling_mass_lb": 4,
+        "remaining_lb": 2196,
+        "representativeness": "multi-increment composite of sorted pile, not geological resource estimate"
+      },
+      {
+        "lot": "JN1-M002",
+        "gold_oz_per_short_ton": "0.09",
+        "sampling_mass_lb": 4,
+        "remaining_lb": 1796,
+        "representativeness": "multi-increment composite of sorted pile, not geological resource estimate"
+      }
+    ],
+    "previous_assays": [
+      {
+        "lot": "JN1-Q001",
+        "gold_oz_per_short_ton": "0.56"
+      },
+      {
+        "lot": "JN1-M001",
+        "gold_oz_per_short_ton": "0.07"
+      }
+    ],
+    "fire_assay_fees_paid": "17.00",
+    "gold_recovered_oz": "0.000",
+    "gold_sold_oz": "0.000",
+    "mine_sales_income": "0.00",
+    "geological_size": "Not enough information",
+    "safety": "Existing fractured next face not reauthorized; no new excavation or injury.",
+    "timber_unused_lb": 415,
+    "timber_installed_lb": 180
+  },
+  "commercial_offers": [
+    {
+      "party": "Reese Ore Agency",
+      "type": "conditional purchase quotation",
+      "parcel": "JN1-Q002 2,196 lb alone",
+      "seller_price_total": "19.50",
+      "delivery": "Deadwood agency yard, seller responsible mine-to-creek and onward carriage",
+      "minimum_lb": 2000,
+      "expiration": "1877-07-27",
+      "current_status": "Not accepted, inspection on receipt; 3 conservative 1,000 lb wagon loads, separate hillside handling required"
+    },
+    {
+      "party": "Black Hills Ore Syndicate",
+      "type": "written conditional claim-side offer",
+      "parcel": "JN1-Q002 2,196 lb alone",
+      "seller_price_total": "11.25",
+      "delivery": "Buyer provides packaging, labor and transport from the mine workfront after on-site verification",
+      "minimum_lb": 2000,
+      "expiration": "1877-07-25",
+      "current_status": "Not accepted; buyer inspection and actual handover/payment required"
+    },
+    {
+      "party": "Deadwood Custom Stamp Works",
+      "type": "processing quote, not purchase",
+      "parcel": "Current quartz lots 3,512 lb total, physically separate origin lots",
+      "processing_fee_per_short_ton": "6.00",
+      "batch_minimum_fee": "18.00",
+      "freight": "separate; must be physically delivered",
+      "gold_recovery_and_settlement": "variable and unguaranteed",
+      "current_status": "No mill work contracted"
+    }
+  ],
+  "cash_reconciliation": {
+    "owner_cash_delta": "-57.00",
+    "freight_cash_delta": "5.50",
+    "combined_cash_open": "872.15",
+    "combined_cash_close": "820.65",
+    "combined_cash_delta": "-51.50",
+    "external_freight_cash_in": "25.00",
+    "external_cash_out_mine_wages": "35.50",
+    "external_cash_out_lab": "17.00",
+    "external_cash_out_sample_packaging": "1.50",
+    "external_cash_out_freight_wages": "15.00",
+    "external_cash_out_animal_care": "6.30",
+    "external_cash_out_freight_supplies": "1.20",
+    "internal_transfer_eliminated": "3.00",
+    "statement": "25 - 35.50 - 17 - 1.50 - 15 - 6.30 - 1.20 = -51.50"
+  },
+  "population_permanent": 22,
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Control prospect, two in-situ samples and independent assay",
+      "status": "complete 1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First paid mineral or recovered gold sale",
+      "status": "0/1"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "goal": "$400 mining operating profit across six consecutive full months, four individually profitable",
+      "status": "0 qualifying windows"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "goal": "650 cumulative recovered and sold troy ounces",
+      "status": "0/650"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "goal": "2 genuinely independent new NPC owned businesses active 90 days with 5 external paid transactions each",
+      "status": "0/2"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered and sold troy oz in consecutive 12 months with positive mine operating profit",
+      "status": "0/850"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents maintained 60 days",
+      "status": "22/90"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered and sold troy oz and $18000 cost-basis owner equity",
+      "status": "0/5500; equity unaudited"
+    }
+  ],
+  "new_findings": [
+    {
+      "id": "VEIN-VALID-012",
+      "description": "Multi-lot post-mining fire assay results remain source-lot-specific; physical sample deductions reconcile with saleable stockpiles. No implied extraction or recovered-metal inventory."
+    },
+    {
+      "id": "VEIN-CAL-007",
+      "description": "Local workfront ore bids versus delivered Deadwood bids materially differ after hillside extraction and wagon-payload costs; profitable shipment cannot be inferred from offered price alone."
+    }
+  ],
+  "next_step": "Owner may authorize claim-side sale for $11.25 conditional on actual inspection/payment, delivered sale for $19.50 subject to actual transport costs, or mill processing trial, without further excavation."
+}

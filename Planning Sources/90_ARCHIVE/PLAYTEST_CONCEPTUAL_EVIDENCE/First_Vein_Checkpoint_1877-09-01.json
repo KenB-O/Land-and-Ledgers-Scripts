@@ -1,0 +1,207 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "fictional autonomous conceptual playtest; NPC developments are simulated, not live Unity game state",
+  "checkpoint": "VEIN-IV-1877-09-01",
+  "date": "1877-09-01",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-08-25.json",
+  "days_advanced": 7,
+  "user_directive": "Delegate day-to-day mine operations to Amos, keep hiring and all ore sales under owner authority; continuously seek liquidity from ore sales while pursuing owned mill property. Reduce repetitive assay and micro-management steps.",
+  "manager_policy": {
+    "mine_manager": "Amos Polk",
+    "employment_status": "Lead Miner, managerial operating delegation (no wage increase agreed)",
+    "allowed": "Daily work plans, safe ordinary shallow surface excavation, directing currently hired 6 workers, material sorting and records, routine supply ordering, economical sampling, contacting prospective ore buyers, exploring mill parcels and rights",
+    "reserved_to_owner": "Ore sale acceptance and settlement, hiring/firing/pay changes, loans, purchase of land, new industrial plant, higher-risk excavation or capital expansions",
+    "initial_operating_spending_cap_usd": "140.00",
+    "owner_cash_floor_usd": "293.27",
+    "no_auto_sale": true,
+    "no_auto_new_staff": true,
+    "freight": "Eli retains autonomous management",
+    "next_cycle": "Do not make 6-person commitments that drive owner cash below floor without financing or an approved cash sale. Regular site scouting and customer enquiries may be conducted while staff perform already paid work."
+  },
+  "workdays": [
+    "1877-08-27",
+    "1877-08-28",
+    "1877-08-29",
+    "1877-08-30",
+    "1877-08-31",
+    "1877-09-01"
+  ],
+  "mine_operations": {
+    "active": true,
+    "crew": 6,
+    "wages_per_workday": "21.00",
+    "days_worked_each": 6,
+    "shallow_work_only": true,
+    "support_check_done_before_work": true,
+    "safety": "No new instability found at authorized shallow face; new unprotected ground not entered",
+    "injuries": 0,
+    "new_excavation_short_tons": "10.50",
+    "timber_prior_uninstalled_lb": 465,
+    "timber_installed_lb": 140,
+    "timber_remaining_lb": 325,
+    "new_lots": [
+      {
+        "id": "JN1-Q004",
+        "kind": "quartz-bearing (unassayed)",
+        "mass_lb": 6000,
+        "grade": null
+      },
+      {
+        "id": "JN1-M004",
+        "kind": "mixed altered (unassayed)",
+        "mass_lb": 3400,
+        "grade": null
+      },
+      {
+        "id": "JN1-W006",
+        "kind": "waste",
+        "mass_lb": 11600,
+        "grade": null
+      }
+    ],
+    "lot_updates": "Historical lots preserved, no merging or invented gold grades",
+    "gold_recovered_new_oz": 0,
+    "gold_sold_new_oz": 0
+  },
+  "inventory": {
+    "start_untreated_lb": 29972,
+    "new_extracted_lb": 21000,
+    "closing_untreated_lb": 50972,
+    "closing_untreated_quartz_lb": 10200,
+    "closing_untreated_mixed_lb": 9372,
+    "closing_untreated_waste_lb": 31400,
+    "historical_sold_ore_lb": 3492,
+    "historical_personal_trial_batch_lb": 20,
+    "historical_assay_samples_lb": 16,
+    "cumulative_excavated_lb": 54500,
+    "mass_balance_check": "50972 + 3492 + 20 + 16 = 54500",
+    "personal_gold_est_oz": "0.0044",
+    "recovered_and_sold_gold_oz": 0
+  },
+  "buyer_inquiries": [
+    {
+      "buyer": "Black Hills Ore Syndicate",
+      "lots": [
+        "JN1-Q003",
+        "JN1-Q004"
+      ],
+      "total_weight_lb": 10200,
+      "indicative_purchase_amount_usd": "42.00",
+      "collection": "buyer at mine",
+      "payment": "on inspected accepted transfer in cash",
+      "conditions": "Buyer-funded representative check, weighing and acceptable grade; conditional proposal not yet sale",
+      "valid_until": "1877-09-08"
+    },
+    {
+      "buyer": "Reese Ore Agency",
+      "lots": [
+        "JN1-Q003",
+        "JN1-Q004"
+      ],
+      "total_weight_lb": 10200,
+      "indicative_purchase_amount_usd": "62.00",
+      "collection": "seller delivers to Deadwood",
+      "conditions": "Additional 0.35-mile downhill handling, at least 11 nominal 1000-lb wagon loads; cost not fully quoted and could exceed price premium",
+      "valid_until": "1877-09-12"
+    }
+  ],
+  "land": {
+    "upper_road_terrace": "Still no verified full ownership title or mill water/tailings rights; $140 conditional price expires Sept 3; no payment and no deed transfer",
+    "alternative_search": "Amos maintains inquiries through already-paid contacts; no newly verified fee-title site identified; no new land spending",
+    "purchased": false,
+    "price_paid": "0.00"
+  },
+  "owner_cash": {
+    "opening": "455.35",
+    "mine_payroll_paid": "126.00",
+    "mine_external_supplies_paid": "11.00",
+    "intercompany_freight_paid": "3.00",
+    "closing": "315.35",
+    "mine_wages_payable": "0.00",
+    "prior_living_expense_gap": "open"
+  },
+  "freight_business": {
+    "opening_cash": "77.10",
+    "external_customer_cash_receipts": "30.00",
+    "intercompany_freight_received": "3.00",
+    "driver_wages_paid": "12.00",
+    "feed_paid": "9.10",
+    "supplies_paid": "2.00",
+    "closing_cash": "87.00",
+    "wage_payable": "0.00",
+    "manager": "Eli Ward",
+    "new_hires": 0,
+    "external_receivable_change": "0.00"
+  },
+  "consolidated": {
+    "opening_cash": "532.45",
+    "closing_cash": "402.35",
+    "change": "-130.10",
+    "external_cash_receipts": "30.00",
+    "external_cash_outlays": "160.10",
+    "intercompany_elimination": "3.00",
+    "warning": "owner prior personal living expense gap remains"
+  },
+  "loan": {
+    "principal": "265.00",
+    "rate_simple": "16% annually",
+    "due": "1878-01-26",
+    "contractual_balloon": "293.27",
+    "interest_to_date_approx": "11.38",
+    "owner_cash_after_balloon_reserve": "22.08"
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Claim control, two in-situ samples and independent assay",
+      "status": "complete 1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First completed paid mineral or recovered-gold sale",
+      "status": "complete 1877-08-02"
+    },
+    {
+      "id": 3,
+      "deadline": "1882-12-31",
+      "goal": "Recover and sell 650 cumulative troy oz gold",
+      "status": "0/650"
+    },
+    {
+      "id": 4,
+      "deadline": "1884-12-31",
+      "goal": "2 independently NPC-owned businesses, each 90 days and five external paid transactions",
+      "status": "0/2"
+    },
+    {
+      "id": 5,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered-and-sold gold troy oz in consecutive 12-month period with positive mine operating profit",
+      "status": "0/850"
+    },
+    {
+      "id": 6,
+      "deadline": "1888-12-31",
+      "goal": "Maintain 90 permanent residents for 60 consecutive days",
+      "status": "22/90"
+    },
+    {
+      "id": 7,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered-and-sold troy oz and $18000 reconciled owner equity",
+      "status": "0/5500; equity unaudited"
+    }
+  ],
+  "completed_objectives": 2,
+  "total_objectives": 7,
+  "population": 22,
+  "findings": [
+    "VEIN-DES-009: delegated routine mine management with owner-reserved sales/hiring/finance",
+    "VEIN-CAL-012: six-person payroll materially exceeds raw-quartz buyer bids; cannot sustain autonomy without liquidity",
+    "VEIN-VALID-017: rock inventory reconciles with buyer inquiries creating no sale or gold credits"
+  ],
+  "decision_gate": "Need owner approval for ore sale and/or financing before committing next full mine payroll cycle while preserving $293.27 note reserve."
+}

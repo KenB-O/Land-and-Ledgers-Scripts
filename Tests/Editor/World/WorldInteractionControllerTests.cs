@@ -37,5 +37,28 @@ namespace LandLedgers.Tests.World
                 Object.DestroyImmediate(controllerObject);
             }
         }
+
+        [Test]
+        public void PersonInspectableTargetRetainsStablePersonIdAndClearsItForOtherKinds()
+        {
+            GameObject targetObject = new("Person Inspectable Target Test");
+            try
+            {
+                WorldInspectableTarget target = targetObject.AddComponent<WorldInspectableTarget>();
+                target.ConfigurePerson(731);
+
+                Assert.AreEqual(WorldInspectableTargetKind.Person, target.Kind);
+                Assert.AreEqual(731, target.PersonId);
+                Assert.AreEqual(-1, target.PlotId);
+                Assert.AreEqual(-1, target.BuildingId);
+
+                target.Configure(WorldInspectableTargetKind.Building, 12, 34);
+                Assert.AreEqual(-1, target.PersonId, "Reusing a target for a non-person must not leave a stale identity.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(targetObject);
+            }
+        }
     }
 }

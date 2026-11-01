@@ -69,6 +69,9 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(result.Success);
             Assert.AreEqual(EntityKind.Business, result.BusinessEntityId.Kind);
             Assert.IsNotNull(result.Business);
+            Assert.AreEqual(0, result.Business.RuntimeState.CurrentCashCents,
+                "A positive capital term cannot turn into cash without a settled owner debit.");
+            StringAssert.Contains("remains unsettled", string.Join(" ", result.Diagnostics));
         }
 
         [Test]
@@ -180,6 +183,28 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void NewBusinessProfile_DoesNotGrantCatalogCashOrInventory()
+        {
+            BusinessProfileDefinition profile = Resources.Load<BusinessProfileDefinition>(
+                "Core/Economy/BusinessProfiles/GeneralStoreProfile");
+            Assert.NotNull(profile, "The authored General Store profile is the production creation template.");
+            Assert.Greater(profile.Business.Economy.StartingCashCents, 0,
+                "This fixture protects against accidentally treating authored profile defaults as transactions.");
+
+            BusinessRuntimeState runtime = profile.CreateRuntimeState();
+
+            Assert.AreEqual(0, runtime.CurrentCashCents,
+                "A profile is descriptive data and must not create business cash without a settled source.");
+            Assert.Greater(runtime.CategoryStock.Count, 0,
+                "The store keeps its authored category targets even when it has no physical opening stock.");
+            foreach (CategoryStockState stock in runtime.CategoryStock)
+            {
+                Assert.AreEqual(0, stock.CurrentStockUnits,
+                    $"Catalog category {stock.CategoryId} cannot become inventory without a receipt or production event.");
+            }
+        }
+
+        [Test]
         public void OpeningRoster_Default_HasTenAuthoredEntries()
         {
             List<OpeningRosterEntry> roster = OpeningBusinessRoster.Default();
@@ -199,6 +224,35 @@ namespace LandLedgers.EditorTests.Economy
             Assert.Greater(roster[0].StartingCapitalCents, 0);
             Assert.Greater(roster[1].StartingCapitalCents, 0);
             Assert.Greater(roster[2].StartingCapitalCents, 0);
+        }
+
+        [Test]
+        public void OpeningRoster_SixPersonDevelopment_UsesNamedOwnersWithoutGrantingCapital()
+        {
+            List<OpeningRosterEntry> roster = OpeningBusinessRoster.SixPersonDevelopment();
+
+            Assert.AreEqual(3, roster.Count);
+            CollectionAssert.AreEqual(
+                new[] { BusinessType.GeneralStore, BusinessType.Bakery, BusinessType.FuelDealer },
+                roster.ConvertAll(entry => entry.BusinessType));
+            CollectionAssert.AreEqual(new[] { 1, 3, 5 }, roster.ConvertAll(entry => entry.OwnerPersonId));
+            CollectionAssert.AreEqual(
+                new[] { "Kennedy Baldwin-Ooms", "Glen Pierce", "Jacob Boniecki" },
+                roster.ConvertAll(entry => entry.OwnerDisplayName));
+            Assert.IsTrue(roster.TrueForAll(entry => entry.StartingCapitalCents == 0),
+                "The development roster must not create opening business cash.");
+            for (int i = 0; i < roster.Count; i++)
+            {
+                CreateBusinessIntent intent = roster[i].ToIntent();
+                Assert.AreEqual(roster[i].OwnerPersonId, intent.Ownership.Shares[0].Owner.PersonId);
+                Assert.AreEqual(BusinessOwnerKind.Npc, intent.Ownership.Shares[0].Owner.OwnerKind);
+                Assert.AreEqual(0, intent.StartingCapitalCents);
+            }
+
+            List<OpeningRosterEntry> canonical = OpeningBusinessRoster.Default();
+            Assert.AreEqual(10, canonical.Count,
+                "Opting into the six-person development roster must not alter ordinary scenario defaults.");
+            Assert.AreEqual(BusinessType.Butcher, canonical[2].BusinessType);
         }
 
         [Test]

@@ -1862,7 +1862,10 @@ namespace LandLedgers.Economy
             {
                 businessId = business.BusinessId,
                 businessType = business.BusinessType,
-                currentCashCents = business.Economy.StartingCashCents,
+                // A profile describes a business and its catalog; it is not a
+                // funding counterparty. Cash enters through a settled contribution,
+                // sale, loan, or other recorded transaction, never on formation.
+                currentCashCents = 0,
                 lastWeeklyReorderBudgetCents = business.Economy.WeeklyReorderReserveCents,
                 reliability01 = 1f,
                 competitionPressure01 = 0f,
@@ -1883,7 +1886,6 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
-                int startingStock = 0;
                 int targetStock = 0;
                 for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
                 {
@@ -1893,11 +1895,13 @@ namespace LandLedgers.Economy
                         continue;
                     }
 
-                    startingStock += item.StartingStockUnits;
                     targetStock += item.ReorderTargetUnits;
                 }
 
-                state.categoryStock.Add(new CategoryStockState(category.CategoryId, startingStock, targetStock));
+                // Catalog StartingStockUnits is not an inventory receipt and has
+                // no SKU/lot identity here. Keep it out of physical stock; only a
+                // production output or settled receipt may create inventory.
+                state.categoryStock.Add(new CategoryStockState(category.CategoryId, 0, targetStock));
             }
 
             state.RefreshStockHealth();

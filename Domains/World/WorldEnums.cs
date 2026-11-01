@@ -17,7 +17,8 @@ namespace LandLedgers.World
         Residence = 3,
         Business = 4,
         Civic = 5,
-        Service = 6
+        Service = 6,
+        Person = 7
     }
 
     [DisallowMultipleComponent]
@@ -27,11 +28,13 @@ namespace LandLedgers.World
         [SerializeField] private int plotId = -1;
         [SerializeField] private int buildingId = -1;
         [SerializeField] private string serviceId = string.Empty;
+        [SerializeField, Min(-1)] private int personId = -1;
 
         public WorldInspectableTargetKind Kind => kind;
         public int PlotId => plotId;
         public int BuildingId => buildingId;
         public string ServiceId => serviceId ?? string.Empty;
+        public int PersonId => personId;
 
         public void Configure(WorldInspectableTargetKind newKind, int newPlotId, int newBuildingId, string newServiceId = "")
         {
@@ -39,6 +42,16 @@ namespace LandLedgers.World
             plotId = newPlotId;
             buildingId = newBuildingId;
             serviceId = newServiceId ?? string.Empty;
+            personId = -1;
+        }
+
+        public void ConfigurePerson(int stablePersonId)
+        {
+            kind = WorldInspectableTargetKind.Person;
+            plotId = -1;
+            buildingId = -1;
+            serviceId = string.Empty;
+            personId = stablePersonId >= 0 ? stablePersonId : -1;
         }
     }
 

@@ -1,0 +1,333 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "fictional conceptual simulation; not actually executed in Unity",
+  "checkpoint": "VEIN-IV-1878-09-27",
+  "date": "1878-09-27",
+  "time": "17:00",
+  "prior_checkpoint": "VEIN-IV-1878-06-29",
+  "days_advanced": 90,
+  "authority": {
+    "mine": "Amos Polk manages ordinary safe five-worker surface mining, sampling, normal paid raw ore sales, basic purchases and scheduling; no new hiring or major capital",
+    "freight": "Eli Ward operates freight business independently, no new wagon/driver without user approval",
+    "owner_reserves": "$70 minimum personal cash, actual collected proceeds only",
+    "prohibitions": "no mill/land/machinery construction/acquisition, no water agreement signature, no new staff or other borrowing",
+    "refinance": "Explicitly approved as quoted, paid and recorded"
+  },
+  "world": {
+    "permanent_population": 22,
+    "owned_mining_interest": "Juniper No. 1 unpatented mining-claim interest, 100% player-owned",
+    "personally_owned_collateral": "wagon, two mules, harness under renewed secured note",
+    "freight_business": "Mercer Freight & Cartage, owner 100%"
+  },
+  "refinance": {
+    "creditor": "Deadwood Commercial Exchange",
+    "signed_on": "1878-08-09",
+    "effective_date": "1878-09-17",
+    "original_maturity_total": "354.00",
+    "cash_applied_to_current_obligation": "100.00",
+    "documentation_fee_cash": "6.00",
+    "old_note_satisfied": "yes, through partial cash and replacement note; no second liability for original $354",
+    "renewal_face_principal_includes_prior_accrued_interest": "254.00",
+    "annual_simple_interest_percent": 18,
+    "term_months": 12,
+    "new_interest": "45.72",
+    "new_maturity_total": "299.72",
+    "maturity_date": "1879-09-17",
+    "collateral": "existing Juniper No. 1 claim interest; personal recourse unchanged",
+    "equity_dilution": "0%"
+  },
+  "debt": {
+    "mine_renewal_face_balance_including_capitalized_prior_interest": "254.00",
+    "mine_payment_due": "299.72 on 1879-09-17",
+    "wagon_renewal_face_balance_including_capitalized_prior_interest": "238.27",
+    "wagon_payment_due": "281.16 on 1879-01-26",
+    "sum_face_balances": "492.27",
+    "sum_maturity_payments": "580.88",
+    "lender_security": "mine claim and personally secured wagon remain distinct",
+    "warning": "the two future maturity totals already include new contractual interest; do not add interest twice"
+  },
+  "mine": {
+    "manager": "Amos Polk",
+    "workers": [
+      "Amos Polk",
+      "Jonas Calder",
+      "Calvin Briggs",
+      "Ezra Harlan",
+      "Miles Fenwick"
+    ],
+    "paid_days_each": 62,
+    "lost_potential_days": 15,
+    "available_non_sunday_days": 77,
+    "mine_wages_paid": "1038.50",
+    "new_excavated_short_tons": 174,
+    "new_gold_bearing_short_tons": 88,
+    "new_mixed_short_tons": 28,
+    "new_waste_short_tons": 58,
+    "twelve_lots": [
+      {
+        "id": "JN1-Q029",
+        "gold_bearing_rock_extracted_lb": 14000,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 13996,
+        "composite_assay_troy_oz_per_short_ton": 1.11,
+        "paid_sale_amount_usd": "123.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q030",
+        "gold_bearing_rock_extracted_lb": 15500,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 15496,
+        "composite_assay_troy_oz_per_short_ton": 1.08,
+        "paid_sale_amount_usd": "137.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q031",
+        "gold_bearing_rock_extracted_lb": 13000,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 12996,
+        "composite_assay_troy_oz_per_short_ton": 0.95,
+        "paid_sale_amount_usd": "109.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q032",
+        "gold_bearing_rock_extracted_lb": 16200,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 16196,
+        "composite_assay_troy_oz_per_short_ton": 1.28,
+        "paid_sale_amount_usd": "144.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q033",
+        "gold_bearing_rock_extracted_lb": 14900,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 14896,
+        "composite_assay_troy_oz_per_short_ton": 1.17,
+        "paid_sale_amount_usd": "132.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q034",
+        "gold_bearing_rock_extracted_lb": 14000,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 13996,
+        "composite_assay_troy_oz_per_short_ton": 1.09,
+        "paid_sale_amount_usd": "120.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q035",
+        "gold_bearing_rock_extracted_lb": 16800,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 16796,
+        "composite_assay_troy_oz_per_short_ton": 1.38,
+        "paid_sale_amount_usd": "152.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q036",
+        "gold_bearing_rock_extracted_lb": 12700,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 12696,
+        "composite_assay_troy_oz_per_short_ton": 0.91,
+        "paid_sale_amount_usd": "103.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q037",
+        "gold_bearing_rock_extracted_lb": 15000,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 14996,
+        "composite_assay_troy_oz_per_short_ton": 1.2,
+        "paid_sale_amount_usd": "129.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q038",
+        "gold_bearing_rock_extracted_lb": 13900,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 13896,
+        "composite_assay_troy_oz_per_short_ton": 1.02,
+        "paid_sale_amount_usd": "112.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q039",
+        "gold_bearing_rock_extracted_lb": 15100,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 15096,
+        "composite_assay_troy_oz_per_short_ton": 1.12,
+        "paid_sale_amount_usd": "126.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      },
+      {
+        "id": "JN1-Q040",
+        "gold_bearing_rock_extracted_lb": 14900,
+        "representative_assay_sample_lb": 4,
+        "buyer_collected_rock_lb": 14896,
+        "composite_assay_troy_oz_per_short_ton": 1.06,
+        "paid_sale_amount_usd": "125.00",
+        "settlement": "paid after independent lot test, buyer inspection and custody transfer; buyer responsible for bulk collection; sale of ore, not recovered gold"
+      }
+    ],
+    "collected_ore_revenue": "1512.00",
+    "operating_cost_wages": "1038.50",
+    "operating_cost_tools_and_support": "239.50",
+    "operating_cost_assays": "102.00",
+    "operating_cost_internal_freight": "28.50",
+    "cash_operating_contribution": "103.50",
+    "notes": "no rock grade imposed on untested mixed piles; no gold credited recovered from raw ore sales; no mineable reserve estimate, safety checks each shift, no blasting shafts or unsupported cuts",
+    "mine_cash_floor": "70.00",
+    "mine_wages_payable": "0.00"
+  },
+  "inventory": {
+    "new_total_excavated_lb": 348000,
+    "new_gold_bearing_lb": 176000,
+    "new_mixed_lb": 56000,
+    "new_waste_lb": 116000,
+    "new_sampling_removed_lb": 48,
+    "new_bulk_ore_sold_lb": 175952,
+    "previous_excavated_lb": 719100,
+    "cumulative_excavated_lb": 1067100,
+    "previous_mixed_lb": 123772,
+    "mixed_remaining_lb": 179772,
+    "previous_waste_lb": 242000,
+    "waste_remaining_lb": 358000,
+    "unsold_quartz_lb": 0,
+    "total_unsold_stockpiles_lb": 537772,
+    "previous_sold_lb": 353196,
+    "cumulative_sold_lb": 529148,
+    "previous_assay_sample_lb": 112,
+    "cumulative_assay_sample_lb": 160,
+    "personal_trial_lb": 20,
+    "conservation_check": "537772 at mine + 529148 sold + 160 laboratory samples + 20 prior personal processing = 1067100 lb",
+    "recovered_unsold_gold_troy_oz_approx": "0.0044",
+    "recovered_and_sold_gold_troy_oz": "0.00",
+    "deposit_estimated_size": "Not enough information"
+  },
+  "finances": {
+    "opening_owner_cash": "450.10",
+    "owner_external_ore_sales": "1512.00",
+    "mine_wages_paid": "-1038.50",
+    "mine_tools_timber_supplies": "-239.50",
+    "mine_assays_12": "-102.00",
+    "mine_internal_freight": "-28.50",
+    "Pine_Bend_land_and_water_legal_enquiry": "-8.50",
+    "mining_loan_refinance_payment_principal_and_fee": "-106.00",
+    "owner_cash_closing": "439.10",
+    "opening_freight_cash": "153.75",
+    "external_freight_receipts": "325.50",
+    "internal_mine_freight_receipts": "28.50",
+    "eli_wages_paid": "-135.00",
+    "animal_feed_care_livery": "-121.50",
+    "maintenance_supplies": "-42.50",
+    "freight_cash_closing": "208.75",
+    "opening_combined": "603.85",
+    "closing_combined": "647.85",
+    "combined_net_cash_movement": "+44.00",
+    "internal_transfers_eliminated": "28.50",
+    "total_external_receipts": "1837.50",
+    "total_external_operating_spending": "1679.00",
+    "site_enquiries": "8.50",
+    "refinance_principal_and_fee_cash": "106.00",
+    "check": "603.85 + 1837.50 - 1679.00 - 8.50 - 106.00 = 647.85",
+    "mine_period_operating_contribution": "103.50",
+    "mine_period_contribution_margin": "6.85%",
+    "freight_external_contribution_before_depreciation_financing": "26.50",
+    "wages_payable_owner_and_freight": "0.00",
+    "owner_prior_living_expenses": "unreconciled preexisting continuity caveat, not changed or guessed"
+  },
+  "freight": {
+    "manager": "Eli Ward",
+    "days_paid": 45,
+    "outside_cargo_orders_completed": 15,
+    "outside_freight_collections": "325.50",
+    "internal_mine_courier_collections": "28.50",
+    "wages": "135.00",
+    "feed_and_care": "121.50",
+    "maintenance_supplies": "42.50",
+    "wages_payable": "0.00",
+    "workload_status": "Below full capacity, no second team proposed",
+    "no_auto_equipment_or_hiring": true
+  },
+  "millsite": {
+    "site": "Pine Bend Mill Ground",
+    "location_interest_acquired": "preliminary local recording June 1, conditional on actual superior rights and federal eligibility, not fee ownership",
+    "size_acres": 1.3,
+    "distance_from_mine_miles": 0.6,
+    "full_title": "No deed or patent. No patent application accepted as final. Original notice does not confer fee title",
+    "historical_legal_note": "1872 federal millsite route for nonmineral ground, <=5 acres, with actual mining/milling use or occupation and other patent requirements; distinguish legal dispossession context",
+    "water_claimant": "August Weller",
+    "senior_ditch_claim_review": "credible local record of priority, physical flow seasonally variable; no binding user right",
+    "unsigned_water_offer": "$14 upfront + $2 per month, subject to verified available rights and acceptable use",
+    "tailings": "enclosed settling and holding works concept cost $40\u2013$55, no permission for discharge",
+    "new_records_and_legal_check_spent": "8.50",
+    "rights_signed": false,
+    "construction_authorized": false,
+    "fee_title_owned": false
+  },
+  "mill_quotes": {
+    "Merrick_two_stamp": "$1480 machinery/mechanical installation; $290 down; $1190 equipment seller note at 16% simple for 24mo; $1570.80 maturity; excludes foundations/building, water/tailings, power/fuel and crew; quote must be reconfirmed at commitment",
+    "estimated_practical_crushing": "2-3 short tons per working day preliminary; actual ore recovery not tested",
+    "economic_tradeoff": "at approximate 1.1\u20131.3 oz/ton tested and $17.18/t buyer price, self-processing needs verified metal recovery and sufficiently low per-ton costs to outperform raw ore sale; no automatic margin gain"
+  },
+  "objectives": [
+    {
+      "n": 1,
+      "deadline": "1877-12-31",
+      "goal": "control claim, 2 in situ samples, independent assay",
+      "status": "complete"
+    },
+    {
+      "n": 2,
+      "deadline": "1878-12-31",
+      "goal": "first paid mineral or gold sale",
+      "status": "complete 1877-08-02"
+    },
+    {
+      "n": 3,
+      "deadline": "1882-12-31",
+      "goal": "recover and sell 650 cumulative troy oz",
+      "progress": "0/650"
+    },
+    {
+      "n": 4,
+      "deadline": "1884-12-31",
+      "goal": "two independent NPC-owned businesses each operating 90 days and completing 5 outside paid transactions",
+      "progress": "0/2"
+    },
+    {
+      "n": 5,
+      "deadline": "1886-12-31",
+      "goal": "recover and sell 850 troy oz in 12 consecutive months with positive mine operating profit",
+      "progress": "0/850"
+    },
+    {
+      "n": 6,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents for 60 consecutive days",
+      "progress": "22/90"
+    },
+    {
+      "n": 7,
+      "deadline": "1890-12-31",
+      "goal": "recover and sell 5500 cumulative troy oz and reach $18000 reconciled owner equity",
+      "progress": "0/5500; equity not audited"
+    }
+  ],
+  "objectives_complete": 2,
+  "objectives_total": 7,
+  "strategic_stop": "Current mine operates on collected sales, small margin; January wagon $281.16 maturity and owned-mill title/use/financing decision. Land rights, mill financing and design remain unapproved; needs owner strategic choice. Continue normal mine/freight autonomous operations until next instruction.",
+  "qa": {
+    "period_owner_cash_check": "pass",
+    "period_freight_cash_check": "pass",
+    "consolidation": "pass",
+    "physical_inventory": "pass",
+    "refinance_zero_double_count": "pass",
+    "no_land_or_mill_transacted": "pass",
+    "historical_personal_living_gap": "still unresolved"
+  }
+}

@@ -354,6 +354,10 @@ namespace LandLedgers.Persistence
             save.businesses != null ? save.businesses.lastWeeklyTransferAgreementSummary : null);
             logisticsRuntime?.LoadFromSaveDto(save.businesses != null ? save.businesses.logistics : null);
             populationManager?.RefreshSettlementMetrics("Population restored from save.");
+            // Person actors are derived from the restored population and world.
+            // Rebuild in the persistence authority so every supported load path
+            // restores visuals, not only scenario-bootstrap loads.
+            populationPathingDirector?.ResetForLoadedState();
 
             ConfigurePortfolioManager();
             if (save.portfolio != null && save.portfolio.initialized)
@@ -372,8 +376,6 @@ namespace LandLedgers.Persistence
             playerDebtManager?.AttachFinancialAuthority(systemsHub?.FinancialObligations, systemsHub?.Ids);
             playerDebtManager?.LoadFromSaveDto(save.debt);
             playerDebtManager?.ProcessCurrentDay();
-            populationPathingDirector?.ResetForLoadedState();
-
             ConfigureFirstSessionGuidance();
             firstSessionGuidance?.LoadFromSaveDto(save.firstSessionGuidance);
             firstLedgerBootstrap ??= FindAnyObjectByType<FirstLedgerBootstrap>();

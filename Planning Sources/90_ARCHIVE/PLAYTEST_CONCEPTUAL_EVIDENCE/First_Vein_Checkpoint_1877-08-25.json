@@ -1,0 +1,266 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "fictional autonomous conceptual playtest; NPC developments are simulated, not live Unity game state",
+  "checkpoint": "VEIN-IV-1877-08-25",
+  "date": "1877-08-25",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-08-18.json",
+  "user_orders": [
+    "Offer up to $140 to buy Upper Road Terrace outright conditional on seller acceptance, clear transferable fee title, water and tailings rights; spend no more than $8 verifying; stop on material defect",
+    "Authorize six workdays all-six-person supervised shallow excavation and stabilization, $190 including wages, supports and consumables; no blasting, unsupported work, shafts",
+    "Keep autonomous freight and reconcile inventory, payroll and loan reserve; display all seven goals"
+  ],
+  "days_advanced": 7,
+  "mine_work_dates": [
+    "1877-08-20",
+    "1877-08-21",
+    "1877-08-22",
+    "1877-08-23",
+    "1877-08-24",
+    "1877-08-25"
+  ],
+  "owner_cash": {
+    "opening": "628.60",
+    "mine_wages_paid": "126.00",
+    "support_timber_purchased": "12.00",
+    "iron_fittings_purchased": "18.00",
+    "fasteners_consumables_purchased": "4.50",
+    "tool_handle_replacement": "2.00",
+    "internal_freight_paid": "4.00",
+    "land_records_title_inquiry_paid": "6.75",
+    "closing": "455.35",
+    "mine_wages_payable": "0.00",
+    "owner_prior_personal_living_expenses_reconciliation": "unresolved"
+  },
+  "mine_budget": {
+    "cap": "190.00",
+    "spent": "166.50",
+    "unspent": "23.50",
+    "wages": "126.00",
+    "external_supplies": "36.50",
+    "intercompany_freight": "4.00",
+    "land_verification_external_not_under_mine_budget": "6.75"
+  },
+  "mine_staff": [
+    {
+      "name": "Amos Polk",
+      "daily_wage": 4.5,
+      "workdays": 6,
+      "wages_paid": "27.0"
+    },
+    {
+      "name": "Rafael Soto",
+      "daily_wage": 4.25,
+      "workdays": 6,
+      "wages_paid": "25.50"
+    },
+    {
+      "name": "Jonas Calder",
+      "daily_wage": 3.25,
+      "workdays": 6,
+      "wages_paid": "19.50"
+    },
+    {
+      "name": "Calvin Briggs",
+      "daily_wage": 3,
+      "workdays": 6,
+      "wages_paid": "18"
+    },
+    {
+      "name": "Ezra Harlan",
+      "daily_wage": 3,
+      "workdays": 6,
+      "wages_paid": "18"
+    },
+    {
+      "name": "Miles Fenwick",
+      "daily_wage": 3,
+      "workdays": 6,
+      "wages_paid": "18"
+    }
+  ],
+  "mine_safety": {
+    "scope": "shallow surface only",
+    "stabilized_first_two_days": true,
+    "unprotected_face_advanced": false,
+    "blasting": false,
+    "shafts": false,
+    "injuries": 0,
+    "next_step": "fresh face assessment before deeper advance"
+  },
+  "rock_lots_created": [
+    {
+      "id": "JN1-W004",
+      "classification": "stabilization waste",
+      "mass_lb": 3000,
+      "grade": "not assayed"
+    },
+    {
+      "id": "JN1-Q003",
+      "classification": "visual quartz-bearing, unassayed",
+      "mass_lb": 4200,
+      "grade": "unknown"
+    },
+    {
+      "id": "JN1-M003",
+      "classification": "visually altered mixed rock, unassayed",
+      "mass_lb": 2700,
+      "grade": "unknown"
+    },
+    {
+      "id": "JN1-W005",
+      "classification": "extraction waste",
+      "mass_lb": 4200,
+      "grade": "not assayed"
+    }
+  ],
+  "material_balances": {
+    "new_excavation_mass_lb": 14100,
+    "cumulative_excavated_lb": 33500,
+    "prior_sold_lb": 3492,
+    "cumulative_assays_sampled_lb": 16,
+    "prior_personal_recovery_batch_lb": 20,
+    "prior_untreated_on_mine_lb": 15872,
+    "new_untreated_on_mine_lb": 14100,
+    "closing_untreated_on_mine_lb": 29972,
+    "untreated_categories_lb": {
+      "quartz": 4200,
+      "mixed": 5972,
+      "waste": 19800
+    },
+    "check": "29972 + 3492 + 16 + 20 = 33500; personal recovery outputs total 20 lb",
+    "prior_recovered_gold_est_troy_oz": "0.0044",
+    "recovered_and_sold_gold_troy_oz": "0"
+  },
+  "timber_physical_lb": {
+    "previous_uninstalled": 415,
+    "new_received_roadhead_and_moved_to_workfront": 350,
+    "installed_this_phase": 300,
+    "closing_uninstalled": 465,
+    "previous_installed": 180,
+    "cumulative_installed": 480
+  },
+  "freight_business": {
+    "opening_cash": "66.10",
+    "external_paid_shipments": [
+      {
+        "id": "FRT-013",
+        "cash_received": "13.00"
+      },
+      {
+        "id": "FRT-014",
+        "cash_received": "12.00"
+      },
+      {
+        "id": "FRT-015",
+        "cash_received": "10.00"
+      }
+    ],
+    "outside_receipts": "35.00",
+    "internal_mine_suppplies_transport": "4.00",
+    "wages_accrued_new": "12.00",
+    "opening_wages_payable": "3.00",
+    "wages_paid": "15.00",
+    "closing_wages_payable": "0.00",
+    "feed_care_paid": "8.40",
+    "livery_paid": "2.00",
+    "supplies_paid": "2.60",
+    "closing_cash": "77.10",
+    "staff": "Eli Ward, $3/day; no expansion trigger",
+    "owned_wagon_status": "personally titled and seller-financed, lent for business use; no transfer"
+  },
+  "property_offer": {
+    "parcel": "Upper Road Terrace",
+    "seller": "Adeline Shaw",
+    "size_ft": "90x100",
+    "bid": "140.00",
+    "seller_response": "conditional acceptance subject to closing requirements through 1877-09-03",
+    "title_review_cost": "6.75",
+    "title_review_budget_cap": "8.00",
+    "evidence": "recorded local transfer and survey description; no verified underlying federal patent or sufficiently clear fee-simple chain located during investigation",
+    "material_defect": "full alienable fee title not documented",
+    "water_rights": "no documented durable priority sufficient for mill, senior users possible",
+    "tailings": "on-site settlement area physically possible, discharge rights unproven",
+    "buyer_cash_paid": "0.00",
+    "deed_signed": false,
+    "acquired": false,
+    "closing_status": "STOPPED on material title and water defect; purchase remains conditional only",
+    "Finch_bench": "still possessory-only proposal, not an acceptable substitute for outright fee ownership"
+  },
+  "loan": {
+    "principal": "265.00",
+    "interest_rate_simple_annual": "16%",
+    "days_since_start": 91,
+    "accrued_interest_approx": "10.57",
+    "balloon_due_date": "1878-01-26",
+    "balloon_due_total": "293.27",
+    "payments": "0.00",
+    "owner_cash_after_preserving_balloon": "162.08",
+    "hypothetical_cash_after_140_land_purchase_and_balloon": "22.08"
+  },
+  "cash_consolidation": {
+    "opening_owner": "628.60",
+    "opening_freight": "66.10",
+    "opening_combined": "694.70",
+    "closing_owner": "455.35",
+    "closing_freight": "77.10",
+    "closing_combined": "532.45",
+    "movement": "-162.25",
+    "internal_4_freight_eliminates_on_consolidation": true,
+    "external_cash_in": "35.00",
+    "external_cash_out": "197.25"
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Claim control, two in-situ samples and independent assay",
+      "status": "complete 1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First completed paid mineral or recovered-gold sale",
+      "status": "complete 1877-08-02"
+    },
+    {
+      "id": 3,
+      "deadline": "1882-12-31",
+      "goal": "Recover and sell 650 cumulative troy oz gold",
+      "status": "0/650"
+    },
+    {
+      "id": 4,
+      "deadline": "1884-12-31",
+      "goal": "2 independently NPC-owned businesses, each 90 days and five external paid transactions",
+      "status": "0/2"
+    },
+    {
+      "id": 5,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered-and-sold gold troy oz in consecutive 12-month period with positive mine operating profit",
+      "status": "0/850"
+    },
+    {
+      "id": 6,
+      "deadline": "1888-12-31",
+      "goal": "Maintain 90 permanent residents for 60 consecutive days",
+      "status": "22/90"
+    },
+    {
+      "id": 7,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered-and-sold troy oz and $18000 reconciled owner equity",
+      "status": "0/5500; equity unaudited"
+    }
+  ],
+  "pending_player_decisions": [
+    "Material defect: terminate or extend conditional Upper Road Terrace bid while pursuing proof of fee title and water rights, or search other parcels. Do not close currently",
+    "Authorize assay and/or processing viability study of unassayed Q003 and M003 new stockpiles before assuming grade or recoverable gold",
+    "Protect cash and 1878 balloon while deciding additional mine work"
+  ],
+  "findings": [
+    "VEIN-VALID-015 \u2014 coupled mine-work payroll, purchase, physical mass conservation and intercompany freight elimination",
+    "VEIN-VALID-016 \u2014 recorded possessory transfer does not equal full fee title; water rights and tailings separate from property purchase"
+  ]
+}

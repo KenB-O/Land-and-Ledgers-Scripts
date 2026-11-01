@@ -108,6 +108,15 @@ namespace LandLedgers.FirstLedger
         [SerializeField, Tooltip("Enables the small three-business roster for focused Main Scene playtesting; canonical opening defaults remain unchanged.")]
         private bool useCompactPlaytestOpeningRoster;
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        [Header("Development Population Fixture")]
+        [SerializeField, Tooltip("Optional Pass XL fixture. Effective only when explicitly enabled for a fresh New Game; ordinary settings and Continue/restore are unchanged.")]
+        private SixPersonDevelopmentFixture developmentPopulationFixture;
+
+        [SerializeField, Tooltip("Explicitly opts this development startup into the assigned six-person fixture.")]
+        private bool enableDevelopmentPopulationFixture;
+#endif
+
         [SerializeField]
         private GeneralStoreBusinessDefinition storeDefinition;
 
@@ -283,6 +292,27 @@ namespace LandLedgers.FirstLedger
 
             Debug.Log("[WorldStartup] New Game path selected: exactly one fresh-world generation pass is permitted.", this);
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            bool useSixPersonDevelopmentProfile = startupIntent == WorldStartupIntent.NewGame
+                && enableDevelopmentPopulationFixture
+                && developmentPopulationFixture != null;
+            if (useSixPersonDevelopmentProfile && generateTownOnPlay && townWorld.Grid == null)
+            {
+                if (!townWorld.TryApplyDevelopmentResidentialHomeCount(
+                    developmentPopulationFixture.Households.Count, out string developmentWorldReason,
+                    OpeningBusinessRoster.SixPersonDevelopment().Count))
+                {
+                    bootstrapStatus = $"Six-person development startup stopped before world generation: {developmentWorldReason}";
+                    Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
+                    CompleteStartupTiming(totalTimer, timing, "development world configuration failed");
+                    initializing = false;
+                    return;
+                }
+
+                Debug.Log($"[WorldStartup] {developmentWorldReason}", this);
+            }
+#endif
+
             if (generateTownOnPlay && townWorld.Grid == null)
             {
                 townWorld.GenerateTownShell();
@@ -297,6 +327,45 @@ namespace LandLedgers.FirstLedger
                 initializing = false;
                 return;
             }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (useSixPersonDevelopmentProfile)
+            {
+                int realResidentialHomes = 0;
+                int realCommercialBuildings = 0;
+                foreach (PlacedBuilding building in townWorld.Buildings)
+                {
+                    if (building?.definition == null)
+                    {
+                        continue;
+                    }
+
+                    if (building.definition.CanHostHouseholds && !building.definition.CanHostWorkplace
+                        && townWorld.TryGetPlotById(building.plotId, out TownPlot plot)
+                        && plot != null && plot.zone == PlotZone.Residential)
+                    {
+                        realResidentialHomes++;
+                    }
+
+                    if (building.definition.CanHostWorkplace
+                        && building.definition.PrimaryUse != BuildingUseType.Civic)
+                    {
+                        realCommercialBuildings++;
+                    }
+                }
+
+                int requiredCommercialBuildings = OpeningBusinessRoster.SixPersonDevelopment().Count;
+                if (realResidentialHomes < developmentPopulationFixture.Households.Count
+                    || realCommercialBuildings < requiredCommercialBuildings)
+                {
+                    bootstrapStatus = $"Six-person development startup stopped: homes={realResidentialHomes}/{developmentPopulationFixture.Households.Count}, commercial buildings={realCommercialBuildings}/{requiredCommercialBuildings}. No Businesses or Persons were initialized.";
+                    Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
+                    CompleteStartupTiming(totalTimer, timing, "development homes unavailable");
+                    initializing = false;
+                    return;
+                }
+            }
+#endif
 
             // The authored SimulationDrivers component can Awake before this
             // bootstrap creates the TownGrid. Rebind after world generation so
@@ -325,7 +394,20 @@ namespace LandLedgers.FirstLedger
 
             if (generatePopulationOnPlay && populationManager != null)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (startupIntent == WorldStartupIntent.NewGame
+                    && enableDevelopmentPopulationFixture
+                    && developmentPopulationFixture != null)
+                {
+                    populationManager.GeneratePopulationSnapshot(developmentPopulationFixture);
+                }
+                else
+                {
+                    populationManager.GeneratePopulationSnapshot();
+                }
+#else
                 populationManager.GeneratePopulationSnapshot();
+#endif
             }
             AppendStartupTiming(timing, stepTimer, "population generation");
 
@@ -468,7 +550,6 @@ namespace LandLedgers.FirstLedger
             ConfigureOpportunityPressureRuntime();
             ConfigureFirstSessionGuidance();
             ConfigureWorldInteractionController();
-            populationPathingDirector?.ResetForLoadedState();
             opportunityPressureRuntime?.RefreshNotices();
             storePanel?.Refresh();
             // Pass XII Worker A: the first real production caller for
@@ -979,8 +1060,17 @@ namespace LandLedgers.FirstLedger
         private void ConfigureOpeningBusinessRoster()
         {
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
-            sharedBusinessRuntime?.ConfigureOpeningBusinessRoster(
-                useCompactPlaytestOpeningRoster ? OpeningBusinessRoster.CompactPlaytest() : null);
+            System.Collections.Generic.IReadOnlyList<OpeningRosterEntry> roster =
+                useCompactPlaytestOpeningRoster ? OpeningBusinessRoster.CompactPlaytest() : null;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (startupIntent == WorldStartupIntent.NewGame
+                && enableDevelopmentPopulationFixture
+                && developmentPopulationFixture != null)
+            {
+                roster = OpeningBusinessRoster.SixPersonDevelopment();
+            }
+#endif
+            sharedBusinessRuntime?.ConfigureOpeningBusinessRoster(roster);
         }
 
         /// <summary>

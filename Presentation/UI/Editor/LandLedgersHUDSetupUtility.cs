@@ -68,6 +68,15 @@ namespace LandLedgers.Editor
 
         public static GameObject CreateOrUpdatePrefabAsset()
         {
+            // The UI Canvas prefab is a complete authored game interface, not a generated
+            // disposable HUD shell. Preserve its management and workflow hierarchy when
+            // updating time controls.
+            if (File.Exists(PrefabPath))
+            {
+                AddRealTimeButtonToExistingPrefab();
+                return AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath);
+            }
+
             LandLedgersTypography.ConfigureTmpSettings();
             GameObject hudRoot = BuildHUD();
 
@@ -82,6 +91,63 @@ namespace LandLedgers.Editor
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             return prefab;
+        }
+
+        private static void AddRealTimeButtonToExistingPrefab()
+        {
+            GameObject root = PrefabUtility.LoadPrefabContents(PrefabPath);
+            try
+            {
+                LandLedgersHUDController controller = root.GetComponentInChildren<LandLedgersHUDController>(true);
+                if (controller == null)
+                {
+                    Debug.LogWarning("Existing UI Canvas has no LandLedgersHUDController; leaving the authored prefab unchanged.", root);
+                    return;
+                }
+
+                Button existing = FindButton(root.transform, "HUD_TimeSpeed_RealTime");
+                if (existing == null)
+                {
+                    Button oneX = FindButton(root.transform, "HUD_TimeSpeed_1x");
+                    if (oneX == null || oneX.transform.parent == null)
+                    {
+                        Debug.LogWarning("Existing UI Canvas has no authored 1x speed control; leaving the prefab unchanged.", root);
+                        return;
+                    }
+
+                    LandLedgersTypography.ConfigureTmpSettings();
+                    existing = CreateSpeedButton("HUD_TimeSpeed_RealTime", oneX.transform.parent, "Real", 72f);
+                    existing.transform.SetSiblingIndex(oneX.transform.GetSiblingIndex());
+                }
+
+                SerializedObject serializedController = new(controller);
+                SerializedProperty realTimeButton = serializedController.FindProperty("realTimeButton");
+                if (realTimeButton != null)
+                {
+                    realTimeButton.objectReferenceValue = existing;
+                    serializedController.ApplyModifiedPropertiesWithoutUndo();
+                }
+
+                EditorUtility.SetDirty(root);
+                PrefabUtility.SaveAsPrefabAsset(root, PrefabPath);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        private static Button FindButton(Transform root, string objectName)
+        {
+            foreach (Button button in root.GetComponentsInChildren<Button>(true))
+            {
+                if (button.gameObject.name == objectName)
+                {
+                    return button;
+                }
+            }
+
+            return null;
         }
 
         private static GameObject BuildHUD()
@@ -147,7 +213,7 @@ namespace LandLedgers.Editor
             GameObject controls = CreateTransparentObject("HUD_TimeSpeedControls", topBarRect);
             LayoutElement controlsLayout = controls.AddComponent<LayoutElement>();
             controlsLayout.flexibleWidth = 1f;
-            controlsLayout.minWidth = 620f;
+            controlsLayout.minWidth = 650f;
             HorizontalLayoutGroup controlsGroup = controls.AddComponent<HorizontalLayoutGroup>();
             controlsGroup.spacing = 8f;
             controlsGroup.childAlignment = TextAnchor.MiddleRight;
@@ -155,6 +221,7 @@ namespace LandLedgers.Editor
             controlsGroup.childForceExpandHeight = false;
 
             Button pause = CreateSpeedButton("HUD_TimeSpeed_Pause", controls.transform, "II");
+            Button realTime = CreateSpeedButton("HUD_TimeSpeed_RealTime", controls.transform, "Real", 72f);
             Button speed1x = CreateSpeedButton("HUD_TimeSpeed_1x", controls.transform, "1x");
             Button speed2x = CreateSpeedButton("HUD_TimeSpeed_2x", controls.transform, "2x");
             Button speed4x = CreateSpeedButton("HUD_TimeSpeed_4x", controls.transform, "4x");
@@ -195,6 +262,7 @@ namespace LandLedgers.Editor
             serializedController.FindProperty("cashText").objectReferenceValue = cash;
             serializedController.FindProperty("dateText").objectReferenceValue = date;
             serializedController.FindProperty("pauseButton").objectReferenceValue = pause;
+            serializedController.FindProperty("realTimeButton").objectReferenceValue = realTime;
             serializedController.FindProperty("speed1xButton").objectReferenceValue = speed1x;
             serializedController.FindProperty("speed2xButton").objectReferenceValue = speed2x;
             serializedController.FindProperty("speed4xButton").objectReferenceValue = speed4x;
@@ -335,20 +403,20 @@ namespace LandLedgers.Editor
             layout.preferredHeight = preferredHeight;
         }
 
-        private static Button CreateSpeedButton(string name, Transform parent, string label)
+        private static Button CreateSpeedButton(string name, Transform parent, string label, float width = 56f)
         {
             GameObject buttonObject = new(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
             buttonObject.transform.SetParent(parent, false);
             RectTransform rect = buttonObject.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(56f, 42f);
+            rect.sizeDelta = new Vector2(width, 42f);
 
             Image image = buttonObject.GetComponent<Image>();
             image.color = new Color(0.16f, 0.18f, 0.17f, 0.92f);
 
             LayoutElement layout = buttonObject.GetComponent<LayoutElement>();
-            layout.preferredWidth = 56f;
+            layout.preferredWidth = width;
             layout.preferredHeight = 42f;
-            layout.minWidth = 56f;
+            layout.minWidth = width;
             layout.minHeight = 42f;
 
             Button button = buttonObject.GetComponent<Button>();

@@ -1,0 +1,179 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "checkpoint": "VEIN-IV-2027-06-08",
+  "date": "1877-06-08",
+  "status": "Soft Continuity: opening-to-date owner cash not fully audited (historical subsistence gap)",
+  "cash": {
+    "owner_recorded": "979.95",
+    "freight_business": "84.35",
+    "opening_owner": "1065.70",
+    "opening_freight": "72.80"
+  },
+  "transactions": {
+    "owner": [
+      [
+        "Mine goods Deadwood",
+        "-27.25"
+      ],
+      [
+        "Timber Nathaniel Finch",
+        "-16.00"
+      ],
+      [
+        "Amos remaining trial wages",
+        "-31.50"
+      ],
+      [
+        "Eli pre-company wages",
+        "-12.00"
+      ],
+      [
+        "Collect pre-company freight receivable",
+        "17.50"
+      ],
+      [
+        "Freight inbound invoice",
+        "-12.00"
+      ],
+      [
+        "Freight mine-site delivery invoice",
+        "-4.50"
+      ]
+    ],
+    "freight": [
+      [
+        "Pay Eli past business payroll",
+        "-6.00"
+      ],
+      [
+        "Four-day animal feed",
+        "-4.60"
+      ],
+      [
+        "Deadwood overnight livery",
+        "-1.25"
+      ],
+      [
+        "Trip consumables",
+        "-1.00"
+      ],
+      [
+        "External backhaul settled",
+        "9.00"
+      ],
+      [
+        "Mine inbound freight invoice paid",
+        "12.00"
+      ],
+      [
+        "Local animal feed",
+        "-1.10"
+      ],
+      [
+        "Mine local-delivery invoice paid",
+        "4.50"
+      ]
+    ]
+  },
+  "personnel": {
+    "Amos Polk": {
+      "status": "trial ended 1877-06-04",
+      "trial_total_wages": "54.00",
+      "previously_paid": "22.50",
+      "last_payment": "31.50",
+      "amount_outstanding": "0.00"
+    },
+    "Eli Ward": {
+      "status": "active through trial ending 1877-06-10",
+      "daily_wage": "3.00",
+      "current_freight_payroll_due": "15.00",
+      "personal_precompany_wages_paid": "12.00",
+      "prior_company_wages_paid": "6.00"
+    }
+  },
+  "finance": {
+    "owner_secured_note_principal": "265.00",
+    "maturity": "1878-01-26",
+    "balloon_total": "293.27",
+    "interest_accrued_approx": "1.51",
+    "owner_freight_ar_remaining": "0.00"
+  },
+  "mining": {
+    "right": "Juniper No.1 unpatented lode claim",
+    "deposit_size_player": "Not enough information",
+    "workfront": "Existing shallow open cut, extraction not started",
+    "ore_extracted_short_tons": "0",
+    "gold_sold_troy_oz": "0",
+    "purchased_inventory": {
+      "mining_picks": 2,
+      "shovels": 2,
+      "prybar_hammer_set": 1,
+      "wheelbarrow": 1,
+      "ore_sacks": 10,
+      "timber_lbs": 595
+    },
+    "physical_location": "creek wagon-access staging, 0.35 mile below mine cut",
+    "mine_work_staff": 0
+  },
+  "shipments": [
+    {
+      "id": "FRT-003",
+      "cargo": "Thomas Mercer supplier returns 190 lb",
+      "origin": "Juniper Gulch",
+      "destination": "Deadwood wholesale merchant",
+      "status": "delivered and paid",
+      "earned_external": "9.00"
+    },
+    {
+      "id": "FRT-004",
+      "cargo": "owner purchased mining tools 105 lb",
+      "origin": "Deadwood merchant",
+      "destination": "Juniper Gulch",
+      "status": "delivered; in owner inventory",
+      "internal_delivery_fee": "12.00"
+    },
+    {
+      "id": "FRT-005",
+      "cargo": "105 lb tools plus 595 lb timber",
+      "origin": "Juniper Gulch suppliers/storage",
+      "destination": "Juniper No.1 creek roadhead",
+      "status": "delivered to creek staging, NOT at excavation",
+      "internal_delivery_fee": "4.50"
+    }
+  ],
+  "objectives": [
+    {
+      "id": 1,
+      "completed": true,
+      "completed_date": "1877-05-20"
+    },
+    {
+      "id": 2,
+      "completed": false
+    },
+    {
+      "id": 3,
+      "completed": false
+    },
+    {
+      "id": 4,
+      "completed": false
+    },
+    {
+      "id": 5,
+      "completed": false
+    },
+    {
+      "id": 6,
+      "completed": false
+    },
+    {
+      "id": 7,
+      "completed": false
+    },
+    {
+      "id": 8,
+      "completed": false
+    }
+  ]
+}

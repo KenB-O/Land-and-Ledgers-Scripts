@@ -1,0 +1,223 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "Fictional, autonomous conceptual playtest; not executed against Unity runtime",
+  "checkpoint": "VEIN-IV-1877-09-14",
+  "date": "1877-09-14",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-09-01.json",
+  "days_advanced": 13,
+  "user_intent": "Record VEIN-UX-011 mining plain-language tooltips; accept Black Hills Ore Syndicate $42 claim-side offer for Q003 and Q004, collected and paid only after inspection and transfer; seek working-capital and mill investment term sheets. Amos runs ordinary work; owner retains staffing, ore sale and all borrowing/equity decisions.",
+  "simulated_events": [
+    {
+      "date": "1877-09-05",
+      "action": "Buyer visual/representative sampling and lot inspections commenced",
+      "condition": "No selling price reduction accepted; buyer testing and collection at buyer expense"
+    },
+    {
+      "date": "1877-09-07",
+      "action": "Inspection passed, $42 cash paid, JN1-Q003 and JN1-Q004 sold and physically taken by buyer",
+      "receipt": "ORE-SALE-002",
+      "payment_usd": "42.00",
+      "title_custody": "Buyer on accepted paid transfer; two separate source lots retained in records; no charge to owner for collection"
+    },
+    {
+      "date": "1877-09-14",
+      "action": "Mine financing options received; neither committed; property search continues without binding deed"
+    }
+  ],
+  "ore_sale": {
+    "buyer": "Black Hills Ore Syndicate",
+    "receipt_id": "ORE-SALE-002",
+    "date": "1877-09-07",
+    "lots": [
+      {
+        "id": "JN1-Q003",
+        "sold_lb": 4200,
+        "assay_grade": "unknown (buyer inspected)"
+      },
+      {
+        "id": "JN1-Q004",
+        "sold_lb": 6000,
+        "assay_grade": "unknown (buyer inspected)"
+      }
+    ],
+    "total_weight_lb": 10200,
+    "cash_paid_usd": "42.00",
+    "collection_paid_by": "buyer",
+    "inventory_disposition": "SOLD/REMOVED. Buyer check samples are components of the 10,200 sold lb; none double-counted.",
+    "is_gold_recovered_and_sold": false,
+    "gold_oz_credit": "0.00",
+    "cumulative_raw_ore_sale_cash_usd": "55.75"
+  },
+  "mine_inventory": {
+    "opening_untreated_lb": 50972,
+    "sold_untreated_lb": 10200,
+    "new_extraction_lb": 0,
+    "closing_untreated_lb": 40772,
+    "remaining_mixed_lb": 9372,
+    "remaining_waste_lb": 31400,
+    "remaining_unsold_quartz_lb": 0,
+    "historical_ore_sales_lb": 13692,
+    "historical_trial_processed_lb": 20,
+    "historical_assay_sample_lb": 16,
+    "cumulative_excavation_lb": 54500,
+    "balance": "40772+13692+20+16=54500",
+    "gold_recovered_est_oz": "0.0044, personal trial, provisional unsold",
+    "gold_recovered_and_sold_oz": "0.00"
+  },
+  "mine_employment": {
+    "staff": [
+      "Amos Polk",
+      "Rafael Soto",
+      "Jonas Calder",
+      "Calvin Briggs",
+      "Ezra Harlan",
+      "Miles Fenwick"
+    ],
+    "daily_pay_usd_if_all_six_work": "21.00",
+    "six_day_pay_usd": "126.00",
+    "paid_work": [
+      "Amos Polk 3 days x $4.50 = $13.50 (sale, financing/property leads)",
+      "Rafael Soto 1 day x $4.25 = $4.25 (site check)",
+      "Jonas Calder 1 day x $3.25 = $3.25 (sale custody/lot count)"
+    ],
+    "wages_incurred_and_paid_usd": "21.00",
+    "other_workers_assignment_days": 0,
+    "mine_wages_payable_usd": "0.00",
+    "work_status": "6 employed on day-wage basis; routine paid excavation paused by protected owner-cash floor; no wages generated on unscheduled days; continued availability not assured after prolonged pause",
+    "autonomy": "Amos handles ordinary work; no additional six-person work week because doing so would invade the $293.27 owner-cash reserve",
+    "new_extraction": false,
+    "safety": "No new ground disturbance; prior support/waste status carried forward"
+  },
+  "land": {
+    "upper_road_terrace": "$140 conditional price lapsed Sept 3, full title and water/tailings rights not established; not bought",
+    "finch_creek_bench": "Only possessory interest documented, not suitable for requested fee-title closing",
+    "south_road_bench": {
+      "seller": "Eleanor Rusk (new simulated potential seller)",
+      "site": "South Road Bench, ~1 mile farther along the accessible wagon road",
+      "asking_price_usd": "165.00",
+      "area": "100 x 120 ft",
+      "title": "Seller produced record references but abstract and patent chain still unverified",
+      "water": "Separate rights inquiry needed",
+      "tailings": "Containment site could be suitable subject to legal approval",
+      "status": "nonbinding lead, no purchase, offer or deposit"
+    },
+    "purchase_paid": "0.00",
+    "mill_built": false,
+    "arra_study": "Prior $238 conceptual quoted small arrastra construction estimate excludes land, water, tailings, staffing and contingency"
+  },
+  "finance_inquiries": [
+    {
+      "counterparty": "Deadwood Commercial Exchange (fictional in-world lender)",
+      "kind": "Secured claim-interest loan indication",
+      "gross_advance_usd": "300.00",
+      "fee_if_closes_usd": "9.00",
+      "cash_net_if_closes_usd": "291.00",
+      "interest": "18% simple annual",
+      "term": "12 months",
+      "total_repayment_usd": "354.00",
+      "security": "First secured interest in Juniper No. 1 transferable claim interest; diligence/recording and personal promise required; NOT existing wagon/mules, separately pledged",
+      "status": "Conditional term sheet, no loan accepted or cash received"
+    },
+    {
+      "counterparty": "Silas Harrow, regional mine investor (fictional NPC)",
+      "kind": "Equity participation indication",
+      "new_cash_if_accepted_usd": "600.00",
+      "requested_interest": "40% of Juniper No. 1 mining venture and qualifying assets/proceeds; no claim on freight business",
+      "conditions": "Diligence, formal division of claim interest and partnership terms; consent rules and owner control must be negotiated; no funded investment",
+      "status": "Nonbinding preliminary offer"
+    }
+  ],
+  "financial": {
+    "opening_owner_cash": "315.35",
+    "owner_external_ore_sale_cash_received": "42.00",
+    "owner_amos_wages_paid": "13.50",
+    "owner_rafael_wages_paid": "4.25",
+    "owner_jonas_wages_paid": "3.25",
+    "owner_ordinary_records_and_postage_paid": "2.00",
+    "closing_owner_cash": "334.35",
+    "mine_wages_payable": "0.00",
+    "freight_opening_cash": "87.00",
+    "freight_external_receipts": "46.00",
+    "freight_wages_paid": "18.00",
+    "freight_feed_and_care_paid": "15.60",
+    "freight_consumables_paid": "2.75",
+    "closing_freight_cash": "96.65",
+    "freight_wages_payable": "0.00",
+    "consolidated_opening_cash": "402.35",
+    "consolidated_closing_cash": "431.00",
+    "consolidated_cash_change": "+28.65",
+    "freight_internal_transfers": "0.00",
+    "loan_wagon_principal": "265.00",
+    "loan_balloon_due_1878_01_26": "293.27",
+    "loan_accrued_interest_approx": "12.89",
+    "owner_cash_after_reserving_balloon": "41.08",
+    "historical_personal_living_expense_gap": "Still unresolved; do not present current absolute owner balance as fully audited",
+    "financial_remarks": "External cash inflows: $42 ore sale + $46 freight. Owner cash paid: $21 wages + $2 records. Freight cash paid: $18 wages + $15.60 feed + $2.75 supplies. Reconciles $402.35 + $88 - $59.35 = $431.00."
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Claim control, two in-situ samples and independent assay",
+      "status": "complete 1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First completed paid mineral or recovered-gold sale",
+      "status": "complete 1877-08-02"
+    },
+    {
+      "id": 3,
+      "deadline": "1882-12-31",
+      "goal": "Recover and sell 650 cumulative troy oz gold",
+      "status": "0/650"
+    },
+    {
+      "id": 4,
+      "deadline": "1884-12-31",
+      "goal": "2 independently NPC-owned businesses, each 90 days and five external paid transactions",
+      "status": "0/2"
+    },
+    {
+      "id": 5,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered-and-sold gold troy oz in consecutive 12-month period with positive mine operating profit",
+      "status": "0/850"
+    },
+    {
+      "id": 6,
+      "deadline": "1888-12-31",
+      "goal": "Maintain 90 permanent residents for 60 consecutive days",
+      "status": "22/90"
+    },
+    {
+      "id": 7,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered-and-sold troy oz and $18000 reconciled owner equity",
+      "status": "0/5500; equity unaudited"
+    }
+  ],
+  "population": 22,
+  "objectives_completed": 2,
+  "objectives_total": 7,
+  "ux_finding": {
+    "id": "VEIN-UX-011",
+    "title": "Plain-language contextual tooltips across economic systems",
+    "requirements": [
+      "Use user-facing label Gold-bearing rock (quartz) instead of unexplained quartz-bearing rock",
+      "One-sentence everyday description on hover/tap for unfamiliar terms",
+      "Optional expandable details with historical/technical terminology",
+      "Clearly distinguish possible gold-bearing material from tested ore, contained gold, recovered gold and sold gold",
+      "Apply similarly to mineral claims, mortgage liens, loans, assay, freight, labor and property title",
+      "Tooltips are educational, not evidence of discovered/hidden material quality"
+    ]
+  },
+  "additional_findings": [
+    "VEIN-VALID-018: Accepted conditional ore purchase still requires inspection, actual payment and separate lot removal",
+    "VEIN-CAL-013: Four-to-six miner wage rate per week overwhelms small parcel ore receipts; expansion needs real recovery throughput/capital",
+    "VEIN-DES-010: Delegation must pause safely at cash reserves while preserving NPC agency and possible employee attrition"
+  ],
+  "next_decision": "Owner must accept or reject financing term sheets or explicitly release protected cash reserve. Continue title search; no land purchase and no mill construction authorized. Mine full-crew extraction paused pending feasible funding; owners retain sales and hiring decisions."
+}

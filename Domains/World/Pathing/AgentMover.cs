@@ -30,14 +30,6 @@ namespace LandLedgers.Pathing
         private string locomotionStateName = "Locomotion";
 
         [SerializeField]
-        [Tooltip("Maximum multiplier applied to path movement when simulation time is fast-forwarded.")]
-        private float maxTimeScaleMovementMultiplier = 12f;
-
-        [SerializeField]
-        [Tooltip("Maximum multiplier applied to walk animation when simulation time is fast-forwarded.")]
-        private float maxTimeScaleAnimationMultiplier = 6f;
-
-        [SerializeField]
         [Tooltip("Animation playback multiplier when walking at 1x simulation speed.")]
         private float baseWalkAnimationSpeed = 1.25f;
 
@@ -174,6 +166,33 @@ namespace LandLedgers.Pathing
             ResetProceduralVisualPose(true);
         }
 
+        /// <summary>
+        /// Keeps this person's visual actor present at its current authoritative
+        /// location without starting a route. Population actors currently have no
+        /// authored interior representation; hiding the actor at every doorway
+        /// made the whole town appear empty even though the Person remained live.
+        /// </summary>
+        public void ShowAtCurrentLocation()
+        {
+            state = AgentMoveState.ArrivedVisible;
+            doorPauseTimer = 0f;
+            hideOnArrival = false;
+            currentPath.Clear();
+            waypointIndex = 0;
+            currentTargetAnchor = default;
+            currentStartDoorAnimator = null;
+            currentTargetDoorAnimator = null;
+            targetDoorActionTriggeredForRoute = false;
+            arrivalEventRaisedForRoute = true;
+            currentLocomotionBlend = 0f;
+            locomotionBlendVelocity = 0f;
+            lastAnimatorWalking = false;
+
+            SetVisible(true);
+            UpdateAnimatorState(true);
+            ResetProceduralVisualPose(true);
+        }
+
         public bool BeginDoorToDoor(BuildingAnchor start, BuildingAnchor target, bool hideWhenArrived = true, BuildingDoorAnimator startDoorAnimator = null, BuildingDoorAnimator targetDoorAnimator = null)
         {
             EnsureReferences();
@@ -245,22 +264,24 @@ namespace LandLedgers.Pathing
 
         private void Update()
         {
+            float realDeltaSeconds = UnityEngine.Time.unscaledDeltaTime;
+            float simulationDeltaSeconds = realDeltaSeconds * GetMovementTimeScale();
             if (state == AgentMoveState.Moving)
             {
-                TickMove(UnityEngine.Time.deltaTime);
+                TickMove(simulationDeltaSeconds);
             }
             else if (state == AgentMoveState.DoorPause)
             {
-                TickDoorPause(UnityEngine.Time.deltaTime);
+                TickDoorPause(simulationDeltaSeconds);
             }
         }
 
         private void LateUpdate()
         {
-            UpdateProceduralVisualMotion(UnityEngine.Time.deltaTime);
+            UpdateProceduralVisualMotion(UnityEngine.Time.unscaledDeltaTime);
         }
 
-        private void TickMove(float deltaTime)
+        private void TickMove(float simulationDeltaSeconds)
         {
             if (pathingManager == null || pathingManager.Settings == null || currentPath.Count == 0 || waypointIndex >= currentPath.Count)
             {
@@ -269,49 +290,70 @@ namespace LandLedgers.Pathing
             }
 
             PathingSettings settings = pathingManager.Settings;
-            float timeScale = GetMovementTimeScale();
-            Vector3 target = pathingManager.CoordToPathWorld(currentPath[waypointIndex]);
-            Vector3 toTarget = target - transform.position;
-            toTarget.y = 0f;
-
-            if (timeScale <= 0f)
+            if (simulationDeltaSeconds <= 0f)
             {
                 UpdateAnimatorState();
                 return;
             }
 
-            if (toTarget.sqrMagnitude <= settings.waypointArrivalDistance * settings.waypointArrivalDistance)
+            float remainingDistance = settings.pedestrianSpeedMetersPerSecond * simulationDeltaSeconds;
+            float arrivalDistance = settings.waypointArrivalDistance;
+            while (waypointIndex < currentPath.Count)
             {
-                waypointIndex++;
-                if (waypointIndex >= currentPath.Count)
+                Vector3 target = pathingManager.CoordToPathWorld(currentPath[waypointIndex]);
+                Vector3 toTarget = target - transform.position;
+                toTarget.y = 0f;
+                float distance = toTarget.magnitude;
+
+                if (distance <= arrivalDistance)
                 {
-                    transform.position = pathingManager.CoordToPathWorld(currentTargetAnchor.coord);
-                    BeginDoorPause();
+                    transform.position = target;
+                    waypointIndex++;
+                    if (waypointIndex >= currentPath.Count)
+                    {
+                        transform.position = pathingManager.CoordToPathWorld(currentTargetAnchor.coord);
+                        BeginDoorPause();
+                        break;
+                    }
+                    continue;
                 }
 
-                return;
-            }
-
-            float step = settings.pedestrianSpeedMetersPerSecond * timeScale * deltaTime;
-            transform.position = Vector3.MoveTowards(transform.position, target, step);
-
-            if (toTarget.sqrMagnitude > 0.001f)
-            {
                 Quaternion targetRotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
-                transform.rotation = Quaternion.RotateTowards(
-                    transform.rotation,
-                    targetRotation,
-                    settings.turnSpeedDegreesPerSecond * timeScale * deltaTime);
+                float turnDegrees = settings.turnSpeedDegreesPerSecond * simulationDeltaSeconds;
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, turnDegrees);
+                if (remainingDistance >= distance)
+                {
+                    transform.position = target;
+                    remainingDistance -= distance;
+                    waypointIndex++;
+                    if (waypointIndex >= currentPath.Count)
+                    {
+                        transform.position = pathingManager.CoordToPathWorld(currentTargetAnchor.coord);
+                        BeginDoorPause();
+                        break;
+                    }
+                    continue;
+                }
+
+                transform.position = Vector3.MoveTowards(transform.position, target, remainingDistance);
+                remainingDistance = 0f;
+                break;
             }
 
             UpdateAnimatorState();
         }
 
-        private void TickDoorPause(float deltaTime)
+        private void TickDoorPause(float simulationDeltaSeconds)
         {
             PathingSettings settings = pathingManager != null ? pathingManager.Settings : null;
+            if (simulationDeltaSeconds <= 0f)
+            {
+                UpdateAnimatorState();
+                return;
+            }
+
             float pauseDuration = settings != null ? settings.doorArrivalPauseSeconds : 1.1f;
-            doorPauseTimer += deltaTime * Mathf.Max(1f, GetMovementTimeScale());
+            doorPauseTimer += simulationDeltaSeconds;
             if (doorPauseTimer < pauseDuration)
             {
                 UpdateAnimatorState();
@@ -454,7 +496,7 @@ namespace LandLedgers.Pathing
                 return 0f;
             }
 
-            return Mathf.Clamp(timeManager.CurrentSpeedMultiplier, 0f, Mathf.Max(1f, maxTimeScaleMovementMultiplier));
+            return Mathf.Max(0f, timeManager.CurrentGameSecondsPerRealSecond);
         }
 
         private void UpdateAnimatorState(bool instant = false)
@@ -491,7 +533,7 @@ namespace LandLedgers.Pathing
                     ref locomotionBlendVelocity,
                     Mathf.Max(0.001f, dampTime),
                     Mathf.Infinity,
-                    UnityEngine.Time.deltaTime);
+                    UnityEngine.Time.unscaledDeltaTime * timeScale);
 
                 if (Mathf.Abs(currentLocomotionBlend - targetBlend) <= 0.001f)
                 {
@@ -502,9 +544,13 @@ namespace LandLedgers.Pathing
                 cachedAnimator.SetFloat(locomotionBlendParameterId, currentLocomotionBlend);
             }
 
-            cachedAnimator.speed = driveImportedWalk
-                ? Mathf.Max(0.01f, baseWalkAnimationSpeed * Mathf.Clamp(timeScale, 1f, Mathf.Max(1f, maxTimeScaleAnimationMultiplier)))
-                : 1f;
+            // Animator time is part of the simulated movement clock. Procedural
+            // locomotion and imported locomotion both need to pause and scale
+            // with the same simulation rate as the actor's route.
+            cachedAnimator.speed = LandLedgers.Time.SimulationAnimationScale.ResolveMovingActorSpeed(
+                baseWalkAnimationSpeed,
+                state == AgentMoveState.Moving,
+                timeScale);
             lastAnimatorWalking = driveImportedWalk;
         }
 
@@ -574,8 +620,6 @@ namespace LandLedgers.Pathing
 
         private void OnValidate()
         {
-            maxTimeScaleMovementMultiplier = Mathf.Max(1f, maxTimeScaleMovementMultiplier);
-            maxTimeScaleAnimationMultiplier = Mathf.Max(1f, maxTimeScaleAnimationMultiplier);
             baseWalkAnimationSpeed = Mathf.Max(0.01f, baseWalkAnimationSpeed);
             walkBlendInSeconds = Mathf.Max(0.001f, walkBlendInSeconds);
             walkBlendOutSeconds = Mathf.Max(0.001f, walkBlendOutSeconds);
@@ -751,8 +795,7 @@ namespace LandLedgers.Pathing
                 return;
             }
 
-            float animationTimeScale = Mathf.Clamp(timeScale, 1f, Mathf.Max(1f, maxTimeScaleAnimationMultiplier));
-            proceduralWalkTime += deltaTime * proceduralWalkFrequency * animationTimeScale;
+            proceduralWalkTime += deltaTime * proceduralWalkFrequency * timeScale;
             float cycle = proceduralWalkTime * Mathf.PI * 2f;
             float stride = Mathf.Sin(cycle);
             float oppositeStride = -stride;

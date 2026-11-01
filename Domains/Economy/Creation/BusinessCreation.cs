@@ -462,10 +462,12 @@ namespace LandLedgers.Economy.Creation
 
     /// <summary>
     /// BIZ-1: the Canon §3.1 universal workflow as code —
-    /// intent → identity → ownership/governance → capability-driven premises →
-    /// assets/working capital. Creating a business creates the entity; it does NOT make
-    /// it operating (Canon §3.2, GHOST-DES-009). Operating status comes only from actual
-    /// commerce, recorded via <see cref="BusinessOperatingLedger"/>.
+    /// intent → identity → ownership/governance → capability-driven premises → entity.
+    /// Formation alone does not settle assets, working capital, inventory, or commerce;
+    /// those require their own authoritative transfer/receipt events. Creating a
+    /// business does not make it operating (Canon §3.2, GHOST-DES-009). Operating
+    /// status comes only from actual commerce, recorded via
+    /// <see cref="BusinessOperatingLedger"/>.
     /// </summary>
     public sealed class BusinessCreationAuthority
     {
@@ -553,13 +555,14 @@ namespace LandLedgers.Economy.Creation
                 return false;
             }
 
-            // Step 6: working capital assignment. Recorded as the owner's capital
-            // contribution; it does NOT make the business operating (Canon §3.2).
+            // Step 6: capital terms on an intent are not themselves a cash
+            // settlement. Business creation has no owner-funds transfer authority;
+            // never describe requested capital as paid-in or operating cash.
             if (intent.StartingCapitalCents > 0)
             {
                 diagnostics.Add(
-                    $"Assigned {intent.StartingCapitalCents}c working capital " +
-                    $"(owner contribution; Canon §3.2 — capital is not commerce).");
+                    $"Requested {intent.StartingCapitalCents}c owner capital remains unsettled; " +
+                    "formation did not debit an owner or credit Business cash.");
             }
 
             diagnostics.Add(

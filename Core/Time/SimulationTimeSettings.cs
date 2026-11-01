@@ -185,6 +185,12 @@ namespace LandLedgers.Time
             return speed switch
             {
                 SimulationSpeed.Paused => 0f,
+                // TimeManager's standard conversion multiplies the selected
+                // speed by GameSecondsPerDay / realSecondsPerGameDayAt1x.
+                // This inverse makes one real second advance exactly one game
+                // second, regardless of whether an accelerated day is 60 or
+                // 30 real seconds.
+                SimulationSpeed.RealTime => Mathf.Max(1f, realSecondsPerGameDayAt1x) / GameSecondsPerDay,
                 SimulationSpeed.Speed1x => speed1xMultiplier,
                 SimulationSpeed.Speed2x => speed2xMultiplier,
                 SimulationSpeed.Speed4x => speed4xMultiplier,

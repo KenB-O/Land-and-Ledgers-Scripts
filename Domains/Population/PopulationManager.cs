@@ -184,6 +184,15 @@ namespace LandLedgers.Population
         [ContextMenu("Generate Population Snapshot")]
         public void GeneratePopulationSnapshot()
         {
+            GeneratePopulationSnapshot(null);
+        }
+
+        /// <summary>
+        /// Explicit development-fixture overload. Ordinary callers continue
+        /// through the calibrated generator when no fixture is supplied.
+        /// </summary>
+        public void GeneratePopulationSnapshot(SixPersonDevelopmentFixture developmentFixture)
+        {
             AutoWireReferences();
 
             sharedBusinessRuntime?.InitializeIfNeeded();
@@ -191,14 +200,23 @@ namespace LandLedgers.Population
             CalendarAnchor anchor = ResolveAnchor();
             int scenarioStartDay = ResolveScenarioStartDay();
             anchor.FromAbsoluteDay(scenarioStartDay, out int startYear, out int startMonth, out int startDay);
-            PopulationGenerationResult result = PopulationGenerator.Generate(
-                townWorld,
-                settings,
-                BuildBoardingHouseSettlementOptions(),
-                kinshipRegistry,
-                startYear,
-                startMonth,
-                startDay);
+            PopulationGenerationResult result = developmentFixture != null
+                ? PopulationGenerator.GenerateDevelopmentFixture(
+                    townWorld,
+                    settings,
+                    developmentFixture,
+                    kinshipRegistry,
+                    startYear,
+                    startMonth,
+                    startDay)
+                : PopulationGenerator.Generate(
+                    townWorld,
+                    settings,
+                    BuildBoardingHouseSettlementOptions(),
+                    kinshipRegistry,
+                    startYear,
+                    startMonth,
+                    startDay);
             state = result.State;
             RebuildLifecycleManager();
             RebuildMembershipRegistry();

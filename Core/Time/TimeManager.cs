@@ -123,6 +123,10 @@ namespace LandLedgers.Time
         public int ShortTickIndex => shortTickIndex;
         public bool IsPaused => isPaused;
         public float CurrentSpeedMultiplier => ResolveSpeedMultiplier(currentSpeed);
+        /// <summary>Authoritative game seconds advanced per unscaled real second at the selected speed.</summary>
+        public float CurrentGameSecondsPerRealSecond => settings != null
+            ? ResolveSpeedMultiplier(currentSpeed) * settings.GameSecondsPerDay / Mathf.Max(1f, settings.realSecondsPerGameDayAt1x)
+            : currentSpeed == SimulationSpeed.Paused ? 0f : currentSpeed == SimulationSpeed.RealTime ? 1f : ResolveSpeedMultiplier(currentSpeed);
         public int CollapsedDayRolloversLastFrame => collapsedDayRolloversLastFrame;
         public int CappedDayRolloverFrames => cappedDayRolloverFrames;
         public int CompressedShortTicksLastFrame => compressedShortTicksLastFrame;
@@ -424,7 +428,12 @@ namespace LandLedgers.Time
 
             // Missing settings should stop simulation advancement, but speed UI/debug listeners
             // still need a stable fallback multiplier when SetSpeed is called during bootstrap or repair.
-            return speed == SimulationSpeed.Paused ? 0f : Mathf.Max(0f, (float)(int)speed);
+            return speed switch
+            {
+                SimulationSpeed.Paused => 0f,
+                SimulationSpeed.RealTime => 1f,
+                _ => Mathf.Max(0f, (float)(int)speed)
+            };
         }
 
         private void InitializeState(bool force)

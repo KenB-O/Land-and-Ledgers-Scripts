@@ -171,10 +171,10 @@ namespace LandLedgers.CameraSystem
         [Tooltip("Keyboard key for rotating the camera right.")]
         public Key rotateRightKey = Key.E;
 
-        [Tooltip("Keyboard key for tilting the camera toward the horizon.")]
+        [Tooltip("Keyboard key for tilting the view toward the horizon.")]
         public Key pitchUpKey = Key.R;
 
-        [Tooltip("Keyboard key for tilting the camera more top-down.")]
+        [Tooltip("Keyboard key for tilting the view to a more top-down angle.")]
         public Key pitchDownKey = Key.F;
 
         [Tooltip("Keyboard key held to use the fast pan multiplier.")]

@@ -11,13 +11,15 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5b1df927f0fe407ba45810966afb291c, type: 3}
   m_Name: FirstLedger
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Orchestration.Scenarios.ScenarioAsset
   scenarioId: first-ledger
   displayName: First Ledger
-  description: |-
-    1870. You step off the stage with your household, a stake of cash, and a ledger with nothing in it yet. The town needs merchants. Form your first business, hire your first hand, and build $15,000 of owner equity — honestly, one entry at a time.
-
-    NOTE: name your household founders on this asset (Player Household section) before bootstrapping — the scenario declares the player household (GHOST-DEF-006).
+  description: "1870. You step off the stage with your household, a stake of cash,
+    and a ledger with nothing in it yet. The town needs merchants. Form your first
+    business, hire your first hand, and build $15,000 of owner equity \u2014 honestly,
+    one entry at a time.\n\nNOTE: name your household founders on this asset (Player
+    Household section) before bootstrapping \u2014 the scenario declares the player
+    household (GHOST-DEF-006)."
   playerHousehold:
     scenarioPlayerId: player
     householdName: Player Household
@@ -27,7 +29,9 @@ MonoBehaviour:
     includeTownResidents: 1
     includeRuralServicePopulation: 0
     includeTransients: 0
-    notes: Money-goals scenario (Tech X §2.1): the player household and town residents count; rural-service and transient populations are excluded from scenario read models.
+    notes: "Money-goals scenario (Tech X \xA72.1): the player household and town
+      residents count; rural-service and transient populations are excluded from
+      scenario read models."
   startingWorld:
     scenarioId: first-ledger
     definitionVersion: 1.0.0
@@ -40,7 +44,8 @@ MonoBehaviour:
     requiredBusinessIds: []
     populationNotes: First Ledger authored starting population.
     economicNotes: Starting cash and owner-equity goals remain authored by this asset.
-    propertyNotes: Player household receives only the property rights explicitly granted by the scenario.
+    propertyNotes: Player household receives only the property rights explicitly
+      granted by the scenario.
     fixedBusinesses: []
     minVariableBusinesses: 0
     maxVariableBusinesses: 2
@@ -49,7 +54,7 @@ MonoBehaviour:
       founderCount: 1
       startingCashCents: 250000
       startingDebtCents: 0
-      professionId: ''
+      professionId:
       ownsHomeBuilding: 1
     economyPolicy:
       cashBandMinCents: 25000
@@ -57,12 +62,10 @@ MonoBehaviour:
       employmentTargetRate01: 0.75
       debtChance01: 0.25
       maxDebtCentsPerHousehold: 150000
-      allowedObligationKinds:
-      - 3
-      - 0
+      allowedObligationKinds: 0300000000000000
     propertyGrants: []
-    householdCompositionNotes: ''
-    validationRulesNotes: ''
+    householdCompositionNotes:
+    validationRulesNotes:
   goals:
   - goalId: acquire-first-business
     text: Form your first business
@@ -74,7 +77,7 @@ MonoBehaviour:
     optional: 0
   - goalId: equity-5000
     text: Reach $5,000 owner equity
-    targetText: $5,000 (owner equity, not cash-in-business — Canon §11.4)
+    targetText: "$5,000 (owner equity, not cash-in-business \u2014 Canon \xA711.4)"
     optional: 0
   - goalId: own-two-businesses
     text: Own two businesses
@@ -86,7 +89,7 @@ MonoBehaviour:
     optional: 0
   - goalId: equity-10000
     text: Reach $10,000 owner equity
-    targetText: $10,000 (owner equity — Canon §11.4)
+    targetText: "$10,000 (owner equity \u2014 Canon \xA711.4)"
     optional: 0
   - goalId: own-three-businesses
     text: Own three businesses
@@ -94,12 +97,13 @@ MonoBehaviour:
     optional: 0
   - goalId: equity-15000
     text: Reach $15,000 owner equity
-    targetText: $15,000 owner equity — scenario complete
+    targetText: "$15,000 owner equity \u2014 scenario complete"
     optional: 0
   objectives:
   - objectiveId: choose-first-business
     linkedGoalId: acquire-first-business
-    text: Choose which business to form first — the general store is the natural start.
+    text: "Choose which business to form first \u2014 the general store is the natural
+      start."
   - objectiveId: complete-purchase
     linkedGoalId: acquire-first-business
     text: Complete formation, then configure the business for real operation.
@@ -108,7 +112,8 @@ MonoBehaviour:
     text: Offer a wage to a worker through the employment relationship.
   - objectiveId: second-acquisition
     linkedGoalId: own-two-businesses
-    text: Form or acquire a second business — freight or farm pair well with the store.
+    text: "Form or acquire a second business \u2014 freight or farm pair well with
+      the store."
   - objectiveId: third-acquisition
     linkedGoalId: own-three-businesses
     text: Form or acquire a third business to complete the set.
@@ -137,4 +142,4 @@ MonoBehaviour:
     floatValue: 0
     intValue: 1500000
     textValue: 
-    description: Final equity milestone — scenario complete.
+    description: "Final equity milestone \u2014 scenario complete."

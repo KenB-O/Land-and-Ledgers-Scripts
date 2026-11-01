@@ -1,0 +1,3 @@
+Doc_ID,Original_PDF_Path,PDF_Pages,Bytes,SHA256,Verified_In
+CAN-XXXI,01_GOVERNING_ORIGINALS/Canonical_Bible_XXXI_Source_2026-10-07.pdf,346,1632854,aa3f6cd55cc501cd3c8fe2e1dcfa38f84e8e1179e740d1b7730cb74bb13e7b42,"v2.1, v2.2, v2.3, standalone originals"
+TECH-XIV,01_GOVERNING_ORIGINALS/Technical_Bible_XIV_Source_2026-10-07.pdf,170,858866,01b475ccb3fcb12361779ef265caa2634a55b01d18e2e7a4fa671f0ea012b3ef,"v2.1, v2.2, v2.3, standalone originals"

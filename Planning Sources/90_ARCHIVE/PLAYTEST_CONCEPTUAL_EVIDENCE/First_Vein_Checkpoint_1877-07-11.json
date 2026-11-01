@@ -1,0 +1,294 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "checkpoint": "VEIN-IV-1877-07-11",
+  "date": "1877-07-11",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-06-27.json",
+  "mode": "Fictional conceptual autonomous roleplay simulation; NOT actual Unity executable results, surveyed geology, or real historical quotes",
+  "continuity": "Owner opening cash is SOFT inherited from historic unresolved personal-expense gap; this period ledger balances.",
+  "elapsed": {
+    "calendar_days": 14,
+    "workdays": [
+      "1877-06-28",
+      "1877-06-29",
+      "1877-06-30",
+      "1877-07-02",
+      "1877-07-03",
+      "1877-07-04",
+      "1877-07-05",
+      "1877-07-06",
+      "1877-07-07",
+      "1877-07-09",
+      "1877-07-10",
+      "1877-07-11"
+    ],
+    "rest_days": [
+      "1877-07-01",
+      "1877-07-08"
+    ],
+    "start": "1877-06-28",
+    "end": "1877-07-11"
+  },
+  "population": {
+    "permanent_persons": 22,
+    "town": "Juniper Gulch"
+  },
+  "owner_cash": {
+    "open_recorded": "873.70",
+    "mine_new_wage_expense_accrued": "93.00",
+    "mine_wages_paid": "69.75",
+    "mine_wages_payable_end": "23.25",
+    "consumables_paid": "12.60",
+    "consumables_detail": [
+      {
+        "type": "fasteners",
+        "spent": "2.40"
+      },
+      {
+        "type": "rope and lashings",
+        "spent": "3.00"
+      },
+      {
+        "type": "tool-edge replacement and repair",
+        "spent": "7.20"
+      }
+    ],
+    "cash_close_recorded": "791.35",
+    "budget_limit_additional": "145.00",
+    "incremental_spending_incurred_including_unpaid_wages": "105.60",
+    "unused_budget": "39.40",
+    "existing_timbers_used_lb": 180,
+    "existing_timber_allocated_book_cost_non_cash": "4.84",
+    "cash_cost_period_paid": "82.35",
+    "mine_new_wages_by_person": {
+      "Amos Polk": "54.00",
+      "Jonas Calder": "39.00"
+    },
+    "noncash_development_timber_used": "4.84",
+    "note": "Existing timber cost is previously paid and not charged twice against new spending cap. Classification as development versus operating cost remains separate from actual cash."
+  },
+  "mine": {
+    "status": "12-workday trial development completed; no further work authorized",
+    "workers": [
+      {
+        "person": "Amos Polk",
+        "title": "Lead Miner",
+        "rate": "4.50",
+        "days": 12,
+        "wages": "54.00"
+      },
+      {
+        "person": "Jonas Calder",
+        "title": "General laborer",
+        "rate": "3.25",
+        "days": 12,
+        "wages": "39.00"
+      }
+    ],
+    "excavation_sequence": [
+      {
+        "workday_count": 3,
+        "work": "bench-back loose upper edge, surface grading and make work area safe",
+        "broken_waste_tons": "1.700",
+        "stockpile": "JN1-W002"
+      },
+      {
+        "workday_count": 9,
+        "work": "bounded surface extraction at stabilized workfront, no unsupported cut",
+        "quartz_tons": "1.100",
+        "mixed_tons": "0.900",
+        "waste_tons": "2.400",
+        "stockpiles": [
+          "JN1-Q002",
+          "JN1-M002",
+          "JN1-W003"
+        ]
+      }
+    ],
+    "new_breakage_tons": "6.100",
+    "new_lots": [
+      {
+        "id": "JN1-W002",
+        "type": "bench-stripping waste",
+        "new_lb": 3400,
+        "grade": "not assayed"
+      },
+      {
+        "id": "JN1-Q002",
+        "type": "new visually selected quartz",
+        "new_lb": 2200,
+        "grade": "not assayed"
+      },
+      {
+        "id": "JN1-M002",
+        "type": "new altered mixed rock",
+        "new_lb": 1800,
+        "grade": "not assayed"
+      },
+      {
+        "id": "JN1-W003",
+        "type": "new face waste",
+        "new_lb": 4800,
+        "grade": "not assayed"
+      }
+    ],
+    "prior_lots_unchanged": [
+      {
+        "id": "JN1-Q001",
+        "at_workfront_lb": 1316,
+        "grade_oz_per_short_ton_if_known": "0.56"
+      },
+      {
+        "id": "JN1-M001",
+        "at_workfront_lb": 1476,
+        "grade_oz_per_short_ton_if_known": "0.07"
+      },
+      {
+        "id": "JN1-W001",
+        "at_workfront_lb": 4400,
+        "grade_oz_per_short_ton_if_known": null
+      }
+    ],
+    "stockpiles_at_workfront_lb": 19392,
+    "physical_samples_at_assay_office_lb": 8,
+    "total_rock_from_both_excavation_phases_lb": 19400,
+    "mass_reconciled": "Prior 7,200 lb excavated (7,192 at site + 8 in assay samples); new 12,200 lb all at site; 19,392 lb stockpiles + 8 lb in laboratory = 19,400 lb.",
+    "geology_player_observable": "Quartz band narrowed at the last excavated face and split into thin stringers. Some quartz looks different; no reliable grade or extent for new lots. Do not extrapolate Q001 or spot assay results.",
+    "geology_total_deposit": "Not enough information",
+    "safety": "Original loose upper edge benched back; safe authorized shallow work completed. Next advance beyond current boundary requires revised plan because new fractured hanging-wall boundary appears. No injuries or shafts/blasting/unsupported excavation.",
+    "workfront_materials": {
+      "initial_tools_and_sacks_lb": 105,
+      "timber_at_site_begin_lb": 595,
+      "timber_installed_lb": 180,
+      "unused_timber_lb": 415,
+      "timber_mass_reconciled_lb": 595
+    },
+    "gold_recovered_troy_oz": "0.000",
+    "gold_sold_troy_oz": "0.000",
+    "mine_sales_revenue": "0.00",
+    "reese_original_quartz_offer": "Expired July 7, 1877 without acceptance",
+    "existing_ore_buyer_offers": "Previously quoted terms require refresh; no commitments."
+  },
+  "freight_business": {
+    "business_name": "Mercer Freight & Cartage",
+    "manager": "Eli Ward",
+    "mode": "autonomous ordinary operation",
+    "cash_open": "64.30",
+    "cash_from_external_paid_freight": "48.00",
+    "payroll_current_period_expensed": "21.00",
+    "payroll_paid": "15.00",
+    "payroll_payable_end": "6.00",
+    "animal_feed_and_care_paid": "12.60",
+    "routine_supplies_paid": "3.90",
+    "cash_close": "80.80",
+    "operating_contribution_before_depreciation_owner_wagon_finance": "10.50",
+    "shipments": [
+      {
+        "id": "FRT-011",
+        "route": "Juniper to Deadwood",
+        "cargo_external_lb": 260,
+        "customer_receipt": "11.00",
+        "status": "delivered/paid"
+      },
+      {
+        "id": "FRT-012",
+        "route": "Deadwood to Juniper",
+        "cargo_external_lb": 430,
+        "customer_receipt": "15.00",
+        "status": "delivered/paid"
+      },
+      {
+        "id": "FRT-013",
+        "route": "Juniper to Deadwood",
+        "cargo_external_lb": 180,
+        "customer_receipt": "9.00",
+        "status": "delivered/paid"
+      },
+      {
+        "id": "FRT-014",
+        "route": "Deadwood to Juniper",
+        "cargo_external_lb": 510,
+        "customer_receipt": "13.00",
+        "status": "delivered/paid"
+      }
+    ],
+    "workdays_paid_or_accrued": 7,
+    "wagons": 1,
+    "drivers": 1,
+    "future_capacity_utilization": "not evidenced as above 100%",
+    "capacity_escalation": false,
+    "additional_staff_or_outfit": "Not authorized. Eli rate remains $3.00 per worked day until second driver hired and promotion triggered.",
+    "wagon_personal_title": "unchanged; available via business use agreement; company did not acquire collateral or loan."
+  },
+  "personal_wagon_loan": {
+    "principal": "265.00",
+    "lender": "Elias Voss",
+    "rate": "16% simple annual",
+    "start": "1877-05-26",
+    "maturity": "1878-01-26",
+    "contract_balloon": "293.27",
+    "accrued_interest_approx_through_1877_07_11": "5.34",
+    "new_cash_payment": "0.00"
+  },
+  "objective_progress": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Control prospect, two in-situ samples and independent assay",
+      "status": "complete 1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First paid mineral or recovered gold sale",
+      "status": "0/1"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "goal": "$400 mining operating profit across six consecutive full months, four individually profitable",
+      "status": "0 qualifying windows"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "goal": "650 cumulative recovered and sold troy ounces",
+      "status": "0/650"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "goal": "2 genuinely independent new NPC owned businesses active 90 days with 5 external paid transactions each",
+      "status": "0/2"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered and sold troy oz in consecutive 12 months with positive mine operating profit",
+      "status": "0/850"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents maintained 60 days",
+      "status": "22/90"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered and sold troy oz and $18000 cost-basis owner equity",
+      "status": "0/5500; equity unaudited"
+    }
+  ],
+  "playtest_findings": [
+    {
+      "id": "VEIN-VALID-011",
+      "finding": "Benching and bounded shallow surface work produce explicit categorized new physical lots, preserve older lots and enforce separate ground safety stop."
+    },
+    {
+      "id": "VEIN-CAL-006",
+      "finding": "Hand-mining costs versus low-grade unprocessed ore value: physical tonnage is not monetary mine profit; costs, grades, milling and carriage matter."
+    }
+  ],
+  "next_decision": "Prioritize lot-specific representative tests and new buyer bids, test small-scale recovery with actual equipment/water/handling, or revise ground plan before more extraction; no transaction or continued excavation implied."
+}

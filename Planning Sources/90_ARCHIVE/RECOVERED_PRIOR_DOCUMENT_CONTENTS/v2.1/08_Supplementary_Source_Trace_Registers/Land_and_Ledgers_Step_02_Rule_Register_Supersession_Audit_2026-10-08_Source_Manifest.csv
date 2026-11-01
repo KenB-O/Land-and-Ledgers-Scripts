@@ -1,0 +1,5 @@
+﻿ID,Source filename,PDF pages,SHA-256,Authority,Compatibility
+CAN,Land_and_Ledgers_Canonical_Project_Bible_Revision_XXXI_2026-10-07(1)(1).pdf,346,aa3f6cd55cc501cd3c8fe2e1dcfa38f84e8e1179e740d1b7730cb74bb13e7b42,Gameplay current baseline XXXI,Current as of 2026-10-07
+TECH,Land_and_Ledgers_Technical_Implementation_Bible_Revision_XIV_2026-10-07(1)(1).pdf,170,01b475ccb3fcb12361779ef265caa2634a55b01d18e2e7a4fa671f0ea012b3ef,Technical target current baseline XIV,Compatible with Canon XXXI; code not verified
+OCC,Occupation_Demography_and_Workforce_Calibration_Report_2026-09-25_Landed_Ledgers(3)(1).pdf,18,54a8418988c8e8cf0fd1cba457c8baebe9b535f22c43ef1bf16c70fb54cb2a1e,Specialist historical calibration; not Canon,References Canon XXV / Tech VIII; refresh Step 10
+WORK,Historical_Work_Construction_Infrastructure_Calibration_Reference_1870-1905_2026-10-05_Land_and_Ledgers(1)(1).pdf,18,0467606eb876604b1b9dfc3a403657807dea5d2da4af68b0a9dfa9e113c4d8c4,Specialist historical calibration; not Canon,References Canon XXVIII / Tech XI; refresh Step 11

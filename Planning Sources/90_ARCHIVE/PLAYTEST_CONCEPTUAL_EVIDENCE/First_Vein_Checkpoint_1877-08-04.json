@@ -1,0 +1,307 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "mode": "fictional conceptual playtest, in-world economic and NPC outcomes simulated",
+  "checkpoint": "VEIN-IV-1877-08-04",
+  "date": "1877-08-04",
+  "time": "17:00",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-07-28.json",
+  "advance": {
+    "calendar_days": 7,
+    "window": "1877-07-29 to 1877-08-04",
+    "mine_excavation_days": 0,
+    "processing_days": 0,
+    "Amos_paid_days": 3,
+    "Jonas_paid_days": 2,
+    "Eli_paid_days": 4,
+    "workflows": [
+      "mineral selling",
+      "miner recruitment",
+      "mill site preliminary negotiation"
+    ]
+  },
+  "owner_cash": {
+    "opening": "717.60",
+    "quartz_sale_collected": "+13.75",
+    "Amos_3_days_wages_paid": "-13.50",
+    "Jonas_2_days_wages_paid": "-6.50",
+    "millsite_records_enquiry_paid": "-1.50",
+    "closing_recorded": "709.85",
+    "mine_wages_payable": "0.00",
+    "continuity_warning": "Earlier personal living expenses remain unreconciled; opening and closing owner balances provisional."
+  },
+  "freight_business": {
+    "name": "Mercer Freight & Cartage",
+    "autonomy": true,
+    "manager": "Eli Ward",
+    "opening_cash": "64.60",
+    "shipments": [
+      {
+        "id": "FRT-007",
+        "status": "delivered and paid",
+        "external_fee": "11.00"
+      },
+      {
+        "id": "FRT-008",
+        "status": "delivered and paid",
+        "external_fee": "13.00"
+      }
+    ],
+    "external_cash_collected": "+24.00",
+    "prior_payroll_opening": "9.00",
+    "new_Eli_wages_4_days": "12.00",
+    "payroll_cash_paid": "-18.00",
+    "ending_wages_payable": "3.00",
+    "animal_feed_and_care_cash": "-8.40",
+    "routine_consumables_cash": "-1.60",
+    "closing_cash": "60.60",
+    "current_period_operating_contribution_before_depreciation_financing": "2.00",
+    "expansion_alert": false,
+    "capacity": "1 wagon, 2 mules, Eli 1 teamster; 1000lb conservative max",
+    "wagon_debt_owner_personal": true
+  },
+  "loan": {
+    "secured_principal": "265.00",
+    "simple_annual_interest_rate": 0.16,
+    "days_since_note": 70,
+    "interest_accrued_unpaid_approx": "8.13",
+    "balloon_due": "1878-01-26",
+    "balloon_original_contract": "293.27",
+    "payment": "0",
+    "asset_title": "personally held; freight business uses by agreement"
+  },
+  "sales": [
+    {
+      "receipt": "ORE-SALE-001",
+      "date": "1877-08-02",
+      "buyer": "Black Hills Ore Syndicate",
+      "terms": "buyer-paid workfront pickup, sale on inspection and seller cash receipt",
+      "status": "paid and fully physically collected by 1877-08-04",
+      "source_lots": [
+        {
+          "id": "JN1-Q002",
+          "lb": 2176,
+          "assay_oz_short_ton": "1.92",
+          "sale_cash": "11.15"
+        },
+        {
+          "id": "JN1-Q001",
+          "lb": 1316,
+          "assay_oz_short_ton": "0.56",
+          "sale_cash": "2.60"
+        }
+      ],
+      "total_mass_lb": 3492,
+      "total_cash": "13.75",
+      "buyer_collection": "Three hired pack animals made physical descents from workfront to roadhead in separately recorded loads; buyer arranged road transport; no seller freight expense. Actual collection complete August 4",
+      "counted_objective_2": true,
+      "counted_recovered_and_sold_gold_oz": "0",
+      "caveat": "Raw ore sold, not refined or recovered gold"
+    }
+  ],
+  "other_offers": {
+    "Reese_Ore_Agency": "prior $19.30 offer for Q002 delivered still potentially valid until 1877-08-12 but Q002 now sold; no active consignment",
+    "mixed_rock": "No buyer willing to pay without negative transport economics; unsold",
+    "waste_rock": "No paying buyer; remains mine spoil"
+  },
+  "inventory": {
+    "opening_untreated_lb": 19364,
+    "sold_Q001_lb": 1316,
+    "sold_Q002_lb": 2176,
+    "closing_untreated_lb": 15872,
+    "remaining_lots": [
+      {
+        "id": "JN1-M001",
+        "type": "mixed",
+        "mass_lb": 1476,
+        "assay_oz_per_ton": 0.07
+      },
+      {
+        "id": "JN1-M002",
+        "type": "mixed",
+        "mass_lb": 1796,
+        "assay_oz_per_ton": 0.09
+      },
+      {
+        "id": "JN1-W001",
+        "type": "waste",
+        "mass_lb": 4400
+      },
+      {
+        "id": "JN1-W002",
+        "type": "waste",
+        "mass_lb": 3400
+      },
+      {
+        "id": "JN1-W003",
+        "type": "waste",
+        "mass_lb": 4800
+      }
+    ],
+    "prior_processed_batch": {
+      "source_lot": "JN1-Q002",
+      "batch_id": "JN1-PR001",
+      "source_mass_lb": "20.0000",
+      "tailings": {
+        "lot_id": "JN1-T001",
+        "mass_lb": "19.6197",
+        "status": "wet crushed tails, dry-equivalent modeled mass; mine-side covered tub"
+      },
+      "heavy_concentrate": {
+        "lot_id": "JN1-C001",
+        "mass_lb": "0.3800",
+        "status": "pan heavy concentrate, not purified gold; mine-side sealed"
+      },
+      "free_gold": {
+        "lot_id": "JN1-G001",
+        "troy_oz_est": "0.0044",
+        "grams_est": "0.1369",
+        "avoirdupois_lb_equivalent": "0.0003",
+        "status": "trace flakes in owner-controlled packet, exact weight unverified without precision balance"
+      },
+      "rounding_note": "Dry-equivalent ledger rounded to 0.0001 lb: 19.6197 + 0.3800 + 0.0003 = 20.0000 lb. Wetness not treated as material creation."
+    },
+    "cumulative_lab_sample_depletion_lb": 16,
+    "total_excavated_lb_cumulative": 19400,
+    "conservation": "15,872 lb untreated onsite + 3,492 lb sold/buyer removed + 20 lb personal recovery trial products + 16 lb lab samples = 19,400 lb excavated",
+    "recovered_gold_oz_est": "0.0044",
+    "recovered_and_sold_gold_oz": "0.0000",
+    "not_enough_information_deposit_size": true
+  },
+  "recruitment": {
+    "Amos": "Lead miner employed $4.50 per day; referrals authorized",
+    "Jonas": "General laborer employed $3.25 per day",
+    "interviewed_candidates": [
+      {
+        "name": "Rafael Soto",
+        "age": 38,
+        "location": "Deadwood",
+        "experience": "5+ years reported western open-cut / timbering; reference to former crew boss positively checked",
+        "proposed_role": "Experienced miner and safety support",
+        "wage_requested_per_day": "4.25",
+        "schedule": "six worked days per week",
+        "earliest_start": "1877-08-07",
+        "status": "Verbal offer available; no employment commitment",
+        "needs": "safety plan review; time to relocate or lodging if required"
+      },
+      {
+        "name": "Calvin Briggs",
+        "age": 29,
+        "location": "Deadwood",
+        "experience": "2 seasons general prospect and cargo handling; hard-rock support unverified",
+        "proposed_role": "General laborer",
+        "wage_requested_per_day": "3.00",
+        "earliest_start": "1877-08-08",
+        "status": "Interested, references partly unverified; not hired"
+      }
+    ],
+    "hiring_status": "No new hires; owner selection pending",
+    "full_crews_dollar_per_week": {
+      "existing_two_workers": 46.5,
+      "with_Rafael": 72.0,
+      "with_both_candidates": 90.0
+    }
+  },
+  "mill_site": {
+    "name": "Finch Creek Bench",
+    "proposed_landlord": "Nathaniel Finch",
+    "site_size": "approx 60 x 80 feet",
+    "near_wagon_roadhead": true,
+    "terms": "Three-year conditional possessory lease proposal, $12 at signing plus $2 each month; no agreement signed or payment made",
+    "title_status": "Finch local recorded possessory claim indicated, no fully verified superior fee title; mineral claim does not imply mill-site possession",
+    "water": "Creek proximity confirmed; priority/seasonal quantity and right to divert not established",
+    "tailings": "Settling and disposal agreement required; not secured",
+    "site_readiness": "not legal for construction yet",
+    "alternate": "Lower bench near Juniper No.1, access easier but road and water arrangements worse, applicability of claim surface use to independent mill not verified",
+    "arrastra_previous_quote": 238,
+    "quotes_still_conditional": true,
+    "rights_investigation_cost_paid": 1.5
+  },
+  "mine_workfront": {
+    "safety": "Fractured next face; no further excavation until revised safe support / bench plan",
+    "new_rock_lb": 0,
+    "milling": false,
+    "investment_commitment": 0,
+    "leases_signed": false
+  },
+  "consolidated_cash": {
+    "opening_owner_freight": "782.20",
+    "closing_owner_freight": "770.45",
+    "net_movement": "-11.75",
+    "sale_cash": "13.75",
+    "external_freight_cash": "24.00",
+    "owner_paid_wages": "-20.00",
+    "owner_records": "-1.50",
+    "freight_paid_wages": "-18.00",
+    "freight_feed": "-8.40",
+    "freight_supplies": "-1.60",
+    "internal_transfers": "0.00",
+    "exclude_incurred_unpaid_freight_wages_from_cash_movement": "3.00"
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "status": "completed 1877-05-20",
+      "goal": "legally control mineral prospect + two in-situ samples + independent assay"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "status": "completed 1877-08-02",
+      "goal": "first paid mineral or recovered gold sale"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "status": "incomplete, no qualifying six-month six-consecutive-full-month 400-dollar operating-profit window",
+      "goal": "$400 mine operating profit across six consecutive full months with four profitable"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "status": "0/650 troy oz recovered and sold",
+      "goal": "650 cumulative recovered-and-sold oz"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "status": "0/2",
+      "goal": "two independent NPC-owned businesses operating 90 days and 5 external paid transactions each"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "status": "0/850",
+      "goal": "850 recovered and sold oz in 12 months with positive operating profit"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "status": "22/90 permanent residents, not sustained at 90",
+      "goal": "90 permanent residents sustained 60 days"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "status": "0/5500 sold oz, cost-basis owner equity unverified",
+      "goal": "5500 cumulative recovered and sold oz and $18,000 cost-basis owner equity"
+    }
+  ],
+  "population_permanent": 22,
+  "new_findings": [
+    "VEIN-VALID-014: Physical lot-level claim-side sale counts first paid mineral sale, not recovered-and-sold ounces; buyer handles workfront loading in recorded loads",
+    "VEIN-DES-008: Multi-track business delegation and player threshold management; recruit, land negotiations and commodity sale in parallel",
+    "VEIN-CAL-012: Short-term mine labor expansion must be supported by payable cash flow and safe mining face; customer ore sales do not establish operating profitability",
+    "VEIN-VALID-015: Possessory ground, milling water priority and tailings permission remain distinct gating rights"
+  ],
+  "pending_player_actions": [
+    "Accept or reject experienced miner employment offer",
+    "Authorize deeper water-right/title research or conditional lease after verified water and waste terms",
+    "Authorize safe next mining phase or ore-treatment test; no excavation currently authorized"
+  ],
+  "continuity_flags": [
+    "Older personal expenses not fully reconciled; owner balances provisional",
+    "Dates of formal buyer pack-mule hauling are simulated and are not committed Unity code execution",
+    "All offer prices and NPC character details are conceptual playtest outcomes"
+  ]
+}

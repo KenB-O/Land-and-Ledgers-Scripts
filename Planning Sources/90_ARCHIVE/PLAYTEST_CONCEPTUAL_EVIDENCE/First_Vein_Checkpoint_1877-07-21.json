@@ -1,0 +1,259 @@
+{
+  "scenario": "THE FIRST VEIN",
+  "simulation_mode": "Fictional conceptual playtest, not a live executable game build or historic real-world quotes",
+  "checkpoint": "VEIN-IV-1877-07-21",
+  "date": "1877-07-21",
+  "time": "17:30",
+  "previous_checkpoint": "First_Vein_Checkpoint_1877-07-20.json",
+  "elapsed": {
+    "calendar_days": 1,
+    "start": "1877-07-21",
+    "end": "1877-07-21",
+    "activity": "Owner worked one personal day crushing and panning 20 lb of JN1-Q002; no mining-employee time; no extraction or sale. Freight remained autonomous."
+  },
+  "owner_cash": {
+    "opening_recorded": "734.35",
+    "mortar_rental_paid": "1.50",
+    "packaging_consumables_paid": "0.25",
+    "refundable_deposit_paid": "5.00",
+    "refundable_deposit_returned": "5.00",
+    "closing_recorded": "732.60",
+    "mine_wages_payable": "0.00",
+    "continuity_flag": "Earlier personal-living-expense reconciliation remains outstanding; prior figures provisionally carried forward."
+  },
+  "freight_business": {
+    "name": "Mercer Freight & Cartage",
+    "manager": "Eli Ward",
+    "autonomy": true,
+    "opening_cash": "83.90",
+    "external_freight_receipts": "0.00",
+    "feed_and_care_paid": "1.20",
+    "driver_wages_incurred": "3.00",
+    "driver_wages_paid": "0.00",
+    "opening_wage_payable": "9.00",
+    "closing_wage_payable": "12.00",
+    "closing_cash": "82.70",
+    "note": "No completed freight contracts on July 21. Normal animal care and a paid day of freight inquiries. No capital decisions or additional hiring."
+  },
+  "personal_wagon_loan": {
+    "principal": "265.00",
+    "simple_annual_interest_rate": "0.16",
+    "accrued_interest_approx": "6.51",
+    "due_date": "1878-01-26",
+    "contract_balloon": "293.27",
+    "no_payment": true
+  },
+  "mine": {
+    "active_crews": [
+      "Amos Polk lead miner $4.50/workday",
+      "Jonas Calder general laborer $3.25/workday"
+    ],
+    "new_mine_workdays": 0,
+    "extraction_authorized": false,
+    "new_excavation_lb": 0,
+    "gold_recovered_oz": "0.0044",
+    "gold_sold_oz": "0.0000",
+    "mine_sales_revenue": "0.00",
+    "current_workfront_lots": [
+      {
+        "id": "JN1-Q001",
+        "category": "quartz",
+        "initial_mass_lb": 1316,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 1316,
+        "composite_gold_assay_oz_per_short_ton": "0.56"
+      },
+      {
+        "id": "JN1-M001",
+        "category": "mixed rock",
+        "initial_mass_lb": 1476,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 1476,
+        "composite_gold_assay_oz_per_short_ton": "0.07"
+      },
+      {
+        "id": "JN1-W001",
+        "category": "waste",
+        "initial_mass_lb": 4400,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 4400,
+        "composite_gold_assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-W002",
+        "category": "waste",
+        "initial_mass_lb": 3400,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 3400,
+        "composite_gold_assay_oz_per_short_ton": null
+      },
+      {
+        "id": "JN1-Q002",
+        "category": "quartz",
+        "initial_mass_lb": 2200,
+        "sample_removed_this_period_lb": 4,
+        "remaining_mass_lb": 2176,
+        "composite_gold_assay_oz_per_short_ton": "1.92",
+        "processed_out_to_batch_lb": 20
+      },
+      {
+        "id": "JN1-M002",
+        "category": "mixed rock",
+        "initial_mass_lb": 1800,
+        "sample_removed_this_period_lb": 4,
+        "remaining_mass_lb": 1796,
+        "composite_gold_assay_oz_per_short_ton": "0.09"
+      },
+      {
+        "id": "JN1-W003",
+        "category": "waste",
+        "initial_mass_lb": 4800,
+        "sample_removed_this_period_lb": 0,
+        "remaining_mass_lb": 4800,
+        "composite_gold_assay_oz_per_short_ton": null
+      }
+    ],
+    "current_workfront_mass_lb": 19364,
+    "cumulative_samples_removed_from_workfront_lb": 16,
+    "geological_size": "Not enough information",
+    "current_workfront_untreated_mass_lb": 19364,
+    "processed_material_inventory": {
+      "source_lot": "JN1-Q002",
+      "batch_id": "JN1-PR001",
+      "source_mass_lb": "20.0000",
+      "tailings": {
+        "lot_id": "JN1-T001",
+        "mass_lb": "19.6197",
+        "status": "wet crushed tails, dry-equivalent modeled mass; mine-side covered tub"
+      },
+      "heavy_concentrate": {
+        "lot_id": "JN1-C001",
+        "mass_lb": "0.3800",
+        "status": "pan heavy concentrate, not purified gold; mine-side sealed"
+      },
+      "free_gold": {
+        "lot_id": "JN1-G001",
+        "troy_oz_est": "0.0044",
+        "grams_est": "0.1369",
+        "avoirdupois_lb_equivalent": "0.0003",
+        "status": "trace flakes in owner-controlled packet, exact weight unverified without precision balance"
+      },
+      "rounding_note": "Dry-equivalent ledger rounded to 0.0001 lb: 19.6197 + 0.3800 + 0.0003 = 20.0000 lb. Wetness not treated as material creation."
+    },
+    "overall_material_conservation": {
+      "prior_mine_untreated_stockpiles_lb": "19384",
+      "processed_source_lb": "20",
+      "untreated_remaining_lb": "19364",
+      "processed_output_dry_equivalent_lb": "20",
+      "total_mine_derived_material_lb": "19384",
+      "cumulative_laboratory_samples_removed_lb": "16",
+      "cumulative_mined_material_lb": "19400",
+      "unaccounted_mass_lb": "0",
+      "note": "Within 0.0001 lb game ledger rounding. Locations: gold packet owner custody; tailings/concentrate at workfront."
+    }
+  },
+  "recovery_plan": {
+    "status": "20 lb single-day trial performed on July 21; no permission for repeating or commercial scale processing",
+    "source_lot": "JN1-Q002",
+    "batch_id": "JN1-PR001",
+    "processed_lb": "20",
+    "assay_implied_contained_gold_oz_at_1_92_oz_per_ton": "0.0192",
+    "free_gold_recovered_troy_oz_provisional": "0.0044",
+    "estimated_recovered_gold_value_at_20_67_per_oz": "0.09",
+    "warning": "0.0044 troy oz is simulation-weight estimate, not verified by independent precision scales; 1 composite stockpile assay does not establish the exact 20lb grade or future recovery factor.",
+    "nonrefundable_cash_expense": "1.75",
+    "deposit_refunded": "5.00",
+    "player_workdays": 1,
+    "employee_workdays": 0,
+    "water": "Access previously authorized; small batch used with no cash fee and no hazardous chemicals",
+    "equipment": "Borrowed pan returned; rented mortar returned intact and $5 deposit released",
+    "commercial_assessment": "Technically possible at small scale but uneconomic at current manual rate; neither 20lb batch nor concentrate is sold."
+  },
+  "offers": {
+    "Reese Ore Agency": {
+      "payment_usd": "19.50",
+      "terms": "JN1-Q002 2196 lb delivered to Deadwood yard; 3 conservative wagon loads, plus 0.35-mi workfront-to-creek carry",
+      "expires": "1877-07-27",
+      "accepted": false,
+      "status": "Requires reconfirmation: offer based on 2196 lb; 2176 lb remains after 20lb destructive test"
+    },
+    "Black Hills Ore Syndicate": {
+      "payment_usd": "11.25",
+      "terms": "claim-side pickup with buyer labor/transport and payment at inspected delivery",
+      "expires": "1877-07-25",
+      "accepted": false,
+      "status": "Requires reconfirmation before July 25 expiration: offer based on 2196 lb; 2176 lb remains after 20lb destructive test"
+    },
+    "Deadwood Custom Stamp Works": {
+      "batch_minimum_usd": "18.00",
+      "fee_usd_per_short_ton": "6.00",
+      "note": "recovery unguaranteed; seller must deliver",
+      "accepted": false
+    }
+  },
+  "cash_reconciliation": {
+    "opening_owner_plus_business": "818.25",
+    "owner_mortar_rental": "-1.50",
+    "owner_misc_consumables": "-0.25",
+    "deposit_out_and_in_net": "0.00",
+    "freight_animal_care": "-1.20",
+    "outside_freight_receipts": "0.00",
+    "ending_owner_plus_business": "815.30",
+    "change": "-2.95",
+    "new_unpaid_wages": "3.00",
+    "owner_cash_delta": "-1.75",
+    "business_cash_delta": "-1.20"
+  },
+  "objectives": [
+    {
+      "id": 1,
+      "deadline": "1877-12-31",
+      "goal": "Control prospect, two in-situ samples and independent assay",
+      "status": "complete 1877-05-20"
+    },
+    {
+      "id": 2,
+      "deadline": "1878-12-31",
+      "goal": "First paid mineral or recovered gold sale",
+      "status": "0/1"
+    },
+    {
+      "id": 3,
+      "deadline": "1880-12-31",
+      "goal": "$400 mining operating profit across six consecutive full months, four individually profitable",
+      "status": "0 qualifying windows"
+    },
+    {
+      "id": 4,
+      "deadline": "1882-12-31",
+      "goal": "650 cumulative recovered and sold troy ounces",
+      "status": "0/650"
+    },
+    {
+      "id": 5,
+      "deadline": "1884-12-31",
+      "goal": "2 genuinely independent new NPC owned businesses active 90 days with 5 external paid transactions each",
+      "status": "0/2"
+    },
+    {
+      "id": 6,
+      "deadline": "1886-12-31",
+      "goal": "850 recovered and sold troy oz in consecutive 12 months with positive mine operating profit",
+      "status": "0/850"
+    },
+    {
+      "id": 7,
+      "deadline": "1888-12-31",
+      "goal": "90 permanent residents maintained 60 days",
+      "status": "22/90"
+    },
+    {
+      "id": 8,
+      "deadline": "1890-12-31",
+      "goal": "5500 cumulative recovered and sold troy oz and $18000 cost-basis owner equity",
+      "status": "0/5500; equity unaudited"
+    }
+  ],
+  "population_permanent": 22,
+  "next_step": "Obtain amended commercial terms on the now-2176-lb unprocessed quartz parcel: optimize Reese delivery as user preferred if manual recovery is not economical, compare claim-side pickup, or commission recoverability tests for larger scale. No sales/hiring/processing authorized."
+}

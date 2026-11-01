@@ -1,0 +1,44 @@
+# Pending proposals 106–145 — DO NOT IMPLEMENT AS NEW CANON WITHOUT APPROVAL
+
+Some proposals restate rules already present in the original Canon; the original remains authoritative independently of the proposed expansion.
+
+- **106** — Physical feasibility vs legality (pending; older v2.3 pointer `CAN-CE1-15` is NAVIGATION ONLY).
+- **107** — Owner assignment vs worker consent (pending; older v2.3 pointer `CAN-CE1-03` is NAVIGATION ONLY).
+- **108** — Principal/actor/beneficiary in transactions (pending; older v2.3 pointer `CAN-CE1-12` is NAVIGATION ONLY).
+- **109** — Ownership/custody/risk of loss separate (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **110** — Custom processing of client-owned goods (pending; older v2.3 pointer `CAN-CE1-06` is NAVIGATION ONLY).
+- **111** — Consignment and brokerage flows (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **112** — Third-party customer funds safeguarded (pending; older v2.3 pointer `CAN-CE1-12` is NAVIGATION ONLY).
+- **113** — Outside-funded loan placement distinct (pending; older v2.3 pointer `CAN-CE1-12` is NAVIGATION ONLY).
+- **114** — Independent enterprise inside shared premises (pending; older v2.3 pointer `CAN-CE1-09` is NAVIGATION ONLY).
+- **115** — Estate, succession and survivor obligations (pending; older v2.3 pointer `CAN-CE1-15` is NAVIGATION ONLY).
+- **116** — Inventory transfer atomicity (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **117** — BlockedShipment duplicate defect release gate (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **118** — Exactly-once financial settlement (pending; older v2.3 pointer `CAN-CE1-12` is NAVIGATION ONLY).
+- **119** — Order through delivery payment stages (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **120** — Historical measuring units and tare (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **121** — Period market-grade standards (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **122** — Quote/offer vs executed price (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **123** — Auctions tenders and negotiated agreements (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **124** — Dated payment instruments and settlement (pending; older v2.3 pointer `CAN-CE1-12` is NAVIGATION ONLY).
+- **125** — Dated postal services and mail chronology (pending; older v2.3 pointer `CAN-CE1-10` is NAVIGATION ONLY).
+- **126** — Seasonal and intermittent firms (pending; older v2.3 pointer `CAN-CE1-02` is NAVIGATION ONLY).
+- **127** — Active labor vs project elapsed time (pending; older v2.3 pointer `CAN-CE1-11` is NAVIGATION ONLY).
+- **128** — Seasonal casual piecework labor relationships (pending; older v2.3 pointer `CAN-CE1-03` is NAVIGATION ONLY).
+- **129** — Generalized subcontracting (pending; older v2.3 pointer `CAN-CE1-06` is NAVIGATION ONLY).
+- **130** — Change orders partial completion disputes (pending; older v2.3 pointer `CAN-CE1-11` is NAVIGATION ONLY).
+- **131** — Nonmarket household production (pending; older v2.3 pointer `CAN-CE1-08` is NAVIGATION ONLY).
+- **132** — Ownership-independent equipment access (pending; older v2.3 pointer `CAN-CE1-06` is NAVIGATION ONLY).
+- **133** — Animal identity and conservation lineage (pending; older v2.3 pointer `CAN-CE1-08` is NAVIGATION ONLY).
+- **134** — Public-land rights vs private fee title (pending; older v2.3 pointer `CAN-CE1-09` is NAVIGATION ONLY).
+- **135** — Indigenous legal/treaty geography (pending; older v2.3 pointer `CAN-CE1-15` is NAVIGATION ONLY).
+- **136** — Water availability vs water rights (pending; older v2.3 pointer `CAN-CE1-09` is NAVIGATION ONLY).
+- **137** — Title and surveyed boundary conflicts (pending; older v2.3 pointer `CAN-CE1-09` is NAVIGATION ONLY).
+- **138** — Insurance coverage and claims (pending; older v2.3 pointer `CAN-CE1-12` is NAVIGATION ONLY).
+- **139** — Civic responsibility and funding (pending; older v2.3 pointer `CAN-CE1-13` is NAVIGATION ONLY).
+- **140** — Dated tax and lien regimes (pending; older v2.3 pointer `CAN-CE1-15` is NAVIGATION ONLY).
+- **141** — Occupation profiles not staffing quotas (pending; older v2.3 pointer `CAN-CE1-03` is NAVIGATION ONLY).
+- **142** — Historical source-selection bias (pending; older v2.3 pointer `CAN-CE1-16` is NAVIGATION ONLY).
+- **143** — Resource lifecycle conserved (pending; older v2.3 pointer `CAN-CE1-07` is NAVIGATION ONLY).
+- **144** — Explainable action feasibility (pending; older v2.3 pointer `CAN-CE1-18` is NAVIGATION ONLY).
+- **145** — Descriptive-label removal regression (pending; older v2.3 pointer `CAN-CE1-02` is NAVIGATION ONLY).

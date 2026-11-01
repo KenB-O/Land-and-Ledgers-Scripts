@@ -1342,6 +1342,55 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void BakeryAndFuelDealerDoNotUseUnwiredWeeklyCategoryConversion()
+        {
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            BusinessProfileDefinition bakeryProfile = Resources.Load<BusinessProfileDefinition>(
+                "Core/Economy/BusinessProfiles/BakeryProfile");
+            BusinessProfileDefinition fuelDealerProfile = Resources.Load<BusinessProfileDefinition>(
+                "Core/Economy/BusinessProfiles/FuelDealerProfile");
+            Assert.NotNull(bakeryProfile);
+            Assert.NotNull(fuelDealerProfile);
+            BusinessInstanceState bakery = BusinessInstanceState.Create(
+                "test-bakery-unwired", bakeryProfile, -1, BusinessOwnerIdentity.Town());
+            BusinessInstanceState fuelDealer = BusinessInstanceState.Create(
+                "test-fuel-dealer-unwired", fuelDealerProfile, -1, BusinessOwnerIdentity.Town());
+            Assert.NotNull(bakery.RuntimeState.GetCategoryStock("flour"));
+            Assert.NotNull(bakery.RuntimeState.GetCategoryStock("fuel_wood"));
+            Assert.NotNull(bakery.RuntimeState.GetCategoryStock("bread"));
+            Assert.NotNull(fuelDealer.RuntimeState.GetCategoryStock("slabs_offcuts"));
+            Assert.NotNull(fuelDealer.RuntimeState.GetCategoryStock("fuel_wood"));
+
+            context.SetBusinessStock(bakery, "flour", 20);
+            context.SetBusinessStock(bakery, "fuel_wood", 10);
+            context.SetBusinessStock(bakery, "bread", 0);
+            context.SetBusinessStock(fuelDealer, "slabs_offcuts", 20);
+            context.SetBusinessStock(fuelDealer, "fuel_wood", 0);
+            context.SetBusinessCash(bakery, 50000);
+            context.SetBusinessCash(fuelDealer, 50000);
+
+            var resolveOperation = typeof(SharedBusinessRuntimeManager).GetMethod(
+                "ResolveBusinessOperation", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.NotNull(resolveOperation);
+            resolveOperation.Invoke(context.SharedBusinessRuntime, new object[] { bakery, new System.Text.StringBuilder() });
+            resolveOperation.Invoke(context.SharedBusinessRuntime, new object[] { fuelDealer, new System.Text.StringBuilder() });
+
+            Assert.AreEqual(20, bakery.RuntimeState.GetCategoryStock("flour").CurrentStockUnits);
+            Assert.AreEqual(10, bakery.RuntimeState.GetCategoryStock("fuel_wood").CurrentStockUnits);
+            Assert.AreEqual(0, bakery.RuntimeState.GetCategoryStock("bread").CurrentStockUnits);
+            Assert.AreEqual(20, fuelDealer.RuntimeState.GetCategoryStock("slabs_offcuts").CurrentStockUnits);
+            Assert.AreEqual(0, fuelDealer.RuntimeState.GetCategoryStock("fuel_wood").CurrentStockUnits);
+            Assert.AreEqual(50000, bakery.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(50000, fuelDealer.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(0, bakery.RuntimeState.LastWeeklyInputUnitsConsumed);
+            Assert.AreEqual(0, bakery.RuntimeState.LastWeeklyOutputUnitsProduced);
+            Assert.AreEqual(0, fuelDealer.RuntimeState.LastWeeklyInputUnitsConsumed);
+            Assert.AreEqual(0, fuelDealer.RuntimeState.LastWeeklyOutputUnitsProduced);
+            StringAssert.Contains("Task-backed production driver is not connected", bakery.RuntimeState.LastWeeklyBlockedReason);
+            StringAssert.Contains("Task-backed production driver is not connected", fuelDealer.RuntimeState.LastWeeklyBlockedReason);
+        }
+
+        [Test]
         public void LowCashBusinessesPreservePayrollReserveBeforeProcurementAndTransfers()
         {
             using TestWorld context = TestWorld.Create();
@@ -1956,7 +2005,7 @@ namespace LandLedgers.Editor.Economy
                 PlayerPortfolio = root.AddComponent<PlayerPortfolioManager>();
             }
 
-            public static TestWorld Create()
+            public static TestWorld Create(bool requireBuildableOwnedPlot = true)
             {
                 TownGenerationSettings sourceSettings = AssetDatabase.LoadAssetAtPath<TownGenerationSettings>("Assets/Core/World/DefaultTownGenerationSettings.asset");
                 GeneralStoreBusinessDefinition storeDefinition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>("Assets/Core/Economy/GeneralStoreBusinessDefinition.asset");
@@ -1979,7 +2028,10 @@ namespace LandLedgers.Editor.Economy
                 context.AcquisitionMarket.Configure(context.TownWorld, context.StoreRuntime, context.SharedBusinessRuntime, context.PopulationManager, null, null, context.PlayerPortfolio);
                 context.AcquisitionMarket.RebuildMarket();
                 context.SetLumberYardStock(0);
-                context.MarkFirstBuildableEmptyPlotOwned();
+                if (requireBuildableOwnedPlot)
+                {
+                    context.MarkFirstBuildableEmptyPlotOwned();
+                }
                 return context;
             }
 

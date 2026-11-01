@@ -243,6 +243,24 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public int Units;
     }
 
+    /// <summary>
+    /// Phase 8: one recorded non-sale consumption of store-lot units
+    /// (bakery feed, credit sale). The per-lot split is the rollback
+    /// record: without it, consumed units could not be restored exactly.
+    /// </summary>
+    [Serializable]
+    public sealed class NamedSkuLotConsumptionRecord
+    {
+        public string ConsumptionId = string.Empty;
+        public string BusinessId = string.Empty;
+        public string SkuId = string.Empty;
+        public int Units;
+        public string Purpose = string.Empty;
+        public int DayIndex;
+        public List<NamedSkuLotConsumption> ConsumedLotUnits = new List<NamedSkuLotConsumption>();
+        public string Provenance = string.Empty;
+    }
+
     [Serializable]
     public sealed class NamedSkuSale
     {
@@ -284,8 +302,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// treated as not yet delivered by this path.
         /// </summary>
         public List<string> DeliveredSaleIds = new List<string>();
+        /// <summary>Phase 8, additive: non-sale lot consumptions. Old saves carry an empty list.</summary>
+        public List<NamedSkuLotConsumptionRecord> LotConsumptions = new List<NamedSkuLotConsumptionRecord>();
         public int NextOrderSequence;
         public int NextSaleSequence;
+        public int NextConsumptionSequence;
     }
 
     public sealed class OffMapNamedSkuProcurementService
@@ -298,9 +319,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         private readonly List<NamedSkuSale> sales = new List<NamedSkuSale>();
         private readonly List<string> receivedReceiptIds = new List<string>();
         private readonly List<string> deliveredSaleIds = new List<string>();
+        private readonly List<NamedSkuLotConsumptionRecord> productionConsumptions = new List<NamedSkuLotConsumptionRecord>();
         private readonly List<string> diagnostics = new List<string>();
         private int nextOrderSequence;
         private int nextSaleSequence;
+        private int nextConsumptionSequence;
 
         public OffMapNamedSkuProcurementService(
             string businessId, ExternalMarketAuthority market, IBusinessCashPort businessCash)
@@ -316,6 +339,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public IReadOnlyList<NamedSkuSale> Sales => sales;
         public IReadOnlyList<string> ReceivedReceiptIds => receivedReceiptIds;
         public IReadOnlyList<string> DeliveredSaleIds => deliveredSaleIds;
+        public IReadOnlyList<NamedSkuLotConsumptionRecord> LotConsumptions => productionConsumptions;
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
         /// <summary>True when this sale's household inventory delivery has already happened.</summary>
@@ -338,9 +362,140 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             sales.Clear();
             receivedReceiptIds.Clear();
             deliveredSaleIds.Clear();
+            productionConsumptions.Clear();
             diagnostics.Clear();
             nextOrderSequence = 0;
             nextSaleSequence = 0;
+            nextConsumptionSequence = 0;
+        }
+
+        /// <summary>
+        /// Phase 8: consumes store-lot units for a named non-household-sale
+        /// purpose (bakery feed, credit sale) through this service's own
+        /// FIFO lot ledger, so one lot unit can never feed both a household
+        /// sale and production, and can never be sold twice. This is the
+        /// ONLY non-sale consumption path: it moves no cash (the caller
+        /// settles cash separately, e.g. an inter-business sale), it
+        /// refuses on shortfall moving nothing, and it records the
+        /// per-lot split so UndoConsumption can restore it exactly.
+        /// Returns null on refusal, with a diagnostic recorded.
+        /// </summary>
+        public NamedSkuLotConsumptionRecord ConsumeLots(
+            string skuId, int units, string purpose, int dayIndex)
+        {
+            if (string.IsNullOrWhiteSpace(skuId) || units <= 0
+                || string.IsNullOrWhiteSpace(purpose))
+            {
+                diagnostics.Add("ConsumeLots rejected: a SKU, positive units, and a named purpose are required.");
+                return null;
+            }
+
+            if (SellableUnits(skuId) < units)
+            {
+                diagnostics.Add($"ConsumeLots rejected: sellable '{skuId}' is {SellableUnits(skuId)}u, requested {units}u for '{purpose}'; no partial consumption, nothing moved.");
+                return null;
+            }
+
+            var consumed = new List<NamedSkuLotConsumption>();
+            int remaining = units;
+            for (int i = 0; i < lots.Count && remaining > 0; i++)
+            {
+                NamedSkuLot lot = lots[i];
+                if (lot == null || !string.Equals(lot.SkuId, skuId, StringComparison.OrdinalIgnoreCase)
+                    || lot.RemainingUnits <= 0)
+                {
+                    continue;
+                }
+
+                int take = Math.Min(lot.RemainingUnits, remaining);
+                lot.RemainingUnits -= take;
+                consumed.Add(new NamedSkuLotConsumption { LotId = lot.LotId, Units = take });
+                remaining -= take;
+            }
+
+            if (remaining > 0)
+            {
+                for (int i = 0; i < consumed.Count; i++)
+                {
+                    for (int j = 0; j < lots.Count; j++)
+                    {
+                        if (lots[j] != null && string.Equals(lots[j].LotId, consumed[i].LotId, StringComparison.Ordinal))
+                        {
+                            lots[j].RemainingUnits += consumed[i].Units;
+                            break;
+                        }
+                    }
+                }
+
+                diagnostics.Add("ConsumeLots rolled back: lot consumption failed after validation; quantities restored.");
+                return null;
+            }
+
+            var record = new NamedSkuLotConsumptionRecord
+            {
+                ConsumptionId = $"sku-consume-{businessId}-{Math.Max(0, dayIndex)}-{nextConsumptionSequence++}",
+                BusinessId = businessId,
+                SkuId = skuId,
+                Units = units,
+                Purpose = purpose,
+                DayIndex = Math.Max(0, dayIndex),
+                ConsumedLotUnits = consumed,
+                Provenance = $"consumption {purpose}: {units}u {skuId} from store lots " +
+                    $"[{string.Join(", ", consumed.ConvertAll(c => c.LotId + ":" + c.Units + "u"))}]; " +
+                    "these units are no longer sellable and can never also feed a household sale.",
+            };
+            productionConsumptions.Add(record);
+            diagnostics.Add(record.Provenance);
+            return record;
+        }
+
+        /// <summary>
+        /// Phase 8: restores exactly one ConsumeLots record, for a failed
+        /// downstream step (e.g. a refused inventory delivery). Returns
+        /// null on success, or a diagnostic when the record is unknown,
+        /// in which case nothing is restored by guesswork.
+        /// </summary>
+        public string UndoConsumption(NamedSkuLotConsumptionRecord record)
+        {
+            if (record == null)
+            {
+                return "UndoConsumption rejected: no consumption record supplied.";
+            }
+
+            bool found = false;
+            for (int i = 0; i < productionConsumptions.Count; i++)
+            {
+                if (productionConsumptions[i] != null
+                    && string.Equals(productionConsumptions[i].ConsumptionId, record.ConsumptionId, StringComparison.Ordinal))
+                {
+                    productionConsumptions.RemoveAt(i);
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+            {
+                return $"UndoConsumption refused for '{record.ConsumptionId}': no such consumption recorded; nothing restored.";
+            }
+
+            if (record.ConsumedLotUnits != null)
+            {
+                for (int i = 0; i < record.ConsumedLotUnits.Count; i++)
+                {
+                    for (int j = 0; j < lots.Count; j++)
+                    {
+                        if (lots[j] != null && string.Equals(lots[j].LotId, record.ConsumedLotUnits[i].LotId, StringComparison.Ordinal))
+                        {
+                            lots[j].RemainingUnits += record.ConsumedLotUnits[i].Units;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            diagnostics.Add($"UndoConsumption: consumption {record.ConsumptionId} ({record.Units}u {record.SkuId} for '{record.Purpose}') restored to store lots.");
+            return null;
         }
 
         public int SellableUnits(string skuId)
@@ -978,8 +1133,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 Sales = new List<NamedSkuSale>(sales),
                 ReceivedReceiptIds = new List<string>(receivedReceiptIds),
                 DeliveredSaleIds = new List<string>(deliveredSaleIds),
+                LotConsumptions = new List<NamedSkuLotConsumptionRecord>(productionConsumptions),
                 NextOrderSequence = nextOrderSequence,
                 NextSaleSequence = nextSaleSequence,
+                NextConsumptionSequence = nextConsumptionSequence,
             };
         }
 
@@ -1069,8 +1226,33 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
             }
 
+            if (dto.LotConsumptions != null) for (int i = 0; i < dto.LotConsumptions.Count; i++)
+            {
+                NamedSkuLotConsumptionRecord record = dto.LotConsumptions[i];
+                if (record == null)
+                {
+                    continue;
+                }
+
+                bool exists = false;
+                for (int j = 0; j < productionConsumptions.Count; j++)
+                {
+                    if (productionConsumptions[j] != null && string.Equals(productionConsumptions[j].ConsumptionId, record.ConsumptionId, StringComparison.Ordinal))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists)
+                {
+                    productionConsumptions.Add(record);
+                }
+            }
+
             nextOrderSequence = Math.Max(nextOrderSequence, dto.NextOrderSequence);
             nextSaleSequence = Math.Max(nextSaleSequence, dto.NextSaleSequence);
+            nextConsumptionSequence = Math.Max(nextConsumptionSequence, dto.NextConsumptionSequence);
         }
     }
 }

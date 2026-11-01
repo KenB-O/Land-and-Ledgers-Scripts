@@ -89,6 +89,8 @@ namespace LandLedgers.Orchestration.Player
         public WageSettlementService Settlement = new WageSettlementService();
         public Dictionary<int, int> PersonHousehold = new Dictionary<int, int>();
         public Dictionary<string, bool> AttendanceByEmploymentWeek = new Dictionary<string, bool>();
+        /// <summary>Phase 8 (Kennedy addition): day attendance, keyed employmentId|dayIndex. No entry means not worked.</summary>
+        public Dictionary<string, bool> AttendanceByEmploymentDay = new Dictionary<string, bool>();
         public List<string> Diagnostics = new List<string>();
     }
 
@@ -280,6 +282,73 @@ namespace LandLedgers.Orchestration.Player
         }
 
         /// <summary>
+        /// Records caller-supplied attendance for one employment-day.
+        /// Phase 8 (Kennedy addition): the daily-wage gate. Only days
+        /// marked worked are paid by PayDailyWage; a day with no entry
+        /// is treated as not worked, never as paid.
+        /// </summary>
+        public static void SetDailyAttendance(SlicePayrollSetup setup, string employmentId, int dayIndex, bool worked)
+        {
+            if (setup == null)
+            {
+                return;
+            }
+
+            setup.AttendanceByEmploymentDay[employmentId + "|" + dayIndex] = worked;
+        }
+
+        /// <summary>
+        /// Phase 8 (Kennedy addition): pays ONE day's wage through the
+        /// SAME existing path as every other wage in this pass,
+        /// WageSettlementService.SettlePartialPeriod via
+        /// BusinessRuntimeState.PayAgreedWage. There is no daily-wage
+        /// authority and no daily-wage terms type in the codebase:
+        /// CompensationTerms carries a weekly wage only, so the daily
+        /// amount is caller-supplied (a daily rate the business agreed,
+        /// or a prorated slice of the weekly wage) and the period label
+        /// is "day-{dayIndex}", which also gives the existing
+        /// exactly-once manual-payment record its day key: paying the
+        /// same day twice is refused by PayAgreedWage itself. The
+        /// attendance gate lives HERE, not in SettlePartialPeriod:
+        /// SettlePartialPeriod does not check attendance, so this
+        /// bridge refuses a day with no worked attendance before
+        /// calling it, moving nothing. Shortfall uses the same
+        /// treatment as weekly and partial pay: the employment is
+        /// suspended and the wage accrues as an operating liability,
+        /// no cash is created. A daily-paid week still nets against
+        /// weekly payroll through the existing ManualCashPaidThisWeek
+        /// netting in BusinessRuntimeState, so daily pay plus a weekly
+        /// run cannot pay the same week twice.
+        /// Returns "paid", "paid-arrears", "refused-no-attendance", or
+        /// a refusal from the settlement path.
+        /// </summary>
+        public static string PayDailyWage(
+            SlicePayrollSetup setup, EmploymentRelationship employment,
+            int dailyWageCents, int dayIndex, List<string> diag)
+        {
+            if (setup == null || employment == null)
+            {
+                return "refused";
+            }
+
+            bool worked = setup.AttendanceByEmploymentDay.TryGetValue(
+                employment.Id + "|" + dayIndex, out bool marked) && marked;
+            if (!worked)
+            {
+                string note = $"SliceWorkAndPay.PayDailyWage: no worked attendance for employment '{employment.Id}' on day {dayIndex} — no wage earned, nothing paid, no liability accrued.";
+                if (diag != null)
+                {
+                    diag.Add(note);
+                }
+
+                return "refused-no-attendance";
+            }
+
+            return setup.Settlement.SettlePartialPeriod(
+                setup.Business, employment, dailyWageCents, "day-" + dayIndex, dayIndex, diag);
+        }
+
+        /// <summary>
         /// Settles a partial-period wage through the real
         /// PayAgreedWage path (via WageSettlementService). Amount is
         /// caller-supplied (use WageSettlementService.ProrateWeeklyWage
@@ -315,6 +384,31 @@ namespace LandLedgers.Orchestration.Player
                 WageCents = 0,
                 Note = "Owner labour (TECH 4.1 FarmOrBusinessOperator): profit/equity draw only, never payroll.",
             };
+        }
+
+        /// <summary>
+        /// Phase 8 (Kennedy addition): the day-to-day owner draw. This
+        /// is DrawOwnerEarnings under its day-to-day name, because the
+        /// pass 7 draw was read as a cycle draw and Kennedy asked for
+        /// the day-to-day form to be explicit: the owner may take money
+        /// out on any day he needs it, in any amount, subject to the
+        /// same reserve cap on every single draw, and may equally take
+        /// nothing on a day. Taking nothing is a real choice, not a
+        /// sweep default: business cash stays in the business, and the
+        /// next day's ordering power is exactly the cash left behind.
+        /// Business cash and household cash stay separate throughout:
+        /// a draw is the only movement between them, it moves real
+        /// cash business to household, and a reserve-breaking draw
+        /// moves nothing. The reserve rule itself is still
+        /// caller-supplied here; the production rule lives in
+        /// PlayerPortfolioManager.ResolveOwnerDistribution and is a
+        /// Kennedy decision, not something this bridge invents.
+        /// </summary>
+        public static SliceOwnerDrawResult DrawDaily(
+            BusinessRuntimeState business, HouseholdLedger householdLedger,
+            int dayIndex, int amountCents, int reserveCents)
+        {
+            return DrawOwnerEarnings(business, householdLedger, dayIndex, amountCents, reserveCents);
         }
 
         /// <summary>

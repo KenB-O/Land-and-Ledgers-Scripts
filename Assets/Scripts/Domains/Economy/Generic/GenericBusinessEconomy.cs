@@ -1045,6 +1045,33 @@ namespace LandLedgers.Economy
         public int Difficulty;
         /// <summary>Optional performance signal; never an attempt permission gate.</summary>
         public string PerformanceSkillId = string.Empty;
+        // Generic Business Reconstruction, Pass 1 (new series), section 7, ADDITIVE ONLY.
+        // No existing field above was renamed or removed. A legacy method that
+        // leaves every field below at its default behaves exactly as before:
+        // one output, no byproducts, no fuel/energy requirement, no
+        // substitutions, no floor-area gate, zero waste, no extra
+        // feasibility conditions. The plain-C# view of these fields is
+        // ProductionRecipeDetail in Domains/Economy/GenericBusiness.
+        /// <summary>Outputs produced alongside the main output (waste-adjacent goods, offcuts, etc.). Empty means none.</summary>
+        public List<ProductionInputRequirement> ByproductOutputs = new();
+        /// <summary>Fuel or energy consumed per run, as product requirements (e.g. fuel wood). Empty means no fuel/energy requirement recorded.</summary>
+        public List<ProductionInputRequirement> FuelOrEnergyInputs = new();
+        /// <summary>Allowed substitutions, one entry per input product. A substitution entry names the original product and its alternatives; see ProductionInputSubstitution. Empty means no substitution is valid for any input.</summary>
+        public List<ProductionInputSubstitutionDefinition> InputSubstitutions = new();
+        /// <summary>Usable floor area this method needs, in square metres. Zero means no floor-area requirement recorded (not "zero space").</summary>
+        public float RequiredFloorAreaSqM;
+        /// <summary>Fraction of input lost as waste, 0 to 1. Zero means no waste recorded.</summary>
+        public float WasteFraction01;
+        /// <summary>Named feasibility conditions the caller must check before running the method (e.g. "oven workstation present"). Empty means no extra conditions beyond equipment, workspace, inputs, and skill.</summary>
+        public List<string> FeasibilityConditions = new();
+    }
+
+    [Serializable]
+    public sealed class ProductionInputSubstitutionDefinition
+    {
+        public string OriginalProductId = string.Empty;
+        public List<string> AlternativeProductIds = new();
+        public float AlternativeQuantity;
     }
 
     [Serializable]

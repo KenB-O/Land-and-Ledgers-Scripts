@@ -49,6 +49,15 @@ namespace LandLedgers.Population
     /// joining on materialisation belongs to the settlement driver
     /// (ArrivalSettlementDriver, phase 4), not to this builder: this
     /// builder only sets the legacy householdId/homeBuildingId pointers.
+    /// Pass XL phase 9 (finding P9-01): do NOT call
+    /// MaterialiseOffMapRelative first and then ArrivalSettlement:
+    /// settlement refuses a person who is already on map, so that order
+    /// strands the arrival. The composed order is tree relative (still
+    /// off map) straight into ArrivalSettlementDriver.SettleAndApply,
+    /// which materialises internally; MaterialiseOffMapRelative on its
+    /// own is only for a resident-creation path that does not go
+    /// through settlement, and its caller must still run the driver
+    /// steps separately.
     /// Plain C#, no Unity dependency, Roslyn-testable.
     /// </summary>
     public static class FamilyTreeBuilder

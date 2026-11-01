@@ -62,12 +62,28 @@ namespace LandLedgers.Population
         /// gestation). Gating births/departures is a separate decision for
         /// Kennedy if a longer sealed run is ever wanted.
         /// PopulationManager sets this false for the six-person
-        /// development fixture on New Game (see SuppressMigrantArrivals);
-        /// it is NOT persisted into saves, so a Continue currently falls
-        /// back to ordinary immigration - Codex must persist/restore it
-        /// for Continue (see the final report).
+        /// development fixture on New Game (see SuppressMigrantArrivals).
+        /// Phase 2 persistence: PassXlSliceSaveCoordinator persists this
+        /// as PassXlSliceSaveDto.suppressMigrantArrivals and restores it
+        /// onto PopulationManager on load, so a Continue keeps the slice
+        /// gate (an earlier revision of this comment said otherwise).
         /// </summary>
         public bool AllowNewArrivals = true;
+
+        /// <summary>
+        /// Pass XL phase 4 (finding F09): when false, MigrationDriver
+        /// skips departures (MigrateOut) as well as arrivals. Default
+        /// true, so every existing scenario and test is byte-for-byte
+        /// unchanged. This flag is the MECHANISM for the slice-departure
+        /// gate only: PopulationManager does NOT set it from
+        /// SuppressMigrantArrivals, because whether six-person slice
+        /// residents may leave is a Kennedy decision (the new
+        /// Outmigration channel says no departures in the slice; the old
+        /// driver runs them). Wiring the slice gate to this flag is that
+        /// one-line decision, not a silent change — see the phase 4
+        /// findings (F09) and the Kennedy decision list.
+        /// </summary>
+        public bool AllowDepartures = true;
     }
 
     /// <summary>

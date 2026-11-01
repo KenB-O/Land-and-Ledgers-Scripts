@@ -7,11 +7,14 @@ namespace LandLedgers.Population
     /// Pass XL phase 3, item 5A: through-traveler immigration.
     ///
     /// A NEW arrival channel, distinct from conversation recruitment
-    /// (item 3) and from natural immigration, and a REPLACEMENT for the
-    /// old dice-roll in-migration this codebase historically carried: a
-    /// 4% monthly roll creating a person into the smallest household with
-    /// no job reason, no housing check, and no contact awareness. That
-    /// roll is exactly what this channel must NOT do.
+    /// (item 3) and from natural immigration, and the INTENDED
+    /// replacement for the old dice-roll in-migration this codebase
+    /// historically carried: a 4% monthly roll creating a person into
+    /// the smallest household with no job reason, no housing check, and
+    /// no contact awareness. That roll is exactly what this channel must
+    /// NOT do — but the old roll is still live in MigrationDriver
+    /// (phase 4 finding F10) until Kennedy retires it, so this class is
+    /// an additional channel today, not yet the replacement.
     ///
     /// The model, in canon order (Canon XXXI §3.4 and §7.4: awareness or
     /// referral -> opportunity evaluation -> acceptable work/income path

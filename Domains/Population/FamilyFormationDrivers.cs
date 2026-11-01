@@ -269,26 +269,38 @@ namespace LandLedgers.Population
 
             ctx.Anchor.FromAbsoluteDay(ctx.CurrentDayIndex, out int year, out int month, out int day);
             var people = ctx.Population.people;
-            for (int i = 0; i < people.Count; i++)
+            if (!ctx.AllowDepartures)
             {
-                PersonState person = people[i];
-                if (person == null || person.deathDayIndex >= 0 || person.isOffMap)
+                // Pass XL phase 4 (finding F09): the departure gate. Default
+                // true, so existing behaviour is unchanged; when a caller
+                // sets it false, no one leaves on this path. PopulationManager
+                // does NOT set this from SuppressMigrantArrivals — wiring the
+                // six-person slice gate to it is a Kennedy decision.
+                ctx.Diagnostics.Add("MigrationDriver: departures suppressed (AllowDepartures is false); no one leaves on this path.");
+            }
+            else
+            {
+                for (int i = 0; i < people.Count; i++)
                 {
-                    continue;
-                }
+                    PersonState person = people[i];
+                    if (person == null || person.deathDayIndex >= 0 || person.isOffMap)
+                    {
+                        continue;
+                    }
 
-                int age = person.GetTrueAge(year, month, day);
-                if (age < 18)
-                {
-                    continue;
-                }
+                    int age = person.GetTrueAge(year, month, day);
+                    if (age < 18)
+                    {
+                        continue;
+                    }
 
-                bool distressed = person.laborUrgency01 > 0.9f;
-                double probability = distressed ? 0.02 : 0.002;
-                double draw = DemographicRng.Draw01(ctx.WorldSeed, ctx.CurrentDayIndex, person.id, "migrate-out");
-                if (draw < probability)
-                {
-                    MigrateOut(ctx, person, distressed);
+                    bool distressed = person.laborUrgency01 > 0.9f;
+                    double probability = distressed ? 0.02 : 0.002;
+                    double draw = DemographicRng.Draw01(ctx.WorldSeed, ctx.CurrentDayIndex, person.id, "migrate-out");
+                    if (draw < probability)
+                    {
+                        MigrateOut(ctx, person, distressed);
+                    }
                 }
             }
 

@@ -1,8 +1,8 @@
 # Pass XL Phase 10 — Unity verification and wiring
 
-Date: 2026-11-01  
-Unity: 6000.4.2f1  
-Source branch: `muse/passxl-slice-phase10`  
+Date: 2026-11-01
+Unity: 6000.4.2f1
+Source branch: `muse/passxl-slice-phase10`
 Starting source SHA: `d4812a6d82076e90ca0124e237ce3197738eb25e`
 
 This record distinguishes fresh Unity evidence from earlier Roslyn-only

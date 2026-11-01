@@ -341,6 +341,8 @@ namespace LandLedgers.FirstLedger
             {
                 int realResidentialHomes = 0;
                 int realCommercialBuildings = 0;
+                int realTotalBuildings = townWorld.Buildings.Count;
+                StringBuilder buildingRoster = new();
                 foreach (PlacedBuilding building in townWorld.Buildings)
                 {
                     if (building?.definition == null)
@@ -360,18 +362,31 @@ namespace LandLedgers.FirstLedger
                     {
                         realCommercialBuildings++;
                     }
+
+                    if (buildingRoster.Length > 0)
+                    {
+                        buildingRoster.Append("; ");
+                    }
+
+                    buildingRoster.Append($"{building.id}:{building.definition.BuildingId}");
                 }
 
                 int requiredCommercialBuildings = OpeningBusinessRoster.SixPersonDevelopment().Count;
-                if (realResidentialHomes < developmentPopulationFixture.Households.Count
-                    || realCommercialBuildings < requiredCommercialBuildings)
+                int requiredResidentialHomes = developmentPopulationFixture.Households.Count;
+                int requiredTotalBuildings = requiredResidentialHomes + requiredCommercialBuildings;
+                if (realResidentialHomes != requiredResidentialHomes
+                    || realCommercialBuildings != requiredCommercialBuildings
+                    || realTotalBuildings != requiredTotalBuildings)
                 {
-                    bootstrapStatus = $"Six-person development startup stopped: homes={realResidentialHomes}/{developmentPopulationFixture.Households.Count}, commercial buildings={realCommercialBuildings}/{requiredCommercialBuildings}. No Businesses or Persons were initialized.";
+                    bootstrapStatus = $"Six-person development startup stopped: standalone homes={realResidentialHomes}/{requiredResidentialHomes}, storefronts={realCommercialBuildings}/{requiredCommercialBuildings}, total buildings={realTotalBuildings}/{requiredTotalBuildings}. No Businesses or Persons were initialized.";
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
                     CompleteStartupTiming(totalTimer, timing, "development homes unavailable");
                     initializing = false;
                     return;
                 }
+
+                Debug.Log($"[WorldStartup] Six-building profile verified: {realResidentialHomes} standalone homes, " +
+                          $"{realCommercialBuildings} storefronts, no farm or Town Hall building. Buildings: {buildingRoster}.", this);
             }
 #endif
 

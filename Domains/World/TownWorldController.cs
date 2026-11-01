@@ -219,6 +219,8 @@ namespace LandLedgers.World
         private TownGenerationSettings settings;
         private TownGenerationSettings runtimeDevelopmentSettings;
         private int runtimeDevelopmentBusinessBuildingLimit = -1;
+        private int runtimeDevelopmentResidentialBuildingLimit = -1;
+        private bool runtimeDevelopmentSeparateUseBuildingProfile;
 
         [SerializeField]
         private bool generateOnStart = false;
@@ -413,10 +415,53 @@ namespace LandLedgers.World
             runtimeDevelopmentBusinessBuildingLimit = requiredBusinessBuildings < 0
                 ? -1
                 : Mathf.Clamp(requiredBusinessBuildings, 0, 32);
+            runtimeDevelopmentResidentialBuildingLimit = clampedHomes;
+            runtimeDevelopmentSeparateUseBuildingProfile = requiredBusinessBuildings >= 0;
+
+            if (runtimeDevelopmentSeparateUseBuildingProfile)
+            {
+                runtimeDevelopmentSettings.generateAgriculturalParcels = false;
+                runtimeDevelopmentSettings.generateSawmillProperty = false;
+                runtimeDevelopmentSettings.generateTownHall = false;
+
+                var eligibleDefinitions = new List<BuildingDefinition>();
+                BuildingDefinition[] authoredCatalog = runtimeDevelopmentSettings.buildingCatalog;
+                if (authoredCatalog != null)
+                {
+                    for (int i = 0; i < authoredCatalog.Length; i++)
+                    {
+                        BuildingDefinition definition = authoredCatalog[i];
+                        if (definition == null || definition.PrimaryUse == BuildingUseType.Civic)
+                        {
+                            continue;
+                        }
+
+                        // The six-building profile assigns households only to
+                        // separate house plots. A double-story storefront may
+                        // still be used as a commercial structure here; its
+                        // upstairs residential capacity remains unused.
+                        bool standaloneHouse = definition.PrimaryUse == BuildingUseType.Residential
+                            && definition.CanHostHouseholds && !definition.CanHostWorkplace;
+                        bool standaloneStorefront = definition.PrimaryUse == BuildingUseType.Commercial
+                            && definition.CanHostWorkplace
+                            && !string.IsNullOrEmpty(definition.BuildingId)
+                            && !definition.BuildingId.Contains("saloon", StringComparison.OrdinalIgnoreCase);
+                        if (standaloneHouse || standaloneStorefront)
+                        {
+                            eligibleDefinitions.Add(definition);
+                        }
+                    }
+                }
+
+                runtimeDevelopmentSettings.buildingCatalog = eligibleDefinitions.ToArray();
+            }
+
             reason = $"Using a runtime-only town settings copy with {clampedHomes} generated edge-house lots; authored asset unchanged.";
             if (runtimeDevelopmentBusinessBuildingLimit >= 0)
             {
-                reason += $" Commercial building cap={runtimeDevelopmentBusinessBuildingLimit}.";
+                reason += $" The separate-use profile has {clampedHomes} standalone house plots and " +
+                          $"{runtimeDevelopmentBusinessBuildingLimit} storefront slots; farms and Town Hall are disabled, " +
+                          $"saloon is excluded, and business upper floors are not assigned to households.";
             }
             return true;
         }
@@ -4179,12 +4224,38 @@ namespace LandLedgers.World
 
             HashSet<int> reservedLandPlotIds = DetermineLandMarketReservations();
             int placedCommercialBuildings = 0;
+            int placedResidentialBuildings = 0;
             for (int i = 0; i < plots.Count; i++)
             {
                 TownPlot plot = plots[i];
                 if (plot == null || plot.buildingId >= 0)
                 {
                     continue;
+                }
+
+                if (runtimeDevelopmentSeparateUseBuildingProfile)
+                {
+                    if (plot.zone == PlotZone.Residential)
+                    {
+                        if (placedResidentialBuildings >= runtimeDevelopmentResidentialBuildingLimit)
+                        {
+                            continue;
+                        }
+                    }
+                    else if (plot.zone == PlotZone.Business)
+                    {
+                        if (placedCommercialBuildings >= runtimeDevelopmentBusinessBuildingLimit)
+                        {
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        // This opt-in fixture intentionally has no farms,
+                        // mixed-use lodging, or other additional building
+                        // categories. Ordinary world generation is unchanged.
+                        continue;
+                    }
                 }
 
                 plot.reservedForLandSale = reservedLandPlotIds.Contains(plot.id);
@@ -4229,7 +4300,14 @@ namespace LandLedgers.World
                 buildings.Add(building);
                 plot.buildingId = building.id;
                 plot.intendedBuildingFootprintCells = ResolvePlacementFootprintSizeCells(definition);
-                if (commercialBuilding) placedCommercialBuildings++;
+                if (commercialBuilding)
+                {
+                    placedCommercialBuildings++;
+                }
+                else if (definition.CanHostHouseholds && !definition.CanHostWorkplace)
+                {
+                    placedResidentialBuildings++;
+                }
             }
         }
 
@@ -4567,6 +4645,26 @@ namespace LandLedgers.World
 
         private BuildingDefinition PickDefinitionForPlot(IReadOnlyList<BuildingDefinition> catalog, TownPlot plot, int plotIndex)
         {
+            if (runtimeDevelopmentSeparateUseBuildingProfile)
+            {
+                if (plot == null)
+                {
+                    return null;
+                }
+
+                if (plot.zone == PlotZone.Residential)
+                {
+                    return PickResidentialDefinitionForPlot(catalog, plot);
+                }
+
+                if (plot.zone == PlotZone.Business)
+                {
+                    return PickDevelopmentStorefrontDefinitionForPlot(catalog, plot, plotIndex);
+                }
+
+                return null;
+            }
+
             if (plot != null && plot.zone == PlotZone.Agricultural)
             {
                 return PickAgriculturalDefinitionForPlot(catalog, plot, plotIndex);
@@ -4587,6 +4685,44 @@ namespace LandLedgers.World
             {
                 BuildingDefinition definition = catalog[(plotIndex + i) % catalog.Count];
                 if (definition == null || definition.PrimaryUse == BuildingUseType.Civic)
+                {
+                    continue;
+                }
+
+                int score = ScoreDefinitionForGeneratedPlot(definition, plot);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = definition;
+                }
+            }
+
+            return best;
+        }
+
+        private BuildingDefinition PickDevelopmentStorefrontDefinitionForPlot(
+            IReadOnlyList<BuildingDefinition> catalog,
+            TownPlot plot,
+            int plotIndex)
+        {
+            if (catalog == null || plot == null || catalog.Count == 0)
+            {
+                return null;
+            }
+
+            BuildingDefinition best = null;
+            int bestScore = int.MinValue;
+            int start = plotIndex % catalog.Count;
+            if (start < 0)
+            {
+                start += catalog.Count;
+            }
+            for (int i = 0; i < catalog.Count; i++)
+            {
+                BuildingDefinition definition = catalog[(start + i) % catalog.Count];
+                if (definition == null
+                    || definition.PrimaryUse != BuildingUseType.Commercial
+                    || !definition.CanHostWorkplace)
                 {
                     continue;
                 }

@@ -40,12 +40,15 @@ namespace LandLedgers.Population
     /// This builder is OPT-IN, deliberately not called by
     /// PopulationGenerator: calling it inside generation would change the
     /// on-map people count in existing generation tests (off-map records
-    /// share PopulationState.people). The production wiring point is:
-    /// call EnsureCompleteTree once after GeneratePopulationSnapshot,
-    /// before the first save. Codex/bootstrapper wiring, not claimed here.
-    /// Household membership joining on materialisation belongs to the
-    /// settlement step (phase 3 item 5B), not to this builder: this builder
-    /// only sets the legacy householdId/homeBuildingId pointers.
+    /// share PopulationState.people). The production wiring point since
+    /// Pass XL phase 4 is the tested seam FamilyTreeWiring
+    /// .ApplyAfterGeneration: call it once after
+    /// GeneratePopulationSnapshot, before the first save (the Codex call
+    /// site in FirstLedgerSliceBootstrapper or the equivalent New Game
+    /// path is still open, phase 4 finding F01). Household membership
+    /// joining on materialisation belongs to the settlement driver
+    /// (ArrivalSettlementDriver, phase 4), not to this builder: this
+    /// builder only sets the legacy householdId/homeBuildingId pointers.
     /// Plain C#, no Unity dependency, Roslyn-testable.
     /// </summary>
     public static class FamilyTreeBuilder
@@ -94,14 +97,15 @@ namespace LandLedgers.Population
             }
 
             // Grandparents: parents of the parents, one level only.
-            var seenParents = new HashSet<int>(parentsOfResidents);
+            // (A duplicate parent id here — two residents sharing a
+            // parent — is a harmless second pass: EnsureParents is a
+            // no-op once both parents exist.)
             foreach (int parentId in parentsOfResidents)
             {
                 PersonState parent = population.GetPerson(parentId);
                 if (parent == null) continue;
                 EnsureParents(population, kinship, parent, seed, referenceYear, report, diagnostics, isGrandparent: true);
             }
-            _ = seenParents;
 
             // Siblings: children sharing at least one parent.
             var childrenByParent = new Dictionary<int, List<int>>();

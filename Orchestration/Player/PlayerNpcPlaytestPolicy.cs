@@ -38,11 +38,15 @@ namespace LandLedgers.Orchestration.Player
     /// Persistence: this class is plain C# and is NOT a save DTO. In Unity
     /// the authoritative value lives on SimulationDrivers as a serialized
     /// bool (see SimulationDrivers.TreatPlayerAsNpc), which Codex exposes in
-    /// the Inspector. That scene value resets to the scene value on reload
-    /// and is not currently part of any save DTO; if the setting must survive
-    /// New Game / Continue, Codex must forward a bootstrapper-level
-    /// serialized bool into drivers.TreatPlayerAsNpc. Default is false, so
-    /// old scenes and old saves behave exactly as before.
+    /// the Inspector. Since Pass XL phase 2 that value IS persisted:
+    /// PassXlSliceSaveDto.treatPlayerAsNpc carries it, SaveLoadManager
+    /// restores it on Continue via PassXlSliceSaveCoordinator without
+    /// regenerating population, and FirstLedgerSliceBootstrapper forwards
+    /// its own playtest bool as an OR override (true forces NPC mode on,
+    /// false never clears a saved true; see PlayerNpcPlaytestForwarding).
+    /// Codex must still set the bootstrapper bool in Main Scene Inspector
+    /// for playtest scenes. Default is false, so old scenes and old saves
+    /// behave exactly as before.
     ///
     /// Plain C# with no Unity dependency, so the rule itself is testable in
     /// the Roslyn harness. SimulationDrivers wiring is covered by an

@@ -67,14 +67,19 @@ namespace LandLedgers.Population
     /// Slice gate, and a FLAGGED CONFLICT (not silently rewritten):
     /// this channel is condition-gated for later play and respects an
     /// AllowDepartures gate. The EXISTING MigrationDriver.EvaluateMonth
-    /// currently still runs departures even when AllowNewArrivals is
-    /// false (arrivals only are suppressed; see its comment). That
-    /// existing behaviour is NOT changed in this pass, because changing
-    /// it would change existing driver behaviour and tests. Kennedy /
-    /// Codex must decide whether to gate existing departures in the
-    /// slice too; until then, this new tracked channel and the old
-    /// driver disagree on slice departures, and that disagreement is
-    /// stated here, not hidden.
+    /// still runs departures even when AllowNewArrivals is false
+    /// (arrivals only are suppressed; see its comment). Since Pass XL
+    /// phase 4 the driver DOES have an AllowDepartures mechanism
+    /// (DemographicDriverContext.AllowDepartures, default true, phase 4
+    /// finding F09) — but PopulationManager does NOT wire it to
+    /// SuppressMigrantArrivals, because whether six-person slice
+    /// residents may leave is a Kennedy decision. Until he activates
+    /// it, this new tracked channel and the old driver disagree on
+    /// slice departures, and that disagreement is stated here, not
+    /// hidden. Since phase 5, OutmigrationCloseout closes the
+    /// membership + employment legs after a departure on this channel;
+    /// household dissolution, property, and debt handling remain the
+    /// driver's explicit decisions (phase 4 finding F08).
     ///
     /// Historical grounding (v3.0, checked, no specialist table found):
     /// docpkg-v3.0's governing originals are unchanged (Canon XXXI /

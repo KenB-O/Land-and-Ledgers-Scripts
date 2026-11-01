@@ -25,6 +25,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     ///     (finding F38). SellerFreight and FreightBusiness quotes are
     ///     accepted; their freight is passed through as the order's
     ///     seller-paid freight surcharge.
+    ///   - Pass XL phase 5 (finding R03): an Unspecified freight option
+    ///     is refused. QuoteAll never emits it, but a hand-built quote
+    ///     carrying freight cents under no freight option would
+    ///     otherwise order with a surcharge for a freight arrangement
+    ///     that does not exist.
     ///   - A FreightBusiness quote does NOT create or commission a
     ///     freight business. The freight-business commission is priced
     ///     into the quote's freight cents and passed through as a
@@ -76,6 +81,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 diagnostics.Add(
                     $"OffMapQuoteToOrder: quote total {quote.DeliveredTotalCents}c does not recompute as " +
                     $"goods {quote.GoodsCents}c + freight {quote.FreightCents}c; refused, no order placed.");
+                return null;
+            }
+            if (quote.FreightOption == FreightOptionKind.Unspecified)
+            {
+                diagnostics.Add("OffMapQuoteToOrder: quote names no freight option; refused rather than ordering under an arrangement that does not exist. Re-quote as SellerFreight or FreightBusiness.");
                 return null;
             }
             if (quote.FreightOption == FreightOptionKind.SelfCollect)

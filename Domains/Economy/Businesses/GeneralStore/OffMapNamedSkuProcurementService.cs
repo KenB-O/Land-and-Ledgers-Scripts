@@ -99,21 +99,30 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// already Received, and the lot id is receipt-derived).
     ///
     /// PERSISTENCE: ExportState / ImportState carry orders, lots, sales,
-    /// received receipt ids, and both sequences. Import is idempotent:
-    /// importing the same order, lot, or sale twice does not duplicate it.
-    /// This service is NOT yet wired into SaveLoadManager DTOs; Codex must
-    /// wire ExportState/ImportState into the store's save path (see the
-    /// Codex handoff in the final report). Old saves therefore do not
-    /// break: a store without this service simply has no off-map lots.
+    /// received receipt ids, delivered sale ids, and both sequences.
+    /// Import is idempotent: importing the same order, lot, or sale
+    /// twice does not duplicate it. Since Pass XL phase 2 this state IS
+    /// wired into saves: PassXlSliceSaveDto.procurement carries it and
+    /// PassXlSliceSaveCoordinator captures/restores it through
+    /// SaveLoadManager (clear-then-load, so loading a second save
+    /// cannot leak the first save's state). What is still Codex-only
+    /// is registering the production service instance with
+    /// SaveLoadManager.PassXlProcurementService before the first save
+    /// (phase 4 finding F19): without that registration, capture and
+    /// restore see a null service and procurement persists empty, with
+    /// a diagnostic. Old saves therefore do not break: a store without
+    /// this service simply has no off-map lots.
     ///
-    /// HOUSEHOLD RECEIPT GAP, STATED PLAINLY: SellToHousehold returns a
-    /// NamedSkuSale whose HouseholdLotId and provenance chain are the
-    /// carriage/receipt record. It does NOT write HouseholdInventory lots;
-    /// that write belongs to the household shopping / receipt path
-    /// (HouseholdShoppingLoop custody -&gt; HouseholdInventory.AddLot) and
-    /// must be connected by Codex with the sale's HouseholdLotId and
-    /// provenance. Do not claim household inventory was updated from this
-    /// service alone.
+    /// HOUSEHOLD RECEIPT, STATED PLAINLY: SellToHousehold alone returns
+    /// a NamedSkuSale whose HouseholdLotId and provenance chain are the
+    /// carriage/receipt record and does NOT write HouseholdInventory
+    /// lots. Since Pass XL phase 2 the delivery write exists on this
+    /// service: DeliverSaleToInventory books one already-settled sale
+    /// into HouseholdInventory exactly once (delivered-sale guard), and
+    /// SellAndDeliverToInventory is the single atomic path (sale + cash
+    /// + inventory lot, with RollbackSale if AddLot rejects). Do not
+    /// claim household inventory was updated from SellToHousehold
+    /// alone; use the phase 2 delivery path.
     ///
     /// Plain C# with no Unity dependency, so the whole path is testable in
     /// the Roslyn harness. No Unity, scene, prefab, or Inspector wiring is

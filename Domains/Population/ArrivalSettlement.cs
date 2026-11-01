@@ -21,9 +21,12 @@ namespace LandLedgers.Population
     ///      refuses settlement);
     ///   2. household — either an existing household id to join, or a
     ///      newly allocated household id that the production driver
-    ///      must create through HouseholdLifecycleManager; this class
-    ///      allocates the id from PopulationState but does NOT create
-    ///      the HouseholdState or write HouseholdMembershipRegistry,
+    ///      must create with that PRE-ALLOCATED id (ArrivalSettlementDriver
+    ///      creates the HouseholdState directly, never FormHousehold,
+    ///      which would allocate a second id) and then join via
+    ///      HouseholdLifecycleManager.AddMember; this class allocates
+    ///      the id from PopulationState but does NOT create the
+    ///      HouseholdState or write HouseholdMembershipRegistry,
     ///      because that registry is the sole membership authority;
     ///   3. job — either a business id with at least one open slot
     ///      supplied by the caller, or an EXPLICIT unemployed-with-plan
@@ -33,13 +36,19 @@ namespace LandLedgers.Population
     ///
     /// When, and only when, all three are present, the person is
     /// materialised (same record, same id, via FamilyTreeBuilder) and
-    /// the settlement record is returned. The production driver must
-    /// then run, in order: HouseholdLifecycleManager household creation
-    /// / joining, housing/residence assignment for the recorded unit,
-    /// and EmploymentRelationship creation for the recorded business
-    /// (or job-seeking registration for the unemployed-with-plan case).
-    /// Those three driver steps are the exact missing link if they are
-    /// not yet wired; they are NOT faked here.
+    /// the settlement record is returned. Since Pass XL phase 4 the
+    /// production driver step is ArrivalSettlementDriver: for an
+    /// existing household it joins via HouseholdLifecycleManager
+    /// .AddMember; for a new household it creates the HouseholdState
+    /// with the record's PRE-ALLOCATED id (never FormHousehold, which
+    /// would allocate a second id) and then joins; it registers an
+    /// EmploymentRelationship only when caller-supplied compensation
+    /// terms exist. Housing/residence assignment for the recorded unit
+    /// is still Codex (HousingResidence runtime), and since phase 5
+    /// callers should prefer the composed ArrivalSettlementDriver
+    /// .SettleAndApply, which rolls the person's flags back if the
+    /// driver refuses after materialisation. Those driver steps are
+    /// NOT faked here.
     /// Plain C#, no Unity dependency.
     /// </summary>
     public sealed class ArrivalSettlementRequest

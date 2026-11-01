@@ -78,6 +78,41 @@ namespace LandLedgers.Population
 
     public static class ThroughTravelerImmigration
     {
+        /// <summary>
+        /// Pass XL phase 5 (finding R04): the staleness-aware form of
+        /// <see cref="EvaluateVisit"/>. ImmigrationConditions has long
+        /// had EvaluateAtDay, which refuses a stale reputation snapshot,
+        /// but the traveler channel read any snapshot regardless of age.
+        /// This overload refuses a stale snapshot (passes on, no
+        /// word-of-mouth spread from an untrusted score) and otherwise
+        /// delegates to EvaluateVisit unchanged. A null snapshot is not
+        /// stale — it delegates, and EvaluateVisit scores it 0. The
+        /// original EvaluateVisit is unchanged, so existing callers
+        /// and tests are unaffected; drivers that gate on reputation
+        /// should prefer this overload.
+        /// </summary>
+        public static TravelerOutcome EvaluateVisitAtDay(
+            ThroughTravelerVisit visit, TownReputationSnapshot reputation,
+            int currentDayIndex, int maxReputationAgeDays,
+            int housingVacancies, int openJobs, bool allowNewArrivals,
+            ImmigrationThresholds thresholds)
+        {
+            if (reputation != null && reputation.IsStale(currentDayIndex, maxReputationAgeDays))
+            {
+                var stale = new TravelerOutcome
+                {
+                    Outcome = TravelerOutcomeKind.PassesOn,
+                    WordOfMouthSpread = false,
+                    WordOfMouthReputationScore01 = reputation.Score01,
+                };
+                stale.Reasons.Add(
+                    $"ThroughTraveler: reputation snapshot from day {reputation.ComputedDayIndex} is stale at day {currentDayIndex} " +
+                    $"(max age {maxReputationAgeDays} days); traveler passes on and no word of mouth is spread from a stale score. Recompute before gating.");
+                return stale;
+            }
+            return EvaluateVisit(visit, reputation, housingVacancies, openJobs, allowNewArrivals, thresholds);
+        }
+
         public static TravelerOutcome EvaluateVisit(
             ThroughTravelerVisit visit, TownReputationSnapshot reputation,
             int housingVacancies, int openJobs, bool allowNewArrivals,

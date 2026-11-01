@@ -32,9 +32,13 @@ namespace LandLedgers.Population
     ///      the General Store as origin, because post goes out from
     ///      there. Posting itself belongs to PostalService.PostItem
     ///      (real postage, real office ids, real chain of custody); this
-    ///      class does NOT post mail, it only builds the request the
-    ///      production driver must hand to PostalService with real
-    ///      office ids. No office id is invented here.
+    ///      class does NOT post mail, it only builds the request. Since
+    ///      Pass XL phase 4 the hand-off is RecruitmentLetterPoster
+    ///      .PostLetter (payer overload, one letter per call, no free
+    ///      carriage), which cross-checks the caller-supplied origin
+    ///      against the request's Origin since phase 5. Registering the
+    ///      General Store office is still a Codex bootstrap task
+    ///      (phase 4 finding F04). No office id is invented here.
     ///
     /// Candidates are living, off-map, adult relatives (age 18+). A
     /// candidate who is already on map, deceased, or a child is never

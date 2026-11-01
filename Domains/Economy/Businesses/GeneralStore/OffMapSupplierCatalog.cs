@@ -39,9 +39,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     ///     quote, not a booking.
     ///
     /// Quotes are sorted by delivered total. This catalog creates no
-    /// stock, no cash movement, and no order: the production driver must
-    /// take the chosen quote's total into OffMapNamedSkuProcurementService.
-    /// Plain C#, no Unity dependency.
+    /// stock, no cash movement, and no order: since Pass XL phase 4
+    /// the quote-to-order step is OffMapQuoteToOrder.PlaceOrderFromQuote,
+    /// which validates the quote (totals recompute, divisible goods)
+    /// and places the exact order through
+    /// OffMapNamedSkuProcurementService, refusing SelfCollect quotes
+    /// (no pickup journey exists) and, since phase 5, Unspecified
+    /// freight options. Plain C#, no Unity dependency.
     /// </summary>
     public sealed class OffMapSupplier
     {

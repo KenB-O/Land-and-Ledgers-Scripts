@@ -22,6 +22,14 @@ namespace LandLedgers.Population
     ///     Registering the General Store office is a Codex bootstrap
     ///     task (finding F04) — no production code registers any office
     ///     today, so posting fails in production until that is done.
+    ///     Pass XL phase 5 (finding R02): the origin is cross-checked
+    ///     against the request's Origin (set to "general-store" by
+    ///     RecruitmentConversation.BuildLetterRequest). A blank
+    ///     fromOfficeId falls back to the request's Origin; a supplied
+    ///     fromOfficeId that disagrees with a non-blank request Origin
+    ///     is refused, so a letter can never be posted from an office
+    ///     its own request does not name. Comparison is case-insensitive,
+    ///     matching PostalService's office registry.
     ///   - It does not choose the sender's payer. The caller supplies an
     ///     IPostalSenderCashAuthority (household ledger payer or business
     ///     cash payer); a null payer is refused, never treated as free.
@@ -59,22 +67,36 @@ namespace LandLedgers.Population
                 diagnostics.Add("RecruitmentLetterPoster: letter request names no recipient; nothing posted.");
                 return null;
             }
-            if (string.IsNullOrWhiteSpace(fromOfficeId))
+            string origin = fromOfficeId;
+            if (string.IsNullOrWhiteSpace(origin))
             {
-                diagnostics.Add("RecruitmentLetterPoster: no origin office id supplied; nothing posted.");
+                origin = request.Origin;
+            }
+            if (string.IsNullOrWhiteSpace(origin))
+            {
+                diagnostics.Add("RecruitmentLetterPoster: no origin office id supplied (neither caller nor request names one); nothing posted.");
+                return null;
+            }
+            if (!string.IsNullOrWhiteSpace(request.Origin)
+                && !string.IsNullOrWhiteSpace(fromOfficeId)
+                && !string.Equals(fromOfficeId, request.Origin, System.StringComparison.OrdinalIgnoreCase))
+            {
+                diagnostics.Add(
+                    $"RecruitmentLetterPoster: caller origin '{fromOfficeId}' disagrees with the letter request's origin " +
+                    $"'{request.Origin}'; nothing posted, no postage charged.");
                 return null;
             }
             string destination = string.IsNullOrWhiteSpace(toOfficeId) ? PostalService.OffMapOfficeId : toOfficeId;
             MailItem posted = postal.PostItem(
                 MailKind.Letter, request.SenderName, request.RecipientPersonId, request.RecipientName,
-                fromOfficeId, destination, dayIndex, senderPayer, diagnostics);
+                origin, destination, dayIndex, senderPayer, diagnostics);
             if (posted == null)
             {
                 diagnostics.Add($"RecruitmentLetterPoster: posting refused for P{request.RecipientPersonId} ({request.RecipientName}); no postage charged by this call.");
                 return null;
             }
             diagnostics.Add(
-                $"RecruitmentLetterPoster: letter posted from '{fromOfficeId}' to '{destination}' " +
+                $"RecruitmentLetterPoster: letter posted from '{origin}' to '{destination}' " +
                 $"for P{request.RecipientPersonId} ({request.RecipientName}), purpose '{request.Purpose}'.");
             return posted;
         }

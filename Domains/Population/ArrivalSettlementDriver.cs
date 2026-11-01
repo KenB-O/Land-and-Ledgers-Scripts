@@ -24,10 +24,13 @@ namespace LandLedgers.Population
     ///      failed apply never leaves an orphan household behind.
     ///   2. Employment: when the record names a business AND the caller
     ///      supplies compensation terms, an EmploymentRelationship is
-    ///      registered (deterministic id "arrival-&lt;personId&gt;-&lt;day&gt;",
-    ///      first-wins on duplicates). When terms are NOT supplied, no
-    ///      employment is invented: the result reports EmploymentPending
-    ///      and the caller must supply terms or register job-seeking.
+    ///      registered (deterministic id
+    ///      "arrival-&lt;personId&gt;-&lt;businessId&gt;-&lt;day&gt;", first-wins
+    ///      on duplicates; the business id is part of the id since
+    ///      phase 5, so two businesses on the same day cannot collide).
+    ///      When terms are NOT supplied, no employment is invented: the
+    ///      result reports EmploymentPending and the caller must supply
+    ///      terms or register job-seeking.
     ///   3. Housing/residence: NOT done here. The record's HousingUnitId
     ///      is a string unit id supplied by the housing systems, while
     ///      PersonState.homeBuildingId is an int; mapping one to the
@@ -41,8 +44,28 @@ namespace LandLedgers.Population
     /// membership, no duplicate employment). A person holding an active
     /// membership in a DIFFERENT household is refused, never silently
     /// transferred — a transfer is an explicit, separate decision.
+    ///
+    /// Pass XL phase 5 (finding R01): prefer the composed entry point
+    /// <see cref="ArrivalSettlementDriver.SettleAndApply"/> over calling
+    /// Settle then Apply by hand. Settle materialises the person
+    /// (flips isOffMap, sets household/home pointers) BEFORE the driver
+    /// runs, so a hand-rolled sequence that reaches a driver refusal
+    /// (dissolved or missing household, conflicting membership, join
+    /// rejection) strands the person on map with no membership.
+    /// SettleAndApply rolls the person's flags back to their pre-settle
+    /// values on a driver refusal (a household the driver created is
+    /// already removed by Apply itself; the allocated household id gap
+    /// remains, which is harmless — allocator ids are monotonic, not
+    /// dense). Raw Settle + Apply behaviour is unchanged.
     /// Plain C#, no Unity dependency, Roslyn-testable.
     /// </summary>
+    public sealed class ArrivalSettlementOutcome
+    {
+        public ArrivalSettlementRecord Record;
+        public ArrivalSettlementApplication Application; // null when settlement itself refused
+        public bool SettledAndApplied; // settled AND driver did not refuse (Applied or AlreadyApplied)
+        public bool RolledBack; // driver refused after materialisation; person flags restored
+    }
     public sealed class ArrivalSettlementApplication
     {
         public bool Applied;
@@ -58,6 +81,75 @@ namespace LandLedgers.Population
 
     public static class ArrivalSettlementDriver
     {
+        /// <summary>
+        /// Pass XL phase 5 (finding R01): the composed settle-then-apply
+        /// path. Runs ArrivalSettlement.Settle and, only if it settles,
+        /// Apply, in one call. If Apply refuses after Settle already
+        /// materialised the person, the person's pre-settle flags are
+        /// restored (isOffMap, householdId, homeBuildingId), so a
+        /// refused arrival leaves no stranded on-map person with no
+        /// membership. A household Apply created and then removed on a
+        /// join rejection stays removed. The allocated household id gap
+        /// on a rolled-back new-household settlement remains (allocator
+        /// ids are monotonic, not dense) and is harmless. When
+        /// settlement itself refuses, nothing is materialised and no
+        /// application is attempted (Application is null). An
+        /// AlreadyApplied result counts as settled-and-applied: the
+        /// person is on map with the membership already in place and
+        /// nothing was duplicated.
+        /// </summary>
+        public static ArrivalSettlementOutcome SettleAndApply(
+            PopulationState population,
+            HouseholdLifecycleManager lifecycle,
+            HouseholdMembershipRegistry memberships,
+            EmploymentRelationshipRegistry employments,
+            ArrivalSettlementRequest request,
+            int dayIndex,
+            string roleDisplayName,
+            CompensationTerms? compensation,
+            List<string> diagnostics)
+        {
+            diagnostics ??= new List<string>();
+            var outcome = new ArrivalSettlementOutcome();
+            PersonState personBefore = request != null && population != null
+                ? population.GetPerson(request.PersonId)
+                : null;
+            bool wasOffMap = personBefore != null && personBefore.isOffMap;
+            int prevHouseholdId = personBefore != null ? personBefore.householdId : -1;
+            int prevHomeBuildingId = personBefore != null ? personBefore.homeBuildingId : -1;
+
+            ArrivalSettlementRecord record = ArrivalSettlement.Settle(population, request, diagnostics);
+            outcome.Record = record;
+            if (record == null || !record.Settled)
+            {
+                diagnostics.Add("ArrivalSettlementDriver: settlement refused; nothing materialised and the driver was not run.");
+                return outcome;
+            }
+
+            ArrivalSettlementApplication application = Apply(
+                population, lifecycle, memberships, employments, record,
+                dayIndex, roleDisplayName, compensation, diagnostics);
+            outcome.Application = application;
+            if (application != null && application.Refused)
+            {
+                PersonState person = population.GetPerson(record.PersonId);
+                if (person != null && wasOffMap)
+                {
+                    person.isOffMap = true;
+                    person.householdId = prevHouseholdId;
+                    person.homeBuildingId = prevHomeBuildingId;
+                }
+                outcome.RolledBack = true;
+                diagnostics.Add(
+                    $"ArrivalSettlementDriver: driver refused after settlement for P{record.PersonId}; " +
+                    "person flags rolled back to pre-settle values (off map, no membership from this arrival).");
+                return outcome;
+            }
+
+            outcome.SettledAndApplied = true;
+            return outcome;
+        }
+
         public static ArrivalSettlementApplication Apply(
             PopulationState population,
             HouseholdLifecycleManager lifecycle,
@@ -216,7 +308,7 @@ namespace LandLedgers.Population
             }
             var relationship = new EmploymentRelationship
             {
-                Id = $"arrival-{record.PersonId}-{Math.Max(0, dayIndex)}",
+                Id = $"arrival-{record.PersonId}-{record.JobBusinessId}-{Math.Max(0, dayIndex)}",
                 EmployeePersonId = record.PersonId,
                 EmployerBusinessId = record.JobBusinessId,
                 RoleDisplayName = roleDisplayName ?? string.Empty,

@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: DoctorProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: doctor
+    displayName: Doctor
+    businessType: 5
+    buildingId: 
+    operations: {salesCadence: 0, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 17000, weeklyReorderReserveCents: 2500, defaultRetailMarkupMultiplier: 1.25, lowStockWarningThreshold01: 0.2, reliabilitySensitivity: 0.9, competitionSensitivity: 0.1}
+    ownedCategoryIds: [medical_service, medicine_remedies]
+    workerSlots:
+    - {slotId: physician, displayName: Physician, baselineWeeklyWageCents: 2200, requiredForOpening: 1}
+    - {slotId: assistant, displayName: Assistant, baselineWeeklyWageCents: 900, requiredForOpening: 0}
+  categories:
+  - {categoryId: medical_service, displayName: Medical Service, role: 0, demandGroup: 5, sortOrder: 10, defaultMarkupMultiplier: 1.25, lowStockThreshold01: 0, playerFacingSummary: House calls and office visits., itemIds: [doctor_visit]}
+  - {categoryId: medicine_remedies, displayName: Medicine / Remedies, role: 1, demandGroup: 5, sortOrder: 20, defaultMarkupMultiplier: 1.2, lowStockThreshold01: 0.2, playerFacingSummary: Practical remedy stock for treatment visits., itemIds: [doctor_remedy_stock]}
+  items:
+  - {itemId: doctor_visit, displayName: Doctor Visit, categoryId: medical_service, unit: visit, pricing: {baselineCents: 75, localMarketBand: {minCents: 50, maxCents: 125}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 0, reorderTargetUnits: 0, reorderLotSize: 1, coreStock: 1, producerTags: [doctor], consumerTags: [household]}
+  - {itemId: doctor_remedy_stock, displayName: Remedy Stock, categoryId: medicine_remedies, unit: bottle, pricing: {baselineCents: 50, localMarketBand: {minCents: 35, maxCents: 85}, markupMultiplier: 1, supplyDemandSensitivity: 0.45}, startingStockUnits: 16, reorderTargetUnits: 20, reorderLotSize: 4, coreStock: 1, producerTags: [freight, doctor], consumerTags: [household]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 5, y: 5}
+    minimumFrontageCells: 5
+    minimumBuildableAreaCells: 25
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: balanced_service
+    displayName: Balanced Service
+    playerFacingSummary: "Balances office visits, house calls, and remedy stock for basic town care."
+  archetype: 2
+  throughputMode: 3
+  baselineWeeklyThroughputUnits: 0
+  baselineDailyServiceCapacity: 8
+  inputCategoryIds: [medicine_remedies]
+  outputCategoryIds: []
+  serviceCategoryIds: [medical_service]

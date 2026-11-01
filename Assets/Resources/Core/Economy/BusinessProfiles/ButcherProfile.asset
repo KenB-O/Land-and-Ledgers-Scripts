@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: ButcherProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: butcher
+    displayName: Butcher
+    businessType: 2
+    buildingId: 
+    operations: {salesCadence: 0, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 24000, weeklyReorderReserveCents: 7500, defaultRetailMarkupMultiplier: 1.25, lowStockWarningThreshold01: 0.3, reliabilitySensitivity: 0.75, competitionSensitivity: 0.25}
+    ownedCategoryIds: [livestock_inputs, meat]
+    workerSlots:
+    - {slotId: butcher, displayName: Butcher, baselineWeeklyWageCents: 1600, requiredForOpening: 1}
+    - {slotId: counter_helper, displayName: Counter Helper, baselineWeeklyWageCents: 1000, requiredForOpening: 0}
+  categories:
+  - {categoryId: livestock_inputs, displayName: Livestock Inputs, role: 0, demandGroup: 1, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.3, playerFacingSummary: Animals and carcass supply from ranches., itemIds: [cattle_lot]}
+  - {categoryId: meat, displayName: Meat, role: 0, demandGroup: 1, sortOrder: 20, defaultMarkupMultiplier: 1.18, lowStockThreshold01: 0.3, playerFacingSummary: Fresh and preserved meat for households and stores., itemIds: [butcher_meat_lot]}
+  items:
+  - {itemId: cattle_lot, displayName: Cattle Lot, categoryId: livestock_inputs, unit: head, pricing: {baselineCents: 1800, localMarketBand: {minCents: 1300, maxCents: 2600}, markupMultiplier: 1, supplyDemandSensitivity: 0.45}, startingStockUnits: 6, reorderTargetUnits: 8, reorderLotSize: 1, coreStock: 1, producerTags: [ranch], consumerTags: [butcher]}
+  - {itemId: butcher_meat_lot, displayName: Meat Lot, categoryId: meat, unit: lot, pricing: {baselineCents: 300, localMarketBand: {minCents: 220, maxCents: 450}, markupMultiplier: 1, supplyDemandSensitivity: 0.45}, startingStockUnits: 48, reorderTargetUnits: 96, reorderLotSize: 8, coreStock: 1, producerTags: [butcher], consumerTags: [household, general_store]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 5, y: 5}
+    minimumFrontageCells: 5
+    minimumBuildableAreaCells: 25
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: fresh_sales
+    displayName: Fresh Sales
+    playerFacingSummary: Moves fresh meat through local demand before preserved or bulk sales become deeper systems.
+  archetype: 1
+  throughputMode: 2
+  baselineWeeklyThroughputUnits: 56
+  baselineDailyServiceCapacity: 0
+  inputCategoryIds: [livestock_inputs]
+  outputCategoryIds: [meat]
+  serviceCategoryIds: []

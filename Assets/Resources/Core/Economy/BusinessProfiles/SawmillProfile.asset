@@ -1,0 +1,55 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: SawmillProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: sawmill_small_sawmill
+    displayName: Small Sawmill
+    businessType: 6
+    buildingId: 
+    operations: {salesCadence: 1, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 22000, weeklyReorderReserveCents: 1800, defaultRetailMarkupMultiplier: 1.15, lowStockWarningThreshold01: 0.2, reliabilitySensitivity: 0.85, competitionSensitivity: 0.1}
+    ownedCategoryIds: [standing_timber, sawmill_logs, lumber, slabs_offcuts]
+    workerSlots:
+    - {slotId: sawyer, displayName: Sawyer, baselineWeeklyWageCents: 1500, requiredForOpening: 1}
+    - {slotId: logger, displayName: Timber Cutter, baselineWeeklyWageCents: 1300, requiredForOpening: 0}
+    - {slotId: yard_teamster, displayName: Yard Teamster, baselineWeeklyWageCents: 1250, requiredForOpening: 0}
+    - {slotId: foreman, displayName: Foreman, baselineWeeklyWageCents: 1700, requiredForOpening: 0}
+  categories:
+  - {categoryId: standing_timber, displayName: Standing Timber, role: 0, demandGroup: 4, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.15, playerFacingSummary: Trees available on the remote sawmill property., itemIds: [timber_stand_unit]}
+  - {categoryId: sawmill_logs, displayName: Staged Logs, role: 0, demandGroup: 4, sortOrder: 20, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.2, playerFacingSummary: Cut logs staged for milling., itemIds: [sawmill_log]}
+  - {categoryId: lumber, displayName: Lumber, role: 0, demandGroup: 4, sortOrder: 30, defaultMarkupMultiplier: 1.08, lowStockThreshold01: 0.2, playerFacingSummary: Finished boards feeding construction and upgrades., itemIds: [sawn_lumber_bundle]}
+  - {categoryId: slabs_offcuts, displayName: Slabs / Offcuts, role: 0, demandGroup: 4, sortOrder: 40, defaultMarkupMultiplier: 1.05, lowStockThreshold01: 0.1, playerFacingSummary: Low-grade fuel wood and offcuts sold cheaply., itemIds: [slab_offcut_bundle]}
+  items:
+  - {itemId: timber_stand_unit, displayName: Standing Timber Unit, categoryId: standing_timber, unit: stand, pricing: {baselineCents: 115, localMarketBand: {minCents: 80, maxCents: 180}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}, startingStockUnits: 80, reorderTargetUnits: 80, reorderLotSize: 10, coreStock: 1, producerTags: [timber_land], consumerTags: [sawmill]}
+  - {itemId: sawmill_log, displayName: Sawmill Log, categoryId: sawmill_logs, unit: log, pricing: {baselineCents: 160, localMarketBand: {minCents: 100, maxCents: 240}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}, startingStockUnits: 8, reorderTargetUnits: 24, reorderLotSize: 6, coreStock: 1, producerTags: [sawmill], consumerTags: [sawmill]}
+  - {itemId: sawn_lumber_bundle, displayName: Lumber Bundle, categoryId: lumber, unit: bundle, pricing: {baselineCents: 85, localMarketBand: {minCents: 65, maxCents: 130}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 240, reorderTargetUnits: 360, reorderLotSize: 24, coreStock: 1, producerTags: [sawmill], consumerTags: [construction, household_upgrade]}
+  - {itemId: slab_offcut_bundle, displayName: Slabs / Offcuts Bundle, categoryId: slabs_offcuts, unit: bundle, pricing: {baselineCents: 22, localMarketBand: {minCents: 12, maxCents: 40}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}, startingStockUnits: 0, reorderTargetUnits: 40, reorderLotSize: 8, coreStock: 0, producerTags: [sawmill], consumerTags: [household, fuel]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 32, y: 28}
+    minimumFrontageCells: 8
+    minimumBuildableAreaCells: 120
+    allowedPlotZones:
+    - 3
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: small_sawmill
+    displayName: Small Sawmill
+    playerFacingSummary: Cuts remote timber into construction lumber with simple offcut sales.
+  archetype: 1
+  throughputMode: 2
+  baselineWeeklyThroughputUnits: 40
+  baselineDailyServiceCapacity: 0
+  inputCategoryIds: [standing_timber, sawmill_logs]
+  outputCategoryIds: [lumber, slabs_offcuts]
+  serviceCategoryIds: []

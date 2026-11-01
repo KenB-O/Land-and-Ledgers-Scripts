@@ -1,0 +1,49 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: CropFarmProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: crop_farm
+    displayName: Crop Farm
+    businessType: 4
+    buildingId: 
+    operations: {salesCadence: 1, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 19000, weeklyReorderReserveCents: 2500, defaultRetailMarkupMultiplier: 1.15, lowStockWarningThreshold01: 0.25, reliabilitySensitivity: 0.85, competitionSensitivity: 0.15}
+    ownedCategoryIds: [seed_inputs, crop_food]
+    workerSlots:
+    - {slotId: farm_hand, displayName: Farm Hand, baselineWeeklyWageCents: 1300, requiredForOpening: 1}
+    - {slotId: field_helper, displayName: Field Helper, baselineWeeklyWageCents: 950, requiredForOpening: 0}
+  categories:
+  - {categoryId: seed_inputs, displayName: Seed / Tool Inputs, role: 0, demandGroup: 0, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: "Seed, sacks, and basic farm inputs.", itemIds: [seed_supply_lot]}
+  - {categoryId: crop_food, displayName: Crop Food, role: 0, demandGroup: 0, sortOrder: 20, defaultMarkupMultiplier: 1.1, lowStockThreshold01: 0.25, playerFacingSummary: Vegetables and feed crops for town supply., itemIds: [potato_crop_lot]}
+  items:
+  - {itemId: seed_supply_lot, displayName: Seed Supply Lot, categoryId: seed_inputs, unit: lot, pricing: {baselineCents: 90, localMarketBand: {minCents: 60, maxCents: 140}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}, startingStockUnits: 24, reorderTargetUnits: 36, reorderLotSize: 7, coreStock: 1, producerTags: [freight], consumerTags: [farm]}
+  - {itemId: potato_crop_lot, displayName: Potato Crop Lot, categoryId: crop_food, unit: sack, pricing: {baselineCents: 45, localMarketBand: {minCents: 18, maxCents: 60}, markupMultiplier: 1, supplyDemandSensitivity: 0.4}, startingStockUnits: 0, reorderTargetUnits: 160, reorderLotSize: 16, coreStock: 1, producerTags: [farm], consumerTags: [household, general_store, ranch]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 8, y: 10}
+    minimumFrontageCells: 8
+    minimumBuildableAreaCells: 80
+    allowedPlotZones:
+    - 3
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: staple_production
+    displayName: Staple Production
+    playerFacingSummary: "Turns seed, field supplies, and labor into steady food crop output for the town."
+  archetype: 1
+  throughputMode: 1
+  baselineWeeklyThroughputUnits: 96
+  baselineDailyServiceCapacity: 0
+  inputCategoryIds: [seed_inputs]
+  outputCategoryIds: [crop_food]
+  serviceCategoryIds: []

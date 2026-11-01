@@ -1,0 +1,95 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 90a7d0b591fd45e1bbdd47eec2421d6a, type: 3}
+  m_Name: DefaultStrategyCameraSettings
+  m_EditorClassIdentifier: 
+  defaultFocusPosition: {x: 0, y: 0, z: 0}
+  defaultYaw: 45
+  defaultZoomDistance: 8.1
+  defaultManualPitchOffset: 0
+  fieldOfView: 45
+  panSpeedClose: 14
+  panSpeedFar: 58
+  fastPanMultiplier: 2
+  movementSmoothing: 0.08
+  mouseYawSensitivity: 0.16
+  mousePitchSensitivity: 0.18
+  mousePitchDeadZonePixels: 0.35
+  invertMousePitch: 0
+  rotateMouseButton: 0
+  lockCursorWhileRotating: 1
+  keyboardYawSpeed: 115
+  keyboardPitchSpeed: 42
+  rotationSmoothing: 0.055
+  minZoomDistance: 8
+  maxZoomDistance: 200
+  wheelZoomSensitivity: 4
+  closeZoomWheelMultiplier: 1.5
+  farZoomWheelMultiplier: 1.5
+  zoomSmoothing: 0.1
+  closePitch: 20
+  farPitch: 40
+  pitchByZoom:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1.004837
+      value: 1.0041199
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  pitchSmoothing: 0.08
+  minReadablePitch: 5
+  maxReadablePitch: 80
+  limitManualPitchOffsetRange: 0
+  minManualPitchOffset: -22
+  maxManualPitchOffset: 16
+  edgePanEnabled: 0
+  edgePanBorderPixels: 18
+  edgePanSpeedMultiplier: 0.6
+  suppressEdgePanWhileRotating: 1
+  rotateLeftKey: 31
+  rotateRightKey: 19
+  pitchUpKey: 32
+  pitchDownKey: 20
+  fastPanKey: 51
+  useFallbackBounds: 1
+  fallbackBoundsCenter: {x: 0, y: 0}
+  fallbackBoundsSize: {x: 320, y: 320}
+  fallbackSoftMargin: 36
+  fallbackReturnStrength: 10
+  terrainFollowEnabled: 0
+  terrainRaycastHeight: 250
+  terrainRaycastDistance: 600
+  terrainHeightOffset: 0
+  terrainVerticalSmoothing: 0.18
+  terrainLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  drawFocusGizmo: 1
+  focusGizmoColor: {r: 0.15, g: 0.8, b: 1, a: 0.75}
+  boundsGizmoColor: {r: 1, g: 0.75, b: 0.2, a: 0.75}

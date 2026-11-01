@@ -1,0 +1,29 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9fb78065283d4ebba87d60cd3777e8c2, type: 3}
+  m_Name: LocalSawmillSupport
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.ConstructionSupportNodeDefinition
+  nodeId: local_sawmill
+  displayName: Local Sawmill
+  resourceKind: 0
+  startingStockUnits: 240
+  unitCostCents: 85
+  active: 1
+  remoteProductionEnabled: 1
+  startingStandingTimberUnits: 80
+  startingLogStockUnits: 8
+  weeklyCutCapacityLogs: 10
+  weeklySawCapacityLogs: 10
+  lumberPerLog: 4
+  lumberStorageCapacityUnits: 360
+  hardwareMaintenanceUnitsPerWeek: 1
+  hasWorkerCabins: 1

@@ -1,4 +1,4 @@
-# Unity-generated project data
+# Unity generated folders
 [Ll]ibrary/
 [Tt]emp/
 [Oo]bj/
@@ -6,27 +6,41 @@
 [Bb]uilds/
 [Ll]ogs/
 [Uu]ser[Ss]ettings/
-[Mm]emoryCaptures/
-[Rr]ecordings/
 
-# IDE and editor user data
+# Visual Studio / Rider / editor state
 .vs/
-.vscode/
 .idea/
-*.csproj.user
+.vscode/
+*.csproj
+*.sln
 *.suo
 *.user
 *.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.vsconfig
 
-# C# and .NET build outputs
+# Unity generated metadata/state
+MemoryCaptures/
+Recordings/
+SysInfo.txt
+*.stackdump
+
+# Build outputs and packages
 bin/
 obj/
 *.dll
-*.pdb
-*.mdb
+*.apk
+*.aab
+*.unitypackage
+*.app
 
-# OS metadata
+# OS files
 .DS_Store
 Thumbs.db
-desktop.ini
-
+Desktop.ini

@@ -1,0 +1,58 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 48cb8c96d20f4281a4a8ec62941af0a8, type: 3}
+  m_Name: DoubleStoryBusinessNaturalWood
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.World.BuildingDefinition
+  buildingId: double_story_business_natural_wood
+  displayName: Double Story Business Natural Wood
+  footprintWidthCells: 2
+  footprintDepthCells: 2
+  allowedPlotZone: 1
+  primaryUse: 2
+  storeyCount: 2
+  workplaceEligible: 1
+  residentialMode: 2
+  residentHouseholdCapacity: 1
+  agriculturalSiteRole: 0
+  businessSuitability:
+  - businessType: 0
+    suitable: 1
+  - businessType: 1
+    suitable: 1
+  - businessType: 2
+    suitable: 1
+  - businessType: 3
+    suitable: 0
+  - businessType: 4
+    suitable: 0
+  - businessType: 5
+    suitable: 1
+  - businessType: 8
+    suitable: 1
+  anchorRules:
+  - type: 0
+    side: 0
+    offsetFromSideCenter: {x: 0, y: 1}
+  - type: 1
+    side: 1
+    offsetFromSideCenter: {x: 0, y: 1}
+  - type: 2
+    side: 0
+    offsetFromSideCenter: {x: 0, y: 2}
+  visualPrefab: {fileID: 8107696169418300663, guid: e21a21015a0e4fb49892141a788a81ba, type: 3}
+  visualScaleMultiplier: 1
+  visualYawOffsetDegrees: 0
+  visualPositionOffset: {x: 0, y: 0, z: 0}
+  fitVisualToFootprint: 1
+  footprintFill: 0.92
+  greyboxHeightMeters: 7.5
+  greyboxColor: {r: 0.58, g: 0.45, b: 0.31, a: 1}

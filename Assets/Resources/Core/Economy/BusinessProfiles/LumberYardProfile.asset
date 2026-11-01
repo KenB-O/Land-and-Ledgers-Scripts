@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: LumberYardProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: lumber_yard
+    displayName: Lumber Yard
+    businessType: 7
+    buildingId: 
+    operations: {salesCadence: 1, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 19000, weeklyReorderReserveCents: 2400, defaultRetailMarkupMultiplier: 1.15, lowStockWarningThreshold01: 0.25, reliabilitySensitivity: 0.75, competitionSensitivity: 0.2}
+    ownedCategoryIds: [lumber]
+    workerSlots:
+    - {slotId: yard_manager, displayName: Yard Manager, baselineWeeklyWageCents: 1450, requiredForOpening: 1}
+    - {slotId: yard_hand, displayName: Yard Hand, baselineWeeklyWageCents: 1150, requiredForOpening: 0}
+    - {slotId: delivery_teamster, displayName: Delivery Teamster, baselineWeeklyWageCents: 1250, requiredForOpening: 0}
+    - {slotId: bookkeeper, displayName: Bookkeeper, baselineWeeklyWageCents: 1050, requiredForOpening: 0}
+  categories:
+  - {categoryId: lumber, displayName: Lumber, role: 0, demandGroup: 4, sortOrder: 10, defaultMarkupMultiplier: 1.12, lowStockThreshold01: 0.25, playerFacingSummary: Finished boards stocked near town construction demand., itemIds: [yard_lumber_bundle]}
+  items:
+  - {itemId: yard_lumber_bundle, displayName: Yard Lumber Bundle, categoryId: lumber, unit: bundle, pricing: {baselineCents: 98, localMarketBand: {minCents: 80, maxCents: 145}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}, startingStockUnits: 96, reorderTargetUnits: 220, reorderLotSize: 32, coreStock: 1, producerTags: [lumber_yard], consumerTags: [construction, household_upgrade]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 8, y: 8}
+    minimumFrontageCells: 6
+    minimumBuildableAreaCells: 45
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: lumber_yard
+    displayName: Lumber Yard
+    playerFacingSummary: Buys finished boards from sawmills or off-map supply and sells them near town demand.
+  archetype: 1
+  throughputMode: 0
+  baselineWeeklyThroughputUnits: 60
+  baselineDailyServiceCapacity: 0
+  inputCategoryIds: [lumber]
+  outputCategoryIds: [lumber]
+  serviceCategoryIds: []

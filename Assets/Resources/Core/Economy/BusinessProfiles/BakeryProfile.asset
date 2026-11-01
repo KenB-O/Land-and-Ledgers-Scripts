@@ -1,0 +1,163 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: BakeryProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: bakery
+    displayName: Bakery
+    businessType: 13
+    buildingId: 
+    operations:
+      salesCadence: 1
+      payrollCadence: 1
+      reorderCadence: 1
+      stockReviewCadence: 1
+      marketSummaryCadence: 2
+    economy:
+      startingCashCents: 15000
+      weeklyReorderReserveCents: 1500
+      defaultRetailMarkupMultiplier: 1.15
+      lowStockWarningThreshold01: 0.25
+      reliabilitySensitivity: 0.75
+      competitionSensitivity: 0.25
+    ownedCategoryIds:
+    - flour
+    - fuel_wood
+    - bread
+    workerSlots:
+    - slotId: baker
+      displayName: Baker
+      baselineWeeklyWageCents: 1400
+      requiredForOpening: 1
+    - slotId: counter_helper
+      displayName: Counter Helper
+      baselineWeeklyWageCents: 850
+      requiredForOpening: 0
+  categories:
+  - categoryId: flour
+    displayName: Flour
+    role: 0
+    demandGroup: 0
+    sortOrder: 10
+    defaultMarkupMultiplier: 1
+    lowStockThreshold01: 0.25
+    playerFacingSummary: Flour supply from the mill or freight fallback.
+    itemIds:
+    - bakery_flour_sack
+  - categoryId: fuel_wood
+    displayName: Fuel Wood
+    role: 1
+    demandGroup: 3
+    sortOrder: 20
+    defaultMarkupMultiplier: 1
+    lowStockThreshold01: 0.25
+    playerFacingSummary: Oven fuel bought from the fuel dealer.
+    itemIds:
+    - bakery_fuel_bundle
+  - categoryId: bread
+    displayName: Bread
+    role: 0
+    demandGroup: 0
+    sortOrder: 30
+    defaultMarkupMultiplier: 1.18
+    lowStockThreshold01: 0.3
+    playerFacingSummary: Bread and simple baked goods for households and store counters.
+    itemIds:
+    - bread_batch
+  items:
+  - itemId: bakery_flour_sack
+    displayName: Bakery Flour Sack
+    categoryId: flour
+    unit: sack
+    pricing:
+      baselineCents: 58
+      baseWholesaleCostCents: 0
+      importCostCents: 0
+      localMarketBand:
+        minCents: 38
+        maxCents: 90
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.35
+    startingStockUnits: 18
+    reorderTargetUnits: 42
+    reorderLotSize: 8
+    coreStock: 1
+    producerTags:
+    - mill
+    - freight
+    consumerTags:
+    - bakery
+  - itemId: bakery_fuel_bundle
+    displayName: Bakery Fuel Bundle
+    categoryId: fuel_wood
+    unit: bundle
+    pricing:
+      baselineCents: 28
+      baseWholesaleCostCents: 0
+      importCostCents: 0
+      localMarketBand:
+        minCents: 15
+        maxCents: 48
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.3
+    startingStockUnits: 6
+    reorderTargetUnits: 18
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags:
+    - fuel_dealer
+    consumerTags:
+    - bakery
+  - itemId: bread_batch
+    displayName: Bread Batch
+    categoryId: bread
+    unit: batch
+    pricing:
+      baselineCents: 36
+      baseWholesaleCostCents: 0
+      importCostCents: 0
+      localMarketBand:
+        minCents: 22
+        maxCents: 60
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.45
+    startingStockUnits: 24
+    reorderTargetUnits: 64
+    reorderLotSize: 8
+    coreStock: 1
+    producerTags:
+    - bakery
+    consumerTags:
+    - household
+    - general_store
+  siteRequirements:
+    minimumSiteSizeCells: {x: 5, y: 5}
+    minimumFrontageCells: 4
+    minimumBuildableAreaCells: 20
+    allowedPlotZones: 0100000000000000
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: bake_shop
+    displayName: Bake Shop
+    playerFacingSummary: Turns flour and heat into bread for households and store
+      counters.
+  archetype: 1
+  throughputMode: 2
+  baselineWeeklyThroughputUnits: 40
+  baselineDailyServiceCapacity: 5
+  inputCategoryIds:
+  - flour
+  - fuel_wood
+  outputCategoryIds:
+  - bread
+  serviceCategoryIds: []

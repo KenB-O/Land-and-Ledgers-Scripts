@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: BarberProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: barber
+    displayName: Barber
+    businessType: 16
+    buildingId: 
+    operations: {salesCadence: 0, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 10000, weeklyReorderReserveCents: 700, defaultRetailMarkupMultiplier: 1, lowStockWarningThreshold01: 0.2, reliabilitySensitivity: 0.65, competitionSensitivity: 0.2}
+    ownedCategoryIds: [barber_consumables, barber_bath_service]
+    workerSlots:
+    - {slotId: barber, displayName: Barber, baselineWeeklyWageCents: 1100, requiredForOpening: 1}
+  categories:
+  - {categoryId: barber_consumables, displayName: Soap / Bath Consumables, role: 1, demandGroup: 3, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: "Soap, water, towels, heat, and small consumables.", itemIds: [barber_consumable_lot]}
+  - {categoryId: barber_bath_service, displayName: Barber Service, role: 0, demandGroup: 3, sortOrder: 20, defaultMarkupMultiplier: 1, lowStockThreshold01: 0, playerFacingSummary: "Haircuts, shaves, and bath service sold as customer visits.", itemIds: [barber_bath_visit]}
+  items:
+  - {itemId: barber_consumable_lot, displayName: Barber Consumables, categoryId: barber_consumables, unit: lot, pricing: {baselineCents: 35, localMarketBand: {minCents: 20, maxCents: 65}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}, startingStockUnits: 10, reorderTargetUnits: 18, reorderLotSize: 4, coreStock: 1, producerTags: [general_store], consumerTags: [barber]}
+  - {itemId: barber_bath_visit, displayName: Barber Visit, categoryId: barber_bath_service, unit: visit, pricing: {baselineCents: 18, localMarketBand: {minCents: 10, maxCents: 35}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}, startingStockUnits: 0, reorderTargetUnits: 0, reorderLotSize: 1, coreStock: 1, producerTags: [barber], consumerTags: [household, worker, boarder]}
+  siteRequirements: {minimumSiteSizeCells: {x: 3, y: 4}, minimumFrontageCells: 3, minimumBuildableAreaCells: 12, allowedPlotZones: [1, 0], requiresRoadFrontage: 1}
+  mainFocus: {focusId: barber, displayName: Barber, playerFacingSummary: "Provides periodic haircut, shave, and bath service without a heavy stock chain."}
+  archetype: 2
+  throughputMode: 3
+  baselineWeeklyThroughputUnits: 0
+  baselineDailyServiceCapacity: 8
+  inputCategoryIds: [barber_consumables]
+  outputCategoryIds: []
+  serviceCategoryIds: [barber_bath_service]

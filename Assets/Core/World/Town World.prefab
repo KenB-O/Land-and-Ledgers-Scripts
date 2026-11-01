@@ -1,0 +1,404 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1131949170282417376
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4805793354913043926}
+  - component: {fileID: 3709094408740216693}
+  m_Layer: 0
+  m_Name: Town World
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &4805793354913043926
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1131949170282417376}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 2142214310907063013}
+  - {fileID: 6424341248723142928}
+  - {fileID: 6216986466907283061}
+  - {fileID: 2699866912278130597}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3709094408740216693
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1131949170282417376}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3150408c96924a95bd90a2066edf6b8c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  settings: {fileID: 11400000, guid: f600734d5941a0948a464d6370b4280e, type: 2}
+  generateOnStart: 1
+  clearBeforeGenerate: 1
+  visualRoot: {fileID: 2142214310907063013}
+  terrainCollider: {fileID: 0}
+  createRuntimeFallbackTerrainCollider: 1
+  logRuntimeFallbackTerrainCollider: 0
+  conformGeneratedVisualsToRuntimeTerrain: 1
+  logRuntimeTerrainVisualConformance: 0
+  runtimeTerrainVisualSurfaceOffsetMeters: 0.015
+  runtimeTerrainConformMaxSingleMoveMeters: 0
+  compactWorldValidationReport: 1
+  worldValidationDetailedWarningLimit: 36
+  worldValidationCategorySampleLimit: 3
+  includeWorldValidationCategoryBreakdown: 1
+  logRuntimeGenerationTiming: 1
+  deferRegionalTerrainRefreshDuringRuntimeStartup: 1
+  deferredRegionalTerrainRefreshDelaySeconds: 0.15
+  buildPropertyAccessPathEvidence: 1
+  logPropertyAccessPathEvidence: 0
+  propertyAccessPathWidthMeters: 0.55
+  propertyAccessPathSurfaceOffsetMeters: 0.08
+  propertyAccessPathColor: {r: 0.48, g: 0.31, b: 0.16, a: 0.72}
+  generatedCellCount: 0
+  generatedRoadCellCount: 0
+  generatedPlotCount: 0
+  generatedBuildingCount: 0
+  generatedAnchorCount: 0
+  generatedRegionalFoundationSummary: 
+  regionalResources:
+    districts: []
+    remoteSites: []
+    totalFreightPressure01: 0
+    totalSettlementPressure01: 0
+    totalRemoteDevelopmentPressure01: 0
+--- !u!1 &1927233397576537412
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2699866912278130597}
+  m_Layer: 0
+  m_Name: Regional Terrain Root
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2699866912278130597
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1927233397576537412}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4805793354913043926}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &4718145535540194625
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2142214310907063013}
+  m_Layer: 0
+  m_Name: WorldVisualRoot
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2142214310907063013
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4718145535540194625}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4805793354913043926}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &5402025024845592793
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6424341248723142928}
+  - component: {fileID: 739339327803047762}
+  m_Layer: 0
+  m_Name: RegionalTerrainTileView
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6424341248723142928
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5402025024845592793}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4805793354913043926}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &739339327803047762
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5402025024845592793}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d1d0cc7ee74228941b7a47703af5bdd5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.World.RegionalTerrainTileView
+  runtimeQualityPreset: 2
+  applyQualityPresetOnlyAtRuntime: 1
+  qualityPresetControlsEvidenceLayers: 1
+  townWorld: {fileID: 3709094408740216693}
+  tileRoot: {fileID: 2699866912278130597}
+  heightmapResolution: 33
+  heightScaleMeters: 12
+  buildOnStart: 0
+  skipDuplicateRuntimeRebuildInSameFrame: 1
+  useOpeningTownLocalSpace: 1
+  allowEditorTerrainRebuild: 0
+  logSkippedEditorTerrainRebuild: 0
+  buildOnlyTilesNearOpeningAnchor: 1
+  openingAnchorTileRadiusMeters: 1280
+  terrainMaterial: {fileID: 2100000, guid: aa1c667e89b3cec4992bf90a59d80268, type: 2}
+  evidenceInspectionDigestItems: 5
+  evidenceInspectionSearchRadiusMeters: 640
+  includeParcelAuthorityInEvidenceInspection: 1
+  createRuntimeFallbackAssets: 1
+  assignRuntimeTerrainMaterialWhenMissing: 1
+  logRuntimeFallbackAssets: 0
+  runtimeTerrainMaterialColor: {r: 0.38, g: 0.43, b: 0.3, a: 1}
+  scenicTreePrefab: {fileID: 6349807758743695999, guid: df809cad009ecc8468a8bc7d281cfc27, type: 3}
+  scenicScrubPrefab: {fileID: 1859637210121816604, guid: 9ebe02ef207433e4282d4973db121007, type: 3}
+  scenicWetReedPrefab: {fileID: 0}
+  scenicRockPrefab: {fileID: 0}
+  scenicGrassClumpPrefab: {fileID: 0}
+  settlementEvidencePrefab: {fileID: 0}
+  parcelStakePrefab: {fileID: 0}
+  upgradeLowRuntimeHeightmapResolution: 1
+  minimumRuntimeHeightmapResolution: 65
+  terrainVerticalStrength: 0.28
+  minimumVisibleReliefMeters: 18
+  broadReliefWeight: 0.46
+  ridgeReliefWeight: 0.22
+  detailReliefWeight: 0.16
+  highlandGradientWeight: 0.18
+  watercourseCutStrength: 0.3
+  waterBankCutStrength: 0.16
+  routeGradeStrength: 0.055
+  routeShoulderStrength: 0.035
+  settlementShelfStrength: 0.1
+  parcelPadGradeStrength: 0.075
+  parcelPadShoulderMeters: 34
+  parcelPadDirtStrength: 0.28
+  heightSmoothingPasses: 1
+  forceValidUnityTerrainResolution: 1
+  terrainLayers:
+  - {fileID: 8574412962073106934, guid: ad305b6e98dc851419f30978c3b0dd18, type: 2}
+  - {fileID: 8574412962073106934, guid: d2e3fadbe74570e4ba10b6fdacdfa47a, type: 2}
+  - {fileID: 8574412962073106934, guid: 4102768e5c847794e8f29a75f9d99349, type: 2}
+  generateRuntimeFallbackLayers: 1
+  paintTerrainAlphamaps: 1
+  alphamapResolution: 96
+  fallbackGrassColor: {r: 0.34, g: 0.42, b: 0.28, a: 1}
+  fallbackRoadDirtColor: {r: 0.58, g: 0.43, b: 0.25, a: 1}
+  fallbackWetlandColor: {r: 0.18, g: 0.31, b: 0.25, a: 1}
+  fallbackRockColor: {r: 0.42, g: 0.39, b: 0.33, a: 1}
+  drawInstancedTerrain: 0
+  paintRuntimeGrassDetails: 1
+  detailResolution: 256
+  detailResolutionPerPatch: 16
+  maxGrassDensity: 5
+  grassMinHeightMeters: 0.35
+  grassMaxHeightMeters: 0.9
+  runtimeGrassHealthyColor: {r: 0.36, g: 0.48, b: 0.25, a: 1}
+  runtimeGrassDryColor: {r: 0.46, g: 0.4, b: 0.23, a: 1}
+  normalizeOpeningTownHeight: 1
+  openingTownTargetY: 0
+  openingTownFlattenRadiusMeters: 220
+  openingTownBlendRadiusMeters: 420
+  logTerrainBuildSummary: 1
+  logRuntimeTerrainBuildTiming: 1
+  buildWatercourseMeshes: 1
+  authoredRiverPrefab: {fileID: 9088132633783935320, guid: 5f66be50e4a055e4298879cf0a1085ca, type: 3}
+  useAuthoredRiverPrefab: 1
+  buildFallbackWaterMeshWithAuthoredRiverPrefab: 0
+  buildFallbackWaterMeshesWhenAuthoredRiverPrefabMissing: 0
+  warnWhenAuthoredRiverPrefabMissing: 1
+  authoredRiverPrefabNominalWidthMeters: 10
+  authoredRiverPrefabNominalLengthMeters: 10
+  authoredRiverSegmentMaxLengthMeters: 96
+  authoredRiverPrefabEulerOffset: {x: 0, y: 0, z: 0}
+  waterMaterial: {fileID: 0}
+  runtimeWaterColor: {r: 0.12, g: 0.34, b: 0.48, a: 0.88}
+  waterRibbonMinWidthMeters: 8
+  waterRibbonMaxWidthMeters: 48
+  waterRibbonWidthMultiplier: 0.45
+  waterSurfaceOffsetMeters: 0.08
+  addWaterMeshColliders: 0
+  buildRouteCorridorMeshes: 1
+  routeMaterial: {fileID: 2100000, guid: ca98a868dceda83409ebb686548306aa, type: 2}
+  runtimeRouteColor: {r: 0.52, g: 0.38, b: 0.2, a: 0.72}
+  routeRibbonMinWidthMeters: 6
+  routeRibbonMaxWidthMeters: 34
+  routeRibbonWidthMultiplier: 0.42
+  routeSurfaceOffsetMeters: 0.055
+  routeRibbonReceivesShadows: 0
+  buildScenicVegetationProps: 1
+  maxScenicPropsPerRebuild: 180
+  scenicPropSpacingMeters: 82
+  scenicPropDensityMultiplier: 0.62
+  scenicPropAvoidTownRadiusMeters: 95
+  scenicPropAvoidRouteInfluence: 0.42
+  scenicPropAvoidParcelPadInfluence: 0.55
+  scenicPropMinScale: 0.55
+  scenicPropMaxScale: 1.35
+  scenicTreeTrunkColor: {r: 0.28, g: 0.18, b: 0.1, a: 1}
+  scenicTreeFoliageColor: {r: 0.24, g: 0.38, b: 0.18, a: 1}
+  scenicScrubColor: {r: 0.31, g: 0.34, b: 0.17, a: 1}
+  scenicWetReedColor: {r: 0.35, g: 0.39, b: 0.2, a: 1}
+  scenicRockColor: {r: 0.34, g: 0.32, b: 0.28, a: 1}
+  buildSettlementEvidenceProps: 1
+  maxSettlementEvidenceProps: 24
+  settlementEvidenceSurfaceOffsetMeters: 0.06
+  settlementEvidenceColor: {r: 0.7, g: 0.55, b: 0.32, a: 1}
+  buildParcelBoundaryStakes: 1
+  maxParcelBoundaryStakes: 72
+  parcelBoundaryStakesOnlyNearOpeningAnchor: 1
+  parcelStakeHeightMeters: 1.25
+  parcelStakeRadiusMeters: 0.06
+  parcelStakeSurfaceOffsetMeters: 0.05
+  parcelStakeColor: {r: 0.62, g: 0.46, b: 0.25, a: 1}
+  maxRuntimeTilesPerRebuild: 64
+  ensureTerrainCollider: 1
+  registerFirstTerrainColliderWithTownWorld: 1
+  forceTileRootWorldIdentity: 1
+  detachTileRootWhenForcingIdentity: 1
+  logTilePlacementDetails: 0
+  destroyOnlyGeneratedChildren: 1
+--- !u!1 &8444117380490268536
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6216986466907283061}
+  - component: {fileID: 2597886994033213250}
+  m_Layer: 0
+  m_Name: RegionalWorldDebugOverlay
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6216986466907283061
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8444117380490268536}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4805793354913043926}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2597886994033213250
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8444117380490268536}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b4791d7ac4a5e874c9b0ef32261edd44, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.World.RegionalWorldDebugOverlay
+  townWorld: {fileID: 3709094408740216693}
+  showOverlay: 1
+  syncLayerVisibilityFromTownSettings: 1
+  toggleKey: 288
+  useInputSystemToggle: 1
+  logInputToggleCompatibilityWarnings: 0
+  yOffset: 0.35
+  showOpeningTerrainBuildRadius: 1
+  showTerrainTiles: 1
+  showRouteReadyTileMarkers: 1
+  showWatercourses: 1
+  showRouteCorridors: 1
+  showRouteConstraintMarkers: 1
+  showVegetationZones: 1
+  showSurveyParcels: 1
+  showParcelReadinessMarkers: 1
+  showRemoteSuitabilityMarkers: 1
+  showAnchor: 1
+  showSettlements: 1
+  showSettlementRiskMarkers: 1
+  showSettlementSuccessionMarkers: 1
+  showFoundationValidationMarkers: 1
+  showRegionalOpportunityMarkers: 1
+  terrainTileColor: {r: 0.42, g: 0.48, b: 0.52, a: 0.36}
+  routeReadyTileColor: {r: 0.95, g: 0.62, b: 0.22, a: 0.74}
+  parcelColor: {r: 0.95, g: 0.78, b: 0.28, a: 0.42}
+  waterColor: {r: 0.15, g: 0.42, b: 0.82, a: 0.82}
+  routeCorridorColor: {r: 0.82, g: 0.62, b: 0.28, a: 0.86}
+  routeConstraintColor: {r: 0.95, g: 0.36, b: 0.12, a: 0.9}
+  anchorColor: {r: 0.95, g: 0.86, b: 0.38, a: 1}
+  vegetationColor: {r: 0.2, g: 0.58, b: 0.24, a: 0.28}
+  settlementColor: {r: 0.95, g: 0.52, b: 0.22, a: 1}
+  readinessColor: {r: 0.35, g: 0.82, b: 0.45, a: 0.72}
+  burdenColor: {r: 0.88, g: 0.28, b: 0.18, a: 0.72}
+  remoteSuitabilityColor: {r: 0.72, g: 0.48, b: 0.95, a: 0.82}
+  validationWarningColor: {r: 1, g: 0.72, b: 0.12, a: 0.92}
+  validationErrorColor: {r: 1, g: 0.12, b: 0.08, a: 1}
+  regionalOpportunityColor: {r: 0.32, g: 0.95, b: 0.8, a: 0.95}
+  openingTerrainBuildRadiusColor: {r: 0.72, g: 0.88, b: 1, a: 0.42}

@@ -1,0 +1,232 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: MineProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: mine_frontier_mine
+    displayName: Mine
+    businessType: 18
+    buildingId:
+    operations:
+      salesCadence: 1
+      payrollCadence: 1
+      reorderCadence: 1
+      stockReviewCadence: 1
+      marketSummaryCadence: 2
+    economy:
+      startingCashCents: 26000
+      weeklyReorderReserveCents: 1500
+      defaultRetailMarkupMultiplier: 1.08
+      lowStockWarningThreshold01: 0.2
+      reliabilitySensitivity: 0.95
+      competitionSensitivity: 0.05
+    ownedCategoryIds:
+    - coal
+    - iron_ore
+    - gold_ore
+    - silver_ore
+    - mine_support_supplies
+    workerSlots:
+    - slotId: foreman
+      displayName: Mine Foreman
+      baselineWeeklyWageCents: 1800
+      requiredForOpening: 1
+    - slotId: pitman
+      displayName: Pitman
+      baselineWeeklyWageCents: 1450
+      requiredForOpening: 1
+    - slotId: hauler
+      displayName: Ore Hauler
+      baselineWeeklyWageCents: 1300
+      requiredForOpening: 0
+    - slotId: timberman
+      displayName: Timberman
+      baselineWeeklyWageCents: 1400
+      requiredForOpening: 0
+  categories:
+  - categoryId: coal
+    displayName: Coal
+    role: 0
+    demandGroup: 4
+    sortOrder: 10
+    defaultMarkupMultiplier: 1
+    lowStockThreshold01: 0.2
+    playerFacingSummary: Bulk coal cut for local fuel and off-map sale.
+    itemIds:
+    - coal_ton
+  - categoryId: iron_ore
+    displayName: Iron Ore
+    role: 0
+    demandGroup: 4
+    sortOrder: 20
+    defaultMarkupMultiplier: 1
+    lowStockThreshold01: 0.2
+    playerFacingSummary: Raw iron ore staged for freight and sale.
+    itemIds:
+    - iron_ore_cart
+  - categoryId: gold_ore
+    displayName: Gold Ore
+    role: 0
+    demandGroup: 4
+    sortOrder: 30
+    defaultMarkupMultiplier: 1
+    lowStockThreshold01: 0.15
+    playerFacingSummary: High-value gold ore under speculative pressure.
+    itemIds:
+    - gold_ore_sack
+  - categoryId: silver_ore
+    displayName: Silver Ore
+    role: 0
+    demandGroup: 4
+    sortOrder: 40
+    defaultMarkupMultiplier: 1
+    lowStockThreshold01: 0.15
+    playerFacingSummary: Silver-bearing ore awaiting freight or assay sale.
+    itemIds:
+    - silver_ore_sack
+  - categoryId: mine_support_supplies
+    displayName: Mine Support Supplies
+    role: 0
+    demandGroup: 4
+    sortOrder: 50
+    defaultMarkupMultiplier: 1.05
+    lowStockThreshold01: 0.25
+    playerFacingSummary: Timbering, lamp, rope, and support sundries for a first-pass mine ledger.
+    itemIds:
+    - mine_support_crate
+  items:
+  - itemId: coal_ton
+    displayName: Coal Ton
+    categoryId: coal
+    unit: ton
+    pricing:
+      baselineCents: 95
+      localMarketBand:
+        minCents: 75
+        maxCents: 140
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.18
+    startingStockUnits: 0
+    reorderTargetUnits: 36
+    reorderLotSize: 6
+    coreStock: 1
+    producerTags:
+    - mine
+    consumerTags:
+    - fuel
+    - freight
+  - itemId: iron_ore_cart
+    displayName: Iron Ore Cart
+    categoryId: iron_ore
+    unit: cart
+    pricing:
+      baselineCents: 145
+      localMarketBand:
+        minCents: 120
+        maxCents: 220
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.2
+    startingStockUnits: 0
+    reorderTargetUnits: 30
+    reorderLotSize: 5
+    coreStock: 1
+    producerTags:
+    - mine
+    consumerTags:
+    - smelter
+    - freight
+  - itemId: gold_ore_sack
+    displayName: Gold Ore Sack
+    categoryId: gold_ore
+    unit: sack
+    pricing:
+      baselineCents: 450
+      localMarketBand:
+        minCents: 360
+        maxCents: 620
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.35
+    startingStockUnits: 0
+    reorderTargetUnits: 18
+    reorderLotSize: 3
+    coreStock: 1
+    producerTags:
+    - mine
+    consumerTags:
+    - assay
+    - freight
+  - itemId: silver_ore_sack
+    displayName: Silver Ore Sack
+    categoryId: silver_ore
+    unit: sack
+    pricing:
+      baselineCents: 320
+      localMarketBand:
+        minCents: 250
+        maxCents: 450
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.28
+    startingStockUnits: 0
+    reorderTargetUnits: 20
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags:
+    - mine
+    consumerTags:
+    - assay
+    - freight
+  - itemId: mine_support_crate
+    displayName: Mine Support Crate
+    categoryId: mine_support_supplies
+    unit: crate
+    pricing:
+      baselineCents: 160
+      localMarketBand:
+        minCents: 140
+        maxCents: 220
+      markupMultiplier: 1
+      supplyDemandSensitivity: 0.12
+    startingStockUnits: 6
+    reorderTargetUnits: 12
+    reorderLotSize: 3
+    coreStock: 1
+    producerTags:
+    - general_trade
+    consumerTags:
+    - mine
+  siteRequirements:
+    minimumSiteSizeCells:
+      x: 14
+      y: 14
+    minimumFrontageCells: 4
+    minimumBuildableAreaCells: 36
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: working_mine
+    displayName: Working Mine
+    playerFacingSummary: Keeps a first-pass ore ledger, mine payroll, and stockpile inside the shared business shell.
+  archetype: 1
+  throughputMode: 1
+  baselineWeeklyThroughputUnits: 18
+  baselineDailyServiceCapacity: 0
+  inputCategoryIds:
+  - mine_support_supplies
+  outputCategoryIds:
+  - coal
+  - iron_ore
+  - gold_ore
+  - silver_ore
+  serviceCategoryIds: []

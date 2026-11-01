@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: FuelDealerProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: fuel_dealer
+    displayName: Fuel Dealer
+    businessType: 11
+    buildingId: 
+    operations: {salesCadence: 1, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 13000, weeklyReorderReserveCents: 1600, defaultRetailMarkupMultiplier: 1.12, lowStockWarningThreshold01: 0.25, reliabilitySensitivity: 0.8, competitionSensitivity: 0.2}
+    ownedCategoryIds: [slabs_offcuts, fuel_wood]
+    workerSlots:
+    - {slotId: fuel_yard_keeper, displayName: Fuel Yard Keeper, baselineWeeklyWageCents: 1200, requiredForOpening: 1}
+    - {slotId: yard_helper, displayName: Yard Helper, baselineWeeklyWageCents: 900, requiredForOpening: 0}
+  categories:
+  - {categoryId: slabs_offcuts, displayName: Slabs / Offcuts, role: 0, demandGroup: 3, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: Low-grade slabs and offcuts bought from the sawmill., itemIds: [fuel_offcut_bundle]}
+  - {categoryId: fuel_wood, displayName: Fuel Wood, role: 0, demandGroup: 3, sortOrder: 20, defaultMarkupMultiplier: 1.12, lowStockThreshold01: 0.25, playerFacingSummary: Cut and bundled heating fuel for household reserves., itemIds: [fuel_wood_bundle]}
+  items:
+  - {itemId: fuel_offcut_bundle, displayName: Slab / Offcut Bundle, categoryId: slabs_offcuts, unit: bundle, pricing: {baselineCents: 22, localMarketBand: {minCents: 12, maxCents: 40}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}, startingStockUnits: 12, reorderTargetUnits: 32, reorderLotSize: 8, coreStock: 1, producerTags: [sawmill], consumerTags: [fuel_dealer]}
+  - {itemId: fuel_wood_bundle, displayName: Fuel Wood Bundle, categoryId: fuel_wood, unit: bundle, pricing: {baselineCents: 28, localMarketBand: {minCents: 15, maxCents: 48}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 24, reorderTargetUnits: 72, reorderLotSize: 12, coreStock: 1, producerTags: [fuel_dealer], consumerTags: [household, heating]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 6, y: 6}
+    minimumFrontageCells: 4
+    minimumBuildableAreaCells: 30
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: fuel_yard
+    displayName: Fuel Yard
+    playerFacingSummary: Turns slabs, offcuts, and cordwood into reliable household fuel supply.
+  archetype: 1
+  throughputMode: 2
+  baselineWeeklyThroughputUnits: 36
+  baselineDailyServiceCapacity: 0
+  inputCategoryIds: [slabs_offcuts]
+  outputCategoryIds: [fuel_wood]
+  serviceCategoryIds: []

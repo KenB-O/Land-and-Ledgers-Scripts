@@ -1,0 +1,257 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d79bbdbc401a4ad9be0110c11e93a167, type: 3}
+  m_Name: CompactPlaytestTownGenerationSettings
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.World.TownGenerationSettings
+  gridWidthCells: 96
+  gridDepthCells: 96
+  cellSizeMeters: 2
+  worldCenter: {x: 0, y: 0.61942244, z: 0}
+  seed: 919477915
+  startupMode: 0
+  fixedTestingProfileName: Default QA Town
+  fixedTestingWorldSeed: 1886
+  useManualSeedOverride: 0
+  manualSeedOverride: 1886
+  randomizeSeedOnFreshRuntimeGeneration: 1
+  useFixedDebugSeed: 0
+  fixedDebugSeed: 1886
+  seedAuthorityLegacyMigrationApplied: 1
+  terrainRaycastHeight: 250
+  terrainRaycastDistance: 600
+  maxBuildableSlopeDegrees: 8
+  minBuildableHeight: -25
+  maxBuildableHeight: 25
+  terrainLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  generateRegionalFoundation: 1
+  regionWidthMeters: 8192
+  regionDepthMeters: 8192
+  regionalTerrainTileSizeMeters: 512
+  regionalSurveySectionSizeMeters: 1609.344
+  regionalInitialHouseholdCount: 18
+  regionalInitialBusinessCount: 6
+  centerTownGridOnRegionalAnchor: 1
+  keepOpeningTownNearSceneOrigin: 1
+  openingTownSceneCenter: {x: 0, y: 0.61942244, z: 0}
+  syncRegionalDebugOverlaySettings: 1
+  showRegionalTerrainTiles: 0
+  showRegionalRouteReadyTileMarkers: 0
+  showRegionalWatercourses: 0
+  showRegionalRouteCorridors: 0
+  showRegionalRouteConstraintMarkers: 0
+  showRegionalVegetationZones: 0
+  showRegionalSurveyParcels: 0
+  showRegionalParcelReadinessMarkers: 0
+  showRegionalRemoteSuitabilityMarkers: 0
+  showRegionalAnchor: 0
+  showRegionalSettlements: 0
+  showRegionalSettlementRiskMarkers: 0
+  showRegionalSettlementSuccessionMarkers: 0
+  showRegionalFoundationValidationMarkers: 0
+  showRegionalOpportunityMarkers: 0
+  regionalInspectionOpportunityDigestLimit: 3
+  roadWidthCells: 3
+  mainStreetLengthCells: 40
+  crossStreetCount: 2
+  crossStreetSpacingCells: 24
+  crossStreetLengthCells: 24
+  plotDepthCells: 8
+  minPlotFrontageCells: 6
+  maxPlotFrontageCells: 10
+  plotGapCells: 1
+  buildingSetbackCells: 1
+  edgeHouseCount: 2
+  landPurchaseExpansionMinPlots: 1
+  landPurchaseExpansionMaxPlots: 2
+  generateAgriculturalParcels: 1
+  agricultureSpurRoadLengthCells: 40
+  agricultureDistanceFromCenterCells: 68
+  cropFarmParcelSizeCells: {x: 16, y: 18}
+  ranchParcelSizeCells: {x: 20, y: 24}
+  generateSawmillProperty: 0
+  sawmillSpurRoadLengthCells: 82
+  sawmillDistanceFromCenterCells: 62
+  sawmillParcelSizeCells: {x: 40, y: 34}
+  generateMineralDistricts: 1
+  coalDistrictCount: 2
+  ironDistrictCount: 2
+  goldDistrictCount: 2
+  silverDistrictCount: 2
+  coalDistrictRadiusCells: {x: 10, y: 18}
+  ironDistrictRadiusCells: {x: 8, y: 15}
+  goldDistrictRadiusCells: {x: 6, y: 11}
+  silverDistrictRadiusCells: {x: 6, y: 11}
+  coalSuitabilityWeight: 1
+  ironSuitabilityWeight: 1
+  goldSuitabilityWeight: 1
+  silverSuitabilityWeight: 1
+  minimumProtoSiteStrength01: 0.48
+  maximumRemoteProtoSites: 6
+  guaranteeLocalCarpenter: 1
+  minimumLocalCarpenterCount: 1
+  houseBuildDurationWeeks: {x: 1, y: 2}
+  businessBuildDurationWeeks: {x: 2, y: 4}
+  repairDurationWeeks: {x: 1, y: 2}
+  cropFarmFoodPrefabs:
+  - {fileID: 2618281412090179102, guid: a0b492f9e252c96498a3133b047e8e66, type: 3}
+  - {fileID: 8128236960932918307, guid: 34a6f43acf9687b4eb318caae41f381b, type: 3}
+  - {fileID: 6649555628699227668, guid: 466fd4c4557e3cb46a4e93d05d9f89e9, type: 3}
+  - {fileID: 8831815494286859845, guid: 1e4acc58dbf602247aa63ef5848700a4, type: 3}
+  cropFarmProduceStackPrefabs:
+  - {fileID: 5683430927688605030, guid: 79579295e0646a9498b3a28094e93912, type: 3}
+  - {fileID: 2618281412090179102, guid: a0b492f9e252c96498a3133b047e8e66, type: 3}
+  ranchAnimalPrefabs:
+  - {fileID: 8650236104009483530, guid: 27277d79dc3e54e41ae1e2937e69c3eb, type: 3}
+  - {fileID: 6686428653688315248, guid: bb84d34bac508bf4eb7282b9ed0be408, type: 3}
+  generateDetailProps: 0
+  barrelPropPrefabs:
+  - {fileID: 1471647305757138, guid: ab115fa0d49ef4d459dc1406aaf7704a, type: 3}
+  - {fileID: 1306179974468026, guid: 27bd799c905a821448d003337fa8d684, type: 3}
+  - {fileID: 1645474004440046, guid: 4524d8b145c8aaf4384a64f5ffc5fa2b, type: 3}
+  cratePropPrefabs:
+  - {fileID: 1108841901519714, guid: 9353b741e7d3daa479cfbfcdff4aa0d9, type: 3}
+  - {fileID: 1301313597562678, guid: 0c49d46218a214c438e919b496c12208, type: 3}
+  - {fileID: 1409572936532184, guid: fffa3dc4e365981409741d16a970e17d, type: 3}
+  - {fileID: 1404000053512912, guid: f24768a462290084b8577fd994836dd7, type: 3}
+  - {fileID: 1729373917808788, guid: ffbbb6e0a7f63ad4591f84f3946b85ca, type: 3}
+  smallGoodsPropPrefabs:
+  - {fileID: 1216671827259502, guid: d8820e5967e71da41a9d133ee3f212b6, type: 3}
+  - {fileID: 1062865885298978, guid: 86bc1c42c777d4d4ea063d5a5164b549, type: 3}
+  - {fileID: 1390030260469552, guid: 6a978a4587d8f894db4089d7b35e4b7f, type: 3}
+  - {fileID: 1440842109463550, guid: 4cc8f580a1d3a794abdcd3bad2cb1dbb, type: 3}
+  - {fileID: 1423045768002754, guid: b67cd395a26b88e46b00fe5701122ae1, type: 3}
+  - {fileID: 1216796238542076, guid: 77c5b14ff955d644d8afc7f128a4cf6c, type: 3}
+  - {fileID: 1987027766634038, guid: 96d0da8f20a4c3548b51e7ec8e8cf844, type: 3}
+  - {fileID: 1022009069945632, guid: 66b2dc64017cc404698cac28aed23b65, type: 3}
+  - {fileID: 1752935948075028, guid: 88493f36e7dae7c4a839ae0a30711ef8, type: 3}
+  - {fileID: 1293146291901798, guid: 436c36c778a1e304fbd9a388a0709e27, type: 3}
+  - {fileID: 1445699982590654, guid: 47276ceed2bd05043af6251b958edaa5, type: 3}
+  farmSupportPropPrefabs:
+  - {fileID: 1108841901519714, guid: 9353b741e7d3daa479cfbfcdff4aa0d9, type: 3}
+  - {fileID: 1301313597562678, guid: 0c49d46218a214c438e919b496c12208, type: 3}
+  - {fileID: 1423045768002754, guid: b67cd395a26b88e46b00fe5701122ae1, type: 3}
+  - {fileID: 1216796238542076, guid: 77c5b14ff955d644d8afc7f128a4cf6c, type: 3}
+  - {fileID: 1216671827259502, guid: d8820e5967e71da41a9d133ee3f212b6, type: 3}
+  - {fileID: 1471647305757138, guid: ab115fa0d49ef4d459dc1406aaf7704a, type: 3}
+  - {fileID: 1022009069945632, guid: 66b2dc64017cc404698cac28aed23b65, type: 3}
+  ranchSupportPropPrefabs:
+  - {fileID: 1216671827259502, guid: d8820e5967e71da41a9d133ee3f212b6, type: 3}
+  - {fileID: 1062865885298978, guid: 86bc1c42c777d4d4ea063d5a5164b549, type: 3}
+  - {fileID: 1390030260469552, guid: 6a978a4587d8f894db4089d7b35e4b7f, type: 3}
+  - {fileID: 1440842109463550, guid: 4cc8f580a1d3a794abdcd3bad2cb1dbb, type: 3}
+  - {fileID: 1423045768002754, guid: b67cd395a26b88e46b00fe5701122ae1, type: 3}
+  - {fileID: 1306179974468026, guid: 27bd799c905a821448d003337fa8d684, type: 3}
+  - {fileID: 1293146291901798, guid: 436c36c778a1e304fbd9a388a0709e27, type: 3}
+  - {fileID: 1445699982590654, guid: 47276ceed2bd05043af6251b958edaa5, type: 3}
+  sawmillSupportPropPrefabs:
+  - {fileID: 1108841901519714, guid: 9353b741e7d3daa479cfbfcdff4aa0d9, type: 3}
+  - {fileID: 1409572936532184, guid: fffa3dc4e365981409741d16a970e17d, type: 3}
+  - {fileID: 1471647305757138, guid: ab115fa0d49ef4d459dc1406aaf7704a, type: 3}
+  - {fileID: 1754497654341622, guid: 99534b59f19040c4eb909ee6a88e7490, type: 3}
+  - {fileID: 1022158144662112, guid: cc95691e75d9b164fac1e8d6c57d6772, type: 3}
+  - {fileID: 1268432472029106, guid: c2f3a23445215ab488a3e6b4cd966f23, type: 3}
+  - {fileID: 1216671827259502, guid: d8820e5967e71da41a9d133ee3f212b6, type: 3}
+  - {fileID: 1022009069945632, guid: 66b2dc64017cc404698cac28aed23b65, type: 3}
+  - {fileID: 1393460014493500, guid: 15ae5dc9006e2644fb1072c2fb23920b, type: 3}
+  - {fileID: 1607477242164160, guid: c313ac1c6e2b2154e9c24fb25ba00982, type: 3}
+  generateForestEnvironmentDressing: 0
+  forestDressingMaxInstances: 320
+  mapEdgeForestBandWidthCells: 10
+  sawmillForestRadiusCells: 12
+  wetGroundCorridorWidthCells: 5
+  forestCanopyTreePrefabs:
+  - {fileID: 2133793693996174905, guid: 33388f1098bb51e49bf05eb9c5588389, type: 3}
+  - {fileID: 2493473939148820682, guid: 915b43792ae342d4ba5fa425e86cc6f4, type: 3}
+  - {fileID: 1168419490129809306, guid: 2c71f3bb1758e824494c5a4a16c89015, type: 3}
+  - {fileID: 534213820712025836, guid: 19df7a28074cb284a8aa8562718310f5, type: 3}
+  - {fileID: 402231074841112697, guid: 65926329d063fb84ea4ac2e63a6fcaa4, type: 3}
+  - {fileID: 1008656033906581803, guid: 47a34fcf711f1d54a9e98658458da727, type: 3}
+  forestUnderstoryPrefabs:
+  - {fileID: 91063913129398454, guid: d97e5a32d0fecff49905a21d3c0d484d, type: 3}
+  - {fileID: 371693925466168213, guid: d1eae364af575a340bcdaad47387008a, type: 3}
+  - {fileID: 1141479743118927529, guid: 75204a7297d010041851c9963ef2ea5f, type: 3}
+  - {fileID: 3963812985103495222, guid: b69d396eb5c32be47897887aae3b0348, type: 3}
+  - {fileID: 762675466716324866, guid: cb105fbabeb70b343a692b3fb09f829e, type: 3}
+  - {fileID: 5305256077440059215, guid: 283a7fd49a90e274f9550368cf6863c0, type: 3}
+  forestGroundCoverPrefabs:
+  - {fileID: 156335607043850256, guid: cc7179a2ce65745459790f57a231a7d8, type: 3}
+  - {fileID: 1298218015822933112, guid: 193204491f653e241bf50074d9dad010, type: 3}
+  - {fileID: 8632977291124583395, guid: 9ff96c23a39dbd84ba03d2b381dd8e57, type: 3}
+  - {fileID: 5001871497718003200, guid: 7a35ad4df6bb0404493e2f034e968eae, type: 3}
+  - {fileID: 7243209615218423865, guid: 4bf5c9392e6410f4285e07b62126ba5f, type: 3}
+  - {fileID: 392714924975134320, guid: ab02f7c4d46ac384593c8c5afb74b3c2, type: 3}
+  forestWetGroundPrefabs:
+  - {fileID: 1438085234795581128, guid: 346b6f594aeca8d4fadc83ffc6dc45cb, type: 3}
+  - {fileID: 8657698042794201298, guid: c78e1d16caa745348a389cf7245ec58d, type: 3}
+  - {fileID: 8132993626496307569, guid: 843a1e98c70b1da40a9ed873ba6b1d65, type: 3}
+  - {fileID: 7774458421340842758, guid: d48da6237a2582f49bc2f3120e5e137d, type: 3}
+  - {fileID: 8237698232529425125, guid: b2727ceef36213345a7d20169238869e, type: 3}
+  forestDeadfallPrefabs:
+  - {fileID: 5532175033796687976, guid: c1921b87b865a68459a301799f6f5633, type: 3}
+  - {fileID: 3452847186763374814, guid: 534778d3f43b4544c872480485624a55, type: 3}
+  - {fileID: 3697114826050726096, guid: a749d72a235896e4e92081fa83f83c40, type: 3}
+  - {fileID: 646326740325627895, guid: 015465e48bb83e04fa51cfe6659976a4, type: 3}
+  - {fileID: 2940671494276870849, guid: 0b7ac2f1f2bc56441ab2eaa5a9b4dfa1, type: 3}
+  - {fileID: 4260959136308526195, guid: 64bac83f5e681894d8cbc0236b0a0351, type: 3}
+  - {fileID: 4504017761037396265, guid: c65358a6665792242b1f1f19df7f0029, type: 3}
+  forestMeadowPrefabs:
+  - {fileID: 6610836305396197048, guid: 6b3546d09bf439c41ad23f17e6092814, type: 3}
+  - {fileID: 7904806139297608410, guid: c29b094abdec2ef4584066ec9fcc9adf, type: 3}
+  - {fileID: 4392666999026414496, guid: f3e870b1be7d316479a798100e2d68b1, type: 3}
+  - {fileID: 3042658973140251840, guid: f4ca836290f8c624094f1af54846cf07, type: 3}
+  - {fileID: 8658205388212818211, guid: 083ddbae69cc6814fa0103896e42ca98, type: 3}
+  forestRockPrefabs:
+  - {fileID: 8745562623447073463, guid: e9db796313a828f48ab412f87a39ce7d, type: 3}
+  - {fileID: 1236898795652179973, guid: d57da85aee64de64ab23b1f75a70f51d, type: 3}
+  - {fileID: 124529913939545396, guid: 038bd9bd223f3a442b89926767d57d23, type: 3}
+  - {fileID: 3218859338934444679, guid: febdc5bf87c1e6947ade6bc58d6b3d42, type: 3}
+  - {fileID: 6608502843660117139, guid: 5268ba3c890b23d4f9b7c386790dc252, type: 3}
+  vacantLandPlotsToReserve: 2
+  generateTownHall: 1
+  townHallDefinition: {fileID: 11400000, guid: 84ce5a1d8b9d46fca3f24c7f1c5a1052, type: 2}
+  schoolhousePhysicalDefinition: {fileID: 0}
+  buildingCatalog:
+  - {fileID: 11400000, guid: f85bad3c03a5cdd4f816bda83c75df32, type: 2}
+  - {fileID: 11400000, guid: 2eb58bf8950115c41b30178b795e7412, type: 2}
+  - {fileID: 11400000, guid: e954e6e40646efa4eba9e138658cd42c, type: 2}
+  - {fileID: 11400000, guid: dda9873594774ff6b20afce22d5dbfe0, type: 2}
+  - {fileID: 11400000, guid: 9164f0c4899e481d906edef24e28873a, type: 2}
+  - {fileID: 11400000, guid: 163b115b15854e2e81eabcf76effdb0c, type: 2}
+  - {fileID: 11400000, guid: b746b0d91e286ff48b823a361f526ab2, type: 2}
+  - {fileID: 11400000, guid: 896469e60d044ea39800ea522d9f3982, type: 2}
+  - {fileID: 11400000, guid: 519b8d15a83e4d85ae8425f09bb0db8e, type: 2}
+  - {fileID: 11400000, guid: 471c4ef371fe494ea4efb3ccafe5098b, type: 2}
+  showTerrainOverlay: 0
+  showRoads: 1
+  showPlots: 0
+  showBuildings: 1
+  showAnchors: 0
+  buildableTerrainColor: {r: 0.18, g: 0.38, b: 0.19, a: 0.22}
+  blockedTerrainColor: {r: 0.45, g: 0.12, b: 0.08, a: 0.45}
+  roadColor: {r: 0.3, g: 0.24, b: 0.18, a: 1}
+  roadMaterial: {fileID: 2100000, guid: 1511ad56e11bc754d8017a5b560f8043, type: 2}
+  plotColor: {r: 0.66, g: 0.5, b: 0.31, a: 1}
+  footprintColor: {r: 0.55, g: 0.38, b: 0.24, a: 1}
+  doorAnchorColor: {r: 0.2, g: 0.85, b: 1, a: 1}
+  serviceAnchorColor: {r: 0.5, g: 0.9, b: 0.35, a: 1}
+  dropOffAnchorColor: {r: 1, g: 0.75, b: 0.2, a: 1}
+  showResourceSuitabilityOverlay: 0
+  showResourceDistricts: 0
+  showResourceProtoSites: 0
+  showResourcePressureLabels: 0
+  coalDistrictColor: {r: 0.18, g: 0.18, b: 0.18, a: 0.42}
+  ironDistrictColor: {r: 0.5, g: 0.32, b: 0.24, a: 0.42}
+  goldDistrictColor: {r: 0.78, g: 0.63, b: 0.14, a: 0.42}
+  silverDistrictColor: {r: 0.64, g: 0.68, b: 0.74, a: 0.42}
+  remoteProtoSiteColor: {r: 0.88, g: 0.86, b: 0.76, a: 1}

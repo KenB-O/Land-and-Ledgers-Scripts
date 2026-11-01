@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: BlacksmithProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: blacksmith
+    displayName: Blacksmith
+    businessType: 1
+    buildingId: 
+    operations: {salesCadence: 0, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 22000, weeklyReorderReserveCents: 3500, defaultRetailMarkupMultiplier: 1.28, lowStockWarningThreshold01: 0.22, reliabilitySensitivity: 0.6, competitionSensitivity: 0.2}
+    ownedCategoryIds: [metal_inputs, tools_hardware]
+    workerSlots:
+    - {slotId: smith, displayName: Smith, baselineWeeklyWageCents: 1800, requiredForOpening: 1}
+    - {slotId: striker_helper, displayName: Striker / Helper, baselineWeeklyWageCents: 1100, requiredForOpening: 0}
+  categories:
+  - {categoryId: metal_inputs, displayName: Metal / Fuel Inputs, role: 0, demandGroup: 4, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: "Iron, coal, and repair inputs.", itemIds: [iron_coal_lot]}
+  - {categoryId: tools_hardware, displayName: Nails / Simple Hardware, role: 0, demandGroup: 4, sortOrder: 20, defaultMarkupMultiplier: 1.22, lowStockThreshold01: 0.2, playerFacingSummary: "Nails, simple hardware, and repair output.", itemIds: [smith_hardware_lot]}
+  items:
+  - {itemId: iron_coal_lot, displayName: Iron and Coal Lot, categoryId: metal_inputs, unit: lot, pricing: {baselineCents: 150, localMarketBand: {minCents: 100, maxCents: 250}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 24, reorderTargetUnits: 32, reorderLotSize: 6, coreStock: 1, producerTags: [freight], consumerTags: [blacksmith]}
+  - {itemId: smith_hardware_lot, displayName: Nails / Simple Hardware Lot, categoryId: tools_hardware, unit: lot, pricing: {baselineCents: 250, localMarketBand: {minCents: 175, maxCents: 400}, markupMultiplier: 1, supplyDemandSensitivity: 0.4}, startingStockUnits: 48, reorderTargetUnits: 72, reorderLotSize: 6, coreStock: 1, producerTags: [blacksmith], consumerTags: [household, farm, ranch, construction]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 6, y: 6}
+    minimumFrontageCells: 5
+    minimumBuildableAreaCells: 36
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: repair_support
+    displayName: Repair Support
+    playerFacingSummary: "Prioritizes practical repairs, farm tools, wagon hardware, and working-town upkeep."
+  archetype: 1
+  throughputMode: 2
+  baselineWeeklyThroughputUnits: 32
+  baselineDailyServiceCapacity: 4
+  inputCategoryIds: [metal_inputs]
+  outputCategoryIds: [tools_hardware]
+  serviceCategoryIds: [repair_service]

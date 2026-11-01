@@ -1,0 +1,6 @@
+# Unity serializes empty YAML values with trailing spaces in authored assets.
+# Treat those generated serialization blanks as data, not diff whitespace errors.
+*.meta whitespace=-blank-at-eol
+*.asset whitespace=-blank-at-eol
+*.prefab whitespace=-blank-at-eol
+*.gitignore whitespace=-blank-at-eof

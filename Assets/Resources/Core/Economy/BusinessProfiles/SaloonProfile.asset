@@ -1,0 +1,42 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: SaloonProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: saloon
+    displayName: Saloon
+    businessType: 15
+    buildingId: 
+    operations: {salesCadence: 0, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 16000, weeklyReorderReserveCents: 1700, defaultRetailMarkupMultiplier: 1.1, lowStockWarningThreshold01: 0.25, reliabilitySensitivity: 0.7, competitionSensitivity: 0.3}
+    ownedCategoryIds: [meal_inputs, fuel_wood, meal_service]
+    workerSlots:
+    - {slotId: proprietor, displayName: Proprietor, baselineWeeklyWageCents: 1450, requiredForOpening: 1}
+    - {slotId: cook, displayName: Cook, baselineWeeklyWageCents: 1200, requiredForOpening: 0}
+  categories:
+  - {categoryId: meal_inputs, displayName: Meal Inputs, role: 0, demandGroup: 0, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: Food and small consumables for table service., itemIds: [meal_input_lot]}
+  - {categoryId: fuel_wood, displayName: Fuel Wood, role: 1, demandGroup: 3, sortOrder: 20, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: Cooking and heating fuel for the saloon room., itemIds: [saloon_fuel_bundle]}
+  - {categoryId: meal_service, displayName: Saloon Service, role: 0, demandGroup: 3, sortOrder: 30, defaultMarkupMultiplier: 1, lowStockThreshold01: 0, playerFacingSummary: "Meals, drink, and social table service.", itemIds: [meal_service_visit]}
+  items:
+  - {itemId: meal_input_lot, displayName: Meal Input Lot, categoryId: meal_inputs, unit: lot, pricing: {baselineCents: 95, localMarketBand: {minCents: 60, maxCents: 150}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 18, reorderTargetUnits: 36, reorderLotSize: 6, coreStock: 1, producerTags: [general_store, butcher, bakery], consumerTags: [saloon]}
+  - {itemId: saloon_fuel_bundle, displayName: Saloon Fuel Bundle, categoryId: fuel_wood, unit: bundle, pricing: {baselineCents: 28, localMarketBand: {minCents: 15, maxCents: 48}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}, startingStockUnits: 6, reorderTargetUnits: 18, reorderLotSize: 4, coreStock: 1, producerTags: [fuel_dealer], consumerTags: [saloon]}
+  - {itemId: meal_service_visit, displayName: Saloon Service Visit, categoryId: meal_service, unit: visit, pricing: {baselineCents: 40, localMarketBand: {minCents: 20, maxCents: 80}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 0, reorderTargetUnits: 0, reorderLotSize: 1, coreStock: 1, producerTags: [saloon], consumerTags: [worker, boarder, traveler]}
+  siteRequirements: {minimumSiteSizeCells: {x: 5, y: 5}, minimumFrontageCells: 5, minimumBuildableAreaCells: 25, allowedPlotZones: [1, 0], requiresRoadFrontage: 1}
+  mainFocus: {focusId: saloon, displayName: Saloon, playerFacingSummary: "Serves meals, drink, and social table service before a mature hotel trade."}
+  archetype: 2
+  throughputMode: 3
+  baselineWeeklyThroughputUnits: 0
+  baselineDailyServiceCapacity: 12
+  inputCategoryIds: [meal_inputs, fuel_wood]
+  outputCategoryIds: []
+  serviceCategoryIds: [meal_service]

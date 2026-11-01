@@ -1,0 +1,54 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: BuilderProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: builder
+    displayName: Builder
+    businessType: 10
+    buildingId: 
+    operations: {salesCadence: 1, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 15000, weeklyReorderReserveCents: 1200, defaultRetailMarkupMultiplier: 1, lowStockWarningThreshold01: 0.2, reliabilitySensitivity: 0.8, competitionSensitivity: 0.1}
+    ownedCategoryIds: [builder_labor, carpentry_service, lumber, tools_hardware]
+    workerSlots:
+    - {slotId: carpenter, displayName: Carpenter, baselineWeeklyWageCents: 1650, requiredForOpening: 1}
+    - {slotId: helper, displayName: Carpenter Helper, baselineWeeklyWageCents: 1050, requiredForOpening: 0}
+  categories:
+  - {categoryId: builder_labor, displayName: Builder Labor, role: 0, demandGroup: 4, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0, playerFacingSummary: "Crew capacity for construction, fit-outs, and repair jobs.", itemIds: [builder_labor_week]}
+  - {categoryId: carpentry_service, displayName: Carpentry Service, role: 0, demandGroup: 4, sortOrder: 20, defaultMarkupMultiplier: 1, lowStockThreshold01: 0, playerFacingSummary: Repair and finish carpentry service sold as crew time., itemIds: [carpentry_service_call]}
+  - {categoryId: lumber, displayName: Lumber, role: 1, demandGroup: 4, sortOrder: 30, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: Boards kept on hand for fit-outs and repair work., itemIds: [builder_lumber_bundle]}
+  - {categoryId: tools_hardware, displayName: Tools / Hardware, role: 1, demandGroup: 4, sortOrder: 40, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: "Nails, hinges, tools, and repair hardware used by the builder crew.", itemIds: [builder_hardware_lot]}
+  items:
+  - {itemId: builder_labor_week, displayName: Builder Labor Week, categoryId: builder_labor, unit: labor-week, pricing: {baselineCents: 350, localMarketBand: {minCents: 250, maxCents: 550}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 0, reorderTargetUnits: 0, reorderLotSize: 1, coreStock: 1, producerTags: [builder], consumerTags: [construction]}
+  - {itemId: carpentry_service_call, displayName: Carpentry Service Call, categoryId: carpentry_service, unit: call, pricing: {baselineCents: 85, localMarketBand: {minCents: 50, maxCents: 150}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}, startingStockUnits: 0, reorderTargetUnits: 0, reorderLotSize: 1, coreStock: 1, producerTags: [builder], consumerTags: [household, business]}
+  - {itemId: builder_lumber_bundle, displayName: Builder Lumber Bundle, categoryId: lumber, unit: bundle, pricing: {baselineCents: 98, localMarketBand: {minCents: 80, maxCents: 145}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}, startingStockUnits: 8, reorderTargetUnits: 24, reorderLotSize: 6, coreStock: 1, producerTags: [lumber_yard], consumerTags: [builder]}
+  - {itemId: builder_hardware_lot, displayName: Builder Hardware Lot, categoryId: tools_hardware, unit: lot, pricing: {baselineCents: 250, localMarketBand: {minCents: 175, maxCents: 400}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 4, reorderTargetUnits: 12, reorderLotSize: 4, coreStock: 1, producerTags: [blacksmith, general_store], consumerTags: [builder]}
+  siteRequirements:
+    minimumSiteSizeCells: {x: 5, y: 5}
+    minimumFrontageCells: 4
+    minimumBuildableAreaCells: 20
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: builder_crew
+    displayName: Builder
+    playerFacingSummary: "Provides carpentry labor capacity for construction, fit-outs, and repairs."
+  archetype: 2
+  throughputMode: 3
+  baselineWeeklyThroughputUnits: 0
+  baselineDailyServiceCapacity: 8
+  inputCategoryIds: []
+  outputCategoryIds: []
+  serviceCategoryIds: [builder_labor, carpentry_service]

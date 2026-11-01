@@ -1,0 +1,447 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: GeneralStoreProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: general_store
+    displayName: General Store
+    businessType: 0
+    buildingId: 
+    operations:
+      salesCadence: 0
+      payrollCadence: 1
+      reorderCadence: 1
+      stockReviewCadence: 1
+      marketSummaryCadence: 2
+    economy:
+      startingCashCents: 45000
+      weeklyReorderReserveCents: 8000
+      defaultRetailMarkupMultiplier: 1.4
+      lowStockWarningThreshold01: 0.25
+      reliabilitySensitivity: 0.5
+      competitionSensitivity: 0.25
+    ownedCategoryIds:
+    - staple_food
+    - meat
+    - clothing
+    - household_goods
+    - tools_hardware
+    - medicine_remedies
+    workerSlots:
+    - slotId: clerk_helper
+      displayName: Store Clerk
+      baselineWeeklyWageCents: 1200
+      requiredForOpening: 1
+    - slotId: stock_helper
+      displayName: Stock Hand
+      baselineWeeklyWageCents: 1000
+      requiredForOpening: 0
+  categories:
+  - categoryId: staple_food
+    displayName: Staple Food
+    role: 0
+    demandGroup: 0
+    sortOrder: 10
+    defaultMarkupMultiplier: 1.45
+    lowStockThreshold01: 0.3
+    playerFacingSummary: Daily pantry goods with reliable household demand.
+    itemIds:
+    - flour
+    - bread
+    - potatoes
+    - salt
+    - sugar
+    - coffee
+    - tea
+  - categoryId: meat
+    displayName: Meat
+    role: 0
+    demandGroup: 1
+    sortOrder: 20
+    defaultMarkupMultiplier: 1.35
+    lowStockThreshold01: 0.25
+    playerFacingSummary: Preserved and fresh protein staples.
+    itemIds:
+    - beef
+    - bacon
+    - cheese
+  - categoryId: clothing
+    displayName: Clothing
+    role: 0
+    demandGroup: 2
+    sortOrder: 30
+    defaultMarkupMultiplier: 1.35
+    lowStockThreshold01: 0.2
+    playerFacingSummary: Practical frontier fabric, workwear, and cold-weather goods.
+    itemIds:
+    - basic_cloth
+    - flannel
+    - workwear
+    - boots
+    - blanket
+    - hat
+  - categoryId: household_goods
+    displayName: Household Goods
+    role: 0
+    demandGroup: 3
+    sortOrder: 40
+    defaultMarkupMultiplier: 1.45
+    lowStockThreshold01: 0.25
+    playerFacingSummary: Home maintenance goods that keep cabins supplied.
+    itemIds:
+    - soap
+    - candles
+    - lamp_oil
+    - lantern
+    - thread
+    - buttons
+  - categoryId: tools_hardware
+    displayName: Tools / Hardware
+    role: 0
+    demandGroup: 4
+    sortOrder: 50
+    defaultMarkupMultiplier: 1.4
+    lowStockThreshold01: 0.2
+    playerFacingSummary: Repair and work supplies for farms, homes, and small trades.
+    itemIds:
+    - nails_hardware_lot
+    - hand_tool
+    - farm_tool
+  - categoryId: medicine_remedies
+    displayName: Medicine / Remedies
+    role: 1
+    demandGroup: 5
+    sortOrder: 60
+    defaultMarkupMultiplier: 1.55
+    lowStockThreshold01: 0.2
+    playerFacingSummary: Small flex stock for household remedies and illness response.
+    itemIds:
+    - patent_remedy
+    - medicine_bottle
+  items:
+  - itemId: flour
+    displayName: Flour
+    categoryId: staple_food
+    unit: 10 lb sack
+    pricing: {baselineCents: 35, baseWholesaleCostCents: 18, importCostCents: 2, localMarketBand: {minCents: 28, maxCents: 45}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}
+    startingStockUnits: 48
+    reorderTargetUnits: 60
+    reorderLotSize: 12
+    coreStock: 1
+    producerTags: [mill, freight]
+    consumerTags: [household, bakery]
+  - itemId: bread
+    displayName: Bread
+    categoryId: staple_food
+    unit: loaf
+    pricing: {baselineCents: 5, baseWholesaleCostCents: 2, importCostCents: 0, localMarketBand: {minCents: 4, maxCents: 8}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 24
+    reorderTargetUnits: 30
+    reorderLotSize: 6
+    coreStock: 1
+    producerTags: [bakery, household]
+    consumerTags: [household]
+  - itemId: potatoes
+    displayName: Vegetables / Potatoes
+    categoryId: staple_food
+    unit: sack
+    pricing: {baselineCents: 25, baseWholesaleCostCents: 12, importCostCents: 1, localMarketBand: {minCents: 18, maxCents: 35}, markupMultiplier: 1, supplyDemandSensitivity: 0.4}
+    startingStockUnits: 30
+    reorderTargetUnits: 40
+    reorderLotSize: 10
+    coreStock: 1
+    producerTags: [farm, freight]
+    consumerTags: [household]
+  - itemId: salt
+    displayName: Salt
+    categoryId: staple_food
+    unit: small bag
+    pricing: {baselineCents: 10, localMarketBand: {minCents: 8, maxCents: 15}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}
+    startingStockUnits: 36
+    reorderTargetUnits: 48
+    reorderLotSize: 12
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, butcher]
+  - itemId: sugar
+    displayName: Sugar
+    categoryId: staple_food
+    unit: lb
+    pricing: {baselineCents: 8, localMarketBand: {minCents: 6, maxCents: 12}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 50
+    reorderTargetUnits: 60
+    reorderLotSize: 10
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, saloon]
+  - itemId: coffee
+    displayName: Coffee
+    categoryId: staple_food
+    unit: lb
+    pricing: {baselineCents: 25, localMarketBand: {minCents: 18, maxCents: 35}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}
+    startingStockUnits: 40
+    reorderTargetUnits: 50
+    reorderLotSize: 10
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, saloon]
+  - itemId: tea
+    displayName: Tea
+    categoryId: staple_food
+    unit: lb
+    pricing: {baselineCents: 60, localMarketBand: {minCents: 45, maxCents: 80}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}
+    startingStockUnits: 12
+    reorderTargetUnits: 18
+    reorderLotSize: 6
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household]
+  - itemId: beef
+    displayName: Beef
+    categoryId: meat
+    unit: lb
+    pricing: {baselineCents: 12, baseWholesaleCostCents: 6, importCostCents: 1, localMarketBand: {minCents: 9, maxCents: 18}, markupMultiplier: 1, supplyDemandSensitivity: 0.45}
+    startingStockUnits: 36
+    reorderTargetUnits: 48
+    reorderLotSize: 12
+    coreStock: 1
+    producerTags: [ranch, butcher]
+    consumerTags: [household, saloon]
+  - itemId: bacon
+    displayName: Pork / Bacon
+    categoryId: meat
+    unit: lb
+    pricing: {baselineCents: 15, localMarketBand: {minCents: 12, maxCents: 22}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}
+    startingStockUnits: 32
+    reorderTargetUnits: 40
+    reorderLotSize: 8
+    coreStock: 1
+    producerTags: [butcher, freight]
+    consumerTags: [household, saloon]
+  - itemId: cheese
+    displayName: Cheese
+    categoryId: meat
+    unit: lb
+    pricing: {baselineCents: 15, localMarketBand: {minCents: 12, maxCents: 22}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}
+    startingStockUnits: 24
+    reorderTargetUnits: 32
+    reorderLotSize: 8
+    coreStock: 1
+    producerTags: [dairy, freight]
+    consumerTags: [household, saloon]
+  - itemId: basic_cloth
+    displayName: Basic Cloth
+    categoryId: clothing
+    unit: yard
+    pricing: {baselineCents: 12, localMarketBand: {minCents: 9, maxCents: 18}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}
+    startingStockUnits: 40
+    reorderTargetUnits: 50
+    reorderLotSize: 10
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, tailor]
+  - itemId: flannel
+    displayName: Better Cloth / Flannel
+    categoryId: clothing
+    unit: yard
+    pricing: {baselineCents: 35, localMarketBand: {minCents: 28, maxCents: 50}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}
+    startingStockUnits: 20
+    reorderTargetUnits: 28
+    reorderLotSize: 7
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, tailor]
+  - itemId: workwear
+    displayName: Workwear
+    categoryId: clothing
+    unit: set
+    pricing: {baselineCents: 150, localMarketBand: {minCents: 120, maxCents: 210}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 10
+    reorderTargetUnits: 14
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags: [freight, tailor]
+    consumerTags: [household, worker]
+  - itemId: boots
+    displayName: Shoes / Boots
+    categoryId: clothing
+    unit: pair
+    pricing: {baselineCents: 250, localMarketBand: {minCents: 200, maxCents: 350}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 8
+    reorderTargetUnits: 12
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, worker]
+  - itemId: blanket
+    displayName: Blanket
+    categoryId: clothing
+    unit: each
+    pricing: {baselineCents: 125, localMarketBand: {minCents: 90, maxCents: 180}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}
+    startingStockUnits: 10
+    reorderTargetUnits: 14
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household]
+  - itemId: hat
+    displayName: Hat
+    categoryId: clothing
+    unit: each
+    pricing: {baselineCents: 75, localMarketBand: {minCents: 50, maxCents: 125}, markupMultiplier: 1, supplyDemandSensitivity: 0.15}
+    startingStockUnits: 8
+    reorderTargetUnits: 12
+    reorderLotSize: 4
+    coreStock: 0
+    producerTags: [freight]
+    consumerTags: [household, worker]
+  - itemId: soap
+    displayName: Soap
+    categoryId: household_goods
+    unit: bar
+    pricing: {baselineCents: 5, baseWholesaleCostCents: 2, importCostCents: 0, localMarketBand: {minCents: 4, maxCents: 8}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}
+    startingStockUnits: 48
+    reorderTargetUnits: 60
+    reorderLotSize: 12
+    coreStock: 1
+    producerTags: [freight, household]
+    consumerTags: [household]
+  - itemId: candles
+    displayName: Candles
+    categoryId: household_goods
+    unit: bundle
+    pricing: {baselineCents: 10, baseWholesaleCostCents: 4, importCostCents: 1, localMarketBand: {minCents: 8, maxCents: 15}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}
+    startingStockUnits: 36
+    reorderTargetUnits: 48
+    reorderLotSize: 12
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household]
+  - itemId: lamp_oil
+    displayName: Lamp Oil
+    categoryId: household_goods
+    unit: quart
+    pricing: {baselineCents: 20, baseWholesaleCostCents: 10, importCostCents: 1, localMarketBand: {minCents: 15, maxCents: 30}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 24
+    reorderTargetUnits: 36
+    reorderLotSize: 12
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, business]
+  - itemId: lantern
+    displayName: Lantern
+    categoryId: household_goods
+    unit: each
+    pricing: {baselineCents: 100, localMarketBand: {minCents: 75, maxCents: 150}, markupMultiplier: 1, supplyDemandSensitivity: 0.2}
+    startingStockUnits: 6
+    reorderTargetUnits: 10
+    reorderLotSize: 2
+    coreStock: 1
+    producerTags: [freight, tinsmith]
+    consumerTags: [household, business]
+  - itemId: thread
+    displayName: Thread
+    categoryId: household_goods
+    unit: spool
+    pricing: {baselineCents: 5, localMarketBand: {minCents: 4, maxCents: 8}, markupMultiplier: 1, supplyDemandSensitivity: 0.15}
+    startingStockUnits: 30
+    reorderTargetUnits: 40
+    reorderLotSize: 10
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, tailor]
+  - itemId: buttons
+    displayName: Buttons
+    categoryId: household_goods
+    unit: card
+    pricing: {baselineCents: 5, localMarketBand: {minCents: 3, maxCents: 8}, markupMultiplier: 1, supplyDemandSensitivity: 0.1}
+    startingStockUnits: 20
+    reorderTargetUnits: 30
+    reorderLotSize: 10
+    coreStock: 1
+    producerTags: [freight]
+    consumerTags: [household, tailor]
+  - itemId: nails_hardware_lot
+    displayName: Nails / Hardware Lot
+    categoryId: tools_hardware
+    unit: lot
+    pricing: {baselineCents: 25, baseWholesaleCostCents: 12, importCostCents: 1, localMarketBand: {minCents: 18, maxCents: 40}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}
+    startingStockUnits: 30
+    reorderTargetUnits: 40
+    reorderLotSize: 10
+    coreStock: 1
+    producerTags: [freight, blacksmith]
+    consumerTags: [household, builder, farm]
+  - itemId: hand_tool
+    displayName: Hand Tool
+    categoryId: tools_hardware
+    unit: each
+    pricing: {baselineCents: 100, localMarketBand: {minCents: 75, maxCents: 160}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 8
+    reorderTargetUnits: 12
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags: [freight, blacksmith]
+    consumerTags: [household, worker, farm]
+  - itemId: farm_tool
+    displayName: Farm Tool
+    categoryId: tools_hardware
+    unit: each
+    pricing: {baselineCents: 250, localMarketBand: {minCents: 180, maxCents: 400}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}
+    startingStockUnits: 5
+    reorderTargetUnits: 8
+    reorderLotSize: 2
+    coreStock: 1
+    producerTags: [freight, blacksmith]
+    consumerTags: [farm]
+  - itemId: patent_remedy
+    displayName: Patent Remedy
+    categoryId: medicine_remedies
+    unit: bottle
+    pricing: {baselineCents: 50, localMarketBand: {minCents: 35, maxCents: 85}, markupMultiplier: 1, supplyDemandSensitivity: 0.45}
+    startingStockUnits: 12
+    reorderTargetUnits: 16
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags: [freight, doctor]
+    consumerTags: [household]
+  - itemId: medicine_bottle
+    displayName: Medicine Bottle
+    categoryId: medicine_remedies
+    unit: bottle
+    pricing: {baselineCents: 75, localMarketBand: {minCents: 50, maxCents: 125}, markupMultiplier: 1, supplyDemandSensitivity: 0.5}
+    startingStockUnits: 8
+    reorderTargetUnits: 12
+    reorderLotSize: 4
+    coreStock: 1
+    producerTags: [freight, doctor]
+    consumerTags: [household]
+  siteRequirements:
+    minimumSiteSizeCells: {x: 5, y: 5}
+    minimumFrontageCells: 5
+    minimumBuildableAreaCells: 25
+    allowedPlotZones:
+    - 1
+    - 0
+    requiresRoadFrontage: 1
+  mainFocus:
+    focusId: balanced_staples
+    displayName: Balanced Staples
+    playerFacingSummary: "Keeps staple shelves reliable while carrying household goods, hardware, and remedies."
+  archetype: 1
+  throughputMode: 0
+  baselineWeeklyThroughputUnits: 36
+  baselineDailyServiceCapacity: 0
+  inputCategoryIds: [freight_goods]
+  outputCategoryIds: [staple_food, meat, clothing, household_goods, tools_hardware, medicine_remedies]
+  serviceCategoryIds: []

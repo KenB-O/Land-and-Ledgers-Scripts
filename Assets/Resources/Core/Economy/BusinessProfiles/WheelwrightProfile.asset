@@ -1,0 +1,40 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: WheelwrightProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: wheelwright
+    displayName: Wheelwright
+    businessType: 17
+    buildingId: 
+    operations: {salesCadence: 1, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 13000, weeklyReorderReserveCents: 1500, defaultRetailMarkupMultiplier: 1.15, lowStockWarningThreshold01: 0.25, reliabilitySensitivity: 0.75, competitionSensitivity: 0.15}
+    ownedCategoryIds: [repair_inputs, wheelwright_repairs]
+    workerSlots:
+    - {slotId: wheelwright, displayName: Wheelwright, baselineWeeklyWageCents: 1500, requiredForOpening: 1}
+    - {slotId: shop_helper, displayName: Shop Helper, baselineWeeklyWageCents: 950, requiredForOpening: 0}
+  categories:
+  - {categoryId: repair_inputs, displayName: Repair Inputs, role: 0, demandGroup: 4, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: "Lumber, hardware, and repair stock for wheel and wagon work.", itemIds: [repair_input_lot]}
+  - {categoryId: wheelwright_repairs, displayName: Wheelwright Repairs, role: 0, demandGroup: 4, sortOrder: 20, defaultMarkupMultiplier: 1.15, lowStockThreshold01: 0.2, playerFacingSummary: "Wagon, wheel, cart, and wooden gear repair output.", itemIds: [wheelwright_repair_lot]}
+  items:
+  - {itemId: repair_input_lot, displayName: Repair Input Lot, categoryId: repair_inputs, unit: lot, pricing: {baselineCents: 110, localMarketBand: {minCents: 75, maxCents: 180}, markupMultiplier: 1, supplyDemandSensitivity: 0.3}, startingStockUnits: 16, reorderTargetUnits: 32, reorderLotSize: 6, coreStock: 1, producerTags: [lumber_yard, blacksmith], consumerTags: [wheelwright]}
+  - {itemId: wheelwright_repair_lot, displayName: Wheelwright Repair Lot, categoryId: wheelwright_repairs, unit: lot, pricing: {baselineCents: 220, localMarketBand: {minCents: 150, maxCents: 360}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 8, reorderTargetUnits: 20, reorderLotSize: 4, coreStock: 1, producerTags: [wheelwright], consumerTags: [livery, farm, ranch, freight]}
+  siteRequirements: {minimumSiteSizeCells: {x: 6, y: 6}, minimumFrontageCells: 4, minimumBuildableAreaCells: 30, allowedPlotZones: [1, 0], requiresRoadFrontage: 1}
+  mainFocus: {focusId: wheelwright, displayName: Wheelwright, playerFacingSummary: "Repairs wagons, wheels, and practical wooden gear for town work."}
+  archetype: 1
+  throughputMode: 2
+  baselineWeeklyThroughputUnits: 22
+  baselineDailyServiceCapacity: 3
+  inputCategoryIds: [repair_inputs]
+  outputCategoryIds: [wheelwright_repairs]
+  serviceCategoryIds: [wheelwright_repairs]

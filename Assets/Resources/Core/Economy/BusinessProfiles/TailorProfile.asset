@@ -1,0 +1,42 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 111cf2b7fdeb44baa372e61f8a3aa477, type: 3}
+  m_Name: TailorProfile
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.BusinessProfileDefinition
+  business:
+    businessId: tailor
+    displayName: Tailor
+    businessType: 14
+    buildingId: 
+    operations: {salesCadence: 1, payrollCadence: 1, reorderCadence: 1, stockReviewCadence: 1, marketSummaryCadence: 2}
+    economy: {startingCashCents: 12000, weeklyReorderReserveCents: 1200, defaultRetailMarkupMultiplier: 1.15, lowStockWarningThreshold01: 0.25, reliabilitySensitivity: 0.7, competitionSensitivity: 0.2}
+    ownedCategoryIds: [cloth_notions, clothing, mending_service]
+    workerSlots:
+    - {slotId: tailor, displayName: Tailor, baselineWeeklyWageCents: 1250, requiredForOpening: 1}
+    - {slotId: sewing_helper, displayName: Sewing Helper, baselineWeeklyWageCents: 800, requiredForOpening: 0}
+  categories:
+  - {categoryId: cloth_notions, displayName: Cloth / Notions, role: 0, demandGroup: 2, sortOrder: 10, defaultMarkupMultiplier: 1, lowStockThreshold01: 0.25, playerFacingSummary: "Cloth, thread, buttons, and small sewing notions.", itemIds: [cloth_notion_lot]}
+  - {categoryId: clothing, displayName: Clothing / Workwear, role: 0, demandGroup: 2, sortOrder: 20, defaultMarkupMultiplier: 1.18, lowStockThreshold01: 0.25, playerFacingSummary: "Clothing, workwear, and practical sewn goods.", itemIds: [tailored_workwear]}
+  - {categoryId: mending_service, displayName: Mending Service, role: 1, demandGroup: 2, sortOrder: 30, defaultMarkupMultiplier: 1, lowStockThreshold01: 0, playerFacingSummary: Alterations and mending sold as service time., itemIds: [mending_job]}
+  items:
+  - {itemId: cloth_notion_lot, displayName: Cloth and Notions Lot, categoryId: cloth_notions, unit: lot, pricing: {baselineCents: 95, localMarketBand: {minCents: 60, maxCents: 160}, markupMultiplier: 1, supplyDemandSensitivity: 0.35}, startingStockUnits: 18, reorderTargetUnits: 32, reorderLotSize: 6, coreStock: 1, producerTags: [freight, general_store], consumerTags: [tailor]}
+  - {itemId: tailored_workwear, displayName: Workwear Lot, categoryId: clothing, unit: lot, pricing: {baselineCents: 180, localMarketBand: {minCents: 120, maxCents: 300}, markupMultiplier: 1, supplyDemandSensitivity: 0.4}, startingStockUnits: 12, reorderTargetUnits: 30, reorderLotSize: 5, coreStock: 1, producerTags: [tailor], consumerTags: [household, worker, general_store]}
+  - {itemId: mending_job, displayName: Mending Job, categoryId: mending_service, unit: job, pricing: {baselineCents: 30, localMarketBand: {minCents: 15, maxCents: 60}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}, startingStockUnits: 0, reorderTargetUnits: 0, reorderLotSize: 1, coreStock: 1, producerTags: [tailor], consumerTags: [household, worker]}
+  siteRequirements: {minimumSiteSizeCells: {x: 4, y: 4}, minimumFrontageCells: 3, minimumBuildableAreaCells: 16, allowedPlotZones: [1, 0], requiresRoadFrontage: 1}
+  mainFocus: {focusId: tailor_room, displayName: Tailor, playerFacingSummary: "Turns cloth and notions into workwear, mending, and clothing service."}
+  archetype: 1
+  throughputMode: 2
+  baselineWeeklyThroughputUnits: 22
+  baselineDailyServiceCapacity: 4
+  inputCategoryIds: [cloth_notions]
+  outputCategoryIds: [clothing]
+  serviceCategoryIds: [mending_service]

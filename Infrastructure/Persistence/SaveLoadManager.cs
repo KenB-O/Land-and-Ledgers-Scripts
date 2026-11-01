@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Financing;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
@@ -118,6 +119,19 @@ namespace LandLedgers.Persistence
         private string lastPostRestoreConsistencySummary = string.Empty;
 
         private MigrationManifestDto activeMigrationManifest;
+
+        /// <summary>
+        /// Phase 2, runtime-only (not serialized): the production
+        /// off-map procurement service, if a driver owns one. A driver
+        /// that creates an OffMapNamedSkuProcurementService MUST set
+        /// this before saving, otherwise procurement state will not
+        /// persist and the save will carry an empty procurement
+        /// section. Null is safe: capture and restore then default to
+        /// empty procurement with a diagnostic. Codex must wire this
+        /// when it wires the procurement driver; it is not a scene
+        /// field because the service is plain C#, not a Unity object.
+        /// </summary>
+        public OffMapNamedSkuProcurementService PassXlProcurementService { get; set; }
 
         public string LastStatus => lastStatus;
         public string DefaultSlotPath => Path.Combine(Application.persistentDataPath, SaveDirectoryName, DefaultSlotFileName);
@@ -400,6 +414,21 @@ namespace LandLedgers.Persistence
             {
                 drivers.ResetDomesticTickWatermark(timeManager.AbsoluteGameSeconds);
             }
+
+            // Phase 2: restore Pass XL slice flags and procurement AFTER
+            // population load, WITHOUT regenerating population, and
+            // BEFORE the post-restore consistency snapshot, so that
+            // snapshot sees the restored flags. Old saves (no
+            // passXlSlice section) restore as flags false and empty
+            // procurement. A null drivers object or a null procurement
+            // service is diagnosed, never crashed on.
+            foreach (string passXlDiagnostic in PassXlSliceSaveCoordinator.Restore(
+                save != null ? save.passXlSlice : null,
+                populationManager, drivers, PassXlProcurementService))
+            {
+                Debug.Log($"[SaveLoad] {passXlDiagnostic}");
+            }
+
             managementPanel?.Refresh();
             ConfigureFirstSessionGuidance();
 
@@ -714,6 +743,11 @@ namespace LandLedgers.Persistence
                 // capture, so the reconciled hub latched list follows.
                 scenario = SaloonCaptureOrDefault(saloonBootstrap, firstLedgerBootstrap),
                 systems = systemsHub != null ? systemsHub.CaptureSaveDto() : new SystemsSaveDto(),
+                // Phase 2: Pass XL slice flags and off-map procurement.
+                // Drivers are found, not assumed; a null driver or a
+                // null procurement service reads as defaults.
+                passXlSlice = PassXlSliceSaveCoordinator.Capture(
+                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto
                 {

@@ -226,6 +226,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string Provenance = string.Empty;
     }
 
+    /// <summary>One store lot consumption, with units, so a sale can be rolled back exactly.</summary>
+    [Serializable]
+    public sealed class NamedSkuLotConsumption
+    {
+        public string LotId = string.Empty;
+        public int Units;
+    }
+
     [Serializable]
     public sealed class NamedSkuSale
     {
@@ -239,6 +247,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public int UnitSalePriceCents;
         public int TotalPriceCents;
         public List<string> ConsumedLotIds = new List<string>();
+        /// <summary>
+        /// Phase 2, additive: per-lot units matching ConsumedLotIds, in the
+        /// same order. Sales written before Phase 2 carry an empty list;
+        /// rollback of such a sale cannot restore per-lot splits exactly
+        /// and is therefore refused rather than guessed (see RollbackSale).
+        /// </summary>
+        public List<NamedSkuLotConsumption> ConsumedLotUnits = new List<NamedSkuLotConsumption>();
         public string HouseholdLotId = string.Empty;
         public int DayIndex;
         public string Provenance = string.Empty;
@@ -252,6 +267,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public List<NamedSkuLot> Lots = new List<NamedSkuLot>();
         public List<NamedSkuSale> Sales = new List<NamedSkuSale>();
         public List<string> ReceivedReceiptIds = new List<string>();
+        /// <summary>
+        /// Phase 2, additive: SaleIds whose household inventory delivery
+        /// has already happened. Delivering the same sale twice must never
+        /// double-add inventory; this set is the persisted guard. Old
+        /// saves carry an empty list, so a sale from an old save is
+        /// treated as not yet delivered by this path.
+        /// </summary>
+        public List<string> DeliveredSaleIds = new List<string>();
         public int NextOrderSequence;
         public int NextSaleSequence;
     }
@@ -265,6 +288,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         private readonly List<NamedSkuLot> lots = new List<NamedSkuLot>();
         private readonly List<NamedSkuSale> sales = new List<NamedSkuSale>();
         private readonly List<string> receivedReceiptIds = new List<string>();
+        private readonly List<string> deliveredSaleIds = new List<string>();
         private readonly List<string> diagnostics = new List<string>();
         private int nextOrderSequence;
         private int nextSaleSequence;
@@ -282,7 +306,33 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public IReadOnlyList<NamedSkuLot> Lots => lots;
         public IReadOnlyList<NamedSkuSale> Sales => sales;
         public IReadOnlyList<string> ReceivedReceiptIds => receivedReceiptIds;
+        public IReadOnlyList<string> DeliveredSaleIds => deliveredSaleIds;
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>True when this sale's household inventory delivery has already happened.</summary>
+        public bool IsSaleDelivered(string saleId)
+        {
+            return !string.IsNullOrWhiteSpace(saleId) && deliveredSaleIds.Contains(saleId);
+        }
+
+        /// <summary>
+        /// Phase 2 clear-then-load support: empties orders, lots, sales,
+        /// receipts, delivered marks, and both sequences. Callers restoring
+        /// a save must call this before ImportState, so a second save does
+        /// not leak the first save's state. ImportState alone remains
+        /// merge-idempotent for duplicate imports.
+        /// </summary>
+        public void ClearState()
+        {
+            orders.Clear();
+            lots.Clear();
+            sales.Clear();
+            receivedReceiptIds.Clear();
+            deliveredSaleIds.Clear();
+            diagnostics.Clear();
+            nextOrderSequence = 0;
+            nextSaleSequence = 0;
+        }
 
         public int SellableUnits(string skuId)
         {
@@ -668,6 +718,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             string saleId = $"sku-sale-{businessId}-{Math.Max(0, dayIndex)}-{nextSaleSequence++}";
             string householdLotId = $"hh-lot-{saleId}";
+            var consumedLotUnits = new List<NamedSkuLotConsumption>();
+            for (int i = 0; i < consumed.Count; i++)
+            {
+                consumedLotUnits.Add(new NamedSkuLotConsumption { LotId = consumed[i].lot.LotId, Units = consumed[i].units });
+            }
+
             var sale = new NamedSkuSale
             {
                 SaleId = saleId,
@@ -680,16 +736,227 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 UnitSalePriceCents = unitSalePriceCents,
                 TotalPriceCents = totalPrice,
                 ConsumedLotIds = consumedLotIds,
+                ConsumedLotUnits = consumedLotUnits,
                 HouseholdLotId = householdLotId,
                 DayIndex = Math.Max(0, dayIndex),
                 Provenance = $"sale {saleId}: H{householdId} bought {units}u {skuId} from {businessId} for {totalPrice}c " +
                     $"from store lots [{string.Join(", ", consumedLotIds)}] -> household lot {householdLotId}; " +
                     "household cash via HouseholdLedger, business cash via business cash port; " +
-                    "household inventory write is NOT done here (see class doc).",
+                    "household inventory write is NOT done by SellToHousehold alone (use SellAndDeliverToInventory).",
             };
             sales.Add(sale);
             diagnostics.Add(sale.Provenance);
             return sale;
+        }
+
+        /// <summary>Result of a household inventory delivery for one sale.</summary>
+        public sealed class NamedSkuDeliveryResult
+        {
+            public bool Success;
+            public bool AlreadyDelivered;
+            public NamedSkuSale Sale;
+            public int HouseholdInventoryLotId = -1;
+            public string Diagnostic = string.Empty;
+        }
+
+        /// <summary>
+        /// Phase 2: delivers one already-settled sale into household
+        /// inventory, exactly once. If the sale is already in
+        /// DeliveredSaleIds, this is a no-op success (AlreadyDelivered),
+        /// never a second inventory lot. It does not move cash: cash was
+        /// settled by SellToHousehold. Callers that need sale + delivery
+        /// in one transaction must use SellAndDeliverToInventory, not
+        /// SellToHousehold followed by a separate charge.
+        /// </summary>
+        public NamedSkuDeliveryResult DeliverSaleToInventory(NamedSkuSale sale, HouseholdInventory inventory)
+        {
+            var result = new NamedSkuDeliveryResult { Sale = sale };
+            if (sale == null)
+            {
+                result.Diagnostic = "DeliverSaleToInventory rejected: no sale supplied.";
+                diagnostics.Add(result.Diagnostic);
+                return result;
+            }
+
+            if (inventory == null || inventory.HouseholdId != sale.HouseholdId)
+            {
+                result.Diagnostic = $"DeliverSaleToInventory rejected: a HouseholdInventory for H{sale.HouseholdId} is required.";
+                diagnostics.Add(result.Diagnostic);
+                return result;
+            }
+
+            if (IsSaleDelivered(sale.SaleId))
+            {
+                result.Success = true;
+                result.AlreadyDelivered = true;
+                result.Diagnostic = $"DeliverSaleToInventory: sale {sale.SaleId} already delivered; no second inventory lot created.";
+                diagnostics.Add(result.Diagnostic);
+                return result;
+            }
+
+            int beforeCount = inventory.Lots.Count;
+            string sourceLabel = $"{sale.Provenance} -> delivered to household inventory";
+            string addProblem = inventory.AddLot(
+                sale.SkuId, sale.Units, sale.DayIndex, sourceLabel,
+                qualityBand: string.Empty, sourceKind: "off-map-procurement-sale",
+                ownerPersonId: sale.ActingPersonId);
+            if (addProblem != null)
+            {
+                result.Diagnostic = $"DeliverSaleToInventory rejected: household inventory refused the lot ({addProblem}); nothing delivered.";
+                diagnostics.Add(result.Diagnostic);
+                return result;
+            }
+
+            // AddLot appends exactly one lot; that lot is the delivery.
+            // Do not guess its id from a sequence: read it back.
+            HouseholdItemLot delivered = null;
+            for (int i = beforeCount; i < inventory.Lots.Count; i++)
+            {
+                delivered = inventory.Lots[i];
+            }
+
+            if (delivered == null)
+            {
+                result.Diagnostic = "DeliverSaleToInventory failed: inventory accepted the lot but no new lot is visible; delivery not marked.";
+                diagnostics.Add(result.Diagnostic);
+                return result;
+            }
+
+            deliveredSaleIds.Add(sale.SaleId);
+            result.Success = true;
+            result.HouseholdInventoryLotId = delivered.LotId;
+            result.Diagnostic = $"DeliverSaleToInventory: sale {sale.SaleId} delivered as household lot {delivered.LotId} ({sale.Units}u {sale.SkuId}); sale HouseholdLotId {sale.HouseholdLotId} is the carriage record, inventory LotId is the household lot.";
+            diagnostics.Add(result.Diagnostic);
+            return result;
+        }
+
+        /// <summary>
+        /// Phase 2: the single settlement path for a household purchase
+        /// that must also land in household inventory. It calls
+        /// SellToHousehold exactly once (one cash settlement, no second
+        /// charge), then delivers to inventory. If AddLot rejects, the
+        /// whole operation rolls back: store lots restored, business
+        /// credit reversed, household outflow reversed, sale record
+        /// removed, and no delivered mark. Returns null on failure.
+        /// </summary>
+        public NamedSkuDeliveryResult SellAndDeliverToInventory(
+            HouseholdLedger householdLedger, HouseholdInventory inventory,
+            int householdId, int actingPersonId, string buyerPrincipal,
+            string skuId, int units, int unitSalePriceCents, int dayIndex)
+        {
+            var result = new NamedSkuDeliveryResult();
+            NamedSkuSale sale = SellToHousehold(
+                householdLedger, householdId, actingPersonId, buyerPrincipal,
+                skuId, units, unitSalePriceCents, dayIndex);
+            if (sale == null)
+            {
+                result.Diagnostic = "SellAndDeliverToInventory failed: sale was refused; nothing moved.";
+                diagnostics.Add(result.Diagnostic);
+                return result;
+            }
+
+            result.Sale = sale;
+            NamedSkuDeliveryResult delivery = DeliverSaleToInventory(sale, inventory);
+            if (delivery.Success)
+            {
+                delivery.Sale = sale;
+                return delivery;
+            }
+
+            // AddLot (or inventory) refused after cash settled: roll back
+            // the sale completely, so no partial goods or cash remain.
+            string rollbackProblem = RollbackSale(sale, householdLedger);
+            result.Diagnostic = $"SellAndDeliverToInventory rolled back: {delivery.Diagnostic}" +
+                (rollbackProblem != null ? $" WARNING: rollback incomplete ({rollbackProblem}); reconcile manually." : " Sale record removed, lots and cash restored.");
+            diagnostics.Add(result.Diagnostic);
+            return result;
+        }
+
+        /// <summary>
+        /// Phase 2 rollback for one sale created by SellToHousehold.
+        /// Restores store lot quantities from ConsumedLotUnits, reverses
+        /// the business credit, reverses the household outflow with a
+        /// named SaleProceeds refund inflow, and removes the sale record.
+        /// Returns null on full success, or a diagnostic if any leg
+        /// could not be reversed. Sales written before Phase 2 carry no
+        /// ConsumedLotUnits and are refused for rollback rather than
+        /// restored by guesswork.
+        /// </summary>
+        public string RollbackSale(NamedSkuSale sale, HouseholdLedger householdLedger)
+        {
+            if (sale == null)
+            {
+                return "RollbackSale rejected: no sale supplied.";
+            }
+
+            if (sale.ConsumedLotUnits == null || sale.ConsumedLotUnits.Count == 0
+                || sale.ConsumedLotUnits.Count != sale.ConsumedLotIds.Count)
+            {
+                return $"RollbackSale refused for sale {sale.SaleId}: per-lot consumption is missing, so lot quantities cannot be restored exactly; no partial rollback was attempted.";
+            }
+
+            for (int i = 0; i < sale.ConsumedLotUnits.Count; i++)
+            {
+                NamedSkuLotConsumption consumption = sale.ConsumedLotUnits[i];
+                for (int j = 0; j < lots.Count; j++)
+                {
+                    if (lots[j] != null && string.Equals(lots[j].LotId, consumption.LotId, StringComparison.Ordinal))
+                    {
+                        lots[j].RemainingUnits += consumption.Units;
+                        break;
+                    }
+                }
+            }
+
+            string problem = null;
+            if (businessCash != null)
+            {
+                string reverseProblem = businessCash.TryDebit(
+                    sale.TotalPriceCents, $"rollback: sale {sale.SaleId} reversed");
+                if (reverseProblem != null)
+                {
+                    problem = $"business credit reversal failed ({reverseProblem})";
+                }
+            }
+            else
+            {
+                problem = "no business cash port supplied for reversal";
+            }
+
+            if (householdLedger != null && householdLedger.HouseholdId == sale.HouseholdId)
+            {
+                string refundProblem = householdLedger.RecordInflow(
+                    Math.Max(0, sale.DayIndex), sale.TotalPriceCents,
+                    HouseholdIncomeSource.SaleProceeds, sale.SaleId,
+                    $"refund: reversed sale {sale.SaleId} ({sale.Units}u {sale.SkuId})",
+                    sale.BusinessId);
+                if (refundProblem != null)
+                {
+                    problem = problem != null
+                        ? problem + $"; household refund failed ({refundProblem})"
+                        : $"household refund failed ({refundProblem})";
+                }
+            }
+            else
+            {
+                problem = problem != null
+                    ? problem + "; no matching household ledger supplied for refund"
+                    : "no matching household ledger supplied for refund";
+            }
+
+            for (int i = 0; i < sales.Count; i++)
+            {
+                if (sales[i] != null && string.Equals(sales[i].SaleId, sale.SaleId, StringComparison.Ordinal))
+                {
+                    sales.RemoveAt(i);
+                    break;
+                }
+            }
+
+            deliveredSaleIds.Remove(sale.SaleId);
+            diagnostics.Add($"RollbackSale: sale {sale.SaleId} reversed (lots restored, cash legs attempted)" +
+                (problem != null ? $" WARNING: {problem}." : "."));
+            return problem;
         }
 
         public NamedSkuProcurementSaveDto ExportState()
@@ -701,6 +968,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 Lots = new List<NamedSkuLot>(lots),
                 Sales = new List<NamedSkuSale>(sales),
                 ReceivedReceiptIds = new List<string>(receivedReceiptIds),
+                DeliveredSaleIds = new List<string>(deliveredSaleIds),
                 NextOrderSequence = nextOrderSequence,
                 NextSaleSequence = nextSaleSequence,
             };
@@ -714,7 +982,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return;
             }
 
-            for (int i = 0; i < dto.Orders.Count; i++)
+            if (dto.Orders != null) for (int i = 0; i < dto.Orders.Count; i++)
             {
                 if (dto.Orders[i] != null && FindOrder(dto.Orders[i].OrderId) == null)
                 {
@@ -722,7 +990,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
             }
 
-            for (int i = 0; i < dto.Lots.Count; i++)
+            if (dto.Lots != null) for (int i = 0; i < dto.Lots.Count; i++)
             {
                 NamedSkuLot lot = dto.Lots[i];
                 if (lot == null)
@@ -746,7 +1014,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
             }
 
-            for (int i = 0; i < dto.Sales.Count; i++)
+            if (dto.Sales != null) for (int i = 0; i < dto.Sales.Count; i++)
             {
                 NamedSkuSale sale = dto.Sales[i];
                 if (sale == null)
@@ -770,11 +1038,25 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
             }
 
-            for (int i = 0; i < dto.ReceivedReceiptIds.Count; i++)
+            if (dto.ReceivedReceiptIds != null)
             {
-                if (!string.IsNullOrWhiteSpace(dto.ReceivedReceiptIds[i]) && !receivedReceiptIds.Contains(dto.ReceivedReceiptIds[i]))
+                for (int i = 0; i < dto.ReceivedReceiptIds.Count; i++)
                 {
-                    receivedReceiptIds.Add(dto.ReceivedReceiptIds[i]);
+                    if (!string.IsNullOrWhiteSpace(dto.ReceivedReceiptIds[i]) && !receivedReceiptIds.Contains(dto.ReceivedReceiptIds[i]))
+                    {
+                        receivedReceiptIds.Add(dto.ReceivedReceiptIds[i]);
+                    }
+                }
+            }
+
+            if (dto.DeliveredSaleIds != null)
+            {
+                for (int i = 0; i < dto.DeliveredSaleIds.Count; i++)
+                {
+                    if (!string.IsNullOrWhiteSpace(dto.DeliveredSaleIds[i]) && !deliveredSaleIds.Contains(dto.DeliveredSaleIds[i]))
+                    {
+                        deliveredSaleIds.Add(dto.DeliveredSaleIds[i]);
+                    }
                 }
             }
 

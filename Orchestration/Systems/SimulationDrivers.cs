@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using LandLedgers.Animals;
 using LandLedgers.Economy;
+using LandLedgers.Persistence;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Estates;
 using LandLedgers.Economy.Farming.Integration;
@@ -60,7 +61,7 @@ namespace LandLedgers.Orchestration.Systems
     ///   audits overdue items (D4F), and RecruitmentService accrues inquiries and
     ///   resolves letters — postal-routed ones only on real arrival (T2B).
     /// </summary>
-    public sealed class SimulationDrivers : MonoBehaviour
+    public sealed class SimulationDrivers : MonoBehaviour, IPassXlPlayerFlagHolder
     {
         [SerializeField, Tooltip("CLN-1 hub owning the authorities. Found automatically if empty.")]
         private SimulationSystemsHub hub;
@@ -79,9 +80,12 @@ namespace LandLedgers.Orchestration.Systems
         // Player-issued travel, player-issued task advancement, and player
         // owner-labour accounting are skipped (see PlayerNpcPlaytestPolicy).
         // Default false: ordinary player behaviour, byte-for-byte unchanged.
-        // Codex: expose this bool in the Inspector on this component. It is
-        // a scene value, not a save-DTO field, so it resets to the scene
-        // value on reload unless a bootstrapper bool forwards it.
+        // Codex: expose this bool in the Inspector on this component.
+        // Phase 2: it is also persisted in PassXlSliceSaveDto and restored
+        // by SaveLoadManager on Continue (see PassXlSliceSaveCoordinator).
+        // The bootstrapper playtest bool (FirstLedgerSliceBootstrapper)
+        // forwards as an OR override on Continue: it can turn NPC mode on,
+        // but it never clears a saved true on its own.
         [SerializeField, Tooltip("Playtest only: treat the player as a regular NPC; skip player-issued travel, player-task advancement, and player owner-labour accounting.")]
         private bool treatPlayerAsNpc;
 

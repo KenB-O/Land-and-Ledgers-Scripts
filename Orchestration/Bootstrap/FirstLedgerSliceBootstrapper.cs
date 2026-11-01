@@ -108,6 +108,9 @@ namespace LandLedgers.FirstLedger
         [SerializeField, Tooltip("Enables the small three-business roster for focused Main Scene playtesting; canonical opening defaults remain unchanged.")]
         private bool useCompactPlaytestOpeningRoster;
 
+        [SerializeField, Tooltip("Playtest only: treat the player as a regular NPC. Forwards to SimulationDrivers.TreatPlayerAsNpc on startup and on Continue. OR logic: true forces NPC mode on, false leaves a restored save value untouched and never clears a saved true. Codex must set this in Main Scene Inspector; it is code only here.")]
+        private bool treatPlayerAsNpcPlaytest;
+
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         [Header("Development Population Fixture")]
         [SerializeField, Tooltip("Optional Pass XL fixture. Effective only when explicitly enabled for a fresh New Game; ordinary settings and Continue/restore are unchanged.")]
@@ -270,6 +273,11 @@ namespace LandLedgers.FirstLedger
                 // scenario/player authorities here as well so development tools and
                 // the authored scenario remain usable after a continue/reload.
                 ConfigureScenarioAuthorities();
+                // Phase 2: forward the playtest bool AFTER the save load,
+                // so SaveLoadManager's restored flag is the base and this
+                // bool can only turn NPC mode on (OR logic), never clear
+                // a saved true. See PlayerNpcPlaytestForwarding.
+                ForwardPlayerNpcPlaytestFlag();
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                 EnsureScenarioValidationHarness();
 #endif
@@ -412,6 +420,12 @@ namespace LandLedgers.FirstLedger
             AppendStartupTiming(timing, stepTimer, "population generation");
 
             ConfigureScenarioAuthorities();
+
+            // Phase 2: forward the playtest bool on New Game startup.
+            // Population generation already set SuppressMigrantArrivals
+            // for a six-person fixture; this flag is the separate
+            // player-as-NPC switch, default false.
+            ForwardPlayerNpcPlaytestFlag();
 
             ConfigureTownPulseRuntime();
             ConfigurePlayerPortfolioManager();
@@ -1055,6 +1069,31 @@ namespace LandLedgers.FirstLedger
 
             sharedBusinessRuntime.Configure(townWorld, null, populationManager, timeManager, storeRuntime, playerPortfolioManager);
             ConfigureOpeningBusinessRoster();
+        }
+
+        /// <summary>
+        /// Phase 2: forwards the playtest bool to SimulationDrivers.
+        /// OR logic only (see PlayerNpcPlaytestForwarding): true forces
+        /// NPC mode on, false leaves the drivers value untouched. Called
+        /// on New Game after ConfigureScenarioAuthorities and on
+        /// Continue after LoadDefaultSlot + ConfigureScenarioAuthorities.
+        /// Codex must set treatPlayerAsNpcPlaytest in Main Scene
+        /// Inspector; this method alone does not wire a scene.
+        /// </summary>
+        private void ForwardPlayerNpcPlaytestFlag()
+        {
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                return;
+            }
+
+            bool npcMode = LandLedgers.Orchestration.Player.PlayerNpcPlaytestForwarding.ApplyBootstrapperFlag(
+                drivers, treatPlayerAsNpcPlaytest);
+            if (npcMode)
+            {
+                Debug.Log("[WorldStartup] Player-as-NPC playtest mode is on (bootstrapper or restored save).", this);
+            }
         }
 
         private void ConfigureOpeningBusinessRoster()

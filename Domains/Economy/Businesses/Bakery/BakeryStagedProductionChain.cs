@@ -68,6 +68,19 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public readonly BakeryFlourStock FlourStock = new BakeryFlourStock();
         public readonly BakeryFuelStock FuelStock = new BakeryFuelStock();
         public readonly List<StagedBakeryBatch> Batches = new List<StagedBakeryBatch>();
+        // Phase 2 investigation (2026-11-01): NO BreadShelf-to-SKU
+        // transfer exists yet, and none was faked. This shelf holds
+        // BakeryStagedBreadLot (string LotId "bread-<batch>"), while
+        // BakeryShopRuntime's sellable shelf holds BakeryBreadLot
+        // (EntityId lot, Condition aging, CanSell), and no converter,
+        // caller, Main Scene driver, or SaveLoadManager wiring connects
+        // the two, nor does any caller feed Phase 1 off-map flour
+        // (NamedSkuLot, no unit label) into BakeryFlourStock (lb units,
+        // EntityId lot, FlourName "bakery-flour"). A safe transfer
+        // needs Kennedy/Codex decisions on: staged-lot to EntityId-lot
+        // mapping, baked-day vs transfer-day aging on transfer, atomic
+        // staged-lot removal with a delivered mark (no such set exists
+        // for staged bread), and flour unit semantics (lb vs SKU units).
         public readonly List<BakeryStagedBreadLot> BreadShelf = new List<BakeryStagedBreadLot>();
         public readonly List<BakeryStagedWasteRecord> WasteLedger = new List<BakeryStagedWasteRecord>();
 

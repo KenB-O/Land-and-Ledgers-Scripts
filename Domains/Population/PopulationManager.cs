@@ -13,7 +13,7 @@ namespace LandLedgers.Population
 {
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(150)]
-    public sealed class PopulationManager : MonoBehaviour
+    public sealed class PopulationManager : MonoBehaviour, IPassXlMigrationFlagHolder
     {
         [Header("Sources")]
         [SerializeField]
@@ -118,13 +118,11 @@ namespace LandLedgers.Population
         /// GeneratePopulationSnapshot(SixPersonDevelopmentFixture) on New
         /// Game when a six-person fixture is supplied. Default false, so
         /// ordinary scenarios are byte-for-byte unchanged.
-        /// LIMITATION, STATED PLAINLY: this is runtime state on the manager,
-        /// not save state. The bootstrapper's six-person profile is ignored
-        /// on Continue and is not persisted into the save, so a Continue
-        /// currently falls back to ordinary immigration. Codex must persist
-        /// and restore this flag (or the six-person profile choice) in the
-        /// save path if Continue must stay sealed; until then, do not claim
-        /// a continued six-person game is immigration-free.
+        /// Phase 2: persisted via PassXlSliceSaveDto (see
+        /// PassXlSliceSaveCoordinator). SaveLoadManager restores this flag
+        /// on Continue without regenerating population. The bootstrapper's
+        /// six-person fixture itself is still only honoured on New Game;
+        /// the flag, not the fixture choice, is what seals a continued game.
         /// </summary>
         public bool SuppressMigrantArrivals { get; set; }
 

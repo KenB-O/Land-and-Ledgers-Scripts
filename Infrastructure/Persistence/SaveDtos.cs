@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Valuation;
@@ -32,6 +33,14 @@ namespace LandLedgers.Persistence
         public PlayerPortfolioSaveDto portfolio = new();
         public FirstSessionGuidanceSaveDto firstSessionGuidance = new();
         public ScenarioSaveDto scenario = new();
+        /// <summary>
+        /// Phase 2, additive: Pass XL vertical slice state. Old saves
+        /// omit this field and read as defaults (no off-map lots, both
+        /// playtest flags false). Newer readers ignore unknown fields;
+        /// older readers ignore this one. Never null in a freshly built
+        /// save; restore code must still null-check for old files.
+        /// </summary>
+        public PassXlSliceSaveDto passXlSlice = new();
         /// <summary>
         /// HF-1: universal per-kind entity-ID cursors (EntityIdSaveAdapter). Legacy
         /// nextPersonId/nextHouseholdId/nextBuildingId fields remain the authority for
@@ -64,6 +73,11 @@ namespace LandLedgers.Persistence
         /// </summary>
         public bool startingActivationIssued;
     }
+
+    // Phase 2 note: PassXlSliceSaveDto lives in its own file,
+    // Infrastructure/Persistence/PassXlSliceSaveDto.cs, same namespace
+    // and serialized shape, so the slice coordinator can be compiled
+    // in the Roslyn harness without the whole SaveDtos closure.
 
     [Serializable]
     public sealed class MigrationManifestDto

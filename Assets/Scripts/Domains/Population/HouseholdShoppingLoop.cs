@@ -983,6 +983,16 @@ namespace LandLedgers.Population
                     $"covers {units}u but only {sold}u were delivered; manual reconciliation required.");
             }
 
+            // Counter shortfall is a third partial-fill cause, after
+            // affordability and stock at evaluation. It only fills
+            // the field when evaluation left it empty — that is,
+            // when the plan was full and the counter itself fell
+            // short — so the first cause still wins.
+            if (string.IsNullOrEmpty(result.PartialFillReason))
+            {
+                result.PartialFillReason = $"settlement-shortfall: seller sold {sold}u of {units}u planned at the counter.";
+            }
+
             units = sold;
             goodsCost = sold * unitPrice;
         }
@@ -1800,6 +1810,16 @@ namespace LandLedgers.Population
                 bool useDelivery = deliveryOffered && units > Math.Max(1, options.CarryCapacityUnits);
                 int total = goodsCost + (useDelivery ? freight : 0);
                 ShoppingSettlementMode mode;
+                // Review 2 second scripts pass: why this candidate
+                // would fill less than the need, if it would. The
+                // cause is carried onto the chosen candidate and
+                // then onto the trip result as PartialFillReason,
+                // so a need that stays open after a real purchase
+                // names its reason instead of leaving callers with
+                // an empty FailureReason. Affordability binds
+                // tighter than stock here: when both bite, the
+                // downsizing branch below names affordability.
+                string partialCause = null;
                 if (total <= ledgerBalance)
                 {
                     mode = ShoppingSettlementMode.CashFromLedger;
@@ -1814,6 +1834,7 @@ namespace LandLedgers.Population
                     // Honest downsizing: the household cannot cover the full
                     // need, so it buys what its ledger can actually cover —
                     // a smaller real trip, not a rejected need and never debt.
+                    int fullPlannedTotal = total;
                     units = Math.Min(ledgerBalance / price, stock);
                     useDelivery = deliveryOffered && units > Math.Max(1, options.CarryCapacityUnits);
                     if (useDelivery)
@@ -1823,6 +1844,10 @@ namespace LandLedgers.Population
                         useDelivery = false;
                     }
 
+                    // Set after the carry cap, so the quoted unit count
+                    // is the final planned count, not a pre-cap count.
+                    partialCause = $"affordability-downsized: affordable budget is {ledgerBalance}c, not the {fullPlannedTotal}c full planned cost; " +
+                        $"buying {units}u instead of {need.UnitsNeeded}u, never debt.";
                     goodsCost = units * price;
                     total = goodsCost;
                     if (units <= 0 || total > ledgerBalance)
@@ -1860,6 +1885,13 @@ namespace LandLedgers.Population
                     DeliveryFeeCents = freight,
                     UseDelivery = useDelivery,
                     SettlementMode = mode,
+                    // Stock binds only when affordability did not
+                    // already downsize: units was capped at stock
+                    // before the affordability chain ran.
+                    PartialFillReason = partialCause ??
+                        (units < need.UnitsNeeded
+                            ? $"stock-limited: seller holds {stock}u, need is {need.UnitsNeeded}u."
+                            : string.Empty),
                 };
 
                 if (best == null || candidate.TotalCostCents < best.TotalCostCents ||
@@ -1878,6 +1910,12 @@ namespace LandLedgers.Population
                 return null;
             }
 
+            // The chosen candidate's partial-fill cause becomes the
+            // trip's cause. A fully planned trip carries an empty
+            // reason; a failed trip later clears it in Fail(), so a
+            // partial reason only ever survives on a trip that
+            // actually bought something.
+            result.PartialFillReason = best.PartialFillReason ?? string.Empty;
             AddEvent(result, dayIndex, ShoppingEventKind.Decision, shopperId, need,
                 $"Chose '{best.Supplier.SupplierName}': {best.UnitsPlanned}u {need.ItemId} @ {best.UnitPriceCents}c " +
                 $"({best.TotalCostCents}c total{(best.UseDelivery ? $" incl {best.DeliveryFeeCents}c freight" : string.Empty)}, " +
@@ -2100,6 +2138,11 @@ namespace LandLedgers.Population
         {
             result.Success = false;
             result.FailureReason = reason;
+            // A failed trip bought nothing, so an evaluation-time
+            // partial-fill cause must not survive on it: the
+            // failure reason is the whole story. Partial reasons
+            // live only on trips with a real purchase.
+            result.PartialFillReason = string.Empty;
             AddEvent(result, dayIndex, ShoppingEventKind.Failure, shopperId, need, reason,
                 "Unfulfilled demand stays observable: the need remains open for §26 diagnostics and NPC opportunity detection.");
             diag.Add($"Day {dayIndex}: shopping FAILED — {reason}");
@@ -2113,6 +2156,7 @@ namespace LandLedgers.Population
             public IGoodsSupplier Supplier;
             public IItemResolvingSupplier ItemSupplier;
             public int UnitsPlanned;
+            public string PartialFillReason = string.Empty;
             public int UnitPriceCents;
             public int TravelMinutesOneWay;
             public float TravelMilesOneWay;

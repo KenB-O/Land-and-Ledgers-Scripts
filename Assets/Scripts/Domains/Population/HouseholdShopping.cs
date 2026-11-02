@@ -325,6 +325,23 @@ namespace LandLedgers.Population
         public string ItemId = string.Empty;
         public int UnitsAcquired;
         public int UnitsStillNeeded;
+        /// <summary>
+        /// Review 2 second scripts pass: why a completed trip bought
+        /// less than the need asked for, in plain words. Set only on
+        /// trips that actually bought something: "affordability-downsized"
+        /// when the ledger covered fewer units than the need, "stock-limited"
+        /// when the seller held fewer units than the need, or
+        /// "settlement-shortfall" when the counter sold fewer units than
+        /// planned. Empty on a fully fulfilled trip, and empty on a
+        /// failed trip (FailureReason carries that instead). Diagnostic
+        /// only: it changes no cash, stock, Success, or need-status
+        /// semantics. Success still means "the trip completed with a
+        /// real purchase", not "the need is fulfilled" — callers that
+        /// need fulfillment must check UnitsStillNeeded / need status,
+        /// and callers that need the reason a need stays open after a
+        /// purchase must read this field, not FailureReason.
+        /// </summary>
+        public string PartialFillReason = string.Empty;
         public int BuyerOutflowCents;
         public int StoreCashInCents;
         public int StoreReceivableCents;

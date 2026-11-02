@@ -281,9 +281,17 @@ namespace LandLedgers.Economy.Freight
             // G-02: idempotent via the collected flag — a second call for the
             // same shipment finds FreightRevenueCollected and is never
             // rescanned, so the charge posts exactly once.
+            // Review 2 second scripts pass: the wording below used to
+            // say this charge was collected "from" the named payer,
+            // which reads as a verified debit. This legacy overload
+            // debits NOBODY — it only names the payer. The verified
+            // overload (payer runtime) is the only production path
+            // that may claim a payer paid. Behaviour is unchanged;
+            // only the diagnostic stops implying a debit.
             shipment.freightRevenueCollected = true;
             diagnostics.Add($"Collected {shipment.FreightChargeCents}c freight charge for '{shipmentId}' " +
-                $"from {shipment.FreightPayerBusinessInstanceId} (external payer).");
+                $"(legacy path: payer debit NOT verified — named payer is {shipment.FreightPayerBusinessInstanceId}; " +
+                "production collection must use the verified overload).");
             return shipment.FreightChargeCents;
         }
 

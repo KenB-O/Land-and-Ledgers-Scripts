@@ -437,6 +437,83 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(0, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
         }
 
+        // ---------- Review 2 second scripts pass: partial-fill attribution ----------
+        // The loop's downsizing policy is deliberate (a cash-short
+        // household buys what it can afford, never debt), and partial
+        // stock fills are deliberate too — but until this pass a
+        // trip that bought less than the need carried NO reason
+        // for the shortfall: Success was true, FailureReason was
+        // empty, and only UnitsStillNeeded hinted anything was
+        // unmet. These tests pin the new PartialFillReason field:
+        // it names the cause on a trip that bought something, is
+        // empty on a full trip, and is empty (not stale) on a
+        // failed trip. Cash, stock, Success, and need-status
+        // semantics are unchanged by the field — see the
+        // corresponding assertions below.
+
+        [Test]
+        public void ExecuteNeed_AffordabilityDownsized_ReportsPartialFillReason()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(200); // 10u flour @ 120c = 1200c; the ledger covers 1u
+            f.Port.OffersTradeCreditValue = false;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            // The purchase itself is unchanged by attribution.
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(1, result.UnitsAcquired);
+            Assert.AreEqual(9, result.UnitsStillNeeded);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status, "a partial purchase must leave the unmet need open");
+            Assert.AreEqual(120, result.BuyerOutflowCents);
+            Assert.AreEqual(80, f.Balance(), "the ledger pays for exactly the 1 unit bought");
+            Assert.AreEqual(99, f.StoreStock());
+            Assert.AreEqual(1, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            // The new claim: the shortfall is named, and it is
+            // NOT reported as a failure.
+            Assert.IsTrue(result.PartialFillReason.Contains("affordability"),
+                $"a downsized trip must name affordability as its partial-fill cause, got: '{result.PartialFillReason}'");
+            Assert.AreEqual(string.Empty, result.FailureReason, "a trip that bought something is not a failed trip");
+        }
+
+        [Test]
+        public void ExecuteNeed_StockLimited_ReportsPartialFillReason()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            f.Port.Stock["staple_food"] = 3; // only 3u available
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(3, result.UnitsAcquired);
+            Assert.AreEqual(7, result.UnitsStillNeeded);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(360, result.BuyerOutflowCents);
+            Assert.IsTrue(result.PartialFillReason.Contains("stock"),
+                $"a stock-limited trip must name stock as its partial-fill cause, got: '{result.PartialFillReason}'");
+            Assert.AreEqual(string.Empty, result.FailureReason);
+        }
+
+        [Test]
+        public void ExecuteNeed_FullPurchase_PartialFillReasonEmpty()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(10, result.UnitsAcquired);
+            Assert.AreEqual(0, result.UnitsStillNeeded);
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+            Assert.AreEqual(string.Empty, result.PartialFillReason, "a fully fulfilled trip carries no partial-fill reason");
+            Assert.AreEqual(string.Empty, result.FailureReason);
+        }
+
         [Test]
         public void ExecuteNeed_PartialStock_PartialFillNeedStaysOpen()
         {

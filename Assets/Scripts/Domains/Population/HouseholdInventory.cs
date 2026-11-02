@@ -118,7 +118,67 @@ namespace LandLedgers.Population
                 return null;
             }
 
-            return ById.TryGetValue(itemId, out HouseholdItemDefinition definition) ? definition : null;
+            if (ById.TryGetValue(itemId, out HouseholdItemDefinition definition))
+            {
+                return definition;
+            }
+
+            return RuntimeById.TryGetValue(itemId, out HouseholdItemDefinition runtime) ? runtime : null;
+        }
+
+        // Review 2 vertical slice Pass D2 (owner-decided horse feed):
+        // runtime-registered household items. This is NOT a default
+        // catalog entry and it is NOT a store offer: it is the record
+        // that an item an owner added to a store (here, horse feed)
+        // can be held by a household and bought through the normal
+        // shopping loop, which validates every need and lot against
+        // this catalog. Registration is per-process, caller-supplied
+        // (id, display name, unit label, reserve category), and never
+        // invents a price: prices live at the selling store. A
+        // built-in id can never be shadowed, and a re-registration
+        // with a different definition is refused, never overwritten.
+        // Persistence gap, stated plainly for Codex: runtime
+        // registrations are not saved by this catalog, so a driver
+        // that registers feed items must re-register them on load
+        // (or persist them in the save DTO) or the loop will reject
+        // the item again after a restore. Until then, a restored
+        // world without re-registration falls back to the pre-D2
+        // behaviour: unknown item, need stays open, no sale faked.
+        private static readonly Dictionary<string, HouseholdItemDefinition> RuntimeById =
+            new Dictionary<string, HouseholdItemDefinition>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Registers a caller-supplied item for this process. Returns a
+        /// diagnostic on refusal, null on success (including an
+        /// identical re-registration, which is idempotent).
+        /// </summary>
+        public static string RegisterRuntimeItem(HouseholdItemDefinition definition)
+        {
+            if (definition == null || string.IsNullOrWhiteSpace(definition.ItemId))
+            {
+                return "Runtime household item needs a non-empty item id.";
+            }
+
+            if (ById.ContainsKey(definition.ItemId))
+            {
+                return $"Item '{definition.ItemId}' is already a built-in household item and cannot be re-registered.";
+            }
+
+            if (RuntimeById.TryGetValue(definition.ItemId, out HouseholdItemDefinition existing))
+            {
+                if (string.Equals(existing.DisplayName, definition.DisplayName, StringComparison.Ordinal)
+                    && string.Equals(existing.UnitLabel, definition.UnitLabel, StringComparison.Ordinal)
+                    && string.Equals(existing.ReserveCategoryId, definition.ReserveCategoryId, StringComparison.Ordinal)
+                    && existing.IsFood == definition.IsFood)
+                {
+                    return null;
+                }
+
+                return $"Runtime item '{definition.ItemId}' is already registered with a different definition and cannot be overwritten.";
+            }
+
+            RuntimeById[definition.ItemId] = definition;
+            return null;
         }
 
         public static IReadOnlyList<HouseholdItemDefinition> All => Definitions;

@@ -163,5 +163,50 @@ namespace LandLedgers.Persistence
 
             return diagnostics;
         }
+
+        /// <summary>
+        /// Series 2 Pass 10, additive only (the 4- and 6-argument
+        /// Capture/Restore above are unchanged in behaviour):
+        /// also captures/restores the Pass 10 section when a state
+        /// holder is supplied. A null state captures a null section,
+        /// which restores as empty Pass 10 state — the same
+        /// null-safe contract as the Pass 9 section. SaveLoadManager
+        /// wiring for the Pass 10 state is Codex work, exactly as
+        /// the Pass 9 state wiring was; this coordinator overload is
+        /// the Roslyn-proven half, not a Unity claim.
+        /// </summary>
+        public static PassXlSliceSaveDto Capture(
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State,
+            Series2Pass10SaveState series2Pass10State)
+        {
+            PassXlSliceSaveDto dto = Capture(migrationHolder, playerHolder, procurementService, series2State);
+            dto.series2Pass10 = series2Pass10State != null ? series2Pass10State.Capture(null) : null;
+            return dto;
+        }
+
+        public static List<string> Restore(
+            PassXlSliceSaveDto dto,
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State,
+            FreightShipmentHooks freightHooks,
+            Series2Pass10SaveState series2Pass10State)
+        {
+            List<string> diagnostics = Restore(dto, migrationHolder, playerHolder, procurementService, series2State, freightHooks);
+            if (series2Pass10State != null)
+            {
+                series2Pass10State.Restore(dto != null ? dto.series2Pass10 : null, diagnostics);
+            }
+            else if (dto != null && dto.series2Pass10 != null)
+            {
+                diagnostics.Add("PassXlSliceSaveCoordinator: Pass 10 section present in save but no Series2Pass10SaveState supplied; Pass 10 state NOT restored. Codex must set the Pass 10 state on SaveLoadManager before loading, exactly as for Pass 9.");
+            }
+
+            return diagnostics;
+        }
     }
 }

@@ -33,5 +33,15 @@ namespace LandLedgers.Persistence
         /// No existing field is renamed, removed, or reordered.
         /// </summary>
         public Series2Pass9SaveDto series2Pass9;
+
+        /// <summary>
+        /// Series 2 Pass 10, additive only: the Pass 10 save section
+        /// (Pass 5 leads, traveler visits, caller-supplied chain
+        /// records, and the optional town snapshot). Null on old
+        /// saves, which restore as empty Pass 10 state (see
+        /// Series2Pass10SaveState.Restore). No existing field is
+        /// renamed, removed, or reordered.
+        /// </summary>
+        public Series2Pass10SaveDto series2Pass10;
     }
 }

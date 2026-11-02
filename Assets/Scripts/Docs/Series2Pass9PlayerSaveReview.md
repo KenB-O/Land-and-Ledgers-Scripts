@@ -119,9 +119,14 @@ What each pass's state does in the section:
   IS restored (unlike adapter DayIndex, which is a pricing
   day set at day start).
 
-Mid-run save/restore is proven by the tests: every round-trip
-test restores into fresh instances and then restores a second
-time, asserting no duplication.
+Mid-run save/restore is proven by the tests: round-trip tests
+restore into fresh instances, and the Pass 2, Pass 4, Pass 6,
+and Pass 8 round-trips restore a second time, asserting no
+duplication. CORRECTED in Pass 11 (this sentence previously
+said "every round-trip test" restores twice): the Pass 9 Pass 3
+round-trip restored only once; Pass 10 added the Pass 3
+double-restore assertion, so the "restores twice" claim now
+holds for Pass 2/3/4/6/8.
 
 Two production-code fixes found by the harness (not test-only):
 `CopyLine` and `CopySettlement` in `Series2Pass9Save.cs`

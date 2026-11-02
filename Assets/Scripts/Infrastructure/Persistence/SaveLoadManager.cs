@@ -149,6 +149,27 @@ namespace LandLedgers.Persistence
         /// </summary>
         public Series2Pass9SaveState Series2Pass9State { get; set; }
 
+        /// <summary>
+        /// Series 2 Pass 11, following the Series2Pass9State
+        /// pattern exactly: the live Pass 10 save holder (Pass 5
+        /// leads/visits/chains, town snapshot), if a driver owns
+        /// one. Pass 10 shipped the coordinator overloads but no
+        /// SaveLoadManager property, so the production save path
+        /// could never carry the Pass 10 section; this property
+        /// closes that gap. A driver that creates Pass 10 model
+        /// instances MUST set this before saving AND before
+        /// loading, otherwise the save will carry an empty Pass 10
+        /// section (or a present section will not restore) with a
+        /// diagnostic. Null is safe: capture and restore then
+        /// default to empty Pass 10 state with a diagnostic.
+        /// Codex must wire this when it wires the Pass 10 drivers;
+        /// it is not a scene field because the holder is plain C#,
+        /// not a Unity object. Unity compilation of this edit is
+        /// Codex/Unity AI work, not claimed in the Pass 11 Roslyn
+        /// harness (which covers the coordinator overloads).
+        /// </summary>
+        public Series2Pass10SaveState Series2Pass10State { get; set; }
+
         public string LastStatus => lastStatus;
         public string DefaultSlotPath => Path.Combine(Application.persistentDataPath, SaveDirectoryName, DefaultSlotFileName);
 
@@ -440,7 +461,7 @@ namespace LandLedgers.Persistence
             // service is diagnosed, never crashed on.
             foreach (string passXlDiagnostic in PassXlSliceSaveCoordinator.Restore(
                 save != null ? save.passXlSlice : null,
-                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null))
+                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null, Series2Pass10State))
             {
                 Debug.Log($"[SaveLoad] {passXlDiagnostic}");
             }
@@ -763,7 +784,7 @@ namespace LandLedgers.Persistence
                 // Drivers are found, not assumed; a null driver or a
                 // null procurement service reads as defaults.
                 passXlSlice = PassXlSliceSaveCoordinator.Capture(
-                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService, Series2Pass9State),
+                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService, Series2Pass9State, Series2Pass10State),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto
                 {

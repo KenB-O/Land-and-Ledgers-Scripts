@@ -74,6 +74,9 @@ this pass. Unity verification is Codex/Unity AI work.
   production save path as Unity-verified: the Pass 9
   SaveLoadManager edit is likewise still Codex/Unity AI
   verification work, not Roslyn-proven Unity behaviour.
+  PASS 11 AMENDMENT: Pass 11 added the property and the
+  call-site wiring (see the Codex list below); assigning
+  the live state and Unity compilation remain Codex work.
 
 ### C. 9-person-shape acceptance harness (production drivers only)
 
@@ -236,10 +239,18 @@ leg (including the household leg).
 
 ## What Codex must hook up (Unity side, not claimed here)
 
-1. SaveLoadManager: set the Pass 10 state before loading
-   (and the Pass 9 state, per Pass 9), exactly as for
+1. SaveLoadManager: set the Pass 10 state before saving and
+   loading (and the Pass 9 state, per Pass 9), exactly as for
    procurement; verify the Pass 9 SaveLoadManager edit in
    Unity — it is not Roslyn-proven Unity behaviour.
+   PASS 11 AMENDMENT: Pass 11 added the
+   `Series2Pass10State` property to SaveLoadManager and
+   wired it into the production Capture/Restore call sites
+   (the Pass 10 section previously travelled only through
+   coordinator overloads, never through the production save
+   path). What remains Codex work here is ASSIGNING the live
+   state before the first save/load, plus Unity compilation
+   of the edit.
 2. Day driver: set each adapter `DayIndex` at day start
    (bakery adapter refuses trading until set); re-issue
    the duty roster, re-supply sellers/lodging for resumed

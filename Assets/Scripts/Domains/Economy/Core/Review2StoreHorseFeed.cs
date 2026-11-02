@@ -93,6 +93,16 @@ namespace LandLedgers.Economy
         private readonly Dictionary<string, Review2StoreFeedItem> byBusiness =
             new Dictionary<string, Review2StoreFeedItem>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Review 2 vertical D3, additive only: clears every
+        /// registration. Used by save Restore (clear-then-load)
+        /// only; it changes no other registry behaviour.
+        /// </summary>
+        public void Clear()
+        {
+            byBusiness.Clear();
+        }
+
         public Review2StoreFeedItem Find(string businessInstanceId)
         {
             if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;

@@ -208,5 +208,50 @@ namespace LandLedgers.Persistence
 
             return diagnostics;
         }
+
+        /// <summary>
+        /// Review 2 vertical D3, additive only (all earlier
+        /// Capture/Restore overloads are unchanged in behaviour):
+        /// also captures/restores the D3 section (runtime
+        /// household items and store feed registrations) when a
+        /// state holder is supplied. A null state captures a null
+        /// section, which restores as empty D3 state — the same
+        /// null-safe contract as the Pass 9 / Pass 10 sections.
+        /// </summary>
+        public static PassXlSliceSaveDto Capture(
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State,
+            Series2Pass10SaveState series2Pass10State,
+            Review2VerticalD3SaveState d3State)
+        {
+            PassXlSliceSaveDto dto = Capture(migrationHolder, playerHolder, procurementService, series2State, series2Pass10State);
+            dto.review2VerticalD3 = d3State != null ? d3State.Capture(null) : null;
+            return dto;
+        }
+
+        public static List<string> Restore(
+            PassXlSliceSaveDto dto,
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State,
+            FreightShipmentHooks freightHooks,
+            Series2Pass10SaveState series2Pass10State,
+            Review2VerticalD3SaveState d3State)
+        {
+            List<string> diagnostics = Restore(dto, migrationHolder, playerHolder, procurementService, series2State, freightHooks, series2Pass10State);
+            if (d3State != null)
+            {
+                d3State.Restore(dto != null ? dto.review2VerticalD3 : null, diagnostics);
+            }
+            else if (dto != null && dto.review2VerticalD3 != null)
+            {
+                diagnostics.Add("PassXlSliceSaveCoordinator: D3 section present in save but no Review2VerticalD3SaveState supplied; D3 state NOT restored. Codex must set the D3 state on SaveLoadManager before loading, exactly as for Pass 9 / Pass 10.");
+            }
+
+            return diagnostics;
+        }
     }
 }

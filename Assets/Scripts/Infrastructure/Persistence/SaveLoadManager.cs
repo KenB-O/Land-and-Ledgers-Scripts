@@ -170,6 +170,23 @@ namespace LandLedgers.Persistence
         /// </summary>
         public Series2Pass10SaveState Series2Pass10State { get; set; }
 
+        /// <summary>
+        /// Review 2 vertical D3, following the Series2Pass10State
+        /// pattern exactly: the live D3 save holder (runtime
+        /// household items and store feed registrations), if a
+        /// driver owns one. A driver that registers feed items
+        /// MUST set this before saving AND before loading,
+        /// otherwise the save will carry an empty D3 section (or
+        /// a present section will not restore) with a diagnostic.
+        /// Null is safe: capture and restore then default to
+        /// empty D3 state with a diagnostic. It is not a scene
+        /// field because the holder is plain C#, not a Unity
+        /// object. Unity compilation of this edit is Codex/Unity
+        /// AI work, not claimed in the D3 Roslyn harness (which
+        /// covers the coordinator overloads and the D3 state).
+        /// </summary>
+        public Review2VerticalD3SaveState Review2VerticalD3SaveState { get; set; }
+
         public string LastStatus => lastStatus;
         public string DefaultSlotPath => Path.Combine(Application.persistentDataPath, SaveDirectoryName, DefaultSlotFileName);
 
@@ -461,7 +478,7 @@ namespace LandLedgers.Persistence
             // service is diagnosed, never crashed on.
             foreach (string passXlDiagnostic in PassXlSliceSaveCoordinator.Restore(
                 save != null ? save.passXlSlice : null,
-                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null, Series2Pass10State))
+                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null, Series2Pass10State, Review2VerticalD3SaveState))
             {
                 Debug.Log($"[SaveLoad] {passXlDiagnostic}");
             }
@@ -784,7 +801,7 @@ namespace LandLedgers.Persistence
                 // Drivers are found, not assumed; a null driver or a
                 // null procurement service reads as defaults.
                 passXlSlice = PassXlSliceSaveCoordinator.Capture(
-                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService, Series2Pass9State, Series2Pass10State),
+                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService, Series2Pass9State, Series2Pass10State, Review2VerticalD3SaveState),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto
                 {

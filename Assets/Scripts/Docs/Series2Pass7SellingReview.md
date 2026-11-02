@@ -96,6 +96,18 @@ scene wiring is claimed anywhere in this pass.
   any shopping; the adapter refuses trading until it is set, and
   refuses a sale whose sale-day price disagrees with its quote.
   In normal operation (day set correctly) quote and sale agree.
+  REVIEW 2 PASS A CLARIFICATION (no code change): `CheckTradingCapability`
+  ignores its `absoluteDayIndex` argument — it refuses only while
+  the adapter's own `DayIndex` is unset (plus any caller trading
+  check). Day equality is NOT enforced by the adapter; only a
+  price disagreement refuses a sale. A stale DayIndex left set
+  from a previous day therefore does not, by itself, stop
+  trading. This is pinned by `Review2PassAGeneralTests`
+  (`BakeryAdapter_CheckTradingCapability_IgnoresDayArgument_RefusesOnlyWhenUnset`
+  and `BakeryAdapter_SaleDayPriceGuard_RefusesOnPriceDifference_StockIntact`);
+  setting DayIndex at every day start remains a Codex binding
+  obligation, and a day-equality guard, if wanted, is a later
+  decision, not something this pass adds silently.
 - WHOLESALE PERSISTENCE CAVEAT: intake duplicates are guarded per
   instance and double settlement per record, but delivered lot ids
   are NOT yet persisted across saves. Pass 9 must adopt that set

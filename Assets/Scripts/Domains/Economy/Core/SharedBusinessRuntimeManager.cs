@@ -4812,6 +4812,43 @@ namespace LandLedgers.Economy
                 return;
             }
 
+            // Review 2 Pass C: the weekly converter must never mint
+            // output from nothing. With an empty input category and a
+            // non-empty output category, the code below would credit
+            // plannedUnits of output (AddCategoryStockUnits) with no
+            // input consumed and no cash spent - free stock, violating
+            // the one-writer / no-synthetic-inventory rules. In the
+            // published profiles the only Retail/Producer/Converter
+            // business in that shape is the General Store (input []
+            // after Pass B removed the dangling freight_goods label,
+            // output [staple_food, ...]), and the General Store is
+            // NOT routed through this converter in production: it is
+            // absent from the archetype goods/service groups, excluded
+            // from WeeklySettlementBusinessTypes, and restocked by
+            // GeneralStoreRuntimeManager.ResolveWeeklyPayrollAndReorder
+            // (per-category pending reorders, costed, delivered by
+            // off-map inbound shipment) plus local-supply transfers.
+            // This guard is therefore production-identical today and
+            // closes the latent mint if a future driver ever calls
+            // this converter directly for a store. Service businesses
+            // are unaffected: the Service path above returns before
+            // this point, and service revenue comes from paying
+            // households, not from minted stock. Putting the store's
+            // six stock categories into inputCategoryIds instead
+            // would change weekly procurement (a binding decision,
+            // not made here); leaving the list empty is correct now
+            // that this guard refuses to mint from it.
+            if (string.IsNullOrWhiteSpace(inputCategoryId) && !string.IsNullOrWhiteSpace(outputCategoryId))
+            {
+                const string noInputReason = "no input category: weekly conversion cannot mint output from nothing";
+                blockedReasons.Add(noInputReason);
+                business.ApplyWeeklyOperationResult(0);
+                runtime.RecordWeeklyOperation(0, 0, "No production completed", BuildBlockedReason(blockedReasons));
+                RecordOperationSummary(business, BuildBlockedReason(blockedReasons));
+                AppendSummarySegment(summary, $"{business.BusinessType} no input category; no output minted");
+                return;
+            }
+
             int outputUnitsPerInput = GetOutputUnitsPerInput(business.BusinessType);
             int procuredUnits = ProcureInputsForWeeklyOperation(business, profile, inputCategoryId, plannedUnits, outputUnitsPerInput, blockedReasons);
             int outputRoom = GetAvailableCategoryCapacity(runtime, outputCategoryId);

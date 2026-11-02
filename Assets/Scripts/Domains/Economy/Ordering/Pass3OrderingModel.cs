@@ -137,6 +137,32 @@ namespace LandLedgers.Economy.Ordering
             return true;
         }
 
+        /// <summary>
+        /// Review 2 Pass D1, additive only (MoveToShelf/MoveToBack
+        /// untouched): consume shelf stock out of the catalog
+        /// entirely, for stocking into a live stock authority (the
+        /// General Store category pool). Refuses bad quantities and
+        /// short shelf stock, moving nothing on refusal. This is the
+        /// transfer that keeps the Pass 3 shelf and the live pool
+        /// from double-counting the same loaves: units leave here
+        /// exactly when they enter the live pool, never before.
+        /// </summary>
+        public bool ConsumeShelfUnits(int units, List<string> diag)
+        {
+            if (units <= 0)
+            {
+                if (diag != null) diag.Add("Pass3Ordering: consuming shelf stock for '" + ProductId + "' needs a positive quantity.");
+                return false;
+            }
+            if (units > ShelfUnits)
+            {
+                if (diag != null) diag.Add("Pass3Ordering: consuming shelf stock for '" + ProductId + "' refused: only " + ShelfUnits + " on shelf, asked " + units + ".");
+                return false;
+            }
+            ShelfUnits -= units;
+            return true;
+        }
+
         /// <summary>Move stock from the front shelf back into back storage. Same refusal rules as MoveToShelf, mirrored.</summary>
         public bool MoveToBack(int units, List<string> diag)
         {

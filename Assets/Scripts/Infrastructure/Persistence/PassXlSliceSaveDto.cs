@@ -43,5 +43,14 @@ namespace LandLedgers.Persistence
         /// renamed, removed, or reordered.
         /// </summary>
         public Series2Pass10SaveDto series2Pass10;
+
+        /// <summary>
+        /// Review 2 vertical D3, additive only: the D3 save section
+        /// (runtime household items and store feed registrations).
+        /// Null on old saves, which restore as empty D3 state (see
+        /// Review2VerticalD3SaveState.Restore). No existing field
+        /// is renamed, removed, or reordered.
+        /// </summary>
+        public Review2VerticalD3SaveDto review2VerticalD3;
     }
 }

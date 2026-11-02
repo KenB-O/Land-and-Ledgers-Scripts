@@ -92,6 +92,44 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField, Tooltip("Optional: weekly profit posts hook into its reset. Found automatically if empty.")]
         private SharedBusinessRuntimeManager sharedBusinessRuntime;
 
+        // Review 2 vertical slice Pass D2 (owner-decided horse feed):
+        // in-memory registry of owner-added General Store feed items
+        // (Review2StoreHorseFeed). Not serialized and NOT saved by
+        // this driver: Codex must persist registrations or
+        // re-register them on load (see Review2StoreHorseFeed's
+        // persistence gap note), or a restored world falls back to
+        // null for store horses until re-registration. The owner
+        // operation is RegisterStoreFeedItem below; the driver
+        // consults it only as the third branch of
+        // ResolveHorseFeedStock, after farm and livery.
+        private readonly Review2StoreFeedRegistry storeFeedRegistry = new Review2StoreFeedRegistry();
+
+        /// <summary>
+        /// D2 owner operation, for the bootstrapper / store UI to
+        /// call when a store owner adds a feed item. Delegates to
+        /// Review2StoreHorseFeed.AddFeedItem; creates no stock and
+        /// sets no price. Returns a diagnostic on refusal, null on
+        /// success. Unity-side: Codex must verify this path in
+        /// Unity, as Roslyn cannot construct this MonoBehaviour.
+        /// </summary>
+        public string RegisterStoreFeedItem(Review2StoreFeedItem item, List<string> diag)
+        {
+            if (sharedBusinessRuntime == null) return "RegisterStoreFeedItem: no shared business runtime — nothing added.";
+            if (item == null) return "RegisterStoreFeedItem: no feed item — nothing added.";
+            if (!sharedBusinessRuntime.TryFindByInstanceId(item.BusinessInstanceId, out BusinessInstanceState business)
+                || business?.RuntimeState == null)
+            {
+                return $"RegisterStoreFeedItem: no live runtime for store '{item.BusinessInstanceId}' — nothing added.";
+            }
+
+            if (business.BusinessType != BusinessType.GeneralStore)
+            {
+                return $"RegisterStoreFeedItem: business '{item.BusinessInstanceId}' is a {business.BusinessType}, not a General Store — feed items are store items, nothing added.";
+            }
+
+            return Review2StoreHorseFeed.AddFeedItem(business.RuntimeState, storeFeedRegistry, item, diag);
+        }
+
         [SerializeField, Tooltip("Optional: drives DailyNeedsService. Found automatically if empty.")]
         private PopulationManager populationManager;
 
@@ -2424,9 +2462,19 @@ namespace LandLedgers.Orchestration.Systems
                     && owner?.RuntimeState != null)
                 {
                     // Business category balances are reporting aggregates, not
-                    // proof of feed. No registered, item-identified horse-feed
-                    // source exists in the current catalog, so do not consume
-                    // livery_upkeep_lot or another mixed category as a ration.
+                    // proof of feed. Require the explicit owner-added feed
+                    // registration before drawing category stock; do not infer
+                    // that a mixed or merely similarly named pool is feed.
+                    if (owner.BusinessType == BusinessType.GeneralStore
+                        && storeFeedRegistry != null)
+                    {
+                        Review2StoreFeedItem feedItem = storeFeedRegistry.Find(ownerId);
+                        if (feedItem != null)
+                        {
+                            return Review2StoreHorseFeed.FeedStockForBusiness(
+                                owner.RuntimeState, feedItem, null);
+                        }
+                    }
                     return null;
                 }
 

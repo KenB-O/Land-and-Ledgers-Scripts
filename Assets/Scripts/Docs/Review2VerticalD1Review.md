@@ -145,8 +145,21 @@ Refusal modes, each moving nothing it must not move, all tested:
   at the category price, not as a per-item priced offer.
 - General Store profile-vs-definition dual authority: untouched,
   not resolved, not silently picked.
-- Horse feed source: untouched, no source chosen, null not pinned
-  as expected.
+- Horse feed source — DECIDED during D1, after D1's code was
+  already committed, so recorded here and handed to the next
+  vertical slice pass for implementation, NOT implemented in D1.
+  Kennedy's decision, verbatim: "Kennedy can sell horse feed at
+  the General Store; by default it is NOT an item the store sells,
+  but it can be added in, as any player should be able to add
+  items to sell." Interpretation: feed source = a player-addable
+  General Store item, not a hard-coded default catalog item and
+  not a Kennedy-only special path. No feed item id, price, or unit
+  is invented here as canon; when the next pass implements it,
+  the item must be owner-addable and its price/unit must be
+  caller-supplied parameters, labelled as such. Until then,
+  `ResolveHorseFeedStock` returning null for store/person-owned
+  horses remains documented as the pre-decision gap, not as
+  expected behaviour, and nothing in D1 pins null as expected.
 - Employment registry gap, item-level stock migration, freight
   payer per leg, and all prices/rates as canon: untouched; D1's
   prices are caller parameters.

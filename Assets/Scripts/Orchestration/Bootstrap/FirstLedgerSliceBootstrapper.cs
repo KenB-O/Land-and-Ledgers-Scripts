@@ -119,6 +119,12 @@ namespace LandLedgers.FirstLedger
 
         [SerializeField, Tooltip("Explicitly opts this development startup into the assigned six-person fixture.")]
         private bool enableDevelopmentPopulationFixture;
+
+        [SerializeField, Tooltip("Opt-in New Game profile: append the configured ExpandedSliceFixture to its six-person base. Ordinary scenarios and the six-person profile are unchanged.")]
+        private bool enableExpandedSliceDevelopmentFixture;
+
+        [SerializeField, Tooltip("Optional expanded fixture asset. If empty, the development asset at Assets/Core/Population/ExpandedSliceFixture.asset is resolved in the Editor.")]
+        private ExpandedSliceFixture expandedSliceDevelopmentFixture;
 #endif
 
         [SerializeField]
@@ -189,6 +195,7 @@ namespace LandLedgers.FirstLedger
         public string LastStartupTimingSummary => lastStartupTimingSummary ?? string.Empty;
         public WorldStartupIntent StartupIntent => startupIntent;
         public bool IsInitialized => initialized;
+        public bool IsStartupReadyForManagementUi => initialized || initializing;
 
         private void Awake()
         {
@@ -302,16 +309,23 @@ namespace LandLedgers.FirstLedger
             Debug.Log("[WorldStartup] New Game path selected: exactly one fresh-world generation pass is permitted.", this);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
+            ExpandedSliceFixture expandedFixture = ResolveExpandedSliceFixture();
+            bool useExpandedSliceProfile = startupIntent == WorldStartupIntent.NewGame
+                && enableExpandedSliceDevelopmentFixture && expandedFixture != null;
             bool useSixPersonDevelopmentProfile = startupIntent == WorldStartupIntent.NewGame
+                && !useExpandedSliceProfile
                 && enableDevelopmentPopulationFixture
                 && developmentPopulationFixture != null;
-            if (useSixPersonDevelopmentProfile && generateTownOnPlay && townWorld.Grid == null)
+            if ((useSixPersonDevelopmentProfile || useExpandedSliceProfile) && generateTownOnPlay && townWorld.Grid == null)
             {
+                SixPersonDevelopmentFixture baseFixture = useExpandedSliceProfile
+                    ? expandedFixture.SixPersonFixture : developmentPopulationFixture;
+                int requestedHomes = useExpandedSliceProfile ? ExpandedSliceFixture.RequiredHouseholdCount : baseFixture.Households.Count;
+                int requestedBusinesses = useExpandedSliceProfile ? ExpandedSliceFixture.RequiredBusinessCount : OpeningBusinessRoster.SixPersonDevelopment().Count;
                 if (!townWorld.TryApplyDevelopmentResidentialHomeCount(
-                    developmentPopulationFixture.Households.Count, out string developmentWorldReason,
-                    OpeningBusinessRoster.SixPersonDevelopment().Count))
+                    requestedHomes, out string developmentWorldReason, requestedBusinesses))
                 {
-                    bootstrapStatus = $"Six-person development startup stopped before world generation: {developmentWorldReason}";
+                    bootstrapStatus = $"Development fixture startup stopped before world generation: {developmentWorldReason}";
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
                     CompleteStartupTiming(totalTimer, timing, "development world configuration failed");
                     initializing = false;
@@ -338,8 +352,12 @@ namespace LandLedgers.FirstLedger
             }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (useSixPersonDevelopmentProfile)
+            if (useSixPersonDevelopmentProfile || useExpandedSliceProfile)
             {
+                int requiredResidentialHomes = useExpandedSliceProfile
+                    ? ExpandedSliceFixture.RequiredHouseholdCount : developmentPopulationFixture.Households.Count;
+                int requiredCommercialBuildings = useExpandedSliceProfile
+                    ? ExpandedSliceFixture.RequiredBusinessCount : OpeningBusinessRoster.SixPersonDevelopment().Count;
                 int realResidentialHomes = 0;
                 int realCommercialBuildings = 0;
                 int realTotalBuildings = townWorld.Buildings.Count;
@@ -372,22 +390,20 @@ namespace LandLedgers.FirstLedger
                     buildingRoster.Append($"{building.id}:{building.definition.BuildingId}");
                 }
 
-                int requiredCommercialBuildings = OpeningBusinessRoster.SixPersonDevelopment().Count;
-                int requiredResidentialHomes = developmentPopulationFixture.Households.Count;
                 int requiredTotalBuildings = requiredResidentialHomes + requiredCommercialBuildings;
                 if (realResidentialHomes != requiredResidentialHomes
                     || realCommercialBuildings != requiredCommercialBuildings
                     || realTotalBuildings != requiredTotalBuildings)
                 {
-                    bootstrapStatus = $"Six-person development startup stopped: standalone homes={realResidentialHomes}/{requiredResidentialHomes}, storefronts={realCommercialBuildings}/{requiredCommercialBuildings}, total buildings={realTotalBuildings}/{requiredTotalBuildings}. No Businesses or Persons were initialized.";
+                    bootstrapStatus = $"Development startup stopped: standalone homes={realResidentialHomes}/{requiredResidentialHomes}, storefronts={realCommercialBuildings}/{requiredCommercialBuildings}, total buildings={realTotalBuildings}/{requiredTotalBuildings}. No Businesses or Persons were initialized.";
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
                     CompleteStartupTiming(totalTimer, timing, "development homes unavailable");
                     initializing = false;
                     return;
                 }
 
-                Debug.Log($"[WorldStartup] Six-building profile verified: {realResidentialHomes} standalone homes, " +
-                          $"{realCommercialBuildings} storefronts, no farm or Town Hall building. Buildings: {buildingRoster}.", this);
+                Debug.Log($"[WorldStartup] Development profile verified: {realResidentialHomes} standalone homes, " +
+                          $"{realCommercialBuildings} storefronts. Buildings: {buildingRoster}.", this);
             }
 #endif
 
@@ -419,7 +435,31 @@ namespace LandLedgers.FirstLedger
             if (generatePopulationOnPlay && populationManager != null)
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (startupIntent == WorldStartupIntent.NewGame
+                if (startupIntent == WorldStartupIntent.NewGame && useExpandedSliceProfile)
+                {
+                    populationManager.GeneratePopulationSnapshot(expandedFixture.SixPersonFixture);
+                    systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+                    populationManager.HouseholdLedgers ??= systemsHub != null ? systemsHub.HouseholdLedgers : null;
+                    PopulationGenerationResult expandedResult = PopulationGenerator.AppendExpandedDevelopmentFixture(
+                        townWorld, populationSettings, populationManager.State, expandedFixture,
+                        populationManager.Lifecycle, populationManager.Kinship,
+                        populationManager.HouseholdLedgers, timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                        timeManager != null ? timeManager.CurrentDate.Year : 1870,
+                        timeManager != null ? timeManager.CurrentDate.Month : 1,
+                        timeManager != null ? timeManager.CurrentDate.DayOfMonth : 1);
+                    if (expandedResult.HasErrors)
+                    {
+                        bootstrapStatus = expandedResult.Summary;
+                        Debug.LogError("[WorldStartup] " + bootstrapStatus, this);
+                        CompleteStartupTiming(totalTimer, timing, "expanded fixture generation failed");
+                        initializing = false;
+                        return;
+                    }
+                    Debug.Log("[WorldStartup] " + expandedResult.Summary, this);
+                    populationManager.RecalculateHouseholdIncomeAndSummaries(expandedResult.Summary);
+                    populationManager.SweepUnledgeredHouseholdCashToLedgers("expanded development fixture generation");
+                }
+                else if (startupIntent == WorldStartupIntent.NewGame
                     && enableDevelopmentPopulationFixture
                     && developmentPopulationFixture != null)
                 {
@@ -489,8 +529,8 @@ namespace LandLedgers.FirstLedger
             sharedBusinessRuntime?.ReconcileGeneratedWorkplaceAssignments();
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             BusinessInstanceState developmentNpcStore = null;
-            if (startupIntent == WorldStartupIntent.NewGame && enableDevelopmentPopulationFixture
-                && developmentPopulationFixture != null)
+            if (startupIntent == WorldStartupIntent.NewGame && (enableDevelopmentPopulationFixture || enableExpandedSliceDevelopmentFixture)
+                && (developmentPopulationFixture != null || ResolveExpandedSliceFixture()?.SixPersonFixture != null))
             {
                 developmentNpcStore = FindDevelopmentNpcGeneralStore();
                 SeedDevelopmentNpcStoreOpeningStock(developmentNpcStore);
@@ -1173,11 +1213,14 @@ namespace LandLedgers.FirstLedger
 
         private void SeedDevelopmentNpcStoreOpeningStock(BusinessInstanceState business)
         {
-            if (business?.RuntimeState == null || developmentPopulationFixture == null || storeRuntime?.StoreDefinition == null)
+            SixPersonDevelopmentFixture stockFixture = enableExpandedSliceDevelopmentFixture
+                ? ResolveExpandedSliceFixture()?.SixPersonFixture
+                : developmentPopulationFixture;
+            if (business?.RuntimeState == null || stockFixture == null || storeRuntime?.StoreDefinition == null)
                 return;
 
             int seed = townWorld?.Settings != null ? townWorld.Settings.seed : 0;
-            if (!ScenarioOpeningStockEndowment.TryApply(developmentPopulationFixture, business,
+            if (!ScenarioOpeningStockEndowment.TryApply(stockFixture, business,
                     storeRuntime.StoreDefinition, seed,
                     timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
                     out string report, out string error))
@@ -1194,7 +1237,12 @@ namespace LandLedgers.FirstLedger
             System.Collections.Generic.IReadOnlyList<OpeningRosterEntry> roster =
                 useCompactPlaytestOpeningRoster ? OpeningBusinessRoster.CompactPlaytest() : null;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (startupIntent == WorldStartupIntent.NewGame
+            if (startupIntent == WorldStartupIntent.NewGame && enableExpandedSliceDevelopmentFixture)
+            {
+                ExpandedSliceFixture expanded = ResolveExpandedSliceFixture();
+                roster = expanded != null ? BuildExpandedOpeningRoster(expanded) : null;
+            }
+            else if (startupIntent == WorldStartupIntent.NewGame
                 && enableDevelopmentPopulationFixture
                 && developmentPopulationFixture != null)
             {
@@ -1203,6 +1251,66 @@ namespace LandLedgers.FirstLedger
 #endif
             sharedBusinessRuntime?.ConfigureOpeningBusinessRoster(roster);
         }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private ExpandedSliceFixture ResolveExpandedSliceFixture()
+        {
+            if (expandedSliceDevelopmentFixture != null) return expandedSliceDevelopmentFixture;
+#if UNITY_EDITOR
+            expandedSliceDevelopmentFixture = UnityEditor.AssetDatabase.LoadAssetAtPath<ExpandedSliceFixture>(
+                "Assets/Core/Population/ExpandedSliceFixture.asset");
+#endif
+            if (enableExpandedSliceDevelopmentFixture && expandedSliceDevelopmentFixture == null)
+                Debug.LogError("[WorldStartup] Expanded fixture is enabled but Assets/Core/Population/ExpandedSliceFixture.asset could not be loaded in the Editor.", this);
+            return expandedSliceDevelopmentFixture;
+        }
+
+        private static List<OpeningRosterEntry> BuildExpandedOpeningRoster(ExpandedSliceFixture fixture)
+        {
+            var roster = new List<OpeningRosterEntry>();
+            if (fixture == null) return roster;
+            foreach (ExpandedSliceFixture.BusinessSlot slot in fixture.Businesses)
+            {
+                BusinessType type = slot.operation switch
+                {
+                    ExpandedSliceFixture.Operation.GeneralStore => BusinessType.GeneralStore,
+                    ExpandedSliceFixture.Operation.Bakery => BusinessType.Bakery,
+                    ExpandedSliceFixture.Operation.FuelDealer => BusinessType.FuelDealer,
+                    ExpandedSliceFixture.Operation.FreightCompany => BusinessType.LiveryFreight,
+                    _ => throw new ArgumentOutOfRangeException()
+                };
+                int ownerId = slot.ownerPersonKey.StartsWith("base:", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse(slot.ownerPersonKey.Substring(5), out int personIndex)
+                    ? personIndex + 1 : slot.operation == ExpandedSliceFixture.Operation.FreightCompany ? 7 : -1;
+                string ownerName = slot.ownerPersonKey switch
+                {
+                    "base:0" => "Kennedy Baldwin-Ooms",
+                    "base:2" => "Glen Pierce",
+                    "base:4" => "Jacob Boniecki",
+                    "ethan" => "Ethan Boniecki",
+                    _ => "Development fixture"
+                };
+                var premises = type switch
+                {
+                    BusinessType.GeneralStore => new PremisesRequirement(customerFacing: true, minAreaSqFt: 800),
+                    BusinessType.Bakery => new PremisesRequirement(customerFacing: true, foodHandling: true, minAreaSqFt: 500),
+                    BusinessType.FuelDealer => new PremisesRequirement(yardStorage: true, minAreaSqFt: 600),
+                    _ => new PremisesRequirement()
+                };
+                string displayName = slot.operation switch
+                {
+                    ExpandedSliceFixture.Operation.GeneralStore => "Baldwin-Ooms General Store",
+                    ExpandedSliceFixture.Operation.Bakery => "Pierce Bakery",
+                    ExpandedSliceFixture.Operation.FuelDealer => "Boniecki Fuel Dealer",
+                    ExpandedSliceFixture.Operation.FreightCompany => "Boniecki Freight Company",
+                    _ => slot.key
+                };
+                roster.Add(new OpeningRosterEntry(type, displayName, ownerName,
+                    premises, slot.openingCashResolved ? slot.openingCashCents : 0, ownerId));
+            }
+            return roster;
+        }
+#endif
 
         /// <summary>
         /// Binds authored boarding-house Businesses to the detailed room and

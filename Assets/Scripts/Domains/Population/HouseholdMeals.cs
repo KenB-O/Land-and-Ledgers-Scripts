@@ -178,6 +178,13 @@ namespace LandLedgers.Population
     public sealed class MealDayResult
     {
         public Dictionary<int, int> MealsServedPerPerson = new Dictionary<int, int>();
+        /// <summary>
+        /// Number of meal slots actually scheduled per member for this day.
+        /// The flexible midday slot is excluded when the supply policy skips
+        /// it, so nutrition does not count a deliberately unscheduled meal as
+        /// a deprivation event.
+        /// </summary>
+        public int MealsRequiredPerPerson;
         public int MealsServed;
         public int MealsMissed;
     }
@@ -307,6 +314,7 @@ namespace LandLedgers.Population
             policy ??= MealSchedulingPolicy.Default;
             float stapleDays = EstimateStapleDaysOfSupply(inventory, memberPersonIds.Count, policy);
             List<MealSlot> slots = policy.GetSlotsForDay(stapleDays);
+            result.MealsRequiredPerPerson = slots.Count;
 
             for (int i = 0; i < memberPersonIds.Count; i++)
             {

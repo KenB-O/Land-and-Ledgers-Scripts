@@ -5,10 +5,9 @@ using UnityEngine;
 namespace LandLedgers.Population
 {
     /// <summary>
-    /// Authorable shape for the expanded nine-person development slice.
-    /// It composes the existing SixPersonDevelopmentFixture and records only
-    /// the additional household/person/business slots. This model does not
-    /// generate population, assign runtime IDs, grant assets, or configure a scene.
+    /// Authorable, opt-in runtime profile for the expanded development slice.
+    /// The six-person fixture remains the base and ordinary scenarios do not
+    /// use this profile unless the bootstrap explicitly enables it.
     /// </summary>
     [CreateAssetMenu(
         fileName = "ExpandedSliceFixture",
@@ -37,6 +36,9 @@ namespace LandLedgers.Population
             public string fullLegalName = string.Empty;
             public bool ageResolved;
             [Min(-1)] public int age = -1;
+            [Tooltip("True when age is provisional development calibration, not biographical Canon.")]
+            public bool ageIsProvisionalCalibration;
+            public bool isFemale;
             public bool homeResolved;
             public string homeBuildingId = string.Empty;
             public bool occupationResolved;
@@ -46,6 +48,8 @@ namespace LandLedgers.Population
             public bool relationshipsResolved;
             [Tooltip("Do not infer a relationship from shared household membership.")]
             public string relationships = string.Empty;
+            [Tooltip("Ordinal into real residential buildings sorted by TownWorld building ID.")]
+            public int homeBuildingOrdinal = -1;
         }
 
         [Serializable]
@@ -58,6 +62,10 @@ namespace LandLedgers.Population
             public bool relationshipBetweenMembersResolved;
             [Tooltip("For example, Ethan and Tia are assigned to one household, but their relationship is unspecified.")]
             public string relationshipBetweenMembers = string.Empty;
+            [Tooltip("Ordinal into real residential buildings sorted by TownWorld building ID.")]
+            public int homeBuildingOrdinal = -1;
+            [Min(0), Tooltip("One-time scenario endowment in cents; not a general household money rule.")]
+            public int openingCashCents;
         }
 
         [Serializable]
@@ -74,37 +82,83 @@ namespace LandLedgers.Population
             public string premisesId = string.Empty;
             public bool openingCashResolved;
             [Min(-1)] public int openingCashCents = -1;
+            [Tooltip("Freight entity may exist before it has premises.")]
+            public bool premisesRequired = true;
+        }
+
+        public enum Relationship { Sibling }
+
+        [Serializable]
+        public sealed class PersonRelationshipSlot
+        {
+            public string firstPersonKey = string.Empty;
+            public string secondPersonKey = string.Empty;
+            public Relationship relationship;
+        }
+
+        [Serializable]
+        public sealed class BaseHouseholdEndowment
+        {
+            [Tooltip("Index into the referenced six-person fixture household array.")]
+            public int householdIndex;
+            [Min(0)] public int openingCashCents;
         }
 
         [SerializeField] private string profileId = "expanded-nine-person-development";
+        [SerializeField, Tooltip("Development-only deterministic generation seed offset; scenario calibration, not Canon.")]
+        private int seedOffset = 9217;
+        [SerializeField, Tooltip("Expanded-profile replacement for base fixture Person index 3. The six-person fixture asset itself is not modified.")]
+        private string expandedPierceSpouseName = "Tannis";
+        [SerializeField, Min(18), Tooltip("Provisional age calibration for Tannis in this development profile; does not alter the six-person fixture.")]
+        private int expandedPierceSpouseAge = 29;
         [SerializeField] private SixPersonDevelopmentFixture sixPersonFixture;
         [SerializeField] private PersonSlot[] additionalPeople =
         {
             new PersonSlot
             {
-                key = "ethan", knownDisplayName = "Ethan B.", householdKey = "ethan-tia",
-                occupationResolved = true, occupation = "Freight Company owner/operator"
+                key = "ethan", knownDisplayName = "Ethan Boniecki", householdKey = "ethan-tia",
+                fullLegalNameResolved = true, fullLegalName = "Ethan Boniecki",
+                ageResolved = true, age = 34, ageIsProvisionalCalibration = true,
+                isFemale = false, homeBuildingOrdinal = 3,
+                occupationResolved = true, occupation = "Freight Company owner/operator",
+                startingCashResolved = true, startingCashCents = 0,
+                relationshipsResolved = true, relationships = "Sibling of base:4; spouse of tia"
             },
             new PersonSlot
             {
-                key = "tia", knownDisplayName = "Tia B.", householdKey = "ethan-tia"
+                key = "tia", knownDisplayName = "Tia Boniecki", householdKey = "ethan-tia",
+                fullLegalNameResolved = true, fullLegalName = "Tia Boniecki",
+                ageResolved = true, age = 30, ageIsProvisionalCalibration = true,
+                isFemale = true, homeBuildingOrdinal = 3,
+                occupationResolved = true, occupation = "Unspecified",
+                startingCashResolved = true, startingCashCents = 0,
+                relationshipsResolved = true, relationships = "Spouse of ethan"
             },
             new PersonSlot
             {
                 key = "shane", knownDisplayName = "Shane Bryan", householdKey = "shane",
                 fullLegalNameResolved = true, fullLegalName = "Shane Bryan",
-                occupationResolved = true, occupation = "Unemployed; seeking work"
+                ageResolved = true, age = 27, ageIsProvisionalCalibration = true,
+                isFemale = false, homeBuildingOrdinal = 4,
+                occupationResolved = true, occupation = "Unemployed; seeking work",
+                startingCashResolved = true, startingCashCents = 0,
+                relationshipsResolved = true, relationships = "No additional relationships authored"
             }
         };
         [SerializeField] private HouseholdSlot[] additionalHouseholds =
         {
             new HouseholdSlot
             {
-                key = "ethan-tia", memberPersonKeys = new[] { "ethan", "tia" }
+                key = "ethan-tia", memberPersonKeys = new[] { "ethan", "tia" },
+                homeResolved = true, homeBuildingOrdinal = 3,
+                relationshipBetweenMembersResolved = true, relationshipBetweenMembers = "Spouses",
+                openingCashCents = 6000
             },
             new HouseholdSlot
             {
-                key = "shane", memberPersonKeys = new[] { "shane" }
+                key = "shane", memberPersonKeys = new[] { "shane" },
+                homeResolved = true, homeBuildingOrdinal = 4,
+                openingCashCents = 12500
             }
         };
         [SerializeField] private BusinessSlot[] businesses =
@@ -112,15 +166,28 @@ namespace LandLedgers.Population
             new BusinessSlot
             {
                 key = "general-store", operation = Operation.GeneralStore,
-                ownerPersonKey = "base:0", ownerResolved = true
+                ownerPersonKey = "base:0", ownerResolved = true,
+                openingCashResolved = true, openingCashCents = 25000
             },
-            new BusinessSlot { key = "bakery", operation = Operation.Bakery },
-            new BusinessSlot { key = "fuel-dealer", operation = Operation.FuelDealer },
+            new BusinessSlot { key = "bakery", operation = Operation.Bakery,
+                ownerPersonKey = "base:2", ownerResolved = true, openingCashResolved = true, openingCashCents = 17500 },
+            new BusinessSlot { key = "fuel-dealer", operation = Operation.FuelDealer,
+                ownerPersonKey = "base:4", ownerResolved = true, openingCashResolved = true, openingCashCents = 20000 },
             new BusinessSlot
             {
                 key = "freight-company", operation = Operation.FreightCompany,
-                ownerPersonKey = "ethan", ownerResolved = true
+                ownerPersonKey = "ethan", ownerResolved = true,
+                openingCashResolved = true, openingCashCents = 10000, premisesRequired = false
             }
+        };
+        [SerializeField] private PersonRelationshipSlot[] additionalRelationships =
+        {
+            new PersonRelationshipSlot { firstPersonKey = "base:4", secondPersonKey = "ethan", relationship = Relationship.Sibling }
+        };
+        [SerializeField] private BaseHouseholdEndowment[] baseHouseholdEndowments =
+        {
+            new BaseHouseholdEndowment { householdIndex = 1, openingCashCents = 6500 },
+            new BaseHouseholdEndowment { householdIndex = 2, openingCashCents = 7500 }
         };
 
         public const int RequiredPersonCount = 9;
@@ -128,10 +195,33 @@ namespace LandLedgers.Population
         public const int RequiredBusinessCount = 4;
 
         public string ProfileId => profileId ?? string.Empty;
+        public int SeedOffset => seedOffset;
+        public string ExpandedPierceSpouseName => expandedPierceSpouseName ?? "Tannis";
+        public int ExpandedPierceSpouseAge => Mathf.Max(18, expandedPierceSpouseAge);
         public SixPersonDevelopmentFixture SixPersonFixture => sixPersonFixture;
         public IReadOnlyList<PersonSlot> AdditionalPeople => additionalPeople ?? Array.Empty<PersonSlot>();
         public IReadOnlyList<HouseholdSlot> AdditionalHouseholds => additionalHouseholds ?? Array.Empty<HouseholdSlot>();
         public IReadOnlyList<BusinessSlot> Businesses => businesses ?? Array.Empty<BusinessSlot>();
+        public IReadOnlyList<PersonRelationshipSlot> AdditionalRelationships => additionalRelationships ?? Array.Empty<PersonRelationshipSlot>();
+        public IReadOnlyList<BaseHouseholdEndowment> BaseHouseholdEndowments => baseHouseholdEndowments ?? Array.Empty<BaseHouseholdEndowment>();
+
+        public string FindPersonDisplayName(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return string.Empty;
+            if (key.StartsWith("base:", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(key.Substring(5), out int index)
+                && sixPersonFixture != null && index >= 0 && index < sixPersonFixture.People.Count)
+            {
+                SixPersonDevelopmentFixture.PersonDefinition person = sixPersonFixture.People[index];
+                if (index == 3 && string.Equals(person.lastName, "Pierce", StringComparison.Ordinal))
+                    return ExpandedPierceSpouseName + " " + person.lastName;
+                return person.firstName + " " + person.lastName;
+            }
+            foreach (PersonSlot person in AdditionalPeople)
+                if (person != null && string.Equals(person.key, key, StringComparison.OrdinalIgnoreCase))
+                    return person.fullLegalNameResolved ? person.fullLegalName : person.knownDisplayName;
+            return string.Empty;
+        }
 
         /// <summary>
         /// Checks the configured nine/five/four shape without pretending that
@@ -175,8 +265,7 @@ namespace LandLedgers.Population
                 else if (string.IsNullOrWhiteSpace(person.fullLegalName)) result.Errors.Add(person.key + " marks full legal name resolved but supplies no value.");
                 if (!person.ageResolved) result.Unresolved.Add(person.key + ".age");
                 else if (person.age < 0) result.Errors.Add(person.key + " marks age resolved but supplies no non-negative value.");
-                if (!person.homeResolved) result.Unresolved.Add(person.key + ".home building");
-                else if (string.IsNullOrWhiteSpace(person.homeBuildingId)) result.Errors.Add(person.key + " marks home resolved but supplies no building ID.");
+                if (person.homeBuildingOrdinal < 0) result.Errors.Add(person.key + " requires a non-negative configured home ordinal.");
                 if (!person.occupationResolved) result.Unresolved.Add(person.key + ".occupation");
                 else if (string.IsNullOrWhiteSpace(person.occupation)) result.Errors.Add(person.key + " marks occupation resolved but supplies no value.");
                 if (!person.startingCashResolved) result.Unresolved.Add(person.key + ".starting cash");
@@ -192,8 +281,8 @@ namespace LandLedgers.Population
 
         private void ValidateRequiredPersonSlots(ExpandedSliceFixtureValidation result)
         {
-            RequireKnownPerson(result, "ethan", "Ethan B.");
-            RequireKnownPerson(result, "tia", "Tia B.");
+            RequireKnownPerson(result, "ethan", "Ethan Boniecki");
+            RequireKnownPerson(result, "tia", "Tia Boniecki");
             RequireKnownPerson(result, "shane", "Shane Bryan");
 
             HouseholdSlot ethanTia = FindHousehold("ethan-tia");
@@ -231,6 +320,10 @@ namespace LandLedgers.Population
         private void ValidateHouseholds(ExpandedSliceFixtureValidation result, HashSet<string> peopleByKey)
         {
             var householdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var homeOrdinals = new HashSet<int>();
+            if (sixPersonFixture != null)
+                foreach (SixPersonDevelopmentFixture.HouseholdDefinition baseHousehold in sixPersonFixture.Households)
+                    if (baseHousehold != null) homeOrdinals.Add(baseHousehold.homeBuildingOrdinal);
             foreach (HouseholdSlot household in AdditionalHouseholds)
             {
                 if (household == null || string.IsNullOrWhiteSpace(household.key)
@@ -253,10 +346,13 @@ namespace LandLedgers.Population
                     PersonSlot person = FindPerson(memberKey);
                     if (person != null && !string.Equals(person.householdKey, household.key, StringComparison.OrdinalIgnoreCase))
                         result.Errors.Add($"Person slot '{memberKey}' and Household '{household.key}' do not agree on membership.");
+                    if (person != null && person.homeBuildingOrdinal != household.homeBuildingOrdinal)
+                        result.Errors.Add($"Person slot '{memberKey}' and Household '{household.key}' do not agree on their home ordinal.");
                 }
 
-                if (!household.homeResolved) result.Unresolved.Add(household.key + ".home building");
-                else if (string.IsNullOrWhiteSpace(household.homeBuildingId)) result.Errors.Add(household.key + " marks home resolved but supplies no building ID.");
+                if (!household.homeResolved || household.homeBuildingOrdinal < 0) result.Errors.Add(household.key + " requires a configured home ordinal.");
+                else if (!homeOrdinals.Add(household.homeBuildingOrdinal)) result.Errors.Add("Each expanded fixture Household must have its own configured home ordinal.");
+                if (household.openingCashCents < 0) result.Errors.Add("Household opening cash cannot be negative.");
 
                 if (household.memberPersonKeys.Length > 1 && !household.relationshipBetweenMembersResolved)
                     result.Unresolved.Add(household.key + ".relationship between household members");
@@ -285,16 +381,36 @@ namespace LandLedgers.Population
                 if (!business.ownerResolved) result.Unresolved.Add(business.key + ".owner/operator");
                 else if (string.IsNullOrWhiteSpace(business.ownerPersonKey) || !peopleByKey.Contains(business.ownerPersonKey))
                     result.Errors.Add(business.key + " marks its owner resolved but references no known Person slot.");
-                if (!business.businessIdResolved) result.Unresolved.Add(business.key + ".runtime Business ID");
-                else if (string.IsNullOrWhiteSpace(business.businessId)) result.Errors.Add(business.key + " marks its Business ID resolved but supplies no ID.");
-                if (!business.premisesResolved) result.Unresolved.Add(business.key + ".premises");
-                else if (string.IsNullOrWhiteSpace(business.premisesId)) result.Errors.Add(business.key + " marks premises resolved but supplies no ID.");
                 if (!business.openingCashResolved) result.Unresolved.Add(business.key + ".opening cash");
                 else if (business.openingCashCents < 0) result.Errors.Add(business.key + " marks opening cash resolved but supplies no non-negative amount.");
             }
 
             foreach (Operation expected in Enum.GetValues(typeof(Operation)))
                 if (!operations.Contains(expected)) result.Errors.Add("Missing Business operation slot: " + expected + ".");
+
+            foreach (PersonRelationshipSlot relation in AdditionalRelationships)
+            {
+                if (relation == null || string.IsNullOrWhiteSpace(relation.firstPersonKey)
+                    || string.IsNullOrWhiteSpace(relation.secondPersonKey)
+                    || !peopleByKey.Contains(relation.firstPersonKey) || !peopleByKey.Contains(relation.secondPersonKey)
+                    || string.Equals(relation.firstPersonKey, relation.secondPersonKey, StringComparison.OrdinalIgnoreCase))
+                    result.Errors.Add("Additional relationship records must connect two distinct known Person slots.");
+            }
+
+            ValidateBusinessOwner("general-store", "base:0", Operation.GeneralStore, result);
+            ValidateBusinessOwner("bakery", "base:2", Operation.Bakery, result);
+            ValidateBusinessOwner("fuel-dealer", "base:4", Operation.FuelDealer, result);
+            ValidateBusinessOwner("freight-company", "ethan", Operation.FreightCompany, result);
+        }
+
+        private void ValidateBusinessOwner(string key, string personKey, Operation operation, ExpandedSliceFixtureValidation result)
+        {
+            BusinessSlot found = null;
+            foreach (BusinessSlot business in Businesses)
+                if (business != null && string.Equals(business.key, key, StringComparison.OrdinalIgnoreCase)) found = business;
+            if (found == null || found.operation != operation || !found.ownerResolved
+                || !string.Equals(found.ownerPersonKey, personKey, StringComparison.OrdinalIgnoreCase))
+                result.Errors.Add($"Business slot '{key}' must map {operation} to owner '{personKey}'.");
         }
 
         private PersonSlot FindPerson(string key)

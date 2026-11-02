@@ -1,9 +1,12 @@
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.DraftPower;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Farming.Integration;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -240,6 +243,70 @@ namespace LandLedgers.EditorTests.Animals
             Assert.That(horse.OwnerId, Is.EqualTo("farm-2"));
             Assert.That(horse.CustodianId, Is.EqualTo("farm-2"));
             Assert.That(sellerLedger.GetBalanceCents(), Is.EqualTo(50000));
+        }
+
+        [Test]
+        public void BusinessHorseFeedAdapter_ConsumesOnlyMatchingOwnedPhysicalSkuLots()
+        {
+            var business = new BusinessRuntimeState();
+            business.BindBusinessIdentity("feed-business-1");
+            business.EnsureCategoryStock("animal_feed", 0, 100);
+            Assert.IsNull(business.TryAddRetailItemLot("feed-lot-1", "hay_test", "animal_feed", "ration",
+                3, "feed-business-1", "feed-business-1", "test physical receipt", 0));
+            Assert.IsNull(business.TryAddRetailItemLot("other-lot", "oats_test", "animal_feed", "ration",
+                4, "feed-business-1", "feed-business-1", "test physical receipt", 0));
+
+            var feed = new BusinessHorseFeedStockAdapter(business, "hay_test", "animal_feed", "ration");
+            Assert.That(feed.FeedStockUnits, Is.EqualTo(3));
+            Assert.That(feed.TakeFeedUnits(2), Is.EqualTo(2));
+            Assert.That(feed.FeedStockUnits, Is.EqualTo(1));
+            Assert.That(business.FindRetailItemLot("feed-lot-1").AvailableUnits, Is.EqualTo(1));
+            Assert.That(business.FindRetailItemLot("other-lot").AvailableUnits, Is.EqualTo(4),
+                "A different feed SKU in the same category must remain untouched.");
+            Assert.That(business.GetCategoryStock("animal_feed").CurrentStockUnits, Is.EqualTo(5),
+                "Category stock remains a reporting aggregate that falls with the physical lot transaction.");
+        }
+
+        [Test]
+        public void BusinessHorseFeedAdapter_DoesNotTreatAggregateOnlyStockAsPhysicalFeed()
+        {
+            var business = new BusinessRuntimeState();
+            business.BindBusinessIdentity("feed-business-1");
+            business.EnsureCategoryStock("livery_feed_upkeep", 8, 100);
+            var feed = new BusinessHorseFeedStockAdapter(
+                business, "livery_upkeep_lot", "livery_feed_upkeep", "ration");
+
+            Assert.That(feed.FeedStockUnits, Is.Zero);
+            Assert.That(feed.TakeFeedUnits(1), Is.Zero);
+            Assert.That(business.GetCategoryStock("livery_feed_upkeep").CurrentStockUnits, Is.EqualTo(8));
+        }
+
+        [Test]
+        public void OwnerScopedHorseFeedResolver_UsesExactActiveAnimalOwnerOnly()
+        {
+            var f = new Fixture();
+            AnimalState horse = f.AddHorse(AnimalOwnerKind.Business, "general_store_060");
+            var expected = new StubFeedStock(2);
+            string resolvedKind = null;
+            string resolvedOwner = null;
+
+            IHorseFeedStock actual = SimulationDrivers.ResolveOwnerScopedHorseFeedStock(horse, (kind, ownerId) =>
+            {
+                resolvedKind = kind.ToString();
+                resolvedOwner = ownerId;
+                return ownerId == "general_store_060" ? expected : null;
+            });
+
+            Assert.AreSame(expected, actual);
+            Assert.That(resolvedKind, Is.EqualTo(AnimalOwnerKind.Business.ToString()));
+            Assert.That(resolvedOwner, Is.EqualTo("general_store_060"));
+            horse.IsActive = false;
+            Assert.IsNull(SimulationDrivers.ResolveOwnerScopedHorseFeedStock(horse,
+                (_, __) =>
+                {
+                    Assert.Fail("Inactive animals must not resolve or consume owner stock.");
+                    return null;
+                }));
         }
 
         [Test]

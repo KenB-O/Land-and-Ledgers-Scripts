@@ -25,6 +25,47 @@ namespace LandLedgers.Population
         Sibling = 3, // symmetric
     }
 
+    /// <summary>Relationship of person B as viewed from person A.</summary>
+    public enum DerivedKinshipRelation
+    {
+        None = 0,
+        Self = 1,
+        Spouse = 2,
+        Parent = 3,
+        Child = 4,
+        Sibling = 5,
+        Grandparent = 6,
+        Grandchild = 7,
+        AuntOrUncle = 8,
+        NieceOrNephew = 9,
+        Cousin = 10,
+        Ancestor = 11,
+        Descendant = 12,
+    }
+
+    /// <summary>A stable person ID and shortest parentage distance.</summary>
+    [Serializable]
+    public sealed class KinshipDistance
+    {
+        public int PersonId;
+        public int Generations;
+    }
+
+    /// <summary>Result of resolving one person's relationship to another.</summary>
+    [Serializable]
+    public sealed class DerivedKinshipResult
+    {
+        public DerivedKinshipRelation Relation;
+        public int Degree;
+        public int Removal;
+        public int CommonAncestorPersonId = -1;
+        public int PersonAGenerationsToCommonAncestor;
+        public int PersonBGenerationsToCommonAncestor;
+        public bool IsExplicit;
+
+        public bool IsRelated => Relation != DerivedKinshipRelation.None;
+    }
+
     /// <summary>One kinship edge between two Persons. Never a substitute for membership.</summary>
     [Serializable]
     public sealed class KinshipEdge
@@ -66,30 +107,67 @@ namespace LandLedgers.Population
                 return;
             }
 
-            AddDirectedEdge(fromPersonId, toPersonId, relation, source);
+            if (!Enum.IsDefined(typeof(KinshipRelation), relation))
+            {
+                diagnostics.Add($"Rejected kinship edge {fromPersonId}->{toPersonId}: unknown relation {relation}.");
+                return;
+            }
+
+            if ((relation == KinshipRelation.Parent && HasParentagePath(toPersonId, fromPersonId))
+                || (relation == KinshipRelation.Child && HasParentagePath(fromPersonId, toPersonId)))
+            {
+                diagnostics.Add($"Rejected parentage {fromPersonId}->{toPersonId}: it would create a parentage cycle.");
+                return;
+            }
+
+            AddEdgeWithNotes(fromPersonId, toPersonId, relation, source, string.Empty);
+        }
+
+        /// <summary>Adds parentage unless it would introduce a cycle.</summary>
+        public bool TryAddParentChild(int parentId, int childId, string source)
+        {
+            if (parentId < 0 || childId < 0 || parentId == childId || HasParentagePath(childId, parentId))
+            {
+                diagnostics.Add($"Rejected parentage {parentId}->{childId}: invalid identity or parentage cycle.");
+                return false;
+            }
+
+            int before = edges.Count;
+            AddEdge(parentId, childId, KinshipRelation.Parent, source);
+            return edges.Count > before || GetChildren(parentId).IndexOf(childId) >= 0;
+        }
+
+        private void AddEdgeWithNotes(int fromPersonId, int toPersonId, KinshipRelation relation, string source, string notes)
+        {
+            AddDirectedEdge(fromPersonId, toPersonId, relation, source, notes);
             switch (relation)
             {
                 case KinshipRelation.Spouse:
                 case KinshipRelation.Sibling:
-                    AddDirectedEdge(toPersonId, fromPersonId, relation, source);
+                    AddDirectedEdge(toPersonId, fromPersonId, relation, source, notes);
                     break;
                 case KinshipRelation.Parent:
-                    AddDirectedEdge(toPersonId, fromPersonId, KinshipRelation.Child, source);
+                    AddDirectedEdge(toPersonId, fromPersonId, KinshipRelation.Child, source, notes);
                     break;
                 case KinshipRelation.Child:
-                    AddDirectedEdge(toPersonId, fromPersonId, KinshipRelation.Parent, source);
+                    AddDirectedEdge(toPersonId, fromPersonId, KinshipRelation.Parent, source, notes);
                     break;
             }
         }
 
         public void AddParentChild(int parentId, int childId, string source)
         {
-            AddEdge(parentId, childId, KinshipRelation.Parent, source);
+            TryAddParentChild(parentId, childId, source);
         }
 
         public void AddSpouses(int personA, int personB, string source)
         {
             AddEdge(personA, personB, KinshipRelation.Spouse, source);
+        }
+
+        public void AddSiblings(int personA, int personB, string source)
+        {
+            AddEdge(personA, personB, KinshipRelation.Sibling, source);
         }
 
         public List<int> GetRelated(int personId, KinshipRelation relation)
@@ -123,6 +201,205 @@ namespace LandLedgers.Population
             return GetRelated(personId, KinshipRelation.Spouse);
         }
 
+        /// <summary>Returns all known ancestors, nearest generation first, without looping on corrupt input.</summary>
+        public List<KinshipDistance> GetAncestors(int personId)
+        {
+            return GetParentageDistances(personId, KinshipRelation.Child);
+        }
+
+        /// <summary>Returns all known descendants, nearest generation first, without looping on corrupt input.</summary>
+        public List<KinshipDistance> GetDescendants(int personId)
+        {
+            return GetParentageDistances(personId, KinshipRelation.Parent);
+        }
+
+        /// <summary>
+        /// Resolves direct and derived family relationships at arbitrary known depth.
+        /// Unknown relatives are never created by this query.
+        /// </summary>
+        public DerivedKinshipResult GetDerivedRelationship(int personA, int personB)
+        {
+            var result = new DerivedKinshipResult();
+            if (personA < 0 || personB < 0)
+            {
+                return result;
+            }
+            if (personA == personB)
+            {
+                result.Relation = DerivedKinshipRelation.Self;
+                return result;
+            }
+
+            if (GetSpouses(personA).IndexOf(personB) >= 0)
+            {
+                result.Relation = DerivedKinshipRelation.Spouse;
+                result.IsExplicit = true;
+                return result;
+            }
+            if (GetRelated(personA, KinshipRelation.Sibling).IndexOf(personB) >= 0)
+            {
+                result.Relation = DerivedKinshipRelation.Sibling;
+                result.IsExplicit = true;
+                return result;
+            }
+
+            List<KinshipDistance> aAncestors = GetAncestors(personA);
+            List<KinshipDistance> bAncestors = GetAncestors(personB);
+            KinshipDistance bFromA = FindDistance(aAncestors, personB);
+            if (bFromA != null)
+            {
+                result.Relation = bFromA.Generations == 1 ? DerivedKinshipRelation.Parent
+                    : bFromA.Generations == 2 ? DerivedKinshipRelation.Grandparent
+                    : DerivedKinshipRelation.Ancestor;
+                result.Degree = bFromA.Generations;
+                return result;
+            }
+            KinshipDistance aFromB = FindDistance(bAncestors, personA);
+            if (aFromB != null)
+            {
+                result.Relation = aFromB.Generations == 1 ? DerivedKinshipRelation.Child
+                    : aFromB.Generations == 2 ? DerivedKinshipRelation.Grandchild
+                    : DerivedKinshipRelation.Descendant;
+                result.Degree = aFromB.Generations;
+                return result;
+            }
+
+            int bestTotal = int.MaxValue;
+            int bestRemoval = int.MaxValue;
+            foreach (KinshipDistance aAncestor in aAncestors)
+            {
+                KinshipDistance bAncestor = FindDistance(bAncestors, aAncestor.PersonId);
+                if (bAncestor == null)
+                {
+                    continue;
+                }
+
+                int total = aAncestor.Generations + bAncestor.Generations;
+                int removal = Math.Abs(aAncestor.Generations - bAncestor.Generations);
+                if (total > bestTotal || (total == bestTotal && removal >= bestRemoval))
+                {
+                    continue;
+                }
+
+                bestTotal = total;
+                bestRemoval = removal;
+                result.CommonAncestorPersonId = aAncestor.PersonId;
+                result.PersonAGenerationsToCommonAncestor = aAncestor.Generations;
+                result.PersonBGenerationsToCommonAncestor = bAncestor.Generations;
+                result.Removal = removal;
+                result.Degree = Math.Max(1, Math.Min(aAncestor.Generations, bAncestor.Generations) - 1);
+                result.IsExplicit = false;
+
+                if (aAncestor.Generations == 1 && bAncestor.Generations == 1)
+                {
+                    result.Relation = DerivedKinshipRelation.Sibling;
+                }
+                else if (aAncestor.Generations == 1 && bAncestor.Generations > 1)
+                {
+                    result.Relation = DerivedKinshipRelation.NieceOrNephew;
+                }
+                else if (aAncestor.Generations > 1 && bAncestor.Generations == 1)
+                {
+                    result.Relation = DerivedKinshipRelation.AuntOrUncle;
+                }
+                else
+                {
+                    result.Relation = DerivedKinshipRelation.Cousin;
+                }
+            }
+
+            return result;
+        }
+
+        private List<KinshipDistance> GetParentageDistances(int personId, KinshipRelation edgeRelation)
+        {
+            var distances = new Dictionary<int, int>();
+            var queue = new Queue<KinshipDistance>();
+            if (personId < 0)
+            {
+                return new List<KinshipDistance>();
+            }
+
+            queue.Enqueue(new KinshipDistance { PersonId = personId, Generations = 0 });
+            distances[personId] = 0;
+            while (queue.Count > 0)
+            {
+                KinshipDistance current = queue.Dequeue();
+                for (int i = 0; i < edges.Count; i++)
+                {
+                    KinshipEdge edge = edges[i];
+                    if (edge == null || edge.FromPersonId != current.PersonId || edge.Relation != edgeRelation)
+                    {
+                        continue;
+                    }
+                    int nextDistance = current.Generations + 1;
+                    if (distances.TryGetValue(edge.ToPersonId, out int existing) && existing <= nextDistance)
+                    {
+                        continue;
+                    }
+                    distances[edge.ToPersonId] = nextDistance;
+                    queue.Enqueue(new KinshipDistance { PersonId = edge.ToPersonId, Generations = nextDistance });
+                }
+            }
+
+            var result = new List<KinshipDistance>();
+            foreach (KeyValuePair<int, int> entry in distances)
+            {
+                if (entry.Key != personId)
+                {
+                    result.Add(new KinshipDistance { PersonId = entry.Key, Generations = entry.Value });
+                }
+            }
+            result.Sort((left, right) => left.Generations != right.Generations
+                ? left.Generations.CompareTo(right.Generations)
+                : left.PersonId.CompareTo(right.PersonId));
+            return result;
+        }
+
+        private bool HasParentagePath(int startPersonId, int targetPersonId)
+        {
+            if (startPersonId == targetPersonId)
+            {
+                return true;
+            }
+            var visited = new HashSet<int> { startPersonId };
+            var queue = new Queue<int>();
+            queue.Enqueue(startPersonId);
+            while (queue.Count > 0)
+            {
+                int current = queue.Dequeue();
+                for (int i = 0; i < edges.Count; i++)
+                {
+                    KinshipEdge edge = edges[i];
+                    if (edge == null || edge.FromPersonId != current || edge.Relation != KinshipRelation.Parent)
+                    {
+                        continue;
+                    }
+                    if (edge.ToPersonId == targetPersonId)
+                    {
+                        return true;
+                    }
+                    if (visited.Add(edge.ToPersonId))
+                    {
+                        queue.Enqueue(edge.ToPersonId);
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static KinshipDistance FindDistance(List<KinshipDistance> distances, int personId)
+        {
+            for (int i = 0; i < distances.Count; i++)
+            {
+                if (distances[i].PersonId == personId)
+                {
+                    return distances[i];
+                }
+            }
+            return null;
+        }
+
         /// <summary>
         /// Pass IX (A2-02, PASS6-003): the CURRENT spouse — the partner on the
         /// latest spouse edge (edges are insertion-ordered) whose partner is
@@ -152,7 +429,7 @@ namespace LandLedgers.Population
             return current;
         }
 
-        private void AddDirectedEdge(int fromPersonId, int toPersonId, KinshipRelation relation, string source)
+        private void AddDirectedEdge(int fromPersonId, int toPersonId, KinshipRelation relation, string source, string notes)
         {
             for (int i = 0; i < edges.Count; i++)
             {
@@ -172,6 +449,7 @@ namespace LandLedgers.Population
                 ToPersonId = toPersonId,
                 Relation = relation,
                 Source = source ?? string.Empty,
+                Notes = notes ?? string.Empty,
             });
         }
 
@@ -188,17 +466,92 @@ namespace LandLedgers.Population
         public void LoadFromSaveDto(KinshipRegistrySaveDto dto)
         {
             edges.Clear();
+            diagnostics.Clear();
             if (dto == null || dto.edges == null)
             {
                 return;
             }
             foreach (KinshipEdge edge in dto.edges)
             {
-                if (edge != null)
+                if (edge == null)
                 {
-                    edges.Add(edge);
+                    continue;
+                }
+
+                if (edge.FromPersonId < 0 || edge.ToPersonId < 0 || edge.FromPersonId == edge.ToPersonId
+                    || !Enum.IsDefined(typeof(KinshipRelation), edge.Relation))
+                {
+                    diagnostics.Add($"Skipped invalid saved kinship edge {edge.FromPersonId}->{edge.ToPersonId}.");
+                    continue;
+                }
+
+                if (edge.Relation == KinshipRelation.Parent)
+                {
+                    bool alreadyPresent = HasDirectedEdge(edge.FromPersonId, edge.ToPersonId, KinshipRelation.Parent);
+                    if (!alreadyPresent && HasParentagePath(edge.ToPersonId, edge.FromPersonId))
+                    {
+                        diagnostics.Add($"Skipped cyclic saved parentage {edge.FromPersonId}->{edge.ToPersonId}.");
+                        continue;
+                    }
+                    RestoreDirectedEdge(edge.FromPersonId, edge.ToPersonId, KinshipRelation.Parent, edge.Source, edge.Notes);
+                    if (!HasDirectedEdge(edge.ToPersonId, edge.FromPersonId, KinshipRelation.Child))
+                    {
+                        AddDirectedEdge(edge.ToPersonId, edge.FromPersonId, KinshipRelation.Child, edge.Source, edge.Notes);
+                    }
+                }
+                else if (edge.Relation == KinshipRelation.Child)
+                {
+                    bool parentEdgeExists = HasDirectedEdge(edge.ToPersonId, edge.FromPersonId, KinshipRelation.Parent);
+                    if (!parentEdgeExists && HasParentagePath(edge.FromPersonId, edge.ToPersonId))
+                    {
+                        diagnostics.Add($"Skipped cyclic saved parentage {edge.ToPersonId}->{edge.FromPersonId}.");
+                        continue;
+                    }
+                    RestoreDirectedEdge(edge.FromPersonId, edge.ToPersonId, KinshipRelation.Child, edge.Source, edge.Notes);
+                    if (!HasDirectedEdge(edge.ToPersonId, edge.FromPersonId, KinshipRelation.Parent))
+                    {
+                        AddDirectedEdge(edge.ToPersonId, edge.FromPersonId, KinshipRelation.Parent, edge.Source, edge.Notes);
+                    }
+                }
+                else if (edge.Relation == KinshipRelation.Spouse || edge.Relation == KinshipRelation.Sibling)
+                {
+                    RestoreDirectedEdge(edge.FromPersonId, edge.ToPersonId, edge.Relation, edge.Source, edge.Notes);
+                    if (!HasDirectedEdge(edge.ToPersonId, edge.FromPersonId, edge.Relation))
+                    {
+                        AddDirectedEdge(edge.ToPersonId, edge.FromPersonId, edge.Relation, edge.Source, edge.Notes);
+                    }
                 }
             }
+        }
+
+        private bool HasDirectedEdge(int fromPersonId, int toPersonId, KinshipRelation relation)
+        {
+            for (int i = 0; i < edges.Count; i++)
+            {
+                KinshipEdge edge = edges[i];
+                if (edge != null && edge.FromPersonId == fromPersonId && edge.ToPersonId == toPersonId
+                    && edge.Relation == relation)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void RestoreDirectedEdge(int fromPersonId, int toPersonId, KinshipRelation relation, string source, string notes)
+        {
+            for (int i = 0; i < edges.Count; i++)
+            {
+                KinshipEdge edge = edges[i];
+                if (edge != null && edge.FromPersonId == fromPersonId && edge.ToPersonId == toPersonId
+                    && edge.Relation == relation)
+                {
+                    edge.Source = source ?? string.Empty;
+                    edge.Notes = notes ?? string.Empty;
+                    return;
+                }
+            }
+            AddDirectedEdge(fromPersonId, toPersonId, relation, source, notes);
         }
     }
 

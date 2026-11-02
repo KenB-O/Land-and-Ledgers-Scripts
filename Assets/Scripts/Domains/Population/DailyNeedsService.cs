@@ -396,7 +396,11 @@ namespace LandLedgers.Population
             foreach (PersonState p in members)
             {
                 int totalEaten = result.MealsServedPerPerson.TryGetValue(p.id, out int served) ? served : 0;
-                bool missedAny = p.nutrition.ApplyDay(totalEaten, mealPolicy.ExpectedMealsPerDay, dayIndex);
+                // Nutrition follows meal slots actually offered by today's
+                // policy. In particular, a deliberately skipped flexible
+                // midday meal is neither logged as missed nor charged as a
+                // nutritional deficit.
+                bool missedAny = p.nutrition.ApplyDay(totalEaten, result.MealsRequiredPerPerson, dayIndex);
                 if (missedAny) undernourished++;
 
                 if (budgetStore != null)

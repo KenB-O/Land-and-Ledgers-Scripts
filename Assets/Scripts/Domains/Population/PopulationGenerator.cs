@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using LandLedgers.Economy.Creation;
 using LandLedgers.World;
 using UnityEngine;
 
@@ -331,6 +332,206 @@ namespace LandLedgers.Population
             string summary = $"Development fixture '{fixture.ProfileId}': {state.people.Count} Persons, " +
                 $"{state.households.Count} Households, three distinct TownWorld homes; no newcomer generation.";
             return new PopulationGenerationResult(state, summary, hasErrors);
+        }
+
+        /// <summary>
+        /// Appends the three additional residents and two households to the
+        /// already-generated six-person New Game state. This preserves the
+        /// existing six-person allocator, membership, kinship and save paths.
+        /// It is only called by the explicit expanded development bootstrap.
+        /// </summary>
+        public static PopulationGenerationResult AppendExpandedDevelopmentFixture(
+            TownWorldController townWorld,
+            PopulationGenerationSettings settings,
+            PopulationState state,
+            ExpandedSliceFixture fixture,
+            HouseholdLifecycleManager lifecycle,
+            KinshipRegistry kinship,
+            HouseholdLedgerRegistry ledgers,
+            int dayIndex,
+            int startYear,
+            int startMonth,
+            int startDay)
+        {
+            if (state == null || fixture == null || lifecycle == null || kinship == null || ledgers == null)
+                return ExpandedFailure(state, "Expanded development fixture requires population, fixture, lifecycle, kinship, and household-ledger authorities.");
+            ExpandedSliceFixtureValidation validation = fixture.Validate();
+            if (!validation.IsStructurallyValid)
+                return ExpandedFailure(state, "Invalid expanded fixture: " + string.Join("; ", validation.Errors));
+            if (townWorld == null || settings == null || townWorld.Buildings == null)
+                return ExpandedFailure(state, "Expanded development fixture requires the generated world and population settings.");
+            if (state.people.Count != SixPersonDevelopmentFixturePersonCount(fixture)
+                || state.households.Count != fixture.SixPersonFixture.Households.Count)
+                return ExpandedFailure(state, "The expanded fixture can only append to its freshly generated six-person base state.");
+
+            List<BuildingRuntimeInfo> homes = new();
+            foreach (BuildingRuntimeInfo building in BuildRuntimeInfo(townWorld))
+                if (building.isHome && building.plotZone == PlotZone.Residential) homes.Add(building);
+            homes.Sort((a, b) => a.buildingId.CompareTo(b.buildingId));
+            if (homes.Count < ExpandedSliceFixture.RequiredHouseholdCount)
+                return ExpandedFailure(state, $"Expanded fixture requires five distinct generated residential homes; found {homes.Count}. No substitute/shared homes were assigned.");
+
+            int seed = (townWorld.Settings != null ? townWorld.Settings.seed : 0) + settings.seedOffset + fixture.SeedOffset;
+            System.Random random = new(seed);
+            var personIds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < state.people.Count; i++)
+                personIds["base:" + i] = state.people[i].id;
+
+            // The expanded development roster replaces Cassidy with Tannis
+            // without changing the reusable six-person fixture or its tests.
+            if (state.people.Count > 3 && string.Equals(state.people[3].lastName, "Pierce", StringComparison.Ordinal))
+            {
+                state.people[3].firstName = fixture.ExpandedPierceSpouseName;
+                state.people[3].age = fixture.ExpandedPierceSpouseAge;
+                state.people[3].birthDate = default;
+            }
+
+            foreach (ExpandedSliceFixture.PersonSlot slot in fixture.AdditionalPeople)
+            {
+                if (slot.homeBuildingOrdinal < 0 || slot.homeBuildingOrdinal >= homes.Count)
+                    return ExpandedFailure(state, $"Person slot '{slot.key}' references unavailable home ordinal {slot.homeBuildingOrdinal}.");
+                int personId = state.AllocateNextPersonId();
+                BuildingRuntimeInfo home = homes[slot.homeBuildingOrdinal];
+                PersonState person = CreateSettlementPerson(
+                    personId, -1, SurnameFromName(slot.fullLegalName), home.buildingId, 0,
+                    settings, random, NewcomerArrivalProfile.SettledResident,
+                    SettlementArrangement.StableHousehold, slot.age, 0.45f, 6,
+                    string.Empty, 0, -1, 0, slot.isFemale);
+                SetPersonName(person, slot.fullLegalName);
+                person.professionId = "unemployed";
+                person.professionName = slot.occupation;
+                person.wage = WageSnapshot.None();
+                person.workplaceBuildingId = -1;
+                person.scheduleState = PopulationScheduleState.AtHome;
+                person.currentDestinationBuildingId = home.buildingId;
+                personIds[slot.key] = personId;
+                state.people.Add(person);
+            }
+
+            foreach (ExpandedSliceFixture.HouseholdSlot slot in fixture.AdditionalHouseholds)
+            {
+                if (slot.homeBuildingOrdinal < 0 || slot.homeBuildingOrdinal >= homes.Count)
+                    return ExpandedFailure(state, $"Household '{slot.key}' references unavailable home ordinal {slot.homeBuildingOrdinal}.");
+                if (slot.memberPersonKeys == null || slot.memberPersonKeys.Length == 0)
+                    return ExpandedFailure(state, $"Household '{slot.key}' has no members.");
+                if (!personIds.TryGetValue(slot.memberPersonKeys[0], out int founderId))
+                    return ExpandedFailure(state, $"Household '{slot.key}' has unknown founder '{slot.memberPersonKeys[0]}'.");
+
+                string surname = SurnameFromName(fixture.FindPersonDisplayName(slot.memberPersonKeys[0]));
+                HouseholdState household = lifecycle.FormHousehold(
+                    slot.key == "shane" ? "Shane Bryan Household" : surname + " Household",
+                    surname, founderId, dayIndex, HouseholdMembershipSource.Authored);
+                if (household == null)
+                    return ExpandedFailure(state, $"Household lifecycle authority refused to form '{slot.key}'.");
+                household.homeBuildingId = homes[slot.homeBuildingOrdinal].buildingId;
+                household.arrivalProfile = NewcomerArrivalProfile.SettledResident;
+                household.settlementArrangement = SettlementArrangement.StableHousehold;
+                household.lastSettlementSummary = "Expanded development fixture; scenario-authored household";
+                household.EnsureHouseholdReservesInitialized(true);
+
+                PersonState founder = state.GetPerson(founderId);
+                founder.homeBuildingId = household.homeBuildingId;
+                founder.currentDestinationBuildingId = household.homeBuildingId;
+                for (int i = 1; i < slot.memberPersonKeys.Length; i++)
+                {
+                    if (!personIds.TryGetValue(slot.memberPersonKeys[i], out int memberId))
+                        return ExpandedFailure(state, $"Household '{slot.key}' has unknown member '{slot.memberPersonKeys[i]}'.");
+                    string refusal = lifecycle.AddMember(household.id, memberId, dayIndex,
+                        HouseholdMembershipSource.Authored, "expanded development fixture household member");
+                    if (refusal != null) return ExpandedFailure(state, refusal);
+                    PersonState member = state.GetPerson(memberId);
+                    member.homeBuildingId = household.homeBuildingId;
+                    member.currentDestinationBuildingId = household.homeBuildingId;
+                }
+                NewcomerSettlementEvaluator.RefreshHouseholdPressures(household);
+                SeedFixtureCash(ledgers, household.id, slot.openingCashCents, dayIndex,
+                    fixture.ProfileId + ":household:" + slot.key);
+            }
+
+            foreach (ExpandedSliceFixture.BaseHouseholdEndowment endowment in fixture.BaseHouseholdEndowments)
+            {
+                if (endowment == null || endowment.householdIndex < 0
+                    || endowment.householdIndex >= fixture.SixPersonFixture.Households.Count
+                    || endowment.openingCashCents <= 0)
+                    continue;
+                SixPersonDevelopmentFixture.HouseholdDefinition baseHousehold = fixture.SixPersonFixture.Households[endowment.householdIndex];
+                int basePersonId = personIds["base:" + baseHousehold.personIndexes[0]];
+                PersonState basePerson = state.GetPerson(basePersonId);
+                SeedFixtureCash(ledgers, basePerson.householdId, endowment.openingCashCents, dayIndex,
+                    fixture.ProfileId + ":household:base-" + endowment.householdIndex);
+            }
+
+            foreach (ExpandedSliceFixture.PersonRelationshipSlot relation in fixture.AdditionalRelationships)
+            {
+                int first = ResolveFixturePersonId(relation.firstPersonKey, personIds);
+                int second = ResolveFixturePersonId(relation.secondPersonKey, personIds);
+                if (relation.relationship == ExpandedSliceFixture.Relationship.Sibling)
+                    kinship.AddSiblings(first, second, "expanded development fixture:" + fixture.ProfileId);
+            }
+            foreach (ExpandedSliceFixture.HouseholdSlot household in fixture.AdditionalHouseholds)
+            {
+                if (household.relationshipBetweenMembersResolved
+                    && string.Equals(household.relationshipBetweenMembers, "Spouses", StringComparison.OrdinalIgnoreCase)
+                    && household.memberPersonKeys.Length == 2)
+                    kinship.AddSpouses(personIds[household.memberPersonKeys[0]], personIds[household.memberPersonKeys[1]],
+                        "expanded development fixture:" + fixture.ProfileId);
+            }
+
+            DemographicCohortPlanner.AssignMissingBirthDates(state.people, startYear, startMonth, startDay,
+                seed ^ 0xE7A11, "Expanded development fixture; provisional age calibration.");
+            foreach (PersonState person in state.people) person?.RefreshDerivedAge(startYear, startMonth, startDay);
+            for (int i = 0; i < state.households.Count; i++)
+            {
+                state.households[i].EnsureHouseholdReservesInitialized(true);
+                NewcomerSettlementEvaluator.RefreshHouseholdPressures(state.households[i]);
+            }
+
+            if (state.people.Count != ExpandedSliceFixture.RequiredPersonCount
+                || state.households.Count != ExpandedSliceFixture.RequiredHouseholdCount)
+                return ExpandedFailure(state, "Expanded fixture postcondition failed: expected nine Persons and five Households.");
+            return new PopulationGenerationResult(state,
+                $"Expanded development fixture '{fixture.ProfileId}': 9 Persons, 5 Households; added through population and kinship authorities.", false);
+        }
+
+        private static PopulationGenerationResult ExpandedFailure(PopulationState state, string message)
+        {
+            state ??= new PopulationState();
+            state.validationMessages.Add("ERROR: " + message);
+            return new PopulationGenerationResult(state, "Expanded development fixture failed: " + message, true);
+        }
+
+        private static int SixPersonDevelopmentFixturePersonCount(ExpandedSliceFixture fixture)
+            => fixture != null && fixture.SixPersonFixture != null ? fixture.SixPersonFixture.People.Count : 0;
+
+        private static int ResolveFixturePersonId(string key, Dictionary<string, int> ids)
+            => ids.TryGetValue(key, out int id) ? id : -1;
+
+        private static string SurnameFromName(string fullName)
+        {
+            if (string.IsNullOrWhiteSpace(fullName)) return string.Empty;
+            int separator = fullName.IndexOf(' ');
+            return separator < 0 ? fullName : fullName.Substring(separator + 1);
+        }
+
+        private static void SetPersonName(PersonState person, string fullName)
+        {
+            if (person == null || string.IsNullOrWhiteSpace(fullName)) return;
+            int separator = fullName.IndexOf(' ');
+            person.firstName = separator < 0 ? fullName : fullName.Substring(0, separator);
+            person.lastName = separator < 0 ? string.Empty : fullName.Substring(separator + 1);
+        }
+
+        private static void SeedFixtureCash(HouseholdLedgerRegistry ledgers, int householdId, int cents, int dayIndex, string sourceReference)
+        {
+            if (cents <= 0) return;
+            HouseholdLedger ledger = ledgers.GetOrCreate(householdId);
+            foreach (HouseholdLedgerEntry entry in ledger.Entries)
+                if (string.Equals(entry.SourceReference, sourceReference, StringComparison.Ordinal)) return;
+            int grant = Math.Max(0, cents - ledger.GetBalanceCents());
+            if (grant == 0) return;
+            string refusal = ledger.RecordInflow(dayIndex, grant, HouseholdIncomeSource.OtherDocumented,
+                sourceReference, "one-time expanded development fixture opening household funds", "scenario fixture");
+            if (refusal != null) Debug.LogError("Expanded fixture cash endowment refused: " + refusal);
         }
 
         private static List<BuildingRuntimeInfo> BuildRuntimeInfo(TownWorldController townWorld)

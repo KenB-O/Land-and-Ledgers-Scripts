@@ -244,8 +244,22 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            storeRuntime?.InitializeIfNeeded();
-            sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
+            // Scene startup owns scenario selection and authority initialization.
+            // The panel's Awake runs before the bootstrapper's Start; defer data
+            // queries until the bootstrap has installed the selected roster. The
+            // bootstrap's own final Refresh is allowed while initialization is in
+            // progress, after its authorities have been configured.
+            FirstLedgerSliceBootstrapper bootstrapper = FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
+            if (bootstrapper != null && !bootstrapper.IsStartupReadyForManagementUi)
+            {
+                view.ShowTab(currentTab);
+                return;
+            }
+
+            // A presentation refresh must not create or seed Businesses. The
+            // scene bootstrapper installs the selected opening roster before it
+            // initializes these authorities; doing it here (including from
+            // Awake -> SetTab -> Refresh) can seed the default roster first.
             civicFoundation?.RefreshFromWorld();
             RebuildOwnedRowsIfNeeded();
             SetButtonLabel(view.GovernmentTabButton, "Civic");

@@ -182,6 +182,7 @@ namespace LandLedgers.Orchestration.Systems
             }
             LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter.RegisterIn(
                 supplierDirectory, storePort);
+            SeedLocalGeneralStoreKnowledge();
             BuildHouseholdShoppingLoop();
         }
 
@@ -388,6 +389,10 @@ namespace LandLedgers.Orchestration.Systems
 
         private void BuildHouseholdShoppingLoop()
         {
+            // Local public-store awareness is independent of whether the
+            // shopping loop already exists. Bootstrap can construct the loop
+            // before B60 registers, then register the store later.
+            SeedLocalGeneralStoreKnowledge();
             if (hub == null || populationManager?.State == null || householdMemberships == null || supplierDirectory == null)
             {
                 return;
@@ -419,32 +424,48 @@ namespace LandLedgers.Orchestration.Systems
                     populationManager.State, householdMemberships, currentJourneys);
             }
 
-            // A formed local General Store is a public town destination, so
-            // residents can know it through ordinary local awareness. Other
-            // supplier types require an explicit discovery/information event;
-            // registering them must not reveal them to every Person.
-            if (populationManager.State.people != null)
-            {
-                foreach (PersonState person in populationManager.State.people)
-                {
-                    if (person != null && person.deathDayIndex < 0)
-                    {
-                        foreach (IGoodsSupplier supplier in supplierDirectory.All)
-                        {
-                            if (supplier is not LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter
-                                || string.IsNullOrWhiteSpace(supplier.SupplierBusinessId)
-                                || string.Equals(supplier.SupplierBusinessId, "general-store", StringComparison.Ordinal))
-                            {
-                                continue;
-                            }
+        }
 
-                            sellerKnowledge.LearnSupplier(
-                                person.id,
-                                supplier.SupplierBusinessId,
-                                "local public General Store",
-                                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0);
-                        }
-                    }
+        /// <summary>
+        /// Seeds only residents' ordinary local awareness of registered,
+        /// specifically identified General Stores. Other supplier types remain
+        /// undiscovered until their normal knowledge events occur. The
+        /// ShopperSellerKnowledge authority makes repeated calls idempotent.
+        /// </summary>
+        private void SeedLocalGeneralStoreKnowledge()
+        {
+            if (populationManager?.State?.people == null || supplierDirectory == null || sellerKnowledge == null)
+                return;
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            SeedLocalGeneralStoreKnowledge(
+                populationManager.State.people, supplierDirectory.All, sellerKnowledge, dayIndex);
+        }
+
+        /// <summary>Pure policy seam used to protect the generic placeholder id.</summary>
+        public static bool IsEligibleLocalGeneralStoreSupplier(IGoodsSupplier supplier)
+        {
+            return supplier is LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter
+                && !string.IsNullOrWhiteSpace(supplier.SupplierBusinessId)
+                && !string.Equals(supplier.SupplierBusinessId, "general-store", StringComparison.Ordinal);
+        }
+
+        /// <summary>Idempotent, narrowly scoped local-store knowledge policy.</summary>
+        public static void SeedLocalGeneralStoreKnowledge(
+            IEnumerable<PersonState> people,
+            IEnumerable<IGoodsSupplier> suppliers,
+            ShopperSellerKnowledge knowledge,
+            int dayIndex)
+        {
+            if (people == null || suppliers == null || knowledge == null) return;
+            foreach (PersonState person in people)
+            {
+                if (person == null || person.id < 0 || person.deathDayIndex >= 0 || person.isOffMap) continue;
+                foreach (IGoodsSupplier supplier in suppliers)
+                {
+                    if (!IsEligibleLocalGeneralStoreSupplier(supplier)) continue;
+                    knowledge.LearnSupplier(person.id, supplier.SupplierBusinessId,
+                        "local public General Store", dayIndex);
                 }
             }
         }
@@ -2373,7 +2394,7 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         private void DriveHorseCareDay(int absoluteDayIndex)
         {
-            if (hub == null || hub.Animals == null || hub.FarmSlice == null || hub.DraftPower == null) return;
+            if (hub == null || hub.Animals == null) return;
             var diagnostics = new List<string>();
             int unfed = HorseCareDriver.CareDay(
                 hub.Animals,
@@ -2390,28 +2411,42 @@ namespace LandLedgers.Orchestration.Systems
 
         private IHorseFeedStock ResolveHorseFeedStock(AnimalState horse)
         {
-            if (horse == null) return null;
-            if (horse.OwnerKind == AnimalOwnerKind.Business
-                && horse.OwnerId != null
-                && horse.OwnerId.StartsWith("farm:", StringComparison.Ordinal))
+            return ResolveOwnerScopedHorseFeedStock(horse, (ownerKind, ownerId) =>
             {
-                return new HorseFeedStockAdapter(hub.FarmSlice.Feed);
-            }
+                if (hub == null || ownerKind != AnimalOwnerKind.Business || string.IsNullOrWhiteSpace(ownerId))
+                    return null;
 
-            if (horse.OwnerKind == AnimalOwnerKind.Business
-                && sharedBusinessRuntime != null
-                && sharedBusinessRuntime.TryFindByInstanceId(horse.OwnerId, out BusinessInstanceState owner)
-                && owner?.RuntimeState != null)
-            {
-                if (owner.BusinessType == BusinessType.LiveryFreight
-                    && owner.RuntimeState.GetCategoryStock("livery_feed_upkeep") != null)
+                if (ownerId.StartsWith("farm:", StringComparison.Ordinal))
+                    return hub.FarmSlice != null ? new HorseFeedStockAdapter(hub.FarmSlice.Feed) : null;
+
+                if (sharedBusinessRuntime != null
+                    && sharedBusinessRuntime.TryFindByInstanceId(ownerId, out BusinessInstanceState owner)
+                    && owner?.RuntimeState != null)
                 {
-                    return new BusinessHorseFeedStockAdapter(owner.RuntimeState);
+                    // Business category balances are reporting aggregates, not
+                    // proof of feed. No registered, item-identified horse-feed
+                    // source exists in the current catalog, so do not consume
+                    // livery_upkeep_lot or another mixed category as a ration.
+                    return null;
                 }
 
-            }
+                return null;
+            });
+        }
 
-            return null;
+        /// <summary>
+        /// Resolves only the source registered to this animal's exact owner
+        /// identity. The resolver deliberately does not fall back across
+        /// businesses, households, or owner kinds.
+        /// </summary>
+        public static IHorseFeedStock ResolveOwnerScopedHorseFeedStock(
+            AnimalState horse,
+            Func<AnimalOwnerKind, string, IHorseFeedStock> registeredSourceForOwner)
+        {
+            if (horse == null || !horse.IsActive || string.IsNullOrWhiteSpace(horse.OwnerId)
+                || registeredSourceForOwner == null)
+                return null;
+            return registeredSourceForOwner(horse.OwnerKind, horse.OwnerId);
         }
 
         private void DriveHouseholdAutonomy(int absoluteDayIndex, List<string> diag)

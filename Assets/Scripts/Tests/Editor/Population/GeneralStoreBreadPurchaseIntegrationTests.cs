@@ -144,8 +144,9 @@ namespace LandLedgers.EditorTests.Population
                     "Only one bread unit was purchased; additional meals must not be invented.");
                 Assert.AreEqual(0, householdInventory.GetAvailableUnits("bread"));
                 Assert.AreEqual(1, population.GetPerson(1).nutrition.lastUpdateDayIndex);
-                Assert.Less(population.GetPerson(1).nutrition.nutrition01, 1f,
-                    "DailyNeedsService must derive nutrition from the actual meal record.");
+                Assert.That(population.GetPerson(1).nutrition.nutrition01, Is.EqualTo(0.82f).Within(0.000001f),
+                    "Nutrition must derive from one actual bread meal and one missed scheduled meal; " +
+                    "the deliberately skipped midday slot is not a missed meal.");
                 IReadOnlyList<HouseholdMealRecord> records = mealLog.GetMeals(7);
                 Assert.AreEqual(1, records.Count);
                 Assert.AreEqual(1, records[0].ItemsConsumed.Count);

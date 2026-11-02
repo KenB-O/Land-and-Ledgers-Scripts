@@ -100,6 +100,36 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void LotBackedBread_IsEatenWithoutCooking_AndSkippedMiddayIsNotNutritionalMiss()
+        {
+            var inventories = new HouseholdInventoryRegistry();
+            HouseholdInventory inventory = inventories.GetOrCreate(7);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.BreadId, 1, 0, "actual household purchase"));
+            var mealLog = new HouseholdMealLogRegistry();
+            population.people[0].nutrition.nutrition01 = 1f;
+            population.people[1].nutrition.nutrition01 = 1f;
+
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                population, planner, null, 0, diag,
+                inventories: inventories, mealLog: mealLog,
+                mealPolicy: MealSchedulingPolicy.Default);
+
+            // The default policy skips its flexible midday slot while supply
+            // is low. The two substantial slots still produce one real meal
+            // and one genuine missed meal for Abe; Bea misses both.
+            Assert.AreEqual(1, report.MealsEaten);
+            Assert.AreEqual(3, report.MealsMissed);
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(1, mealLog.GetMeals(7).Count,
+                "Ready bread is consumed directly; no cooking Task or prepared meal is fabricated.");
+            Assert.AreEqual(HouseholdItemCatalog.BreadId, mealLog.GetMeals(7)[0].ItemsConsumed[0].ItemId);
+            Assert.AreEqual(0, mealLog.GetPreparations(7).Count);
+            Assert.That(population.GetPerson(1).nutrition.nutrition01, Is.EqualTo(0.82f).Within(0.000001f),
+                "Only the two scheduled substantial slots count toward nutrition when midday is skipped.");
+            Assert.That(population.GetPerson(2).nutrition.nutrition01, Is.EqualTo(0.64f).Within(0.000001f));
+        }
+
+        [Test]
         public void ShortfallIsShoppedForByAHouseholdMember()
         {
             // No food in stores: the acting member must shop (GHOST-DEF-006 — meals need a source).

@@ -15,7 +15,8 @@ namespace LandLedgers.Economy.Creation
     {
         Unspecified = 0,
 
-        /// <summary>No dedicated premises required (Canon §3.1, GHOST-DES-031).</summary>
+        /// <summary>No premises are claimed during establishment. Operations that need
+        /// a site remain unavailable until their Task prerequisites are met.</summary>
         NoPremisesRequired = 1,
 
         /// <summary>Use an owned parcel; the dropdown lists ALL owned parcels including
@@ -302,10 +303,9 @@ namespace LandLedgers.Economy.Creation
         }
 
         /// <summary>
-        /// Full form validation with human-readable errors. Enforces the canon premises
-        /// rules: capability-driven premises (Tech X §3.2) — the chosen premises mode
-        /// must satisfy the merged capability requirements, or the error says exactly
-        /// what is missing (e.g. "slaughter capability needs yard space with sanitation").
+        /// Validates legal establishment inputs and any explicitly claimed property
+        /// arrangement. Operational site fit is reported by the relevant capability
+        /// Tasks; it does not prevent the Business entity from existing.
         /// </summary>
         public List<string> Validate()
         {
@@ -344,46 +344,28 @@ namespace LandLedgers.Economy.Creation
 
             // Capabilities → requirements (capability-driven, never type-driven).
             var unknown = new List<string>();
-            PremisesRequirement requirement = CapabilityPremisesHints.MergeForCapabilities(capabilityIds, unknown);
+            CapabilityPremisesHints.MergeForCapabilities(capabilityIds, unknown);
             foreach (string id in unknown)
             {
                 errors.Add($"Unknown capability '{id}' — pick from the capability list.");
             }
 
-            // A classless entity may be formed before it has an operation or
-            // premises. Physical requirements are checked when work is configured
-            // and attempted, not by a legacy trade-class selector.
-            if (businessType == BusinessType.Generic && capabilityIds != null && capabilityIds.Count == 0
-                && (premises == null || premises.Mode == PremisesMode.Unspecified))
+            // Establishment may precede selection or acquisition of any premises,
+            // equipment, workers, or inventory. Capability-specific Tasks own those
+            // operational prerequisites.
+            if (premises == null || premises.Mode == PremisesMode.Unspecified
+                || premises.Mode == PremisesMode.NoPremisesRequired)
             {
                 return errors;
             }
 
-            // Premises mode chosen?
-            if (premises == null || premises.Mode == PremisesMode.Unspecified)
-            {
-                errors.Add("Choose how this business is housed: no premises, owned property, leased, acquired, compatible space, or mobile route (GHOST-DES-031).");
-                return errors;
-            }
-
-            // The canon premises rules, in plain language.
+            // Validate the integrity of an explicitly claimed arrangement. These checks
+            // protect property rights and space assignments, not operational readiness.
             switch (premises.Mode)
             {
-                case PremisesMode.NoPremisesRequired:
-                    if (!requirement.IsSiteFree)
-                    {
-                        errors.Add($"No-premises won't work here: {DescribeUnmetNeeds(requirement)} " +
-                            "Pick a premises option that fits the work (Tech X §3.2).");
-                    }
-                    break;
-
                 case PremisesMode.MobileRoute:
-                    if (requirement.NeedsCustomerFacingSpace || requirement.NeedsWorkshopSpace
-                        || requirement.NeedsAnimalHousing || requirement.NeedsFoodHandling)
-                    {
-                        errors.Add($"A mobile route can't satisfy: {DescribeUnmetNeeds(requirement)} " +
-                            "Mobile operation fits route trade, not fixed-site work (Tech X §3.2).");
-                    }
+                    // The entity may be established before its route equipment or other
+                    // operational resources exist. Route Tasks check them when run.
                     break;
 
                 case PremisesMode.UseOwnedProperty:
@@ -405,15 +387,7 @@ namespace LandLedgers.Economy.Creation
                 case PremisesMode.UseExistingCompatibleSpace:
                     if (premises.CompatibleSpaceKind == CompatibleSpaceKind.Unspecified)
                     {
-                        errors.Add("Say which compatible space the business uses: house room, barn, yard, or shared premises.");
-                    }
-                    else
-                    {
-                        string mismatch = CheckCompatibleSpaceFit(premises.CompatibleSpaceKind, requirement);
-                        if (!string.IsNullOrEmpty(mismatch))
-                        {
-                            errors.Add(mismatch);
-                        }
+                        errors.Add("Say which existing space this business intends to occupy.");
                     }
                     break;
             }
@@ -444,6 +418,7 @@ namespace LandLedgers.Economy.Creation
                 PremisesMode.UseExistingCompatibleSpace => PremisesPreference.PreferShared,
                 PremisesMode.MobileRoute => PremisesPreference.PreferMobile,
                 PremisesMode.NoPremisesRequired => PremisesPreference.NoneRequired,
+                PremisesMode.Unspecified => PremisesPreference.NoneRequired,
                 _ => PremisesPreference.Auto,
             };
 
@@ -456,48 +431,5 @@ namespace LandLedgers.Economy.Creation
                 totalCapital);
         }
 
-        private static string DescribeUnmetNeeds(PremisesRequirement requirement)
-        {
-            var needs = new List<string>();
-            if (requirement.NeedsCustomerFacingSpace) needs.Add("customer-facing space");
-            if (requirement.NeedsWorkshopSpace) needs.Add("workshop space");
-            if (requirement.NeedsAnimalHousing) needs.Add("animal housing");
-            if (requirement.NeedsYardStorage) needs.Add("yard storage (yard space)");
-            if (requirement.NeedsFoodHandling) needs.Add("food-handling space");
-            if (requirement.MinimumAreaSqFt > 0) needs.Add($"{requirement.MinimumAreaSqFt} sq ft");
-            return needs.Count > 0 ? string.Join(", ", needs) : "site requirements";
-        }
-
-        private static string CheckCompatibleSpaceFit(CompatibleSpaceKind kind, PremisesRequirement requirement)
-        {
-            // Plain-language fit checks: the chosen compatible space must satisfy the
-            // merged capability requirements (Tech X §3.2).
-            switch (kind)
-            {
-                case CompatibleSpaceKind.HouseRoom:
-                    if (requirement.NeedsAnimalHousing)
-                        return "A house room can't house animals — use barn space (Tech X §3.2).";
-                    if (requirement.NeedsYardStorage)
-                        return "A house room has no yard storage — use a yard area (Tech X §3.2).";
-                    if (requirement.NeedsFoodHandling && requirement.MinimumAreaSqFt > 600)
-                        return "Food handling at this scale needs more than a house room (Tech X §3.2).";
-                    break;
-                case CompatibleSpaceKind.BarnSpace:
-                    if (requirement.NeedsCustomerFacingSpace)
-                        return "A barn isn't customer-facing — use a storefront or shared premises (Tech X §3.2).";
-                    break;
-                case CompatibleSpaceKind.YardArea:
-                    if (requirement.NeedsCustomerFacingSpace)
-                        return "A yard area isn't customer-facing — use a storefront or shared premises (Tech X §3.2).";
-                    if (requirement.NeedsFoodHandling)
-                        return "Food handling needs an enclosed space, not an open yard (Tech X §3.2).";
-                    break;
-                case CompatibleSpaceKind.SharedPremises:
-                    // Shared premises can host anything with a real space assignment (Canon §3.3).
-                    break;
-            }
-
-            return null;
-        }
     }
 }

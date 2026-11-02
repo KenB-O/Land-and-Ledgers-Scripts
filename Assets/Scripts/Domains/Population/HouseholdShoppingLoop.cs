@@ -499,7 +499,7 @@ namespace LandLedgers.Population
                 {
                     if (supplier == null) continue;
                     var itemSupplier = supplier as IItemResolvingSupplier;
-                    if (itemSupplier == null || !itemSupplier.OffersItem(need.ItemId))
+                    if (itemSupplier == null || !SupplierRecognizesItem(supplier, need.ItemId))
                     {
                         rejected.Add($"{supplier.SupplierName}: item identity unavailable");
                         continue;
@@ -1714,7 +1714,8 @@ namespace LandLedgers.Population
                         continue;
                     }
 
-                    if (supplier is IItemResolvingSupplier resolving && resolving.OffersItem(itemId))
+                    if (supplier is IItemResolvingSupplier
+                        && SupplierRecognizesItem(supplier, itemId))
                     {
                         found.Add(supplier);
                     }
@@ -1722,6 +1723,15 @@ namespace LandLedgers.Population
             }
 
             return found;
+        }
+
+        private static bool SupplierRecognizesItem(IGoodsSupplier supplier, string itemId)
+        {
+            if (supplier is not IItemResolvingSupplier resolving)
+                return false;
+            return supplier is IItemCatalogSupplier catalog
+                ? catalog.RecognizesItem(itemId)
+                : resolving.OffersItem(itemId);
         }
 
         private string DescribeNoKnownItemOffer(List<int> memberIds, string itemId)

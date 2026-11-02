@@ -39,11 +39,37 @@ namespace LandLedgers.Editor.Economy
             Assert.NotNull(view.LoanSubmitButton);
             Assert.NotNull(view.AcquisitionFocusButton);
             Assert.NotNull(view.GovernmentFocusButton);
-            Assert.NotNull(view.ResourcesTabButton);
+            Assert.NotNull(view.NewBusinessTabButton);
+            Assert.NotNull(view.DialogueTabButton);
+            Assert.IsNull(view.ResourcesTabButton, "Resources should be a Town subsection, not a sixth management tab.");
+            Assert.AreEqual("Businesses", view.PropertiesTabButton.GetComponentInChildren<TMP_Text>(true).text);
+            Assert.AreEqual("Acquisitions", view.AcquisitionsTabButton.GetComponentInChildren<TMP_Text>(true).text);
+            Assert.AreEqual("Town", view.GovernmentTabButton.GetComponentInChildren<TMP_Text>(true).text);
+            Assert.AreEqual("New Business", view.NewBusinessTabButton.GetComponentInChildren<TMP_Text>(true).text);
+            Assert.AreEqual("Dialogue", view.DialogueTabButton.GetComponentInChildren<TMP_Text>(true).text);
+            Assert.AreSame(view.BusinessesSubnavRoot, view.FinancesTabButton.transform.parent, "Owner finance controls should remain available under Businesses.");
+            Assert.AreSame(view.PropertiesContentRoot.parent, view.NewBusinessContentRoot.parent);
+            Assert.AreSame(view.PropertiesContentRoot.parent, view.DialogueContentRoot.parent);
+            Assert.Less(view.PropertiesTabButton.transform.GetSiblingIndex(), view.NewBusinessTabButton.transform.GetSiblingIndex());
+            Assert.Less(view.NewBusinessTabButton.transform.GetSiblingIndex(), view.GovernmentTabButton.transform.GetSiblingIndex());
+            Assert.Less(view.GovernmentTabButton.transform.GetSiblingIndex(), view.AcquisitionsTabButton.transform.GetSiblingIndex());
+            Assert.Less(view.AcquisitionsTabButton.transform.GetSiblingIndex(), view.DialogueTabButton.transform.GetSiblingIndex());
+
+            Assert.NotNull(view.BusinessesSubnavRoot);
+            Assert.NotNull(view.NewBusinessContentRoot);
+            Assert.NotNull(view.DialogueContentRoot);
+            Assert.NotNull(view.OpenExistingBusinessFormationButton);
+            Assert.AreSame(view.GovernmentContentRoot, view.ResourcesContentRoot,
+                "Town civic and resource read models should share one authored Town page.");
             Assert.NotNull(view.ResourcesContentRoot);
             Assert.NotNull(view.ResourcesSummaryText);
             Assert.NotNull(view.ResourcesDistrictListText);
             Assert.NotNull(view.ResourcesDetailText);
+
+            int authoredChildCount = view.transform.GetComponentsInChildren<Transform>(true).Length;
+            view.EnsureResourcesControls(true);
+            Assert.AreEqual(authoredChildCount, view.transform.GetComponentsInChildren<Transform>(true).Length,
+                "Resources UI must be authored in the prefab and must not be manufactured at runtime.");
 
             AssertSecondPassSectionBindings(view);
             AssertCashTransferButtonPathReportsRejection(view);
@@ -53,6 +79,14 @@ namespace LandLedgers.Editor.Economy
             AssertTabSwitch(view, ManagementPanelTab.Acquisitions, view.AcquisitionsContentRoot);
             AssertTabSwitch(view, ManagementPanelTab.Government, view.GovernmentContentRoot);
             AssertTabSwitch(view, ManagementPanelTab.Resources, view.ResourcesContentRoot);
+            AssertTabSwitch(view, ManagementPanelTab.NewBusiness, view.NewBusinessContentRoot);
+            view.ShowTab(ManagementPanelTab.Properties);
+            Assert.IsTrue(view.NewBusinessContentRoot.gameObject.activeSelf,
+                "A legacy controller refresh must not replace the selected New Business page.");
+            AssertTabSwitch(view, ManagementPanelTab.Dialogue, view.DialogueContentRoot);
+            view.ShowTab(ManagementPanelTab.Properties);
+            Assert.IsTrue(view.DialogueContentRoot.gameObject.activeSelf,
+                "A legacy controller refresh must not replace the selected Dialogue page.");
         }
 
         private static void AssertBusinessCashTransferPropertyScrollPlacement(ManagementPanelView view)
@@ -235,11 +269,15 @@ namespace LandLedgers.Editor.Economy
             view.ShowTab(tab);
 
             Assert.IsTrue(expectedActiveRoot.gameObject.activeSelf, $"{tab} content should be active after selecting the tab.");
+            bool businesses = tab == ManagementPanelTab.Properties || tab == ManagementPanelTab.Finances;
+            bool town = tab == ManagementPanelTab.Government || tab == ManagementPanelTab.Resources;
             Assert.AreEqual(tab == ManagementPanelTab.Properties, view.PropertiesContentRoot.gameObject.activeSelf);
             Assert.AreEqual(tab == ManagementPanelTab.Finances, view.FinancesContentRoot.gameObject.activeSelf);
             Assert.AreEqual(tab == ManagementPanelTab.Acquisitions, view.AcquisitionsContentRoot.gameObject.activeSelf);
-            Assert.AreEqual(tab == ManagementPanelTab.Government, view.GovernmentContentRoot.gameObject.activeSelf);
-            Assert.AreEqual(tab == ManagementPanelTab.Resources, view.ResourcesContentRoot.gameObject.activeSelf);
+            Assert.AreEqual(town, view.GovernmentContentRoot.gameObject.activeSelf);
+            Assert.AreEqual(businesses, view.BusinessesSubnavRoot.gameObject.activeSelf);
+            Assert.AreEqual(tab == ManagementPanelTab.NewBusiness, view.NewBusinessContentRoot.gameObject.activeSelf);
+            Assert.AreEqual(tab == ManagementPanelTab.Dialogue, view.DialogueContentRoot.gameObject.activeSelf);
         }
 
         private static BusinessProfileDefinition LoadProfile(BusinessType businessType)

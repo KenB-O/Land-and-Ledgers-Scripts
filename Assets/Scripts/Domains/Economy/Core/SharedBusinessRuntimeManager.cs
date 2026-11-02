@@ -2036,7 +2036,9 @@ namespace LandLedgers.Economy
 
         public IReadOnlyList<NewcomerSettlementBoardingOption> BuildBoardingHouseSettlementOptions()
         {
-            InitializeIfNeeded(generalStoreRuntime != null ? generalStoreRuntime.CurrentBusiness : null);
+            // This is a read-model query used by UI and population summaries.
+            // It must not seed the default opening roster before the scene
+            // bootstrapper has selected and installed the scenario roster.
             List<NewcomerSettlementBoardingOption> options = new();
             for (int i = 0; i < businesses.Count; i++)
             {

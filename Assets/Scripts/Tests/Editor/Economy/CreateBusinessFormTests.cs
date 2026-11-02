@@ -104,7 +104,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Validate_SlaughterWithNoPremises_ExplainsUnmetNeeds()
+        public void Validate_SlaughterCanBeEstablishedBeforePremisesExist()
         {
             var form = new CreateBusinessFormModel();
             form.SetDisplayName("Slaughterhouse");
@@ -114,8 +114,25 @@ namespace LandLedgers.EditorTests.Economy
 
             List<string> errors = form.Validate();
 
-            Assert.AreEqual(1, errors.Count);
-            StringAssert.Contains("yard space", errors[0].ToLowerInvariant());
+            Assert.AreEqual(0, errors.Count, string.Join("; ", errors));
+            Assert.AreEqual(PremisesPreference.NoneRequired, form.ToIntent().PremisesPreference);
+        }
+
+        [Test]
+        public void Validate_CapableBusinessCanBeEstablishedBeforeChoosingPremises()
+        {
+            var form = new CreateBusinessFormModel();
+            form.SetBusinessType(BusinessType.Bakery);
+            form.SetDisplayName("Baker's Company");
+            form.AddOwnerRow(new CreateBusinessOwnerRow());
+            form.AddCapability("baking");
+
+            List<string> errors = form.Validate();
+
+            Assert.AreEqual(0, errors.Count, string.Join("; ", errors));
+            Assert.AreEqual(PremisesPreference.NoneRequired, form.ToIntent().PremisesPreference);
+            Assert.IsTrue(form.ToIntent().PremisesRequirement.NeedsFoodHandling,
+                "The operational requirement remains on the intent for task readiness checks.");
         }
 
         [Test]
@@ -154,7 +171,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Validate_AnimalHousingInHouseRoom_Rejected()
+        public void Validate_AnimalHousingBusinessCanBeEstablishedBeforeCompatibleFacilities()
         {
             var form = new CreateBusinessFormModel();
             form.SetDisplayName("Livery");
@@ -165,8 +182,8 @@ namespace LandLedgers.EditorTests.Economy
 
             List<string> errors = form.Validate();
 
-            Assert.AreEqual(1, errors.Count);
-            StringAssert.Contains("barn", errors[0].ToLowerInvariant());
+            Assert.AreEqual(0, errors.Count, string.Join("; ", errors));
+            Assert.AreEqual(PremisesPreference.PreferShared, form.ToIntent().PremisesPreference);
         }
 
         [Test]

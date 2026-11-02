@@ -372,9 +372,10 @@ namespace LandLedgers.Persistence
         public string lastSettlementSummary = string.Empty;
         public string lastRentalSummary = string.Empty;
         /// <summary>
-        /// Pass V P1-2/P1-3: the population-wide kinship edges (separate from
-        /// household membership, Tech X §2.2). Restored into the manager's
-        /// KinshipRegistry on load.
+        /// Pass V P1-2/P1-3: the population-wide KinshipRegistry edges (separate
+        /// from household membership, Tech X §2.2). This field name and edge shape
+        /// remain the save compatibility contract; parent/child and explicit sibling
+        /// edges are restored by the same authoritative registry without generating IDs.
         /// </summary>
         public List<KinshipEdge> kinshipEdges = new();
         /// <summary>Pass V P1-2: in-flight pregnancies (birth driver state).</summary>

@@ -21,6 +21,7 @@ namespace LandLedgers.EditorTests.Economy
             public int PremisesAssignments;
             public BusinessType LastPremisesBusinessType;
             public PremisesKind LastPremisesKind;
+            public bool PremisesAvailable = true;
 
             public bool TryGetProfile(BusinessType type, out BusinessProfileDefinition profile)
             {
@@ -35,6 +36,12 @@ namespace LandLedgers.EditorTests.Economy
 
             public bool TryAssignPremises(PremisesKind kind, out int buildingId)
             {
+                if (!PremisesAvailable)
+                {
+                    buildingId = -1;
+                    return false;
+                }
+
                 buildingId = 100 + PremisesAssignments;
                 PremisesAssignments++;
                 return true;
@@ -97,6 +104,57 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(created, string.Join("; ", result.Diagnostics));
             Assert.AreEqual(BusinessType.CropFarm, context.LastPremisesBusinessType);
             Assert.AreEqual(PremisesKind.YardShopArea, context.LastPremisesKind);
+        }
+
+        [Test]
+        public void TryCreate_SiteUnavailable_EstablishesEntityWithoutGrantingPremisesOrAssets()
+        {
+            var authority = new BusinessCreationAuthority();
+            var context = new TestContext { PremisesAvailable = false };
+            var intent = ValidIntent(
+                BusinessType.Bakery,
+                new PremisesRequirement(foodHandling: true, minAreaSqFt: 400));
+
+            bool created = authority.TryCreate(intent, context, out BusinessCreationResult result);
+
+            Assert.IsTrue(created, string.Join("; ", result.Diagnostics));
+            Assert.IsTrue(result.Success);
+            Assert.IsNotNull(result.Business);
+            Assert.AreEqual(-1, result.Premises.BuildingId);
+            Assert.AreEqual(0, result.Business.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(0, result.Business.RuntimeState.RetailItemLots.Count,
+                "Establishment must not grant inventory lots.");
+            foreach (CategoryStockState category in result.Business.RuntimeState.CategoryStock)
+            {
+                Assert.AreEqual(0, category.CurrentStockUnits,
+                    $"Establishment must not grant stock in {category.CategoryId}.");
+            }
+            foreach (WorkerSlotState slot in result.Business.RuntimeState.WorkerSlots)
+            {
+                Assert.IsFalse(slot.IsFilled, "Establishment must not grant workers.");
+            }
+            Assert.AreEqual(0, context.PremisesAssignments);
+            StringAssert.Contains("Established without a", string.Join(" ", result.Diagnostics));
+            Assert.IsFalse(new BusinessOperatingLedger().IsOperating(result.BusinessEntityId));
+        }
+
+        [Test]
+        public void TryCreate_ExplicitDeferredPremises_DoesNotAttemptToClaimASite()
+        {
+            var authority = new BusinessCreationAuthority();
+            var context = new TestContext();
+            var intent = ValidIntent(
+                BusinessType.LiveryFreight,
+                new PremisesRequirement(animalHousing: true, yardStorage: true),
+                PremisesPreference.NoneRequired);
+
+            bool created = authority.TryCreate(intent, context, out BusinessCreationResult result);
+
+            Assert.IsTrue(created, string.Join("; ", result.Diagnostics));
+            Assert.AreEqual(PremisesKind.NoDedicatedPremises, result.Premises.Kind);
+            Assert.AreEqual(-1, result.Premises.BuildingId);
+            Assert.AreEqual(0, context.PremisesAssignments);
+            Assert.AreEqual(0, result.Business.RuntimeState.CurrentCashCents);
         }
 
         [Test]

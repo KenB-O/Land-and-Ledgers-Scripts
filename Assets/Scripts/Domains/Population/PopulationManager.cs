@@ -1160,7 +1160,8 @@ namespace LandLedgers.Population
             dto.householdMemberships = membershipRegistry?.CaptureSaveDto();
             if (kinshipRegistry != null)
             {
-                foreach (KinshipEdge edge in kinshipRegistry.AllEdges)
+                KinshipRegistrySaveDto kinshipSave = kinshipRegistry.CaptureSaveDto();
+                foreach (KinshipEdge edge in kinshipSave.edges)
                 {
                     if (edge == null)
                     {
@@ -1462,18 +1463,7 @@ namespace LandLedgers.Population
             estateService.Clear();
             pregnancies.Clear();
 
-            if (dto.kinshipEdges != null)
-            {
-                foreach (KinshipEdge edge in dto.kinshipEdges)
-                {
-                    if (edge == null)
-                    {
-                        continue;
-                    }
-
-                    kinshipRegistry.AddEdge(edge.FromPersonId, edge.ToPersonId, edge.Relation, edge.Source);
-                }
-            }
+            kinshipRegistry.LoadFromSaveDto(new KinshipRegistrySaveDto { edges = dto.kinshipEdges });
 
             if (dto.pregnancies != null)
             {

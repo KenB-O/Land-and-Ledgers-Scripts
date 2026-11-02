@@ -58,6 +58,8 @@ namespace LandLedgers.EditorTests.Economy
                 GeneralStoreSupplierAdapter emptySupplier = new GeneralStoreSupplierAdapter(
                     manager.BuildHouseholdTradingPort(CreateNpcStore(definition)));
                 Assert.IsFalse(emptySupplier.OffersItem("bread"), "A catalog entry without a physical lot is not an offer.");
+                Assert.IsTrue(emptySupplier.RecognizesItem("bread"), "The seller still recognizes the SKU when it is temporarily out of stock.");
+                Assert.IsFalse(emptySupplier.RecognizesItem("preserved_meat"), "An undeclared SKU is not part of this store's catalog.");
 
                 GeneralStoreTradingPort port = manager.BuildHouseholdTradingPort(store);
                 var supplier = new GeneralStoreSupplierAdapter(port);
@@ -86,6 +88,7 @@ namespace LandLedgers.EditorTests.Economy
 
                 Assert.AreEqual(12, supplier.SellItem("bread", 12, 0, cashSettlement, new List<string>()));
                 Assert.IsFalse(supplier.OffersItem("bread"), "The final unit sale must remove live availability.");
+                Assert.IsTrue(supplier.RecognizesItem("bread"), "Selling out must not erase the store's item identity.");
                 Assert.AreEqual(0, supplier.ItemStockUnits("bread"));
                 Assert.AreEqual(14 * breadPrice, store.RuntimeState.CurrentCashCents,
                     "Sale proceeds must post to the Business cash authority at the authored item price.");

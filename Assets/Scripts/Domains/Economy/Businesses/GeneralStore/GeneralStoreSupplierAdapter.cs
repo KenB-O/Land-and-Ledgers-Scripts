@@ -75,7 +75,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// Item resolution is store-declared (CategoryOffers): the store knows
     /// what its categories represent. No global category→item guesswork.
     /// </summary>
-    public sealed class GeneralStoreSupplierAdapter : IItemResolvingSupplier, IDeliveryOfferingSupplier, IOffersTradeCredit
+    public sealed class GeneralStoreSupplierAdapter : IItemResolvingSupplier, IItemCatalogSupplier, IDeliveryOfferingSupplier, IOffersTradeCredit
     {
         private readonly IGeneralStoreTradingPort port;
         private readonly List<string> log = new List<string>();
@@ -153,6 +153,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             return !string.IsNullOrWhiteSpace(categoryId)
                 && ItemStockUnits(itemId) > 0
                 && ItemPricePerUnitCents(itemId) > 0;
+        }
+
+        public bool RecognizesItem(string itemId)
+        {
+            return !string.IsNullOrWhiteSpace(CategoryForItem(itemId));
         }
 
         public string CategoryForItem(string itemId)

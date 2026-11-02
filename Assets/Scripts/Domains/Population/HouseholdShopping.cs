@@ -363,6 +363,17 @@ namespace LandLedgers.Population
     }
 
     /// <summary>
+    /// Optional catalog surface for suppliers whose item identity exists even
+    /// when current physical stock is exhausted. This keeps seller knowledge
+    /// separate from stock availability: the shopping loop can report a known
+    /// seller's real stockout instead of misclassifying it as an unknown offer.
+    /// </summary>
+    public interface IItemCatalogSupplier
+    {
+        bool RecognizesItem(string itemId);
+    }
+
+    /// <summary>
     /// Phase C: a storefront that can arrange delivery of purchased goods.
     /// Freight is real (journey minutes, real fee) and unaffordable freight
     /// fails the candidate — never silently absorbed.

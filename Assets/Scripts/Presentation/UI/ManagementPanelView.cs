@@ -10,7 +10,9 @@ namespace LandLedgers.UI
         Finances = 1,
         Acquisitions = 2,
         Government = 3,
-        Resources = 4
+        Resources = 4,
+        NewBusiness = 5,
+        Dialogue = 6
     }
 
     [DisallowMultipleComponent]
@@ -29,6 +31,8 @@ namespace LandLedgers.UI
         [SerializeField] private Button acquisitionsTabButton;
         [SerializeField] private Button governmentTabButton;
         [SerializeField] private Button resourcesTabButton;
+        [SerializeField] private Button newBusinessTabButton;
+        [SerializeField] private Button dialogueTabButton;
         [SerializeField] private Button closeButton;
 
         [Header("Tabs")]
@@ -37,6 +41,15 @@ namespace LandLedgers.UI
         [SerializeField] private RectTransform acquisitionsContentRoot;
         [SerializeField] private RectTransform governmentContentRoot;
         [SerializeField] private RectTransform resourcesContentRoot;
+        [SerializeField] private RectTransform businessesSubnavRoot;
+        [SerializeField] private RectTransform newBusinessContentRoot;
+        [SerializeField] private RectTransform dialogueContentRoot;
+        [SerializeField] private Button openExistingBusinessFormationButton;
+        [SerializeField] private TMP_Text newBusinessSummaryText;
+        [SerializeField] private TMP_Text dialogueStatusText;
+        private bool primaryTabListenersBound;
+        private bool hasStandaloneTabSelection;
+        private ManagementPanelTab standaloneTabSelection;
 
         [Header("Properties")]
         [SerializeField] private TMP_Text propertyListTitleText;
@@ -167,12 +180,20 @@ namespace LandLedgers.UI
         public Button AcquisitionsTabButton => acquisitionsTabButton;
         public Button GovernmentTabButton => governmentTabButton;
         public Button ResourcesTabButton => resourcesTabButton;
+        public Button NewBusinessTabButton => newBusinessTabButton;
+        public Button DialogueTabButton => dialogueTabButton;
         public Button CloseButton => closeButton;
         public RectTransform PropertiesContentRoot => propertiesContentRoot;
         public RectTransform FinancesContentRoot => financesContentRoot;
         public RectTransform AcquisitionsContentRoot => acquisitionsContentRoot;
         public RectTransform GovernmentContentRoot => governmentContentRoot;
         public RectTransform ResourcesContentRoot => resourcesContentRoot;
+        public RectTransform BusinessesSubnavRoot => businessesSubnavRoot;
+        public RectTransform NewBusinessContentRoot => newBusinessContentRoot;
+        public RectTransform DialogueContentRoot => dialogueContentRoot;
+        public Button OpenExistingBusinessFormationButton => openExistingBusinessFormationButton;
+        public TMP_Text NewBusinessSummaryText => newBusinessSummaryText;
+        public TMP_Text DialogueStatusText => dialogueStatusText;
         public TMP_Text PropertyListTitleText => propertyListTitleText;
         public RectTransform PropertyListContent => propertyListContent;
         public Button PropertyRowTemplate => propertyRowTemplate;
@@ -293,6 +314,8 @@ namespace LandLedgers.UI
             acquisitionsTabButton = acquisitionsTabButton != null ? acquisitionsTabButton : FindButton(root, "Acquisitions Tab Panel");
             governmentTabButton = governmentTabButton != null ? governmentTabButton : FindButton(root, "Tab_Government");
             resourcesTabButton = resourcesTabButton != null ? resourcesTabButton : FindButton(root, "Tab_Resources");
+            newBusinessTabButton = newBusinessTabButton != null ? newBusinessTabButton : FindButton(root, "Tab_NewBusiness");
+            dialogueTabButton = dialogueTabButton != null ? dialogueTabButton : FindButton(root, "Tab_Dialogue");
             closeButton = closeButton != null ? closeButton : FindButton(root, "Tab_Close");
             closeButton = closeButton != null ? closeButton : FindButton(root, "CloseButton");
 
@@ -301,6 +324,12 @@ namespace LandLedgers.UI
             acquisitionsContentRoot = acquisitionsContentRoot != null ? acquisitionsContentRoot : FindRect(root, "Acquisitions Content");
             governmentContentRoot = governmentContentRoot != null ? governmentContentRoot : FindRect(root, "Government Content");
             resourcesContentRoot = resourcesContentRoot != null ? resourcesContentRoot : FindRect(root, "Resources Content");
+            businessesSubnavRoot = businessesSubnavRoot != null ? businessesSubnavRoot : FindRect(root, "Businesses Subnav");
+            newBusinessContentRoot = newBusinessContentRoot != null ? newBusinessContentRoot : FindRect(root, "New Business Content");
+            dialogueContentRoot = dialogueContentRoot != null ? dialogueContentRoot : FindRect(root, "Dialogue Content");
+            openExistingBusinessFormationButton = openExistingBusinessFormationButton != null ? openExistingBusinessFormationButton : FindButton(root, "NewBusiness_OpenFormationButton");
+            newBusinessSummaryText = newBusinessSummaryText != null ? newBusinessSummaryText : FindText(root, "NewBusiness_SummaryText");
+            dialogueStatusText = dialogueStatusText != null ? dialogueStatusText : FindText(root, "Dialogue_StatusText");
             propertyListTitleText = propertyListTitleText != null ? propertyListTitleText : FindText(root, "PropertyList_Title");
             propertyListContent = propertyListContent != null ? propertyListContent : FindRect(root, "PropertyList_Content");
             propertyRowTemplate = propertyRowTemplate != null ? propertyRowTemplate : FindButton(root, "PropertyRow_Template");
@@ -322,7 +351,7 @@ namespace LandLedgers.UI
             buildProjectButton = buildProjectButton != null ? buildProjectButton : FindButton(root, "BuildProjectButton");
             EnsureMarginActionButtons(canRepairAuthoredReferences);
             EnsureCloseButton(canRepairAuthoredReferences);
-            EnsureResourcesControls(canRepairAuthoredReferences);
+            EnsureResourcesControls(false);
             EnsurePropertyDetailScrollBody(canRepairAuthoredReferences);
             financesScrollRoot = financesScrollRoot != null ? financesScrollRoot : FindRect(root, "Finances_Scroll");
             financesScrollContent = financesScrollContent != null ? financesScrollContent : FindRect(root, "Finances_ScrollContent");
@@ -384,6 +413,7 @@ namespace LandLedgers.UI
             resourcesDetailText = resourcesDetailText != null ? resourcesDetailText : FindText(root, "ResourcesDetailText");
             runtimeFallbackText = runtimeFallbackText != null ? runtimeFallbackText : FindText(root, "RuntimePanelText");
             EnsureStatusText(canRepairAuthoredReferences);
+            BindPrimaryTabListeners();
             if (Application.isPlaying)
             {
                 ConfigureStaticTooltips();
@@ -442,6 +472,8 @@ namespace LandLedgers.UI
             ApplyButtonTypography(acquisitionsTabButton, LandLedgersTypography.TextRole.TabLabel);
             ApplyButtonTypography(governmentTabButton, LandLedgersTypography.TextRole.TabLabel);
             ApplyButtonTypography(resourcesTabButton, LandLedgersTypography.TextRole.TabLabel);
+            ApplyButtonTypography(newBusinessTabButton, LandLedgersTypography.TextRole.TabLabel);
+            ApplyButtonTypography(dialogueTabButton, LandLedgersTypography.TextRole.TabLabel);
             ApplyButtonTypography(closeButton, LandLedgersTypography.TextRole.TabLabel);
             ApplyButtonTypography(acquisitionLandButton, LandLedgersTypography.TextRole.TabLabel);
             ApplyButtonTypography(acquisitionBusinessesButton, LandLedgersTypography.TextRole.TabLabel);
@@ -470,7 +502,6 @@ namespace LandLedgers.UI
                 && financesTabButton != null
                 && acquisitionsTabButton != null
                 && governmentTabButton != null
-                && resourcesTabButton != null
                 && closeButton != null
                 && propertiesContentRoot != null
                 && financesContentRoot != null
@@ -512,16 +543,26 @@ namespace LandLedgers.UI
                 && governmentOwnerImplicationsText != null
                 && resourcesSummaryText != null
                 && resourcesDistrictListText != null
-                && resourcesDetailText != null;
+                && resourcesDetailText != null
+                && businessesSubnavRoot != null
+                && newBusinessTabButton != null
+                && dialogueTabButton != null
+                && newBusinessContentRoot != null
+                && dialogueContentRoot != null
+                && openExistingBusinessFormationButton != null
+                && newBusinessSummaryText != null
+                && dialogueStatusText != null;
         }
 
         private void ConfigureStaticTooltips()
         {
             UITooltipRegistry.Attach(propertiesTabButton, "Businesses", "Review owned businesses, staffing, cash, and operating actions.");
-            UITooltipRegistry.Attach(financesTabButton, "Finances", "Review liquid cash, business cash, transfers, lender pressure, and formal loan applications.");
+            UITooltipRegistry.Attach(financesTabButton, "Business Finances", "Review the owner portfolio, cash, transfers, lender pressure, and formal loan applications.");
             UITooltipRegistry.Attach(acquisitionsTabButton, "Acquisitions", "Review active leads, scouting reads, funding posture, and move serious deals into formal process.");
-            UITooltipRegistry.Attach(governmentTabButton, "Civic", "Review town status, civic effects, and owner-facing public pressure.");
-            UITooltipRegistry.Attach(resourcesTabButton, "Resources", "Review mineral districts, proto-sites, and future remote-industry pressure.");
+            UITooltipRegistry.Attach(governmentTabButton, "Town", "Review civic status, regional resources, and settlement pressures.");
+            UITooltipRegistry.Attach(resourcesTabButton, "Town Resources", "Review the town's regional resource readout.");
+            UITooltipRegistry.Attach(newBusinessTabButton, "New Business", "Open the existing Business formation workflow.");
+            UITooltipRegistry.Attach(dialogueTabButton, "Dialogue", "Review the current state of supported management-panel conversations.");
             UITooltipRegistry.Attach(closeButton, "Close", "Close the management desk.");
 
             UITooltipRegistry.Attach(focusPropertyButton, "Inspect Site", "Move the camera to the selected property or business.");
@@ -565,11 +606,36 @@ namespace LandLedgers.UI
 
         public void ShowTab(ManagementPanelTab tab)
         {
-            SetRootActive(propertiesContentRoot, tab == ManagementPanelTab.Properties);
-            SetRootActive(financesContentRoot, tab == ManagementPanelTab.Finances);
+            // The legacy controller refreshes its old tab selection every frame. The two
+            // newly authored pages are view-only additions, so retain them until the player
+            // explicitly selects one of the controller-owned tabs.
+            if (hasStandaloneTabSelection && IsControllerOwnedTab(tab))
+            {
+                return;
+            }
+
+            if (tab == ManagementPanelTab.NewBusiness || tab == ManagementPanelTab.Dialogue)
+            {
+                hasStandaloneTabSelection = true;
+                standaloneTabSelection = tab;
+            }
+
+            bool businesses = tab == ManagementPanelTab.Properties || tab == ManagementPanelTab.Finances;
+            bool town = tab == ManagementPanelTab.Government || tab == ManagementPanelTab.Resources;
+            bool financeSection = tab == ManagementPanelTab.Finances;
+            SetRootActive(businessesSubnavRoot, businesses);
+            SetRootActive(propertiesContentRoot, businesses && !financeSection);
+            SetRootActive(financesContentRoot, financeSection);
             SetRootActive(acquisitionsContentRoot, tab == ManagementPanelTab.Acquisitions);
-            SetRootActive(governmentContentRoot, tab == ManagementPanelTab.Government);
-            SetRootActive(resourcesContentRoot, tab == ManagementPanelTab.Resources);
+            SetRootActive(governmentContentRoot, town);
+            // Resource read-model fields are authored inside the Town page. Keep the legacy
+            // resource root reference as a compatibility alias without creating a second panel.
+            if (resourcesContentRoot != null && resourcesContentRoot != governmentContentRoot)
+            {
+                SetRootActive(resourcesContentRoot, false);
+            }
+            SetRootActive(newBusinessContentRoot, tab == ManagementPanelTab.NewBusiness);
+            SetRootActive(dialogueContentRoot, tab == ManagementPanelTab.Dialogue);
             SetActiveTab(tab);
         }
 
@@ -589,11 +655,96 @@ namespace LandLedgers.UI
 
         public void SetActiveTab(ManagementPanelTab tab)
         {
+            if (hasStandaloneTabSelection && IsControllerOwnedTab(tab))
+            {
+                tab = standaloneTabSelection;
+            }
+
+            // The legacy panel controller refreshes these labels during its own update.
+            // Keep the prefab's principal navigation names authoritative at the view layer.
+            SetTabButtonLabel(propertiesTabButton, "Businesses");
+            SetTabButtonLabel(financesTabButton, "Finances");
+            SetTabButtonLabel(governmentTabButton, "Town");
+            SetTabButtonLabel(newBusinessTabButton, "New Business");
+            SetTabButtonLabel(dialogueTabButton, "Dialogue");
+
+            bool businesses = tab == ManagementPanelTab.Properties || tab == ManagementPanelTab.Finances;
+            bool town = tab == ManagementPanelTab.Government || tab == ManagementPanelTab.Resources;
             SetButtonSelected(propertiesTabButton, tab == ManagementPanelTab.Properties);
             SetButtonSelected(financesTabButton, tab == ManagementPanelTab.Finances);
             SetButtonSelected(acquisitionsTabButton, tab == ManagementPanelTab.Acquisitions);
-            SetButtonSelected(governmentTabButton, tab == ManagementPanelTab.Government);
-            SetButtonSelected(resourcesTabButton, tab == ManagementPanelTab.Resources);
+            SetButtonSelected(governmentTabButton, town);
+            SetButtonSelected(resourcesTabButton, false);
+            SetButtonSelected(newBusinessTabButton, tab == ManagementPanelTab.NewBusiness);
+            SetButtonSelected(dialogueTabButton, tab == ManagementPanelTab.Dialogue);
+            if (businesses && propertiesTabButton != null)
+            {
+                SetButtonSelected(propertiesTabButton, true);
+            }
+        }
+
+        private void BindPrimaryTabListeners()
+        {
+            if (primaryTabListenersBound)
+            {
+                return;
+            }
+
+            newBusinessTabButton?.onClick.AddListener(OpenNewBusinessTab);
+            dialogueTabButton?.onClick.AddListener(OpenDialogueTab);
+            propertiesTabButton?.onClick.AddListener(ClearStandaloneTabSelection);
+            financesTabButton?.onClick.AddListener(ClearStandaloneTabSelection);
+            acquisitionsTabButton?.onClick.AddListener(ClearStandaloneTabSelection);
+            governmentTabButton?.onClick.AddListener(ClearStandaloneTabSelection);
+            resourcesTabButton?.onClick.AddListener(ClearStandaloneTabSelection);
+            openExistingBusinessFormationButton?.onClick.AddListener(OpenExistingBusinessFormation);
+            primaryTabListenersBound = true;
+        }
+
+        private void OpenNewBusinessTab()
+        {
+            ShowTab(ManagementPanelTab.NewBusiness);
+        }
+
+        private void OpenDialogueTab()
+        {
+            ShowTab(ManagementPanelTab.Dialogue);
+        }
+
+        private void ClearStandaloneTabSelection()
+        {
+            hasStandaloneTabSelection = false;
+        }
+
+        private static bool IsControllerOwnedTab(ManagementPanelTab tab)
+        {
+            return tab == ManagementPanelTab.Properties
+                || tab == ManagementPanelTab.Finances
+                || tab == ManagementPanelTab.Acquisitions
+                || tab == ManagementPanelTab.Government
+                || tab == ManagementPanelTab.Resources;
+        }
+
+        private static void SetTabButtonLabel(Button button, string label)
+        {
+            TMP_Text text = button != null ? button.GetComponentInChildren<TMP_Text>(true) : null;
+            if (text != null && text.text != label)
+            {
+                text.text = label;
+            }
+        }
+
+        private void OpenExistingBusinessFormation()
+        {
+            Button existingWorkflowButton = FindButton(transform, "Management_CreateBusinessButton");
+            if (existingWorkflowButton == null || !existingWorkflowButton.interactable)
+            {
+                SetStatusText("Business formation is not initialized in this session.");
+                return;
+            }
+
+            existingWorkflowButton.gameObject.SetActive(true);
+            existingWorkflowButton.onClick.Invoke();
         }
 
         public void SetAcquisitionSectionActive(bool landActive)
@@ -760,73 +911,13 @@ namespace LandLedgers.UI
 
         public void EnsureResourcesControls(bool canCreate)
         {
-            Transform tabParent = governmentTabButton != null
-                ? governmentTabButton.transform.parent
-                : propertiesTabButton != null ? propertiesTabButton.transform.parent : null;
-            Button tabTemplate = governmentTabButton != null ? governmentTabButton : propertiesTabButton;
-            if (resourcesTabButton == null && canCreate && tabParent != null && tabTemplate != null)
-            {
-                resourcesTabButton = Instantiate(tabTemplate, tabParent);
-                resourcesTabButton.name = "Tab_Resources";
-            }
-
-            if (resourcesTabButton != null)
-            {
-                ConfigureActionButton(resourcesTabButton, "Resources", 140f);
-                ApplyButtonTypography(resourcesTabButton, LandLedgersTypography.TextRole.TabLabel);
-                resourcesTabButton.gameObject.SetActive(true);
-            }
-
-            RectTransform parent = governmentContentRoot != null
-                ? governmentContentRoot.parent as RectTransform
-                : acquisitionsContentRoot != null ? acquisitionsContentRoot.parent as RectTransform : null;
-            if (resourcesContentRoot == null && canCreate && parent != null)
-            {
-                resourcesContentRoot = CreateRect("Resources Content", parent);
-            }
-
-            if (resourcesContentRoot == null)
-            {
-                return;
-            }
-
-            ConfigureSectionRoot(resourcesContentRoot, 160f);
-            Image image = resourcesContentRoot.GetComponent<Image>() ?? resourcesContentRoot.gameObject.AddComponent<Image>();
-            image.color = new Color(0.075f, 0.085f, 0.075f, 0.82f);
-            image.raycastTarget = true;
-
-            LayoutElement element = resourcesContentRoot.GetComponent<LayoutElement>() ?? resourcesContentRoot.gameObject.AddComponent<LayoutElement>();
-            element.preferredHeight = -1f;
-            element.flexibleWidth = 1f;
-            element.flexibleHeight = 1f;
-
-            resourcesSummaryText = EnsureSectionBody(
-                resourcesContentRoot,
-                "ResourcesSummary_Section",
-                "Regional Summary",
-                resourcesSummaryText,
-                "ResourcesSummaryText",
-                "Regional resource summary loads at runtime.",
-                92f,
-                canCreate);
-            resourcesDistrictListText = EnsureSectionBody(
-                resourcesContentRoot,
-                "ResourcesDistrictList_Section",
-                "Districts",
-                resourcesDistrictListText,
-                "ResourcesDistrictListText",
-                "Mineral district list loads at runtime.",
-                136f,
-                canCreate);
-            resourcesDetailText = EnsureSectionBody(
-                resourcesContentRoot,
-                "ResourcesDetail_Section",
-                "Site Detail",
-                resourcesDetailText,
-                "ResourcesDetailText",
-                "Future prospecting, claims, camps, and industrial detail will anchor here.",
-                136f,
-                canCreate);
+            // Resources are part of the authored Town page. Never manufacture tab or content
+            // roots at runtime; an absent serialized panel is a prefab integration defect.
+            resourcesTabButton = resourcesTabButton != null ? resourcesTabButton : FindButton(transform, "Tab_Resources");
+            resourcesContentRoot = resourcesContentRoot != null ? resourcesContentRoot : governmentContentRoot;
+            resourcesSummaryText = resourcesSummaryText != null ? resourcesSummaryText : FindText(transform, "ResourcesSummaryText");
+            resourcesDistrictListText = resourcesDistrictListText != null ? resourcesDistrictListText : FindText(transform, "ResourcesDistrictListText");
+            resourcesDetailText = resourcesDetailText != null ? resourcesDetailText : FindText(transform, "ResourcesDetailText");
         }
 
         private static void EnsureCloseSpacer(Transform parent, Transform closeTransform, bool canCreate)

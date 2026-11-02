@@ -53,8 +53,8 @@ namespace LandLedgers.Economy.Creation
         PreferHomeBased = 3,
         PreferMobile = 4,
 
-        /// <summary>Player asserts no premises are needed; the resolver still verifies
-        /// the task/equipment requirements agree.</summary>
+        /// <summary>No site is being claimed during establishment. Individual Tasks
+        /// remain subject to their own premises and equipment requirements.</summary>
         NoneRequired = 5,
     }
 
@@ -462,7 +462,9 @@ namespace LandLedgers.Economy.Creation
 
     /// <summary>
     /// BIZ-1: the Canon §3.1 universal workflow as code —
-    /// intent → identity → ownership/governance → capability-driven premises → entity.
+    /// intent → identity → ownership/governance → established entity, with optional
+    /// premises assignment when an eligible site is available. Operational readiness
+    /// is evaluated by the relevant activity rather than by formation.
     /// Formation alone does not settle assets, working capital, inventory, or commerce;
     /// those require their own authoritative transfer/receipt events. Creating a
     /// business does not make it operating (Canon §3.2, GHOST-DES-009). Operating
@@ -472,8 +474,9 @@ namespace LandLedgers.Economy.Creation
     public sealed class BusinessCreationAuthority
     {
         /// <summary>
-        /// Runs the full workflow. Returns false with diagnostics when the intent is
-        /// invalid or the world cannot satisfy it — never a half-created business.
+        /// Runs the full establishment workflow. Returns false with diagnostics when
+        /// the intent is invalid; unavailable optional operating resources leave a
+        /// valid entity established but not ready for the affected activity.
         /// </summary>
         public bool TryCreate(
             CreateBusinessIntent intent,
@@ -507,29 +510,43 @@ namespace LandLedgers.Economy.Creation
             EntityId businessId = context.IdRegistry.Allocate(EntityKind.Business);
             diagnostics.Add($"Allocated {businessId} (HF-1, never reused).");
 
-            // Step 3: resolve premises from task/equipment requirements (Tech X §3.2).
-            // The preference is a hint; requirements win and say so in the diagnostics.
-            int provisionalBuildingId = -1;
-            PremisesResolution premises = PremisesResolver.Resolve(
-                intent.PremisesRequirement, intent.PremisesPreference, provisionalBuildingId, diagnostics);
-
-            if (premises.Kind != PremisesKind.NoDedicatedPremises
-                && premises.Kind != PremisesKind.MobileRoute)
+            // Step 3: establishment does not require operational premises. An explicit
+            // deferred-site choice must not claim a building or grant one for free;
+            // capability-specific Tasks continue to enforce their actual site needs.
+            PremisesResolution premises;
+            if (intent.PremisesPreference == PremisesPreference.NoneRequired)
             {
-                int buildingId;
-                bool premisesAssigned = context is IBusinessTypedPremisesContext typedContext
-                    ? typedContext.TryAssignPremises(intent.BusinessType, premises.Kind, out buildingId)
-                    : context.TryAssignPremises(premises.Kind, out buildingId);
-                if (!premisesAssigned)
-                {
-                    diagnostics.Add(
-                        $"No suitable site available for {premises.Kind}; creation refused " +
-                        "(premises are required by the work, not optional).");
-                    return false;
-                }
+                premises = new PremisesResolution(PremisesKind.NoDedicatedPremises, -1,
+                    "No premises claimed at establishment; activity-specific site requirements remain in force.");
+                diagnostics.Add(
+                    "Established without premises. Tasks requiring a site, equipment, workers, or inventory remain blocked until those prerequisites are legitimately met.");
+            }
+            else
+            {
+                // Preserve the existing capability-driven site choice when the intent
+                // requests one. A world without a suitable site still establishes the
+                // entity; it simply cannot perform the site-dependent operation yet.
+                premises = PremisesResolver.Resolve(
+                    intent.PremisesRequirement, intent.PremisesPreference, -1, diagnostics);
 
-                premises = new PremisesResolution(premises.Kind, buildingId,
-                    premises.DerivationNotes + $" Assigned building {buildingId}.");
+                if (premises.Kind != PremisesKind.NoDedicatedPremises
+                    && premises.Kind != PremisesKind.MobileRoute)
+                {
+                    int buildingId;
+                    bool premisesAssigned = context is IBusinessTypedPremisesContext typedContext
+                        ? typedContext.TryAssignPremises(intent.BusinessType, premises.Kind, out buildingId)
+                        : context.TryAssignPremises(premises.Kind, out buildingId);
+                    if (premisesAssigned)
+                    {
+                        premises = new PremisesResolution(premises.Kind, buildingId,
+                            premises.DerivationNotes + $" Assigned building {buildingId}.");
+                    }
+                    else
+                    {
+                        diagnostics.Add(
+                            $"Established without a {premises.Kind} site; its site-dependent Tasks remain unavailable until the prerequisite is met.");
+                    }
+                }
             }
 
             // Step 4: profile (authored data when present; code fallback otherwise so any

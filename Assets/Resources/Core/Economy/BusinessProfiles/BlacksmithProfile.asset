@@ -47,4 +47,4 @@ MonoBehaviour:
   baselineDailyServiceCapacity: 4
   inputCategoryIds: [metal_inputs]
   outputCategoryIds: [tools_hardware]
-  serviceCategoryIds: [repair_service]
+  serviceCategoryIds: []

@@ -442,6 +442,6 @@ MonoBehaviour:
   throughputMode: 0
   baselineWeeklyThroughputUnits: 36
   baselineDailyServiceCapacity: 0
-  inputCategoryIds: [freight_goods]
+  inputCategoryIds: []
   outputCategoryIds: [staple_food, meat, clothing, household_goods, tools_hardware, medicine_remedies]
   serviceCategoryIds: []

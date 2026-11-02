@@ -357,6 +357,17 @@ namespace LandLedgers.FirstLedger
         /// The offer list is an explicit translation from the store's existing
         /// category stock to the household item catalog; it does not create
         /// stock or a second settlement path.
+        ///
+        /// Series 2 Pass 7: multi-item categories are no longer skipped.
+        /// A category with exactly one authored item keeps the legacy
+        /// single-item path below, unchanged. A category with several
+        /// authored items goes through Series2TradingPortBuilder, which
+        /// emits one offer per real household item in the category
+        /// (validated via Pass3PerItemOffer). Every per-item offer in a
+        /// category draws from that category's single aggregate pool in
+        /// BusinessRuntimeState — see the builder's shared-pool caveat.
+        /// Items that are not household items are never offered, and
+        /// never offered under a representative id.
         /// </summary>
         public GeneralStoreTradingPort BuildHouseholdTradingPort()
         {
@@ -377,21 +388,57 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
-                string itemId = HouseholdItemForStoreCategory(category.CategoryId);
-                if (string.IsNullOrWhiteSpace(itemId)
-                    || !TryResolveSingleItemForCategory(storeDefinition, category.CategoryId, out string authoredItemId)
-                    || !string.Equals(itemId, authoredItemId, StringComparison.OrdinalIgnoreCase)
-                    || !category.ContainsItem(itemId))
+                if (TryResolveSingleItemForCategory(storeDefinition, category.CategoryId, out string singleItemId))
                 {
+                    // Legacy single-item path, preserved exactly: the one
+                    // authored item must be the category's household
+                    // representative and be contained in the category.
+                    string itemId = HouseholdItemForStoreCategory(category.CategoryId);
+                    if (string.IsNullOrWhiteSpace(itemId)
+                        || !string.Equals(itemId, singleItemId, StringComparison.OrdinalIgnoreCase)
+                        || !category.ContainsItem(itemId))
+                    {
+                        continue;
+                    }
+
+                    offers.Add(new GeneralStoreCategoryOffer
+                    {
+                        CategoryId = category.CategoryId,
+                        OfferedItemIds = new List<string> { itemId },
+                        StoreUnitsPerItemUnit = 1,
+                    });
                     continue;
                 }
 
-                offers.Add(new GeneralStoreCategoryOffer
+                // Multi-item category: per-item offers, one per real
+                // household item. The builder diagnoses every skip.
+                var categoryItemIds = new List<string>();
+                ReadOnlySpan<ItemDefinition> authoredItems = storeDefinition != null
+                    ? storeDefinition.Items
+                    : ReadOnlySpan<ItemDefinition>.Empty;
+                for (int j = 0; j < authoredItems.Length; j++)
                 {
-                    CategoryId = category.CategoryId,
-                    OfferedItemIds = new List<string> { itemId },
-                    StoreUnitsPerItemUnit = 1,
-                });
+                    ItemDefinition authored = authoredItems[j];
+                    if (authored != null
+                        && string.Equals(authored.CategoryId, category.CategoryId, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(authored.ItemId))
+                    {
+                        categoryItemIds.Add(authored.ItemId);
+                    }
+                }
+                // Fall back to the category's own item list when the
+                // definition's item table is empty for this category.
+                if (categoryItemIds.Count == 0)
+                {
+                    ReadOnlySpan<string> listed = category.ItemIds;
+                    for (int j = 0; j < listed.Length; j++)
+                    {
+                        if (!string.IsNullOrWhiteSpace(listed[j]))
+                            categoryItemIds.Add(listed[j]);
+                    }
+                }
+                offers.AddRange(Series2TradingPortBuilder.BuildPerItemOffers(
+                    category.CategoryId, categoryItemIds, null));
             }
 
             var capability = new StoreTradingCapability { Staffed = false };
@@ -404,6 +451,9 @@ namespace LandLedgers.FirstLedger
         /// offer when the authored profile contains exactly one SKU in that
         /// category. Mapping a multi-SKU category's aggregate to one item would
         /// sell unlike goods under a false product identity.
+        /// Series 2 Pass 7 keeps this helper for the single-item branch of
+        /// BuildHouseholdTradingPort; multi-item categories no longer go
+        /// through it, they go through Series2TradingPortBuilder instead.
         /// </summary>
         internal static bool TryResolveSingleItemForCategory(
             GeneralStoreBusinessDefinition definition,

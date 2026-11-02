@@ -244,6 +244,47 @@ namespace LandLedgers.Orchestration.Player
             return true;
         }
 
+        /// <summary>
+        /// Series 2 Pass 9, additive only: clear-then-load restore
+        /// of a saved auto-eat snapshot. Toggle, state, location,
+        /// model cash gate, failure reason, seller location, and
+        /// travel progress are reinstated verbatim. This restores
+        /// the MODEL state only: the seller object itself is NOT
+        /// in the snapshot (it is a live shopping-system object),
+        /// so a restored AtSeller state must have its seller
+        /// re-supplied by the driver before StepEat, and StepEat
+        /// fails safely (known state, no free meal) if it is not.
+        /// An out-of-range state restores as Inactive, diagnosed,
+        /// never as a made-up state. Restoring twice yields the
+        /// same state (idempotent). This is NOT a toggle action:
+        /// restoring a toggle does not cancel an in-flight state
+        /// the way SetToggle(false) does.
+        /// </summary>
+        public void RestoreSnapshot(
+            bool toggleOn, Pass4AutoEatState state, string locationId, int cashCents,
+            string failureReason, string sellerLocationId, int travelMinutesTotal, int travelMinutesElapsed,
+            List<string> diag)
+        {
+            ToggleOn = toggleOn;
+            if ((int)state < 0 || (int)state > (int)Pass4AutoEatState.Failed)
+            {
+                State = Pass4AutoEatState.Inactive;
+                if (diag != null) diag.Add("Pass4AutoEat: saved state was out of range; restored as Inactive, never as a made-up state.");
+            }
+            else
+            {
+                State = state;
+            }
+
+            CurrentLocationId = locationId ?? string.Empty;
+            CashCents = cashCents;
+            FailureReason = failureReason ?? string.Empty;
+            SellerLocationId = sellerLocationId ?? string.Empty;
+            TravelMinutesTotal = Math.Max(0, travelMinutesTotal);
+            TravelMinutesElapsed = Math.Max(0, travelMinutesElapsed);
+            seller = null;
+        }
+
         private void Fail(string reason)
         {
             State = Pass4AutoEatState.Failed;
@@ -391,6 +432,38 @@ namespace LandLedgers.Orchestration.Player
             // skip them.
             State = Pass4AutoSleepState.Done;
             return true;
+        }
+
+        /// <summary>
+        /// Series 2 Pass 9, additive only: clear-then-load restore
+        /// of a saved auto-sleep snapshot, with the same limits as
+        /// auto-eat (see Pass4AutoEat.RestoreSnapshot): the lodging
+        /// object itself is NOT in the snapshot, so a restored
+        /// AtLodging state must have its lodging re-supplied by
+        /// the driver before StepSleep, and StepSleep fails safely
+        /// (known state, no free night) if it is not. An
+        /// out-of-range state restores as Inactive, diagnosed.
+        /// </summary>
+        public void RestoreSnapshot(
+            bool toggleOn, Pass4AutoSleepState state, string locationId, int cashCents,
+            string failureReason, string lodgingLocationId, List<string> diag)
+        {
+            ToggleOn = toggleOn;
+            if ((int)state < 0 || (int)state > (int)Pass4AutoSleepState.Failed)
+            {
+                State = Pass4AutoSleepState.Inactive;
+                if (diag != null) diag.Add("Pass4AutoSleep: saved state was out of range; restored as Inactive, never as a made-up state.");
+            }
+            else
+            {
+                State = state;
+            }
+
+            CurrentLocationId = locationId ?? string.Empty;
+            CashCents = cashCents;
+            FailureReason = failureReason ?? string.Empty;
+            LodgingLocationId = lodgingLocationId ?? string.Empty;
+            lodging = null;
         }
 
         private void Fail(string reason)

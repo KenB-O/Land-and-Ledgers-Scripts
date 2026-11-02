@@ -71,6 +71,9 @@ namespace LandLedgers.Economy.FreightFuel
             IdRegistry = idRegistry;
         }
 
+        /// <summary>Series 2 Pass 9, additive only: the dealer id, for save parameters. The source itself never owned an id before; this exposes the dealer's, never invents one.</summary>
+        public string DealerBusinessId => dealer != null ? dealer.DealerBusinessId : string.Empty;
+
         public int IntakeUnitsPerBakeryUnit { get; }
 
         public Series2OffMapFuelReceipt OffMapReceipt { get; }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Logistics;
 
 namespace LandLedgers.Persistence
 {
@@ -55,11 +56,30 @@ namespace LandLedgers.Persistence
             IPassXlPlayerFlagHolder playerHolder,
             OffMapNamedSkuProcurementService procurementService)
         {
+            return Capture(migrationHolder, playerHolder, procurementService, null);
+        }
+
+        /// <summary>
+        /// Series 2 Pass 9, additive only (the 3-argument Capture
+        /// above is unchanged in behaviour): also captures the
+        /// Pass 9 section when a state holder is supplied. A null
+        /// state captures a null section, which restores as empty
+        /// Pass 9 state — the same null-safe contract as the
+        /// procurement section. Capture diagnostics live on
+        /// state.LastCaptureDiagnostics for the caller to log.
+        /// </summary>
+        public static PassXlSliceSaveDto Capture(
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State)
+        {
             return new PassXlSliceSaveDto
             {
                 treatPlayerAsNpc = playerHolder != null && playerHolder.TreatPlayerAsNpc,
                 suppressMigrantArrivals = migrationHolder != null && migrationHolder.SuppressMigrantArrivals,
                 procurement = procurementService != null ? procurementService.ExportState() : null,
+                series2Pass9 = series2State != null ? series2State.Capture(null) : null,
             };
         }
 
@@ -110,6 +130,37 @@ namespace LandLedgers.Persistence
             }
 
             diagnostics.Add($"PassXlSliceSaveCoordinator: flags restored (TreatPlayerAsNpc={treatPlayerAsNpc}, SuppressMigrantArrivals={suppressMigrantArrivals}); population was NOT regenerated.");
+            return diagnostics;
+        }
+
+        /// <summary>
+        /// Series 2 Pass 9, additive only (the 4-argument Restore
+        /// above is unchanged in behaviour): also restores the
+        /// Pass 9 section when a state holder is supplied, after
+        /// the flags and procurement restore, so a single restore
+        /// call covers the whole slice section. Freight hooks may
+        /// be null (see Series2Pass9SaveState.Restore for the
+        /// null-hooks contract); a null state with a present
+        /// section is diagnosed, never silently dropped.
+        /// </summary>
+        public static List<string> Restore(
+            PassXlSliceSaveDto dto,
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State,
+            FreightShipmentHooks freightHooks)
+        {
+            List<string> diagnostics = Restore(dto, migrationHolder, playerHolder, procurementService);
+            if (series2State != null)
+            {
+                series2State.Restore(dto != null ? dto.series2Pass9 : null, freightHooks, diagnostics);
+            }
+            else if (dto != null && dto.series2Pass9 != null)
+            {
+                diagnostics.Add("PassXlSliceSaveCoordinator: Pass 9 section present in save but no Series2Pass9SaveState supplied; Pass 9 state NOT restored. Codex must set SaveLoadManager.Series2Pass9State before loading, exactly as for procurement.");
+            }
+
             return diagnostics;
         }
     }

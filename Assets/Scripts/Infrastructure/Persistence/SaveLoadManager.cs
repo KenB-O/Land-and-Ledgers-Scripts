@@ -133,6 +133,22 @@ namespace LandLedgers.Persistence
         /// </summary>
         public OffMapNamedSkuProcurementService PassXlProcurementService { get; set; }
 
+        /// <summary>
+        /// Series 2 Pass 9, following the PassXlProcurementService
+        /// pattern exactly: the live Pass 9 save holder (Pass 2/3/
+        /// 4/6/8 state), if a driver owns one. A driver that
+        /// creates Pass 9 model instances MUST set this before
+        /// saving, otherwise the save will carry an empty Pass 9
+        /// section. Null is safe: capture and restore then
+        /// default to empty Pass 9 state with a diagnostic. Codex
+        /// must wire this when it wires the Pass 9 drivers; it is
+        /// not a scene field because the holder is plain C#, not
+        /// a Unity object. Unity compilation of this edit is
+        /// Codex/Unity AI work, not claimed in the Pass 9 Roslyn
+        /// harness (which covers the coordinator overloads).
+        /// </summary>
+        public Series2Pass9SaveState Series2Pass9State { get; set; }
+
         public string LastStatus => lastStatus;
         public string DefaultSlotPath => Path.Combine(Application.persistentDataPath, SaveDirectoryName, DefaultSlotFileName);
 
@@ -424,7 +440,7 @@ namespace LandLedgers.Persistence
             // service is diagnosed, never crashed on.
             foreach (string passXlDiagnostic in PassXlSliceSaveCoordinator.Restore(
                 save != null ? save.passXlSlice : null,
-                populationManager, drivers, PassXlProcurementService))
+                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null))
             {
                 Debug.Log($"[SaveLoad] {passXlDiagnostic}");
             }
@@ -747,7 +763,7 @@ namespace LandLedgers.Persistence
                 // Drivers are found, not assumed; a null driver or a
                 // null procurement service reads as defaults.
                 passXlSlice = PassXlSliceSaveCoordinator.Capture(
-                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService),
+                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService, Series2Pass9State),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto
                 {

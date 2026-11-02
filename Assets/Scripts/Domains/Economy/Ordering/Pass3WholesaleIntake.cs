@@ -168,6 +168,38 @@ namespace LandLedgers.Economy.Ordering
                 },
             };
         }
+
+        /// <summary>
+        /// Series 2 Pass 9, additive only (Receive is untouched):
+        /// snapshot of the delivered-lot guard, for save adoption.
+        /// A reload that rebuilt this instance without its delivered
+        /// set could re-intake a lot and double-count bread, so the
+        /// Pass 9 save bundle captures this set and restores it
+        /// before this path runs in production.
+        /// </summary>
+        public List<string> DeliveredLotIds()
+        {
+            return new List<string>(deliveredLotIds);
+        }
+
+        /// <summary>
+        /// Series 2 Pass 9, additive only: clear-then-load restore
+        /// of the delivered-lot guard. Restoring the same set twice
+        /// yields the same guard (idempotent); empty, duplicate, and
+        /// blank ids are skipped with a diagnostic, never stored.
+        /// </summary>
+        public void RestoreDeliveredLotIds(IEnumerable<string> lotIds, List<string> diag)
+        {
+            deliveredLotIds.Clear();
+            if (lotIds == null) return;
+            foreach (string lotId in lotIds)
+            {
+                if (string.IsNullOrWhiteSpace(lotId)) continue;
+                string trimmed = lotId.Trim();
+                if (!deliveredLotIds.Add(trimmed) && diag != null)
+                    diag.Add($"Pass3Ordering: duplicate delivered wholesale lot id '{trimmed}' in save; kept once.");
+            }
+        }
     }
 
     /// <summary>

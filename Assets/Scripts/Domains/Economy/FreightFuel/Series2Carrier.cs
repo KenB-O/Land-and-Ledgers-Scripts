@@ -417,6 +417,44 @@ namespace LandLedgers.Economy.FreightFuel
             return !string.IsNullOrWhiteSpace(shipmentId) && settledShipmentIds.Contains(shipmentId);
         }
 
+        /// <summary>
+        /// Series 2 Pass 9, additive only (SettleOnAcceptance is
+        /// untouched): snapshot of the per-instance settled set,
+        /// for diagnostics and tests. This set is NOT persisted as
+        /// a second source of truth — see RestoreFromShipments.
+        /// </summary>
+        public List<string> CaptureSettledIds()
+        {
+            return new List<string>(settledShipmentIds);
+        }
+
+        /// <summary>
+        /// Series 2 Pass 9, additive only: rebuild the per-instance
+        /// settled set from restored shipments, clear-then-load.
+        /// DECISION (Pass 9, stated plainly): the shipment's own
+        /// freightRevenueCollected flag — which IS part of the
+        /// shipment save DTO — is the settlement authority across
+        /// saves, not this in-memory set. A second persisted set
+        /// could disagree with the flag, and then no reader would
+        /// know which one to trust, so no second set is persisted
+        /// at all. Restore rebuilds this set from the flags so the
+        /// in-process guard matches the persisted truth, and
+        /// SettleOnAcceptance still refuses a flagged shipment
+        /// even if this set were empty — a restored settlement
+        /// can therefore never double-collect. Restoring twice
+        /// yields the same set (idempotent).
+        /// </summary>
+        public void RestoreFromShipments(IEnumerable<LogisticsShipmentState> shipments)
+        {
+            settledShipmentIds.Clear();
+            if (shipments == null) return;
+            foreach (LogisticsShipmentState shipment in shipments)
+            {
+                if (shipment == null || string.IsNullOrWhiteSpace(shipment.ShipmentId)) continue;
+                if (shipment.FreightRevenueCollected) settledShipmentIds.Add(shipment.ShipmentId);
+            }
+        }
+
         public Series2CarrierSettlementResult SettleOnAcceptance(
             LogisticsShipmentState shipment, IBusinessCashPort payer, IBusinessCashPort carrier, List<string> diag)
         {

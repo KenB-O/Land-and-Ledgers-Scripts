@@ -412,6 +412,124 @@ namespace LandLedgers.Orchestration.Player
         }
 
         /// <summary>
+        /// Series 2 Pass 9, additive only (all roster methods are
+        /// untouched): clear-then-load restore of a saved duty
+        /// snapshot. The roster, offloaded list, toggle, NPC mode,
+        /// current task, travel, and model cash gate are reinstated
+        /// verbatim from the Pass 9 save bundle's duty section.
+        /// Two honest limits, both diagnosed, never hidden:
+        /// a current task that is not an unfinished roster task is
+        /// dropped (the player is not busy with a task that does
+        /// not exist), and travel requested while a task is current
+        /// is dropped (the model forbids being busy twice) — the
+        /// player stays at the saved location, never teleported.
+        /// Restoring the same snapshot twice yields the same
+        /// roster (idempotent). This restores the MODEL state;
+        /// TaskAuthority WorkTasks are the binding's job (see
+        /// Series2PlayerDutyBinding), not this method's — a driver
+        /// that restores duty without re-issuing through the
+        /// binding has a roster with no authority tasks, and must
+        /// say so, not pretend otherwise.
+        /// </summary>
+        public void RestoreSnapshot(
+            string locationId, int dailyBudgetMinutes, bool dutyRequested, bool npcMode,
+            string currentTaskId, int cashCents,
+            string travelDestination, int travelMinutesTotal, int travelMinutesElapsed,
+            List<Pass4DutyTask> restoredTasks, List<Pass4DutyTask> restoredOffloaded,
+            List<string> diag)
+        {
+            tasks.Clear();
+            offloaded.Clear();
+            if (restoredTasks != null)
+            {
+                foreach (Pass4DutyTask t in restoredTasks)
+                {
+                    if (t == null || string.IsNullOrWhiteSpace(t.TaskDefinitionId)) continue;
+                    tasks.Add(new Pass4DutyTask
+                    {
+                        TaskDefinitionId = t.TaskDefinitionId,
+                        PlannedMinutes = Math.Max(1, t.PlannedMinutes),
+                        Owner = string.IsNullOrWhiteSpace(t.Owner) ? "player" : t.Owner,
+                        Completed = t.Completed,
+                        InProgress = t.InProgress && !t.Completed,
+                        MissedReason = t.MissedReason ?? string.Empty,
+                        DutyAssigned = t.DutyAssigned,
+                    });
+                }
+            }
+
+            if (restoredOffloaded != null)
+            {
+                foreach (Pass4DutyTask t in restoredOffloaded)
+                {
+                    if (t == null || string.IsNullOrWhiteSpace(t.TaskDefinitionId)) continue;
+                    offloaded.Add(new Pass4DutyTask
+                    {
+                        TaskDefinitionId = t.TaskDefinitionId,
+                        PlannedMinutes = Math.Max(1, t.PlannedMinutes),
+                        Owner = string.IsNullOrWhiteSpace(t.Owner) ? "employee" : t.Owner,
+                        Completed = t.Completed,
+                        InProgress = false,
+                        MissedReason = t.MissedReason ?? string.Empty,
+                        DutyAssigned = t.DutyAssigned,
+                    });
+                }
+            }
+
+            CurrentLocationId = locationId ?? string.Empty;
+            DailyBudgetMinutes = Math.Max(1, dailyBudgetMinutes);
+            DutyRequested = dutyRequested;
+            TreatPlayerAsNpc = npcMode;
+            CashCents = cashCents;
+
+            CurrentTaskId = string.Empty;
+            if (!string.IsNullOrWhiteSpace(currentTaskId))
+            {
+                bool foundCurrent = false;
+                foreach (Pass4DutyTask t in tasks)
+                {
+                    if (string.Equals(t.TaskDefinitionId, currentTaskId, System.StringComparison.Ordinal) && !t.Completed && t.InProgress)
+                    {
+                        foundCurrent = true;
+                        break;
+                    }
+                }
+
+                if (foundCurrent)
+                {
+                    CurrentTaskId = currentTaskId;
+                }
+                else if (diag != null)
+                {
+                    diag.Add($"Pass4Player: saved current task '{currentTaskId}' is not an unfinished in-progress roster task after restore; the player is not busy, never busy with a phantom task.");
+                }
+            }
+
+            IsTravelling = false;
+            TravelDestination = string.Empty;
+            TravelMinutesTotal = 0;
+            TravelMinutesElapsed = 0;
+            if (!string.IsNullOrWhiteSpace(travelDestination) && travelMinutesTotal > 0 && travelMinutesElapsed < travelMinutesTotal)
+            {
+                if (!string.IsNullOrEmpty(CurrentTaskId))
+                {
+                    if (diag != null) diag.Add("Pass4Player: saved travel dropped on restore because a task is current; the model forbids being busy twice. The player stays at the saved location.");
+                }
+                else
+                {
+                    IsTravelling = true;
+                    TravelDestination = travelDestination;
+                    TravelMinutesTotal = travelMinutesTotal;
+                    TravelMinutesElapsed = Math.Max(0, travelMinutesElapsed);
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(travelDestination) && diag != null)
+            {
+                diag.Add("Pass4Player: saved travel was already complete or had no route minutes; the player is at the saved location, not teleported to the destination.");
+            }
+        }
+
+        /// <summary>
         /// The Pass 1 stall, addressed honestly, not hidden: a task issued
         /// while NPC mode is on stalls InProgress, because autonomous
         /// drivers do not convert player tasks into NPC work (see

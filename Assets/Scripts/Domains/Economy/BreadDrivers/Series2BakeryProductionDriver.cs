@@ -83,6 +83,51 @@ namespace LandLedgers.Economy.BreadDrivers
         }
 
         /// <summary>
+        /// Series 2 Pass 9, additive only (PlanBatches and
+        /// RunScheduledDay are untouched): clear-then-load restore
+        /// of the planned day and batch ids. Planned state was in NO
+        /// save DTO before this pass — a reload lost the plan, and
+        /// RunScheduledDay would refuse the day as unplanned. The
+        /// ids are preserved verbatim; a batch id the runtime no
+        /// longer holds (baked, removed) is warned about, never
+        /// silently dropped, and RunScheduledDay still re-validates
+        /// through Precheck before any bake, so a restored plan can
+        /// never bake blind. Restoring the same state twice yields
+        /// the same plan (idempotent).
+        /// </summary>
+        public void RestorePlannedState(int dayIndex, List<string> batchIds, List<string> diag)
+        {
+            PlannedDayIndex = dayIndex;
+            PlannedBatchIds.Clear();
+            if (batchIds == null) return;
+            foreach (string batchId in batchIds)
+            {
+                if (string.IsNullOrWhiteSpace(batchId)) continue;
+                string trimmed = batchId.Trim();
+                if (!PlannedBatchIds.Contains(trimmed)) PlannedBatchIds.Add(trimmed);
+            }
+
+            if (bakery != null && diag != null)
+            {
+                foreach (string batchId in PlannedBatchIds)
+                {
+                    bool found = false;
+                    foreach (var batch in bakery.Batches)
+                    {
+                        if (batch != null && string.Equals(batch.BatchId, batchId, System.StringComparison.Ordinal))
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found)
+                        diag.Add($"Series2BakeryProductionDriver: restored planned batch '{batchId}' is not in the bakery runtime's batches; the plan is preserved, and Precheck will refuse a bake it cannot validate.");
+                }
+            }
+        }
+
+        /// <summary>
         /// Pre-check for the planned batches: flour, notions, fuel, ready
         /// oven, hand kit. Returns null when the day may run, or a
         /// refusal diagnostic when it must not. Never truncates, never

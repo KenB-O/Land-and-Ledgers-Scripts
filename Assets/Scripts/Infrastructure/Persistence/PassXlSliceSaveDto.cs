@@ -25,5 +25,13 @@ namespace LandLedgers.Persistence
         public bool treatPlayerAsNpc;
         public bool suppressMigrantArrivals;
         public NamedSkuProcurementSaveDto procurement;
+
+        /// <summary>
+        /// Series 2 Pass 9, additive only: the Pass 9 save section
+        /// (Pass 2/3/4/6/8 state). Null on old saves, which restore
+        /// as empty Pass 9 state (see Series2Pass9SaveState.Restore).
+        /// No existing field is renamed, removed, or reordered.
+        /// </summary>
+        public Series2Pass9SaveDto series2Pass9;
     }
 }

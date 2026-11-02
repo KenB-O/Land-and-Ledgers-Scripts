@@ -260,10 +260,11 @@ never the new fixture targets.
   `python3 -c "import uuid; print(uuid.uuid4().hex)"`, never
   copied: helper `2c68470ab8fa4ea7a9ce4ccce2238186`, tests
   `b65aadbfe9dd47828ec56ff0ff51c7bd`, this doc
-  `008a5f0917aa4a62a1a9759d3afd070c` — each appears exactly
-  once in the tracked tree, mutually distinct (verified by
-  text search after commit; Unity import remains the final
-  GUID check).
+  `008a5f0917aa4a62a1a9759d3afd070c` — each appears in exactly
+  one `.meta` file, mutually distinct, with no other asset
+  sharing the GUID (verified by `git grep` after commit; the
+  doc's own mentions of the GUIDs are text references, not
+  additional assets. Unity import remains the final GUID check).
 - Roslyn only (this pass touched one `.cs` file, so suites
   were re-run): main harness, freshly built
   `harness-2SO.csproj` (second-scripts harness retargeted to

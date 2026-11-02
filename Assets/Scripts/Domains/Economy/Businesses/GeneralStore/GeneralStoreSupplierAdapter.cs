@@ -18,6 +18,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public List<string> OfferedItemIds = new List<string>();
         /// <summary>Store category units consumed per item unit sold (≥1).</summary>
         public int StoreUnitsPerItemUnit = 1;
+        /// <summary>When true, SKU stock is backed by identified Business inventory lots.</summary>
+        public bool UsesItemLevelInventory;
     }
 
     /// <summary>
@@ -50,6 +52,16 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// <summary>C1.11: documented trade credit offered to shoppers.</summary>
         bool OffersTradeCredit { get; }
         int TradeCreditLimitCents { get; }
+    }
+
+    /// <summary>Optional exact-SKU extension; legacy category-only ports remain source compatible.</summary>
+    public interface IItemLevelGeneralStoreTradingPort : IGeneralStoreTradingPort
+    {
+        bool UsesItemLevelInventory(string itemId);
+        int ItemStockUnits(string itemId);
+        int ItemPricePerUnitCents(string itemId);
+        bool TryConsumeItemStockUnits(string itemId, int units, out int consumedUnits);
+        void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents);
     }
 
     /// <summary>
@@ -113,8 +125,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public int Sell(string categoryId, int requestedUnits, int dayIndex, List<string> diagnostics)
         {
             GeneralStoreCategoryOffer offer = FindOffer(categoryId);
-            if (offer == null || requestedUnits <= 0)
+            if (offer == null || requestedUnits <= 0 || offer.UsesItemLevelInventory)
             {
+                if (offer?.UsesItemLevelInventory == true)
+                    diagnostics?.Add($"'{SupplierName}' requires an exact item ID for category '{categoryId}'; pooled-category sale refused.");
                 return 0;
             }
 
@@ -135,7 +149,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public bool OffersItem(string itemId)
         {
-            return !string.IsNullOrWhiteSpace(CategoryForItem(itemId));
+            string categoryId = CategoryForItem(itemId);
+            return !string.IsNullOrWhiteSpace(categoryId)
+                && ItemStockUnits(itemId) > 0
+                && ItemPricePerUnitCents(itemId) > 0;
         }
 
         public string CategoryForItem(string itemId)
@@ -173,8 +190,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return 0;
             }
 
-            int perItem = StoreUnitsPerItem(categoryId);
-            return StockUnits(categoryId) / Math.Max(1, perItem);
+            if (port is IItemLevelGeneralStoreTradingPort exactPort && exactPort.UsesItemLevelInventory(itemId))
+                return Math.Max(0, exactPort.ItemStockUnits(itemId));
+
+            GeneralStoreCategoryOffer offer = FindOffer(categoryId);
+            return StockUnits(categoryId) / Math.Max(1, StoreUnitsPerItem(categoryId));
         }
 
         public int ItemPricePerUnitCents(string itemId)
@@ -185,6 +205,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return 0;
             }
 
+            if (port is IItemLevelGeneralStoreTradingPort exactPort && exactPort.UsesItemLevelInventory(itemId))
+                return Math.Max(0, exactPort.ItemPricePerUnitCents(itemId));
+
+            GeneralStoreCategoryOffer offer = FindOffer(categoryId);
             return PricePerUnitCents(categoryId) * Math.Max(1, StoreUnitsPerItem(categoryId));
         }
 
@@ -215,6 +239,33 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             if (string.IsNullOrEmpty(categoryId) || requestedUnits <= 0)
             {
                 return 0;
+            }
+
+            GeneralStoreCategoryOffer itemOffer = FindOffer(categoryId);
+            if (itemOffer?.UsesItemLevelInventory == true
+                && port is IItemLevelGeneralStoreTradingPort exactPort
+                && exactPort.UsesItemLevelInventory(itemId))
+            {
+                if (!exactPort.TryConsumeItemStockUnits(itemId, requestedUnits, out int exactUnits) || exactUnits <= 0)
+                {
+                    diagnostics?.Add($"'{SupplierName}' cannot fill {requestedUnits}u {itemId}: exact item stock exhausted or reserved.");
+                    return 0;
+                }
+
+                int exactRevenue = exactUnits * ItemPricePerUnitCents(itemId);
+                if (settlement != null && settlement.Mode == ShoppingSettlementMode.TradeCreditObligation)
+                {
+                    port.RecordCreditSettlement(categoryId, exactUnits, exactRevenue, settlement.ObligationId ?? string.Empty);
+                }
+                else
+                {
+                    exactPort.RecordItemCashSettlement(categoryId, exactUnits, exactRevenue);
+                }
+
+                lastReceiptId = $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
+                log.Add($"Day {dayIndex}: sold {exactUnits}u {itemId} for {exactRevenue}c using its identified lot stock.");
+                diagnostics?.Add($"'{SupplierName}' sold {exactUnits}u {itemId} ({lastReceiptId}).");
+                return exactUnits;
             }
 
             int storeUnitsNeeded = requestedUnits * Math.Max(1, StoreUnitsPerItem(categoryId));

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using LandLedgers.Civic;
 using System.Text;
@@ -486,12 +487,27 @@ namespace LandLedgers.FirstLedger
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
             sharedBusinessRuntime?.ReconcileGeneratedWorkplaceAssignments();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            BusinessInstanceState developmentNpcStore = null;
+            if (startupIntent == WorldStartupIntent.NewGame && enableDevelopmentPopulationFixture
+                && developmentPopulationFixture != null)
+            {
+                developmentNpcStore = FindDevelopmentNpcGeneralStore();
+                SeedDevelopmentNpcStoreOpeningStock(developmentNpcStore);
+            }
+#endif
             // Register the live store with the shared supplier directory. The
             // household membership binding remains an explicit scenario/world
             // concern; registering the seller alone cannot execute a purchase.
             if (simulationDrivers != null && storeRuntime != null)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                simulationDrivers.RegisterGeneralStoreSupplier(developmentNpcStore != null
+                    ? storeRuntime.BuildHouseholdTradingPort(developmentNpcStore)
+                    : storeRuntime.BuildHouseholdTradingPort());
+#else
                 simulationDrivers.RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort());
+#endif
             }
             simulationDrivers?.EnsureGeneralStorePostOfficeForCurrentWorld();
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
@@ -1139,6 +1155,37 @@ namespace LandLedgers.FirstLedger
             {
                 Debug.Log("[WorldStartup] Player-as-NPC playtest mode is on (bootstrapper or restored save).", this);
             }
+        }
+
+        private BusinessInstanceState FindDevelopmentNpcGeneralStore()
+        {
+            if (sharedBusinessRuntime?.Businesses == null) return null;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business != null && business.BusinessType == BusinessType.GeneralStore
+                    && business.Owner != null && business.Owner.OwnerKind == BusinessOwnerKind.Npc
+                    && business.Owner.PersonId == 1 && business.RuntimeState != null)
+                    return business;
+            }
+            Debug.LogError("[WorldStartup] Six-person fixture opening-stock endowment was not applied: no NPC General Store owned by P001 was found.", this);
+            return null;
+        }
+
+        private void SeedDevelopmentNpcStoreOpeningStock(BusinessInstanceState business)
+        {
+            if (business?.RuntimeState == null || developmentPopulationFixture == null || storeRuntime?.StoreDefinition == null)
+                return;
+
+            int seed = townWorld?.Settings != null ? townWorld.Settings.seed : 0;
+            if (!ScenarioOpeningStockEndowment.TryApply(developmentPopulationFixture, business,
+                    storeRuntime.StoreDefinition, seed,
+                    timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                    out string report, out string error))
+            {
+                Debug.LogError($"[WorldStartup] {error}", this);
+                return;
+            }
+            Debug.Log($"[WorldStartup] {report}", this);
         }
 
         private void ConfigureOpeningBusinessRoster()

@@ -367,7 +367,10 @@ namespace LandLedgers.World
             PopulationState state = populationManager.State;
             HouseholdState household = person.householdId >= 0 ? state.GetHousehold(person.householdId) : null;
             var text = new StringBuilder(512);
-            AppendPersonField(text, "Person ID", $"P{person.id:000}", showDevelopmentPersonDetails);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (showDevelopmentPersonDetails)
+                AppendPersonField(text, "Person ID", $"P{person.id:000}", true);
+#endif
             AppendPersonField(text, "Age", person.age >= 0 ? $"{person.age} years" : null, true);
             AppendPersonField(text, "Household", household != null ? household.householdName : null, showDevelopmentPersonDetails || household != null);
             AppendPersonField(text, "Occupation", !string.IsNullOrWhiteSpace(person.professionName) ? person.professionName : person.professionId, showDevelopmentPersonDetails || !string.IsNullOrWhiteSpace(person.professionName));
@@ -426,7 +429,9 @@ namespace LandLedgers.World
                 PersonState relative = populationManager.State.GetPerson(relatedIds[i]);
                 if (i > 0) names.Append(", ");
                 names.Append(relative != null ? relative.DisplayName.Trim() : $"P{relatedIds[i]:000}");
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                 if (showDevelopmentPersonDetails) names.Append($" [P{relatedIds[i]:000}]");
+#endif
             }
 
                 AppendPersonField(text, label, names.ToString(), true);

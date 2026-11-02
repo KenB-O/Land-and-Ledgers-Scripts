@@ -828,8 +828,8 @@ namespace LandLedgers.Orchestration.Systems
         private void BindNpcBusinessCreation(SharedBusinessRuntimeManager runtime)
         {
             if (hub == null || runtime == null) return;
-            hub.NpcBusinessCreation.PremisesAssigner = kind =>
-                runtime.TryAssignNpcBusinessPremises(kind, out int buildingId) ? buildingId : -1;
+            hub.NpcBusinessCreation.TypedPremisesAssigner = (businessType, kind) =>
+                runtime.TryAssignNpcBusinessPremises(businessType, kind, out int buildingId) ? buildingId : -1;
             hub.NpcBusinessCreation.BusinessCreated = business =>
             {
                 if (!runtime.TryAdoptNpcBusiness(business, out string message))
@@ -1146,33 +1146,12 @@ namespace LandLedgers.Orchestration.Systems
                     CreationPort = hub.NpcBusinessCreation,
                     Suppliers = supplierDirectory,
                     PersonAlreadyOwnsBusiness = PersonOwnsBusiness,
-                    PremisesFinder = opportunity =>
-                    {
-                        if (sharedBusinessRuntime == null || opportunity == null) return null;
-                        if (!sharedBusinessRuntime.TryAssignNpcBusinessPremises(
-                            PremisesKind.DedicatedStorefront, out int buildingId))
-                            return null;
-                        return new NpcPremisesOption
-                        {
-                            Description = "unassigned storefront identified for the opportunity",
-                            Tenure = NpcPremisesTenure.Rented,
-                            ParcelOrBuildingRef = "bldg-" + buildingId,
-                            UpfrontCostCents = 3000,
-                            RecurringCostCents = 500,
-                        };
-                    },
-                    EquipmentFinder = opportunity =>
-                    {
-                        string smithyId = FindCraftBusinessId();
-                        if (string.IsNullOrWhiteSpace(smithyId)) return null;
-                        return new NpcEquipmentOption
-                        {
-                            Description = "shop fittings (counter, scales, shelves)",
-                            ItemId = "shop_fittings",
-                            CostCents = 1500,
-                            Provenance = "purchase:" + smithyId,
-                        };
-                    },
+                    // PremisesFinder and EquipmentFinder intentionally remain
+                    // unbound until production can return actual property
+                    // rights and an actual stocked/sold equipment asset. A
+                    // free building id plus fixed rent, or a provenance string
+                    // without a transaction, is not evidence that the Person
+                    // can lawfully open a Business.
                 }, diag);
             if (diag.Count > 0)
             {
@@ -1271,20 +1250,6 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             return false;
-        }
-
-        private string FindCraftBusinessId()
-        {
-            if (sharedBusinessRuntime == null) return null;
-            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
-            {
-                if (business == null) continue;
-                if (business.BusinessType == BusinessType.Blacksmith
-                    && !string.IsNullOrWhiteSpace(business.InstanceId))
-                    return business.InstanceId;
-            }
-
-            return null;
         }
 
         /// <summary>
@@ -2377,6 +2342,25 @@ namespace LandLedgers.Orchestration.Systems
             DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
             DriveEmbodiedShopping(absoluteDayIndex, diag);
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
+            if (diag.Count > 0)
+            {
+                // Keep failed household needs observable in production logs.
+                // These diagnostics explain blocked journeys, suppliers,
+                // affordability and unmet meals; they do not alter state.
+                const int maxDiagnosticsPerDay = 12;
+                int shown = Math.Min(diag.Count, maxDiagnosticsPerDay);
+                var visible = new List<string>(shown);
+                for (int i = 0; i < shown; i++)
+                {
+                    visible.Add(diag[i]);
+                }
+
+                string omitted = diag.Count > shown
+                    ? $" | ... {diag.Count - shown} additional diagnostic(s) omitted"
+                    : string.Empty;
+                Debug.LogWarning($"[SimulationDrivers] household needs day {absoluteDayIndex}: " +
+                    string.Join(" | ", visible) + omitted, this);
+            }
         }
 
         /// <summary>

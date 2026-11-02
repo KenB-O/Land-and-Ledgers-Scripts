@@ -18,30 +18,29 @@ namespace LandLedgers.Population
     ///   - mirrors lot consumption (meals) back into reserves so legacy
     ///     readouts do not double-count food.
     ///
-    /// The category-to-item mapping below is a DOCUMENTED TRANSITIONAL
-    /// APPROXIMATION for the Phase B bridge — not canon, not calibration.
-    /// Phase C removes it with item-level purchasing.
+    /// Category-only legacy purchases do not identify their contained SKU.
+    /// This bridge records those credits as explicit unspecified category
+    /// lots instead of relabeling pooled stock as flour, preserved meat, soap,
+    /// or clothing textiles. Exact item shopping writes exact SKU lots in the
+    /// Phase C path.
     /// </summary>
     public static class HouseholdInventoryReserveBridge
     {
         private static readonly Dictionary<string, string> CategoryToItemId =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                { "staple_food", HouseholdItemCatalog.FlourId },
-                { "meat", HouseholdItemCatalog.PreservedMeatId },
+                { "staple_food", HouseholdItemCatalog.UnspecifiedStapleFoodId },
+                { "meat", HouseholdItemCatalog.UnspecifiedMeatId },
                 { "fuel_wood", HouseholdItemCatalog.FuelWoodId },
-                { "household_goods", HouseholdItemCatalog.SoapId },
-                { "clothing", HouseholdItemCatalog.ClothingTextilesId },
+                { "household_goods", HouseholdItemCatalog.UnspecifiedHouseholdGoodsId },
+                { "clothing", HouseholdItemCatalog.UnspecifiedClothingId },
             };
 
         /// <summary>
         /// One-time deterministic conversion of a household's existing
         /// reserve units into lots. Idempotent via SeededFromReserves.
-        /// Staple food books as the unspecified migration item (composition
-        /// honestly unknown); meat books as preserved meat (stored meat in
-        /// this period is preserved — documented assumption); fuel wood maps
-        /// directly. Mixed non-food categories are left unseeded; their
-        /// legacy flow continues untouched until Phase C.
+        /// Categories without SKU composition use an unspecified category
+        /// item; fuel wood retains its exact identity.
         /// </summary>
         public static void SeedLotsFromReserves(
             HouseholdState household,
@@ -59,13 +58,14 @@ namespace LandLedgers.Population
                 return;
             }
 
-            household.EnsureHouseholdReservesInitialized();
+            household.EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
             SeedCategory(household, inventory, "staple_food",
                 HouseholdItemCatalog.UnspecifiedStapleFoodId,
                 "legacy reserve migration (composition unspecified)", dayIndex, diagnostics);
             SeedCategory(household, inventory, "meat",
-                HouseholdItemCatalog.PreservedMeatId,
-                "legacy reserve migration (stored meat recorded as preserved)", dayIndex, diagnostics);
+                HouseholdItemCatalog.UnspecifiedMeatId,
+                "legacy reserve migration (composition unspecified)", dayIndex, diagnostics);
             SeedCategory(household, inventory, "fuel_wood",
                 HouseholdItemCatalog.FuelWoodId,
                 "legacy reserve migration", dayIndex, diagnostics);
@@ -74,19 +74,21 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
-        /// Mirrors a reserve credit (e.g. General Store shopping) into a lot
-        /// with purchase provenance. Categories without an item mapping
-        /// (medicine, tools) credit the reserve only — no lot is invented.
+        /// Mirrors a reserve credit (e.g. General Store shopping) into an
+        /// exact SKU lot only for single-identity categories, otherwise an
+        /// explicitly unspecified category lot. Categories without a
+        /// supported category identity (medicine, tools) credit the reserve
+        /// only — no lot is invented.
         ///
         /// PHASE C: RETIRED from the shopping path. The Phase C shopping loop
         /// (HouseholdShoppingLoop) resolves real items through the store's own
         /// declared offers (IItemResolvingSupplier) and books lots directly —
-        /// the global category→item guess below is the documented transitional
-        /// approximation and must not be used for new shopping flows. Kept for
-        /// the legacy HF-4 EmbodiedPurchaseExecutor path until DailyNeedsService
-        /// migrates.
+        /// this bridge only records exact SKU identity when the category has
+        /// one unambiguous item; pooled categories remain explicitly
+        /// unspecified. Kept for the legacy HF-4 EmbodiedPurchaseExecutor
+        /// path until DailyNeedsService migrates.
         /// </summary>
-        [Obsolete("Phase C: retired from the shopping path — the transitional category→item mapping is replaced by store-declared item resolution (IItemResolvingSupplier).")]
+        [Obsolete("Legacy category-credit bridge. New retail should resolve declared item offers through IItemResolvingSupplier.")]
         public static void MirrorReserveCreditToLots(
             HouseholdInventory inventory,
             string categoryId,

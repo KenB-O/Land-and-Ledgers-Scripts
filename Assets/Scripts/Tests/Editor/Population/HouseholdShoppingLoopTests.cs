@@ -414,6 +414,26 @@ namespace LandLedgers.EditorTests.Population
         // ---------- C4 failure modes ----------
 
         [Test]
+        public void ExecuteBatch_UnstockedKnownSeller_ExplainsShortageWithoutCreatingSale()
+        {
+            Fixture f = Fixture.Create();
+            f.Port.Stock["staple_food"] = 0;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 1);
+
+            HouseholdShoppingLoop.BatchShoppingResult result =
+                f.Loop.ExecuteBatch(new[] { need }, f.Day, f.Options());
+
+            Assert.IsFalse(result.TripExecuted);
+            StringAssert.Contains("out of stock", result.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Balance(), "an unfilled need must not create household funds");
+            Assert.AreEqual(0, f.StoreStock(), "the shortage check must not manufacture inventory");
+            Assert.AreEqual(0, f.Inventories.GetOrCreate(f.HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, f.Port.RecordedCashRevenue, "an unfilled need is not a sale");
+        }
+
+        [Test]
         public void ExecuteNeed_InsufficientFunds_NoSaleNeedStaysOpen()
         {
             Fixture f = Fixture.Create();
@@ -471,6 +491,23 @@ namespace LandLedgers.EditorTests.Population
             StringAssert.Contains("known seller", result.FailureReason);
             Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
             Assert.AreEqual(10000, f.Balance());
+        }
+
+        [Test]
+        public void ExecuteNeed_KnownSellerWithNoAvailableStock_ReportsOfferBlockerSeparately()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            f.Port.Stock["staple_food"] = 0;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 1);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsFalse(result.Success);
+            StringAssert.Contains("Known seller(s) exist", result.FailureReason);
+            StringAssert.Contains("available stock", result.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(10000, f.Balance(), "A failed no-stock search must not debit household cash.");
         }
 
         [Test]

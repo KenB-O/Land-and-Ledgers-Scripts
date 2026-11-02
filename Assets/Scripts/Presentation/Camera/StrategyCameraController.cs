@@ -483,19 +483,19 @@ namespace LandLedgers.CameraSystem
 
         private float ReadKeyboardPitch(Keyboard keyboard)
         {
-            float input = 0f;
+            bool raisePressed = IsKeyPressed(keyboard, settings.pitchUpKey);
+            bool lowerPressed = IsKeyPressed(keyboard, settings.pitchDownKey);
+            return EvaluateRaiseLowerPitchInput(raisePressed, lowerPressed);
+        }
 
-            if (IsKeyPressed(keyboard, settings.pitchUpKey))
-            {
-                input -= 1f;
-            }
-
-            if (IsKeyPressed(keyboard, settings.pitchDownKey))
-            {
-                input += 1f;
-            }
-
-            return input;
+        /// <summary>
+        /// Resolves camera elevation controls into pitch input. Raising the view
+        /// moves toward the horizon (negative rig pitch); lowering moves toward
+        /// the ground (positive rig pitch). Opposing inputs cancel.
+        /// </summary>
+        public static float EvaluateRaiseLowerPitchInput(bool raisePressed, bool lowerPressed)
+        {
+            return (lowerPressed ? 1f : 0f) - (raisePressed ? 1f : 0f);
         }
 
         private static bool IsKeyPressed(Keyboard keyboard, Key key)

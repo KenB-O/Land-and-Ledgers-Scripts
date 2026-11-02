@@ -48,3 +48,32 @@ MonoBehaviour:
   - surname: Boniecki
     personIndexes: 0400000005000000
     homeBuildingOrdinal: 2
+  spousePairs:
+  - firstPersonIndex: 0
+    secondPersonIndex: 1
+  - firstPersonIndex: 2
+    secondPersonIndex: 3
+  - firstPersonIndex: 4
+    secondPersonIndex: 5
+  openingStoreStock:
+  - itemId: bread
+    minimumUnits: 12
+    maximumUnits: 24
+  - itemId: flour
+    minimumUnits: 4
+    maximumUnits: 8
+  - itemId: potatoes
+    minimumUnits: 4
+    maximumUnits: 8
+  - itemId: sugar
+    minimumUnits: 5
+    maximumUnits: 10
+  - itemId: coffee
+    minimumUnits: 3
+    maximumUnits: 6
+  - itemId: tea
+    minimumUnits: 2
+    maximumUnits: 4
+  - itemId: salt
+    minimumUnits: 4
+    maximumUnits: 8

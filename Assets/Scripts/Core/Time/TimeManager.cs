@@ -346,6 +346,7 @@ namespace LandLedgers.Time
 
             Instance = this;
             InitializeState(false);
+            LandLedgers.Presentation.DayNightVisualController.EnsureAttached(this);
         }
 
         private void OnEnable()
@@ -356,6 +357,10 @@ namespace LandLedgers.Time
             }
 
             InitializeState(false);
+            if (Instance == this)
+            {
+                LandLedgers.Presentation.DayNightVisualController.EnsureAttached(this);
+            }
         }
 
         private void OnDisable()

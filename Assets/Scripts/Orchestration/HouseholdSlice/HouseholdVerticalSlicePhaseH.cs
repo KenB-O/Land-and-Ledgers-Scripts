@@ -532,7 +532,9 @@ namespace LandLedgers.Orchestration.HouseholdSlice
             FundHousehold(w, H_Morrow, 0, 15000, HouseholdIncomeSource.WageEmployment, "emp-morrow-1", "Tomas winter wages", "mill");
             FundHousehold(w, H_Kovac, 0, 40000, HouseholdIncomeSource.WageEmployment, "emp-kovac-1", "Petr mason wages and savings", "builder");
             FundHousehold(w, H_Renner, 0, 40000, HouseholdIncomeSource.WageEmployment, "emp-renner-1", "Emil carpenter wages", "builder");
-            FundHousehold(w, H_Vane, 0, 200, HouseholdIncomeSource.OtherDocumented, "odd-jobs", "day labor", "neighbors");
+            // Keep this fixture below the price of one flour unit so the
+            // hardship proof exercises a genuinely unaffordable purchase.
+            FundHousehold(w, H_Vane, 0, 100, HouseholdIncomeSource.OtherDocumented, "odd-jobs", "day labor", "neighbors");
             FundHousehold(w, H_Hart, 0, 200000, HouseholdIncomeSource.OwnerDraw, "general-store", "store profit draw", "store");
 
             // Wire every household ledger into the credit cash bridge (real participant cash).
@@ -1008,7 +1010,7 @@ namespace LandLedgers.Orchestration.HouseholdSlice
         {
             FailureExperimentResult f = r.InsufficientFunds;
             int day = 15;
-            // Vane holds 200c; 10u flour @120c = 1200c — unaffordable. No trade credit offered.
+            // Vane holds 100c; even one flour unit costs 120c. No trade credit is offered.
             HouseholdPurchasingNeed need = OpenTraceNeed(w, H_Vane, HouseholdItemCatalog.FlourId, 10, day);
             int balanceBefore = w.Ledgers.Get(H_Vane).GetBalanceCents();
             int cashBefore = w.StorePort.CurrentCashCents;
@@ -1227,7 +1229,7 @@ namespace LandLedgers.Orchestration.HouseholdSlice
             p.TripFailureReason = attempt.RejectedAlternatives.Count > 0
                 ? attempt.RejectedAlternatives[0].Reason : attempt.FailureReason;
 
-            ProofNote(r, $"Day {day}: HARDSHIP — H{H_Vane} (Sarah + Tomas Vane, 200c, empty pantry): " +
+            ProofNote(r, $"Day {day}: HARDSHIP — H{H_Vane} (Sarah + Tomas Vane, 100c, empty pantry): " +
                 $"served {p.MealsServed}, missed {p.MealsMissed} ({p.MissedMealRecords} missed-meal records); " +
                 $"no invisible replenishment — balance still {p.BalanceCents}c, flour {p.FlourUnits}u, " +
                 $"exactly {p.InflowEntryCount} provenanced inflow ever; the 10u flour need stays OPEN " +

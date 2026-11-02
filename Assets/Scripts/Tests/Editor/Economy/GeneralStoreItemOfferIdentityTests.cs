@@ -1,117 +1,211 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.FirstLedger;
 using LandLedgers.Population;
+using LandLedgers.Persistence;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 
 namespace LandLedgers.EditorTests.Economy
 {
-    /// <summary>
-    /// Series 2 Pass 7 update: the old version of this test asserted that
-    /// staple_food is NEVER offered, because the old trading port only
-    /// offered a category when exactly one item resolved in it, and
-    /// selling the 7-item staple_food aggregate as "flour" would have
-    /// been a false product identity. Pass 7 replaces that guard with
-    /// per-item offers (Series2TradingPortBuilder): staple_food IS now
-    /// offered, but as seven separate one-item offers (flour, bread,
-    /// potatoes, salt, sugar, coffee, tea), each drawing from the
-    /// shared category pool — never as one aggregate labelled flour.
-    /// The safety invariant this test protects is therefore restated,
-    /// not removed:
-    ///   - every offer carries exactly one item id;
-    ///   - every offered item is an authored item in its category AND
-    ///     a real household item (HouseholdItemCatalog);
-    ///   - no offer sells a multi-item category under a representative
-    ///     id (no "preserved_meat" for beef/bacon/cheese, no
-    ///     "clothing_textiles" for cloth/workwear/etc.);
-    ///   - single-item categories keep the legacy behaviour exactly
-    ///     (one offer, the authored item, matching the old mapping).
-    /// Total sales across items in one category are capped by the
-    /// shared category pool; that conservation is proven in the
-    /// Roslyn Pass 7 tests (Series2Pass7SellingTests), not here,
-    /// because this test runs against the live manager port.
-    /// </summary>
     public sealed class GeneralStoreItemOfferIdentityTests
     {
-        [Test]
-        public void HouseholdTradingPort_OffersRealItemsPerItem_NeverAnAggregateAsOneItem()
-        {
-            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(
-                "Assets/Core/Economy/GeneralStoreBusinessDefinition.asset");
-            Assert.IsNotNull(definition, "The authored General Store profile is required for this integration test.");
+        private const string DefinitionPath = "Assets/Core/Economy/GeneralStoreBusinessDefinition.asset";
+        private const string FixturePath = "Assets/Core/Population/SixPersonDevelopmentFixture.asset";
 
-            GameObject host = new GameObject("GeneralStoreItemOfferIdentityTests");
+        [Test]
+        public void DevelopmentFixtureOpeningStock_IsDeterministicAndWithinConfiguredRanges()
+        {
+            SixPersonDevelopmentFixture fixture = AssetDatabase.LoadAssetAtPath<SixPersonDevelopmentFixture>(FixturePath);
+            Assert.IsNotNull(fixture);
+            Assert.IsTrue(fixture.Validate(out string error), error);
+
+            bool seedVariesAStockLine = false;
+            foreach (SixPersonDevelopmentFixture.OpeningRetailStockRange range in fixture.OpeningStoreStock)
+            {
+                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 1897, out int first));
+                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 1897, out int repeated));
+                Assert.AreEqual(first, repeated, range.itemId + " must be stable for the same scenario seed.");
+                Assert.That(first, Is.InRange(range.minimumUnits, range.maximumUnits), range.itemId);
+                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 1898, out int otherSeed));
+                seedVariesAStockLine |= otherSeed != first;
+            }
+            Assert.IsTrue(seedVariesAStockLine, "At least one configured line should demonstrate seed variation.");
+        }
+
+        [Test]
+        public void ItemLevelOffers_RequireIdentifiedStockAndExactHouseholdUnits()
+        {
+            GeneralStoreBusinessDefinition definition = LoadDefinition();
+            GameObject host = new GameObject(nameof(ItemLevelOffers_RequireIdentifiedStockAndExactHouseholdUnits));
             try
             {
-                GeneralStoreRuntimeManager manager = host.AddComponent<GeneralStoreRuntimeManager>();
-                FieldInfo definitionField = typeof(GeneralStoreRuntimeManager).GetField(
-                    "storeDefinition", BindingFlags.Instance | BindingFlags.NonPublic);
-                Assert.IsNotNull(definitionField, "The manager's authored store-profile binding changed.");
-                definitionField.SetValue(manager, definition);
+                GeneralStoreRuntimeManager manager = ConfigureManager(host, definition);
+                BusinessInstanceState store = CreateNpcStore(definition);
 
-                GeneralStoreTradingPort port = manager.BuildHouseholdTradingPort();
-                Assert.IsNotNull(port);
-                Assert.Greater(port.CategoryOffers.Count, 0, "The port must offer at least the staple_food items; an empty port is the old bug, not a pass.");
+                AddLot(store, definition, "bread", 14);
+                AddLot(store, definition, "flour", 6);
+                AddLot(store, definition, "potatoes", 5);
+                AddLot(store, definition, "sugar", 8);
+                AddLot(store, definition, "coffee", 4);
+                AddLot(store, definition, "tea", 3);
+                AddLot(store, definition, "salt", 6);
 
-                var offeredByCategory = new Dictionary<string, List<string>>();
-                foreach (GeneralStoreCategoryOffer offer in port.CategoryOffers)
-                {
-                    Assert.IsNotNull(offer);
-                    Assert.AreEqual(1, offer.OfferedItemIds.Count,
-                        $"Category '{offer.CategoryId}' must resolve to exactly one item per offer (per-item offers, never an aggregate).");
+                GeneralStoreSupplierAdapter emptySupplier = new GeneralStoreSupplierAdapter(
+                    manager.BuildHouseholdTradingPort(CreateNpcStore(definition)));
+                Assert.IsFalse(emptySupplier.OffersItem("bread"), "A catalog entry without a physical lot is not an offer.");
 
-                    string itemId = offer.OfferedItemIds[0];
-                    Assert.IsNotNull(HouseholdItemCatalog.Get(itemId),
-                        $"Offered item '{itemId}' in '{offer.CategoryId}' must be a real household item.");
+                GeneralStoreTradingPort port = manager.BuildHouseholdTradingPort(store);
+                var supplier = new GeneralStoreSupplierAdapter(port);
+                Assert.IsTrue(supplier.OffersItem("bread"));
+                Assert.IsTrue(supplier.OffersItem("sugar"));
+                Assert.IsTrue(supplier.OffersItem("coffee"));
+                Assert.IsTrue(supplier.OffersItem("tea"));
+                Assert.IsFalse(supplier.OffersItem("flour"), "10 lb sacks cannot be advertised as household pounds without an authored conversion.");
+                Assert.IsFalse(supplier.OffersItem("potatoes"), "Sacks cannot be advertised as pounds without an authored conversion.");
+                Assert.IsFalse(supplier.OffersItem("salt"), "Small bags cannot be advertised as pounds without a conversion.");
+                Assert.IsFalse(supplier.OffersItem("preserved_meat"));
 
-                    bool authoredInCategory = false;
-                    foreach (ItemDefinition item in definition.Items)
-                    {
-                        if (item != null && string.Equals(item.CategoryId, offer.CategoryId,
-                                System.StringComparison.OrdinalIgnoreCase)
-                            && string.Equals(item.ItemId, itemId, System.StringComparison.OrdinalIgnoreCase))
-                        {
-                            authoredInCategory = true;
-                            break;
-                        }
-                    }
-                    Assert.IsTrue(authoredInCategory,
-                        $"Offered item '{itemId}' must be an authored item in category '{offer.CategoryId}', not a representative id.");
+                Assert.AreEqual(14, supplier.ItemStockUnits("bread"));
+                Assert.AreEqual(6, store.RuntimeState.GetRetailItemStockUnits("flour"));
+                Assert.AreEqual(46, store.RuntimeState.GetCategoryStock("staple_food").CurrentStockUnits,
+                    "Category reporting must equal the sum of the seven seeded item lots exactly once.");
+                Assert.Greater(supplier.ItemPricePerUnitCents("bread"), 0);
 
-                    if (!offeredByCategory.TryGetValue(offer.CategoryId, out List<string> items))
-                    {
-                        items = new List<string>();
-                        offeredByCategory[offer.CategoryId] = items;
-                    }
-                    items.Add(itemId);
-                }
+                int otherSkuBefore = supplier.ItemStockUnits("sugar");
+                int breadPrice = supplier.ItemPricePerUnitCents("bread");
+                var cashSettlement = new ShoppingSettlement { Mode = ShoppingSettlementMode.CashFromLedger };
+                Assert.AreEqual(2, supplier.SellItem("bread", 2, 0, cashSettlement, new List<string>()));
+                Assert.AreEqual(12, supplier.ItemStockUnits("bread"));
+                Assert.AreEqual(otherSkuBefore, supplier.ItemStockUnits("sugar"));
+                Assert.AreEqual(2 * breadPrice, store.RuntimeState.CurrentCashCents);
 
-                // Staple_food is now offered per-item, not skipped, and
-                // not as flour alone: all seven authored household items.
-                Assert.IsTrue(offeredByCategory.TryGetValue("staple_food", out List<string> staple),
-                    "staple_food must now be offered per-item (Pass 7 fix for the shopping-loop block).");
-                foreach (string expected in new[] { "flour", "bread", "potatoes", "salt", "sugar", "coffee", "tea" })
-                {
-                    Assert.Contains(expected, staple,
-                        $"staple_food must offer '{expected}' as its own item.");
-                }
+                Assert.AreEqual(12, supplier.SellItem("bread", 12, 0, cashSettlement, new List<string>()));
+                Assert.IsFalse(supplier.OffersItem("bread"), "The final unit sale must remove live availability.");
+                Assert.AreEqual(0, supplier.ItemStockUnits("bread"));
+                Assert.AreEqual(14 * breadPrice, store.RuntimeState.CurrentCashCents,
+                    "Sale proceeds must post to the Business cash authority at the authored item price.");
+                Assert.IsFalse(port.TryConsumeStoreUnits("staple_food", 1, out _), "Identified SKU stock cannot be consumed by category only.");
 
-                // No representative aggregates: meat and clothing stay
-                // un-offered through this path, because their authored
-                // items are not household items.
-                Assert.IsFalse(offeredByCategory.ContainsKey("meat"),
-                    "meat must not be offered as preserved_meat — beef/bacon/cheese are not household items.");
-                Assert.IsFalse(offeredByCategory.ContainsKey("clothing"),
-                    "clothing must not be offered as clothing_textiles — cloth/workwear/etc. are not household items.");
+                BusinessRuntimeSaveDto dto = store.RuntimeState.CaptureSaveDto();
+                BusinessRuntimeState restored = BusinessRuntimeState.FromSaveDto(dto, BusinessType.GeneralStore);
+                Assert.AreEqual(0, restored.GetRetailItemStockUnits("bread"));
+                Assert.AreEqual(6, restored.GetRetailItemStockUnits("flour"));
+                Assert.AreEqual(8, restored.GetRetailItemStockUnits("sugar"));
+                Assert.AreEqual(0, restored.GetRetailItemPhysicalUnits("bread"));
+                Assert.AreEqual("lot:bread", restored.RetailItemLots[0].LotId);
             }
             finally
             {
-                Object.DestroyImmediate(host);
+                UnityEngine.Object.DestroyImmediate(host);
             }
+        }
+
+        [Test]
+        public void ScenarioOpeningEndowment_IsFiniteAndAppliedExactlyOnce()
+        {
+            GeneralStoreBusinessDefinition definition = LoadDefinition();
+            SixPersonDevelopmentFixture fixture = AssetDatabase.LoadAssetAtPath<SixPersonDevelopmentFixture>(FixturePath);
+            Assert.IsNotNull(fixture);
+            BusinessInstanceState store = CreateNpcStore(definition);
+
+            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(fixture, store, definition, 0, 0,
+                out string report, out string error), error);
+            Assert.That(report, Does.Contain("general_store_060"));
+            int expectedLotCount = fixture.OpeningStoreStock.Count;
+            Assert.AreEqual(expectedLotCount, store.RuntimeState.RetailItemLots.Count);
+            int firstPhysicalQuantity = store.RuntimeState.GetRetailItemPhysicalUnits("bread");
+            Assert.That(firstPhysicalQuantity, Is.InRange(12, 24));
+            foreach (SixPersonDevelopmentFixture.OpeningRetailStockRange range in fixture.OpeningStoreStock)
+            {
+                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 0, out int expected));
+                Assert.AreEqual(expected, store.RuntimeState.GetRetailItemPhysicalUnits(range.itemId), range.itemId);
+            }
+
+            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(fixture, store, definition, 0, 0,
+                out _, out error), error);
+            Assert.AreEqual(expectedLotCount, store.RuntimeState.RetailItemLots.Count, "Repeat initialization must not create another lot.");
+            Assert.AreEqual(firstPhysicalQuantity, store.RuntimeState.GetRetailItemPhysicalUnits("bread"));
+            Assert.AreEqual(0, store.RuntimeState.CurrentCashCents, "The opening stock endowment does not grant operating cash.");
+            Assert.IsTrue(store.RuntimeState.HasAppliedScenarioEndowment(
+                $"scenario-opening-endowment:{fixture.ProfileId}:{store.InstanceId}:0"));
+
+            BusinessInstanceState restoredStore = BusinessInstanceState.FromSaveDto(store.CaptureSaveDto());
+            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(fixture, restoredStore, definition, 0, 1,
+                out report, out error), error);
+            Assert.That(report, Does.Contain("already recorded"));
+            Assert.AreEqual(expectedLotCount, restoredStore.RuntimeState.RetailItemLots.Count);
+            Assert.AreEqual(firstPhysicalQuantity, restoredStore.RuntimeState.GetRetailItemPhysicalUnits("bread"));
+        }
+
+        [Test]
+        public void GeneralStoreProfileAndPlayerFormation_DoNotGrantInventory()
+        {
+            GeneralStoreBusinessDefinition definition = LoadDefinition();
+            BusinessInstanceState playerStore = BusinessInstanceState.Create(
+                "player_general_store_test", definition, 3, BusinessOwnerIdentity.Player());
+            Assert.AreEqual(0, playerStore.RuntimeState.RetailItemLots.Count);
+            foreach (ItemCategoryDefinition category in definition.Categories)
+                Assert.AreEqual(0, playerStore.RuntimeState.GetCategoryStock(category.CategoryId).CurrentStockUnits,
+                    "Authored catalog/profile defaults are not a physical opening receipt.");
+        }
+
+        [Test]
+        public void AppliedEndowmentMarkerAndLots_SurviveDoubleRestoreWithoutDuplication()
+        {
+            GeneralStoreBusinessDefinition definition = LoadDefinition();
+            BusinessInstanceState store = CreateNpcStore(definition);
+            AddLot(store, definition, "bread", 18);
+            Assert.IsTrue(store.RuntimeState.RecordAppliedScenarioEndowment("fixture:B60:1897"));
+            Assert.IsFalse(store.RuntimeState.RecordAppliedScenarioEndowment("fixture:B60:1897"));
+
+            BusinessRuntimeState firstRestore = BusinessRuntimeState.FromSaveDto(
+                store.RuntimeState.CaptureSaveDto(), BusinessType.GeneralStore);
+            BusinessRuntimeState secondRestore = BusinessRuntimeState.FromSaveDto(
+                firstRestore.CaptureSaveDto(), BusinessType.GeneralStore);
+            Assert.IsTrue(secondRestore.HasAppliedScenarioEndowment("fixture:B60:1897"));
+            Assert.AreEqual(18, secondRestore.GetRetailItemStockUnits("bread"));
+            Assert.AreEqual(1, secondRestore.RetailItemLots.Count);
+        }
+
+        private static GeneralStoreBusinessDefinition LoadDefinition()
+        {
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.IsNotNull(definition, "The authored General Store business definition is required.");
+            return definition;
+        }
+
+        private static GeneralStoreRuntimeManager ConfigureManager(GameObject host, GeneralStoreBusinessDefinition definition)
+        {
+            GeneralStoreRuntimeManager manager = host.AddComponent<GeneralStoreRuntimeManager>();
+            FieldInfo field = typeof(GeneralStoreRuntimeManager).GetField("storeDefinition", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field);
+            field.SetValue(manager, definition);
+            return manager;
+        }
+
+        private static BusinessInstanceState CreateNpcStore(GeneralStoreBusinessDefinition definition)
+        {
+            return BusinessInstanceState.Create("general_store_060", definition, 60,
+                BusinessOwnerIdentity.Npc(1, "Kennedy Baldwin-Ooms", "Baldwin-Ooms"));
+        }
+
+        private static void AddLot(BusinessInstanceState business, GeneralStoreBusinessDefinition definition,
+            string itemId, int quantity)
+        {
+            ItemDefinition item = null;
+            foreach (ItemDefinition candidate in definition.Items)
+                if (candidate != null && string.Equals(candidate.ItemId, itemId, StringComparison.OrdinalIgnoreCase))
+                { item = candidate; break; }
+            Assert.IsNotNull(item, "Missing profile item " + itemId);
+            string result = business.RuntimeState.TryAddRetailItemLot("lot:" + itemId, item.ItemId,
+                item.CategoryId, item.Unit, quantity, business.InstanceId, business.InstanceId,
+                "scenario-opening-endowment:test", 0);
+            Assert.IsNull(result, result);
         }
     }
 }

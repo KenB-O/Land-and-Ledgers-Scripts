@@ -452,6 +452,79 @@ namespace LandLedgers.Economy
     }
 
     /// <summary>
+    /// Identified physical inventory held by a Business. The category balance
+    /// remains the reporting aggregate; these lots are the item-level authority
+    /// for SKUs explicitly managed by lot. Quantities use the authored SKU unit.
+    /// </summary>
+    [Serializable]
+    public sealed class BusinessRetailItemLotState
+    {
+        [SerializeField] private string lotId = string.Empty;
+        [SerializeField] private string itemId = string.Empty;
+        [SerializeField] private string categoryId = string.Empty;
+        [SerializeField] private string unitLabel = string.Empty;
+        [SerializeField, Min(0)] private int quantityUnits;
+        [SerializeField, Min(0)] private int reservedUnits;
+        [SerializeField] private string ownerBusinessId = string.Empty;
+        [SerializeField] private string custodianBusinessId = string.Empty;
+        [SerializeField] private string provenance = string.Empty;
+        [SerializeField] private int createdDayIndex = -1;
+
+        public string LotId => lotId ?? string.Empty;
+        public string ItemId => itemId ?? string.Empty;
+        public string CategoryId => categoryId ?? string.Empty;
+        public string UnitLabel => unitLabel ?? string.Empty;
+        public int QuantityUnits => Mathf.Max(0, quantityUnits);
+        public int ReservedUnits => Mathf.Clamp(reservedUnits, 0, QuantityUnits);
+        public int AvailableUnits => Mathf.Max(0, QuantityUnits - ReservedUnits);
+        public string OwnerBusinessId => ownerBusinessId ?? string.Empty;
+        public string CustodianBusinessId => custodianBusinessId ?? string.Empty;
+        public string Provenance => provenance ?? string.Empty;
+        public int CreatedDayIndex => createdDayIndex;
+
+        public BusinessRetailItemLotState() { }
+
+        public BusinessRetailItemLotState(string id, string sku, string category, string unit,
+            int quantity, string owner, string custodian, string source, int dayIndex)
+        {
+            lotId = id ?? string.Empty;
+            itemId = sku ?? string.Empty;
+            categoryId = category ?? string.Empty;
+            unitLabel = unit ?? string.Empty;
+            quantityUnits = Mathf.Max(0, quantity);
+            ownerBusinessId = owner ?? string.Empty;
+            custodianBusinessId = custodian ?? string.Empty;
+            provenance = source ?? string.Empty;
+            createdDayIndex = dayIndex;
+        }
+
+        public bool TryConsume(int units)
+        {
+            if (units <= 0 || units > AvailableUnits) return false;
+            quantityUnits -= units;
+            return true;
+        }
+
+        public BusinessRetailItemLotSaveDto CaptureSaveDto() => new()
+        {
+            lotId = LotId, itemId = ItemId, categoryId = CategoryId, unitLabel = UnitLabel,
+            quantityUnits = QuantityUnits, reservedUnits = ReservedUnits,
+            ownerBusinessId = OwnerBusinessId, custodianBusinessId = CustodianBusinessId,
+            provenance = Provenance, createdDayIndex = CreatedDayIndex
+        };
+
+        public static BusinessRetailItemLotState FromSaveDto(BusinessRetailItemLotSaveDto dto)
+        {
+            if (dto == null) return null;
+            var lot = new BusinessRetailItemLotState(dto.lotId, dto.itemId, dto.categoryId,
+                dto.unitLabel, dto.quantityUnits, dto.ownerBusinessId, dto.custodianBusinessId,
+                dto.provenance, dto.createdDayIndex);
+            lot.reservedUnits = Mathf.Clamp(dto.reservedUnits, 0, lot.quantityUnits);
+            return lot;
+        }
+    }
+
+    /// <summary>
     /// Legacy worker-slot record. Mixes staffing need (slot id, required-for-opening), worker
     /// identity (assigned worker), wage terms and missed-payroll state in one record.
     /// PKG-2 (TECH §4.3 / SD-05): slot COUNTS are no longer a causal staffing authority. FTE and
@@ -1254,6 +1327,12 @@ namespace LandLedgers.Economy
         private List<CategoryStockState> categoryStock = new();
 
         [SerializeField]
+        private List<BusinessRetailItemLotState> retailItemLots = new();
+
+        [SerializeField]
+        private List<string> appliedScenarioEndowmentIds = new();
+
+        [SerializeField]
         private List<WorkerSlotState> workerSlots = new();
 
         [SerializeField]
@@ -1310,6 +1389,7 @@ namespace LandLedgers.Economy
         public float Reliability01 => Mathf.Clamp01(reliability01);
         public float CompetitionPressure01 => Mathf.Clamp01(competitionPressure01);
         public IReadOnlyList<CategoryStockState> CategoryStock => categoryStock;
+        public IReadOnlyList<BusinessRetailItemLotState> RetailItemLots => retailItemLots;
         public IReadOnlyList<WorkerSlotState> WorkerSlots => workerSlots;
         public int TotalCurrentStockUnits => CalculateTotalCurrentStockUnits();
         public int TotalTargetStockUnits => CalculateTotalTargetStockUnits();
@@ -1953,6 +2033,12 @@ namespace LandLedgers.Economy
                 dto.categoryStock.Add(categoryStock[i].CaptureSaveDto());
             }
 
+            for (int i = 0; i < retailItemLots.Count; i++)
+            {
+                if (retailItemLots[i] != null) dto.retailItemLots.Add(retailItemLots[i].CaptureSaveDto());
+            }
+            dto.appliedScenarioEndowmentIds.AddRange(appliedScenarioEndowmentIds);
+
             for (int i = 0; i < workerSlots.Count; i++)
             {
                 dto.workerSlots.Add(workerSlots[i].CaptureSaveDto());
@@ -2059,6 +2145,25 @@ namespace LandLedgers.Economy
                 for (int i = 0; i < dto.categoryStock.Count; i++)
                 {
                     state.categoryStock.Add(CategoryStockState.FromSaveDto(dto.categoryStock[i]));
+                }
+            }
+
+            state.retailItemLots.Clear();
+            if (dto.retailItemLots != null)
+            {
+                for (int i = 0; i < dto.retailItemLots.Count; i++)
+                {
+                    BusinessRetailItemLotState lot = BusinessRetailItemLotState.FromSaveDto(dto.retailItemLots[i]);
+                    if (lot != null) state.retailItemLots.Add(lot);
+                }
+            }
+            state.appliedScenarioEndowmentIds.Clear();
+            if (dto.appliedScenarioEndowmentIds != null)
+            {
+                foreach (string id in dto.appliedScenarioEndowmentIds)
+                {
+                    if (!string.IsNullOrWhiteSpace(id) && !state.appliedScenarioEndowmentIds.Contains(id))
+                        state.appliedScenarioEndowmentIds.Add(id);
                 }
             }
 
@@ -3442,6 +3547,20 @@ namespace LandLedgers.Economy
             }
 
             int requestedUnits = Mathf.Max(0, units);
+            // Category-only callers may consume only stock whose SKU is
+            // genuinely unspecified. Identified lots must leave through the
+            // item-level path so a category sale cannot silently remove flour
+            // while leaving its flour lot available (or vice versa).
+            int identifiedPhysicalUnits = 0;
+            for (int i = 0; i < retailItemLots.Count; i++)
+            {
+                BusinessRetailItemLotState lot = retailItemLots[i];
+                if (lot != null && string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
+                    identifiedPhysicalUnits += lot.QuantityUnits;
+            }
+            int unallocatedCategoryUnits = Mathf.Max(0, stock.CurrentStockUnits - identifiedPhysicalUnits);
+            if (requestedUnits <= 0 || requestedUnits > unallocatedCategoryUnits)
+                return false;
             if (!stock.TryConsumeStockUnits(requestedUnits))
             {
                 return false;
@@ -3451,6 +3570,141 @@ namespace LandLedgers.Economy
             RefreshStockHealth();
             RefreshStoredCapacityOnly();
             return true;
+        }
+
+        public int GetRetailItemStockUnits(string itemId)
+        {
+            return GetRetailItemStockUnits(itemId, null);
+        }
+
+        public int GetRetailItemStockUnits(string itemId, string categoryId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId)) return 0;
+            int total = 0;
+            for (int i = 0; i < retailItemLots.Count; i++)
+            {
+                BusinessRetailItemLotState lot = retailItemLots[i];
+                if (IsRetailLotHeldByThisBusiness(lot)
+                    && string.Equals(lot.ItemId, itemId, StringComparison.OrdinalIgnoreCase)
+                    && (string.IsNullOrWhiteSpace(categoryId)
+                        || string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)))
+                    total += lot.AvailableUnits;
+            }
+            return total;
+        }
+
+        public int GetRetailItemPhysicalUnits(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId)) return 0;
+            int total = 0;
+            for (int i = 0; i < retailItemLots.Count; i++)
+            {
+                BusinessRetailItemLotState lot = retailItemLots[i];
+                if (IsRetailLotHeldByThisBusiness(lot)
+                    && string.Equals(lot.ItemId, itemId, StringComparison.OrdinalIgnoreCase))
+                    total += lot.QuantityUnits;
+            }
+            return total;
+        }
+
+        public BusinessRetailItemLotState FindRetailItemLot(string lotId)
+        {
+            if (string.IsNullOrWhiteSpace(lotId)) return null;
+            for (int i = 0; i < retailItemLots.Count; i++)
+                if (retailItemLots[i] != null && string.Equals(retailItemLots[i].LotId, lotId, StringComparison.Ordinal))
+                    return retailItemLots[i];
+            return null;
+        }
+
+        private bool IsRetailLotHeldByThisBusiness(BusinessRetailItemLotState lot)
+        {
+            return lot != null && !string.IsNullOrWhiteSpace(BusinessId)
+                && string.Equals(lot.OwnerBusinessId, BusinessId, StringComparison.Ordinal)
+                && string.Equals(lot.CustodianBusinessId, BusinessId, StringComparison.Ordinal);
+        }
+
+        public bool HasAppliedScenarioEndowment(string endowmentId) =>
+            !string.IsNullOrWhiteSpace(endowmentId) && appliedScenarioEndowmentIds.Contains(endowmentId);
+
+        public bool RecordAppliedScenarioEndowment(string endowmentId)
+        {
+            if (string.IsNullOrWhiteSpace(endowmentId) || HasAppliedScenarioEndowment(endowmentId)) return false;
+            appliedScenarioEndowmentIds.Add(endowmentId.Trim());
+            return true;
+        }
+
+        public string TryAddRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+            int quantityUnits, string ownerBusinessId, string custodianBusinessId, string provenance, int dayIndex)
+        {
+            if (string.IsNullOrWhiteSpace(BusinessId) || string.IsNullOrWhiteSpace(lotId)
+                || string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(categoryId)
+                || string.IsNullOrWhiteSpace(unitLabel) || string.IsNullOrWhiteSpace(provenance)
+                || quantityUnits <= 0)
+                return "Retail item lot requires stable business, lot, item, category, unit, provenance, and positive quantity.";
+            if (!string.Equals(ownerBusinessId, BusinessId, StringComparison.Ordinal)
+                || !string.Equals(custodianBusinessId, BusinessId, StringComparison.Ordinal))
+                return "Retail item lot owner and custodian must match the receiving Business.";
+            if (FindRetailItemLot(lotId) != null) return $"Retail item lot '{lotId}' already exists.";
+            CategoryStockState category = GetCategoryStock(categoryId);
+            if (category == null) return $"Business has no stock category '{categoryId}'.";
+            if (category.TargetStockUnits > 0 && category.CurrentStockUnits + quantityUnits > category.TargetStockUnits)
+                return $"Category '{categoryId}' capacity would be exceeded.";
+            if (category.AddStockUnits(quantityUnits) != quantityUnits)
+                return $"Category '{categoryId}' rejected the full item-lot receipt.";
+            retailItemLots.Add(new BusinessRetailItemLotState(lotId, itemId, categoryId, unitLabel,
+                quantityUnits, ownerBusinessId, custodianBusinessId, provenance, dayIndex));
+            RefreshStockHealth();
+            RefreshStoredCapacityOnly();
+            return null;
+        }
+
+        public bool TryConsumeRetailItemStockUnits(string itemId, string categoryId, int units, out int consumedUnits)
+        {
+            consumedUnits = 0;
+            int requested = Mathf.Max(0, units);
+            if (requested <= 0) return false;
+            int categoryItemAvailable = 0;
+            for (int i = 0; i < retailItemLots.Count; i++)
+            {
+                BusinessRetailItemLotState lot = retailItemLots[i];
+                if (IsRetailLotHeldByThisBusiness(lot) && string.Equals(lot.ItemId, itemId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
+                    categoryItemAvailable += lot.AvailableUnits;
+            }
+            if (categoryItemAvailable < requested) return false;
+            CategoryStockState category = GetCategoryStock(categoryId);
+            if (category == null || category.CurrentStockUnits < requested || !category.TryConsumeStockUnits(requested))
+                return false;
+            int remaining = requested;
+            for (int i = 0; i < retailItemLots.Count && remaining > 0; i++)
+            {
+                BusinessRetailItemLotState lot = retailItemLots[i];
+                if (!IsRetailLotHeldByThisBusiness(lot) || !string.Equals(lot.ItemId, itemId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)) continue;
+                int take = Mathf.Min(remaining, lot.AvailableUnits);
+                if (take > 0 && lot.TryConsume(take)) remaining -= take;
+            }
+            // Lots retain their stable IDs at zero quantity. Their identity
+            // and provenance remain available for transaction/save audits.
+            if (remaining != 0) throw new InvalidOperationException("Retail SKU availability changed during a single-writer stock settlement.");
+            consumedUnits = requested;
+            RefreshStockHealth();
+            RefreshStoredCapacityOnly();
+            return true;
+        }
+
+        public void RecordRetailItemSettlement(string categoryId, int unitsSold, int revenueCents)
+        {
+            int units = Mathf.Max(0, unitsSold);
+            int revenue = Mathf.Max(0, revenueCents);
+            currentCashCents += revenue;
+            lastDailyRevenueCents += revenue;
+            weekToDateRevenueCents += revenue;
+            weekToDateUnitsSold += units;
+            RecordNetDelta(revenue);
+            GetCategoryStock(categoryId)?.RecordDailySalesObservation(units, revenue);
+            RefreshStockHealth();
+            RefreshWeeklyCashAfter();
         }
 
         public int AddCategoryStockUnits(string categoryId, int units)

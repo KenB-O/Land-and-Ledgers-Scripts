@@ -10906,12 +10906,9 @@ namespace LandLedgers.Economy
 
         private TownPlot GetPlot(int plotId)
         {
-            if (townWorld == null || plotId < 0 || plotId >= townWorld.Plots.Count)
-            {
-                return null;
-            }
-
-            return townWorld.Plots[plotId];
+            return townWorld != null && townWorld.TryGetPlotById(plotId, out TownPlot plot)
+                ? plot
+                : null;
         }
 
         private bool TryResolveHouseholdUpgradeTarget(
@@ -10962,12 +10959,9 @@ namespace LandLedgers.Economy
 
         private PlacedBuilding GetBuilding(int buildingId)
         {
-            if (townWorld == null || buildingId < 0 || buildingId >= townWorld.Buildings.Count)
-            {
-                return null;
-            }
-
-            return townWorld.Buildings[buildingId];
+            return townWorld != null && townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building)
+                ? building
+                : null;
         }
 
         private OwnedPlotBuildabilityState FindOwnedBuildabilityState(int plotId)

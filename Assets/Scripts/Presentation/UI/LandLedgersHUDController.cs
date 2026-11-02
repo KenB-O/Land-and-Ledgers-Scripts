@@ -11,6 +11,8 @@ namespace LandLedgers.UI
     [DisallowMultipleComponent]
     public sealed class LandLedgersHUDController : MonoBehaviour
     {
+        public const string DefaultControlHintMessage = "Manage C | Pause Space | Move WASD | Raise R | Lower F | Rotate RMB/QE | Zoom Wheel";
+
         private const float TopBarHeight = 72f;
         private const float AlertStripHeight = 52f;
         private const float FirstSessionGuidanceTopGap = 14f;
@@ -76,7 +78,7 @@ namespace LandLedgers.UI
         private TMP_Text controlHintText;
 
         [SerializeField]
-        private string controlHintMessage = "Manage C | Pause Space | Move WASD | Rotate RMB/QE | Zoom Wheel";
+        private string controlHintMessage = DefaultControlHintMessage;
 
         [SerializeField]
         private Color controlHintBackgroundColor = new(0.08f, 0.09f, 0.08f, 0.82f);
@@ -200,6 +202,7 @@ namespace LandLedgers.UI
         public bool UsingFallbackCashField => createdFallbackCashText;
         public bool UsingFallbackDateField => createdFallbackDateText;
         public bool IsSystemStatusVisible => systemStatusStrip != null && systemStatusStrip.gameObject.activeInHierarchy;
+        public string CurrentControlHintText => controlHintText != null ? controlHintText.text : controlHintMessage;
         public string CurrentSystemStatusTitleText => systemStatusTitleText != null ? systemStatusTitleText.text : string.Empty;
         public string CurrentSystemStatusMessageText => systemStatusMessageText != null ? systemStatusMessageText.text : string.Empty;
         public Vector2 CurrentFirstSessionGuidanceAnchoredPosition => firstSessionGuidanceStrip != null
@@ -231,6 +234,9 @@ namespace LandLedgers.UI
 
         private void Awake()
         {
+            // Keep the player-facing controls correct even when an older prefab
+            // instance still serializes the previous hint string.
+            controlHintMessage = DefaultControlHintMessage;
             AutoWireFields();
             EnsureCoreHudFields();
             ApplyAlertStripLayout();

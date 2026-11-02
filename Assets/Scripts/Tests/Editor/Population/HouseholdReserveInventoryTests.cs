@@ -307,6 +307,42 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void PartialReserveSaveMigratesLegacyFoodWhenStapleCategoryIsMissing()
+        {
+            GameObject targetObject = new("Partial Reserve Save Target");
+            try
+            {
+                PopulationSaveDto dto = new();
+                dto.households.Add(new HouseholdSaveDto
+                {
+                    id = 23,
+                    householdName = "Partially Migrated",
+                    surname = "Household",
+                    foodReserveUnits = 4,
+                    reserves = new List<HouseholdReserveSaveDto>
+                    {
+                        new() { categoryId = "fuel_wood", currentUnits = 2 }
+                    }
+                });
+                PopulationManager target = targetObject.AddComponent<PopulationManager>();
+                target.LoadFromSaveDto(dto);
+                HouseholdState household = target.State.households[0];
+
+                Assert.AreEqual(4, household.GetReserve("staple_food").currentUnits,
+                    "a partial reserve save must not erase the legacy food balance when adding the missing staple category");
+                Assert.AreEqual(2, household.GetReserve("fuel_wood").currentUnits,
+                    "preserving legacy food must not overwrite already-migrated categories");
+                Assert.AreEqual(4, household.foodReserveUnits,
+                    "the compatibility field remains synchronized to the authoritative reserve after load");
+            }
+            finally
+            {
+                Object.DestroyImmediate(targetObject);
+            }
+
+        }
+
+        [Test]
         public void LocalGeneralStoreReservePurchaseReducesStockAndCapturesSale()
         {
             GameObject storeObject = new("Reserve Store Sale Test");
@@ -320,6 +356,7 @@ namespace LandLedgers.EditorTests.Population
                 staple.currentUnits = 0;
 
                 CategoryStockState stock = runtime.GetCategoryStock("staple_food");
+                stock.SetCurrentStockForTests(staple.targetUnits);
                 int stockBefore = stock.CurrentStockUnits;
                 int cashBefore = runtime.CurrentCashCents;
 
@@ -350,6 +387,7 @@ namespace LandLedgers.EditorTests.Population
                     1,
                     BusinessOwnerIdentity.Npc(1010, "Sarah Mill", "Mill"));
                 sawmill.EnsureOwnerOperatorStaffing(sawmill.Owner);
+                ActivateAllWorkerSlots(sawmill, "fuel_sales_worker");
                 CategoryStockState offcuts = sawmill.RuntimeState.GetCategoryStock("slabs_offcuts");
                 offcuts.SetCurrentStockForTests(5);
                 CategoryStockState lumber = sawmill.RuntimeState.GetCategoryStock("lumber");
@@ -391,13 +429,25 @@ namespace LandLedgers.EditorTests.Population
                     1,
                     BusinessOwnerIdentity.Npc(1002, "Martha Hobbs", "Hobbs"));
                 staffedButcher.EnsureOwnerOperatorStaffing(staffedButcher.Owner);
+                ActivateAllWorkerSlots(staffedButcher, "butcher_sales_worker");
+                staffedButcher.RuntimeState.GetCategoryStock("meat").SetCurrentStockForTests(48);
+                Assert.AreEqual(BusinessRoleCoverageStatus.Covered, staffedButcher.BuildRoleCoverageSnapshot().Status,
+                    "The positive seller fixture must model a covered, active butcher.");
                 SetBusinesses(manager, new List<BusinessInstanceState> { staffedButcher });
 
                 int budget = 100000;
                 int stockBefore = staffedButcher.RuntimeState.GetCategoryStock("meat").CurrentStockUnits;
+                BusinessRoleCoverageSnapshot coverage = staffedButcher.BuildRoleCoverageSnapshot();
+                bool hasEligibleOffer = manager.TryEvaluateBestHouseholdReserveSellerScore(
+                    "meat", new[] { "meat" }, 3, budget,
+                    out LandLedgers.Reputation.BusinessReputationSellerChoiceScore sellerScore);
+                int unitPrice = GetSharedTransferUnitPrice(manager, staffedButcher, "meat");
                 int sold = manager.TrySellHouseholdReserveUnits("meat", new[] { "meat" }, 3, ref budget, out int spend);
 
-                Assert.Greater(sold, 0);
+                Assert.Greater(sold, 0,
+                    $"Covered butcher sale returned zero. eligibleOffer={hasEligibleOffer}/{sellerScore.Eligible}, " +
+                    $"stock={stockBefore}, unitPrice={unitPrice}, operatingEfficiency={coverage.OperatingEfficiency01}, " +
+                    $"reliability={staffedButcher.RuntimeState.Reliability01}.");
                 Assert.Greater(spend, 0);
                 Assert.AreEqual(stockBefore - sold, staffedButcher.RuntimeState.GetCategoryStock("meat").CurrentStockUnits);
 
@@ -406,6 +456,7 @@ namespace LandLedgers.EditorTests.Population
                     butcherProfile,
                     2,
                     BusinessOwnerIdentity.Npc(1003, "No Staff", "No Staff"));
+                unstaffedButcher.RuntimeState.GetCategoryStock("meat").SetCurrentStockForTests(48);
                 int unstaffedStockBefore = unstaffedButcher.RuntimeState.GetCategoryStock("meat").CurrentStockUnits;
                 SetBusinesses(manager, new List<BusinessInstanceState> { unstaffedButcher });
 
@@ -725,6 +776,22 @@ namespace LandLedgers.EditorTests.Population
         private static void SetBusinesses(SharedBusinessRuntimeManager manager, List<BusinessInstanceState> businesses)
         {
             SetPrivateField(manager, "businesses", businesses);
+        }
+
+        private static void ActivateAllWorkerSlots(BusinessInstanceState business, string workerPrefix)
+        {
+            Assert.NotNull(business);
+            for (int i = 0; i < business.RuntimeState.WorkerSlots.Count; i++)
+            {
+                WorkerSlotState slot = business.RuntimeState.WorkerSlots[i];
+                if (slot == null)
+                {
+                    continue;
+                }
+
+                slot.Assign($"{workerPrefix}_{i}", $"{workerPrefix} {i}", slot.WeeklyWageCents);
+                slot.MarkPaidActive();
+            }
         }
 
         private static void SetPrivateField(object target, string fieldName, object value)

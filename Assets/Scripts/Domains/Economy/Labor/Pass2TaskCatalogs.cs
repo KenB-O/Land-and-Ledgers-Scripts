@@ -119,12 +119,7 @@ namespace LandLedgers.Economy.Labor
             shelfToBack.DomainTags.Add("merchandising");
             authority.RegisterDefinition(shelfToBack, out ignored);
 
-            var backToShelf = new TaskDefinition(MoveBackToShelfId, "Move stock from back storage to shelf", 2);
-            backToShelf.SetRequiredSkill(SkillIds.Stocking, new[] { SkillIds.Stocking });
-            backToShelf.SetDefaultPriority(TaskPriority.Normal);
-            backToShelf.DomainTags.Add("retail");
-            backToShelf.DomainTags.Add("merchandising");
-            authority.RegisterDefinition(backToShelf, out ignored);
+            RegisterWholesaleShelfMove(authority);
 
             var payment = new TaskDefinition(HandlePaymentId, "Handle payment at counter", 2);
             payment.SetRequiredSkill(SkillIds.CustomerTending, new[] { SkillIds.CustomerTending });
@@ -199,6 +194,18 @@ namespace LandLedgers.Economy.Labor
             sleep.SetDefaultPriority(TaskPriority.High);
             sleep.DomainTags.Add("life");
             authority.RegisterDefinition(sleep, out ignored);
+        }
+
+        /// <summary>Registers the existing wholesale back-stock shelf Task without activating any driver.</summary>
+        public static void RegisterWholesaleShelfMove(TaskAuthority authority)
+        {
+            if (authority == null) throw new System.ArgumentNullException(nameof(authority));
+            var backToShelf = new TaskDefinition(MoveBackToShelfId, "Move stock from back storage to shelf", 2);
+            backToShelf.SetRequiredSkill(SkillIds.Stocking, new[] { SkillIds.Stocking });
+            backToShelf.SetDefaultPriority(TaskPriority.Normal);
+            backToShelf.DomainTags.Add("retail");
+            backToShelf.DomainTags.Add("merchandising");
+            authority.RegisterDefinition(backToShelf, out _);
         }
 
         /// <summary>

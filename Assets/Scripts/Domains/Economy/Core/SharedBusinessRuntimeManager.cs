@@ -3045,13 +3045,12 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            if (townWorld == null || buildingId >= townWorld.Buildings.Count)
+            if (townWorld == null || !townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building) || building == null)
             {
                 message = $"Building {buildingId:000} is not part of the generated town.";
                 return false;
             }
 
-            PlacedBuilding building = townWorld.Buildings[buildingId];
             if (building == null || !building.playerOwned)
             {
                 message = $"Building {buildingId:000} is not a player-owned shell.";
@@ -3692,12 +3691,13 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            if (business.AssignedBuildingId < 0 || business.AssignedBuildingId >= townWorld.Buildings.Count)
+            if (business.AssignedBuildingId < 0
+                || !townWorld.TryGetBuildingById(business.AssignedBuildingId, out PlacedBuilding building)
+                || building == null)
             {
                 return false;
             }
 
-            PlacedBuilding building = townWorld.Buildings[business.AssignedBuildingId];
             return BusinessSiteSuitabilityEvaluator.CanOperate(profile, building, GetPlot(building != null ? building.plotId : -1));
         }
 
@@ -3826,6 +3826,22 @@ namespace LandLedgers.Economy
             if (best == null) return false;
             buildingId = best.id;
             return true;
+        }
+
+        /// <summary>
+        /// Resolves NPC premises through the same typed site selector used by
+        /// the live player formation context. This preserves agricultural role,
+        /// ownership, profile suitability, and already-assigned-site checks.
+        /// The selected building is adopted into the shared registry after
+        /// successful formation, so a refused formation does not reserve it.
+        /// </summary>
+        public bool TryAssignNpcBusinessPremises(
+            BusinessType businessType,
+            PremisesKind kind,
+            out int buildingId)
+        {
+            AutoWire();
+            return new ManagerCreationContext(this).TryAssignPremises(businessType, kind, out buildingId);
         }
 
         private void ResetWeeklySettlementForType(BusinessType businessType)
@@ -7425,13 +7441,14 @@ namespace LandLedgers.Economy
 
         private TownPlot GetSellerPlot(BusinessInstanceState business)
         {
-            if (business == null || townWorld == null || business.AssignedBuildingId < 0 || business.AssignedBuildingId >= townWorld.Buildings.Count)
+            if (business == null || townWorld == null
+                || !townWorld.TryGetBuildingById(business.AssignedBuildingId, out PlacedBuilding building)
+                || building == null)
             {
                 return null;
             }
 
-            PlacedBuilding building = townWorld.Buildings[business.AssignedBuildingId];
-            return GetPlot(building != null ? building.plotId : -1);
+            return GetPlot(building.plotId);
         }
 
         private static int EstimateRouteDistanceCells(TownPlot buyerPlot, TownPlot sellerPlot)
@@ -9150,16 +9167,52 @@ namespace LandLedgers.Economy
             public bool TryAssignPremises(BusinessType businessType, PremisesKind kind, out int buildingId)
             {
                 buildingId = -1;
+                if (manager.townWorld == null || manager.townWorld.Buildings == null)
+                {
+                    return false;
+                }
+
                 if (businessType != BusinessType.CropFarm
                     && businessType != BusinessType.Ranch
                     && businessType != BusinessType.Sawmill)
                 {
-                    return TryAssignPremises(kind, out buildingId);
-                }
+                    BusinessProfileDefinition compatibleProfile = manager.FindProfile(businessType);
+                    if (compatibleProfile == null)
+                    {
+                        return TryAssignPremises(kind, out buildingId);
+                    }
 
-                if (manager.townWorld == null || manager.townWorld.Buildings == null)
-                {
-                    return false;
+                    PlacedBuilding bestCompatible = null;
+                    foreach (PlacedBuilding building in manager.townWorld.Buildings)
+                    {
+                        if (building == null || building.definition == null
+                            || building.playerOwned
+                            || manager.assignedBuildingIds.Contains(building.id))
+                        {
+                            continue;
+                        }
+
+                        TownPlot plot = manager.GetPlot(building.plotId);
+                        if (plot == null
+                            || plot.playerOwned
+                            || !BusinessSiteSuitabilityEvaluator.CanOperate(compatibleProfile, building, plot))
+                        {
+                            continue;
+                        }
+
+                        if (bestCompatible == null || building.id < bestCompatible.id)
+                        {
+                            bestCompatible = building;
+                        }
+                    }
+
+                    if (bestCompatible == null)
+                    {
+                        return false;
+                    }
+
+                    buildingId = bestCompatible.id;
+                    return true;
                 }
 
                 AgriculturalSiteRole requiredRole = businessType switch
@@ -9173,6 +9226,7 @@ namespace LandLedgers.Economy
                 foreach (PlacedBuilding building in manager.townWorld.Buildings)
                 {
                     if (building == null || building.definition == null
+                        || building.playerOwned
                         || manager.assignedBuildingIds.Contains(building.id))
                     {
                         continue;
@@ -9180,6 +9234,7 @@ namespace LandLedgers.Economy
 
                     TownPlot plot = manager.GetPlot(building.plotId);
                     bool roleMatch = plot != null
+                        && !plot.playerOwned
                         && (plot.agriculturalSiteRole == requiredRole
                             || (plot.zone == PlotZone.Agricultural
                                 && building.definition.AgriculturalSiteRole == requiredRole));
@@ -9223,6 +9278,14 @@ namespace LandLedgers.Economy
                         continue;
                     }
 
+                    // Opening-roster formation represents NPC businesses. A player-held
+                    // shell must remain available for the player's explicit activation
+                    // workflow; a market refresh must never claim it as a missing NPC site.
+                    if (building.playerOwned)
+                    {
+                        continue;
+                    }
+
                     if (manager.assignedBuildingIds.Contains(building.id))
                     {
                         continue;
@@ -9232,6 +9295,10 @@ namespace LandLedgers.Economy
                     // generic first-fit storefront/shop must not consume them before
                     // the corresponding farm, ranch, or sawmill is formed.
                     TownPlot plot = manager.GetPlot(building.plotId);
+                    if (plot == null || plot.playerOwned)
+                    {
+                        continue;
+                    }
                     if (plot != null && plot.zone == PlotZone.Agricultural)
                     {
                         continue;
@@ -9776,12 +9843,9 @@ namespace LandLedgers.Economy
 
         private TownPlot GetPlot(int plotId)
         {
-            if (townWorld == null || plotId < 0 || plotId >= townWorld.Plots.Count)
-            {
-                return null;
-            }
-
-            return townWorld.Plots[plotId];
+            return townWorld != null && townWorld.TryGetPlotById(plotId, out TownPlot plot)
+                ? plot
+                : null;
         }
 
         private PersonState FindPersonForWorkerSlot(WorkerSlotState slot)

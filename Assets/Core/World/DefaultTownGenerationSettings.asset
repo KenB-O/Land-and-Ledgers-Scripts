@@ -42,6 +42,7 @@ MonoBehaviour:
   plotDepthCells: 8
   minPlotFrontageCells: 6
   maxPlotFrontageCells: 10
+  minimumCommercialSiteFrontageCells: 8
   plotGapCells: 1
   buildingSetbackCells: 1
   edgeHouseCount: 2

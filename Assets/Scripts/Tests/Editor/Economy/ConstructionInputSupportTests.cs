@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
+using LandLedgers.Pathing;
 using LandLedgers.Population;
 using LandLedgers.Time;
 using LandLedgers.World;
@@ -18,13 +20,26 @@ namespace LandLedgers.Editor.Economy
     public sealed class ConstructionInputSupportTests
     {
         private const int TestOwnerConstructionCashCents = 2_000_000;
+        private const int TestSawmillLumberUnits = 1_000;
+        private const int TestBlacksmithHardwareUnits = 1_000;
+
+        [Test]
+        public void GenericCommercialBuildingCanHostLumberYardUnlessExplicitlyExcluded()
+        {
+            BuildingDefinition building = AssetDatabase.LoadAssetAtPath<BuildingDefinition>(
+                "Assets/Core/World/Buildings/SingleStoryBusinessGreyPlaster.asset");
+
+            Assert.NotNull(building);
+            Assert.IsTrue(building.IsSuitableForBusiness(BusinessType.LumberYard),
+                "A generic commercial shell with no explicit Lumber Yard exclusion must use the shared commercial suitability fallback.");
+        }
 
         [Test]
         public void ShellQuoteIncludesPositiveConstructionInputs()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireProceedableConstructionQuote: false);
 
-            Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
+            Assert.IsTrue(context.TryFindPhysicalShellQuote(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
 
             Assert.Greater(quote.CashCostCents, 0);
             Assert.Greater(quote.GetLine(ConstructionResourceKind.Lumber).requiredUnits, 0);
@@ -35,8 +50,8 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void ShellConstructionBlocksWhenLocalLumberMarketIsMissing()
         {
-            using TestWorld context = TestWorld.Create();
-            Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
+            using TestWorld context = TestWorld.Create(requireProceedableConstructionQuote: false);
+            Assert.IsTrue(context.TryFindPhysicalShellQuote(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
             context.SetLumberYardStock(0);
             context.SetSawmillStock(Mathf.Max(0, quote.GetLine(ConstructionResourceKind.Lumber).requiredUnits - 1));
 
@@ -49,9 +64,15 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void ShellConstructionUsesPaidRegionalHardwareWhenBlacksmithHardwareIsMissing()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireProceedableConstructionQuote: false);
             context.SetBlacksmithHardwareStock(0);
-            Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
+            Assert.IsTrue(context.TryFindPhysicalShellQuote(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
+            context.SetSawmillStock(quote.GetLine(ConstructionResourceKind.Lumber).requiredUnits);
+            Assert.IsTrue(
+                context.AcquisitionMarket.TryGetConstructionQuoteForOwnedPlotOption(plotId, optionIndex, out quote, out string quoteMessage)
+                && quote != null
+                && quote.CanProceed,
+                quoteMessage);
             ConstructionResourceQuoteLine hardware = quote.GetLine(ConstructionResourceKind.Nails);
             Assert.NotNull(hardware);
             StringAssert.Contains("Regional freight hardware", hardware.sourceLabel);
@@ -72,9 +93,16 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void SuccessfulShellConstructionConsumesSawmillAndBlacksmithInputs()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireProceedableConstructionQuote: false);
             context.SetLumberYardStock(0);
-            Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
+            Assert.IsTrue(context.TryFindPhysicalShellQuote(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
+            context.SetSawmillStock(quote.GetLine(ConstructionResourceKind.Lumber).requiredUnits);
+            context.SetBlacksmithHardwareStock(quote.GetLine(ConstructionResourceKind.Nails).requiredUnits);
+            Assert.IsTrue(
+                context.AcquisitionMarket.TryGetConstructionQuoteForOwnedPlotOption(plotId, optionIndex, out quote, out string quoteMessage)
+                && quote != null
+                && quote.CanProceed,
+                quoteMessage);
             int lumberBefore = context.GetSawmillStock();
             int hardwareBefore = context.GetBlacksmithHardwareStock();
             BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
@@ -97,7 +125,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void UnmatchedArchetypeMarketDemandRetainsStockAndPostsNoSellerOnlyRevenue()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
             context.SetBlacksmithHardwareStock(40);
             int cashBefore = blacksmith.RuntimeState.CurrentCashCents;
@@ -155,9 +183,12 @@ namespace LandLedgers.Editor.Economy
 
             Assert.IsTrue(started, message);
             Assert.NotNull(business);
-            Assert.AreEqual(candidate.startupCostCents, quote.CashCostCents);
-            Assert.AreEqual(ownerCashBefore - quote.CashCostCents, context.PlayerPortfolio.OwnerCashCents);
-            Assert.AreEqual(storeCashBefore, context.StoreRuntime.CurrentCashCents);
+            Assert.Greater(candidate.startupCostCents, 0, "The candidate retains the authored starting fit-out charge.");
+            int ownerCashSpent = ownerCashBefore - context.PlayerPortfolio.OwnerCashCents;
+            int storeCashReceived = context.StoreRuntime.CurrentCashCents - storeCashBefore;
+            Assert.GreaterOrEqual(storeCashReceived, 0, "Store opening capital must not be withdrawn from the store during formation.");
+            Assert.AreEqual(quote.CashCostCents + storeCashReceived, ownerCashSpent,
+                "The startup fit-out and any separately funded opening capital must both be accounted for in owner cash.");
             Assert.AreEqual(lumberBefore - quote.GetLine(ConstructionResourceKind.Lumber).requiredUnits, context.GetSawmillStock());
             Assert.AreEqual(hardwareBefore - quote.GetLine(ConstructionResourceKind.Nails).requiredUnits, context.GetBlacksmithHardwareStock());
         }
@@ -240,7 +271,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(BusinessType.Blacksmith, business.BusinessType);
             Assert.GreaterOrEqual(business.RuntimeState.ActiveRequiredWorkerCount, business.RuntimeState.RequiredWorkerCount);
             Assert.GreaterOrEqual(business.RuntimeState.OperatingEfficiency01, 0.75f);
-            StringAssert.Contains("Assigned", message);
+            StringAssert.Contains("opened", message);
         }
 
         [Test]
@@ -296,6 +327,7 @@ namespace LandLedgers.Editor.Economy
         public void FirstEligibleActivationCandidateSkipsBlockedGeneralStore()
         {
             using TestWorld context = TestWorld.Create();
+            context.CreatePlayerStoreForAccounting();
             Assert.IsTrue(context.TryBuildShell(out PlacedBuilding shell));
 
             int firstEligibleIndex = context.AcquisitionMarket.GetFirstEligibleBusinessActivationCandidateIndex(shell.id);
@@ -415,6 +447,7 @@ namespace LandLedgers.Editor.Economy
             using TestWorld context = TestWorld.Create();
             BusinessType[] expected =
             {
+                BusinessType.GeneralStore,
                 BusinessType.Blacksmith,
                 BusinessType.Butcher,
                 BusinessType.Ranch,
@@ -448,7 +481,8 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void FirstEligibleBusinessDevelopmentCandidateSkipsBlockedGeneralStore()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.CreatePlayerStoreForAccounting();
 
             int firstEligibleIndex = context.AcquisitionMarket.GetFirstEligibleBusinessDevelopmentCandidateIndex();
 
@@ -463,6 +497,7 @@ namespace LandLedgers.Editor.Economy
         public void AdditionalGeneralStoreIsHiddenFromExpansionCandidateCycles()
         {
             using TestWorld context = TestWorld.Create();
+            context.CreatePlayerStoreForAccounting();
             int developmentCount = context.AcquisitionMarket.GetBusinessDevelopmentCandidateCount();
             for (int i = 0; i < developmentCount; i++)
             {
@@ -511,7 +546,15 @@ namespace LandLedgers.Editor.Economy
             context.SetBlacksmithHardwareStock(0);
             Assert.IsTrue(context.TryFindBusinessShellOption(BusinessType.Blacksmith, out int plotId, out int businessIndex, out int shellIndex, out _, out _));
             Assert.IsTrue(context.AcquisitionMarket.TryConstructBusinessShellOnOwnedPlot(plotId, businessIndex, shellIndex, out PlacedBuilding shell, out string buildMessage), buildMessage);
-            Assert.IsTrue(context.TryFindActivationOption(shell.id, out int activationIndex, out BusinessActivationCandidateState candidate, out ConstructionInputQuote quote));
+            BusinessInstanceState existingAtShell = context.SharedBusinessRuntime.FindByBuildingId(shell.id);
+            Assert.IsNull(existingAtShell,
+                $"New building ID {shell.id} collides with {existingAtShell?.BusinessType}:{existingAtShell?.InstanceId} "
+                + $"at existing premises {existingAtShell?.AssignedBuildingId}.");
+            Assert.IsTrue(TryFindActivationOption(context, shell.id, BusinessType.Blacksmith, out int activationIndex, out BusinessActivationCandidateState candidate, out ConstructionInputQuote quote));
+            existingAtShell = context.SharedBusinessRuntime.FindByBuildingId(shell.id);
+            Assert.IsNull(existingAtShell,
+                $"Resolving the activation quote registered {existingAtShell?.BusinessType}:{existingAtShell?.InstanceId} "
+                + $"at the just-built shell {shell.id}.");
             Assert.AreNotEqual(BusinessType.GeneralStore, candidate.businessType);
             ConstructionResourceQuoteLine hardware = quote.GetLine(ConstructionResourceKind.Nails);
             Assert.NotNull(hardware);
@@ -551,13 +594,11 @@ namespace LandLedgers.Editor.Economy
             context.SetBlacksmithHardwareStock(0);
             Assert.IsTrue(context.TryFindBusinessShellOption(BusinessType.Blacksmith, out int plotId, out int businessIndex, out int shellIndex, out _, out _));
             Assert.IsTrue(context.AcquisitionMarket.TryConstructBusinessShellOnOwnedPlot(plotId, businessIndex, shellIndex, out PlacedBuilding shell, out string buildMessage), buildMessage);
-            Assert.IsTrue(context.TryFindActivationOption(shell.id, out int activationIndex, out _, out _));
+            Assert.IsTrue(TryFindActivationOption(context, shell.id, BusinessType.Blacksmith, out int activationIndex, out _, out _));
             Assert.IsTrue(context.AcquisitionMarket.TryStartBusinessFromOwnedShell(shell.id, activationIndex, out _, out string startMessage), startMessage);
             Assert.AreEqual(1, context.AcquisitionMarket.OwnedBusinessCount);
             context.SetBlacksmithHardwareStock(0);
-            Assert.IsTrue(context.TryMarkNextBuildableEmptyPlotOwned(out _));
-
-            Assert.IsTrue(context.TryFindBusinessShellQuote(
+            Assert.IsTrue(context.TryFindAdditionalOwnedBusinessShellQuote(
                 BusinessType.Blacksmith,
                 false,
                 out int recoveryPlotId,
@@ -565,7 +606,8 @@ namespace LandLedgers.Editor.Economy
                 out int recoveryShellIndex,
                 out _,
                 out ConstructionInputQuote quote,
-                out string quoteMessage), quoteMessage);
+                out string quoteMessage),
+                "The follow-up plot must itself expose a Blacksmith shell; a generic buildable plot is not enough. " + quoteMessage);
 
             Assert.NotNull(quote);
             ConstructionResourceQuoteLine hardware = quote.GetLine(ConstructionResourceKind.Nails);
@@ -628,9 +670,30 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void DefaultGeneratedTownFormsLumberYardOnMatchingCommercialSite()
+        {
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            BusinessInstanceState yard = context.GetBusiness(BusinessType.LumberYard);
+            Assert.NotNull(yard);
+            Assert.GreaterOrEqual(yard.AssignedBuildingId, 0);
+            Assert.IsTrue(context.TownWorld.TryGetBuildingById(yard.AssignedBuildingId, out PlacedBuilding building));
+            Assert.NotNull(building);
+            TownPlot plot = context.GetPlot(building.plotId);
+            Assert.NotNull(plot);
+
+            BusinessProfileDefinition profile = AssetDatabase.LoadAssetAtPath<BusinessProfileDefinition>(
+                "Assets/Resources/Core/Economy/BusinessProfiles/LumberYardProfile.asset");
+            Assert.NotNull(profile);
+            Assert.IsTrue(BusinessSiteSuitabilityEvaluator.CanOperate(profile, building, plot, out string reason), reason);
+        }
+
+        [Test]
         public void LumberYardEarnsWeeklyRevenueFromLocalBuilderDemand()
         {
-            using TestWorld context = TestWorld.Create();
+            // This settlement/accounting regression does not exercise land
+            // development, so it must not depend on the generated world having
+            // a vacant, buildable parcel.
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState yard = context.GetBusiness(BusinessType.LumberYard);
             CategoryStockState lumber = yard.RuntimeState.GetCategoryStock("lumber");
             Assert.NotNull(lumber);
@@ -732,6 +795,7 @@ namespace LandLedgers.Editor.Economy
             context.SetSawmillStock(0);
             context.SetLumberYardStock(220);
             context.SetBlacksmithHardwareStock(100);
+            AssertLumberYardIsAValidSupplier(context);
             Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out ConstructionInputQuote quote));
             ConstructionResourceQuoteLine lumber = quote.GetLine(ConstructionResourceKind.Lumber);
             Assert.NotNull(lumber);
@@ -755,6 +819,7 @@ namespace LandLedgers.Editor.Economy
             context.SetSawmillStock(220);
             context.SetLumberYardStock(220);
             context.SetBlacksmithHardwareStock(100);
+            AssertLumberYardIsAValidSupplier(context);
 
             Assert.IsTrue(context.TryFindBuildableOption(out _, out _, out ConstructionInputQuote quote));
             ConstructionResourceQuoteLine lumber = quote.GetLine(ConstructionResourceKind.Lumber);
@@ -765,45 +830,99 @@ namespace LandLedgers.Editor.Economy
             StringAssert.Contains("Lumber Yard", lumber.sourceLabel);
         }
 
-        [Test]
-        public void WeeklyOperationsTransferSawmillLumberToLumberYard()
+        private static void AssertLumberYardIsAValidSupplier(TestWorld context)
         {
-            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState yard = context.GetBusiness(BusinessType.LumberYard);
+            context.SetWorkerSlotFilled(yard, "yard_manager", true);
+
+            context.TownWorld.TryGetBuildingById(yard.AssignedBuildingId, out PlacedBuilding building);
+            TownPlot plot = building != null ? context.GetPlot(building.plotId) : null;
+            BusinessProfileDefinition profile = AssetDatabase.LoadAssetAtPath<BusinessProfileDefinition>(
+                "Assets/Resources/Core/Economy/BusinessProfiles/LumberYardProfile.asset");
+            bool siteValid = BusinessSiteSuitabilityEvaluator.CanOperate(profile, building, plot, out string siteReason);
+            bool assignmentValid = context.SharedBusinessRuntime.IsBusinessAssignmentValid(yard);
+            float efficiency = context.SharedBusinessRuntime.GetHealthAdjustedOperatingEfficiency01(yard);
+
+            Assert.IsTrue(siteValid && assignmentValid && efficiency > 0f,
+                $"Lumber Yard fixture must be a valid staffed supplier before testing construction sourcing. "
+                + $"Building={yard.AssignedBuildingId}, buildingNull={building == null}, plot={building?.plotId}, "
+                + $"siteValid={siteValid} ({siteReason}), assignmentValid={assignmentValid}, efficiency={efficiency}, "
+                + $"requiredStaff={yard.RuntimeState.RequiredWorkerCount}, activeRequired={yard.RuntimeState.ActiveRequiredWorkerCount}, "
+                + $"suspendedPayroll={yard.RuntimeState.LastSuspendedPayrollWorkerIds.Count}.");
+        }
+
+        [Test]
+        public void UnroutedSawmillYardAttemptDoesNotMintDestinationStockOrSettlement()
+        {
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.ConfigureLogistics();
             context.SetSawmillStock(200);
             context.SetLumberYardStock(0);
             context.SetBlacksmithHardwareStock(20);
             BusinessInstanceState sawmill = context.GetBusiness(BusinessType.Sawmill);
             BusinessInstanceState yard = context.GetBusiness(BusinessType.LumberYard);
-
+            context.SetBusinessCash(yard, 50000); // Caller-supplied test opening balance; not a design constant.
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
-            Assert.Greater(context.GetLumberYardStock(), 0);
-            Assert.Greater(sawmill.RuntimeState.LastWeeklyLocalTransferRevenueCents, 0);
-            Assert.Greater(yard.RuntimeState.LastWeeklyLocalTransferCostCents, 0);
-            StringAssert.Contains("lumber", yard.RuntimeState.LastWeeklyTransferSummary);
+            foreach (LogisticsShipmentState shipment in context.LogisticsRuntime.Shipments)
+            {
+                Assert.IsFalse(shipment != null
+                    && shipment.shipmentKind == LogisticsShipmentKind.LocalTradeTransfer
+                    && string.Equals(shipment.sourceBusinessInstanceId, sawmill.InstanceId, StringComparison.Ordinal)
+                    && string.Equals(shipment.destinationBusinessInstanceId, yard.InstanceId, StringComparison.Ordinal)
+                    && string.Equals(shipment.destinationCategoryId, "lumber", StringComparison.Ordinal),
+                    "This test fixture produced no routed sawmill-to-yard delivery, so no matching local cargo may exist.");
+            }
+
+            Assert.LessOrEqual(context.GetSawmillStock(), 200,
+                "Other legitimate weekly construction demand may consume sawmill stock; it must not be duplicated.");
+            Assert.AreEqual(0, context.GetLumberYardStock(), "No blocked shipment may appear as yard inventory.");
+            Assert.AreEqual(0, sawmill.RuntimeState.LastWeeklyLocalTransferRevenueCents);
+            Assert.AreEqual(0, yard.RuntimeState.LastWeeklyLocalTransferCostCents);
         }
 
         [Test]
-        public void LumberYardBuysOffMapLumberWhenLocalSawmillCannotSupply()
+        public void LumberYardQueuesOffMapLumberWhenLocalSawmillCannotSupply()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.ConfigureLogistics();
             context.SetSawmillStock(0);
             context.SetSawmillProductionState(0, 0, 0, 0, 4, 360, 1, true);
             context.SetLumberYardStock(0);
             BusinessInstanceState yard = context.GetBusiness(BusinessType.LumberYard);
             context.SetBusinessCash(yard, 50000);
+            int cashBefore = yard.RuntimeState.CurrentCashCents;
 
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
-            Assert.Greater(context.GetLumberYardStock(), 0);
-            Assert.Greater(yard.RuntimeState.LastWeeklyLocalTransferCostCents, 0);
-            StringAssert.Contains("off-map lumber", yard.RuntimeState.LastWeeklyTransferSummary);
+            LogisticsShipmentState inbound = null;
+            foreach (LogisticsShipmentState shipment in context.LogisticsRuntime.Shipments)
+            {
+                if (shipment != null
+                    && shipment.shipmentKind == LogisticsShipmentKind.OffMapInboundPurchase
+                    && string.Equals(shipment.destinationBusinessInstanceId, yard.InstanceId, StringComparison.Ordinal)
+                    && string.Equals(shipment.destinationCategoryId, "lumber", StringComparison.Ordinal))
+                {
+                    inbound = shipment;
+                    break;
+                }
+            }
+
+            Assert.NotNull(inbound, "An off-map purchase must create a real inbound shipment.");
+            Assert.NotNull(inbound.RoutePlan);
+            Assert.IsNotEmpty(inbound.RoutePlan.VisiblePath);
+            Assert.Greater(inbound.PlannedQuantityUnits, 0);
+            Assert.AreEqual(inbound.PlannedQuantityUnits, inbound.RemainingQuantityUnits);
+            Assert.AreEqual(0, inbound.DeliveredQuantityUnits);
+            Assert.AreEqual(0, context.GetLumberYardStock(), "Queued cargo must not appear in destination inventory before delivery.");
+            Assert.AreEqual(cashBefore, yard.RuntimeState.CurrentCashCents, "Inbound cost is settled when cargo is accepted, not when merely queued.");
+            Assert.AreEqual(0, yard.RuntimeState.LastWeeklyLocalTransferCostCents);
         }
 
         [Test]
         public void LumberYardCashReserveLimitsLocalAndOffMapBuying()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             context.SetSawmillStock(200);
             context.SetLumberYardStock(0);
             BusinessInstanceState yard = context.GetBusiness(BusinessType.LumberYard);
@@ -832,7 +951,10 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(6, context.GetSawmillLogs());
             Assert.AreEqual(hardwareBefore - 1, context.GetBlacksmithHardwareStock());
             Assert.AreEqual(7, context.GetSawmillNode().LastWeeklySlabsOffcutsProducedUnits);
-            Assert.AreEqual(7, context.GetSawmillNode().LastWeeklySlabsOffcutsSoldUnits);
+            Assert.AreEqual(0, context.GetSawmillNode().LastWeeklySlabsOffcutsSoldUnits,
+                "Unmatched modeled demand cannot consume offcuts or post revenue without a buyer/order.");
+            Assert.AreEqual(7, context.GetBusinessStock(context.GetBusiness(BusinessType.Sawmill), "slabs_offcuts"),
+                "Offcuts remain in authoritative stock until a funded buyer accepts them.");
             StringAssert.Contains("produced 28 lumber", context.GetSawmillNode().LastWeeklyProductionSummary);
             StringAssert.Contains("owned hauling", context.GetSawmillNode().LastWeeklyHaulingMode);
             StringAssert.Contains("commuting remote crew", context.AcquisitionMarket.BuildConstructionInputAvailabilityText());
@@ -891,11 +1013,15 @@ namespace LandLedgers.Editor.Economy
             context.SetSawmillHauling(false, true, 35);
             context.SetBlacksmithHardwareStock(10);
             BusinessInstanceState sawmill = context.GetBusiness(BusinessType.Sawmill);
+            context.SetWorkerSlotFilled(sawmill, "sawyer", true);
+            context.SetBusinessCash(sawmill, 10_000); // Caller-supplied test working cash for paid hauling.
             int cashBefore = sawmill.RuntimeState.CurrentCashCents;
 
             bool produced = context.AcquisitionMarket.ResolveWeeklyConstructionSupportProduction();
 
-            Assert.IsTrue(produced);
+            Assert.IsTrue(produced,
+                $"Expected a staffed sawmill to produce with hired hauling. {context.GetSawmillNode().LastWeeklyProductionSummary} "
+                + $"blocked={context.GetSawmillNode().LastWeeklyBlockedReason}; cash={sawmill.RuntimeState.CurrentCashCents}.");
             StringAssert.Contains("hired hauling", context.GetSawmillNode().LastWeeklyHaulingMode);
             Assert.Greater(context.GetSawmillNode().LastWeeklyHaulingCostCents, 0);
             Assert.Less(sawmill.RuntimeState.CurrentCashCents, cashBefore + sawmill.RuntimeState.LastWeeklyLocalTransferRevenueCents);
@@ -945,6 +1071,8 @@ namespace LandLedgers.Editor.Economy
             staffed.SetSawmillStock(0);
             staffed.SetSawmillProductionState(80, 0, 20, 20, 4, 360, 1, false);
             staffed.SetBlacksmithHardwareStock(10);
+            staffed.SetWorkerSlotFilled(staffed.GetBusiness(BusinessType.Sawmill), "sawyer", true);
+            staffed.SetWorkerSlotFilled(staffed.GetBusiness(BusinessType.Sawmill), "logger", true);
             Assert.IsTrue(staffed.AcquisitionMarket.ResolveWeeklyConstructionSupportProduction());
             int staffedOutput = staffed.GetSawmillStock();
 
@@ -953,6 +1081,7 @@ namespace LandLedgers.Editor.Economy
             thinCrew.SetSawmillProductionState(80, 0, 20, 20, 4, 360, 1, false);
             thinCrew.SetBlacksmithHardwareStock(10);
             BusinessInstanceState thinCrewSawmill = thinCrew.GetBusiness(BusinessType.Sawmill);
+            thinCrew.SetWorkerSlotFilled(thinCrewSawmill, "sawyer", true);
             thinCrew.SetWorkerSlotFilled(thinCrewSawmill, "logger", false);
 
             bool produced = thinCrew.AcquisitionMarket.ResolveWeeklyConstructionSupportProduction();
@@ -993,7 +1122,7 @@ namespace LandLedgers.Editor.Economy
 
             string text = context.SharedBusinessRuntime.BuildBusinessInventoryText(sawmill);
 
-            StringAssert.Contains("Yard context:", text);
+            StringAssert.Contains("Sawmill Chain", text);
             StringAssert.Contains("Last saw run:", text);
             StringAssert.Contains("Standing Timber", text);
             StringAssert.Contains("Slabs / Offcuts", text);
@@ -1021,7 +1150,10 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void GeneratedTownCreatesRemoteSawmillYardWithLongSpurAndDressing()
         {
-            using TestWorld context = TestWorld.Create();
+            // This assertion concerns generated remote-industry placement,
+            // not the separate player construction workflow. Do not make
+            // this test depend on a spare buildable plot in the same town.
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
 
             TownPlot sawmill = context.FindSawmillPlot();
 
@@ -1038,35 +1170,35 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(context.VisualNameContains("Remote Sawmill Worker House 1"));
             Assert.IsTrue(context.VisualNameContains("Remote Sawmill Worker House 2"));
             Assert.IsTrue(context.VisualNameContains("Remote Sawmill Worker House 3"));
-            Assert.IsTrue(context.VisualNameContains("Remote Sawmill Placeholder Tree Block"));
+            Assert.IsTrue(context.VisualNameContains("Forest Environment Sawmill Timber Stand"),
+                "The generated sawmill site should use its configured timber-stand prefabs instead of retired placeholder blocks.");
             Assert.AreEqual(sawmill.id, context.GetSawmillNode().RemotePropertyPlotId);
         }
 
         [Test]
-        public void SharedWeeklyOperationsProduceAndTransferCoreSupplies()
+        public void SharedWeeklyOperationsDoNotInventCoreSuppliesWithoutInputsOrRetailPremises()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             context.SetBlacksmithHardwareStock(20);
-            context.SetStoreStockToTarget("tools_hardware");
-            context.SetStoreStock("meat", 0);
+            BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
+            context.SetBusinessStock(blacksmith, "metal_inputs", 0);
             int hardwareBefore = context.GetBlacksmithHardwareStock();
-            int storeMeatBefore = context.GetStoreStock("meat");
 
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
-            Assert.Greater(context.GetBlacksmithHardwareStock(), hardwareBefore);
-            Assert.Greater(context.GetStoreStock("meat"), storeMeatBefore);
-            BusinessInstanceState blacksmith = context.SharedBusinessRuntime.FindByType(BusinessType.Blacksmith);
-            StringAssert.Contains("tools_hardware", context.SharedBusinessRuntime.GetLastOperationSummary(blacksmith));
-            BusinessInstanceState sawmill = context.SharedBusinessRuntime.FindByType(BusinessType.Sawmill);
-            Assert.NotNull(sawmill);
-            StringAssert.Contains("lumber", context.SharedBusinessRuntime.GetLastOperationSummary(sawmill));
+            Assert.AreEqual(hardwareBefore, context.GetBlacksmithHardwareStock(), "No hardware may be created without metal inputs.");
+            Assert.AreEqual(0, blacksmith.RuntimeState.LastWeeklyInputUnitsConsumed);
+            Assert.AreEqual(0, blacksmith.RuntimeState.LastWeeklyOutputUnitsProduced);
+            StringAssert.Contains("input shortage", blacksmith.RuntimeState.LastWeeklyBlockedReason);
+            Assert.IsNull(context.StoreRuntime.RuntimeState, "The fixture has not formed a player retail Business.");
+            Assert.IsNull(context.LogisticsRuntime,
+                "No retail premises or logistics route exists, so no shipment authority may be fabricated.");
         }
 
         [Test]
-        public void SharedWeeklySettlementPaysPayrollConsumesInputsProducesOutputsAndRecordsCash()
+        public void SharedWeeklySettlementExcludesOwnerPayrollAndRecordsOwnerOperatedProduction()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
             context.SetBusinessStock(blacksmith, "metal_inputs", 20);
             context.SetBusinessStock(blacksmith, "tools_hardware", 0);
@@ -1075,7 +1207,12 @@ namespace LandLedgers.Editor.Economy
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
             Assert.AreEqual(cashBefore, blacksmith.RuntimeState.LastWeeklyCashBeforeCents);
-            Assert.Greater(blacksmith.RuntimeState.LastWeeklyPayrollCents, 0);
+            Assert.NotNull(blacksmith.Owner);
+            Assert.AreEqual(BusinessOwnerKind.Npc, blacksmith.Owner.OwnerKind);
+            Assert.That(context.PopulationManager.State.people.Exists(person => person != null && person.id == blacksmith.Owner.PersonId),
+                "The owner-operated business must resolve to a real Person.");
+            Assert.Greater(blacksmith.RuntimeState.ActiveWorkerCount, 0, "Owner operation must be represented by an active worker slot.");
+            Assert.AreEqual(0, blacksmith.RuntimeState.LastWeeklyPayrollCents, "Owner labor is not a wage payment to the owner.");
             Assert.Greater(blacksmith.RuntimeState.LastWeeklyInputUnitsConsumed, 0);
             Assert.Greater(blacksmith.RuntimeState.LastWeeklyOutputUnitsProduced, 0);
             Assert.AreEqual(blacksmith.RuntimeState.CurrentCashCents, blacksmith.RuntimeState.LastWeeklyCashAfterCents);
@@ -1085,7 +1222,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void PlayerOwnedBusinessDistributionPaysOwnerCashAfterCheckpointedGrowth()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
             Assert.IsTrue(context.SharedBusinessRuntime.TryTransferBusinessToPlayer(blacksmith.AssignedBuildingId, out _, out string transferMessage), transferMessage);
             context.SetBusinessCash(blacksmith, 50000);
@@ -1104,7 +1241,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void PlayerOwnedSawmillDistributionPaysOwnerCashAfterCheckpointedGrowth()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState sawmill = context.GetBusiness(BusinessType.Sawmill);
             Assert.IsTrue(context.SharedBusinessRuntime.TryTransferBusinessToPlayer(sawmill.AssignedBuildingId, out _, out string transferMessage), transferMessage);
             context.SetBusinessCash(sawmill, 50000);
@@ -1123,7 +1260,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void TownOwnedBusinessDoesNotDistributeToOwnerCash()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState butcher = context.GetBusiness(BusinessType.Butcher);
             context.SetBusinessCash(butcher, 50000);
             int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
@@ -1139,7 +1276,8 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void LegacyPortfolioMigrationMovesOnlyGeneralStoreSurplusAboveReserve()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.CreatePlayerStoreForAccounting();
             int reserve = context.StoreRuntime.ProtectedBusinessCashReserveCents;
             context.SetStoreCash(reserve + 5000);
             GameObject portfolioObject = new("Legacy Portfolio Migration Test");
@@ -1162,7 +1300,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void PortfolioSaveDtoRestoresOwnerCashAndDistributionCheckpoints()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
             Assert.IsTrue(context.SharedBusinessRuntime.TryTransferBusinessToPlayer(blacksmith.AssignedBuildingId, out _, out string transferMessage), transferMessage);
             context.PlayerPortfolio.RegisterCurrentBusinessCashCheckpoint(blacksmith, 3);
@@ -1186,7 +1324,8 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void SharedRuntimeDoesNotDistributeDeepGeneralStoreDuplicate()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.CreatePlayerStoreForAccounting();
             BusinessInstanceState storeBusiness = context.StoreRuntime.CurrentBusiness;
             Assert.NotNull(storeBusiness);
             context.SetStoreCash(50000);
@@ -1202,28 +1341,52 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void PaidLocalTransfersIncreaseSourceCashAndDecreaseDestinationCash()
+        public void PaidLocalTransfersQueueCargoAndDeferCashSettlementUntilDelivery()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.ConfigureLogistics();
             BusinessInstanceState ranch = context.GetBusiness(BusinessType.Ranch);
             BusinessInstanceState butcher = context.GetBusiness(BusinessType.Butcher);
             context.SetBusinessStock(ranch, "livestock_inputs", 20);
             context.SetBusinessStock(butcher, "livestock_inputs", 0);
+            context.SetBusinessCash(butcher, 50000);
             int butcherCashBefore = butcher.RuntimeState.CurrentCashCents;
 
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
-            Assert.Greater(ranch.RuntimeState.LastWeeklyLocalTransferRevenueCents, 0);
-            Assert.Greater(butcher.RuntimeState.LastWeeklyLocalTransferCostCents, 0);
-            Assert.Less(butcher.RuntimeState.CurrentCashCents, butcherCashBefore);
-            StringAssert.Contains("sold", ranch.RuntimeState.LastWeeklyTransferSummary);
-            StringAssert.Contains("bought", butcher.RuntimeState.LastWeeklyTransferSummary);
+            LogisticsShipmentState queued = null;
+            foreach (LogisticsShipmentState shipment in context.LogisticsRuntime.Shipments)
+            {
+                if (shipment != null
+                    && shipment.shipmentKind == LogisticsShipmentKind.LocalTradeTransfer
+                    && string.Equals(shipment.sourceBusinessInstanceId, ranch.InstanceId, StringComparison.Ordinal)
+                    && string.Equals(shipment.destinationBusinessInstanceId, butcher.InstanceId, StringComparison.Ordinal)
+                    && string.Equals(shipment.sourceCategoryId, "livestock_inputs", StringComparison.Ordinal))
+                {
+                    queued = shipment;
+                    break;
+                }
+            }
+
+            Assert.NotNull(queued, "A paid local order must create a real routed shipment.");
+            Assert.NotNull(queued.RoutePlan);
+            Assert.IsNotEmpty(queued.RoutePlan.VisiblePath);
+            Assert.Greater(queued.PlannedQuantityUnits, 0);
+            Assert.IsTrue(queued.sourceCommittedAtSchedule);
+            Assert.AreEqual(queued.PlannedQuantityUnits, queued.RemainingQuantityUnits);
+            Assert.AreEqual(0, queued.DeliveredQuantityUnits);
+            Assert.LessOrEqual(butcher.RuntimeState.CurrentCashCents, butcherCashBefore,
+                "The weekly business may pay separate operating costs, but the queued cargo remains unsettled.");
+            Assert.AreEqual(0, butcher.RuntimeState.LastWeeklyLocalTransferCostCents);
+            Assert.Less(context.GetBusinessStock(butcher, "livestock_inputs"), queued.PlannedQuantityUnits,
+                "In-transit cargo is not added to destination inventory; any smaller stock change must come from a separately recorded operation.");
         }
 
         [Test]
         public void WeeklySharedOperationsCreatesRecurringLocalOrderRelationships()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.ConfigureLogistics();
             BusinessInstanceState ranch = context.GetBusiness(BusinessType.Ranch);
             BusinessInstanceState butcher = context.GetBusiness(BusinessType.Butcher);
             context.SetBusinessStock(ranch, "livestock_inputs", 20);
@@ -1257,7 +1420,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void InputShortageBlocksWeeklyOutputWithReadableReason()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState ranch = context.GetBusiness(BusinessType.Ranch);
             BusinessInstanceState butcher = context.GetBusiness(BusinessType.Butcher);
             context.SetBusinessCash(ranch, 0);
@@ -1277,9 +1440,10 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void GeneralStorePaidLocalSupplyIntakeSpendsCashAndRecordsSummary()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.CreatePlayerStoreForAccounting();
             context.SetStoreStock("meat", 0);
-            context.SetStoreCash(10000);
+            context.SetStoreCash(context.StoreRuntime.ProtectedBusinessCashReserveCents + 10000);
             int cashBefore = context.StoreRuntime.CurrentCashCents;
 
             int accepted = context.StoreRuntime.ReceiveLocalSupply("meat", 4, 175, "Test Butcher");
@@ -1294,9 +1458,9 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void SharedBusinessesRemainSolventAfterRepeatedWeeklySettlements()
+        public void RepeatedSettlementsDoNotMintCashToCoverOwnerOperatorSlots()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessType[] stableTypes =
             {
                 BusinessType.Blacksmith,
@@ -1313,21 +1477,23 @@ namespace LandLedgers.Editor.Economy
             for (int i = 0; i < stableTypes.Length; i++)
             {
                 BusinessInstanceState business = context.GetBusiness(stableTypes[i]);
-                Assert.GreaterOrEqual(
-                    business.RuntimeState.CurrentCashCents,
-                    context.GetFilledWeeklyPayrollCents(business),
-                    $"{stableTypes[i]} should retain enough cash for next required payroll. Blocked: {business.RuntimeState.LastWeeklyBlockedReason}");
+                Assert.GreaterOrEqual(business.RuntimeState.CurrentCashCents, 0,
+                    $"{stableTypes[i]} may be unprofitable but its cash balance cannot become negative.");
+                Assert.AreEqual(business.RuntimeState.CurrentCashCents, business.RuntimeState.LastWeeklyCashAfterCents,
+                    $"{stableTypes[i]} closing cash must match the settled runtime balance.");
+                Assert.AreEqual(0, business.RuntimeState.LastWeeklyPayrollCents,
+                    $"{stableTypes[i]} owner-operator slots are not employee payroll.");
                 Assert.AreEqual(
                     0,
                     business.RuntimeState.LastSuspendedPayrollWorkerIds.Count,
-                    $"{stableTypes[i]} should not routinely miss payroll. Blocked: {business.RuntimeState.LastWeeklyBlockedReason}");
+                    $"{stableTypes[i]} has no wage-paid employee in this fixture. Blocked: {business.RuntimeState.LastWeeklyBlockedReason}");
             }
         }
 
         [Test]
         public void ButcherConvertsOneLivestockIntoMultipleMeatUnits()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState ranch = context.GetBusiness(BusinessType.Ranch);
             BusinessInstanceState butcher = context.GetBusiness(BusinessType.Butcher);
             context.SetBusinessStock(ranch, "livestock_inputs", 0);
@@ -1391,32 +1557,33 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void LowCashBusinessesPreservePayrollReserveBeforeProcurementAndTransfers()
+        public void LowCashOwnerOperatedBusinessPreservesCashWithoutEmployeePayroll()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState ranch = context.GetBusiness(BusinessType.Ranch);
             BusinessInstanceState butcher = context.GetBusiness(BusinessType.Butcher);
             context.SetBusinessStock(ranch, "livestock_inputs", 20);
             context.SetBusinessStock(butcher, "livestock_inputs", 0);
             context.SetBusinessStock(butcher, "meat", 0);
             context.SetBusinessCash(butcher, context.GetFilledWeeklyPayrollCents(butcher) + 100);
+            int cashBefore = butcher.RuntimeState.CurrentCashCents;
 
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
+            Assert.AreEqual(0, butcher.RuntimeState.LastWeeklyPayrollCents, "The owner operator is not a wage-paid employee.");
             Assert.AreEqual(0, butcher.RuntimeState.LastWeeklyLocalTransferCostCents);
             Assert.AreEqual(0, butcher.RuntimeState.LastWeeklyInputProcurementSpendCents);
-            Assert.AreEqual(100, butcher.RuntimeState.CurrentCashCents);
-            StringAssert.Contains("cash-limited local transfer", butcher.RuntimeState.LastWeeklyBlockedReason);
+            Assert.AreEqual(cashBefore, butcher.RuntimeState.CurrentCashCents);
+            StringAssert.Contains("cash-limited", butcher.RuntimeState.LastWeeklyBlockedReason);
             StringAssert.Contains("cash-limited input procurement", butcher.RuntimeState.LastWeeklyBlockedReason);
         }
 
         [Test]
-        public void MissedPayrollBlocksButPreservesWorkerSlotForRecovery()
+        public void OwnerOperatorSlotDoesNotAccrueEmployeePayroll()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             BusinessInstanceState blacksmith = context.GetBusiness(BusinessType.Blacksmith);
             int filledBefore = blacksmith.RuntimeState.FilledWorkerCount;
-            int payroll = context.GetFilledWeeklyPayrollCents(blacksmith);
             context.SetBusinessStock(blacksmith, "metal_inputs", 0);
             context.SetBusinessStock(blacksmith, "tools_hardware", 0);
             context.SetBusinessCash(blacksmith, 0);
@@ -1424,21 +1591,18 @@ namespace LandLedgers.Editor.Economy
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
             Assert.AreEqual(filledBefore, blacksmith.RuntimeState.FilledWorkerCount);
-            Assert.AreEqual(0, blacksmith.RuntimeState.ActiveWorkerCount);
-            StringAssert.Contains("missed payroll", blacksmith.RuntimeState.LastWeeklyBlockedReason);
-
-            context.SetBusinessCash(blacksmith, payroll);
-            context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
-
-            Assert.AreEqual(filledBefore, blacksmith.RuntimeState.FilledWorkerCount);
             Assert.Greater(blacksmith.RuntimeState.ActiveWorkerCount, 0);
+            Assert.AreEqual(0, blacksmith.RuntimeState.LastWeeklyPayrollCents,
+                "The NPC owner-operator is not an employee and cannot accrue missed employee payroll.");
             Assert.AreEqual(0, blacksmith.RuntimeState.LastSuspendedPayrollWorkerIds.Count);
+            StringAssert.DoesNotContain("missed payroll", blacksmith.RuntimeState.LastWeeklyBlockedReason);
         }
 
         [Test]
         public void GeneralStoreLocalSupplyIntakePreservesCashBuffer()
         {
-            using TestWorld context = TestWorld.Create();
+            using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
+            context.CreatePlayerStoreForAccounting();
             int buffer = GeneralStoreRuntimeManager.MinimumPostReorderCashBufferForLocalSupplyCents;
             context.SetStoreStock("meat", 0);
             context.SetStoreCash(buffer);
@@ -1532,6 +1696,10 @@ namespace LandLedgers.Editor.Economy
                 source.State.households.Add(household);
 
                 LandLedgers.Persistence.PopulationSaveDto dto = source.CaptureSaveDto();
+                Assert.AreEqual(4, household.foodReserveUnits, "Capturing a save must not erase the legacy food-reserve balance.");
+                Assert.AreEqual(4, dto.households[0].foodReserveUnits, "The household save record must retain the legacy food-reserve balance.");
+                Assert.AreEqual(4, dto.households[0].reserves.Find(reserve => reserve.categoryId == "staple_food").currentUnits,
+                    "The new staple-food reserve record must migrate the legacy balance.");
                 target.LoadFromSaveDto(dto);
 
                 HouseholdState restored = target.State.households[0];
@@ -1573,6 +1741,10 @@ namespace LandLedgers.Editor.Economy
             household.upgrades.Add(HouseholdUpgradeState.Built(HouseholdUpgradeKind.ChickenCoop, 2));
             household.upgrades.Add(HouseholdUpgradeState.Built(HouseholdUpgradeKind.KitchenGarden, 3));
             household.foodReserveUnits = 0;
+            HouseholdReserveState stapleReserve = household.GetReserve(HouseholdReserveCatalog.StapleFoodCategoryId);
+            Assert.NotNull(stapleReserve);
+            stapleReserve.currentUnits = 0;
+            household.SyncLegacyFoodReserveFromReserves();
 
             HouseholdUpgradeEconomyEvaluator.ApplyWeeklySettlementEffects(household);
 
@@ -1712,7 +1884,7 @@ namespace LandLedgers.Editor.Economy
             source.SetBlacksmithHardwareStock(1000);
             Assert.IsTrue(source.TryFindBusinessShellOption(BusinessType.Blacksmith, out int plotId, out int businessIndex, out int shellIndex, out _, out _));
             Assert.IsTrue(source.AcquisitionMarket.TryConstructBusinessShellOnOwnedPlot(plotId, businessIndex, shellIndex, out PlacedBuilding shell, out string buildMessage), buildMessage);
-            Assert.IsTrue(source.TryFindActivationOption(shell.id, out int activationIndex, out BusinessActivationCandidateState activationCandidate, out _));
+            Assert.IsTrue(TryFindActivationOption(source, shell.id, BusinessType.Blacksmith, out int activationIndex, out BusinessActivationCandidateState activationCandidate, out _));
             Assert.AreEqual(BusinessType.Blacksmith, activationCandidate.businessType);
             Assert.IsTrue(source.AcquisitionMarket.TryStartBusinessFromOwnedShell(shell.id, activationIndex, out BusinessInstanceState startedBusiness, out string startMessage), startMessage);
             source.SharedBusinessRuntime.ResolveWeeklySharedOperations();
@@ -1991,6 +2163,7 @@ namespace LandLedgers.Editor.Economy
             public SharedBusinessRuntimeManager SharedBusinessRuntime { get; }
             public AcquisitionMarketManager AcquisitionMarket { get; }
             public PlayerPortfolioManager PlayerPortfolio { get; }
+            public LogisticsRuntimeManager LogisticsRuntime { get; private set; }
             public TownGenerationSettings Settings => settings;
 
             private TestWorld(GameObject root, TownGenerationSettings settings)
@@ -2005,7 +2178,9 @@ namespace LandLedgers.Editor.Economy
                 PlayerPortfolio = root.AddComponent<PlayerPortfolioManager>();
             }
 
-            public static TestWorld Create(bool requireBuildableOwnedPlot = true)
+            public static TestWorld Create(
+                bool requireBuildableOwnedPlot = true,
+                bool requireProceedableConstructionQuote = true)
             {
                 TownGenerationSettings sourceSettings = AssetDatabase.LoadAssetAtPath<TownGenerationSettings>("Assets/Core/World/DefaultTownGenerationSettings.asset");
                 GeneralStoreBusinessDefinition storeDefinition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>("Assets/Core/Economy/GeneralStoreBusinessDefinition.asset");
@@ -2028,11 +2203,39 @@ namespace LandLedgers.Editor.Economy
                 context.AcquisitionMarket.Configure(context.TownWorld, context.StoreRuntime, context.SharedBusinessRuntime, context.PopulationManager, null, null, context.PlayerPortfolio);
                 context.AcquisitionMarket.RebuildMarket();
                 context.SetLumberYardStock(0);
+                // These are finite, test-only starting inventories for tests
+                // that exercise a proceedable shell quote. Individual stockout
+                // tests overwrite them with their explicit shortage inputs.
+                context.SetSawmillStock(TestSawmillLumberUnits);
+                context.SetBlacksmithHardwareStock(TestBlacksmithHardwareUnits);
                 if (requireBuildableOwnedPlot)
                 {
-                    context.MarkFirstBuildableEmptyPlotOwned();
+                    context.MarkFirstBuildableEmptyPlotOwned(requireProceedableConstructionQuote);
                 }
                 return context;
+            }
+
+            public void ConfigureLogistics()
+            {
+                PathingSettings pathingSettings = AssetDatabase.LoadAssetAtPath<PathingSettings>("Assets/Core/Pathing/DefaultPathingSettings.asset");
+                Assert.NotNull(pathingSettings, "The logistics test needs the authored pathing configuration.");
+
+                PathingManager pathing = root.AddComponent<PathingManager>();
+                pathing.Configure(TownWorld, pathingSettings);
+                LogisticsRuntime = root.AddComponent<LogisticsRuntimeManager>();
+                LogisticsRuntime.Configure(TownWorld, pathing, null, StoreRuntime, SharedBusinessRuntime);
+            }
+
+            public void CreatePlayerStoreForAccounting()
+            {
+                Assert.IsTrue(
+                    SharedBusinessRuntime.TryCreatePlayerBusiness(
+                        BusinessType.GeneralStore,
+                        "Retail Accounting Test Store",
+                        out BusinessInstanceState business,
+                        out string formationMessage),
+                    formationMessage);
+                Assert.IsTrue(StoreRuntime.TryBindFormedPlayerBusiness(business, out string bindMessage), bindMessage);
             }
 
             public void Dispose()
@@ -2067,6 +2270,36 @@ namespace LandLedgers.Editor.Economy
                         if (AcquisitionMarket.TryGetConstructionQuoteForOwnedPlotOption(state.plotId, buildIndex, out ConstructionInputQuote candidate, out _)
                             && candidate != null
                             && candidate.CanProceed)
+                        {
+                            plotId = state.plotId;
+                            optionIndex = buildIndex;
+                            quote = candidate;
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+
+            public bool TryFindPhysicalShellQuote(out int plotId, out int optionIndex, out ConstructionInputQuote quote)
+            {
+                plotId = -1;
+                optionIndex = -1;
+                quote = null;
+                IReadOnlyList<OwnedPlotBuildabilityState> states = AcquisitionMarket.GetOwnedBuildablePlots();
+                for (int stateIndex = 0; stateIndex < states.Count; stateIndex++)
+                {
+                    OwnedPlotBuildabilityState state = states[stateIndex];
+                    if (state == null || !state.buildable || state.buildOptions == null)
+                    {
+                        continue;
+                    }
+
+                    for (int buildIndex = 0; buildIndex < state.buildOptions.Count; buildIndex++)
+                    {
+                        if (AcquisitionMarket.TryGetConstructionQuoteForOwnedPlotOption(state.plotId, buildIndex, out ConstructionInputQuote candidate, out _)
+                            && candidate != null)
                         {
                             plotId = state.plotId;
                             optionIndex = buildIndex;
@@ -2352,7 +2585,7 @@ namespace LandLedgers.Editor.Economy
                 for (int i = 0; i < TownWorld.Buildings.Count; i++)
                 {
                     PlacedBuilding building = TownWorld.Buildings[i];
-                    if (building == null || building.definition == null || building.definition.CanHostWorkplace)
+                    if (building == null || building.definition != house || building.definition.CanHostWorkplace)
                     {
                         continue;
                     }
@@ -2730,6 +2963,70 @@ namespace LandLedgers.Editor.Economy
                 return false;
             }
 
+            public bool TryFindAdditionalOwnedBusinessShellQuote(
+                BusinessType businessType,
+                bool requireCanProceed,
+                out int plotId,
+                out int businessIndex,
+                out int shellIndex,
+                out BusinessActivationCandidateState candidate,
+                out ConstructionInputQuote quote,
+                out string message)
+            {
+                plotId = -1;
+                businessIndex = -1;
+                shellIndex = -1;
+                candidate = null;
+                quote = null;
+                message = string.Empty;
+
+                for (int i = 0; i < TownWorld.Plots.Count; i++)
+                {
+                    TownPlot plot = TownWorld.Plots[i];
+                    if (plot == null || plot.playerOwned || plot.buildingId >= 0)
+                    {
+                        continue;
+                    }
+
+                    plot.playerOwned = true;
+                    AcquisitionMarket.RebuildMarket();
+                    bool found = TryFindBusinessShellQuote(
+                        businessType,
+                        requireCanProceed,
+                        out int candidatePlotId,
+                        out int candidateBusinessIndex,
+                        out int candidateShellIndex,
+                        out BusinessActivationCandidateState candidateState,
+                        out ConstructionInputQuote candidateQuote,
+                        out string candidateMessage);
+                    if (found && candidatePlotId == plot.id)
+                    {
+                        plotId = candidatePlotId;
+                        businessIndex = candidateBusinessIndex;
+                        shellIndex = candidateShellIndex;
+                        candidate = candidateState;
+                        quote = candidateQuote;
+                        message = candidateMessage;
+                        return true;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(candidateMessage))
+                    {
+                        message = candidateMessage;
+                    }
+
+                    plot.playerOwned = false;
+                    AcquisitionMarket.RebuildMarket();
+                }
+
+                if (string.IsNullOrWhiteSpace(message))
+                {
+                    message = $"No additional owned plot exposes a {businessType} shell quote.";
+                }
+
+                return false;
+            }
+
             private TownPlot ResolvePlot(int plotId)
             {
                 for (int i = 0; i < TownWorld.Plots.Count; i++)
@@ -2766,8 +3063,11 @@ namespace LandLedgers.Editor.Economy
                 }
             }
 
-            private void MarkFirstBuildableEmptyPlotOwned()
+            private void MarkFirstBuildableEmptyPlotOwned(bool requireProceedableConstructionQuote)
             {
+                TownPlot bestPlot = null;
+                int bestBuildOptionCount = -1;
+                int bestArea = -1;
                 for (int i = 0; i < TownWorld.Plots.Count; i++)
                 {
                     TownPlot plot = TownWorld.Plots[i];
@@ -2776,17 +3076,98 @@ namespace LandLedgers.Editor.Economy
                         continue;
                     }
 
+                    bool wasOwned = plot.playerOwned;
                     plot.playerOwned = true;
                     AcquisitionMarket.RebuildMarket();
-                    if (TryFindBuildableOption(out _, out _, out _))
+                    OwnedPlotBuildabilityState state = FindBuildabilityState(plot.id);
+                    if (state != null && state.buildable && state.buildOptions != null && state.buildOptions.Count > 0)
                     {
-                        return;
+                        bool hasProceedableQuote = !requireProceedableConstructionQuote;
+                        if (!hasProceedableQuote)
+                        {
+                            for (int optionIndex = 0; optionIndex < state.buildOptions.Count; optionIndex++)
+                            {
+                                if (AcquisitionMarket.TryGetConstructionQuoteForOwnedPlotOption(
+                                        state.plotId,
+                                        optionIndex,
+                                        out ConstructionInputQuote quote,
+                                        out _)
+                                    && quote != null
+                                    && quote.CanProceed)
+                                {
+                                    hasProceedableQuote = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!hasProceedableQuote)
+                        {
+                            plot.playerOwned = false;
+                            AcquisitionMarket.RebuildMarket();
+                            continue;
+                        }
+
+                        int area = plot.bounds.Area;
+                        if (state.buildOptions.Count > bestBuildOptionCount
+                            || (state.buildOptions.Count == bestBuildOptionCount && area > bestArea))
+                        {
+                            bestPlot = plot;
+                            bestBuildOptionCount = state.buildOptions.Count;
+                            bestArea = area;
+                        }
                     }
 
-                    plot.playerOwned = false;
+                    plot.playerOwned = wasOwned;
+                    AcquisitionMarket.RebuildMarket();
                 }
 
-                Assert.Fail("No buildable empty plot found in the generated town.");
+                if (bestPlot != null)
+                {
+                    bestPlot.playerOwned = true;
+                    AcquisitionMarket.RebuildMarket();
+                    return;
+                }
+
+                var diagnostics = new StringBuilder();
+                diagnostics.Append($"No empty plot with a proceedable construction quote was found. Plot count={TownWorld.Plots.Count}; building count={TownWorld.Buildings.Count}. ");
+                for (int i = 0; i < TownWorld.Plots.Count; i++)
+                {
+                    TownPlot plot = TownWorld.Plots[i];
+                    if (plot == null)
+                    {
+                        diagnostics.Append($"[{i}: null] ");
+                        continue;
+                    }
+
+                    if (plot.buildingId >= 0)
+                    {
+                        continue;
+                    }
+
+                    bool wasOwned = plot.playerOwned;
+                    plot.playerOwned = true;
+                    AcquisitionMarket.RebuildMarket();
+                    OwnedPlotBuildabilityState state = FindBuildabilityState(plot.id);
+                    diagnostics.Append($"[plot={plot.id}, zone={plot.zone}, owned={wasOwned}, frontage={plot.frontageCells}, size={plot.bounds.width}x{plot.bounds.depth}, road={plot.roadAccessCell}, state={state?.reason ?? "not registered"}, options={state?.buildOptions?.Count ?? 0}] ");
+                    plot.playerOwned = wasOwned;
+                }
+
+                AcquisitionMarket.RebuildMarket();
+                diagnostics.Append("Catalog: ");
+                BuildingDefinition[] catalog = settings != null ? settings.buildingCatalog : null;
+                if (catalog != null)
+                {
+                    for (int i = 0; i < catalog.Length; i++)
+                    {
+                        BuildingDefinition definition = catalog[i];
+                        diagnostics.Append(definition == null
+                            ? "[null] "
+                            : $"[{definition.BuildingId} {definition.FootprintSizeCells.x}x{definition.FootprintSizeCells.y} {definition.PrimaryUse} households={definition.CanHostHouseholds} workplace={definition.CanHostWorkplace}] ");
+                    }
+                }
+
+                Assert.Fail(diagnostics.ToString());
             }
         }
 

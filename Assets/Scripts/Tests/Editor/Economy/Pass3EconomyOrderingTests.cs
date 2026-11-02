@@ -264,15 +264,16 @@ namespace LandLedgers.EditorTests.Economy
             var catalog = new Pass3StoreCatalog();
             var intake = new Pass3WholesaleIntake();
             var diag = new List<string>();
-            var result = intake.Receive("bread-lot-1", "bread", 24, 6, 5, 5, catalog, diag);
+            var result = intake.Receive("bread-lot-1", "bread", 24, 6, 5, 5, catalog,
+                "general-store-1", "bakery-1", diag);
             Assert.IsNotNull(result);
             Assert.AreEqual("Fresh", result.Condition);
             Assert.AreEqual(0, catalog.Find("bread").ShelfUnits);
             Assert.AreEqual(24, catalog.Find("bread").BackUnits);
             Assert.AreEqual(144, result.Settlement.AmountCents);
             Assert.IsFalse(result.Settlement.Settled);
-            Assert.AreEqual("general-store", result.Settlement.PayerBusinessId);
-            Assert.AreEqual("bakery", result.Settlement.PayeeBusinessId);
+            Assert.AreEqual("general-store-1", result.Settlement.PayerBusinessId);
+            Assert.AreEqual("bakery-1", result.Settlement.PayeeBusinessId);
         }
 
         [Test]
@@ -281,11 +282,14 @@ namespace LandLedgers.EditorTests.Economy
             var catalog = new Pass3StoreCatalog();
             var intake = new Pass3WholesaleIntake();
             var diag = new List<string>();
-            var dayOld = intake.Receive("bread-lot-2", "bread", 10, 6, 5, 6, catalog, diag);
+            var dayOld = intake.Receive("bread-lot-2", "bread", 10, 6, 5, 6, catalog,
+                "general-store-1", "bakery-1", diag);
             Assert.IsNotNull(dayOld);
             Assert.AreEqual("DayOld", dayOld.Condition);
-            Assert.IsNull(intake.Receive("bread-lot-2", "bread", 10, 6, 5, 6, catalog, diag)); // duplicate
-            Assert.IsNull(intake.Receive("bread-lot-3", "bread", 10, 6, 5, 7, catalog, diag)); // stale, 2 days past baked
+            Assert.IsNull(intake.Receive("bread-lot-2", "bread", 10, 6, 5, 6, catalog,
+                "general-store-1", "bakery-1", diag)); // duplicate
+            Assert.IsNull(intake.Receive("bread-lot-3", "bread", 10, 6, 5, 7, catalog,
+                "general-store-1", "bakery-1", diag)); // stale, 2 days past baked
             Assert.AreEqual(10, catalog.Find("bread").BackUnits); // only the day-old lot landed
         }
 

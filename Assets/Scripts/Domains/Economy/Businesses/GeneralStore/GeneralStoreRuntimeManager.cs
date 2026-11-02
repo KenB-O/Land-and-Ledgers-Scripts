@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Orchestration.Systems;
@@ -353,21 +354,9 @@ namespace LandLedgers.FirstLedger
         public int StoreBuildingId => storeBuildingId;
 
         /// <summary>
-        /// Builds the production household-trading port over this live store.
-        /// The offer list is an explicit translation from the store's existing
-        /// category stock to the household item catalog; it does not create
-        /// stock or a second settlement path.
-        ///
-        /// Series 2 Pass 7: multi-item categories are no longer skipped.
-        /// A category with exactly one authored item keeps the legacy
-        /// single-item path below, unchanged. A category with several
-        /// authored items goes through Series2TradingPortBuilder, which
-        /// emits one offer per real household item in the category
-        /// (validated via Pass3PerItemOffer). Every per-item offer in a
-        /// category draws from that category's single aggregate pool in
-        /// BusinessRuntimeState — see the builder's shared-pool caveat.
-        /// Items that are not household items are never offered, and
-        /// never offered under a representative id.
+        /// Builds the legacy player-store trading port. Single-SKU categories
+        /// retain exact item identity; pooled multi-SKU categories are never
+        /// projected as multiple item offers.
         /// </summary>
         public GeneralStoreTradingPort BuildHouseholdTradingPort()
         {
@@ -396,7 +385,8 @@ namespace LandLedgers.FirstLedger
                     string itemId = HouseholdItemForStoreCategory(category.CategoryId);
                     if (string.IsNullOrWhiteSpace(itemId)
                         || !string.Equals(itemId, singleItemId, StringComparison.OrdinalIgnoreCase)
-                        || !category.ContainsItem(itemId))
+                        || !category.ContainsItem(itemId)
+                        || !HouseholdUnitsMatch(storeDefinition, itemId))
                     {
                         continue;
                     }
@@ -410,35 +400,9 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
-                // Multi-item category: per-item offers, one per real
-                // household item. The builder diagnoses every skip.
-                var categoryItemIds = new List<string>();
-                ReadOnlySpan<ItemDefinition> authoredItems = storeDefinition != null
-                    ? storeDefinition.Items
-                    : ReadOnlySpan<ItemDefinition>.Empty;
-                for (int j = 0; j < authoredItems.Length; j++)
-                {
-                    ItemDefinition authored = authoredItems[j];
-                    if (authored != null
-                        && string.Equals(authored.CategoryId, category.CategoryId, StringComparison.OrdinalIgnoreCase)
-                        && !string.IsNullOrWhiteSpace(authored.ItemId))
-                    {
-                        categoryItemIds.Add(authored.ItemId);
-                    }
-                }
-                // Fall back to the category's own item list when the
-                // definition's item table is empty for this category.
-                if (categoryItemIds.Count == 0)
-                {
-                    ReadOnlySpan<string> listed = category.ItemIds;
-                    for (int j = 0; j < listed.Length; j++)
-                    {
-                        if (!string.IsNullOrWhiteSpace(listed[j]))
-                            categoryItemIds.Add(listed[j]);
-                    }
-                }
-                offers.AddRange(Series2TradingPortBuilder.BuildPerItemOffers(
-                    category.CategoryId, categoryItemIds, null));
+                // The aggregate cannot identify an individual SKU. The NPC
+                // store overload below advertises these only when item lots
+                // supply identity, quantity, owner, custody and provenance.
             }
 
             var capability = new StoreTradingCapability { Staffed = false };
@@ -446,14 +410,97 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
-        /// The legacy Business stock authority stores one aggregate count per
-        /// category. It can only be exposed through an item-resolved household
-        /// offer when the authored profile contains exactly one SKU in that
-        /// category. Mapping a multi-SKU category's aggregate to one item would
-        /// sell unlike goods under a false product identity.
-        /// Series 2 Pass 7 keeps this helper for the single-item branch of
-        /// BuildHouseholdTradingPort; multi-item categories no longer go
-        /// through it, they go through Series2TradingPortBuilder instead.
+        /// Builds the household-facing port for a specific NPC store. Items
+        /// are included only when the profile declares the SKU, the household
+        /// catalog uses the same unit, and this Business has identified stock
+        /// for that SKU. A category total is never projected onto its SKUs.
+        /// </summary>
+        public GeneralStoreTradingPort BuildHouseholdTradingPort(BusinessInstanceState npcBusiness)
+        {
+            if (npcBusiness == null || npcBusiness.RuntimeState == null || storeDefinition == null)
+                return BuildHouseholdTradingPort();
+
+            var offers = new List<GeneralStoreCategoryOffer>();
+            ReadOnlySpan<ItemCategoryDefinition> categories = storeDefinition.Categories;
+            for (int categoryIndex = 0; categoryIndex < categories.Length; categoryIndex++)
+            {
+                ItemCategoryDefinition category = categories[categoryIndex];
+                if (category == null || string.IsNullOrWhiteSpace(category.CategoryId)) continue;
+                var categoryItemIds = new List<string>();
+                ReadOnlySpan<string> declaredItemIds = category.ItemIds;
+                for (int i = 0; i < declaredItemIds.Length; i++)
+                    if (!string.IsNullOrWhiteSpace(declaredItemIds[i])) categoryItemIds.Add(declaredItemIds[i]);
+
+                List<GeneralStoreCategoryOffer> validatedItems = Series2TradingPortBuilder.BuildPerItemOffers(
+                    category.CategoryId, categoryItemIds, null);
+                GeneralStoreCategoryOffer exactOffer = null;
+                foreach (GeneralStoreCategoryOffer candidate in validatedItems)
+                {
+                    if (candidate?.OfferedItemIds == null || candidate.OfferedItemIds.Count != 1) continue;
+                    string itemId = candidate.OfferedItemIds[0];
+                    ItemDefinition item = FindAuthoredStoreItem(itemId);
+                    HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(itemId);
+                    if (item == null || householdItem == null
+                        || !string.Equals(item.Unit.Trim(), householdItem.UnitLabel.Trim(), StringComparison.OrdinalIgnoreCase)
+                        || GetItemSellingPriceCents(itemId) <= 0) continue;
+
+                    if (exactOffer == null)
+                    {
+                        exactOffer = new GeneralStoreCategoryOffer
+                        {
+                            CategoryId = category.CategoryId,
+                            StoreUnitsPerItemUnit = 1,
+                            UsesItemLevelInventory = true,
+                        };
+                        offers.Add(exactOffer);
+                    }
+                    exactOffer.OfferedItemIds.Add(itemId);
+                }
+            }
+
+            var capability = new StoreTradingCapability { Staffed = npcBusiness.RuntimeState.FilledWorkerCount > 0 };
+            return new GeneralStoreTradingPort(this, npcBusiness, offers, capability);
+        }
+
+        private ItemDefinition FindAuthoredStoreItem(string itemId)
+        {
+            if (storeDefinition == null || string.IsNullOrWhiteSpace(itemId)) return null;
+            ReadOnlySpan<ItemDefinition> items = storeDefinition.Items;
+            for (int i = 0; i < items.Length; i++)
+                if (items[i] != null && string.Equals(items[i].ItemId, itemId, StringComparison.OrdinalIgnoreCase))
+                    return items[i];
+            return null;
+        }
+
+        private bool HouseholdUnitsMatch(GeneralStoreBusinessDefinition definition, string itemId)
+        {
+            HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(itemId);
+            if (definition == null || householdItem == null) return false;
+            ReadOnlySpan<ItemDefinition> items = definition.Items;
+            for (int i = 0; i < items.Length; i++)
+                if (items[i] != null && string.Equals(items[i].ItemId, itemId, StringComparison.OrdinalIgnoreCase))
+                    return string.Equals(items[i].Unit.Trim(), householdItem.UnitLabel.Trim(), StringComparison.OrdinalIgnoreCase);
+            return false;
+        }
+
+        /// <summary>Uses the authored item's cost-plus retail policy and category markup.</summary>
+        public int GetItemSellingPriceCents(string itemId)
+        {
+            if (storeDefinition == null || string.IsNullOrWhiteSpace(itemId)) return 0;
+            ReadOnlySpan<ItemDefinition> items = storeDefinition.Items;
+            for (int i = 0; i < items.Length; i++)
+            {
+                ItemDefinition item = items[i];
+                if (item == null || !string.Equals(item.ItemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
+                int price = item.Pricing.GetCostPlusPriceCents(GetCategoryMarkupMultiplier(item.CategoryId), 0f);
+                return Mathf.Max(minimumCategoryUnitPriceCents, price);
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// Resolves whether a category has exactly one authored SKU, allowing
+        /// the backwards-compatible category-only stock path to map safely.
         /// </summary>
         internal static bool TryResolveSingleItemForCategory(
             GeneralStoreBusinessDefinition definition,
@@ -920,13 +967,12 @@ namespace LandLedgers.FirstLedger
                 townWorld.GenerateTownShell();
             }
 
-            if (buildingId < 0 || buildingId >= townWorld.Buildings.Count)
+            if (!townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building) || building == null)
             {
                 message = $"Building {buildingId:000} is not part of the generated town.";
                 return false;
             }
 
-            PlacedBuilding building = townWorld.Buildings[buildingId];
             if (building == null || building.definition == null)
             {
                 message = $"Building {buildingId:000} is missing its building shell definition.";
@@ -2099,12 +2145,9 @@ namespace LandLedgers.FirstLedger
 
         private TownPlot GetPlot(int plotId)
         {
-            if (townWorld == null || plotId < 0 || plotId >= townWorld.Plots.Count)
-            {
-                return null;
-            }
-
-            return townWorld.Plots[plotId];
+            return townWorld != null && townWorld.TryGetPlotById(plotId, out TownPlot plot)
+                ? plot
+                : null;
         }
 
         private int CountPopulationWorkersAtBuilding(int buildingId)
@@ -3736,12 +3779,12 @@ namespace LandLedgers.FirstLedger
             for (int i = 0; i < population.households.Count; i++)
             {
                 int buildingId = population.households[i].homeBuildingId;
-                if (buildingId < 0 || buildingId >= townWorld.Buildings.Count)
+                if (!townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building) || building == null)
                 {
                     continue;
                 }
 
-                BuildingDefinition definition = townWorld.Buildings[buildingId].definition;
+                BuildingDefinition definition = building.definition;
                 if (definition != null && (definition.IsMixedUse || definition.UsesUpperFloorResidential))
                 {
                     count++;
@@ -5364,6 +5407,97 @@ namespace LandLedgers.FirstLedger
             }
 
             return index < 0 ? count - 1 : index % count;
+        }
+    }
+
+    /// <summary>
+    /// Applies the explicitly configured, finite development-scenario stock
+    /// endowment to its existing NPC General Store. This is not a Business
+    /// formation default and never changes cash.
+    /// </summary>
+    public static class ScenarioOpeningStockEndowment
+    {
+        public static bool TryApply(SixPersonDevelopmentFixture fixture, BusinessInstanceState business,
+            GeneralStoreBusinessDefinition definition, int scenarioSeed, int dayIndex,
+            out string report, out string error)
+        {
+            report = string.Empty;
+            error = string.Empty;
+            if (fixture == null || business?.RuntimeState == null || definition == null
+                || business.BusinessType != BusinessType.GeneralStore || business.Owner == null
+                || business.Owner.OwnerKind != BusinessOwnerKind.Npc)
+            {
+                error = "The development opening-stock endowment requires a configured fixture and an existing NPC General Store runtime.";
+                return false;
+            }
+
+            string endowmentId = $"scenario-opening-endowment:{fixture.ProfileId}:{business.InstanceId}:{scenarioSeed}";
+            BusinessRuntimeState state = business.RuntimeState;
+            if (state.HasAppliedScenarioEndowment(endowmentId))
+            {
+                report = $"Opening stock endowment already recorded for {business.InstanceId}; no stock recreated.";
+                return true;
+            }
+
+            var itemById = new Dictionary<string, ItemDefinition>(StringComparer.OrdinalIgnoreCase);
+            ReadOnlySpan<ItemDefinition> items = definition.Items;
+            for (int i = 0; i < items.Length; i++)
+                if (items[i] != null && !string.IsNullOrWhiteSpace(items[i].ItemId)) itemById[items[i].ItemId] = items[i];
+
+            var stockReport = new StringBuilder();
+            foreach (SixPersonDevelopmentFixture.OpeningRetailStockRange range in fixture.OpeningStoreStock)
+            {
+                if (range == null || !fixture.TryResolveOpeningStoreStock(range.itemId, scenarioSeed, out int quantity))
+                {
+                    error = "The development fixture contains an invalid opening stock range.";
+                    return false;
+                }
+                if (!itemById.TryGetValue(range.itemId, out ItemDefinition item)
+                    || definition.FindCategory(item.CategoryId) is not ItemCategoryDefinition category
+                    || !category.ContainsItem(item.ItemId))
+                {
+                    error = $"Opening-stock SKU '{range.itemId}' is missing from the Business catalog or its declared category.";
+                    return false;
+                }
+
+                string lotId = $"opening-endowment:{fixture.ProfileId}:{business.InstanceId}:{scenarioSeed}:{item.ItemId}";
+                BusinessRetailItemLotState existing = state.FindRetailItemLot(lotId);
+                if (existing != null)
+                {
+                    if (!string.Equals(existing.ItemId, item.ItemId, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(existing.CategoryId, item.CategoryId, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(existing.UnitLabel, item.Unit, StringComparison.OrdinalIgnoreCase)
+                        || existing.QuantityUnits != quantity
+                        || !string.Equals(existing.OwnerBusinessId, business.InstanceId, StringComparison.Ordinal)
+                        || !string.Equals(existing.CustodianBusinessId, business.InstanceId, StringComparison.Ordinal))
+                    {
+                        error = $"Existing opening lot '{lotId}' does not match the fixture seed and Business ownership.";
+                        return false;
+                    }
+                }
+                else
+                {
+                    string refusal = state.TryAddRetailItemLot(lotId, item.ItemId, item.CategoryId, item.Unit,
+                        quantity, business.InstanceId, business.InstanceId,
+                        $"scenario-opening-endowment:{fixture.ProfileId}", dayIndex);
+                    if (!string.IsNullOrWhiteSpace(refusal))
+                    {
+                        error = $"Opening stock endowment refused for {item.ItemId}: {refusal}";
+                        return false;
+                    }
+                }
+
+                if (stockReport.Length > 0) stockReport.Append("; ");
+                stockReport.Append(item.ItemId).Append('=').Append(quantity).Append(' ').Append(item.Unit);
+            }
+
+            if (!state.RecordAppliedScenarioEndowment(endowmentId))
+            {
+                error = $"Could not record opening stock endowment '{endowmentId}'.";
+                return false;
+            }
+            report = $"Applied finite fixture endowment to {business.InstanceId}, owner P{business.Owner.PersonId:000}: {stockReport}.";
+            return true;
         }
     }
 }

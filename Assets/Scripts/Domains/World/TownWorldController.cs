@@ -3890,7 +3890,7 @@ namespace LandLedgers.World
             if (zone == PlotZone.Business)
             {
                 int catalogMinimum = GetCatalogMinimumFrontageCells(PlotZone.Business);
-                int tightMinimum = Mathf.Max(minimum, catalogMinimum);
+                int tightMinimum = Mathf.Max(minimum, catalogMinimum, settings.minimumCommercialSiteFrontageCells);
                 int tightMaximum = Mathf.Max(tightMinimum, Mathf.Min(maximum, tightMinimum + 1));
                 return random.Next(tightMinimum, tightMaximum + 1);
             }
@@ -3898,7 +3898,7 @@ namespace LandLedgers.World
             if (zone == PlotZone.MixedUse)
             {
                 int catalogMinimum = Mathf.Max(GetCatalogMinimumFrontageCells(PlotZone.Business), GetCatalogMinimumFrontageCells(PlotZone.Residential));
-                int mixedMinimum = Mathf.Max(minimum, catalogMinimum);
+                int mixedMinimum = Mathf.Max(minimum, catalogMinimum, settings.minimumCommercialSiteFrontageCells);
                 int mixedMaximum = Mathf.Max(mixedMinimum, Mathf.Min(maximum + 1, mixedMinimum + 2));
                 return random.Next(mixedMinimum, mixedMaximum + 1);
             }

@@ -155,6 +155,16 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         string Credit(int amountCents, string reason);
     }
 
+    /// <summary>
+    /// A business cash port whose runtime owner is known. Use this where
+    /// transaction records name payer/payee Businesses and the money ports
+    /// must be proven to belong to those same parties.
+    /// </summary>
+    public interface IBusinessIdentityCashPort : IBusinessCashPort
+    {
+        string BusinessId { get; }
+    }
+
     /// <summary>Trade-credit port. Production maps to FinancialObligationAuthority.</summary>
     public interface ITradeCreditPort
     {

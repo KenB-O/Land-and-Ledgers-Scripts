@@ -932,6 +932,7 @@ namespace LandLedgers.Orchestration.Systems
 
             // Shop/service catalogs.
             GeneralStoreTaskCatalog.RegisterAll(tasks);
+            Pass2TaskCatalogs.RegisterWholesaleShelfMove(tasks);
             BakeryBreadCatalog.RegisterAll(tasks);
             BarberServiceCatalog.RegisterAll(tasks);
             DoctorTreatmentCatalog.RegisterAll(tasks);

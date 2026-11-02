@@ -212,6 +212,7 @@ namespace LandLedgers.Population
             // zero-based allocator remains unchanged.
             state.RestorePersonIdAllocator(1);
             state.RestoreHouseholdIdAllocator(1);
+            int[] personIdsByFixtureIndex = new int[fixture.People.Count];
 
             for (int householdIndex = 0; householdIndex < fixture.Households.Count; householdIndex++)
             {
@@ -275,6 +276,7 @@ namespace LandLedgers.Population
                     person.currentDestinationBuildingId = home.buildingId;
                     household.memberIds.Add(personId);
                     state.people.Add(person);
+                    personIdsByFixtureIndex[definition.personIndexes[memberIndex]] = personId;
                 }
 
                 household.EnsureHouseholdReservesInitialized(true);
@@ -282,6 +284,20 @@ namespace LandLedgers.Population
                     household.settlementReserveStrengthCents, household.spendingMoneyCents);
                 NewcomerSettlementEvaluator.RefreshHouseholdPressures(household);
                 state.households.Add(household);
+            }
+
+            if (fixture.SpousePairs.Count > 0 && kinship == null)
+            {
+                state.validationMessages.Add("ERROR: The six-person development fixture has spouse relations but no KinshipRegistry authority.");
+                return new PopulationGenerationResult(state, "Development population fixture failed: kinship authority missing.", true);
+            }
+
+            foreach (SixPersonDevelopmentFixture.SpousePairDefinition pair in fixture.SpousePairs)
+            {
+                kinship.AddSpouses(
+                    personIdsByFixtureIndex[pair.firstPersonIndex],
+                    personIdsByFixtureIndex[pair.secondPersonIndex],
+                    $"scenario fixture:{fixture.ProfileId}");
             }
 
             DemographicCohortPlanner.AssignMissingBirthDates(

@@ -7498,12 +7498,12 @@ namespace LandLedgers.FirstLedger
 
         private TownPlot GetPlot(int plotId)
         {
-            return townWorld != null && plotId >= 0 && plotId < townWorld.Plots.Count ? townWorld.Plots[plotId] : null;
+            return townWorld != null && townWorld.TryGetPlotById(plotId, out TownPlot plot) ? plot : null;
         }
 
         private PlacedBuilding GetBuilding(int buildingId)
         {
-            return townWorld != null && buildingId >= 0 && buildingId < townWorld.Buildings.Count ? townWorld.Buildings[buildingId] : null;
+            return townWorld != null && townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building) ? building : null;
         }
 
         private static void SetText(TMP_Text text, string value)

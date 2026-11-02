@@ -97,11 +97,18 @@ namespace LandLedgers.Economy.Ordering
         /// </summary>
         public Pass3WholesaleIntakeResult Receive(
             string bakeryLotId, string productId, int units, int wholesalePriceCents,
-            int bakedDayIndex, int transferDayIndex, Pass3StoreCatalog storeCatalog, List<string> diag)
+            int bakedDayIndex, int transferDayIndex, Pass3StoreCatalog storeCatalog,
+            string payerBusinessId, string payeeBusinessId, List<string> diag)
         {
             if (string.IsNullOrWhiteSpace(bakeryLotId) || string.IsNullOrWhiteSpace(productId) || storeCatalog == null)
             {
                 if (diag != null) diag.Add("Pass3Ordering: wholesale intake needs a bakery lot id, a product id, and a store catalog.");
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(payerBusinessId) || string.IsNullOrWhiteSpace(payeeBusinessId)
+                || string.Equals(payerBusinessId.Trim(), payeeBusinessId.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                if (diag != null) diag.Add("Pass3Ordering: wholesale intake needs distinct, real payer and payee Business ids.");
                 return null;
             }
             if (units <= 0)
@@ -157,8 +164,8 @@ namespace LandLedgers.Economy.Ordering
                 Condition = condition,
                 Settlement = new Pass3WholesaleSettlement
                 {
-                    PayerBusinessId = "general-store",
-                    PayeeBusinessId = "bakery",
+                    PayerBusinessId = payerBusinessId.Trim(),
+                    PayeeBusinessId = payeeBusinessId.Trim(),
                     BakeryLotId = bakeryLotId.Trim(),
                     ProductId = productId.Trim(),
                     Units = units,

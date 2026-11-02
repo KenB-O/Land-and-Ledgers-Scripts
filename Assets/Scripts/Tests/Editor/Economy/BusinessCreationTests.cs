@@ -15,10 +15,12 @@ namespace LandLedgers.EditorTests.Economy
     [TestFixture]
     public sealed class BusinessCreationTests
     {
-        private sealed class TestContext : IBusinessCreationContext
+        private sealed class TestContext : IBusinessCreationContext, IBusinessTypedPremisesContext
         {
             public EntityIdRegistry IdRegistry { get; } = new EntityIdRegistry();
             public int PremisesAssignments;
+            public BusinessType LastPremisesBusinessType;
+            public PremisesKind LastPremisesKind;
 
             public bool TryGetProfile(BusinessType type, out BusinessProfileDefinition profile)
             {
@@ -36,6 +38,13 @@ namespace LandLedgers.EditorTests.Economy
                 buildingId = 100 + PremisesAssignments;
                 PremisesAssignments++;
                 return true;
+            }
+
+            public bool TryAssignPremises(BusinessType businessType, PremisesKind kind, out int buildingId)
+            {
+                LastPremisesBusinessType = businessType;
+                LastPremisesKind = kind;
+                return TryAssignPremises(kind, out buildingId);
             }
 
             public void LogDiagnostic(string message)
@@ -72,6 +81,75 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(0, result.Business.RuntimeState.CurrentCashCents,
                 "A positive capital term cannot turn into cash without a settled owner debit.");
             StringAssert.Contains("remains unsettled", string.Join(" ", result.Diagnostics));
+        }
+
+        [Test]
+        public void TryCreate_UsesBusinessTypeAwarePremisesContext()
+        {
+            var authority = new BusinessCreationAuthority();
+            var context = new TestContext();
+            var intent = ValidIntent(
+                BusinessType.CropFarm,
+                new PremisesRequirement(yardStorage: true));
+
+            bool created = authority.TryCreate(intent, context, out BusinessCreationResult result);
+
+            Assert.IsTrue(created, string.Join("; ", result.Diagnostics));
+            Assert.AreEqual(BusinessType.CropFarm, context.LastPremisesBusinessType);
+            Assert.AreEqual(PremisesKind.YardShopArea, context.LastPremisesKind);
+        }
+
+        [Test]
+        public void NpcAdapter_UsesConfiguredTypedPremisesSelectorWithoutUntypedFallback()
+        {
+            var adapter = new NpcBusinessCreationAdapter(new EntityIdRegistry());
+            bool untypedCalled = false;
+            BusinessType selectedType = BusinessType.Generic;
+            PremisesKind selectedKind = PremisesKind.Unspecified;
+            adapter.PremisesAssigner = kind =>
+            {
+                untypedCalled = true;
+                return 11;
+            };
+            adapter.TypedPremisesAssigner = (businessType, kind) =>
+            {
+                selectedType = businessType;
+                selectedKind = kind;
+                return 22;
+            };
+
+            bool assigned = ((IBusinessTypedPremisesContext)adapter).TryAssignPremises(
+                BusinessType.Ranch,
+                PremisesKind.BarnSpace,
+                out int buildingId);
+
+            Assert.IsTrue(assigned);
+            Assert.AreEqual(22, buildingId);
+            Assert.AreEqual(BusinessType.Ranch, selectedType);
+            Assert.AreEqual(PremisesKind.BarnSpace, selectedKind);
+            Assert.IsFalse(untypedCalled, "The generic fallback must not override a configured typed site authority.");
+        }
+
+        [Test]
+        public void NpcAdapter_RefusesWhenOnlyLegacyUntypedPremisesSelectorExists()
+        {
+            var adapter = new NpcBusinessCreationAdapter(new EntityIdRegistry());
+            bool untypedCalled = false;
+            adapter.PremisesAssigner = kind =>
+            {
+                untypedCalled = true;
+                return 11;
+            };
+
+            bool assigned = ((IBusinessTypedPremisesContext)adapter).TryAssignPremises(
+                BusinessType.CropFarm,
+                PremisesKind.YardShopArea,
+                out int buildingId);
+
+            Assert.IsFalse(assigned,
+                "A typed formation must refuse when only a business-unaware selector is wired.");
+            Assert.AreEqual(-1, buildingId);
+            Assert.IsFalse(untypedCalled);
         }
 
         [Test]

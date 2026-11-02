@@ -45,7 +45,7 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.AreEqual(40000, w.Ledgers.Get(HouseholdVerticalSlice.H_Morrow).GetBalanceCents());
             Assert.AreEqual(40000, w.Ledgers.Get(HouseholdVerticalSlice.H_Kovac).GetBalanceCents());
             Assert.AreEqual(40000, w.Ledgers.Get(HouseholdVerticalSlice.H_Renner).GetBalanceCents());
-            Assert.AreEqual(200, w.Ledgers.Get(HouseholdVerticalSlice.H_Vane).GetBalanceCents());
+            Assert.AreEqual(100, w.Ledgers.Get(HouseholdVerticalSlice.H_Vane).GetBalanceCents());
             foreach (int hid in new[] { 100, 101, 102, 103, 104 })
             {
                 foreach (HouseholdLedgerEntry entry in w.Ledgers.Get(hid).Entries)
@@ -185,13 +185,13 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.IsTrue(f.FailedAsExpected);
             StringAssert.Contains("unaffordable", f.FailureReason);
             Assert.IsTrue(f.NeedStayedOpen);
-            Assert.AreEqual(200, f.BuyerBalanceAfterFailure);
+            Assert.AreEqual(100, f.BuyerBalanceAfterFailure);
             Assert.AreEqual(0, f.HouseholdFlourAfterFailure);
 
             Assert.IsTrue(f.Recovered);
             Assert.AreEqual(1200, f.BuyerOutflowOnRecovery);
             Assert.AreEqual(10, f.UnitsAcquiredOnRecovery);
-            Assert.AreEqual(1000, w.Ledgers.Get(HouseholdVerticalSlice.H_Vane).GetBalanceCents());
+            Assert.AreEqual(900, w.Ledgers.Get(HouseholdVerticalSlice.H_Vane).GetBalanceCents());
             Assert.AreEqual(10, w.Inventories.GetOrCreate(HouseholdVerticalSlice.H_Vane)
                 .GetAvailableUnits(HouseholdItemCatalog.FlourId));
         }
@@ -209,7 +209,7 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.AreEqual(0, p.MealsServed);
             Assert.AreEqual(4, p.MealsMissed);
             Assert.AreEqual(4, p.MissedMealRecords);
-            Assert.AreEqual(200, p.BalanceCents);
+            Assert.AreEqual(100, p.BalanceCents);
             Assert.AreEqual(0, p.FlourUnits);
             Assert.AreEqual(1, p.InflowEntryCount);
             Assert.IsTrue(p.NeedOpenAfterFailedTrip);

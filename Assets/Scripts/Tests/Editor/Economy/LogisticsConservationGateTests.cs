@@ -303,6 +303,7 @@ namespace LandLedgers.EditorTests.Economy
                 BusinessInstanceState buyer = CreateBusiness(BusinessType.Butcher, "buyer_rec", 2);
                 SetStock(seller, "livestock_inputs", 10);
                 SetStock(buyer, "livestock_inputs", 0);
+                buyer.RuntimeState.SetCurrentCashCents(10000); // Caller-supplied test budget so route refusal is exercised, not cash refusal.
 
                 LocalRecurringOrderTemplate template = new(
                     "rec_test_order",

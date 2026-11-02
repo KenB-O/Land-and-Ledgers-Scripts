@@ -5,6 +5,7 @@ using LandLedgers.Economy.Farming.Dairy;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Farming.Livestock;
 using LandLedgers.Economy.Farming.Timber;
+using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Postal;
 using LandLedgers.FirstLedger;
@@ -56,6 +57,9 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.IsNotNull(tasks.GetDefinition(GeneralStoreTaskCatalog.UnloadFreightId), "store unload");
             Assert.IsNotNull(tasks.GetDefinition(GeneralStoreTaskCatalog.StockShelvesId), "stock shelves");
             Assert.IsNotNull(tasks.GetDefinition(GeneralStoreTaskCatalog.CleanStoreId), "clean store");
+            var shelfMove = tasks.GetDefinition(Pass2TaskCatalogs.MoveBackToShelfId);
+            Assert.IsNotNull(shelfMove, "wholesale back-to-shelf task");
+            Assert.AreEqual(2, shelfMove.BaseMinutes, "use the existing task definition without changing its duration");
         }
 
         [Test]
@@ -93,6 +97,15 @@ namespace LandLedgers.EditorTests.Orchestration
             });
             Assert.IsNotNull(task);
             Assert.AreEqual(FreightCompanyRuntime.LoadFreightTaskId, task.DefinitionId);
+
+            WorkTask shelfMove = null;
+            Assert.DoesNotThrow(() =>
+            {
+                shelfMove = tasks.CreateTaskWithPlannedMinutes(
+                    Pass2TaskCatalogs.MoveBackToShelfId, EntityId.Invalid, 0, 2, "wholesale-lot-1");
+            });
+            Assert.IsNotNull(shelfMove, "the production TaskAuthority can issue the existing wholesale shelf-work definition");
+            Assert.AreEqual(Pass2TaskCatalogs.MoveBackToShelfId, shelfMove.DefinitionId);
         }
 
         [Test]

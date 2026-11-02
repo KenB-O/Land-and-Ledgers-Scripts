@@ -130,7 +130,8 @@ namespace LandLedgers.Population
                 return null;
             }
 
-            EnsureHouseholdReservesInitialized();
+            EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: reserves == null || reserves.Count == 0);
             for (int i = 0; i < reserves.Count; i++)
             {
                 HouseholdReserveState reserve = reserves[i];
@@ -151,7 +152,8 @@ namespace LandLedgers.Population
 
         public HouseholdReservePressureSnapshot RefreshReservePressureSnapshot()
         {
-            EnsureHouseholdReservesInitialized();
+            EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: reserves == null || reserves.Count == 0);
             reservePressureSnapshot = HouseholdReserveEvaluator.BuildPressureSnapshot(this);
             return reservePressureSnapshot;
         }
@@ -220,6 +222,14 @@ namespace LandLedgers.Population
                 }
             }
 
+            // A partially migrated save may already contain other reserve
+            // categories while still carrying its legacy food balance. If
+            // staple_food is absent, preserve that balance when creating the
+            // missing reserve instead of treating the non-empty list as proof
+            // that migration has completed.
+            bool migrateMissingLegacyFood = migrateLegacyFoodReserve
+                || (foodReserveUnits > 0
+                    && FindReserveWithoutInitializing("staple_food") == null);
             IReadOnlyList<HouseholdReserveDefinition> definitions = HouseholdReserveCatalog.All;
             for (int definitionIndex = 0; definitionIndex < definitions.Count; definitionIndex++)
             {
@@ -229,7 +239,7 @@ namespace LandLedgers.Population
                 if (reserve == null)
                 {
                     int startingUnits = fillMissingToTarget ? target : 0;
-                    if (migrateLegacyFoodReserve && string.Equals(definition.CategoryId, "staple_food", StringComparison.OrdinalIgnoreCase))
+                    if (migrateMissingLegacyFood && string.Equals(definition.CategoryId, "staple_food", StringComparison.OrdinalIgnoreCase))
                     {
                         startingUnits = foodReserveUnits;
                     }
@@ -356,7 +366,8 @@ namespace LandLedgers.Population
 
         public string BuildHeatingSummary()
         {
-            EnsureHouseholdReservesInitialized();
+            EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: reserves == null || reserves.Count == 0);
 
             string fuel = BuildFriendlyFuelName(preferredFuel);
             string shell = BuildFriendlyHeatRetentionName(heatRetentionTier);
@@ -402,7 +413,8 @@ namespace LandLedgers.Population
 
         public string BuildInspectionSummary()
         {
-            EnsureHouseholdReservesInitialized();
+            EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: reserves == null || reserves.Count == 0);
 
             string homeRead = homeBuildingId > 0 ? $"Home {homeBuildingId}" : "No home assigned";
             int totalDemandUnits = Math.Max(0, demandSnapshot.foodNeed)

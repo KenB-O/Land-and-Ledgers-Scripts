@@ -390,5 +390,68 @@ namespace LandLedgers.EditorTests.Population
             List<HouseholdErrandPlan> replanned = coordinator2.PlanDay(Fixture.HouseholdId, Fixture.Day, f.Context(), f.Diag);
             Assert.AreEqual(0, replanned.Count, "restored claim survives — no duplicate plan after load");
         }
+
+        [Test]
+        public void TerminalPlansAreCompactedAndLegacyTerminalHistoryIsNotRestored()
+        {
+            var registry = new HouseholdErrandPlanRegistry();
+            HouseholdErrandPlan active = registry.Create(Fixture.HouseholdId, Fixture.Day);
+            Assert.IsTrue(registry.Claim(active.PlanId, Fixture.HouseholdId, 3));
+            registry.NoteEstimate(active.PlanId, 90, 600);
+            registry.NoteTerminal(active.PlanId);
+            Assert.AreSame(active, registry.Get(active.PlanId), "an active plan must never be compacted");
+            Assert.IsTrue(registry.IsNeedClaimed(Fixture.HouseholdId, 3), "active claims must survive no-op retirement");
+
+            HouseholdErrandPlan failed = registry.Create(Fixture.HouseholdId, Fixture.Day + 1);
+            string failedId = failed.PlanId;
+            registry.NoteEstimate(failedId, 120, 600);
+            failed.MarkFailed();
+            registry.NoteTerminal(failedId);
+
+            Assert.IsNull(registry.Get(failedId), "terminal coordination state must be retired");
+            Assert.AreEqual(1, registry.All.Count, "the active plan must remain resumable");
+            HouseholdErrandPlanRegistrySaveDto captured = registry.CaptureSaveDto();
+            Assert.AreEqual(1, captured.Plans.Count);
+            Assert.AreEqual(active.PlanId, captured.Plans[0].PlanId);
+            Assert.AreEqual(1, captured.Claims.Count);
+            Assert.IsFalse(captured.EstimateMinutes.Exists(entry => entry.Key == failedId));
+
+            // Legacy saves could contain completed/failed plans. Loading them
+            // must preserve the monotonic sequence but discard terminal state.
+            var legacy = new HouseholdErrandPlanRegistrySaveDto { NextPlanSequence = 42 };
+            var legacyFailed = new HouseholdErrandPlan("errand-legacy", Fixture.HouseholdId);
+            legacyFailed.MarkFailed();
+            legacy.Plans.Add(legacyFailed);
+            legacy.EstimateMinutes.Add(new HouseholdErrandPlanIntEntry { Key = legacyFailed.PlanId, Value = 120 });
+            var restored = new HouseholdErrandPlanRegistry();
+            restored.LoadFromSaveDto(legacy);
+
+            Assert.AreEqual(0, restored.All.Count);
+            Assert.AreEqual("errand-" + Fixture.HouseholdId + "-0-42", restored.Create(Fixture.HouseholdId, 0).PlanId,
+                "loading legacy history must not reset or reuse plan identities");
+        }
+
+        [Test]
+        public void CapturedErrandSaveIsAnImmutableSnapshotOfAnActivePlan()
+        {
+            var registry = new HouseholdErrandPlanRegistry();
+            HouseholdErrandPlan active = registry.Create(Fixture.HouseholdId, Fixture.Day);
+            Assert.IsTrue(registry.Claim(active.PlanId, Fixture.HouseholdId, 3));
+            active.Assign(1, new[] { "3" }, "schedule:1:shopping");
+
+            HouseholdErrandPlanRegistrySaveDto snapshot = registry.CaptureSaveDto();
+            active.MarkFailed();
+            registry.NoteTerminal(active.PlanId);
+
+            Assert.AreEqual(1, snapshot.Plans.Count);
+            Assert.AreEqual(HouseholdErrandPlanStatus.Assigned, snapshot.Plans[0].Status,
+                "a later live failure must not rewrite the earlier captured save state");
+
+            var restored = new HouseholdErrandPlanRegistry();
+            restored.LoadFromSaveDto(snapshot);
+            Assert.AreEqual(1, restored.All.Count);
+            Assert.AreEqual(HouseholdErrandPlanStatus.Assigned, restored.Get(active.PlanId).Status);
+            Assert.IsTrue(restored.IsNeedClaimed(Fixture.HouseholdId, 3));
+        }
     }
 }

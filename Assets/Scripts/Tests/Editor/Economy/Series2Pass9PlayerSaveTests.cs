@@ -127,8 +127,12 @@ namespace LandLedgers.Tests.Economy
         public void ProductionCashPort_CreditNonNegative_IsInfallible_AndDebitRefusesShortfall()
         {
             var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity("cash-port-test-business");
             runtime.AddCashCents(1000);
             var port = new Series2BusinessRuntimeCashPort(runtime);
+
+            Assert.AreEqual("cash-port-test-business", port.BusinessId,
+                "the identity cash port must report the wrapped authoritative runtime identity");
 
             // Pass 7's proof: Credit for a non-negative amount on a
             // non-null runtime has no failure path in the runtime.
@@ -239,7 +243,8 @@ namespace LandLedgers.Tests.Economy
 
             var intakeCatalog = new Pass3StoreCatalog();
             var intake = new Pass3WholesaleIntake();
-            Assert.IsNotNull(intake.Receive("lot-1", "bread", 10, 5, 0, 0, intakeCatalog, diag),
+            Assert.IsNotNull(intake.Receive("lot-1", "bread", 10, 5, 0, 0, intakeCatalog,
+                "general-store-1", "bakery-1", diag),
                 "intake must accept lot-1; diag: " + string.Join("; ", diag));
 
             var settled = new Pass3WholesaleSettlement
@@ -303,13 +308,16 @@ namespace LandLedgers.Tests.Economy
             // The adopted delivered set refuses a re-intake: a reload
             // can never re-intake a lot it already received.
             Assert.IsNull(target.WholesaleIntake.Receive(
-                "lot-1", "bread", 10, 5, 0, 0, new Pass3StoreCatalog(), diag),
+                "lot-1", "bread", 10, 5, 0, 0, new Pass3StoreCatalog(),
+                "general-store-1", "bakery-1", diag),
                 "delivered lot-1 must be refused after restore");
 
             // And the restored settled record refuses a second settlement.
             var payer = new BusinessRuntimeState();
+            payer.BindBusinessIdentity("bakery-1");
             payer.AddCashCents(5000);
             var payee = new BusinessRuntimeState();
+            payee.BindBusinessIdentity("general-store-1");
             var result = Series2WholesaleSettlement.SettleCash(
                 target.WholesaleSettlements.First(s => s.BakeryLotId == "lot-1"),
                 new Series2BusinessRuntimeCashPort(payer),

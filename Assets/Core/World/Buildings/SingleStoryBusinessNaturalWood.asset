@@ -36,6 +36,8 @@ MonoBehaviour:
     suitable: 0
   - businessType: 5
     suitable: 1
+  - businessType: 7
+    suitable: 1
   anchorRules:
   - type: 0
     side: 0

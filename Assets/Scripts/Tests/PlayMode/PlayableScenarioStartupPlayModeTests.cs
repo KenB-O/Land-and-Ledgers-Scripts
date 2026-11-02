@@ -154,8 +154,8 @@ namespace LandLedgers.PlayMode
                 "The isolated profile must build exactly three distinct real residential homes before population generation.");
             Assert.AreEqual(3, commercialBuildings,
                 "The isolated profile must contain only the three commercial premises required by the three Businesses.");
-            Assert.AreEqual(7, worldBuildingIds.Count,
-                "The controlled settlement contains three houses, three commercial buildings, and one Town Hall.");
+            Assert.AreEqual(6, worldBuildingIds.Count,
+                "The controlled six-person profile contains exactly three standalone houses and three commercial buildings; Town Hall is excluded from this fixture.");
             Assert.IsTrue(businessBuildingIds.IsSubsetOf(worldBuildingIds),
                 "Every Business premises reference must resolve to one of the seven real town buildings.");
             Debug.Log($"[PassXL six-person runtime] P001–P006; Households=3; Businesses=3 (General Store=P001, Bakery=P003, Fuel Dealer=P005); houses={residentialHomes}; commercial buildings={commercialBuildings}; total buildings={worldBuildingIds.Count}: {string.Join(", ", buildingLabels)}.");
@@ -650,6 +650,25 @@ namespace LandLedgers.PlayMode
             Debug.Log($"[Pass22 RUN-004] closing day={endDay}; {closing}");
             Assert.AreEqual(startDay + 30, endDay,
                 "Thirty consecutive day boundaries must reach the ordinary daily/weekly/monthly production callbacks.");
+
+            object errandCoordinator = hubType.GetProperty("HouseholdErrands")?.GetValue(hub);
+            object errandPlans = errandCoordinator?.GetType().GetProperty("Plans")?.GetValue(errandCoordinator);
+            System.Collections.IEnumerable retainedPlans = errandPlans?.GetType().GetProperty("All")?.GetValue(errandPlans)
+                as System.Collections.IEnumerable;
+            Assert.NotNull(retainedPlans, "The household errand authority must remain inspectable after the run.");
+            int retainedPlanCount = 0;
+            foreach (object plan in retainedPlans)
+            {
+                if (plan == null) continue;
+                retainedPlanCount++;
+                string status = plan.GetType().GetProperty("Status")?.GetValue(plan)?.ToString();
+                Assert.Contains(status, new[] { "Proposed", "Assigned" },
+                    "Only resumable household plans may remain after terminal errands are compacted.");
+            }
+            System.Collections.ICollection householdCount = populationState?.GetType().GetField("households")?.GetValue(populationState)
+                as System.Collections.ICollection;
+            Assert.LessOrEqual(retainedPlanCount, householdCount?.Count ?? 0,
+                "A 30-day run must not retain one completed/failed orchestration record per household per day.");
 
             object generalStore = businesses.Cast<object>().FirstOrDefault(business =>
                 string.Equals(business.GetType().GetProperty("BusinessType")?.GetValue(business)?.ToString(), "GeneralStore", StringComparison.Ordinal));

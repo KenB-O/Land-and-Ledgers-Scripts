@@ -183,7 +183,7 @@ namespace LandLedgers.Population
             if (knownOffering.Count == 0)
             {
                 return Fail(result, need, -1, dayIndex,
-                    $"No legitimately known seller offers '{need.ItemId}' — unavailable seller, need stays open.", diag, options);
+                    DescribeNoKnownItemOffer(memberIds, need.ItemId), diag, options);
             }
 
             string homeLocation = ResolvePersonLocation(memberIds[0], options);
@@ -483,22 +483,57 @@ namespace LandLedgers.Population
             // by winnable supplier WITHOUT recording choice events yet. ----
             var viableBySupplier = new Dictionary<string, List<HouseholdPurchasingNeed>>(StringComparer.OrdinalIgnoreCase);
             var viableSuppliers = new Dictionary<string, IGoodsSupplier>(StringComparer.OrdinalIgnoreCase);
+            var unservedNeedReasons = new List<string>();
             foreach (HouseholdPurchasingNeed need in valid)
             {
                 ShoppingTripResult result = FindBatchNeedResult(batch, need);
                 List<IGoodsSupplier> knownOffering = FindKnownItemSuppliers(memberIds, need.ItemId, dayIndex, result, diag, options);
+                var rejected = new List<string>();
+                if (knownOffering.Count == 0)
+                {
+                    rejected.Add("no legitimately known seller offers this item");
+                }
+
                 bool anyViable = false;
                 foreach (IGoodsSupplier supplier in knownOffering)
                 {
                     if (supplier == null) continue;
                     var itemSupplier = supplier as IItemResolvingSupplier;
-                    if (itemSupplier == null || !itemSupplier.OffersItem(need.ItemId)) continue;
-                    if (itemSupplier.ItemStockUnits(need.ItemId) <= 0) continue;
-                    if (itemSupplier.ItemPricePerUnitCents(need.ItemId) <= 0) continue;
+                    if (itemSupplier == null || !itemSupplier.OffersItem(need.ItemId))
+                    {
+                        rejected.Add($"{supplier.SupplierName}: item identity unavailable");
+                        continue;
+                    }
+
+                    int stock = itemSupplier.ItemStockUnits(need.ItemId);
+                    if (stock <= 0)
+                    {
+                        rejected.Add($"{supplier.SupplierName}: out of stock");
+                        continue;
+                    }
+
+                    int unitPrice = itemSupplier.ItemPricePerUnitCents(need.ItemId);
+                    if (unitPrice <= 0)
+                    {
+                        rejected.Add($"{supplier.SupplierName}: no legitimate price");
+                        continue;
+                    }
+
                     JourneyRoute route = journeys.FindRoute(homeLocation, supplier.LocationId, TravelMode.Foot);
-                    if (!route.Found) continue;
+                    if (!route.Found)
+                    {
+                        rejected.Add($"{supplier.SupplierName}: blocked journey ({route.Diagnostic})");
+                        continue;
+                    }
+
                     int arrivalMinute = options.DepartureMinuteOfDay + Math.Max(1, route.TotalMinutes);
-                    if (itemSupplier.CheckTradingCapability(dayIndex, arrivalMinute) != null) continue;
+                    string sellerTradeBlock = itemSupplier.CheckTradingCapability(dayIndex, arrivalMinute);
+                    if (sellerTradeBlock != null)
+                    {
+                        rejected.Add($"{supplier.SupplierName}: cannot trade at arrival ({sellerTradeBlock})");
+                        continue;
+                    }
+
                     anyViable = true;
                     if (!viableBySupplier.TryGetValue(supplier.SupplierBusinessId, out List<HouseholdPurchasingNeed> group))
                     {
@@ -512,8 +547,14 @@ namespace LandLedgers.Population
 
                 if (!anyViable)
                 {
+                    int shown = Math.Min(3, rejected.Count);
+                    string explanation = rejected.Count == 0
+                        ? "no supplier passed stock, price, route, and trading checks"
+                        : string.Join("; ", rejected.GetRange(0, shown)) +
+                          (rejected.Count > shown ? $"; and {rejected.Count - shown} more" : string.Empty);
+                    unservedNeedReasons.Add($"{need.ItemId}: {explanation}");
                     Fail(result, need, -1, dayIndex,
-                        $"No viable seller for '{need.ItemId}' — need stays open.", diag, options);
+                        $"No viable seller for '{need.ItemId}': {explanation}. Need stays open.", diag, options);
                 }
             }
 
@@ -532,7 +573,12 @@ namespace LandLedgers.Population
 
             if (batchNeeds == null || batchNeeds.Count == 0)
             {
-                batch.FailureReason = "No supplier can serve any need in the batch — needs stay open.";
+                int shown = Math.Min(3, unservedNeedReasons.Count);
+                string detail = shown > 0
+                    ? " " + string.Join(" | ", unservedNeedReasons.GetRange(0, shown)) +
+                      (unservedNeedReasons.Count > shown ? $" | and {unservedNeedReasons.Count - shown} more need(s)" : string.Empty)
+                    : string.Empty;
+                batch.FailureReason = "No supplier can serve any need in the batch — needs stay open." + detail;
                 return batch;
             }
 
@@ -1092,7 +1138,7 @@ namespace LandLedgers.Population
             if (knownOffering.Count == 0)
             {
                 return FailPlan(trip, need, -1,
-                    $"No legitimately known seller offers '{need.ItemId}' — unavailable seller, need stays open.", diag);
+                    DescribeNoKnownItemOffer(memberIds, need.ItemId), diag);
             }
 
             string homeLocation = ResolvePersonLocation(memberIds[0], options);
@@ -1676,6 +1722,30 @@ namespace LandLedgers.Population
             }
 
             return found;
+        }
+
+        private string DescribeNoKnownItemOffer(List<int> memberIds, string itemId)
+        {
+            bool hasKnownSeller = false;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (memberIds != null)
+            {
+                foreach (int memberId in memberIds)
+                {
+                    List<IGoodsSupplier> known = knowledge.KnownSuppliers(memberId, suppliers.All);
+                    foreach (IGoodsSupplier supplier in known)
+                    {
+                        if (supplier != null && seen.Add(supplier.SupplierBusinessId))
+                        {
+                            hasKnownSeller = true;
+                        }
+                    }
+                }
+            }
+
+            return hasKnownSeller
+                ? $"Known seller(s) exist, but none currently advertise a purchasable '{itemId}' offer (item mapping, price, or available stock may be missing). Need stays open."
+                : $"No legitimately known seller offers '{itemId}' — unavailable seller, need stays open.";
         }
 
         private int EstimateTripMinutes(string homeLocation, List<IGoodsSupplier> candidates, ShoppingLoopOptions options)

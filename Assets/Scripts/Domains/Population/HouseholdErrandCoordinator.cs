@@ -174,6 +174,7 @@ namespace LandLedgers.Population
             if (batch == null)
             {
                 plan.MarkFailed();
+                plans.NoteTerminal(plan.PlanId);
                 return null;
             }
 
@@ -434,8 +435,10 @@ namespace LandLedgers.Population
     /// <summary>
     /// Pass V P2-1: the plan registry. One plan per household per day in the
     /// common case; needs are claimed by at most one active plan, so two plans
-    /// never buy the same goods. Clear-then-load: reload restores plans and
-    /// claims without re-executing anything.
+    /// never buy the same goods. Only resumable plans are retained and saved;
+    /// terminal outcomes remain in their economic/task authorities, not in an
+    /// ever-growing orchestration list. Clear-then-load restores active plans
+    /// and claims without re-executing anything.
     /// </summary>
     public sealed class HouseholdErrandPlanRegistry
     {
@@ -546,10 +549,23 @@ namespace LandLedgers.Population
             return result;
         }
 
-        /// <summary>Drops a terminal plan's claim set (Completed/Failed/Cancelled).</summary>
+        /// <summary>
+        /// Retires a terminal plan and its planning metadata. Terminal plan
+        /// history is not an economic record; transactions, needs, and Tasks
+        /// remain in their own authorities. Keeping failed plans here caused
+        /// repeated blocked errands to grow the registry and every save forever.
+        /// </summary>
         public void NoteTerminal(string planId)
         {
-            if (!string.IsNullOrWhiteSpace(planId)) claims.Remove(planId);
+            if (string.IsNullOrWhiteSpace(planId)) return;
+            HouseholdErrandPlan plan = Get(planId);
+            if (plan != null && IsResumable(plan.Status)) return;
+
+            claims.Remove(planId);
+            estimateMinutes.Remove(planId);
+            departureMinutes.Remove(planId);
+            planDays.Remove(planId);
+            if (plan != null) plans.Remove(plan);
         }
 
         public void ReleaseClaim(string planId, int needSequence)
@@ -588,10 +604,20 @@ namespace LandLedgers.Population
         public HouseholdErrandPlanRegistrySaveDto CaptureSaveDto()
         {
             var dto = new HouseholdErrandPlanRegistrySaveDto { NextPlanSequence = nextPlanSequence };
-            dto.Plans.AddRange(plans);
+            var resumablePlanIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (HouseholdErrandPlan plan in plans)
+            {
+                if (plan == null || !IsResumable(plan.Status)) continue;
+                // The plan remains mutable in the live registry. A save DTO
+                // must represent the instant of capture even if simulation
+                // continues and the live plan later completes or fails.
+                dto.Plans.Add(plan.Copy());
+                resumablePlanIds.Add(plan.PlanId);
+            }
+
             foreach (KeyValuePair<string, HashSet<string>> entry in claims)
             {
-                if (entry.Value == null) continue;
+                if (!resumablePlanIds.Contains(entry.Key) || entry.Value == null) continue;
                 foreach (string needKey in entry.Value)
                 {
                     dto.Claims.Add(new HouseholdErrandPlanClaimEntry { PlanId = entry.Key, NeedKey = needKey });
@@ -599,16 +625,19 @@ namespace LandLedgers.Population
             }
             foreach (KeyValuePair<string, int> entry in estimateMinutes)
             {
+                if (!resumablePlanIds.Contains(entry.Key)) continue;
                 dto.EstimateMinutes.Add(new HouseholdErrandPlanIntEntry { Key = entry.Key, Value = entry.Value });
             }
 
             foreach (KeyValuePair<string, int> entry in departureMinutes)
             {
+                if (!resumablePlanIds.Contains(entry.Key)) continue;
                 dto.DepartureMinutes.Add(new HouseholdErrandPlanIntEntry { Key = entry.Key, Value = entry.Value });
             }
 
             foreach (KeyValuePair<string, int> entry in planDays)
             {
+                if (!resumablePlanIds.Contains(entry.Key)) continue;
                 dto.PlanDays.Add(new HouseholdErrandPlanIntEntry { Key = entry.Key, Value = entry.Value });
             }
 
@@ -628,16 +657,14 @@ namespace LandLedgers.Population
             if (dto == null) return;
             nextPlanSequence = Math.Max(0, dto.NextPlanSequence);
             // Pass XII Worker F (copy-on-load, E-DEFECT-02 pattern):
-            // plans are mutated in place (Assign, MarkCompleted,
-            // MarkFailed, Cancel), so storing the DTO's plan objects
-            // would let a run corrupt the caller's snapshot. Every
-            // plan is therefore copied via Copy (Assign cannot copy:
-            // it forces status to Assigned).
+            // plans are mutated in place, so never retain DTO objects. Only
+            // active plans are resumable; old saves may contain terminal
+            // history from before registry compaction, which is safely dropped.
             if (dto.Plans != null)
             {
                 foreach (HouseholdErrandPlan plan in dto.Plans)
                 {
-                    if (plan == null) continue;
+                    if (plan == null || !IsResumable(plan.Status)) continue;
                     plans.Add(plan.Copy());
                 }
             }
@@ -677,7 +704,7 @@ namespace LandLedgers.Population
             {
                 foreach (HouseholdErrandPlanIntEntry entry in dto.EstimateMinutes)
                 {
-                    if (entry != null) estimateMinutes[entry.Key] = entry.Value;
+                    if (entry != null && Get(entry.Key) != null) estimateMinutes[entry.Key] = entry.Value;
                 }
             }
 
@@ -685,7 +712,7 @@ namespace LandLedgers.Population
             {
                 foreach (HouseholdErrandPlanIntEntry entry in dto.DepartureMinutes)
                 {
-                    if (entry != null) departureMinutes[entry.Key] = entry.Value;
+                    if (entry != null && Get(entry.Key) != null) departureMinutes[entry.Key] = entry.Value;
                 }
             }
 
@@ -693,9 +720,15 @@ namespace LandLedgers.Population
             {
                 foreach (HouseholdErrandPlanIntEntry entry in dto.PlanDays)
                 {
-                    if (entry != null) planDays[entry.Key] = entry.Value;
+                    if (entry != null && Get(entry.Key) != null) planDays[entry.Key] = entry.Value;
                 }
             }
+        }
+
+        private static bool IsResumable(HouseholdErrandPlanStatus status)
+        {
+            return status == HouseholdErrandPlanStatus.Proposed
+                || status == HouseholdErrandPlanStatus.Assigned;
         }
     }
 

@@ -36,10 +36,11 @@ namespace LandLedgers.Editor.Economy
     [TestFixture]
     public sealed class Series2Pass7SellingTests
     {
-        private sealed class RuntimeCashPort : IBusinessCashPort
+        private sealed class RuntimeCashPort : IBusinessIdentityCashPort
         {
             private readonly BusinessRuntimeState runtime;
             public RuntimeCashPort(BusinessRuntimeState runtime) { this.runtime = runtime; }
+            public string BusinessId => runtime != null ? runtime.BusinessId : string.Empty;
             public int BalanceCents => runtime != null ? runtime.CurrentCashCents : 0;
             public string TryDebit(int amountCents, string reason)
             {
@@ -453,7 +454,8 @@ namespace LandLedgers.Editor.Economy
         {
             var diag = new List<string>();
             Pass3WholesaleIntakeResult result = intake.Receive(
-                lotId, "bread", units, wholesalePrice, bakedDay, transferDay, catalog, diag);
+                lotId, "bread", units, wholesalePrice, bakedDay, transferDay, catalog,
+                "general-store-1", "pierce-bakery-1", diag);
             Assert.IsNotNull(result, "intake should succeed; diag: " + string.Join("; ", diag));
             return result;
         }
@@ -477,14 +479,16 @@ namespace LandLedgers.Editor.Economy
             bakeryRuntime.AddCashCents(500);
             var diag = new List<string>();
             Series2WholesaleSettlementResult settled = Series2WholesaleSettlement.SettleCash(
-                result.Settlement, new RuntimeCashPort(storeRuntime), new RuntimeCashPort(bakeryRuntime), diag);
+                result.Settlement, new RuntimeCashPort(storeRuntime),
+                new RuntimeCashPort(bakeryRuntime), diag);
             Assert.IsTrue(settled.Settled, "cash settlement should succeed; diag: " + string.Join("; ", diag));
             Assert.IsTrue(result.Settlement.Settled);
             Assert.AreEqual(950, storeRuntime.CurrentCashCents, "store pays exactly 50c");
             Assert.AreEqual(550, bakeryRuntime.CurrentCashCents, "bakery receives exactly 50c");
 
             Series2WholesaleSettlementResult again = Series2WholesaleSettlement.SettleCash(
-                result.Settlement, new RuntimeCashPort(storeRuntime), new RuntimeCashPort(bakeryRuntime), diag);
+                result.Settlement, new RuntimeCashPort(storeRuntime),
+                new RuntimeCashPort(bakeryRuntime), diag);
             Assert.IsFalse(again.Settled, "double settlement must refuse");
             Assert.AreEqual(950, storeRuntime.CurrentCashCents, "second settlement moves no cash");
             Assert.AreEqual(550, bakeryRuntime.CurrentCashCents);
@@ -504,11 +508,57 @@ namespace LandLedgers.Editor.Economy
             bakeryRuntime.AddCashCents(500);
             var diag = new List<string>();
             Series2WholesaleSettlementResult settled = Series2WholesaleSettlement.SettleCash(
-                result.Settlement, new RuntimeCashPort(storeRuntime), new RuntimeCashPort(bakeryRuntime), diag);
+                result.Settlement, new RuntimeCashPort(storeRuntime),
+                new RuntimeCashPort(bakeryRuntime), diag);
             Assert.IsFalse(settled.Settled, "a payer that cannot cover the amount must not settle");
             Assert.IsFalse(result.Settlement.Settled);
             Assert.AreEqual(10, storeRuntime.CurrentCashCents);
             Assert.AreEqual(500, bakeryRuntime.CurrentCashCents);
+        }
+
+        [Test]
+        public void Wholesale_CashSettlement_RefusesCashPortsForDifferentBusinesses()
+        {
+            var catalog = new Pass3StoreCatalog();
+            Pass3WholesaleIntakeResult result = IntakeBread(
+                new Pass3WholesaleIntake(), catalog, "lot-wrong-party", 10, 5, 2, 2);
+            var actualStore = new BusinessRuntimeState();
+            actualStore.BindBusinessIdentity("unrelated-store");
+            actualStore.AddCashCents(1000);
+            var actualBakery = new BusinessRuntimeState();
+            actualBakery.BindBusinessIdentity("pierce-bakery-1");
+            actualBakery.AddCashCents(500);
+            var diag = new List<string>();
+
+            Series2WholesaleSettlementResult settled = Series2WholesaleSettlement.SettleCash(
+                result.Settlement,
+                new RuntimeCashPort(actualStore),
+                new RuntimeCashPort(actualBakery), diag);
+
+            Assert.IsFalse(settled.Settled, "a matching balance is insufficient when the payer identity is wrong");
+            Assert.IsFalse(result.Settlement.Settled);
+            Assert.AreEqual(1000, actualStore.CurrentCashCents, "mismatch must move no payer cash");
+            Assert.AreEqual(500, actualBakery.CurrentCashCents, "mismatch must move no payee cash");
+        }
+
+        [Test]
+        public void Wholesale_Intake_RequiresRealDistinctBusinessPartiesWithoutConsumingLot()
+        {
+            var catalog = new Pass3StoreCatalog();
+            var intake = new Pass3WholesaleIntake();
+            var diag = new List<string>();
+
+            Assert.IsNull(intake.Receive("lot-party-retry", "bread", 10, 5, 2, 2,
+                catalog, "general-store-1", "", diag));
+            Assert.AreEqual(0, catalog.Find("bread")?.BackUnits ?? 0,
+                "invalid party data must not create or mutate stock");
+
+            Pass3WholesaleIntakeResult retry = intake.Receive("lot-party-retry", "bread", 10, 5, 2, 2,
+                catalog, "general-store-1", "pierce-bakery-1", diag);
+            Assert.IsNotNull(retry, "a refused attempt must not consume the lot identity");
+            Assert.AreEqual("general-store-1", retry.Settlement.PayerBusinessId);
+            Assert.AreEqual("pierce-bakery-1", retry.Settlement.PayeeBusinessId);
+            Assert.AreEqual(10, catalog.Find("bread").BackUnits);
         }
 
         [Test]
@@ -536,10 +586,12 @@ namespace LandLedgers.Editor.Economy
             var intake = new Pass3WholesaleIntake();
             var diag = new List<string>();
             Pass3WholesaleIntakeResult first = IntakeBread(intake, catalog, "lot-w4", 10, 5, 2, 2);
-            Assert.IsNull(intake.Receive("lot-w4", "bread", 10, 5, 2, 2, catalog, diag),
+            Assert.IsNull(intake.Receive("lot-w4", "bread", 10, 5, 2, 2, catalog,
+                "general-store-1", "pierce-bakery-1", diag),
                 "the same lot must never intake twice");
             Assert.AreEqual(10, catalog.Find("bread").BackUnits, "duplicate intake moves no stock");
-            Assert.IsNull(intake.Receive("lot-w5", "bread", 10, 5, 2, 4, catalog, diag),
+            Assert.IsNull(intake.Receive("lot-w5", "bread", 10, 5, 2, 4, catalog,
+                "general-store-1", "pierce-bakery-1", diag),
                 "a lot more than one day past its baked day is stale and refused");
             Assert.AreEqual(10, catalog.Find("bread").BackUnits);
 

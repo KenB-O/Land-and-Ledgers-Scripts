@@ -538,7 +538,8 @@ namespace LandLedgers.Editor.Economy
             List<Pass3OrderRequest> placed = draft.Place(diag);
             Assert.IsNotNull(placed);
             var intake = new Pass3WholesaleIntake();
-            Assert.IsNotNull(intake.Receive("lot-1", "bread", 10, 5, 0, 0, new Pass3StoreCatalog(), diag));
+            Assert.IsNotNull(intake.Receive("lot-1", "bread", 10, 5, 0, 0, new Pass3StoreCatalog(),
+                "general-store-1", "bakery-1", diag));
             var settled = new Pass3WholesaleSettlement
             {
                 BakeryLotId = "lot-1", ProductId = "bread", Units = 10, UnitWholesalePriceCents = 50,
@@ -562,7 +563,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, target.WholesaleSettlements.Count, "the second restore must not double settlements");
             Assert.AreEqual(5, target.Catalog.Find("bread").ShelfUnits);
             Assert.IsNull(target.WholesaleIntake.Receive(
-                "lot-1", "bread", 10, 5, 0, 0, new Pass3StoreCatalog(), diag),
+                "lot-1", "bread", 10, 5, 0, 0, new Pass3StoreCatalog(),
+                "general-store-1", "bakery-1", diag),
                 "the delivered set must still refuse a re-intake after the second restore");
         }
 

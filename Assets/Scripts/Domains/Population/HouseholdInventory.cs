@@ -54,12 +54,15 @@ namespace LandLedgers.Population
         public const string SaltId = "salt";
 
         /// <summary>
-        /// Migration-only item: legacy reserve units had no composition, so
-        /// the one-time reserve-to-lot conversion books them honestly as
-        /// unspecified staple food rather than inventing flour/bread/potatoes.
-        /// New purchases must use real items.
+        /// Unspecified category lot used when a legacy reserve transaction
+        /// reports aggregate staple food without the exact SKU. It preserves
+        /// quantity and food availability without claiming flour, bread, or
+        /// potatoes were received.
         /// </summary>
         public const string UnspecifiedStapleFoodId = "staple_food_unspecified";
+        public const string UnspecifiedMeatId = "meat_unspecified";
+        public const string UnspecifiedHouseholdGoodsId = "household_goods_unspecified";
+        public const string UnspecifiedClothingId = "clothing_unspecified";
 
         private static readonly HouseholdItemDefinition[] Definitions =
         {
@@ -95,7 +98,10 @@ namespace LandLedgers.Population
             new("perfume", "Perfume", "bottle", "luxury_goods", 0, false),
             new("chocolate", "Chocolate", "bar", "luxury_goods", 0, true),
             new("silk_cloth", "Silk Cloth", "yd", "luxury_goods", 0, false),
-            new(UnspecifiedStapleFoodId, "Staple Food (legacy, composition unspecified)", "unit", "staple_food", 2, true),
+            new(UnspecifiedStapleFoodId, "Staple Food (composition unspecified)", "unit", "staple_food", 2, true),
+            new(UnspecifiedMeatId, "Meat (category-level, composition unspecified)", "unit", "meat", 1, true),
+            new(UnspecifiedHouseholdGoodsId, "Household Goods (category-level, item unspecified)", "unit", "household_goods", 0, false),
+            new(UnspecifiedClothingId, "Clothing (category-level, item unspecified)", "unit", "clothing", 0, false),
         };
 
         private static readonly Dictionary<string, HouseholdItemDefinition> ById = BuildIndex();

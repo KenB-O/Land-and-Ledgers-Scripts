@@ -13,9 +13,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// authorities (stock, cash, settlement). Scene wiring constructs this
     /// and registers the adapter in the SupplierDirectory (Codex integrates).
     /// </summary>
-    public sealed class GeneralStoreTradingPort : IGeneralStoreTradingPort
+    public sealed class GeneralStoreTradingPort : IItemLevelGeneralStoreTradingPort
     {
         private readonly GeneralStoreRuntimeManager manager;
+        private readonly BusinessInstanceState business;
         private readonly List<GeneralStoreCategoryOffer> offers;
         private readonly StoreTradingCapability capability;
 
@@ -29,9 +30,22 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             this.capability = tradingCapability ?? new StoreTradingCapability();
         }
 
-        public string StoreBusinessId => manager.CurrentBusiness != null ? manager.CurrentBusiness.InstanceId : "general-store";
-        public string StoreName => manager.CurrentBusiness != null ? manager.CurrentBusiness.RuntimeDisplayName : "General Store";
-        public string LocationId => manager.StoreBuildingId >= 0 ? $"building:{manager.StoreBuildingId}" : "general-store";
+        public GeneralStoreTradingPort(GeneralStoreRuntimeManager manager, BusinessInstanceState business,
+            List<GeneralStoreCategoryOffer> categoryOffers, StoreTradingCapability tradingCapability)
+        {
+            this.manager = manager ?? throw new ArgumentNullException(nameof(manager));
+            this.business = business ?? throw new ArgumentNullException(nameof(business));
+            this.offers = categoryOffers ?? new List<GeneralStoreCategoryOffer>();
+            this.capability = tradingCapability ?? new StoreTradingCapability();
+        }
+
+        private BusinessInstanceState ActiveBusiness => business ?? manager.CurrentBusiness;
+        private BusinessRuntimeState ActiveState => ActiveBusiness?.RuntimeState ?? manager.RuntimeState;
+        public string StoreBusinessId => ActiveBusiness != null ? ActiveBusiness.InstanceId : "general-store";
+        public string StoreName => ActiveBusiness != null ? ActiveBusiness.RuntimeDisplayName : "General Store";
+        public string LocationId => ActiveBusiness != null && ActiveBusiness.AssignedBuildingId >= 0
+            ? $"building:{ActiveBusiness.AssignedBuildingId}"
+            : manager.StoreBuildingId >= 0 ? $"building:{manager.StoreBuildingId}" : "general-store";
         public IReadOnlyList<GeneralStoreCategoryOffer> CategoryOffers => offers;
         public StoreTradingCapability TradingCapability
         {
@@ -43,14 +57,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 // clerk exist; registration itself never opens the business.
                 if (manager != null && capability != null)
                 {
-                    capability.Staffed = manager.CurrentBusiness != null
-                        && manager.FilledWorkerSlotCount > 0;
+                    capability.Staffed = business != null
+                        ? business.RuntimeState != null && business.RuntimeState.FilledWorkerCount > 0
+                        : manager.CurrentBusiness != null && manager.FilledWorkerSlotCount > 0;
                 }
 
                 return capability;
             }
         }
-        public int CurrentCashCents => manager.CurrentCashCents;
+        public int CurrentCashCents => ActiveState != null ? ActiveState.CurrentCashCents : manager.CurrentCashCents;
         public bool OffersDelivery => false;
 
         /// <summary>
@@ -62,14 +77,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public int CategoryStockUnits(string categoryId)
         {
-            BusinessRuntimeState state = manager.RuntimeState;
+            BusinessRuntimeState state = ActiveState;
             CategoryStockState stock = state != null ? state.GetCategoryStock(categoryId) : null;
             return stock != null ? stock.CurrentStockUnits : 0;
         }
 
         public int CategoryTargetStockUnits(string categoryId)
         {
-            BusinessRuntimeState state = manager.RuntimeState;
+            BusinessRuntimeState state = ActiveState;
             CategoryStockState stock = state != null ? state.GetCategoryStock(categoryId) : null;
             return stock != null ? stock.TargetStockUnits : 0;
         }
@@ -79,16 +94,66 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             return Math.Max(0, manager.GetAverageCategorySellingPriceCents(categoryId));
         }
 
+        private GeneralStoreCategoryOffer FindOffer(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || offers == null) return null;
+            for (int i = 0; i < offers.Count; i++)
+            {
+                GeneralStoreCategoryOffer offer = offers[i];
+                if (offer?.OfferedItemIds == null) continue;
+                for (int j = 0; j < offer.OfferedItemIds.Count; j++)
+                    if (string.Equals(offer.OfferedItemIds[j], itemId, StringComparison.OrdinalIgnoreCase)) return offer;
+            }
+            return null;
+        }
+
+        public bool UsesItemLevelInventory(string itemId) => FindOffer(itemId)?.UsesItemLevelInventory == true;
+
+        public int ItemStockUnits(string itemId)
+        {
+            GeneralStoreCategoryOffer offer = FindOffer(itemId);
+            if (offer == null) return 0;
+            return offer.UsesItemLevelInventory
+                ? ActiveState?.GetRetailItemStockUnits(itemId, offer.CategoryId) ?? 0
+                : CategoryStockUnits(offer.CategoryId) / Math.Max(1, offer.StoreUnitsPerItemUnit);
+        }
+
+        public int ItemPricePerUnitCents(string itemId)
+        {
+            GeneralStoreCategoryOffer offer = FindOffer(itemId);
+            if (offer == null) return 0;
+            return offer.UsesItemLevelInventory
+                ? manager.GetItemSellingPriceCents(itemId)
+                : CategoryPricePerUnitCents(offer.CategoryId) * Math.Max(1, offer.StoreUnitsPerItemUnit);
+        }
+
+        public bool TryConsumeItemStockUnits(string itemId, int units, out int consumedUnits)
+        {
+            consumedUnits = 0;
+            GeneralStoreCategoryOffer offer = FindOffer(itemId);
+            return offer != null && offer.UsesItemLevelInventory && ActiveState != null
+                && ActiveState.TryConsumeRetailItemStockUnits(itemId, offer.CategoryId, units, out consumedUnits);
+        }
+
+        public void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents)
+        {
+            ActiveState?.RecordRetailItemSettlement(categoryId, unitsSold, revenueCents);
+        }
+
         public bool TryConsumeStoreUnits(string categoryId, int units, out int consumedUnits)
         {
             consumedUnits = 0;
-            BusinessRuntimeState state = manager.RuntimeState;
+            for (int i = 0; i < offers.Count; i++)
+                if (offers[i] != null && offers[i].UsesItemLevelInventory
+                    && string.Equals(offers[i].CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            BusinessRuntimeState state = ActiveState;
             return state != null && state.TryConsumeCategoryStockUnits(categoryId, units, out consumedUnits);
         }
 
         public void RecordCashSettlement(string categoryId, int unitsSold, int revenueCents)
         {
-            BusinessRuntimeState state = manager.RuntimeState;
+            BusinessRuntimeState state = ActiveState;
             if (state != null)
             {
                 state.RecordGenericRetailSettlement(categoryId, unitsSold, revenueCents);
@@ -97,7 +162,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public void RecordCreditSettlement(string categoryId, int unitsSold, int amountCents, string obligationId)
         {
-            BusinessRuntimeState state = manager.RuntimeState;
+            BusinessRuntimeState state = ActiveState;
             if (state == null)
             {
                 return;
@@ -111,7 +176,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public string SpendCash(int amountCents, string purpose)
         {
-            BusinessRuntimeState state = manager.RuntimeState;
+            BusinessRuntimeState state = ActiveState;
             if (state == null)
             {
                 return "Store runtime unavailable.";
@@ -134,7 +199,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public string ReceiveStock(string categoryId, int units, string provenanceLabel)
         {
-            BusinessRuntimeState state = manager.RuntimeState;
+            BusinessRuntimeState state = ActiveState;
             if (state == null)
             {
                 return "Store runtime unavailable.";
@@ -156,7 +221,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public int CategoryReceivableUnits(string categoryId)
         {
-            BusinessRuntimeState state = manager.RuntimeState;
+            BusinessRuntimeState state = ActiveState;
             CategoryStockState stock = state != null ? state.GetCategoryStock(categoryId) : null;
             if (stock == null)
             {

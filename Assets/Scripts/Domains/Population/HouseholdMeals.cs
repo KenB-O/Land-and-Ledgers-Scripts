@@ -127,6 +127,7 @@ namespace LandLedgers.Population
         {
             HouseholdItemCatalog.BreadId,
             HouseholdItemCatalog.PreservedMeatId,
+            HouseholdItemCatalog.UnspecifiedMeatId,
             HouseholdItemCatalog.PreservedFoodId,
             HouseholdItemCatalog.PotatoesId,
             HouseholdItemCatalog.FlourId,

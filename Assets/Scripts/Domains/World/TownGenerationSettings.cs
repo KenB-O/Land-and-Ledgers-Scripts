@@ -179,6 +179,10 @@ namespace LandLedgers.World
         [Min(1)]
         public int maxPlotFrontageCells = 10;
 
+        [Min(1)]
+        [Tooltip("Minimum frontage for generated Business and MixedUse lots. This controls town parcel supply; each business still enforces its own authored site requirements at formation.")]
+        public int minimumCommercialSiteFrontageCells = 8;
+
         [Min(0)]
         public int plotGapCells = 1;
 
@@ -438,6 +442,7 @@ namespace LandLedgers.World
             plotDepthCells = Mathf.Max(1, plotDepthCells);
             minPlotFrontageCells = Mathf.Max(1, minPlotFrontageCells);
             maxPlotFrontageCells = Mathf.Max(minPlotFrontageCells, maxPlotFrontageCells);
+            minimumCommercialSiteFrontageCells = Mathf.Max(1, minimumCommercialSiteFrontageCells);
             plotGapCells = Mathf.Max(0, plotGapCells);
             buildingSetbackCells = Mathf.Max(0, buildingSetbackCells);
             edgeHouseCount = Mathf.Max(0, edgeHouseCount);

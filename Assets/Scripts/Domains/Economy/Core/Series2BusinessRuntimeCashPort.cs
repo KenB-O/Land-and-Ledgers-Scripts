@@ -50,7 +50,7 @@ namespace LandLedgers.Economy
     /// adapters take it as a caller-supplied port and never
     /// construct business cash themselves.
     /// </summary>
-    public sealed class Series2BusinessRuntimeCashPort : IBusinessCashPort
+    public sealed class Series2BusinessRuntimeCashPort : IBusinessIdentityCashPort
     {
         private readonly BusinessRuntimeState runtime;
 
@@ -59,6 +59,8 @@ namespace LandLedgers.Economy
             this.runtime = runtime;
         }
 
+        /// <summary>Identity comes from the wrapped runtime itself; callers cannot relabel another Business's cash.</summary>
+        public string BusinessId => runtime != null ? runtime.BusinessId : string.Empty;
         public int BalanceCents => runtime != null ? runtime.CurrentCashCents : 0;
 
         public string TryDebit(int amountCents, string reason)

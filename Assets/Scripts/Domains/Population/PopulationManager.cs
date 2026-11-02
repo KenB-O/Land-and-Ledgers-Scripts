@@ -782,7 +782,8 @@ namespace LandLedgers.Population
                 HouseholdState household = state.households[i];
                 if (household != null && household.id == householdId)
                 {
-                    household.EnsureHouseholdReservesInitialized();
+                    household.EnsureHouseholdReservesInitialized(
+                        migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
                     household.EnsureHouseholdUpgradesInitialized();
                     return household;
                 }
@@ -803,7 +804,8 @@ namespace LandLedgers.Population
                 HouseholdState household = state.households[i];
                 if (household != null && household.homeBuildingId == homeBuildingId)
                 {
-                    household.EnsureHouseholdReservesInitialized();
+                    household.EnsureHouseholdReservesInitialized(
+                        migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
                     household.EnsureHouseholdUpgradesInitialized();
                     return household;
                 }
@@ -930,7 +932,12 @@ namespace LandLedgers.Population
                         continue;
                     }
 
-                    household.EnsureHouseholdReservesInitialized();
+                    // Older household snapshots carry the staple-food balance
+                    // only in foodReserveUnits. Build the new reserve records
+                    // from that legacy value before reserve initialization
+                    // synchronizes the compatibility field from the reserve list.
+                    household.EnsureHouseholdReservesInitialized(
+                        migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
                     household.EnsureSettlementStateInitialized();
                     bool isBoardingHouseGuestHousehold = household.isBoardingHouseGuestHousehold;
                     bool isBoardingHouseLodging = household.isBoardingHouseLodging || isBoardingHouseGuestHousehold;
@@ -1025,7 +1032,8 @@ namespace LandLedgers.Population
                         }
                     }
 
-                    household.EnsureHouseholdReservesInitialized();
+                    household.EnsureHouseholdReservesInitialized(
+                        migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
                     householdDto.foodReserveUnits = household.foodReserveUnits;
                     if (household.reserves != null)
                     {
@@ -2524,7 +2532,8 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                household.EnsureHouseholdReservesInitialized();
+                household.EnsureHouseholdReservesInitialized(
+                    migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
                 household.EnsureHouseholdUpgradesInitialized();
 
                 builder.Append(" - ");

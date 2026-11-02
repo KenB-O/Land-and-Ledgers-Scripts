@@ -84,8 +84,8 @@ namespace LandLedgers.Economy.Ordering
         /// </summary>
         public static Series2WholesaleSettlementResult SettleCash(
             Pass3WholesaleSettlement settlement,
-            IBusinessCashPort payer,
-            IBusinessCashPort payee,
+            IBusinessIdentityCashPort payer,
+            IBusinessIdentityCashPort payee,
             List<string> diag)
         {
             var result = new Series2WholesaleSettlementResult();
@@ -161,6 +161,13 @@ namespace LandLedgers.Economy.Ordering
                 if (diag != null) diag.Add("Series2WholesaleSettlement: " + result.Refusal);
                 return result;
             }
+            string partyProblem = ValidateBusinessParties(settlement);
+            if (partyProblem != null)
+            {
+                result.Refusal = partyProblem;
+                if (diag != null) diag.Add("Series2WholesaleSettlement: " + partyProblem);
+                return result;
+            }
             if (creditPort == null)
             {
                 result.Refusal = "no trade-credit port supplied — credit without the debt authority is informal debt and is refused.";
@@ -189,12 +196,30 @@ namespace LandLedgers.Economy.Ordering
             return result;
         }
 
-        private static string Validate(Pass3WholesaleSettlement settlement, IBusinessCashPort payer, IBusinessCashPort payee)
+        private static string Validate(Pass3WholesaleSettlement settlement, IBusinessIdentityCashPort payer, IBusinessIdentityCashPort payee)
         {
             if (settlement == null) return "no settlement record to settle.";
             if (settlement.Settled) return $"lot '{settlement.BakeryLotId}' is already settled — double settlement refused.";
             if (settlement.AmountCents <= 0) return $"lot '{settlement.BakeryLotId}' has no positive amount to settle.";
             if (payer == null || payee == null) return "settlement needs both a payer and a payee cash port.";
+            string partyProblem = ValidateBusinessParties(settlement);
+            if (partyProblem != null) return partyProblem;
+            if (string.IsNullOrWhiteSpace(payer.BusinessId) || string.IsNullOrWhiteSpace(payee.BusinessId))
+                return "cash ports must identify their owning Businesses before wholesale settlement.";
+            if (!string.Equals(payer.BusinessId.Trim(), settlement.PayerBusinessId.Trim(), StringComparison.OrdinalIgnoreCase))
+                return $"payer cash port belongs to '{payer.BusinessId}', settlement names '{settlement.PayerBusinessId}'.";
+            if (!string.Equals(payee.BusinessId.Trim(), settlement.PayeeBusinessId.Trim(), StringComparison.OrdinalIgnoreCase))
+                return $"payee cash port belongs to '{payee.BusinessId}', settlement names '{settlement.PayeeBusinessId}'.";
+            return null;
+        }
+
+        private static string ValidateBusinessParties(Pass3WholesaleSettlement settlement)
+        {
+            if (settlement == null) return "no settlement record to settle.";
+            if (string.IsNullOrWhiteSpace(settlement.PayerBusinessId) || string.IsNullOrWhiteSpace(settlement.PayeeBusinessId))
+                return "settlement must name real payer and payee Business ids.";
+            if (string.Equals(settlement.PayerBusinessId.Trim(), settlement.PayeeBusinessId.Trim(), StringComparison.OrdinalIgnoreCase))
+                return "payer and payee must be distinct Businesses.";
             return null;
         }
     }

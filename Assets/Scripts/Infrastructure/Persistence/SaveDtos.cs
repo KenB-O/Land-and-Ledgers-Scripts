@@ -1016,6 +1016,10 @@ namespace LandLedgers.Persistence
         public float reliability01 = 1f;
         public float competitionPressure01;
         public List<CategoryStockSaveDto> categoryStock = new();
+        // Additive: absent from older saves, which continue to restore the
+        // existing category-only inventory without being granted new goods.
+        public List<BusinessRetailItemLotSaveDto> retailItemLots = new();
+        public List<string> appliedScenarioEndowmentIds = new();
         public List<WorkerSlotSaveDto> workerSlots = new();
         public List<string> lastSuspendedPayrollWorkerIds = new();
         public BusinessMainFocusSaveDto mainFocus = new();
@@ -1082,6 +1086,21 @@ namespace LandLedgers.Persistence
         public int lastDailyRevenueCents;
         public int weekToDateUnitsSold;
         public int weekToDateRevenueCents;
+    }
+
+    [Serializable]
+    public sealed class BusinessRetailItemLotSaveDto
+    {
+        public string lotId = string.Empty;
+        public string itemId = string.Empty;
+        public string categoryId = string.Empty;
+        public string unitLabel = string.Empty;
+        public int quantityUnits;
+        public int reservedUnits;
+        public string ownerBusinessId = string.Empty;
+        public string custodianBusinessId = string.Empty;
+        public string provenance = string.Empty;
+        public int createdDayIndex = -1;
     }
 
     [Serializable]

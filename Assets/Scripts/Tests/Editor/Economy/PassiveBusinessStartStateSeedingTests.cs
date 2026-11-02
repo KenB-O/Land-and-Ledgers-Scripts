@@ -230,7 +230,7 @@ namespace LandLedgers.Editor.Economy
                     3,
                     "Ranch parcel should instantiate animal asset dressing.");
                 Assert.GreaterOrEqual(
-                    CountVisualsWithPrefix(townWorld.VisualRoot, "Remote Sawmill Tree Stand"),
+                    CountVisualsWithPrefix(townWorld.VisualRoot, "Forest Environment Sawmill Timber Stand"),
                     10,
                     "Sawmill parcel should create remote timber dressing.");
             }

@@ -936,7 +936,8 @@ namespace LandLedgers.World
 
         private static bool IsDefaultCommercialProfessionFit(BusinessType businessType)
         {
-            return businessType == BusinessType.LiveryFreight
+            return businessType == BusinessType.LumberYard
+                || businessType == BusinessType.LiveryFreight
                 || businessType == BusinessType.Builder
                 || businessType == BusinessType.FuelDealer
                 || businessType == BusinessType.GrainMill

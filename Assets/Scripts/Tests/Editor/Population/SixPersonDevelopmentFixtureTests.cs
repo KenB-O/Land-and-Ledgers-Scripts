@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.World;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 
 namespace LandLedgers.EditorTests.Population
@@ -13,6 +15,7 @@ namespace LandLedgers.EditorTests.Population
     {
         private GameObject worldObject;
         private GameObject managerObject;
+        private GameObject interactionObject;
         private TownWorldController world;
         private PopulationManager manager;
         private PopulationGenerationSettings settings;
@@ -56,6 +59,7 @@ namespace LandLedgers.EditorTests.Population
         public void TearDown()
         {
             if (managerObject != null) Object.DestroyImmediate(managerObject);
+            if (interactionObject != null) Object.DestroyImmediate(interactionObject);
             if (worldObject != null) Object.DestroyImmediate(worldObject);
             foreach (BuildingDefinition definition in definitions)
             {
@@ -63,6 +67,18 @@ namespace LandLedgers.EditorTests.Population
             }
             if (settings != null) Object.DestroyImmediate(settings);
             if (fixture != null) Object.DestroyImmediate(fixture);
+        }
+
+        [Test]
+        public void AuthoredFixtureAsset_ContainsTheThreeApprovedSpousePairs()
+        {
+            SixPersonDevelopmentFixture authored = AssetDatabase.LoadAssetAtPath<SixPersonDevelopmentFixture>(
+                "Assets/Core/Population/SixPersonDevelopmentFixture.asset");
+            Assert.IsNotNull(authored, "The Main Scene fixture asset must load from its authored project path.");
+            Assert.IsTrue(authored.Validate(out string error), error);
+            CollectionAssert.AreEqual(
+                new[] { (0, 1), (2, 3), (4, 5) },
+                authored.SpousePairs.Select(pair => (pair.firstPersonIndex, pair.secondPersonIndex)).ToArray());
         }
 
         [Test]
@@ -109,6 +125,42 @@ namespace LandLedgers.EditorTests.Population
 
             Assert.IsNotNull(manager.Lifecycle);
             Assert.AreEqual(6, manager.Memberships.ActiveCount);
+
+            AssertSpousePair(1, 2);
+            AssertSpousePair(3, 4);
+            AssertSpousePair(5, 6);
+            Assert.AreEqual(6, manager.Kinship.EdgeCount, "Three symmetric spouse relations should create exactly six directed kinship edges.");
+
+            PopulationSaveDto saved = manager.CaptureSaveDto();
+            Assert.AreEqual(6, saved.kinshipEdges.Count);
+            manager.LoadFromSaveDto(saved);
+            AssertSpousePair(1, 2);
+            AssertSpousePair(3, 4);
+            AssertSpousePair(5, 6);
+            Assert.AreEqual(6, manager.Kinship.EdgeCount, "Restoring the population must preserve spouse edges without duplication.");
+        }
+
+        [Test]
+        public void PersonInspection_ShowsSpouseNamesAndKeepsIdsInDevelopmentDetailsOnly()
+        {
+            manager.GeneratePopulationSnapshot(fixture);
+            interactionObject = new GameObject("PersonInspectionTest");
+            WorldInteractionController controller = interactionObject.AddComponent<WorldInteractionController>();
+            SetPrivateField(controller, "populationManager", manager);
+            MethodInfo buildText = typeof(WorldInteractionController).GetMethod(
+                "BuildPersonInspectionText", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(buildText);
+
+            SetPrivateField(controller, "showDevelopmentPersonDetails", false);
+            string playerText = (string)buildText.Invoke(controller, new object[] { manager.State.GetPerson(1) });
+            StringAssert.Contains("Spouse: Emma Baldwin-Ooms", playerText);
+            StringAssert.DoesNotContain("Person ID:", playerText);
+            StringAssert.DoesNotContain("[P002]", playerText);
+
+            SetPrivateField(controller, "showDevelopmentPersonDetails", true);
+            string developerText = (string)buildText.Invoke(controller, new object[] { manager.State.GetPerson(1) });
+            StringAssert.Contains("Person ID: P001", developerText);
+            StringAssert.Contains("Emma Baldwin-Ooms [P002]", developerText);
         }
 
         [Test]
@@ -134,6 +186,16 @@ namespace LandLedgers.EditorTests.Population
         private static void SetPrivateField(object target, string name, object value)
         {
             target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(target, value);
+        }
+
+        private void AssertSpousePair(int personA, int personB)
+        {
+            CollectionAssert.Contains(manager.Kinship.GetSpouses(personA), personB);
+            CollectionAssert.Contains(manager.Kinship.GetSpouses(personB), personA);
+            Assert.IsTrue(manager.Kinship.AllEdges.Any(edge => edge.FromPersonId == personA
+                && edge.ToPersonId == personB
+                && edge.Relation == KinshipRelation.Spouse
+                && edge.Source == $"scenario fixture:{fixture.ProfileId}"));
         }
     }
 }

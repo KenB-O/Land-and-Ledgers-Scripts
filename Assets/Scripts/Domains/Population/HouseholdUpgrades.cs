@@ -276,7 +276,8 @@ namespace LandLedgers.Population
             household.EnsureHouseholdUpgradesInitialized();
             ApplyDailyNeedBonuses(household, ref demand);
 
-            household.EnsureHouseholdReservesInitialized();
+            household.EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
             HouseholdReserveState stapleReserve = household.GetReserve("staple_food");
             int availableReserve = stapleReserve != null ? stapleReserve.currentUnits : household.foodReserveUnits;
             int maxReserveUse = HouseholdUpgradeCatalog.HasBuiltUpgrade(household, HouseholdUpgradeKind.RootCellar) ? 2 : 1;
@@ -315,7 +316,8 @@ namespace LandLedgers.Population
             }
 
             household.EnsureHouseholdUpgradesInitialized();
-            household.EnsureHouseholdReservesInitialized();
+            household.EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
             HouseholdReserveState stapleReserve = household.GetReserve("staple_food");
             int reserveBefore = stapleReserve != null ? Mathf.Max(0, stapleReserve.currentUnits) : Mathf.Max(0, household.foodReserveUnits);
             int reserveProduction = 0;

@@ -91,6 +91,7 @@ namespace LandLedgers.Editor.Population
             household.EnsureHouseholdReservesInitialized();
             HouseholdReserveState staple = household.GetReserve("staple_food");
             staple.currentUnits = 8;
+            household.GetReserve("meat").currentUnits = 3;
             var inventory = new HouseholdInventory(55);
 
             HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
@@ -98,12 +99,71 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(8, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
                 "Legacy staple units seed honestly as unspecified, never invented as flour/bread.");
             Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(3, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedMeatId),
+                "Legacy meat reserve units retain unknown composition rather than being labeled preserved meat.");
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.PreservedMeatId));
             Assert.IsTrue(inventory.State.SeededFromReserves);
 
             HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 10, new List<string>());
             Assert.AreEqual(8, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
                 "Seeding is idempotent: a second pass adds nothing.");
-            Assert.AreEqual(1, inventory.Lots.Count, "No duplicate lots.");
+            Assert.AreEqual(3, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedMeatId));
+            Assert.AreEqual(2, inventory.Lots.Count, "No duplicate lots.");
+        }
+
+        [Test]
+        public void Bridge_CategoryCreditsDoNotInventSpecificPooledSkuIdentity()
+        {
+            var inventory = new HouseholdInventory(56);
+            var diagnostics = new List<string>();
+
+#pragma warning disable 618
+            HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
+                inventory, "staple_food", 7, 4, "category purchase from store", diagnostics);
+            HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
+                inventory, "meat", 2, 4, "category purchase from store", diagnostics);
+            HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
+                inventory, "household_goods", 5, 4, "category purchase from store", diagnostics);
+            HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
+                inventory, "clothing", 3, 4, "category purchase from store", diagnostics);
+            HouseholdInventoryReserveBridge.MirrorReserveCreditToLots(
+                inventory, "fuel_wood", 4, 4, "exact fuel purchase from store", diagnostics);
+#pragma warning restore 618
+
+            Assert.AreEqual(7, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId));
+            Assert.AreEqual(2, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedMeatId));
+            Assert.AreEqual(5, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedHouseholdGoodsId));
+            Assert.AreEqual(3, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedClothingId));
+            Assert.AreEqual(4, inventory.GetAvailableUnits(HouseholdItemCatalog.FuelWoodId));
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.PreservedMeatId));
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.SoapId));
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.ClothingTextilesId));
+            Assert.IsEmpty(diagnostics);
+
+            var household = new HouseholdState { id = 56 };
+            household.EnsureHouseholdReservesInitialized();
+            household.GetReserve("meat").currentUnits = 2;
+            var mealLog = new HouseholdMealLogRegistry();
+            var mealService = new HouseholdMealService(mealLog);
+            MealDayResult meal = mealService.ServeHouseholdDay(
+                household,
+                new List<int> { 1 },
+                inventory,
+                new MealSchedulingPolicy
+                {
+                    SubstantialMealSlots = new List<MealSlot> { MealSlot.Morning },
+                    MiddayMealEnabled = false,
+                },
+                4,
+                null);
+
+            Assert.AreEqual(1, meal.MealsServed,
+                "The explicitly unidentified meat category lot remains edible through the real meal authority.");
+            Assert.AreEqual(HouseholdItemCatalog.UnspecifiedMeatId,
+                mealLog.GetMeals(56)[0].ItemsConsumed[0].ItemId);
+            Assert.AreEqual(1, household.GetReserve("meat").currentUnits,
+                "Lot consumption updates the corresponding legacy reserve mirror exactly once.");
         }
 
         // ---------- B3: real food and meals ----------

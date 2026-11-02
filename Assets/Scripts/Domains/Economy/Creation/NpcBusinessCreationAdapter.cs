@@ -23,7 +23,7 @@ namespace LandLedgers.Economy.Creation
     /// profiles). The formation orchestration over this port IS tested
     /// via a fake port; this adapter is Codex/Luna's Unity-run surface.
     /// </summary>
-    public sealed class NpcBusinessCreationAdapter : INpcBusinessCreationPort, IBusinessCreationContext
+    public sealed class NpcBusinessCreationAdapter : INpcBusinessCreationPort, IBusinessCreationContext, IBusinessTypedPremisesContext
     {
         private readonly EntityIdRegistry ids;
         private readonly BusinessCapabilityRegistry capabilityRegistry;
@@ -31,9 +31,19 @@ namespace LandLedgers.Economy.Creation
         /// <summary>
         /// Resolves a premises kind to a real building id. Supplied by the
         /// runtime manager (scene/building knowledge lives there, not here).
-        /// Return -1 when no suitable site exists.
+        /// Legacy compatibility hook. Production creation uses
+        /// <see cref="TypedPremisesAssigner"/> and never falls back here when
+        /// the business-aware resolver is absent.
         /// </summary>
         public Func<PremisesKind, int> PremisesAssigner;
+
+        /// <summary>
+        /// Optional production selector that can use both the descriptive
+        /// BusinessType and the capability-derived premises kind. Without this
+        /// path a crop farm and a storefront would receive the same generic
+        /// first-free-building selection.
+        /// </summary>
+        public Func<BusinessType, PremisesKind, int> TypedPremisesAssigner;
 
         /// <summary>Handoff into the authoritative live Business runtime after formation.</summary>
         public Action<BusinessInstanceState> BusinessCreated;
@@ -187,6 +197,37 @@ namespace LandLedgers.Economy.Creation
             }
 
             return buildingId >= 0;
+        }
+
+        public bool TryAssignPremises(BusinessType businessType, PremisesKind kind, out int buildingId)
+        {
+            buildingId = -1;
+            if (TypedPremisesAssigner != null)
+            {
+                try
+                {
+                    buildingId = TypedPremisesAssigner(businessType, kind);
+                }
+                catch (Exception)
+                {
+                    buildingId = -1;
+                }
+
+                if (buildingId >= 0)
+                {
+                    return true;
+                }
+
+                // A configured typed selector is authoritative. Falling back
+                // to an untyped selector could silently place the wrong kind
+                // of business on an incompatible site.
+                return false;
+            }
+
+            // This adapter is itself a typed context. Falling back to a
+            // premises-kind-only selector can assign a business to an
+            // unrelated first-free shell, so missing typed wiring is refusal.
+            return false;
         }
 
         public void LogDiagnostic(string message)

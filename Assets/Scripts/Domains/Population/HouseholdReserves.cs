@@ -368,7 +368,8 @@ namespace LandLedgers.Population
                 return 0;
             }
 
-            household.EnsureHouseholdReservesInitialized();
+            household.EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
             reserve ??= household.GetReserve(HouseholdReserveCatalog.FuelWoodCategoryId);
             if (reserve == null)
             {
@@ -548,7 +549,8 @@ namespace LandLedgers.Population
                 return 0;
             }
 
-            household.EnsureHouseholdReservesInitialized();
+            household.EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
             if (household.lastReserveDepletionDayIndex == absoluteDayIndex)
             {
                 return 0;
@@ -597,7 +599,8 @@ namespace LandLedgers.Population
                 return needs;
             }
 
-            household.EnsureHouseholdReservesInitialized();
+            household.EnsureHouseholdReservesInitialized(
+                migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
             IReadOnlyList<HouseholdReserveDefinition> definitions = HouseholdReserveCatalog.All;
             for (int i = 0; i < definitions.Count; i++)
             {

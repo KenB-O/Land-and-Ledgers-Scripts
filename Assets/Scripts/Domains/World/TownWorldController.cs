@@ -402,7 +402,7 @@ namespace LandLedgers.World
                 return false;
             }
 
-            int clampedHomes = Mathf.Clamp(requiredHomes, 0, 4);
+            int clampedHomes = Mathf.Max(0, requiredHomes);
             if (runtimeDevelopmentSettings == null)
             {
                 runtimeDevelopmentSettings = Instantiate(settings);
@@ -3696,6 +3696,66 @@ namespace LandLedgers.World
                     created++;
                 }
             }
+
+            // The four corner lots are the preferred edge-house sites, but an
+            // expanded development fixture can require more than four separate
+            // homes. Search existing road frontage for additional vacant lots
+            // instead of sharing a dwelling or fabricating a home off-road.
+            for (int z = 0; z < grid.Depth && created < target; z++)
+            {
+                for (int x = 0; x < grid.Width && created < target; x++)
+                {
+                    GridCoord access = new(x, z);
+                    if (!grid.GetCell(access).IsRoad)
+                    {
+                        continue;
+                    }
+
+                    if (TryCreateRoadFrontedResidentialLot(x, z, frontage, depth, GridDirection.East, -1, 0)
+                        || TryCreateRoadFrontedResidentialLot(x, z, frontage, depth, GridDirection.West, 1, 0)
+                        || TryCreateRoadFrontedResidentialLot(x, z, frontage, depth, GridDirection.South, 0, 1)
+                        || TryCreateRoadFrontedResidentialLot(x, z, frontage, depth, GridDirection.North, 0, -1))
+                    {
+                        created++;
+                    }
+                }
+            }
+        }
+
+        private bool TryCreateRoadFrontedResidentialLot(
+            int roadX,
+            int roadZ,
+            int frontage,
+            int depth,
+            GridDirection frontageDirection,
+            int sideX,
+            int sideZ)
+        {
+            int plotX;
+            int plotZ;
+            int plotWidth;
+            int plotDepth;
+            if (sideX != 0)
+            {
+                plotWidth = depth;
+                plotDepth = frontage;
+                plotX = sideX < 0 ? roadX - depth : roadX + 1;
+                plotZ = roadZ - frontage / 2;
+            }
+            else
+            {
+                plotWidth = frontage;
+                plotDepth = depth;
+                plotX = roadX - frontage / 2;
+                plotZ = sideZ < 0 ? roadZ - depth : roadZ + 1;
+            }
+
+            return TryCreatePlot(
+                new GridRect(plotX, plotZ, plotWidth, plotDepth),
+                frontageDirection,
+                new GridCoord(roadX, roadZ),
+                PlotZone.Residential,
+                false);
         }
 
         private void GenerateAgriculturalPlots(int centerX, int centerZ, int halfRoad)
@@ -4258,7 +4318,10 @@ namespace LandLedgers.World
                     }
                 }
 
-                plot.reservedForLandSale = reservedLandPlotIds.Contains(plot.id);
+                bool requiredDevelopmentResidence = runtimeDevelopmentSeparateUseBuildingProfile
+                    && plot.zone == PlotZone.Residential;
+                plot.reservedForLandSale = reservedLandPlotIds.Contains(plot.id)
+                    && !requiredDevelopmentResidence;
                 if (plot.reservedForLandSale)
                 {
                     continue;

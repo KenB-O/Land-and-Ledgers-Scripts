@@ -38,6 +38,31 @@ namespace LandLedgers.FirstLedger
         private IReadOnlyList<GenericBusinessSetupTemplate> setupTemplates = Array.Empty<GenericBusinessSetupTemplate>();
 
         public bool IsOpen => overlay != null && overlay.activeSelf;
+        public bool IsConfigured => configured;
+
+        public bool TryOpenFormFromManagementTab(out string message)
+        {
+            if (!configured)
+            {
+                message = "Business formation is not initialized in this session.";
+                return false;
+            }
+
+            if (overlay == null || confirmButton == null || nameInput == null)
+            {
+                EnsureControls();
+            }
+
+            if (overlay == null || confirmButton == null)
+            {
+                message = "Business formation controls could not be initialized.";
+                return false;
+            }
+
+            OpenForm();
+            message = "Business formation is open.";
+            return true;
+        }
 
         public void Configure(
             SharedBusinessRuntimeManager newSharedBusinessRuntime,

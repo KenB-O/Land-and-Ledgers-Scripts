@@ -1,0 +1,184 @@
+fileFormatVersion: 2
+guid: ebb50d1e34f1e624fa377acbc57d9571
+ModelImporter:
+  serializedVersion: 23
+  fileIDToRecycleName:
+    100000: //RootNode
+    100002: Back_1
+    100004: Back_2
+    100006: Chest_3
+    100008: Head_6
+    100010: Head_7
+    100012: Head_8
+    100014: Hip
+    100016: Horse
+    100018: Joint_6
+    100020: L_Leg_1
+    100022: L_Leg_2
+    100024: L_Leg_3
+    100026: L_Leg_4
+    100028: L_Leg_4_2
+    100030: L_Leg_5
+    100032: L_Leg_5_2
+    100034: L_Leg_6
+    100036: L_Leg_7
+    100038: L_Leg_8
+    100040: L_Leg_9
+    100042: Neck_4
+    100044: Neck_5
+    100046: R_Leg_1
+    100048: R_Leg_2
+    100050: R_Leg_3
+    100052: R_Leg_4
+    100054: R_Leg_4_2
+    100056: R_Leg_5
+    100058: R_Leg_5_2
+    100060: R_Leg_6
+    100062: R_Leg_6_2
+    100064: R_Leg_7
+    100066: R_Leg_8
+    100068: R_Leg_9
+    100070: Tail_1
+    100072: Tail_2
+    100074: Tail_3
+    100076: Tail_4
+    400000: //RootNode
+    400002: Back_1
+    400004: Back_2
+    400006: Chest_3
+    400008: Head_6
+    400010: Head_7
+    400012: Head_8
+    400014: Hip
+    400016: Horse
+    400018: Joint_6
+    400020: L_Leg_1
+    400022: L_Leg_2
+    400024: L_Leg_3
+    400026: L_Leg_4
+    400028: L_Leg_4_2
+    400030: L_Leg_5
+    400032: L_Leg_5_2
+    400034: L_Leg_6
+    400036: L_Leg_7
+    400038: L_Leg_8
+    400040: L_Leg_9
+    400042: Neck_4
+    400044: Neck_5
+    400046: R_Leg_1
+    400048: R_Leg_2
+    400050: R_Leg_3
+    400052: R_Leg_4
+    400054: R_Leg_4_2
+    400056: R_Leg_5
+    400058: R_Leg_5_2
+    400060: R_Leg_6
+    400062: R_Leg_6_2
+    400064: R_Leg_7
+    400066: R_Leg_8
+    400068: R_Leg_9
+    400070: Tail_1
+    400072: Tail_2
+    400074: Tail_3
+    400076: Tail_4
+    2300000: //RootNode
+    3300000: //RootNode
+    4300000: Horse
+    9500000: //RootNode
+    13700000: Horse
+  externalObjects:
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Horse_Hair_Mat
+    second: {fileID: 2100000, guid: 8caf23a8da0fc1142b035d41a0d877c7, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Horse_Mat
+    second: {fileID: 2100000, guid: 611d15c059d297846a8fc01e4f29c510, type: 2}
+  materials:
+    importMaterials: 1
+    materialName: 0
+    materialSearch: 1
+    materialLocation: 1
+  animations:
+    legacyGenerateAnimations: 4
+    bakeSimulation: 0
+    resampleCurves: 1
+    optimizeGameObjects: 0
+    motionNodeName: 
+    rigImportErrors: 
+    rigImportWarnings: 
+    animationImportErrors: 
+    animationImportWarnings: 
+    animationRetargetingWarnings: 
+    animationDoRetargetingWarnings: 0
+    importAnimatedCustomProperties: 0
+    importConstraints: 0
+    animationCompression: 1
+    animationRotationError: 0.5
+    animationPositionError: 0.5
+    animationScaleError: 0.5
+    animationWrapMode: 0
+    extraExposedTransformPaths: []
+    extraUserProperties: []
+    clipAnimations: []
+    isReadable: 0
+  meshes:
+    lODScreenPercentages: []
+    globalScale: 1
+    meshCompression: 0
+    addColliders: 0
+    useSRGBMaterialColor: 1
+    importVisibility: 1
+    importBlendShapes: 1
+    importCameras: 1
+    importLights: 1
+    swapUVChannels: 0
+    generateSecondaryUV: 0
+    useFileUnits: 1
+    optimizeMeshForGPU: 1
+    keepQuads: 0
+    weldVertices: 1
+    preserveHierarchy: 0
+    indexFormat: 0
+    secondaryUVAngleDistortion: 8
+    secondaryUVAreaDistortion: 15.000001
+    secondaryUVHardAngle: 88
+    secondaryUVPackMargin: 4
+    useFileScale: 1
+    previousCalculatedGlobalScale: 0.01
+    hasPreviousCalculatedGlobalScale: 1
+  tangentSpace:
+    normalSmoothAngle: 60
+    normalImportMode: 0
+    tangentImportMode: 3
+    normalCalculationMode: 4
+    legacyComputeAllNormalsFromSmoothingGroupsWhenMeshHasBlendShapes: 0
+    blendShapeNormalImportMode: 1
+    normalSmoothingSource: 0
+  importAnimation: 1
+  copyAvatar: 0
+  humanDescription:
+    serializedVersion: 2
+    human: []
+    skeleton: []
+    armTwist: 0.5
+    foreArmTwist: 0.5
+    upperLegTwist: 0.5
+    legTwist: 0.5
+    armStretch: 0.05
+    legStretch: 0.05
+    feetSpacing: 0
+    rootMotionBoneName: 
+    hasTranslationDoF: 0
+    hasExtraRoot: 0
+    skeletonHasParents: 1
+  lastHumanDescriptionAvatarSource: {instanceID: 0}
+  animationType: 2
+  humanoidOversampling: 1
+  additionalBone: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

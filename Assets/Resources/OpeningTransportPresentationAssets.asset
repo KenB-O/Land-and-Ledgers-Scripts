@@ -1,0 +1,17 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2a72408b03d7486595af0c37c9c80ad5, type: 3}
+  m_Name: OpeningTransportPresentationAssets
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.Transport.OpeningTransportPresentationAssets
+  horsePrefab: {fileID: 3631131018280871194, guid: f43d7d331bb2cd8438260b01e1ff268a, type: 3}
+  wagonPrefab: {fileID: 2532316502339358137, guid: dd7bb2b8300ad4547bed073f3098f16e, type: 3}
+  horseIdleController: {fileID: 9100000, guid: bc9d470a0c52be246b52ef66e7b6e0db, type: 2}

@@ -166,6 +166,17 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            // The world bootstrap can initialize or rebuild the director's
+            // scenario registry after this presentation component's Awake.
+            // Re-register through the same idempotent authority immediately
+            // before switching so the authored Start action cannot target an
+            // empty registry after startup ordering changes.
+            if (!scenarioDirector.RegisterScenarioAsset(scenarioAsset))
+            {
+                Debug.LogError($"[ScenarioHUD] Scenario '{scenarioAsset.ScenarioId}' could not be registered before start; the campaign clock was not started.", this);
+                return;
+            }
+
             TimeManager clock = TimeManager.Instance;
             TimeSaveDto previousClock = clock != null ? clock.CaptureSaveDto() : null;
             bool hasScenarioStart = scenarioAsset.StartingWorld != null;

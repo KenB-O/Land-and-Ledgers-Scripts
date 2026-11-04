@@ -1,15 +1,19 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using LandLedgers.Animals;
 using LandLedgers.CameraSystem;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Economy.Valuation;
 using LandLedgers.Population;
 using LandLedgers.Time;
+using LandLedgers.Economy.Transport;
 using LandLedgers.UI;
 using LandLedgers.World;
 using TMPro;
@@ -132,8 +136,13 @@ namespace LandLedgers.FirstLedger
         private int selectedBusinessDevelopmentPlotId = -1;
         private OwnedLandDevelopmentIntent selectedOwnedLandDevelopmentIntent = OwnedLandDevelopmentIntent.Business;
         private string ownedSignature = string.Empty;
+        private int townRosterCacheFrame = -1;
+        private string townRosterCache = string.Empty;
+        private Coroutine governmentLayoutRefreshRoutine;
+        private bool isApplyingDeferredGovernmentLayout;
         private string financeBusinessSignature = string.Empty;
         private string pendingOwnedContinuityStatus = string.Empty;
+        private readonly BusinessSaleReviewFlow businessSaleReviewFlow = new();
         private string panelStatus = "Ready.";
         private ManagementPanelTab currentTab;
         private AcquisitionMarketSection acquisitionSection = AcquisitionMarketSection.Land;
@@ -222,6 +231,7 @@ namespace LandLedgers.FirstLedger
             Keyboard keyboard = Keyboard.current;
             if (enableKeyboardToggle && WasKeyPressed(keyboard, managementToggleKey))
             {
+                Debug.Log($"[ManagementUI] toggle key {managementToggleKey} received; visible={visible}.", this);
                 SetVisible(!visible);
             }
 
@@ -768,6 +778,8 @@ namespace LandLedgers.FirstLedger
             view.PreviousListingButton?.onClick.AddListener(PreviousListing);
             view.NextListingButton?.onClick.AddListener(NextListing);
             view.BuyListingButton?.onClick.AddListener(BuyListing);
+            view.AcquireOpeningTransportButton?.onClick.AddListener(AcquireOpeningFreightTransport);
+            view.AcquireOpeningWagonButton?.onClick.AddListener(AcquireOpeningFreightWagon);
             view.GovernmentFocusButton?.onClick.AddListener(FocusTownHall);
             view.LoanIncreaseOneButton?.onClick.AddListener(() => AdjustLoanRequest(1));
             view.LoanIncreaseTenButton?.onClick.AddListener(() => AdjustLoanRequest(10));
@@ -828,6 +840,8 @@ namespace LandLedgers.FirstLedger
             view.PreviousListingButton?.onClick.RemoveAllListeners();
             view.NextListingButton?.onClick.RemoveAllListeners();
             view.BuyListingButton?.onClick.RemoveAllListeners();
+            view.AcquireOpeningTransportButton?.onClick.RemoveAllListeners();
+            view.AcquireOpeningWagonButton?.onClick.RemoveAllListeners();
             view.GovernmentFocusButton?.onClick.RemoveAllListeners();
             view.LoanIncreaseOneButton?.onClick.RemoveAllListeners();
             view.LoanIncreaseTenButton?.onClick.RemoveAllListeners();
@@ -904,25 +918,47 @@ namespace LandLedgers.FirstLedger
 
         private void UpdateProperties()
         {
+            int ownedBusinessCount = 0;
+            int ownedSiteCount = 0;
+            for (int i = 0; i < ownedEntries.Count; i++)
+            {
+                if (ownedEntries[i].Kind == OwnedKind.Store || ownedEntries[i].Kind == OwnedKind.Business)
+                {
+                    ownedBusinessCount++;
+                }
+                else if (ownedEntries[i].Kind == OwnedKind.Land)
+                {
+                    ownedSiteCount++;
+                }
+            }
+
             if (view.PropertyListTitleText != null)
             {
-                view.PropertyListTitleText.text = $"Businesses ({ownedEntries.Count})";
+                view.PropertyListTitleText.text = ownedSiteCount > 0
+                    ? $"Businesses ({ownedBusinessCount}) | Sites ({ownedSiteCount})"
+                    : $"Businesses ({ownedBusinessCount})";
             }
 
             ConsumePendingOwnedContinuityStatus();
 
-            if (ownedEntries.Count == 0)
+            if (ownedBusinessCount == 0)
             {
                 SetText(view.PropertyDetailTitleText, "No Businesses Yet");
                 SetText(view.PropertyDetailSummaryText, BuildPropertiesEmptyStateSummary());
-                SetText(view.RentingOverviewText, BuildRentingAndLodgingSummary());
-                SetText(view.StoreOverviewText, BuildPropertiesEmptyStateDetail());
+                SetText(view.RentingOverviewText, string.Empty);
+                SetText(view.StoreOverviewText, ownedSiteCount > 0
+                    ? BuildPropertiesEmptyStateDetail() + "\n\nOwned sites remain available in the list."
+                    : BuildPropertiesEmptyStateDetail());
                 SetText(view.StoreFinanceText, string.Empty);
-                SetText(view.StoreStaffingText, BuildPropertiesEmptyStateAction());
+                SetText(view.StoreStaffingText, string.Empty);
                 SetText(view.StoreStockText, string.Empty);
                 view.RefreshPropertyDetailLayout();
                 RefreshOwnedRowSelectionStyles();
-                UpdatePropertyActionBar(default, false);
+                bool hasOwnedPropertySelection = ownedEntries.Count > 0;
+                OwnedEntry selectedOwnedProperty = hasOwnedPropertySelection
+                    ? ownedEntries[Mathf.Clamp(selectedOwnedIndex, 0, ownedEntries.Count - 1)]
+                    : default;
+                UpdatePropertyActionBar(selectedOwnedProperty, hasOwnedPropertySelection);
                 UpdateBusinessCashTransferPanel();
                 return;
             }
@@ -1112,7 +1148,7 @@ namespace LandLedgers.FirstLedger
                 SetButtonInteractable(view.PreviousWorkerButton, false);
                 SetButtonInteractable(view.AssignWorkerButton, selectionCount > 0);
                 SetButtonVisible(view.BuildProjectButton, true);
-                SetButtonLabel(view.BuildProjectButton, "Sell Business");
+                SetButtonLabel(view.BuildProjectButton, BuildBusinessSaleActionLabel(selected.BuildingId));
                 SetButtonInteractable(view.BuildProjectButton, acquisitionMarket != null);
             }
             else if (isVacantShell)
@@ -1703,7 +1739,7 @@ namespace LandLedgers.FirstLedger
                 string focus = storeRuntime.CurrentBusiness != null ? storeRuntime.CurrentBusiness.MainFocus.DisplayName : "Balanced";
                 BusinessRuntimeState runtime = storeRuntime.RuntimeState;
                 string pressure = BuildStorePriorityState(runtime);
-                string summary = $"{focus}{BuildControlPolicySummary(storeRuntime.CurrentBusiness)} | Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount} | Stock {runtime.StockHealth01:P0} | Business Cash {FormatMoney(storeRuntime.CurrentCashCents)} | {pressure}";
+                string summary = $"{focus}{BuildControlPolicySummary(storeRuntime.CurrentBusiness)} | Staff {runtime.FilledWorkerCount} | Stock {runtime.StockHealth01:P0} | Business Cash {FormatMoney(storeRuntime.CurrentCashCents)} | {pressure}";
                 string bottleneck = storeRuntime.CurrentBusiness != null && storeRuntime.CurrentBusiness.Capacity != null
                     ? BuildBottleneckSegment(storeRuntime.CurrentBusiness.Capacity.BottleneckDisplayName)
                     : string.Empty;
@@ -1859,9 +1895,12 @@ namespace LandLedgers.FirstLedger
             builder.AppendLine();
             if (storeRuntime != null && storeRuntime.CurrentBusiness != null)
             {
-                builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(storeRuntime.CurrentBusiness));
-                builder.AppendLine(storeRuntime.BuildStorePolicyTelemetryText());
-                builder.AppendLine();
+                if (ShouldShowNpcManagerPolicy(storeRuntime.CurrentBusiness))
+                {
+                    builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(storeRuntime.CurrentBusiness));
+                    builder.AppendLine(storeRuntime.BuildStorePolicyTelemetryText());
+                    builder.AppendLine();
+                }
             }
 
             builder.Append(storeRuntime != null
@@ -1891,7 +1930,10 @@ namespace LandLedgers.FirstLedger
             builder.AppendLine();
             builder.AppendLine("Owner cash transfers move working capital only; this net read is operating performance.");
             builder.AppendLine();
-            builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(business));
+            if (ShouldShowNpcManagerPolicy(business))
+            {
+                builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(business));
+            }
             if (sharedBusinessRuntime != null)
             {
                 builder.AppendLine(sharedBusinessRuntime.BuildBusinessPricingMarginText(business));
@@ -2058,9 +2100,16 @@ namespace LandLedgers.FirstLedger
 
         private static string BuildControlPolicySummary(BusinessInstanceState business)
         {
-            return business == null
+            return !ShouldShowNpcManagerPolicy(business)
                 ? string.Empty
                 : $" | {business.ControlStateDisplayName}/{business.ManagerPolicyDisplayName}";
+        }
+
+        private static bool ShouldShowNpcManagerPolicy(BusinessInstanceState business)
+        {
+            return business != null
+                && business.Owner != null
+                && business.Owner.OwnerKind != BusinessOwnerKind.Player;
         }
 
         private string BuildNonStoreDetail(OwnedEntry selected)
@@ -2170,7 +2219,7 @@ namespace LandLedgers.FirstLedger
             BusinessRuntimeState runtime = business.RuntimeState;
             BusinessPortfolioSummary summary = BuildBusinessPortfolioSummary(business);
             string status = BuildBusinessSummaryStatus(summary);
-            string staff = runtime != null ? $"Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount}" : "Staff unavailable";
+            string staff = runtime != null ? $"Staff {runtime.FilledWorkerCount}" : "Staff unavailable";
             string cash = $"Business Cash {FormatMoney(summary.BusinessCashCents)}";
             string reserve = $"Reserve {FormatMoney(summary.SurvivalReserveCents)}";
             string transferable = $"Transferable {FormatMoney(summary.TransferableCashCents)}";
@@ -2225,7 +2274,10 @@ namespace LandLedgers.FirstLedger
             builder.AppendLine($"{BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)} | Operator {GetOwnerDisplayName(business)}");
             builder.AppendLine($"Current read: {BuildBusinessMainProblem(business)}");
             builder.AppendLine($"Next move: {BuildBusinessRecommendedAction(business)}");
-            builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(business));
+            if (ShouldShowNpcManagerPolicy(business))
+            {
+                builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(business));
+            }
             builder.AppendLine(BuildBusinessPortfolioSummary(business).BuildLedgerLine());
             if (business.RuntimeState != null)
             {
@@ -3567,7 +3619,7 @@ namespace LandLedgers.FirstLedger
             SetText(view.BankLoanTitleText, title);
             SetText(view.BankLoanHelpText, playerDebtManager.HasPendingApplication
                 ? "The bank has the request. Return tomorrow for a decision."
-                : "Set the request, check payment pressure, then send it to the bank.");
+                : playerDebtManager.BuildApplicationPreviewText());
             SetText(view.BankLoanRequestedAmountText, playerDebtManager.BuildRequestedAmountText());
             SetText(view.BankLoanEstimatedPaymentText, playerDebtManager.BuildEstimatedPaymentText());
             SetText(view.BankLoanPaymentScheduleText, playerDebtManager.BuildPaymentScheduleText());
@@ -3977,7 +4029,7 @@ namespace LandLedgers.FirstLedger
             SetText(view.AcquisitionForSaleText, BuildAcquisitionMarketSnapshotText());
             SetText(view.AcquisitionOffMarketText, BuildOffMarketText());
             SetText(view.AcquisitionSelectedLeadText, BuildAcquisitionSelectedLeadText());
-            SetText(view.AcquisitionHistoryText, BuildAcquisitionActionDeskText());
+            SetText(view.AcquisitionHistoryText, BuildAcquisitionActionDeskText() + "\n\n" + BuildOpeningTransportOfferText());
             SetButtonVisible(view.AcquisitionFocusButton, true);
             SetButtonLabel(view.AcquisitionFocusButton, hasListing ? "Inspect Selected Site" : "Inspect Site");
             SetButtonInteractable(view.AcquisitionFocusButton, hasListing);
@@ -3986,6 +4038,116 @@ namespace LandLedgers.FirstLedger
             SetButtonInteractable(view.AcquisitionWorkflowButton, hasListing);
             SetButtonLabel(view.BuyListingButton, NormalizeAcquisitionActionLabel(acquisitionMarket.GetSelectedAcquisitionActionLabel(acquisitionSection)));
             SetButtonInteractable(view.BuyListingButton, hasListing);
+            SetButtonVisible(view.AcquireOpeningTransportButton, true);
+            SetButtonInteractable(view.AcquireOpeningTransportButton, FindPlayerFreightBusiness() != null);
+            SetButtonVisible(view.AcquireOpeningWagonButton, true);
+            SetButtonInteractable(view.AcquireOpeningWagonButton, FindPlayerFreightBusiness() != null);
+        }
+
+        private string BuildOpeningTransportOfferText()
+        {
+            string horseSellerId = string.Empty;
+            string wagonSellerId = string.Empty;
+            if (systemsHub != null && systemsHub.TransportAssets != null)
+            {
+                foreach (EquipmentAsset asset in systemsHub.TransportAssets.Assets)
+                {
+                    if (asset != null && asset.IsWagon && !asset.IsTransportAssigned
+                        && string.Equals(asset.OwnerKind, "business", StringComparison.OrdinalIgnoreCase))
+                    {
+                        wagonSellerId = asset.OwnerId;
+                        break;
+                    }
+                }
+            }
+
+            if (systemsHub?.Animals != null)
+            {
+                foreach (AnimalState animal in systemsHub.Animals.ActiveAnimals)
+                {
+                    if (animal != null && animal.IsActive && animal.Species == AnimalSpecies.Horse
+                        && animal.OwnerKind == AnimalOwnerKind.Business && animal.CurrentUse == HorseUseKind.None)
+                    {
+                        horseSellerId = animal.OwnerId;
+                        break;
+                    }
+                }
+            }
+
+            string horseAvailability = !string.IsNullOrWhiteSpace(horseSellerId)
+                ? $"Horse available from {DescribeAcquisitionSeller(horseSellerId)}"
+                : "No opening horse available";
+            string wagonAvailability = !string.IsNullOrWhiteSpace(wagonSellerId)
+                ? $"Wagon available from {DescribeAcquisitionSeller(wagonSellerId)}"
+                : "No opening wagon available";
+            string buyer = FindPlayerFreightBusiness() != null
+                ? "Each button purchases that asset separately using Freight Business cash."
+                : "Establish a player Freight Business first; stock and prices are not granted by establishment.";
+            return $"Opening assets (source calibration, not Canon): Horse {FormatMoney(OpeningTransportStock.OpeningHorseSalePriceCents)} — {horseAvailability}; Wagon {FormatMoney(OpeningTransportStock.OpeningWagonSalePriceCents)} — {wagonAvailability}. {buyer}";
+        }
+
+        private string DescribeAcquisitionSeller(string businessId)
+        {
+            return sharedBusinessRuntime != null
+                && sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState seller)
+                ? seller.RuntimeDisplayName
+                : businessId;
+        }
+
+        private BusinessInstanceState FindPlayerFreightBusiness()
+        {
+            if (sharedBusinessRuntime?.Businesses == null) return null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business != null && business.BusinessType == BusinessType.LiveryFreight
+                    && business.Owner != null && business.Owner.OwnerKind == BusinessOwnerKind.Player)
+                {
+                    return business;
+                }
+            }
+            return null;
+        }
+
+        private void AcquireOpeningFreightTransport()
+        {
+            BusinessInstanceState buyer = FindPlayerFreightBusiness();
+            if (buyer == null || sharedBusinessRuntime == null)
+            {
+                panelStatus = "A player-owned Freight Business must exist before it can acquire a horse.";
+            }
+            else if (sharedBusinessRuntime.TryAcquireOpeningHorse(buyer, out string message))
+            {
+                panelStatus = message;
+            }
+            else
+            {
+                panelStatus = message;
+            }
+
+            LLFeedbackService.Play(!string.IsNullOrEmpty(panelStatus) && panelStatus.Contains("Purchased") ? LLFeedbackKind.UIConfirm : LLFeedbackKind.Warning, "opening horse acquisition", canvas);
+            SetTab(ManagementPanelTab.Acquisitions);
+        }
+
+        private void AcquireOpeningFreightWagon()
+        {
+            BusinessInstanceState buyer = FindPlayerFreightBusiness();
+            if (buyer == null || sharedBusinessRuntime == null)
+            {
+                panelStatus = "A player-owned Freight Business must exist before it can acquire a wagon.";
+            }
+            else if (sharedBusinessRuntime.TryAcquireOpeningWagon(buyer, out string message))
+            {
+                panelStatus = message;
+            }
+            else
+            {
+                panelStatus = message;
+            }
+
+            LLFeedbackService.Play(!string.IsNullOrEmpty(panelStatus) && panelStatus.Contains("Purchased") ? LLFeedbackKind.UIConfirm : LLFeedbackKind.Warning, "opening wagon acquisition", canvas);
+            SetTab(ManagementPanelTab.Acquisitions);
         }
 
         private string BuildAcquisitionMarketSnapshotText()
@@ -4283,10 +4445,11 @@ namespace LandLedgers.FirstLedger
             if (civicFoundation == null)
             {
                 SetText(view.GovernmentTitleText, "Civic");
-                SetText(view.GovernmentSummaryText, "Civic records unavailable. Town Hall authority has not been established in this save.");
+                SetText(view.GovernmentSummaryText, "Civic records unavailable. Town Hall authority has not been established in this save.\n\n" + BuildTownResidentRosterText());
                 SetText(view.GovernmentEffectsText, "Confidence +0% | Town maturity +0% | Immigration pull +0% | Land confidence +0%");
                 SetText(view.GovernmentOwnerImplicationsText, BuildGovernmentOwnerImplicationsBodyText("No civic uplift is improving land confidence, migration, or town-center prestige yet."));
                 SetButtonVisible(view.GovernmentFocusButton, false);
+                RefreshGovernmentLayout();
                 return;
             }
 
@@ -4296,12 +4459,213 @@ namespace LandLedgers.FirstLedger
             bool built = townHall.Built;
 
             SetText(view.GovernmentTitleText, $"Civic: {townHall.displayName}");
-            SetText(view.GovernmentSummaryText, BuildGovernmentSummaryText(townHall));
+            SetText(view.GovernmentSummaryText, BuildGovernmentSummaryText(townHall) + "\n\n" + BuildTownResidentRosterText());
+            SetText(view.GovernmentBusinessRosterText, BuildTownBusinessRosterText());
             SetText(view.GovernmentEffectsText, BuildGovernmentEffectsText(contribution));
             SetText(view.GovernmentOwnerImplicationsText, BuildGovernmentOwnerImplicationsBodyText(civicFoundation.BuildCompactSummaryText()));
             SetButtonVisible(view.GovernmentFocusButton, built);
             SetButtonLabel(view.GovernmentFocusButton, "View Civic Site");
             SetButtonInteractable(view.GovernmentFocusButton, built);
+            RefreshGovernmentLayout();
+        }
+
+        private void RefreshGovernmentLayout()
+        {
+            if (view == null)
+            {
+                return;
+            }
+
+            // Resolve the available width before measuring wrapped TMP content. The
+            // Government section roots carry LayoutElements, so their minimum heights
+            // override the VerticalLayoutGroup's calculated preferred heights unless
+            // we explicitly propagate each body's measured height to its section.
+            Canvas.ForceUpdateCanvases();
+
+            TMP_Text[] townTexts =
+            {
+                view.GovernmentSummaryText,
+                view.GovernmentBusinessRosterText,
+                view.GovernmentEffectsText,
+                view.GovernmentOwnerImplicationsText
+            };
+
+            for (int i = 0; i < townTexts.Length; i++)
+            {
+                TMP_Text text = townTexts[i];
+                if (text == null)
+                {
+                    continue;
+                }
+
+                text.ForceMeshUpdate();
+                LayoutElement layout = text.GetComponent<LayoutElement>();
+                if (layout != null)
+                {
+                    float width = text.rectTransform.rect.width;
+                    if (width <= 1f && text.transform.parent is RectTransform sectionRect)
+                    {
+                        width = Mathf.Max(1f, sectionRect.rect.width - 32f);
+                    }
+
+                    float measuredHeight = width > 1f
+                        ? text.GetPreferredValues(text.text, width, 0f).y
+                        : text.preferredHeight;
+                    layout.preferredHeight = Mathf.Max(layout.minHeight, measuredHeight);
+
+                    if (text.transform.parent is RectTransform sectionRoot)
+                    {
+                        LayoutElement sectionLayout = sectionRoot.GetComponent<LayoutElement>();
+                        if (sectionLayout != null)
+                        {
+                            // Let the section's VerticalLayoutGroup derive its preferred
+                            // height from the header and this measured body. A fixed
+                            // section minimum overrides that calculation and clips rosters.
+                            sectionLayout.minHeight = -1f;
+                            sectionLayout.preferredHeight = -1f;
+                        }
+
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(sectionRoot);
+                    }
+                }
+            }
+
+            if (view.GovernmentContentRoot == null)
+            {
+                return;
+            }
+
+            RectTransform parent = view.GovernmentContentRoot.parent as RectTransform;
+            if (parent != null)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(parent);
+            }
+
+            // The parent establishes the tab's final width first. Rebuild its content
+            // a second time so TMP wrapping and section heights use that settled size.
+            LayoutRebuilder.ForceRebuildLayoutImmediate(view.GovernmentContentRoot);
+            for (int i = 0; i < townTexts.Length; i++)
+            {
+                RectTransform section = townTexts[i] != null ? townTexts[i].transform.parent as RectTransform : null;
+                if (section != null)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(section);
+                }
+            }
+            Canvas.ForceUpdateCanvases();
+
+            // The Town content is activated immediately before its data is written. At
+            // that point inactive RectTransforms may still report their authored
+            // placeholder width, so the first TMP measurement can be too short. Re-run
+            // the same layout pass after Unity has completed the activation/layout pass.
+            if (Application.isPlaying && !isApplyingDeferredGovernmentLayout)
+            {
+                if (governmentLayoutRefreshRoutine != null)
+                {
+                    StopCoroutine(governmentLayoutRefreshRoutine);
+                }
+
+                governmentLayoutRefreshRoutine = StartCoroutine(RefreshGovernmentLayoutAfterActivation());
+            }
+
+        }
+
+        private IEnumerator RefreshGovernmentLayoutAfterActivation()
+        {
+            yield return null;
+            isApplyingDeferredGovernmentLayout = true;
+            RefreshGovernmentLayout();
+            isApplyingDeferredGovernmentLayout = false;
+            governmentLayoutRefreshRoutine = null;
+        }
+
+        private string BuildTownResidentRosterText()
+        {
+            if (!string.IsNullOrEmpty(townRosterCache) && UnityEngine.Time.frameCount - townRosterCacheFrame < 60)
+            {
+                return townRosterCache;
+            }
+
+            List<PersonState> people = populationManager != null ? populationManager.State?.people : null;
+            if (people == null)
+            {
+                return CacheTownRoster("On-map residents\nResident records are not connected in this session.");
+            }
+
+            List<string> names = new();
+            for (int i = 0; i < people.Count; i++)
+            {
+                PersonState person = people[i];
+                if (person == null || person.isOffMap || person.deathDayIndex >= 0)
+                {
+                    continue;
+                }
+
+                string name = person.DisplayName?.Trim();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    names.Add(name);
+                }
+            }
+
+            if (names.Count == 0)
+            {
+                return CacheTownRoster("On-map residents\nNo living on-map residents are currently registered.");
+            }
+
+            StringBuilder roster = new();
+            roster.AppendLine($"On-map residents ({names.Count})");
+            for (int i = 0; i < names.Count; i++)
+            {
+                roster.Append("• ").AppendLine(names[i]);
+            }
+
+            return CacheTownRoster(roster.ToString().TrimEnd());
+        }
+
+        private string BuildTownBusinessRosterText()
+        {
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime?.Businesses;
+            if (businesses == null)
+            {
+                return "Business records are not connected in this session.";
+            }
+
+            int listedCount = 0;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                if (businesses[i] != null) listedCount++;
+            }
+
+            if (listedCount == 0)
+            {
+                return "No town businesses are currently registered.";
+            }
+
+            StringBuilder roster = new();
+            roster.AppendLine($"Settlement businesses ({listedCount})");
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+
+                string name = string.IsNullOrWhiteSpace(business.RuntimeDisplayName)
+                    ? "Business name unavailable" : business.RuntimeDisplayName.Trim();
+                string owner = business.Owner != null && !string.IsNullOrWhiteSpace(business.Owner.DisplayName)
+                    ? business.Owner.DisplayName.Trim() : "Owner unknown";
+                roster.Append("• <b>").Append(name).Append("</b> — Owner: ").Append(owner)
+                    .Append("  |  Status: ")
+                    .AppendLine(BuildManagedBusinessRowStatus(business));
+            }
+
+            return roster.ToString().TrimEnd();
+        }
+
+        private string CacheTownRoster(string value)
+        {
+            townRosterCache = value ?? string.Empty;
+            townRosterCacheFrame = UnityEngine.Time.frameCount;
+            return townRosterCache;
         }
 
         private void UpdateResources()
@@ -4857,10 +5221,57 @@ namespace LandLedgers.FirstLedger
                 BusinessInstanceState activeBusiness = GetBusinessForEntry(selected);
                 if (activeBusiness != null)
                 {
-                    string saleMessage = "Business sale unavailable.";
-                    if (acquisitionMarket != null && acquisitionMarket.TrySellPlayerBusiness(selected.BuildingId, out saleMessage))
+                    if (acquisitionMarket == null)
+                    {
+                        panelStatus = "Business sale unavailable: acquisition market is missing.";
+                        businessSaleReviewFlow.Reset();
+                        RefreshSelectedPropertyActionPanelStatus();
+                        Debug.Log(panelStatus, this);
+                        return;
+                    }
+
+                    if (!acquisitionMarket.TryEstimatePlayerBusinessSaleOffer(selected.BuildingId, out int offerCents, out string saleRead))
+                    {
+                        panelStatus = saleRead;
+                        businessSaleReviewFlow.Reset();
+                        RefreshSelectedPropertyActionPanelStatus();
+                        Debug.Log(panelStatus, this);
+                        return;
+                    }
+
+                    if (businessSaleReviewFlow.Stage == BusinessSaleReviewStage.None
+                        || businessSaleReviewFlow.BuildingId != selected.BuildingId)
+                    {
+                        businessSaleReviewFlow.ReviewListing(selected.BuildingId);
+                        BusinessPortfolioSummary liveSummary = BuildBusinessPortfolioSummary(activeBusiness);
+                        panelStatus = $"SALE LISTING REVIEW — {activeBusiness.RuntimeDisplayName}. Indicative offer: {offerCents}c. {saleRead} Live ledger: {liveSummary.BuildLedgerLine()}. Review the live Stock and Finance sections before continuing; the sale has not happened.";
+                        SetTab(ManagementPanelTab.Properties);
+                        return;
+                    }
+
+                    if (businessSaleReviewFlow.Stage == BusinessSaleReviewStage.ListingReviewed)
+                    {
+                        businessSaleReviewFlow.ReviewListing(selected.BuildingId);
+                        BusinessPortfolioSummary liveSummary = BuildBusinessPortfolioSummary(activeBusiness);
+                        panelStatus = $"SALE TERMS REVIEW — price {offerCents}c from the existing sale valuation. Transfer: the business identity and attached premises; current cash, inventory and employee relationships remain on the business records; obligations remain attached to that business identity (no debt novation). {liveSummary.BuildLedgerLine()}. Click Confirm Sale only if these terms are acceptable.";
+                        SetTab(ManagementPanelTab.Properties);
+                        return;
+                    }
+
+                    if (!businessSaleReviewFlow.CanConfirm(selected.BuildingId))
+                    {
+                        panelStatus = "Business sale blocked: review the listing and terms first.";
+                        SetTab(ManagementPanelTab.Properties);
+                        return;
+                    }
+
+                    if (acquisitionMarket.TrySellPlayerBusiness(
+                            selected.BuildingId,
+                            explicitConfirmation: businessSaleReviewFlow.CanConfirm(selected.BuildingId),
+                            out string saleMessage))
                     {
                         panelStatus = saleMessage;
+                        businessSaleReviewFlow.Reset();
                         selectedWorkerCandidateIndex = 0;
                         selectedBusinessActivationBuildingId = -1;
                         ownedSignature = string.Empty;
@@ -4868,6 +5279,7 @@ namespace LandLedgers.FirstLedger
                     else
                     {
                         panelStatus = saleMessage;
+                        businessSaleReviewFlow.Reset();
                         Debug.Log(panelStatus, this);
                     }
 
@@ -4946,6 +5358,21 @@ namespace LandLedgers.FirstLedger
             }
 
             SetTab(ManagementPanelTab.Properties);
+        }
+
+        private string BuildBusinessSaleActionLabel(int buildingId)
+        {
+            if (businessSaleReviewFlow.BuildingId != buildingId)
+            {
+                return "Review Sale Listing";
+            }
+
+            return businessSaleReviewFlow.Stage switch
+            {
+                BusinessSaleReviewStage.ListingReviewed => "Review Sale Terms",
+                BusinessSaleReviewStage.TermsReviewed => "Confirm Sale",
+                _ => "Review Sale Listing"
+            };
         }
 
         private bool IsWorkerFireMode()
@@ -5255,52 +5682,12 @@ namespace LandLedgers.FirstLedger
 
         private string BuildPropertiesEmptyStateSummary()
         {
-            int landListings = acquisitionMarket != null ? acquisitionMarket.LandListings.Count : 0;
-            int businessListings = acquisitionMarket != null ? acquisitionMarket.BusinessListings.Count : 0;
-            if (landListings > 0 || businessListings > 0)
-            {
-                return $"Nothing is in your portfolio yet. Land listings {landListings} | Business listings {businessListings}.";
-            }
-
-            return "Owned land, businesses, houses, and rental property appear here after acquisition or construction.";
+            return "No businesses owned. You do not currently operate a business.";
         }
 
         private string BuildPropertiesEmptyStateDetail()
         {
-            if (acquisitionMarket == null)
-            {
-                return "Open Acquisitions to inspect market opportunities. Closed deals and finished builds appear here automatically.";
-            }
-
-            if (acquisitionSection == AcquisitionMarketSection.Businesses && acquisitionMarket.BusinessListings.Count > 0)
-            {
-                return $"Open Acquisitions and inspect the business market. {acquisitionMarket.BusinessListings.Count} business listing{(acquisitionMarket.BusinessListings.Count == 1 ? string.Empty : "s")} currently visible.";
-            }
-
-            if (acquisitionMarket.LandListings.Count > 0)
-            {
-                return $"Open Acquisitions and inspect Land listings. {acquisitionMarket.LandListings.Count} parcel{(acquisitionMarket.LandListings.Count == 1 ? string.Empty : "s")} currently visible for expansion.";
-            }
-
-            return "Open Acquisitions and inspect the market. Your first closed parcel or finished shell will appear here automatically.";
-        }
-
-        private string BuildPropertiesEmptyStateAction()
-        {
-            if (acquisitionMarket != null)
-            {
-                if (acquisitionMarket.LandListings.Count > 0)
-                {
-                    return "Next move: open Acquisitions, switch to Land if needed, inspect a parcel, and begin inquiry when the site fits your cash and plan.";
-                }
-
-                if (acquisitionMarket.BusinessListings.Count > 0)
-                {
-                    return "Next move: open Acquisitions and review business opportunities, but land expansion remains the cleanest first build path.";
-                }
-            }
-
-            return "Next move: open Acquisitions, review available opportunities, and close a site that can support your next build step.";
+            return "Use New Business to begin the formation process, or Acquisitions to review businesses presently offered for sale.";
         }
 
         private string BuildOwnedSignature()
@@ -5579,7 +5966,7 @@ namespace LandLedgers.FirstLedger
             }
 
             string state = BuildStoreMainProblem(runtime);
-            return $"{state} | Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount}";
+            return $"{state} | Staff {runtime.FilledWorkerCount}";
         }
 
         private string BuildOwnedRentingRowStatus()
@@ -5701,7 +6088,7 @@ namespace LandLedgers.FirstLedger
                     : runtime.FilledWorkerCount < runtime.TargetWorkerCount
                         ? "Understaffed"
                         : "Operating";
-            return $"{state} | Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount}";
+            return $"{state} | Staff {runtime.FilledWorkerCount}";
         }
 
         private static string BuildPropertyActionRowStatus(PropertyProjectActionState state)
@@ -6539,7 +6926,7 @@ namespace LandLedgers.FirstLedger
             builder.AppendLine($"Condition: {ColorizeStatus(BuildBusinessSummaryStatus(business))}");
             builder.AppendLine($"Pressure: {BuildBusinessMainProblem(business)}");
             builder.AppendLine($"Manager Read: {BuildBusinessRecommendedAction(business)}");
-            builder.AppendLine($"Operations: Cash {FormatMoney(runtime.CurrentCashCents)} | Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount} | Efficiency {business.OperatingEfficiency01:P0}");
+            builder.AppendLine($"Operations: Cash {FormatMoney(runtime.CurrentCashCents)} | Staff {runtime.FilledWorkerCount} | Efficiency {business.OperatingEfficiency01:P0}");
             if (sharedBusinessRuntime != null)
             {
                 string captureLine = sharedBusinessRuntime.BuildBusinessLocalMarketCaptureLine(business);
@@ -6957,7 +7344,7 @@ namespace LandLedgers.FirstLedger
 
                 count++;
                 string cash = business.RuntimeState != null ? FormatMoney(business.RuntimeState.CurrentCashCents) : "$0.00";
-                string staff = business.RuntimeState != null ? $"{business.RuntimeState.FilledWorkerCount}/{business.RuntimeState.TargetWorkerCount}" : "0/0";
+                string staff = business.RuntimeState != null ? business.RuntimeState.FilledWorkerCount.ToString() : "0";
                 string occupancy = sharedBusinessRuntime.BuildBoardingHouseOccupancyLine(business);
                 builder.AppendLine($"{business.RuntimeDisplayName} | Operator {GetOwnerDisplayName(business)} | Staff {staff} | Cash {cash}");
                 builder.AppendLine(occupancy);

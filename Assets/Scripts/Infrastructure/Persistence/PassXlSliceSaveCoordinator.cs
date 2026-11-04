@@ -226,8 +226,22 @@ namespace LandLedgers.Persistence
             Series2Pass10SaveState series2Pass10State,
             Review2VerticalD3SaveState d3State)
         {
+            return Capture(migrationHolder, playerHolder, procurementService, series2State,
+                series2Pass10State, d3State, null);
+        }
+
+        public static PassXlSliceSaveDto Capture(
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State,
+            Series2Pass10SaveState series2Pass10State,
+            Review2VerticalD3SaveState d3State,
+            OffMapAidBusinessRuntime millbrookAid)
+        {
             PassXlSliceSaveDto dto = Capture(migrationHolder, playerHolder, procurementService, series2State, series2Pass10State);
             dto.review2VerticalD3 = d3State != null ? d3State.Capture(null) : null;
+            dto.millbrookAid = millbrookAid != null ? millbrookAid.ExportState() : null;
             return dto;
         }
 
@@ -241,6 +255,21 @@ namespace LandLedgers.Persistence
             Series2Pass10SaveState series2Pass10State,
             Review2VerticalD3SaveState d3State)
         {
+            return Restore(dto, migrationHolder, playerHolder, procurementService, series2State,
+                freightHooks, series2Pass10State, d3State, null);
+        }
+
+        public static List<string> Restore(
+            PassXlSliceSaveDto dto,
+            IPassXlMigrationFlagHolder migrationHolder,
+            IPassXlPlayerFlagHolder playerHolder,
+            OffMapNamedSkuProcurementService procurementService,
+            Series2Pass9SaveState series2State,
+            FreightShipmentHooks freightHooks,
+            Series2Pass10SaveState series2Pass10State,
+            Review2VerticalD3SaveState d3State,
+            OffMapAidBusinessRuntime millbrookAid)
+        {
             List<string> diagnostics = Restore(dto, migrationHolder, playerHolder, procurementService, series2State, freightHooks, series2Pass10State);
             if (d3State != null)
             {
@@ -249,6 +278,16 @@ namespace LandLedgers.Persistence
             else if (dto != null && dto.review2VerticalD3 != null)
             {
                 diagnostics.Add("PassXlSliceSaveCoordinator: D3 section present in save but no Review2VerticalD3SaveState supplied; D3 state NOT restored. Codex must set the D3 state on SaveLoadManager before loading, exactly as for Pass 9 / Pass 10.");
+            }
+
+            if (millbrookAid != null)
+            {
+                string aidRefusal = millbrookAid.ImportState(dto != null ? dto.millbrookAid : null);
+                diagnostics.Add(aidRefusal ?? $"PassXlSliceSaveCoordinator: restored Millbrook aid table ({millbrookAid.GetInventoryUnits("bakery_flour_sack")} lb flour, {millbrookAid.CashCents}c retained cash, {millbrookAid.Lots.Count} cargo lots).");
+            }
+            else if (dto != null && dto.millbrookAid != null)
+            {
+                diagnostics.Add("PassXlSliceSaveCoordinator: Millbrook aid section is present but no live aid runtime was supplied; state was not restored.");
             }
 
             return diagnostics;

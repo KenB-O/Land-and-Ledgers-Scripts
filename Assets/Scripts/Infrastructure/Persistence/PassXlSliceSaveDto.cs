@@ -52,5 +52,8 @@ namespace LandLedgers.Persistence
         /// is renamed, removed, or reordered.
         /// </summary>
         public Review2VerticalD3SaveDto review2VerticalD3;
+
+        /// <summary>Millbrook's authored off-map inventory, retained cash, orders, and freight lots.</summary>
+        public OffMapAidBusinessSaveDto millbrookAid;
     }
 }

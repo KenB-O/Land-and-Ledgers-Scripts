@@ -98,5 +98,21 @@ namespace LandLedgers.EditorTests.Economy
             BusinessInstanceState restored = BusinessInstanceState.FromSaveDto(dto);
             Assert.AreEqual(0, restored.SaleTerms.IncludedCashCents);
         }
+
+        [Test]
+        public void SaleReviewFlow_RequiresListingTermsAndSeparateConfirmation()
+        {
+            BusinessSaleReviewFlow flow = new();
+
+            Assert.IsFalse(flow.CanConfirm(12), "A single click must not close the sale.");
+            Assert.AreEqual(BusinessSaleReviewStage.ListingReviewed, flow.ReviewListing(12));
+            Assert.IsFalse(flow.CanConfirm(12), "Listing review is not final confirmation.");
+            Assert.AreEqual(BusinessSaleReviewStage.TermsReviewed, flow.ReviewListing(12));
+            Assert.IsTrue(flow.CanConfirm(12), "Only a separate action after terms review may close.");
+            Assert.IsFalse(flow.CanConfirm(13), "Confirmation cannot be carried to another business.");
+
+            flow.Reset();
+            Assert.IsFalse(flow.CanConfirm(12));
+        }
     }
 }

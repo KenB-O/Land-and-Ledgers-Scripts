@@ -13,6 +13,25 @@ namespace LandLedgers.Editor.Financing
     public sealed class PlayerDebtManagerTests
     {
         [Test]
+        public void DayProcessingWithoutAnExplicitApplicationDoesNotGrantALoan()
+        {
+            GameObject host = new("PlayerDebtManager_NoApplication_Test");
+            try
+            {
+                PlayerDebtManager manager = host.AddComponent<PlayerDebtManager>();
+                manager.ProcessDay(365);
+
+                Assert.IsFalse(manager.HasPendingApplication);
+                Assert.IsFalse(manager.HasActiveLoan);
+                Assert.IsNull(manager.ActiveLoan);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
         public void StrongApplicantAndReasonableAmountApproves()
         {
             BankLoanUnderwritingResult result = PlayerDebtManager.EvaluateWorkingCapitalApplication(

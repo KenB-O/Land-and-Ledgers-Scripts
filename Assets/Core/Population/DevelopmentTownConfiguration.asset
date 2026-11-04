@@ -1,0 +1,223 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fc972e2dd5e242a6b411008defae1771, type: 3}
+  m_Name: Development Town Configuration
+  m_EditorClassIdentifier: 
+  configurationId: millbrook-development-town
+  seedOffset: 9217
+  people:
+  - key: base:0
+    firstName: Kennedy
+    lastName: Baldwin-Ooms
+    age: 35
+    ageIsProvisionalCalibration: 0
+    isFemale: 0
+    occupation: Unemployed
+    homeBuildingOrdinal: 0
+  - key: base:1
+    firstName: Emma
+    lastName: Baldwin-Ooms
+    age: 32
+    ageIsProvisionalCalibration: 0
+    isFemale: 1
+    occupation: Unemployed
+    homeBuildingOrdinal: 0
+  - key: base:2
+    firstName: Glen
+    lastName: Pierce
+    age: 31
+    ageIsProvisionalCalibration: 0
+    isFemale: 0
+    occupation: Unemployed
+    homeBuildingOrdinal: 1
+  - key: base:3
+    firstName: Tannis
+    lastName: Pierce
+    age: 29
+    ageIsProvisionalCalibration: 1
+    isFemale: 1
+    occupation: Unemployed
+    homeBuildingOrdinal: 1
+  - key: base:4
+    firstName: Jacob
+    lastName: Boniecki
+    age: 34
+    ageIsProvisionalCalibration: 0
+    isFemale: 0
+    occupation: Unemployed
+    homeBuildingOrdinal: 2
+  - key: base:5
+    firstName: Grace
+    lastName: Boniecki
+    age: 30
+    ageIsProvisionalCalibration: 0
+    isFemale: 1
+    occupation: Unemployed
+    homeBuildingOrdinal: 2
+  - key: ethan
+    firstName: Ethan
+    lastName: Boniecki
+    age: 34
+    ageIsProvisionalCalibration: 1
+    isFemale: 0
+    occupation: Freight Company owner/operator
+    homeBuildingOrdinal: 3
+  - key: tia
+    firstName: Tia
+    lastName: Boniecki
+    age: 30
+    ageIsProvisionalCalibration: 1
+    isFemale: 1
+    occupation: Unspecified
+    homeBuildingOrdinal: 3
+  - key: shane
+    firstName: Shane
+    lastName: Bryan
+    age: 27
+    ageIsProvisionalCalibration: 1
+    isFemale: 0
+    occupation: Unemployed; seeking work
+    homeBuildingOrdinal: 4
+  households:
+  - key: base-household:0
+    displayName: Baldwin-Ooms Household
+    surname: Baldwin-Ooms
+    memberPersonKeys:
+    - base:0
+    - base:1
+    homeBuildingOrdinal: 0
+    openingCashCents: 0
+  - key: base-household:1
+    displayName: Pierce Household
+    surname: Pierce
+    memberPersonKeys:
+    - base:2
+    - base:3
+    homeBuildingOrdinal: 1
+    openingCashCents: 6500
+  - key: base-household:2
+    displayName: Boniecki Household
+    surname: Boniecki
+    memberPersonKeys:
+    - base:4
+    - base:5
+    homeBuildingOrdinal: 2
+    openingCashCents: 7500
+  - key: ethan-tia
+    displayName: ethan-tia Household
+    surname: Boniecki
+    memberPersonKeys:
+    - ethan
+    - tia
+    homeBuildingOrdinal: 3
+    openingCashCents: 6000
+  - key: shane
+    displayName: Shane Bryan Household
+    surname: Bryan
+    memberPersonKeys:
+    - shane
+    homeBuildingOrdinal: 4
+    openingCashCents: 12500
+  relationships:
+  - firstPersonKey: base:0
+    secondPersonKey: base:1
+    relationship: 0
+  - firstPersonKey: base:2
+    secondPersonKey: base:3
+    relationship: 0
+  - firstPersonKey: base:4
+    secondPersonKey: base:5
+    relationship: 0
+  - firstPersonKey: base:4
+    secondPersonKey: ethan
+    relationship: 1
+  - firstPersonKey: ethan
+    secondPersonKey: tia
+    relationship: 0
+  businesses:
+  - key: general-store
+    operationId: general-store
+    ownerPersonKey: base:0
+    businessId: 
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 25000
+  - key: bakery
+    operationId: bakery
+    ownerPersonKey: base:2
+    businessId: 
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 17500
+  - key: fuel-dealer
+    operationId: fuel-dealer
+    ownerPersonKey: base:4
+    businessId: 
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 20000
+  - key: freight-company
+    operationId: livery-freight
+    ownerPersonKey: ethan
+    businessId: 
+    premisesId: 
+    premisesRequired: 0
+    openingCashCents: 10000
+    freightRateCard:
+      baseServiceFeeCents: 25
+      ratePerMileCents: 1
+      chargeRoundTrip: 1
+  businessCashTargets:
+  - businessKey: general-store
+    targetCashCents: 20000
+  - businessKey: bakery
+    targetCashCents: 20000
+  - businessKey: fuel-dealer
+    targetCashCents: 20000
+  - businessKey: freight-company
+    targetCashCents: 20000
+  householdCashTargets:
+  - anchorPersonKey: base:2
+    targetCashCents: 40000
+  - anchorPersonKey: base:4
+    targetCashCents: 40000
+  - anchorPersonKey: ethan
+    targetCashCents: 40000
+  - anchorPersonKey: shane
+    targetCashCents: 20000
+  openingInventory:
+  - businessKey: general-store
+    items:
+    - itemId: bread
+      minimumUnits: 12
+      maximumUnits: 24
+    - itemId: flour
+      minimumUnits: 4
+      maximumUnits: 8
+    - itemId: potatoes
+      minimumUnits: 4
+      maximumUnits: 8
+    - itemId: sugar
+      minimumUnits: 5
+      maximumUnits: 10
+    - itemId: coffee
+      minimumUnits: 3
+      maximumUnits: 6
+    - itemId: tea
+      minimumUnits: 2
+      maximumUnits: 4
+    - itemId: salt
+      minimumUnits: 4
+      maximumUnits: 8
+  freightBusinessKey: freight-company
+  openingHorseId: A0
+  openingWagonId: opening-freight-wagon

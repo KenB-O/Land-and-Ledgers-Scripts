@@ -135,6 +135,26 @@ namespace LandLedgers.EditorTests.Tasks
         }
 
         [Test]
+        public void StartTask_RefusesSecondExclusiveTaskForPersonUntilCurrentTaskCompletes()
+        {
+            TaskAuthority authority = CreateAuthority();
+            WorkTimeBudgetStore budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            WorkTask first = authority.CreateTask("test.sweep", Business(1), 1);
+            WorkTask second = authority.CreateTask("test.sweep", Business(2), 1);
+            Assert.IsTrue(authority.AssignTask(first.TaskId, Person(7), budgets, out string reason), reason);
+            Assert.IsTrue(authority.AssignTask(second.TaskId, Person(7), budgets, out reason), reason);
+
+            Assert.IsTrue(authority.StartTask(first.TaskId, 1, out reason), reason);
+            Assert.IsFalse(authority.StartTask(second.TaskId, 1, out reason));
+            StringAssert.Contains(first.TaskId.ToString(), reason);
+            Assert.AreEqual(TaskStatus.Assigned, second.Status);
+
+            Assert.IsTrue(authority.CompleteTask(first.TaskId, TaskOutcome.Success, 1, budgets));
+            Assert.IsTrue(authority.StartTask(second.TaskId, 1, out reason), reason);
+        }
+
+        [Test]
         public void MarkResourcesReserved_Assigned_StoresHandleId()
         {
             var authority = CreateAuthority();

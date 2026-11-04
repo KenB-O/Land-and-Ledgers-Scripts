@@ -25,9 +25,18 @@ namespace LandLedgers.UI
                 return null;
             }
 
-            var existing = canvas.GetComponentInChildren<UITooltipController>(true);
-            if (existing != null)
+            var existingControllers = canvas.GetComponentsInChildren<UITooltipController>(true);
+            for (var i = 0; i < existingControllers.Length; i++)
             {
+                var existing = existingControllers[i];
+                // Older authored canvases can contain a tooltip controller on a
+                // plain Transform. Such an object cannot be laid out as UI. Skip
+                // it and create a valid RectTransform-backed runtime tooltip.
+                if (existing == null || existing.transform as RectTransform == null)
+                {
+                    continue;
+                }
+
                 existing.EnsureInitialized();
                 existing.BuildVisuals(canvas);
                 return existing;
@@ -91,6 +100,14 @@ namespace LandLedgers.UI
 
         private void BuildVisuals(Canvas canvas)
         {
+            // Resolve from this GameObject every time before touching layout so
+            // authored/runtime tooltip instances never depend on a stale cache.
+            rectTransform = transform as RectTransform;
+            if (rectTransform == null)
+            {
+                Debug.LogError("[UITooltipController] Tooltip root needs a RectTransform; visuals were not built.", this);
+                return;
+            }
             EnsureInitialized();
             canvasRect = canvas.transform as RectTransform;
 
@@ -148,7 +165,7 @@ namespace LandLedgers.UI
 
         private void EnsureInitialized()
         {
-            rectTransform ??= transform as RectTransform;
+            rectTransform = transform as RectTransform;
             canvasRect ??= GetComponentInParent<Canvas>()?.transform as RectTransform;
             titleText ??= transform.Find("Title")?.GetComponent<TextMeshProUGUI>();
             bodyText ??= transform.Find("Body")?.GetComponent<TextMeshProUGUI>();

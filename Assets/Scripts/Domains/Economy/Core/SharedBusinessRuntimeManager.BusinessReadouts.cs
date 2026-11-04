@@ -132,9 +132,35 @@ namespace LandLedgers.Economy
                     break;
             }
 
+            AppendIdentifiedItemLots(builder, business);
             builder.AppendLine();
             AppendOperatingNotesV4(builder, business, profile, family, descriptor);
             return builder.ToString();
+        }
+
+        private static void AppendIdentifiedItemLots(StringBuilder builder, BusinessInstanceState business)
+        {
+            IReadOnlyList<BusinessRetailItemLotState> lots = business?.RuntimeState?.RetailItemLots;
+            builder.AppendLine();
+            builder.AppendLine("Identified item lots (physical stock; category totals above are reporting aggregates)");
+            if (lots == null || lots.Count == 0)
+            {
+                builder.AppendLine("No item-level lots recorded.");
+                return;
+            }
+
+            for (int i = 0; i < lots.Count; i++)
+            {
+                BusinessRetailItemLotState lot = lots[i];
+                if (lot == null) continue;
+                builder.Append("• ").Append(string.IsNullOrWhiteSpace(lot.ItemId) ? "Unknown item" : lot.ItemId)
+                    .Append(": ").Append(lot.AvailableUnits).Append(" available / ").Append(lot.QuantityUnits)
+                    .Append(' ').Append(string.IsNullOrWhiteSpace(lot.UnitLabel) ? "units" : lot.UnitLabel)
+                    .Append(" | lot ").Append(lot.LotId)
+                    .Append(" | owner ").Append(lot.OwnerBusinessId)
+                    .Append(" | custodian ").Append(lot.CustodianBusinessId)
+                    .Append(" | source ").AppendLine(string.IsNullOrWhiteSpace(lot.Provenance) ? "unspecified" : lot.Provenance);
+            }
         }
 
         private BusinessOperatingReadoutFamily ResolveOperatingReadoutFamilyV4(BusinessInstanceState business, BusinessProfileDefinition profile)
@@ -503,7 +529,7 @@ namespace LandLedgers.Economy
             builder.AppendLine($"Puts out: {descriptor.PutsOut}");
             builder.AppendLine($"Gets paid by: {descriptor.GetsPaidBy}");
             builder.AppendLine($"Watch: {descriptor.Watch}");
-            builder.AppendLine($"Staff: {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount} filled | Required: {runtime.FilledWorkerCount}/{runtime.RequiredWorkerCount} | Efficiency: {GetHealthAdjustedOperatingEfficiency01(business):P0}");
+            builder.AppendLine($"Staff: {runtime.FilledWorkerCount} | Required: {runtime.RequiredWorkerCount} | Efficiency: {GetHealthAdjustedOperatingEfficiency01(business):P0}");
         }
 
         private void AppendMoneyPulseV4(StringBuilder builder, BusinessInstanceState business, BusinessFlowDescriptor descriptor)

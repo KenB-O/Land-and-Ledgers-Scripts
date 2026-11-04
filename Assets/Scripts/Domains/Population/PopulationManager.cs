@@ -112,12 +112,7 @@ namespace LandLedgers.Population
         private int demographicWorldSeed;
 
         /// <summary>
-        /// Pass XL vertical slice: when true, DriveDemographicDay builds its
-        /// DemographicDriverContext with AllowNewArrivals = false, so the
-        /// monthly MigrationDriver adds no newcomers. Set by
-        /// GeneratePopulationSnapshot(SixPersonDevelopmentFixture) on New
-        /// Game when a six-person fixture is supplied. Default false, so
-        /// ordinary scenarios are byte-for-byte unchanged.
+        /// Development-town startup can disable migrant arrivals on New Game.
         /// Phase 2: persisted via PassXlSliceSaveDto (see
         /// PassXlSliceSaveCoordinator). SaveLoadManager restores this flag
         /// on Continue without regenerating population. The bootstrapper's
@@ -199,43 +194,29 @@ namespace LandLedgers.Population
         [ContextMenu("Generate Population Snapshot")]
         public void GeneratePopulationSnapshot()
         {
-            GeneratePopulationSnapshot(null);
+            GeneratePopulationSnapshot((DevelopmentTownConfiguration)null);
         }
 
-        /// <summary>
-        /// Explicit development-fixture overload. Ordinary callers continue
-        /// through the calibrated generator when no fixture is supplied.
-        /// </summary>
-        public void GeneratePopulationSnapshot(SixPersonDevelopmentFixture developmentFixture)
+        /// <summary>Generates the complete development population in one pass from direct authored records.</summary>
+        public void GeneratePopulationSnapshot(DevelopmentTownConfiguration configuration)
         {
-            // Pass XL vertical slice: a supplied six-person fixture seals
-            // the town against later migrant arrivals (New Game only; see
-            // SuppressMigrantArrivals for the Continue limitation).
-            SuppressMigrantArrivals = developmentFixture != null;
+            SuppressMigrantArrivals = configuration != null;
             AutoWireReferences();
-
             sharedBusinessRuntime?.InitializeIfNeeded();
             EnsureDemographicStack(freshKinship: true);
             CalendarAnchor anchor = ResolveAnchor();
             int scenarioStartDay = ResolveScenarioStartDay();
             anchor.FromAbsoluteDay(scenarioStartDay, out int startYear, out int startMonth, out int startDay);
-            PopulationGenerationResult result = developmentFixture != null
-                ? PopulationGenerator.GenerateDevelopmentFixture(
-                    townWorld,
-                    settings,
-                    developmentFixture,
-                    kinshipRegistry,
-                    startYear,
-                    startMonth,
-                    startDay)
-                : PopulationGenerator.Generate(
-                    townWorld,
-                    settings,
-                    BuildBoardingHouseSettlementOptions(),
-                    kinshipRegistry,
-                    startYear,
-                    startMonth,
-                    startDay);
+            PopulationGenerationResult result = configuration != null
+                ? PopulationGenerator.GenerateDevelopmentTown(townWorld, settings, configuration,
+                    kinshipRegistry, ResolvedHouseholdLedgers, scenarioStartDay, startYear, startMonth, startDay)
+                : PopulationGenerator.Generate(townWorld, settings, BuildBoardingHouseSettlementOptions(),
+                    kinshipRegistry, startYear, startMonth, startDay);
+            CompletePopulationSnapshot(result);
+        }
+
+        private void CompletePopulationSnapshot(PopulationGenerationResult result)
+        {
             state = result.State;
             RebuildLifecycleManager();
             RebuildMembershipRegistry();

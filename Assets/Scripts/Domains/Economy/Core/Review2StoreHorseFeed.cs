@@ -78,6 +78,14 @@ namespace LandLedgers.Economy
         public string FeedItemId = string.Empty;
         public string DisplayName = string.Empty;
         public string UnitLabel = string.Empty;
+        /// <summary>Owner-entered retail price in cents; zero means no household offer price was supplied.</summary>
+        public int RetailPriceCents;
+
+        // Exact rational conversion: store packages * numerator / denominator = feed units.
+        // The prior integer StoreUnitsPerFeedUnit remains for additive legacy save migration.
+        public int FeedUnitsPerStoreUnitNumerator;
+        public int FeedUnitsPerStoreUnitDenominator = 1;
+        public int UnusedFeedUnits;
 
         /// <summary>
         /// Store units backing one horse feed unit. Must be &gt; 0;
@@ -151,19 +159,38 @@ namespace LandLedgers.Economy
             if (string.IsNullOrWhiteSpace(item.BusinessInstanceId)) return "AddFeedItem: a feed item needs a store business instance id.";
             if (string.IsNullOrWhiteSpace(item.FeedCategoryId)) return "AddFeedItem: a feed item needs a store category id.";
             if (string.IsNullOrWhiteSpace(item.FeedItemId)) return "AddFeedItem: a feed item needs an item id.";
-            if (item.StoreUnitsPerFeedUnit <= 0) return $"AddFeedItem: feed item '{item.FeedItemId}' needs a positive store-units-per-feed-unit conversion; 0 or negative is 'not supplied', not a silent 1:1.";
+            int feedNumerator = item.FeedUnitsPerStoreUnitNumerator > 0
+                ? item.FeedUnitsPerStoreUnitNumerator
+                : 1;
+            int feedDenominator = item.FeedUnitsPerStoreUnitNumerator > 0
+                ? item.FeedUnitsPerStoreUnitDenominator
+                : item.StoreUnitsPerFeedUnit;
+            if (feedNumerator <= 0 || feedDenominator <= 0) return $"AddFeedItem: feed item '{item.FeedItemId}' needs a positive rational conversion; no silent 1:1.";
+            if (item.RetailPriceCents < 0) return $"AddFeedItem: feed item '{item.FeedItemId}' cannot have a negative retail price.";
 
             Review2StoreFeedItem existing = registry.Find(item.BusinessInstanceId);
             if (existing != null)
             {
                 if (string.Equals(existing.FeedCategoryId, item.FeedCategoryId, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(existing.FeedItemId, item.FeedItemId, StringComparison.OrdinalIgnoreCase)
-                    && existing.StoreUnitsPerFeedUnit == item.StoreUnitsPerFeedUnit)
+                    && EffectiveNumerator(existing) == feedNumerator
+                    && EffectiveDenominator(existing) == feedDenominator)
                 {
-                    return null;
-                }
+                    if (existing.RetailPriceCents == item.RetailPriceCents
+                        && string.Equals(existing.DisplayName, item.DisplayName ?? string.Empty, StringComparison.Ordinal)
+                        && string.Equals(existing.UnitLabel, item.UnitLabel ?? string.Empty, StringComparison.Ordinal))
+                    {
+                        return null;
+                    }
 
-                return $"AddFeedItem: store '{item.BusinessInstanceId}' already carries feed item '{existing.FeedItemId}' in category '{existing.FeedCategoryId}'; a different feed item cannot silently replace it.";
+                    // Same SKU and conversion: this is an explicit owner
+                    // update to its runtime listing data (including price).
+                    // The store category and inventory are left untouched.
+                }
+                else
+                {
+                    return $"AddFeedItem: store '{item.BusinessInstanceId}' already carries feed item '{existing.FeedItemId}' in category '{existing.FeedCategoryId}'; a different feed item cannot silently replace it.";
+                }
             }
 
             // Ensure the category exists so the adapter has a stock
@@ -183,9 +210,13 @@ namespace LandLedgers.Economy
                 DisplayName = item.DisplayName ?? string.Empty,
                 UnitLabel = item.UnitLabel ?? string.Empty,
                 StoreUnitsPerFeedUnit = item.StoreUnitsPerFeedUnit,
+                RetailPriceCents = item.RetailPriceCents,
+                FeedUnitsPerStoreUnitNumerator = feedNumerator,
+                FeedUnitsPerStoreUnitDenominator = feedDenominator,
+                UnusedFeedUnits = existing != null ? Math.Max(0, existing.UnusedFeedUnits) : 0,
             };
             registry.Add(stored);
-            diag?.Add($"Store '{stored.BusinessInstanceId}' now offers feed item '{stored.FeedItemId}' from category '{stored.FeedCategoryId}' at {stored.StoreUnitsPerFeedUnit} store units per feed unit (caller parameters, not canon).");
+            diag?.Add($"Store '{stored.BusinessInstanceId}' now offers feed item '{stored.FeedItemId}' at {stored.FeedUnitsPerStoreUnitNumerator}/{stored.FeedUnitsPerStoreUnitDenominator} feed units per store unit (caller parameters, not canon).");
             return null;
         }
 
@@ -207,14 +238,22 @@ namespace LandLedgers.Economy
                 return null;
             }
 
-            if (registration.StoreUnitsPerFeedUnit <= 0)
+            if (EffectiveNumerator(registration) <= 0 || EffectiveDenominator(registration) <= 0)
             {
                 diag?.Add($"Store horse feed: feed item '{registration.FeedItemId}' has no conversion supplied — no feed stock, never a silent 1:1.");
                 return null;
             }
 
-            return new StoreHorseFeedStockAdapter(storeRuntime, registration.FeedCategoryId, registration.StoreUnitsPerFeedUnit);
+            return new StoreHorseFeedStockAdapter(storeRuntime, registration);
         }
+
+        public static int EffectiveNumerator(Review2StoreFeedItem registration) =>
+            registration == null ? 0 : registration.FeedUnitsPerStoreUnitNumerator > 0
+                ? registration.FeedUnitsPerStoreUnitNumerator : 1;
+
+        public static int EffectiveDenominator(Review2StoreFeedItem registration) =>
+            registration == null ? 0 : registration.FeedUnitsPerStoreUnitNumerator > 0
+                ? registration.FeedUnitsPerStoreUnitDenominator : registration.StoreUnitsPerFeedUnit;
 
         /// <summary>
         /// Production-resolver shape for General Store horses only.

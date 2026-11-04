@@ -57,6 +57,7 @@ namespace LandLedgers.Economy.Freight
             new Dictionary<string, BusinessRuntimeState>(StringComparer.Ordinal);
         private readonly Dictionary<string, DispatchPlan> dispatchPlans =
             new Dictionary<string, DispatchPlan>(StringComparer.Ordinal);
+        private readonly FreightServiceAgreementBook serviceAgreements = new FreightServiceAgreementBook();
 
         public FreightProductionDriver(FreightShipmentService service = null)
         {
@@ -67,6 +68,7 @@ namespace LandLedgers.Economy.Freight
         public FreightShipmentService Service => service;
 
         public IReadOnlyDictionary<string, FreightCompanyRuntime> Companies => companies;
+        public FreightServiceAgreementBook ServiceAgreements => serviceAgreements;
 
         /// <summary>
         /// Constructs (once) the production FreightCompanyRuntime for a
@@ -164,7 +166,11 @@ namespace LandLedgers.Economy.Freight
             int freightChargeCents,
             string freightPayerBusinessId,
             List<string> diagnostics,
-            out string reason)
+            out string reason,
+            string freightServiceAgreementId = "",
+            string sourceLotId = "",
+            string sourceSkuId = "",
+            bool holdForDispatchAuthorization = false)
         {
             reason = string.Empty;
             diagnostics = diagnostics ?? new List<string>();
@@ -173,6 +179,24 @@ namespace LandLedgers.Economy.Freight
             {
                 reason = "FreightProductionDriver: a carrier business id is required.";
                 return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(sourceLotId))
+            {
+                if (string.IsNullOrWhiteSpace(sourceSkuId))
+                {
+                    reason = "FreightProductionDriver: a source lot requires its SKU; no shipment was created.";
+                    return null;
+                }
+                foreach (LogisticsShipmentState existing in service.TrackedShipments)
+                {
+                    if (existing != null && FreightShipmentService.IsLiveShipment(existing)
+                        && string.Equals(existing.CargoLotId, sourceLotId, StringComparison.Ordinal))
+                    {
+                        reason = $"FreightProductionDriver: source lot '{sourceLotId}' is already bound to live shipment '{existing.ShipmentId}'.";
+                        return null;
+                    }
+                }
             }
 
             LogisticsShipmentState shipment = service.CreateShipment(
@@ -187,8 +211,20 @@ namespace LandLedgers.Economy.Freight
                 return shipment; // terminal record; never accepted, owns zero cargo
             }
 
+            if (!string.IsNullOrWhiteSpace(sourceLotId)
+                && !service.TryBindSourceLot(shipment, sourceLotId, sourceSkuId, out reason))
+            {
+                shipment.state = LogisticsShipmentStatus.Failed;
+                shipment.blockedReason = "Source lot binding refused before pickup: " + reason;
+                shipment.remainingQuantityUnits = 0;
+                shipment.loadApplied = false;
+                return shipment;
+            }
+
             shipment.freightChargeCents = Math.Max(0, freightChargeCents);
             shipment.freightPayerBusinessInstanceId = freightPayerBusinessId ?? string.Empty;
+            shipment.freightServiceAgreementId = freightServiceAgreementId ?? string.Empty;
+            shipment.requiresDispatchAuthorization = holdForDispatchAuthorization;
             if (!company.TryAcceptShipment(shipment, diagnostics))
             {
                 reason = "FreightProductionDriver: carrier '" + carrierBusinessId + "' refused shipment '" + shipmentId + "'.";
@@ -201,6 +237,20 @@ namespace LandLedgers.Economy.Freight
                 AnimalIds = animalIds != null ? new List<EntityId>(animalIds) : new List<EntityId>(),
             };
             return shipment;
+        }
+
+        /// <summary>Releases an accepted agreement shipment only after the next dispatch-preparation stage has prepared its real team.</summary>
+        public bool AuthorizeShipmentDispatch(string shipmentId, out string reason)
+        {
+            reason = string.Empty;
+            LogisticsShipmentState shipment = AllShipments().Find(s => s != null
+                && string.Equals(s.ShipmentId, shipmentId, StringComparison.Ordinal));
+            if (shipment == null) { reason = "Unknown freight shipment."; return false; }
+            if (!shipment.requiresDispatchAuthorization) return true;
+            if (shipment.Status != LogisticsShipmentStatus.Planned)
+            { reason = "Only a planned shipment can be released from its dispatch-preparation hold."; return false; }
+            shipment.requiresDispatchAuthorization = false;
+            return true;
         }
 
         /// <summary>Records or replaces the dispatch plan for a shipment (e.g. after a restore).</summary>
@@ -267,6 +317,8 @@ namespace LandLedgers.Economy.Freight
             foreach (LogisticsShipmentState shipment in AllShipments())
             {
                 if (shipment == null || !FreightShipmentService.IsLiveShipment(shipment))
+                    continue;
+                if (shipment.requiresDispatchAuthorization)
                     continue;
                 LogisticsShipmentStatus before = shipment.Status;
                 string reason;
@@ -345,7 +397,9 @@ namespace LandLedgers.Economy.Freight
         /// <summary>Captures every company's shipments through the service DTO.</summary>
         public FreightShipmentService.FreightServiceSaveDto CaptureSaveDto()
         {
-            return service.CaptureSaveDto(AllShipments());
+            FreightShipmentService.FreightServiceSaveDto dto = service.CaptureSaveDto(AllShipments());
+            dto.ServiceAgreements = serviceAgreements.CaptureSaveDto();
+            return dto;
         }
 
         /// <summary>
@@ -361,6 +415,7 @@ namespace LandLedgers.Economy.Freight
             List<string> diagnostics)
         {
             diagnostics = diagnostics ?? new List<string>();
+            serviceAgreements.RestoreSaveDto(dto != null ? dto.ServiceAgreements : null);
             List<LogisticsShipmentState> restored = service.RestoreSaveDto(dto, hooks);
 
             var byCarrier = new Dictionary<string, List<LogisticsShipmentState>>(StringComparer.Ordinal);

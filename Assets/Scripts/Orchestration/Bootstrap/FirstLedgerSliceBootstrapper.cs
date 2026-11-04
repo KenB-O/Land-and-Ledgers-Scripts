@@ -4,7 +4,11 @@ using LandLedgers.Civic;
 using System.Text;
 using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Core;
+using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.BoardingHouse;
+using LandLedgers.Economy.Businesses.Bakery;
+using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Transport;
@@ -21,6 +25,7 @@ using LandLedgers.Time;
 using LandLedgers.UI;
 using LandLedgers.World;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
 using Stopwatch = System.Diagnostics.Stopwatch;
@@ -114,17 +119,11 @@ namespace LandLedgers.FirstLedger
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         [Header("Development Population Fixture")]
-        [SerializeField, Tooltip("Optional Pass XL fixture. Effective only when explicitly enabled for a fresh New Game; ordinary settings and Continue/restore are unchanged.")]
-        private SixPersonDevelopmentFixture developmentPopulationFixture;
+        [SerializeField, FormerlySerializedAs("enableExpandedSliceDevelopmentFixture"), Tooltip("Opt-in New Game development town configuration. Ordinary scenarios and Continue/restore are unchanged.")]
+        private bool enableDevelopmentTownConfiguration;
 
-        [SerializeField, Tooltip("Explicitly opts this development startup into the assigned six-person fixture.")]
-        private bool enableDevelopmentPopulationFixture;
-
-        [SerializeField, Tooltip("Opt-in New Game profile: append the configured ExpandedSliceFixture to its six-person base. Ordinary scenarios and the six-person profile are unchanged.")]
-        private bool enableExpandedSliceDevelopmentFixture;
-
-        [SerializeField, Tooltip("Optional expanded fixture asset. If empty, the development asset at Assets/Core/Population/ExpandedSliceFixture.asset is resolved in the Editor.")]
-        private ExpandedSliceFixture expandedSliceDevelopmentFixture;
+        [SerializeField, Tooltip("Single active development-town configuration. If empty, the Editor resolves Assets/Core/Population/DevelopmentTownConfiguration.asset.")]
+        private DevelopmentTownConfiguration developmentTownConfiguration;
 #endif
 
         [SerializeField]
@@ -191,6 +190,8 @@ namespace LandLedgers.FirstLedger
 
         private bool initialized;
         private bool initializing;
+        [NonSerialized] private Review2VerticalD3SaveState review2D3SaveState = new Review2VerticalD3SaveState();
+        [NonSerialized] private BakeryShopRuntime liveBakeryRuntime;
 
         public string LastStartupTimingSummary => lastStartupTimingSummary ?? string.Empty;
         public WorldStartupIntent StartupIntent => startupIntent;
@@ -309,21 +310,21 @@ namespace LandLedgers.FirstLedger
             Debug.Log("[WorldStartup] New Game path selected: exactly one fresh-world generation pass is permitted.", this);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            ExpandedSliceFixture expandedFixture = ResolveExpandedSliceFixture();
-            bool useExpandedSliceProfile = startupIntent == WorldStartupIntent.NewGame
-                && enableExpandedSliceDevelopmentFixture && expandedFixture != null;
-            bool useSixPersonDevelopmentProfile = startupIntent == WorldStartupIntent.NewGame
-                && !useExpandedSliceProfile
-                && enableDevelopmentPopulationFixture
-                && developmentPopulationFixture != null;
-            if ((useSixPersonDevelopmentProfile || useExpandedSliceProfile) && generateTownOnPlay && townWorld.Grid == null)
+            DevelopmentTownConfiguration townConfiguration = ResolveDevelopmentTownConfiguration();
+            bool useDevelopmentTownProfile = startupIntent == WorldStartupIntent.NewGame
+                && enableDevelopmentTownConfiguration && townConfiguration != null;
+            if (useDevelopmentTownProfile && !townConfiguration.Validate(out string configError))
             {
-                SixPersonDevelopmentFixture baseFixture = useExpandedSliceProfile
-                    ? expandedFixture.SixPersonFixture : developmentPopulationFixture;
-                int requestedHomes = useExpandedSliceProfile ? ExpandedSliceFixture.RequiredHouseholdCount : baseFixture.Households.Count;
-                int requestedBusinesses = useExpandedSliceProfile ? ExpandedSliceFixture.RequiredBusinessCount : OpeningBusinessRoster.SixPersonDevelopment().Count;
+                bootstrapStatus = "Development town startup stopped: " + configError;
+                Debug.LogError("[WorldStartup] " + bootstrapStatus, this);
+                CompleteStartupTiming(totalTimer, timing, "development configuration invalid");
+                initializing = false;
+                return;
+            }
+            if (useDevelopmentTownProfile && generateTownOnPlay && townWorld.Grid == null)
+            {
                 if (!townWorld.TryApplyDevelopmentResidentialHomeCount(
-                    requestedHomes, out string developmentWorldReason, requestedBusinesses))
+                    townConfiguration.Households.Count, out string developmentWorldReason, townConfiguration.Businesses.Count))
                 {
                     bootstrapStatus = $"Development fixture startup stopped before world generation: {developmentWorldReason}";
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
@@ -352,12 +353,10 @@ namespace LandLedgers.FirstLedger
             }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (useSixPersonDevelopmentProfile || useExpandedSliceProfile)
+            if (useDevelopmentTownProfile)
             {
-                int requiredResidentialHomes = useExpandedSliceProfile
-                    ? ExpandedSliceFixture.RequiredHouseholdCount : developmentPopulationFixture.Households.Count;
-                int requiredCommercialBuildings = useExpandedSliceProfile
-                    ? ExpandedSliceFixture.RequiredBusinessCount : OpeningBusinessRoster.SixPersonDevelopment().Count;
+                int requiredResidentialHomes = townConfiguration.Households.Count;
+                int requiredCommercialBuildings = townConfiguration.Businesses.Count;
                 int realResidentialHomes = 0;
                 int realCommercialBuildings = 0;
                 int realTotalBuildings = townWorld.Buildings.Count;
@@ -435,35 +434,11 @@ namespace LandLedgers.FirstLedger
             if (generatePopulationOnPlay && populationManager != null)
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (startupIntent == WorldStartupIntent.NewGame && useExpandedSliceProfile)
+                if (startupIntent == WorldStartupIntent.NewGame && useDevelopmentTownProfile)
                 {
-                    populationManager.GeneratePopulationSnapshot(expandedFixture.SixPersonFixture);
                     systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
                     populationManager.HouseholdLedgers ??= systemsHub != null ? systemsHub.HouseholdLedgers : null;
-                    PopulationGenerationResult expandedResult = PopulationGenerator.AppendExpandedDevelopmentFixture(
-                        townWorld, populationSettings, populationManager.State, expandedFixture,
-                        populationManager.Lifecycle, populationManager.Kinship,
-                        populationManager.HouseholdLedgers, timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
-                        timeManager != null ? timeManager.CurrentDate.Year : 1870,
-                        timeManager != null ? timeManager.CurrentDate.Month : 1,
-                        timeManager != null ? timeManager.CurrentDate.DayOfMonth : 1);
-                    if (expandedResult.HasErrors)
-                    {
-                        bootstrapStatus = expandedResult.Summary;
-                        Debug.LogError("[WorldStartup] " + bootstrapStatus, this);
-                        CompleteStartupTiming(totalTimer, timing, "expanded fixture generation failed");
-                        initializing = false;
-                        return;
-                    }
-                    Debug.Log("[WorldStartup] " + expandedResult.Summary, this);
-                    populationManager.RecalculateHouseholdIncomeAndSummaries(expandedResult.Summary);
-                    populationManager.SweepUnledgeredHouseholdCashToLedgers("expanded development fixture generation");
-                }
-                else if (startupIntent == WorldStartupIntent.NewGame
-                    && enableDevelopmentPopulationFixture
-                    && developmentPopulationFixture != null)
-                {
-                    populationManager.GeneratePopulationSnapshot(developmentPopulationFixture);
+                    populationManager.GeneratePopulationSnapshot(townConfiguration);
                 }
                 else
                 {
@@ -524,16 +499,24 @@ namespace LandLedgers.FirstLedger
             storeRuntime?.InitializeIfNeeded();
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
+            ConfigureLiveBakerySaveOwner();
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
+            simulationDrivers?.AttachDevelopmentTownConfiguration(ResolveDevelopmentTownConfiguration());
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            ApplyDevelopmentTownOpeningCash();
+#endif
+            ConfigureMillbrookAidTable(simulationDrivers);
             sharedBusinessRuntime?.ReconcileGeneratedWorkplaceAssignments();
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             BusinessInstanceState developmentNpcStore = null;
-            if (startupIntent == WorldStartupIntent.NewGame && (enableDevelopmentPopulationFixture || enableExpandedSliceDevelopmentFixture)
-                && (developmentPopulationFixture != null || ResolveExpandedSliceFixture()?.SixPersonFixture != null))
+            if (enableDevelopmentTownConfiguration && ResolveDevelopmentTownConfiguration() != null)
             {
                 developmentNpcStore = FindDevelopmentNpcGeneralStore();
-                SeedDevelopmentNpcStoreOpeningStock(developmentNpcStore);
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    SeedDevelopmentBusinessOpeningInventory();
+                if (startupIntent == WorldStartupIntent.NewGame && simulationDrivers != null && developmentNpcStore?.RuntimeState != null)
+                    ConfigurePlaytestHorseFeed(developmentNpcStore, simulationDrivers);
             }
 #endif
             // Register the live store with the shared supplier directory. The
@@ -543,7 +526,7 @@ namespace LandLedgers.FirstLedger
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                 simulationDrivers.RegisterGeneralStoreSupplier(developmentNpcStore != null
-                    ? storeRuntime.BuildHouseholdTradingPort(developmentNpcStore)
+                    ? storeRuntime.BuildHouseholdTradingPort(developmentNpcStore, simulationDrivers.StoreFeedRegistry)
                     : storeRuntime.BuildHouseholdTradingPort());
 #else
                 simulationDrivers.RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort());
@@ -556,6 +539,19 @@ namespace LandLedgers.FirstLedger
                 systemsHub,
                 sharedBusinessRuntime != null ? sharedBusinessRuntime.Businesses : null,
                 timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (enableDevelopmentTownConfiguration && ResolveDevelopmentTownConfiguration() != null)
+            {
+                OpeningTransportPresentationController transportPresentation =
+                    GetComponent<OpeningTransportPresentationController>()
+                    ?? gameObject.AddComponent<OpeningTransportPresentationController>();
+                transportPresentation.Present(
+                    systemsHub,
+                    sharedBusinessRuntime != null ? sharedBusinessRuntime.Businesses : null,
+                    townWorld,
+                    populationManager != null ? populationManager.State : null);
+            }
+#endif
             RunOpeningSettlementReconciliation();
             ConfigurePopulationPathingDirector();
             // P4: the scenario promises "a stake of cash" (FirstLedger.asset tunable
@@ -1207,28 +1203,45 @@ namespace LandLedgers.FirstLedger
                     && business.Owner.PersonId == 1 && business.RuntimeState != null)
                     return business;
             }
-            Debug.LogError("[WorldStartup] Six-person fixture opening-stock endowment was not applied: no NPC General Store owned by P001 was found.", this);
+            Debug.LogError("[WorldStartup] Development opening-stock endowment was not applied: configured NPC General Store owner was not found.", this);
             return null;
         }
 
-        private void SeedDevelopmentNpcStoreOpeningStock(BusinessInstanceState business)
+        private void SeedDevelopmentBusinessOpeningInventory()
         {
-            SixPersonDevelopmentFixture stockFixture = enableExpandedSliceDevelopmentFixture
-                ? ResolveExpandedSliceFixture()?.SixPersonFixture
-                : developmentPopulationFixture;
-            if (business?.RuntimeState == null || stockFixture == null || storeRuntime?.StoreDefinition == null)
-                return;
-
-            int seed = townWorld?.Settings != null ? townWorld.Settings.seed : 0;
-            if (!ScenarioOpeningStockEndowment.TryApply(stockFixture, business,
-                    storeRuntime.StoreDefinition, seed,
-                    timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
-                    out string report, out string error))
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (enableDevelopmentTownConfiguration && configuration != null)
             {
-                Debug.LogError($"[WorldStartup] {error}", this);
+                int developmentSeed = townWorld?.Settings != null ? townWorld.Settings.seed : 0;
+                foreach (DevelopmentTownConfiguration.BusinessOpeningInventory entry in configuration.OpeningInventory)
+                {
+                    if (entry == null || !configuration.TryGetBusiness(entry.businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot))
+                    {
+                        Debug.LogError("[WorldStartup] Development opening inventory has an unresolved business key.", this);
+                        return;
+                    }
+                    BusinessType type = ToBusinessType(slot.operationId);
+                    BusinessInstanceState business = FindDevelopmentBusiness(type);
+                    if (business?.RuntimeState == null)
+                    {
+                        Debug.LogError($"[WorldStartup] Opening inventory for '{entry.businessKey}' refused: the configured business runtime does not exist.", this);
+                        return;
+                    }
+                    if (!ScenarioOpeningStockEndowment.TryApply(configuration, entry.businessKey, business,
+                            storeRuntime?.StoreDefinition, developmentSeed,
+                            timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                            out string inventoryReport, out string inventoryError))
+                    {
+                        Debug.LogError($"[WorldStartup] {inventoryError}", this);
+                        return;
+                    }
+                    Debug.Log($"[WorldStartup] {inventoryReport}", this);
+                }
                 return;
             }
-            Debug.Log($"[WorldStartup] {report}", this);
+
+            // No fixture-specific inventory fallback: all configured opening stock
+            // must pass through the generic DevelopmentTownConfiguration entries.
         }
 
         private void ConfigureOpeningBusinessRoster()
@@ -1237,59 +1250,59 @@ namespace LandLedgers.FirstLedger
             System.Collections.Generic.IReadOnlyList<OpeningRosterEntry> roster =
                 useCompactPlaytestOpeningRoster ? OpeningBusinessRoster.CompactPlaytest() : null;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (startupIntent == WorldStartupIntent.NewGame && enableExpandedSliceDevelopmentFixture)
+            if (startupIntent == WorldStartupIntent.NewGame && enableDevelopmentTownConfiguration)
             {
-                ExpandedSliceFixture expanded = ResolveExpandedSliceFixture();
-                roster = expanded != null ? BuildExpandedOpeningRoster(expanded) : null;
-            }
-            else if (startupIntent == WorldStartupIntent.NewGame
-                && enableDevelopmentPopulationFixture
-                && developmentPopulationFixture != null)
-            {
-                roster = OpeningBusinessRoster.SixPersonDevelopment();
+                DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+                roster = configuration != null ? BuildDevelopmentOpeningRoster(configuration) : null;
             }
 #endif
             sharedBusinessRuntime?.ConfigureOpeningBusinessRoster(roster);
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private ExpandedSliceFixture ResolveExpandedSliceFixture()
+        private DevelopmentTownConfiguration ResolveDevelopmentTownConfiguration()
         {
-            if (expandedSliceDevelopmentFixture != null) return expandedSliceDevelopmentFixture;
+            if (developmentTownConfiguration != null) return developmentTownConfiguration;
 #if UNITY_EDITOR
-            expandedSliceDevelopmentFixture = UnityEditor.AssetDatabase.LoadAssetAtPath<ExpandedSliceFixture>(
-                "Assets/Core/Population/ExpandedSliceFixture.asset");
+            developmentTownConfiguration = UnityEditor.AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
 #endif
-            if (enableExpandedSliceDevelopmentFixture && expandedSliceDevelopmentFixture == null)
-                Debug.LogError("[WorldStartup] Expanded fixture is enabled but Assets/Core/Population/ExpandedSliceFixture.asset could not be loaded in the Editor.", this);
-            return expandedSliceDevelopmentFixture;
+            if (enableDevelopmentTownConfiguration && developmentTownConfiguration == null)
+                Debug.LogError("[WorldStartup] Development town configuration is enabled but Assets/Core/Population/DevelopmentTownConfiguration.asset could not be loaded in the Editor.", this);
+            if (enableDevelopmentTownConfiguration && developmentTownConfiguration != null
+                && !developmentTownConfiguration.Validate(out string validationError))
+                Debug.LogError($"[WorldStartup] Development town configuration is invalid: {validationError}", this);
+            return developmentTownConfiguration;
         }
 
-        private static List<OpeningRosterEntry> BuildExpandedOpeningRoster(ExpandedSliceFixture fixture)
+        private static BusinessType ToBusinessType(string operationId) => operationId?.Trim().ToLowerInvariant() switch
+        {
+            "general-store" => BusinessType.GeneralStore,
+            "bakery" => BusinessType.Bakery,
+            "fuel-dealer" => BusinessType.FuelDealer,
+            "livery-freight" or "freight-company" => BusinessType.LiveryFreight,
+            _ => throw new ArgumentException($"Unsupported configured business operation ID '{operationId}'.", nameof(operationId))
+        };
+
+        private BusinessInstanceState FindDevelopmentBusiness(BusinessType type)
+        {
+            if (sharedBusinessRuntime?.Businesses == null) return null;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                if (business != null && business.BusinessType == type && business.Owner?.OwnerKind == BusinessOwnerKind.Npc)
+                    return business;
+            return null;
+        }
+
+        private static List<OpeningRosterEntry> BuildDevelopmentOpeningRoster(DevelopmentTownConfiguration configuration)
         {
             var roster = new List<OpeningRosterEntry>();
-            if (fixture == null) return roster;
-            foreach (ExpandedSliceFixture.BusinessSlot slot in fixture.Businesses)
+            if (configuration == null) return roster;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
             {
-                BusinessType type = slot.operation switch
-                {
-                    ExpandedSliceFixture.Operation.GeneralStore => BusinessType.GeneralStore,
-                    ExpandedSliceFixture.Operation.Bakery => BusinessType.Bakery,
-                    ExpandedSliceFixture.Operation.FuelDealer => BusinessType.FuelDealer,
-                    ExpandedSliceFixture.Operation.FreightCompany => BusinessType.LiveryFreight,
-                    _ => throw new ArgumentOutOfRangeException()
-                };
-                int ownerId = slot.ownerPersonKey.StartsWith("base:", StringComparison.OrdinalIgnoreCase)
-                    && int.TryParse(slot.ownerPersonKey.Substring(5), out int personIndex)
-                    ? personIndex + 1 : slot.operation == ExpandedSliceFixture.Operation.FreightCompany ? 7 : -1;
-                string ownerName = slot.ownerPersonKey switch
-                {
-                    "base:0" => "Kennedy Baldwin-Ooms",
-                    "base:2" => "Glen Pierce",
-                    "base:4" => "Jacob Boniecki",
-                    "ethan" => "Ethan Boniecki",
-                    _ => "Development fixture"
-                };
+                BusinessType type = ToBusinessType(slot.operationId);
+                int ownerId = configuration.ResolveRuntimePersonId(slot.ownerPersonKey);
+                configuration.TryGetPerson(slot.ownerPersonKey, out DevelopmentTownConfiguration.PersonDefinition owner);
+                string ownerName = owner != null ? owner.firstName + " " + owner.lastName : "Development configuration";
                 var premises = type switch
                 {
                     BusinessType.GeneralStore => new PremisesRequirement(customerFacing: true, minAreaSqFt: 800),
@@ -1297,16 +1310,16 @@ namespace LandLedgers.FirstLedger
                     BusinessType.FuelDealer => new PremisesRequirement(yardStorage: true, minAreaSqFt: 600),
                     _ => new PremisesRequirement()
                 };
-                string displayName = slot.operation switch
+                string displayName = slot.operationId switch
                 {
-                    ExpandedSliceFixture.Operation.GeneralStore => "Baldwin-Ooms General Store",
-                    ExpandedSliceFixture.Operation.Bakery => "Pierce Bakery",
-                    ExpandedSliceFixture.Operation.FuelDealer => "Boniecki Fuel Dealer",
-                    ExpandedSliceFixture.Operation.FreightCompany => "Boniecki Freight Company",
+                    "general-store" => ownerName + " General Store",
+                    "bakery" => ownerName + " Bakery",
+                    "fuel-dealer" => ownerName + " Fuel Dealer",
+                    "livery-freight" or "freight-company" => ownerName + " Freight Company",
                     _ => slot.key
                 };
                 roster.Add(new OpeningRosterEntry(type, displayName, ownerName,
-                    premises, slot.openingCashResolved ? slot.openingCashCents : 0, ownerId));
+                    premises, slot.openingCashCents, ownerId));
             }
             return roster;
         }
@@ -1551,10 +1564,335 @@ namespace LandLedgers.FirstLedger
                 saveLoadManager = saveLoadObject.AddComponent<SaveLoadManager>();
             }
 
+            ConfigureReview2D3SaveWiring();
+
             if (civicFoundation == null)
             {
                 civicFoundation = CivicFoundationManager.FindOrCreate();
             }
         }
+
+        private void ConfigureReview2D3SaveWiring()
+        {
+            if (saveLoadManager == null)
+            {
+                return;
+            }
+
+            review2D3SaveState ??= new Review2VerticalD3SaveState();
+            saveLoadManager.Review2VerticalD3SaveState = review2D3SaveState;
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("Review 2 D3 save binding deferred: the authored SimulationDrivers component is missing. Feed registrations will not be saved until a driver exists.", this);
+                return;
+            }
+
+            drivers.AttachReview2D3SaveState(review2D3SaveState);
+
+            List<string> diagnostics = new List<string>();
+            string refusal = Review2SecondScriptsSaveWiring.BindDriverRegistry(
+                review2D3SaveState,
+                drivers.StoreFeedRegistry,
+                diagnostics);
+            if (!string.IsNullOrWhiteSpace(refusal))
+            {
+                Debug.LogWarning(refusal, this);
+            }
+        }
+
+        private void ConfigureLiveBakerySaveOwner()
+        {
+            if (sharedBusinessRuntime == null || saveLoadManager == null)
+            {
+                Debug.LogWarning("[BakeryRuntime] Live owner was not created: shared business runtime or SaveLoadManager is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState bakeryBusiness = null;
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate == null || candidate.BusinessType != BusinessType.Bakery) continue;
+                bakeryBusiness = candidate;
+                break;
+            }
+
+            if (bakeryBusiness == null || string.IsNullOrWhiteSpace(bakeryBusiness.InstanceId))
+            {
+                Debug.LogWarning("[BakeryRuntime] Live owner was not created: no authored Bakery business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                pass9 = new Series2Pass9SaveState();
+                saveLoadManager.Series2Pass9State = pass9;
+            }
+
+            liveBakeryRuntime = pass9.BakeryRuntime ?? pass9.BakeryDriver?.Bakery;
+            if (liveBakeryRuntime == null)
+            {
+                liveBakeryRuntime = new BakeryShopRuntime(bakeryBusiness.InstanceId);
+            }
+            else if (!string.Equals(liveBakeryRuntime.BusinessInstanceId, bakeryBusiness.InstanceId, StringComparison.Ordinal))
+            {
+                Debug.LogError($"[BakeryRuntime] Refusing a second Bakery runtime: save owner is '{liveBakeryRuntime.BusinessInstanceId}', authored Bakery is '{bakeryBusiness.InstanceId}'.", this);
+                return;
+            }
+
+            pass9.BakeryRuntime = liveBakeryRuntime;
+            if (pass9.BakeryDriver == null)
+            {
+                // The live identity/save owner is established here. A production
+                // fuel source is attached only by the daily operations wiring;
+                // this driver therefore refuses baking until that authority exists.
+                pass9.BakeryDriver = new Series2BakeryProductionDriver(liveBakeryRuntime, null);
+            }
+            // Detailed freight state is owned by the same Pass 9 save section
+            // before any daily driver can create or restore a shipment.
+            // SimulationDrivers reuses this instance; it must not keep a
+            // transient parallel FreightProductionDriver.
+            if (pass9.FreightDriver == null)
+            {
+                pass9.FreightDriver = new LandLedgers.Economy.Freight.FreightProductionDriver();
+                Debug.Log("[FreightSave] Pass 9 save owner created the live freight driver before simulation startup.", this);
+            }
+            Debug.Log($"[BakeryRuntime] Bootstrap owns one live BakeryShopRuntime for '{bakeryBusiness.RuntimeDisplayName}' ({bakeryBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+        }
+
+        private void ConfigureMillbrookAidTable(SimulationDrivers drivers)
+        {
+            const string resourcePath = "Core/Economy/OffMapAidBusinesses/MillbrookGrainCo";
+            OffMapAidBusinessDefinition definition = Resources.Load<OffMapAidBusinessDefinition>(resourcePath);
+            if (definition == null)
+            {
+                Debug.LogError($"[OffMapAid] Millbrook definition was not found at Resources/{resourcePath}.asset.", this);
+                return;
+            }
+
+            string validation = definition.ValidateDefinition();
+            if (validation != null)
+            {
+                Debug.LogError($"[OffMapAid] Millbrook definition is invalid: {validation}", this);
+                return;
+            }
+
+            OffMapAidBusinessRuntime runtime = saveLoadManager != null ? saveLoadManager.MillbrookAidRuntime : null;
+            if (runtime == null || !string.Equals(runtime.BusinessId, definition.BusinessId, StringComparison.Ordinal))
+                runtime = new OffMapAidBusinessRuntime(definition);
+            if (saveLoadManager != null) saveLoadManager.MillbrookAidRuntime = runtime;
+            if (drivers != null) drivers.AttachMillbrookAidRuntime(runtime);
+            Debug.Log($"[OffMapAid] Loaded {definition.DisplayName} ({definition.BusinessId}) from Resources: " +
+                $"flour={runtime.GetInventoryUnits("bakery_flour_sack")} lb, wheat={runtime.GetInventoryUnits("wheat_grain")} lb, " +
+                $"sugar={runtime.GetInventoryUnits("sugar")} lb, yeast={runtime.GetInventoryUnits("yeast")} lb; " +
+                "off-map table runtime is attached to the daily driver and save authority.", this);
+        }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private void ApplyDevelopmentTownOpeningCash()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (startupIntent != WorldStartupIntent.NewGame || !enableDevelopmentTownConfiguration || configuration == null)
+                return;
+
+            BusinessInstanceState markerBusiness = null;
+            var businessesByKey = new Dictionary<string, BusinessInstanceState>(StringComparer.OrdinalIgnoreCase);
+            if (sharedBusinessRuntime?.Businesses != null)
+            {
+                foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+                {
+                    if (candidate?.RuntimeState == null) continue;
+                    foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+                    {
+                        if (!configuration.TryGetBusiness(target.businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot)) continue;
+                        int ownerId = configuration.ResolveRuntimePersonId(slot.ownerPersonKey);
+                        if (candidate.BusinessType == ToBusinessType(slot.operationId)
+                            && candidate.Owner?.PersonId == ownerId && !businessesByKey.ContainsKey(target.businessKey))
+                            businessesByKey.Add(target.businessKey, candidate);
+                    }
+                    if (candidate.BusinessType == BusinessType.GeneralStore) markerBusiness = candidate;
+                }
+            }
+
+            if (markerBusiness?.RuntimeState == null || populationManager?.State == null
+                || systemsHub?.HouseholdLedgers == null)
+            {
+                Debug.LogError("[DevelopmentFinance] Expanded opening allocation refused: business, population, or household ledger authority is missing.", this);
+                return;
+            }
+
+            const string source = "DevelopmentTownConfiguration opening allocation";
+            const string reason = "$200 per business and $200 per NPC resident for development testing liquidity";
+
+            foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+            {
+                if (!businessesByKey.TryGetValue(target.businessKey, out BusinessInstanceState business))
+                {
+                    Debug.LogError($"[DevelopmentFinance] Business '{target.businessKey}' allocation refused: its runtime is missing.", this);
+                    return;
+                }
+                string allocationId = "small-prompt-8-development-cash:source=expanded-scenario:reason=opening-liquidity:business=" + business.BusinessType;
+                if (!business.RuntimeState.HasAppliedScenarioEndowment(allocationId)
+                    && business.RuntimeState.CurrentCashCents > target.targetCashCents)
+                {
+                    Debug.LogError($"[DevelopmentFinance] {target.businessKey} allocation refused: actual starting balance {business.RuntimeState.CurrentCashCents}c exceeds configured target {target.targetCashCents}c.", this);
+                    return;
+                }
+            }
+            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in configuration.HouseholdCashTargets)
+            {
+                int personId = configuration.ResolveRuntimePersonId(target.anchorPersonKey);
+                PersonState person = populationManager.State.GetPerson(personId);
+                if (person == null || person.householdId < 0 || systemsHub.HouseholdLedgers.Get(person.householdId) == null)
+                {
+                    Debug.LogError($"[DevelopmentFinance] Household anchored by '{target.anchorPersonKey}' allocation refused: resident or existing shared household ledger is missing.", this);
+                    return;
+                }
+                string allocationId = "small-prompt-8-development-cash:source=expanded-scenario:reason=opening-liquidity:household=" + person.householdId;
+                HouseholdLedger ledger = systemsHub.HouseholdLedgers.Get(person.householdId);
+                if (!markerBusiness.RuntimeState.HasAppliedScenarioEndowment(allocationId)
+                    && ledger.GetBalanceCents() > target.targetCashCents)
+                {
+                    Debug.LogError($"[DevelopmentFinance] {target.anchorPersonKey} allocation refused: actual starting balance {ledger.GetBalanceCents()}c exceeds configured target {target.targetCashCents}c.", this);
+                    return;
+                }
+            }
+
+            foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+            {
+                BusinessInstanceState business = businessesByKey[target.businessKey];
+                string allocationId = "small-prompt-8-development-cash:source=expanded-scenario:reason=opening-liquidity:business=" + business.BusinessType;
+                BusinessRuntimeState cash = business.RuntimeState;
+                if (cash.HasAppliedScenarioEndowment(allocationId)) continue;
+                int before = cash.CurrentCashCents;
+                int amount = target.targetCashCents - before;
+                if (amount > 0) cash.AddCashCents(amount);
+                cash.RecordAppliedScenarioEndowment(allocationId);
+                Debug.Log($"[DevelopmentFinance] opening allocation applied: source='{source}', reason='{reason}', recipient='{target.businessKey}' ({business.InstanceId}), amount={amount}c, balance={before}->{cash.CurrentCashCents}c.", this);
+            }
+
+            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in configuration.HouseholdCashTargets)
+            {
+                PersonState person = populationManager.State.GetPerson(configuration.ResolveRuntimePersonId(target.anchorPersonKey));
+                HouseholdLedger ledger = systemsHub.HouseholdLedgers.Get(person.householdId);
+                string allocationId = "small-prompt-8-development-cash:source=expanded-scenario:reason=opening-liquidity:household=" + person.householdId;
+                if (markerBusiness.RuntimeState.HasAppliedScenarioEndowment(allocationId)) continue;
+                int before = ledger.GetBalanceCents();
+                int amount = target.targetCashCents - before;
+                if (amount > 0)
+                {
+                    string refusal = ledger.RecordInflow(
+                        timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                        amount,
+                        HouseholdIncomeSource.OtherDocumented,
+                        allocationId,
+                        reason,
+                        source);
+                    if (!string.IsNullOrWhiteSpace(refusal))
+                    {
+                        Debug.LogError($"[DevelopmentFinance] {target.anchorPersonKey} allocation refused by household ledger: {refusal}", this);
+                        return;
+                    }
+                }
+                markerBusiness.RuntimeState.RecordAppliedScenarioEndowment(allocationId);
+                Debug.Log($"[DevelopmentFinance] opening allocation applied: source='{source}', reason='{reason}', recipient='{target.anchorPersonKey}' (H{person.householdId}), amount={amount}c, balance={before}->{ledger.GetBalanceCents()}c.", this);
+            }
+
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                int balance = systemsHub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
+                Debug.Log($"[ScenarioFinance] opening household balance: H{household.id} '{household.householdName ?? "Household"}'={balance}c.", this);
+            }
+            foreach (BusinessInstanceState business in businessesByKey.Values)
+                Debug.Log($"[ScenarioFinance] opening business balance: '{business.RuntimeDisplayName}' ({business.InstanceId})={business.RuntimeState.CurrentCashCents}c.", this);
+        }
+#endif
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private void ConfigurePlaytestHorseFeed(BusinessInstanceState storeBusiness, SimulationDrivers drivers)
+        {
+            const string itemId = "store_horse_feed_sack";
+            const string categoryId = "animal_feed";
+            const string supplierId = "millbrook_grain_co";
+            var diagnostics = new List<string>();
+            string itemRefusal = review2D3SaveState.RegisterRuntimeItem(
+                new HouseholdItemDefinition(itemId, "Horse Feed", "sack", categoryId, 1, false), diagnostics);
+            if (itemRefusal != null)
+            {
+                Debug.LogError($"[FeedSupply] household catalog registration refused: {itemRefusal}", this);
+                return;
+            }
+
+            string registrationRefusal = drivers.RegisterStoreFeedItem(new Review2StoreFeedItem
+            {
+                BusinessInstanceId = storeBusiness.InstanceId,
+                FeedCategoryId = categoryId,
+                FeedItemId = itemId,
+                DisplayName = "Horse Feed",
+                UnitLabel = "sack",
+                RetailPriceCents = 15,
+                FeedUnitsPerStoreUnitNumerator = 2,
+                FeedUnitsPerStoreUnitDenominator = 1,
+            }, diagnostics);
+            if (registrationRefusal != null)
+            {
+                Debug.LogError($"[FeedSupply] store feed registration refused: {registrationRefusal}", this);
+                return;
+            }
+
+            // Temporary Small Prompt 2 playtest registration, not a Canon supplier:
+            // the owner's specified 20 sacks at 15c each are a finite external order.
+            if (storeBusiness.RuntimeState.HasAppliedScenarioEndowment("small-prompt-2-horse-feed-order"))
+            {
+                Debug.Log("[FeedSupply] opening feed order already recorded; no replacement order or free stock created.", this);
+                return;
+            }
+
+            var market = new ExternalMarketAuthority();
+            var counterparty = new ExternalCounterparty
+            {
+                CounterpartyId = supplierId,
+                DisplayName = "Millbrook Grain Co.",
+                TransitDays = 1,
+                InitialBudgetCents = 0,
+                SupplyUnits = new Dictionary<string, int> { [itemId] = 20 },
+            };
+            string marketRefusal = market.RegisterCounterparty(counterparty);
+            if (marketRefusal != null)
+            {
+                Debug.LogError($"[FeedSupply] external supplier registration refused: {marketRefusal}", this);
+                return;
+            }
+
+            var procurement = new OffMapNamedSkuProcurementService(
+                storeBusiness.InstanceId, market,
+                new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState));
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            NamedSkuOrder order = procurement.PlaceOrder(
+                itemId, 20, 15, 0, supplierId, dayIndex, NamedSkuPaymentMode.CashOnArrival, null);
+            if (order == null)
+            {
+                Debug.LogError("[FeedSupply] General Store feed purchase was refused; no feed stock was created. " +
+                    string.Join(" | ", procurement.Diagnostics), this);
+                return;
+            }
+
+            storeBusiness.RuntimeState.RecordAppliedScenarioEndowment("small-prompt-2-horse-feed-order");
+            drivers.AttachStoreFeedProcurement(procurement, storeBusiness);
+            if (saveLoadManager != null)
+            {
+                if (saveLoadManager.PassXlProcurementService == null)
+                    saveLoadManager.PassXlProcurementService = procurement;
+                else if (!ReferenceEquals(saveLoadManager.PassXlProcurementService, procurement))
+                    Debug.LogWarning("[FeedSupply] SaveLoadManager already owns a different PassXl procurement service; feed procurement was not substituted into that slot.", this);
+            }
+            Debug.Log($"[FeedSupply] General Store ordered {order.UnitsOrdered} sack(s) from {counterparty.DisplayName} " +
+                $"at {order.UnitGoodsCostCents}c/sack, total {order.TotalCostCents}c; arrival day {order.ExpectedArrivalDayIndex}; " +
+                $"cash before payment={storeBusiness.RuntimeState.CurrentCashCents}c. No category stock was seeded for free.", this);
+        }
+#endif
     }
 }

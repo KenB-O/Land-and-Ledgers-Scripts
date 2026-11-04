@@ -1,4 +1,6 @@
 #if UNITY_EDITOR
+using System;
+using System.Collections.Generic;
 using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using TMPro;
@@ -18,6 +20,99 @@ namespace LandLedgers.EditorTools
     {
         private const string CanvasName = "UI Canvas";
         private const string PanelName = "Scenario Objective HUD (Authored)";
+
+        [MenuItem("Land & Ledgers/Development/Bind Direct Town Configuration to Main Scene")]
+        public static void BindDirectTownConfigurationToMainScene()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                Debug.LogError("Development configuration binding is available only in Edit Mode.");
+                return;
+            }
+            var scene = EditorSceneManager.GetActiveScene();
+            if (scene.name != "Main Scene" || scene.path != "Assets/Main Scene.unity")
+            {
+                Debug.LogError("Open Assets/Main Scene.unity before binding the development town configuration.");
+                return;
+            }
+            if (scene.isDirty)
+            {
+                Debug.LogError("Main Scene has pre-existing unsaved edits; configuration binding refused to avoid saving unrelated scene changes.");
+                return;
+            }
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            FirstLedgerSliceBootstrapper bootstrapper = FindUnique<FirstLedgerSliceBootstrapper>("Game Systems");
+            if (configuration == null || bootstrapper == null)
+            {
+                Debug.LogError("Could not bind development configuration. " + (configuration == null ? "Asset missing." : "Bootstrapper missing."));
+                return;
+            }
+            if (!configuration.Validate(out string validationError))
+            {
+                Debug.LogError("Could not bind invalid development configuration: " + validationError);
+                return;
+            }
+            var serialized = new SerializedObject(bootstrapper);
+            SerializedProperty field = serialized.FindProperty("developmentTownConfiguration");
+            if (field == null)
+            {
+                Debug.LogError("Bootstrapper has no serialized developmentTownConfiguration field.");
+                return;
+            }
+            field.objectReferenceValue = configuration;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(bootstrapper);
+            EditorSceneManager.MarkSceneDirty(scene);
+            if (!EditorSceneManager.SaveScene(scene))
+            {
+                Debug.LogError("Main Scene save failed after binding the validated town configuration.");
+                return;
+            }
+            Debug.Log("[SceneAuthoring] Bound the validated DevelopmentTownConfiguration asset to the Main Scene bootstrapper and saved this isolated scene change.", bootstrapper);
+        }
+
+        [MenuItem("Land & Ledgers/Development/Author Runtime Entity Containers")]
+        public static void AuthorRuntimeEntityContainers()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                Debug.LogError("Runtime entity containers are authored in Edit Mode only.");
+                return;
+            }
+            var scene = EditorSceneManager.GetActiveScene();
+            if (scene.path != "Assets/Main Scene.unity" || scene.isDirty)
+            {
+                Debug.LogError("Open a clean Main Scene before authoring runtime entity containers; the command refuses to save unrelated edits.");
+                return;
+            }
+            GameObject townWorld = GameObject.Find("Town World");
+            if (townWorld == null)
+            {
+                Debug.LogError("Runtime entity containers were not created: the authored Town World root is missing.");
+                return;
+            }
+            Transform entities = FindOrCreate(townWorld.transform, "Runtime Entities");
+            FindOrCreate(entities, "Animals");
+            FindOrCreate(entities, "Transport");
+            FindOrCreate(entities, "World Fixtures");
+            if (!EditorSceneManager.SaveScene(scene))
+            {
+                Debug.LogError("Runtime entity containers were authored but the isolated Main Scene save failed.");
+                return;
+            }
+            Debug.Log("[SceneAuthoring] Main Scene now has stable Town World/Runtime Entities containers for Animals, Transport, and World Fixtures.", townWorld);
+        }
+
+        private static Transform FindOrCreate(Transform parent, string childName)
+        {
+            Transform child = parent.Find(childName);
+            if (child != null) return child;
+            var childObject = new GameObject(childName);
+            UnityEditor.SceneManagement.EditorSceneManager.MoveGameObjectToScene(childObject, parent.gameObject.scene);
+            childObject.transform.SetParent(parent, false);
+            return childObject.transform;
+        }
 
         [MenuItem("Land & Ledgers/Author Main Scene Scenario HUD")]
         public static void AuthorMainSceneScenarioHud()
@@ -123,122 +218,9 @@ namespace LandLedgers.EditorTools
             Debug.Log("[CompactPlaytest] Main Scene now uses an 8–10 household, 22–30 resident profile and three legitimate opening Businesses. Canonical defaults remain unchanged.", bootstrapper);
         }
 
-        [MenuItem("Land & Ledgers/Author Six-Person Development Fixture")]
-        public static void AuthorSixPersonDevelopmentFixture()
-        {
-            if (EditorApplication.isPlayingOrWillChangePlaymode)
-            {
-                Debug.LogError("Exit Play Mode before authoring the six-person development fixture.");
-                return;
-            }
-
-            const string scenePath = "Assets/Main Scene.unity";
-            if (EditorSceneManager.GetActiveScene().path != scenePath)
-            {
-                if (!Application.isBatchMode)
-                {
-                    Debug.LogError("Open Assets/Main Scene.unity in Edit Mode before authoring the six-person development fixture.");
-                    return;
-                }
-
-                EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
-            }
-
-            const string fixturePath = "Assets/Core/Population/SixPersonDevelopmentFixture.asset";
-            SixPersonDevelopmentFixture fixture = AssetDatabase.LoadAssetAtPath<SixPersonDevelopmentFixture>(fixturePath);
-            if (fixture == null)
-            {
-                fixture = ScriptableObject.CreateInstance<SixPersonDevelopmentFixture>();
-                AssetDatabase.CreateAsset(fixture, fixturePath);
-            }
-
-            if (!fixture.Validate(out string fixtureError))
-            {
-                Debug.LogError($"Six-person fixture asset is invalid: {fixtureError}", fixture);
-                return;
-            }
-
-            FirstLedgerSliceBootstrapper bootstrapper = FindUnique<FirstLedgerSliceBootstrapper>("Game Systems");
-            if (bootstrapper == null)
-            {
-                Debug.LogError("Fixture asset was preserved, but Main Scene needs exactly one Game Systems bootstrapper.");
-                return;
-            }
-
-            SerializedObject serialized = new SerializedObject(bootstrapper);
-            SerializedProperty fixtureReference = serialized.FindProperty("developmentPopulationFixture");
-            SerializedProperty fixtureToggle = serialized.FindProperty("enableDevelopmentPopulationFixture");
-            if (fixtureReference == null || fixtureToggle == null)
-            {
-                Debug.LogError("The current bootstrapper does not expose the development fixture fields; the scene was not changed.", bootstrapper);
-                return;
-            }
-
-            fixtureReference.objectReferenceValue = fixture;
-            // The fixture is wired and inspectable but remains opt-in. Normal
-            // First Ledger and Sandbox starts therefore keep their own population.
-            fixtureToggle.boolValue = false;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-            EditorUtility.SetDirty(fixture);
-            AssetDatabase.SaveAssets();
-            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-            EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene());
-            Debug.Log("[PassXL] Six-person fixture assigned on Main Scene and left opt-in; enable it on Game Systems only for the isolated development startup.", bootstrapper);
-        }
-
-        [MenuItem("Land & Ledgers/Enable Six-Person Fixture for Verification")]
-        public static void EnableSixPersonFixtureForVerification() => SetSixPersonFixtureEnabled(true);
-
-        [MenuItem("Land & Ledgers/Restore Normal Main Scene Population")]
-        public static void RestoreNormalMainScenePopulation() => SetSixPersonFixtureEnabled(false);
-
-        private static void SetSixPersonFixtureEnabled(bool enabled)
-        {
-            if (EditorApplication.isPlayingOrWillChangePlaymode)
-            {
-                Debug.LogError("Change the development population profile only in Edit Mode.");
-                return;
-            }
-
-            const string scenePath = "Assets/Main Scene.unity";
-            if (EditorSceneManager.GetActiveScene().path != scenePath)
-            {
-                if (!Application.isBatchMode)
-                {
-                    Debug.LogError("Open Assets/Main Scene.unity in Edit Mode before changing the development population profile.");
-                    return;
-                }
-                EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
-            }
-
-            FirstLedgerSliceBootstrapper bootstrapper = FindUnique<FirstLedgerSliceBootstrapper>("Game Systems");
-            if (bootstrapper == null)
-            {
-                Debug.LogError("Main Scene needs exactly one Game Systems bootstrapper.");
-                return;
-            }
-
-            SerializedObject serialized = new SerializedObject(bootstrapper);
-            SerializedProperty fixtureReference = serialized.FindProperty("developmentPopulationFixture");
-            SerializedProperty fixtureToggle = serialized.FindProperty("enableDevelopmentPopulationFixture");
-            if (fixtureReference == null || fixtureReference.objectReferenceValue == null || fixtureToggle == null)
-            {
-                Debug.LogError("The six-person fixture must be authored before it can be enabled.", bootstrapper);
-                return;
-            }
-
-            fixtureToggle.boolValue = enabled;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-            EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene());
-            Debug.Log(enabled
-                ? "[PassXL] Six-person development profile enabled for verification. Restore normal Main Scene population after the test."
-                : "[PassXL] Normal Main Scene population restored; six-person development profile remains assigned but opt-in.", bootstrapper);
-        }
-
         private static T FindUnique<T>(string objectName) where T : Component
         {
-            T[] matches = Object.FindObjectsByType<T>();
+            T[] matches = UnityEngine.Object.FindObjectsByType<T>();
             T found = null;
             for (int i = 0; i < matches.Length; i++)
             {

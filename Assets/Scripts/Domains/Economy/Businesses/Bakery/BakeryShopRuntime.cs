@@ -261,6 +261,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
         private readonly List<string> diagnostics = new List<string>();
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+        public string BusinessInstanceId => businessInstanceId ?? string.Empty;
         public BakeryFlourStock FlourStock => flourStock;
 
         /// <summary>D1D: the oven-firebox fuel store.</summary>

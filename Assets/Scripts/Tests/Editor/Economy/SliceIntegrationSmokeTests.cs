@@ -19,9 +19,13 @@ namespace LandLedgers.Editor.Economy
             Scene scene = EditorSceneManager.OpenScene("Assets/Main Scene.unity", OpenSceneMode.Single);
             Assert.IsTrue(scene.IsValid(), "Main Scene should open for the Management smoke test.");
 
-            ManagementPanelView view = UnityEngine.Object.FindAnyObjectByType<ManagementPanelView>(FindObjectsInactive.Include);
-            Assert.NotNull(view, "Main Scene should contain a ManagementPanelView.");
+            ManagementPanelView[] views = UnityEngine.Object.FindObjectsByType<ManagementPanelView>(
+                FindObjectsInactive.Include);
+            Assert.AreEqual(1, views.Length, "Main Scene should contain exactly one ManagementPanelView.");
+            ManagementPanelView view = views[0];
             Assert.IsTrue(view.BindFromChildren(), "ManagementPanelView should bind authored scene references.");
+            Assert.NotNull(view.BusinessesSubnavRoot, "Businesses Subnav is a required content root.");
+            Assert.NotNull(view.GovernmentBusinessRosterText, "Town business roster must have a separate scroll-layout card.");
 
             view.EnsureBusinessCashTransferControls(true);
             view.EnsureBankLoanControls(true);
@@ -47,7 +51,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual("Town", view.GovernmentTabButton.GetComponentInChildren<TMP_Text>(true).text);
             Assert.AreEqual("New Business", view.NewBusinessTabButton.GetComponentInChildren<TMP_Text>(true).text);
             Assert.AreEqual("Dialogue", view.DialogueTabButton.GetComponentInChildren<TMP_Text>(true).text);
-            Assert.AreSame(view.BusinessesSubnavRoot, view.FinancesTabButton.transform.parent, "Owner finance controls should remain available under Businesses.");
+            Assert.AreSame(view.PropertiesTabButton.transform.parent, view.FinancesTabButton.transform.parent,
+                "Businesses and Finances are sibling buttons in the shared navigation bar.");
             Assert.AreSame(view.PropertiesContentRoot.parent, view.NewBusinessContentRoot.parent);
             Assert.AreSame(view.PropertiesContentRoot.parent, view.DialogueContentRoot.parent);
             Assert.Less(view.PropertiesTabButton.transform.GetSiblingIndex(), view.NewBusinessTabButton.transform.GetSiblingIndex());
@@ -87,6 +92,38 @@ namespace LandLedgers.Editor.Economy
             view.ShowTab(ManagementPanelTab.Properties);
             Assert.IsTrue(view.DialogueContentRoot.gameObject.activeSelf,
                 "A legacy controller refresh must not replace the selected Dialogue page.");
+        }
+
+        [Test]
+        public void FinancesTabSelectsOnlyFinanceButton()
+        {
+            GameObject viewObject = new("Management Finance Selection Test", typeof(RectTransform));
+            GameObject businessesObject = new("Businesses Tab", typeof(RectTransform), typeof(Image), typeof(Button));
+            GameObject financesObject = new("Finances Tab", typeof(RectTransform), typeof(Image), typeof(Button));
+            try
+            {
+                businessesObject.transform.SetParent(viewObject.transform, false);
+                financesObject.transform.SetParent(viewObject.transform, false);
+                Button businesses = businessesObject.GetComponent<Button>();
+                Button finances = financesObject.GetComponent<Button>();
+                businesses.targetGraphic = businessesObject.GetComponent<Image>();
+                finances.targetGraphic = financesObject.GetComponent<Image>();
+
+                ManagementPanelView view = viewObject.AddComponent<ManagementPanelView>();
+                typeof(ManagementPanelView).GetField("propertiesTabButton", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    .SetValue(view, businesses);
+                typeof(ManagementPanelView).GetField("financesTabButton", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    .SetValue(view, finances);
+
+                view.SetActiveTab(ManagementPanelTab.Finances);
+
+                Assert.AreNotEqual(businesses.targetGraphic.color, finances.targetGraphic.color,
+                    "Finances should be selected while the Businesses tab is unselected.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(viewObject);
+            }
         }
 
         private static void AssertBusinessCashTransferPropertyScrollPlacement(ManagementPanelView view)
@@ -278,6 +315,16 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(businesses, view.BusinessesSubnavRoot.gameObject.activeSelf);
             Assert.AreEqual(tab == ManagementPanelTab.NewBusiness, view.NewBusinessContentRoot.gameObject.activeSelf);
             Assert.AreEqual(tab == ManagementPanelTab.Dialogue, view.DialogueContentRoot.gameObject.activeSelf);
+            if (tab == ManagementPanelTab.Finances)
+            {
+                Assert.AreNotEqual(view.PropertiesTabButton.targetGraphic.color, view.FinancesTabButton.targetGraphic.color,
+                    "Finances must be the only selected button within the Businesses section.");
+            }
+            else if (tab == ManagementPanelTab.Properties)
+            {
+                Assert.AreNotEqual(view.PropertiesTabButton.targetGraphic.color, view.FinancesTabButton.targetGraphic.color,
+                    "Businesses must be the only selected button within the Businesses section.");
+            }
         }
 
         private static BusinessProfileDefinition LoadProfile(BusinessType businessType)

@@ -338,6 +338,15 @@ namespace LandLedgers.Economy
             pendingReorderUnits = 0;
         }
 
+        public bool EnsureStorageCapacity(int minimumUnits)
+        {
+            int resolvedMinimum = Mathf.Max(0, minimumUnits);
+            if (resolvedMinimum <= targetStockUnits) return false;
+            targetStockUnits = resolvedMinimum;
+            pendingReorderUnits = Mathf.Min(pendingReorderUnits, Mathf.Max(0, targetStockUnits - currentStockUnits));
+            return true;
+        }
+
         public int ReceivePendingReorderUnits(int units)
         {
             int receivedUnits = Mathf.Clamp(units, 0, pendingReorderUnits);
@@ -2931,6 +2940,24 @@ namespace LandLedgers.Economy
             RefreshStockHealth();
             RefreshStoredCapacityOnly();
             return stock;
+        }
+
+        /// <summary>
+        /// Raises an existing business category's finite storage target when a
+        /// real procurement need requires more room. This never reduces an
+        /// authored target or adds inventory.
+        /// </summary>
+        public int EnsureCategoryStorageCapacity(string categoryId, int minimumUnits)
+        {
+            if (string.IsNullOrWhiteSpace(categoryId) || minimumUnits < 0) return 0;
+            CategoryStockState stock = EnsureCategoryStock(categoryId, 0, minimumUnits);
+            if (stock == null) return 0;
+            if (stock.EnsureStorageCapacity(minimumUnits))
+            {
+                RefreshStockHealth();
+                RefreshStoredCapacityOnly();
+            }
+            return stock.TargetStockUnits;
         }
 
         public void SetCategoryStockUnits(string categoryId, int units)

@@ -15,27 +15,7 @@ namespace LandLedgers.EditorTests.Economy
     public sealed class GeneralStoreItemOfferIdentityTests
     {
         private const string DefinitionPath = "Assets/Core/Economy/GeneralStoreBusinessDefinition.asset";
-        private const string FixturePath = "Assets/Core/Population/SixPersonDevelopmentFixture.asset";
-
-        [Test]
-        public void DevelopmentFixtureOpeningStock_IsDeterministicAndWithinConfiguredRanges()
-        {
-            SixPersonDevelopmentFixture fixture = AssetDatabase.LoadAssetAtPath<SixPersonDevelopmentFixture>(FixturePath);
-            Assert.IsNotNull(fixture);
-            Assert.IsTrue(fixture.Validate(out string error), error);
-
-            bool seedVariesAStockLine = false;
-            foreach (SixPersonDevelopmentFixture.OpeningRetailStockRange range in fixture.OpeningStoreStock)
-            {
-                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 1897, out int first));
-                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 1897, out int repeated));
-                Assert.AreEqual(first, repeated, range.itemId + " must be stable for the same scenario seed.");
-                Assert.That(first, Is.InRange(range.minimumUnits, range.maximumUnits), range.itemId);
-                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 1898, out int otherSeed));
-                seedVariesAStockLine |= otherSeed != first;
-            }
-            Assert.IsTrue(seedVariesAStockLine, "At least one configured line should demonstrate seed variation.");
-        }
+        private const string DevelopmentTownConfigurationPath = "Assets/Core/Population/DevelopmentTownConfiguration.asset";
 
         [Test]
         public void ItemLevelOffers_RequireIdentifiedStockAndExactHouseholdUnits()
@@ -109,40 +89,28 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void ScenarioOpeningEndowment_IsFiniteAndAppliedExactlyOnce()
+        public void DevelopmentTownOpeningInventory_IsPerBusinessFiniteAndIdempotent()
         {
             GeneralStoreBusinessDefinition definition = LoadDefinition();
-            SixPersonDevelopmentFixture fixture = AssetDatabase.LoadAssetAtPath<SixPersonDevelopmentFixture>(FixturePath);
-            Assert.IsNotNull(fixture);
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(DevelopmentTownConfigurationPath);
+            Assert.IsNotNull(configuration);
+            Assert.IsTrue(configuration.Validate(out string validationError), validationError);
             BusinessInstanceState store = CreateNpcStore(definition);
 
-            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(fixture, store, definition, 0, 0,
+            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(configuration, "general-store", store, definition, 0, 0,
                 out string report, out string error), error);
-            Assert.That(report, Does.Contain("general_store_060"));
-            int expectedLotCount = fixture.OpeningStoreStock.Count;
-            Assert.AreEqual(expectedLotCount, store.RuntimeState.RetailItemLots.Count);
-            int firstPhysicalQuantity = store.RuntimeState.GetRetailItemPhysicalUnits("bread");
-            Assert.That(firstPhysicalQuantity, Is.InRange(12, 24));
-            foreach (SixPersonDevelopmentFixture.OpeningRetailStockRange range in fixture.OpeningStoreStock)
-            {
-                Assert.IsTrue(fixture.TryResolveOpeningStoreStock(range.itemId, 0, out int expected));
-                Assert.AreEqual(expected, store.RuntimeState.GetRetailItemPhysicalUnits(range.itemId), range.itemId);
-            }
-
-            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(fixture, store, definition, 0, 0,
-                out _, out error), error);
-            Assert.AreEqual(expectedLotCount, store.RuntimeState.RetailItemLots.Count, "Repeat initialization must not create another lot.");
-            Assert.AreEqual(firstPhysicalQuantity, store.RuntimeState.GetRetailItemPhysicalUnits("bread"));
-            Assert.AreEqual(0, store.RuntimeState.CurrentCashCents, "The opening stock endowment does not grant operating cash.");
-            Assert.IsTrue(store.RuntimeState.HasAppliedScenarioEndowment(
-                $"scenario-opening-endowment:{fixture.ProfileId}:{store.InstanceId}:0"));
-
-            BusinessInstanceState restoredStore = BusinessInstanceState.FromSaveDto(store.CaptureSaveDto());
-            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(fixture, restoredStore, definition, 0, 1,
+            Assert.That(report, Does.Contain("general-store"));
+            Assert.AreEqual(7, store.RuntimeState.RetailItemLots.Count);
+            int firstBread = store.RuntimeState.GetRetailItemPhysicalUnits("bread");
+            Assert.That(firstBread, Is.InRange(12, 24));
+            Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(configuration, "general-store", store, definition, 0, 0,
                 out report, out error), error);
             Assert.That(report, Does.Contain("already recorded"));
-            Assert.AreEqual(expectedLotCount, restoredStore.RuntimeState.RetailItemLots.Count);
-            Assert.AreEqual(firstPhysicalQuantity, restoredStore.RuntimeState.GetRetailItemPhysicalUnits("bread"));
+            Assert.AreEqual(7, store.RuntimeState.RetailItemLots.Count);
+            Assert.AreEqual(firstBread, store.RuntimeState.GetRetailItemPhysicalUnits("bread"));
+            Assert.AreEqual(0, store.RuntimeState.CurrentCashCents, "Configured stock does not grant business cash.");
+            Assert.IsFalse(configuration.TryResolveOpeningInventory("bakery", "bread", 0, out _),
+                "Unconfigured businesses receive no stock by default.");
         }
 
         [Test]

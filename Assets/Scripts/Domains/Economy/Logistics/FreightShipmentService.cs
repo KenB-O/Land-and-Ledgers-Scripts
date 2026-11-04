@@ -19,6 +19,7 @@ using LandLedgers.Time;
 using LandLedgers.Persistence;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Freight;
 using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Economy.Logistics
@@ -49,6 +50,22 @@ namespace LandLedgers.Economy.Logistics
         public ReceiveFreightShipmentHandler ReceiveShipment;
 
         /// <summary>
+        /// Lot-custody path for cargo which already has a source inventory lot.
+        /// The implementation must atomically debit shipment.CargoLotId (or return
+        /// false without moving stock) and treat ShipmentId as an idempotency key.
+        /// Legacy/construction shipments keep using ReceiveShipment unless they
+        /// explicitly opt into RequiresSourceLotCustody.
+        /// </summary>
+        public CommitFreightSourceLotHandler CommitSourceLot;
+
+        /// <summary>
+        /// Atomically credits the same CargoLotId to the destination, or refuses
+        /// without moving stock. The destination authority must persist receipt
+        /// identity and refuse a second credit for this shipment/lot pair.
+        /// </summary>
+        public ReceiveFreightCargoLotHandler ReceiveCargoLot;
+
+        /// <summary>
         /// Pass IX WS3 (A4-13): the existing unified reservation authority
         /// (EquipmentReservationService via the hub). When wired, Dispatch
         /// atomically reserves the wagon, driver and draft animals through
@@ -67,6 +84,12 @@ namespace LandLedgers.Economy.Logistics
     /// Recipient acceptance callback: (shipment, quantityUnits, reason) -> accepted units.
     /// </summary>
     public delegate int ReceiveFreightShipmentHandler(
+        LogisticsShipmentState shipment, int quantityUnits, out string reason);
+
+    public delegate bool CommitFreightSourceLotHandler(
+        LogisticsShipmentState shipment, int quantityUnits, out string reason);
+
+    public delegate bool ReceiveFreightCargoLotHandler(
         LogisticsShipmentState shipment, int quantityUnits, out string reason);
 
     /// <summary>
@@ -209,6 +232,14 @@ namespace LandLedgers.Economy.Logistics
                 reason = "FreightShipmentService: shipment needs an id and quantity — refusing phantom shipment.";
                 return null;
             }
+            foreach (LogisticsShipmentState existing in trackedShipments)
+            {
+                if (existing != null && string.Equals(existing.ShipmentId, shipmentId, StringComparison.Ordinal))
+                {
+                    reason = $"FreightShipmentService: shipment id '{shipmentId}' is already recorded; duplicate shipment creation refused.";
+                    return null;
+                }
+            }
             if (!wagons.TryGetValue(wagonAssetId ?? string.Empty, out EquipmentAsset wagon) || wagon == null)
             {
                 reason = "FreightShipmentService: wagon '" + wagonAssetId + "' is not a registered wagon — refusing phantom wagon.";
@@ -239,6 +270,7 @@ namespace LandLedgers.Economy.Logistics
             var shipment = new LogisticsShipmentState
             {
                 shipmentId = shipmentId,
+                cargoLotId = "freight-cargo:" + shipmentId,
                 sourceBusinessInstanceId = sourceBusinessId ?? string.Empty,
                 destinationBusinessInstanceId = destinationBusinessId ?? string.Empty,
                 plannedQuantityUnits = Math.Max(0, quantityUnits),
@@ -270,6 +302,41 @@ namespace LandLedgers.Economy.Logistics
             return shipment;
         }
 
+        /// <summary>
+        /// Binds the authoritative source lot to a still-planned shipment.
+        /// One whole lot can be assigned to only one shipment record; callers
+        /// that need split loads must first represent those quantities as
+        /// distinct source lots in their inventory authority.
+        /// </summary>
+        public bool TryBindSourceLot(LogisticsShipmentState shipment, string lotId, string skuId, out string reason)
+        {
+            reason = string.Empty;
+            if (shipment == null || string.IsNullOrWhiteSpace(lotId) || string.IsNullOrWhiteSpace(skuId))
+            {
+                reason = "FreightShipmentService: a shipment, source lot id, and SKU are required; source lot was not bound.";
+                return false;
+            }
+            if (shipment.Status != LogisticsShipmentStatus.Planned || shipment.loadApplied || shipment.sourceLotDebitApplied)
+            {
+                reason = $"FreightShipmentService: source lot '{lotId}' can only be bound before shipment '{shipment.ShipmentId}' loading begins.";
+                return false;
+            }
+            foreach (LogisticsShipmentState existing in trackedShipments)
+            {
+                if (existing == null || ReferenceEquals(existing, shipment)) continue;
+                if (string.Equals(existing.CargoLotId, lotId, StringComparison.Ordinal)
+                    && existing.Status != LogisticsShipmentStatus.Failed)
+                {
+                    reason = $"FreightShipmentService: source lot '{lotId}' is already assigned to shipment '{existing.ShipmentId}' ({existing.Status}); duplicate lot assignment refused.";
+                    return false;
+                }
+            }
+            shipment.cargoLotId = lotId.Trim();
+            shipment.cargoSkuId = skuId.Trim();
+            shipment.requiresSourceLotCustody = true;
+            return true;
+        }
+
         private LogisticsShipmentState BlockPreLoad(LogisticsShipmentState shipment, string why, FreightShipmentHooks hooks)
         {
             Track(shipment);
@@ -297,6 +364,14 @@ namespace LandLedgers.Economy.Logistics
             if (shipment.Status != LogisticsShipmentStatus.Planned)
             {
                 reason = "FreightShipmentService: shipment '" + shipment.ShipmentId + "' is " + shipment.Status + ", not Planned.";
+                return false;
+            }
+            if (shipment.requiresSourceLotCustody
+                && (string.IsNullOrWhiteSpace(shipment.cargoLotId)
+                    || string.IsNullOrWhiteSpace(shipment.cargoSkuId)
+                    || hooks?.CommitSourceLot == null))
+            {
+                reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires a source lot id, SKU, and wired source-debit authority before loading; no task or cargo movement started.";
                 return false;
             }
             // Pass IX WS3 (A4-13): re-check the wagon at loading — a shipment
@@ -336,14 +411,55 @@ namespace LandLedgers.Economy.Logistics
             FreightShipmentHooks hooks, out string reason)
         {
             reason = string.Empty;
+            if (shipment == null) { reason = "FreightShipmentService: no shipment to load."; return false; }
             if (!loadTasks.TryGetValue(shipment.ShipmentId, out EntityId taskId))
             {
                 reason = "FreightShipmentService: no load task for '" + shipment.ShipmentId + "'.";
                 return false;
             }
-            if (!hooks.Tasks.RecordWorkProgress(taskId, minutes, hooks.Budgets, hooks.DayIndex,
-                out bool done, out reason)) return false;
+            WorkTask loadTask = hooks?.Tasks?.FindTask(taskId);
+            if (loadTask == null)
+            {
+                reason = $"FreightShipmentService: load task '{taskId}' is missing; shipment remains in source custody.";
+                return false;
+            }
+            if (shipment.requiresSourceLotCustody
+                && (!shipment.sourceLotDebitApplied)
+                && (string.IsNullOrWhiteSpace(shipment.cargoLotId)
+                    || string.IsNullOrWhiteSpace(shipment.cargoSkuId)
+                    || hooks?.CommitSourceLot == null))
+            {
+                reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' has no complete source-lot debit binding; no loading work recorded.";
+                return false;
+            }
+            bool done = loadTask.MinutesRemaining <= 0;
+            if (!done && !hooks.Tasks.RecordWorkProgress(taskId,
+                Math.Min(WorkTimeMath.ClampToWholeMinutes(minutes), loadTask.MinutesRemaining),
+                hooks.Budgets, hooks.DayIndex, out done, out reason)) return false;
             if (!done) return true;
+
+            if (shipment.requiresSourceLotCustody && !shipment.sourceLotDebitApplied)
+            {
+                if (string.IsNullOrWhiteSpace(shipment.cargoLotId)
+                    || string.IsNullOrWhiteSpace(shipment.cargoSkuId))
+                {
+                    reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires a source lot id and SKU before loading; source stock was not moved.";
+                    return false;
+                }
+                if (hooks?.CommitSourceLot == null)
+                {
+                    reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires source-lot debit for '{shipment.cargoLotId}', but no debit authority is wired; source stock was not moved.";
+                    return false;
+                }
+                if (!hooks.CommitSourceLot(shipment, shipment.PlannedQuantityUnits, out reason))
+                {
+                    if (string.IsNullOrWhiteSpace(reason)) reason = "source-lot debit refused; no cargo loaded.";
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': source debit refused for lot '{shipment.cargoLotId}': {reason}");
+                    return false;
+                }
+                shipment.sourceLotDebitApplied = true;
+                Log(hooks, $"shipment '{shipment.ShipmentId}': source lot '{shipment.cargoLotId}' ({shipment.cargoSkuId}) debited once; {shipment.PlannedQuantityUnits}u enters wagon custody.");
+            }
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
             loadTasks.Remove(shipment.ShipmentId);
             // Loading applied: the wagon now has custody of the full planned quantity.
@@ -472,12 +588,25 @@ namespace LandLedgers.Economy.Logistics
         {
             reason = string.Empty;
             if (shipment == null) { reason = "No shipment."; return false; }
+            if (shipment.deliveryApplied)
+            {
+                reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' already credited its cargo lot; duplicate receipt refused.";
+                return false;
+            }
             bool resumingPartial = shipment.Status == LogisticsShipmentStatus.Partial
                 && !shipment.deliveryApplied
                 && !unloadTasks.ContainsKey(shipment.ShipmentId);
             if (shipment.Status != LogisticsShipmentStatus.Arrived && !resumingPartial)
             {
                 reason = "FreightShipmentService: shipment '" + shipment.ShipmentId + "' is " + shipment.Status + ", not Arrived.";
+                return false;
+            }
+            if (shipment.requiresSourceLotCustody
+                && (!shipment.sourceLotDebitApplied
+                    || string.IsNullOrWhiteSpace(shipment.cargoLotId)
+                    || hooks?.ReceiveCargoLot == null))
+            {
+                reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires a committed source lot and wired lot receiver before unloading; cargo remains in wagon custody.";
                 return false;
             }
             string defId = "freight:unload:" + shipment.ShipmentId;
@@ -513,13 +642,22 @@ namespace LandLedgers.Economy.Logistics
             FreightShipmentHooks hooks, out string reason)
         {
             reason = string.Empty;
+            if (shipment == null) { reason = "FreightShipmentService: no shipment to unload."; return false; }
             if (!unloadTasks.TryGetValue(shipment.ShipmentId, out EntityId taskId))
             {
                 reason = "FreightShipmentService: no unload task for '" + shipment.ShipmentId + "'.";
                 return false;
             }
-            if (!hooks.Tasks.RecordWorkProgress(taskId, minutes, hooks.Budgets, hooks.DayIndex,
-                out bool done, out reason)) return false;
+            WorkTask unloadTask = hooks?.Tasks?.FindTask(taskId);
+            if (unloadTask == null)
+            {
+                reason = $"FreightShipmentService: unload task '{taskId}' is missing; cargo remains in wagon custody.";
+                return false;
+            }
+            bool done = unloadTask.MinutesRemaining <= 0;
+            if (!done && !hooks.Tasks.RecordWorkProgress(taskId,
+                Math.Min(WorkTimeMath.ClampToWholeMinutes(minutes), unloadTask.MinutesRemaining),
+                hooks.Budgets, hooks.DayIndex, out done, out reason)) return false;
             if (!done) return true;
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
             unloadTasks.Remove(shipment.ShipmentId);
@@ -533,6 +671,40 @@ namespace LandLedgers.Economy.Logistics
                 shipment.physicalTransportBound = false;
                 shipment.state = LogisticsShipmentStatus.Partial;
                 Log(hooks, "shipment '" + shipment.ShipmentId + "': unload complete with zero cargo — nothing to deliver.");
+                return true;
+            }
+
+            if (shipment.requiresSourceLotCustody)
+            {
+                if (!shipment.sourceLotDebitApplied || string.IsNullOrWhiteSpace(shipment.cargoLotId))
+                {
+                    shipment.MarkDelayed("source lot was not debited or cargo lot identity is missing; recipient credit refused", LogisticsShipmentStatus.Arrived);
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': NOT delivered — no committed source lot identity; {remaining}u remain in wagon custody.");
+                    return true;
+                }
+                if (hooks?.ReceiveCargoLot == null)
+                {
+                    shipment.MarkDelayed("no source-lot-aware receiving authority wired; cargo remains in wagon custody", LogisticsShipmentStatus.Arrived);
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': NOT delivered — no lot receiver for '{shipment.cargoLotId}'.");
+                    return true;
+                }
+                if (!hooks.ReceiveCargoLot(shipment, remaining, out string lotReceiveReason))
+                {
+                    shipment.MarkDelayed(
+                        string.IsNullOrWhiteSpace(lotReceiveReason) ? "recipient refused cargo lot" : lotReceiveReason.Trim(),
+                        LogisticsShipmentStatus.Arrived);
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': NOT delivered — lot '{shipment.cargoLotId}' remains in wagon custody ({shipment.BlockedReason}).");
+                    return true;
+                }
+
+                shipment.deliveredQuantityUnits += remaining;
+                shipment.remainingQuantityUnits = 0;
+                shipment.deliveryApplied = true;
+                shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
+                shipment.physicalTransportBound = false;
+                shipment.state = LogisticsShipmentStatus.Completed;
+                ReleaseShipmentReservations(shipment);
+                Log(hooks, $"shipment '{shipment.ShipmentId}': lot '{shipment.cargoLotId}' credited once to '{shipment.destinationBusinessInstanceId}' ({remaining}u).");
                 return true;
             }
 
@@ -628,6 +800,7 @@ namespace LandLedgers.Economy.Logistics
         public sealed class FreightServiceSaveDto
         {
             public List<LogisticsShipmentSaveDto> Shipments = new List<LogisticsShipmentSaveDto>();
+            public FreightServiceAgreementBookSaveDto ServiceAgreements = new FreightServiceAgreementBookSaveDto();
             public List<string> ShipmentIdsWithLoadTasks = new List<string>();
             public List<string> ShipmentIdsWithUnloadTasks = new List<string>();
             /// <summary>

@@ -143,7 +143,11 @@ namespace LandLedgers.Population
                 return;
             }
 
-            if (daysCovered >= LowDaysThreshold)
+            // A household at exactly the configured reserve boundary is
+            // already in the low-stock band. This lets the production driver
+            // open a shopping need while the final day's food is still held,
+            // instead of waiting until consumption has driven it below zero.
+            if (daysCovered > LowDaysThreshold)
             {
                 // Adequate for now: keep the open need fresh but do not grow it.
                 if (openNeed != null)

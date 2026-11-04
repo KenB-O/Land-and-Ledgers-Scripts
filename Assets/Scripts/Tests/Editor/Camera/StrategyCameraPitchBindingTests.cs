@@ -14,12 +14,12 @@ namespace LandLedgers.Tests.Camera
                 "Assets/Core/Camera/DefaultStrategyCameraSettings.asset");
 
             Assert.IsNotNull(settings, "The Main Scene camera settings asset must be present.");
-            Assert.AreEqual(Key.R, settings.pitchUpKey, "R raises the view toward the horizon.");
-            Assert.AreEqual(Key.F, settings.pitchDownKey, "F lowers the view toward the ground.");
+            Assert.AreEqual(Key.R, settings.pitchUpKey, "R raises the camera rig.");
+            Assert.AreEqual(Key.F, settings.pitchDownKey, "F lowers the camera rig.");
         }
 
-        [TestCase(true, false, -1f)]
-        [TestCase(false, true, 1f)]
+        [TestCase(true, false, 1f)]
+        [TestCase(false, true, -1f)]
         [TestCase(true, true, 0f)]
         [TestCase(false, false, 0f)]
         public void RaiseAndLowerInputProducesExpectedPitchDirection(bool raisePressed, bool lowerPressed, float expected)

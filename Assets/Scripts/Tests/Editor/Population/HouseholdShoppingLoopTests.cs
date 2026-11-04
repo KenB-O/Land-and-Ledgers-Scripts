@@ -20,6 +20,26 @@ namespace LandLedgers.EditorTests.Population
     [TestFixture]
     public sealed class HouseholdShoppingLoopTests
     {
+        [Test]
+        public void ShopperAssignment_PrefersAvailableAdultWoman_ThenFallsBackToAdult()
+        {
+            var population = new PopulationState();
+            population.people.Add(new PersonState
+            {
+                id = 1, firstName = "Kennedy", ageBand = AgeBand.Adult18Plus, isFemale = false
+            });
+            population.people.Add(new PersonState
+            {
+                id = 2, firstName = "Emma", ageBand = AgeBand.Adult18Plus, isFemale = true
+            });
+
+            int chosen = ShopperAssignmentPolicy.ChooseShopper(
+                population, new List<int> { 1, 2 }, 0, 480, 60, null, null, null, out string reason);
+
+            Assert.AreEqual(2, chosen, "An available adult woman is the household's preferred shopper.");
+            Assert.IsNull(reason);
+        }
+
         private sealed class FakeStorePort : IGeneralStoreTradingPort
         {
             public string StoreBusinessId { get; set; } = "store-1";

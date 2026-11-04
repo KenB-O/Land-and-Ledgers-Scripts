@@ -395,6 +395,12 @@ namespace LandLedgers.Population
             AddEvent(result, dayIndex, ShoppingEventKind.Receipt, shopperId, need,
                 $"H{need.HouseholdId} received {unitsSold}u {need.ItemId} into real lots (physical receipt).",
                 batch.Provenance + (need.Status == PurchasingNeedStatus.Fulfilled ? " Need fulfilled." : $" {need.UnitsNeeded}u still needed."));
+            PersonState buyer = population.GetPerson(shopperId);
+            string buyerName = buyer != null ? buyer.DisplayName : "P" + shopperId;
+            diag.Add($"[FoodEconomy] purchase received: buyer='{buyerName}', household=H{need.HouseholdId}, " +
+                $"seller='{supplierName}', item='{need.ItemId}', units received={unitsSold}, " +
+                $"household stock after={inventory.GetAvailableUnits(need.ItemId)}, " +
+                $"receipt='{batch.ReceiptId}', custody=household inventory.");
             diag.Add($"Day {dayIndex}: P{shopperId} delivered {unitsSold}u {need.ItemId} to H{need.HouseholdId} " +
                 $"from '{supplierName}' (batch {batch.BatchId}).");
             return null;
@@ -1046,6 +1052,19 @@ namespace LandLedgers.Population
         result.ReceiptId = chosen.ItemSupplier.LastReceiptId;
         result.Counterparty = chosen.Supplier.SupplierName;
         result.TravelMinutesTotal = trip.OutboundMinutes + trip.ReturnMinutes;
+        PersonState settledBuyer = population.GetPerson(shopperId);
+        string settledBuyerName = settledBuyer != null ? settledBuyer.DisplayName : "P" + shopperId;
+        HouseholdLedger householdLedger = ledgers.Get(need.HouseholdId);
+        int stockAfterSale = chosen.ItemSupplier.ItemStockUnits(need.ItemId);
+        string householdBalanceAfter = householdLedger != null
+            ? householdLedger.GetBalanceCents().ToString()
+            : "unknown";
+        diag.Add($"[FoodEconomy] purchase settled: buyer='{settledBuyerName}', household=H{need.HouseholdId}, " +
+            $"seller='{chosen.Supplier.SupplierName}', item='{need.ItemId}', units={sold}, " +
+            $"unit price={unitPrice}c, total settled={totalCost}c, household debit={result.BuyerOutflowCents}c, " +
+            $"seller cash credit={result.StoreCashInCents}c, seller receivable={result.StoreReceivableCents}c, " +
+            $"household cash after={householdBalanceAfter}c, seller stock after={stockAfterSale}, " +
+            $"settlement={settlement.Mode}, receipt='{result.ReceiptId}'.");
         AddEvent(result, dayIndex, ShoppingEventKind.RetailPurchase, shopperId, need,
             $"'{chosen.Supplier.SupplierName}' sold {sold}u {need.ItemId} ({result.ReceiptId}).",
             $"real store stock decreased; business posted {(settlement.Mode == ShoppingSettlementMode.CashFromLedger ? "cash" : "receivable")} {totalCost}c.");

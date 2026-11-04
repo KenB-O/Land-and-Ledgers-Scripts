@@ -100,35 +100,34 @@ namespace LandLedgers.Economy
         private const string SupersededLegacyRecurringLocalOrderCancellationReason = "superseded legacy recurring local order";
         private static readonly IReadOnlyList<LocalRecurringOrderTemplate> DefaultLocalRecurringOrders = LocalRecurringOrderTemplate.CreateDefaultTemplates();
 
-        [Header("Sources")]
-        [SerializeField]
+        [Header("Authored Runtime References")]
+        [SerializeField, Tooltip("Town world authority used for business locations and building resolution.")]
         private TownWorldController townWorld;
 
-        [SerializeField]
+        [SerializeField, Tooltip("Population authority used for business ownership, staffing, and resident relationships.")]
         private PopulationManager populationManager;
 
-        [SerializeField]
+        [SerializeField, Tooltip("Simulation clock used to subscribe to business day and week events.")]
         private TimeManager timeManager;
 
-        [SerializeField]
+        [SerializeField, Tooltip("Specialized General Store authority. Other businesses continue to use the shared business runtime.")]
         private GeneralStoreRuntimeManager generalStoreRuntime;
 
-        [SerializeField]
+        [SerializeField, Tooltip("Player portfolio authority used for player-owned business valuation and finance flows.")]
         private PlayerPortfolioManager playerPortfolio;
 
-        [SerializeField]
+        [SerializeField, Tooltip("Logistics authority for shared business shipments and transport-related operations.")]
         private LogisticsRuntimeManager logisticsRuntime;
 
-        [SerializeField]
+        [SerializeField, Tooltip("Authored business templates loaded by the shared runtime. These are definitions, not live business instances.")]
         private BusinessProfileDefinition[] businessProfiles = Array.Empty<BusinessProfileDefinition>();
 
-        [Header("BIZ-1 Formation Workflow")]
-        [SerializeField]
+        [Header("Opening Formation (Legacy Compatibility)")]
+        [SerializeField, InspectorName("Legacy Passive Business Seed (Deprecated)")]
         [Tooltip("BIZ-1 (Canon XXVII §3.2, GHOST-DES-009): when true, the legacy synthetic passive auto-seed runs at opening instead of the authored formation workflow. Default false (deprecated). Kennedy can veto the deprecation by re-enabling this.")]
         private bool useLegacyPassiveSeed;
 
-        [SerializeField]
-        [Tooltip("BIZ-1: operating status ledger — a business becomes operating only through recorded commerce (Canon §3.2).")]
+        [SerializeField, Tooltip("BIZ-1: serialized operating-status ledger. A business becomes operating through recorded commerce, not by this component's presence (Canon §3.2).")]
         private BusinessOperatingLedger operatingLedger = new BusinessOperatingLedger();
 
         private List<OpeningRosterEntry> openingBusinessRosterOverride;
@@ -136,24 +135,25 @@ namespace LandLedgers.Economy
         /// <summary>BIZ-1: HF-1 identity registry for business entity IDs (never reused).</summary>
         private readonly EntityIdRegistry businessIdRegistry = new EntityIdRegistry();
 
-        [Header("Staffing")]
-        [SerializeField]
+        [Header("Hiring Eligibility")]
+        [SerializeField, InspectorName("Minimum Candidate Labor Access")]
+        [Tooltip("Minimum labor-access category for NPC hiring candidates. YoungWorker admits eligible 16–17 year olds; it excludes household helpers and junior low-trust workers. This is a legal/access eligibility filter, not a staffing target.")]
         private LaborAccessLevel minimumHireLaborAccess = LaborAccessLevel.YoungWorker;
 
-        [Header("Runtime")]
-        [SerializeField]
+        [Header("Serialized Runtime State")]
+        [SerializeField, Tooltip("Live business instances owned by this runtime. This is persisted runtime state, not an authored setup list.")]
         private List<BusinessInstanceState> businesses = new();
 
-        [SerializeField]
+        [SerializeField, Tooltip("Latest shared-runtime status message for Inspector diagnosis.")]
         private string status = "Not ready.";
 
-        [SerializeField, TextArea(1, 4)]
+        [SerializeField, TextArea(1, 4), Tooltip("Read-only operational summary from the latest weekly recurring local-order resolution.")]
         private string lastWeeklyRecurringLocalOrderSummary = "No recurring local orders resolved yet.";
 
-        [SerializeField]
+        [SerializeField, Tooltip("Persisted transfer agreements currently tracked by the shared business runtime.")]
         private List<BusinessTransferAgreementState> transferAgreements = new();
 
-        [SerializeField, TextArea(1, 4)]
+        [SerializeField, TextArea(1, 4), Tooltip("Read-only summary from the latest weekly transfer-agreement resolution.")]
         private string lastWeeklyTransferAgreementSummary = "No owned transfer agreements resolved yet.";
 
         private readonly HashSet<int> assignedBuildingIds = new();
@@ -1370,7 +1370,7 @@ namespace LandLedgers.Economy
             BusinessRuntimeState runtime = business.RuntimeState;
             StringBuilder builder = new();
             builder.AppendLine($"{business.RuntimeDisplayName} | {GetOwnerDisplayName(business)}");
-            builder.AppendLine($"Type: {business.BusinessType} | Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount} | Efficiency {GetHealthAdjustedOperatingEfficiency01(business):P0}");
+            builder.AppendLine($"Type: {business.BusinessType} | Staff {runtime.FilledWorkerCount} | Efficiency {GetHealthAdjustedOperatingEfficiency01(business):P0}");
             builder.AppendLine(BuildOperatingLine(business));
             builder.AppendLine(BuildCapacitySummaryLine(business));
 
@@ -2890,6 +2890,165 @@ namespace LandLedgers.Economy
             return true;
         }
 
+        public bool TryAcquireOpeningHorse(BusinessInstanceState buyer, out string message)
+        {
+            AutoWire();
+            message = string.Empty;
+            if (buyer == null || buyer.BusinessType != BusinessType.LiveryFreight
+                || buyer.Owner == null || buyer.Owner.OwnerKind != BusinessOwnerKind.Player
+                || buyer.RuntimeState == null)
+            {
+                message = "A player-owned Freight Business is required to acquire the opening horse.";
+                return false;
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            if (hub?.Animals == null || hub.TransportAssets?.HorseHousing == null)
+            {
+                message = "Animal and horse-housing authorities are unavailable.";
+                return false;
+            }
+
+            AnimalState horse = null;
+            foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
+            {
+                if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
+                    && candidate.OwnerKind == AnimalOwnerKind.Business
+                    && !string.Equals(candidate.OwnerId, buyer.InstanceId, StringComparison.OrdinalIgnoreCase)
+                    && candidate.CurrentUse == HorseUseKind.None)
+                {
+                    horse = candidate;
+                    break;
+                }
+            }
+
+            BusinessInstanceState seller = horse != null ? FindByInstanceId(horse.OwnerId) : null;
+            if (horse == null || seller?.RuntimeState == null)
+            {
+                message = "No available business-owned opening horse has a registered seller.";
+                return false;
+            }
+
+            int priceCents = OpeningTransportStock.OpeningHorseSalePriceCents;
+            if (buyer.RuntimeState.CurrentCashCents < priceCents)
+            {
+                message = $"Horse purchase requires {priceCents}c; buyer has {buyer.RuntimeState.CurrentCashCents}c.";
+                return false;
+            }
+
+            string buyerHousingId = "player-livery-yard-" + buyer.InstanceId;
+            if (hub.TransportAssets.HorseHousing.Capacity(buyerHousingId) == 0)
+            {
+                string housingError = hub.TransportAssets.HorseHousing.AddHousing(buyerHousingId, 2);
+                if (housingError != null) { message = housingError; return false; }
+            }
+            if (hub.TransportAssets.HorseHousing.Occupied(buyerHousingId)
+                >= hub.TransportAssets.HorseHousing.Capacity(buyerHousingId))
+            {
+                message = $"Housing '{buyerHousingId}' has no available stall.";
+                return false;
+            }
+
+            string assignError = hub.TransportAssets.HorseHousing.Assign(buyerHousingId, horse.AnimalId.ToString());
+            if (assignError != null) { message = assignError; return false; }
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            string ownerError = hub.Animals.TransferOwnership(
+                horse.AnimalId, AnimalOwnerKind.Business, buyer.InstanceId, dayIndex,
+                $"sold opening draft horse to {buyer.RuntimeDisplayName} for {priceCents}c");
+            if (ownerError != null)
+            {
+                hub.TransportAssets.HorseHousing.Release(buyerHousingId, horse.AnimalId.ToString());
+                message = ownerError;
+                return false;
+            }
+
+            string oldHousingId = horse.HousingId;
+            if (!string.IsNullOrWhiteSpace(oldHousingId))
+                hub.TransportAssets.HorseHousing.Release(oldHousingId, horse.AnimalId.ToString());
+            string housingErrorAfterTransfer = HorseAuthority.SetHousing(horse, buyerHousingId, buyerHousingId);
+            if (housingErrorAfterTransfer == null)
+                housingErrorAfterTransfer = HorseAuthority.SetCustody(horse, "business", buyer.InstanceId);
+            if (housingErrorAfterTransfer != null)
+            {
+                hub.TransportAssets.HorseHousing.Release(buyerHousingId, horse.AnimalId.ToString());
+                hub.TransportAssets.HorseHousing.Assign(oldHousingId, horse.AnimalId.ToString());
+                hub.Animals.TransferOwnership(horse.AnimalId, AnimalOwnerKind.Business, seller.InstanceId,
+                    dayIndex, "reversed opening horse transfer after housing refusal");
+                message = housingErrorAfterTransfer;
+                return false;
+            }
+
+            buyer.RuntimeState.AdjustCashCents(-priceCents);
+            seller.RuntimeState.AdjustCashCents(priceCents);
+            hub.Valuation.RegisterBusiness(buyer.InstanceId, buyer.RuntimeDisplayName, true);
+            hub.Valuation.RecordTransferableAssets(buyer.InstanceId, priceCents);
+            message = $"Purchased opening Horse {horse.AnimalId} from {seller.RuntimeDisplayName} for {priceCents}c.";
+            return true;
+        }
+
+        public bool TryAcquireOpeningWagon(BusinessInstanceState buyer, out string message)
+        {
+            AutoWire();
+            message = string.Empty;
+            if (buyer == null || buyer.BusinessType != BusinessType.LiveryFreight
+                || buyer.Owner == null || buyer.Owner.OwnerKind != BusinessOwnerKind.Player
+                || buyer.RuntimeState == null)
+            {
+                message = "A player-owned Freight Business is required to acquire the opening wagon.";
+                return false;
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            if (hub?.TransportAssets == null)
+            {
+                message = "Transport asset authority is unavailable.";
+                return false;
+            }
+
+            EquipmentAsset wagon = null;
+            foreach (EquipmentAsset candidate in hub.TransportAssets.Assets)
+            {
+                if (candidate != null && candidate.IsWagon && !candidate.IsTransportAssigned
+                    && string.Equals(candidate.OwnerKind, "business", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(candidate.OwnerId, buyer.InstanceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    wagon = candidate;
+                    break;
+                }
+            }
+
+            BusinessInstanceState seller = wagon != null ? FindByInstanceId(wagon.OwnerId) : null;
+            if (wagon == null || seller?.RuntimeState == null)
+            {
+                message = "No available business-owned opening wagon has a registered seller.";
+                return false;
+            }
+
+            int priceCents = OpeningTransportStock.OpeningWagonSalePriceCents;
+            if (buyer.RuntimeState.CurrentCashCents < priceCents)
+            {
+                message = $"Wagon purchase requires {priceCents}c; buyer has {buyer.RuntimeState.CurrentCashCents}c.";
+                return false;
+            }
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            string ownerError = wagon.TransferOwnership(
+                "business", buyer.InstanceId,
+                $"sold opening freight wagon to {buyer.RuntimeDisplayName} for {priceCents}c", dayIndex);
+            if (ownerError != null) { message = ownerError; return false; }
+
+            buyer.RuntimeState.AdjustCashCents(-priceCents);
+            seller.RuntimeState.AdjustCashCents(priceCents);
+            string locationId = "player-livery-yard-" + buyer.InstanceId;
+            wagon.LocationId = locationId;
+            wagon.StorageLocationId = locationId;
+            hub.Valuation.RegisterBusiness(buyer.InstanceId, buyer.RuntimeDisplayName, true);
+            hub.Valuation.RecordTransferableAssets(buyer.InstanceId, priceCents);
+            message = $"Purchased opening Wagon {wagon.AssetId} from {seller.RuntimeDisplayName} for {priceCents}c.";
+            return true;
+        }
+
         /// <summary>
         /// Transfers the acquisition authority's saved diligence estimate into the
         /// enterprise valuation evidence for the acquired going concern. This is
@@ -3185,7 +3344,7 @@ namespace LandLedgers.Economy
             StringBuilder builder = new();
             builder.AppendLine(GetBusinessManagementHeading(business.BusinessType));
             string autoTransfer = business.CashTransferRule.AutoTransferEnabled ? "on" : "off";
-            builder.AppendLine($"Owner: {GetOwnerDisplayName(business)} | Staff {runtime.FilledWorkerCount}/{runtime.TargetWorkerCount} | Efficiency {GetHealthAdjustedOperatingEfficiency01(business):P0}");
+            builder.AppendLine($"Owner: {GetOwnerDisplayName(business)} | Staff {runtime.FilledWorkerCount} | Efficiency {GetHealthAdjustedOperatingEfficiency01(business):P0}");
             AppendHealthStaffingLine(builder, runtime);
             builder.AppendLine($"Working capital: cash {FormatMoney(runtime.CurrentCashCents)} | protected {FormatMoney(GetLocalTradeAdjustedSurvivalCashReserveCents(business))} | payroll {FormatMoney(runtime.FilledWeeklyPayrollCents)} | input reserve {FormatMoney(runtime.LastWeeklyReorderBudgetCents)} | auto transfer {autoTransfer}");
             builder.AppendLine(ManagerPolicyEffects.BuildControlPolicyLine(business));

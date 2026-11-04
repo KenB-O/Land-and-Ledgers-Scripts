@@ -129,6 +129,7 @@ namespace LandLedgers.Pathing
         public bool IsMoving => state == AgentMoveState.Moving;
         public bool IsRouteActive => state == AgentMoveState.Moving || state == AgentMoveState.DoorPause;
         public bool IsArrivedVisible => state == AgentMoveState.ArrivedVisible;
+        public int RemainingPathWaypointCount => Math.Max(0, currentPath.Count - waypointIndex);
         public event Action<AgentMover> ArrivedAtDestination;
 
         public void Configure(PathingManager newPathingManager)

@@ -15,6 +15,7 @@ using LandLedgers.Time;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Logistics;
+using LandLedgers.Persistence;
 
 namespace LandLedgers.Editor.Economy
 {
@@ -120,6 +121,150 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual("store-1", shipment.physicalLocationId, "custody: recipient");
             Assert.IsFalse(shipment.physicalTransportBound, "transport released");
             Assert.IsTrue(service.VerifyConservation(shipment, 100, out string cons2), cons2);
+        }
+
+        [Test]
+        public void LotCustody_DebitsSourceAndCreditsSameLotExactlyOnce()
+        {
+            var sourceLots = new Dictionary<string, int> { ["mill-lot-001"] = 10 };
+            var destinationLots = new Dictionary<string, int>();
+            var debitedShipments = new HashSet<string>(StringComparer.Ordinal);
+            var receivedShipments = new HashSet<string>(StringComparer.Ordinal);
+
+            hooks.CommitSourceLot = (LogisticsShipmentState s, int quantity, out string reason) =>
+            {
+                reason = string.Empty;
+                if (debitedShipments.Contains(s.ShipmentId)) return true;
+                if (!sourceLots.TryGetValue(s.CargoLotId, out int onHand) || onHand < quantity)
+                {
+                    reason = "source lot shortfall";
+                    return false;
+                }
+                sourceLots[s.CargoLotId] = onHand - quantity;
+                debitedShipments.Add(s.ShipmentId);
+                return true;
+            };
+            hooks.ReceiveCargoLot = (LogisticsShipmentState s, int quantity, out string reason) =>
+            {
+                reason = string.Empty;
+                if (receivedShipments.Contains(s.ShipmentId))
+                {
+                    reason = "duplicate shipment/lot receipt refused";
+                    return false;
+                }
+                receivedShipments.Add(s.ShipmentId);
+                destinationLots[s.CargoLotId] = quantity;
+                return true;
+            };
+
+            LogisticsShipmentState shipment = service.CreateShipment("millbrook-flour-001", "millbrook_grain_co",
+                "bakery_001", 2, GrainSpec(), "wagon-1", hooks, out string createReason);
+            Assert.IsNotNull(shipment, createReason);
+            Assert.IsTrue(service.TryBindSourceLot(shipment, "mill-lot-001", "bakery_flour_sack", out string bindReason), bindReason);
+
+            Assert.IsTrue(service.BeginLoading(shipment, loader, hooks, out string loadReason), loadReason);
+            int guard = 0;
+            while (!shipment.loadApplied && guard++ < 10)
+                Assert.IsTrue(service.WorkLoading(shipment, 60, hooks, out string workReason), workReason);
+            Assert.IsTrue(shipment.sourceLotDebitApplied);
+            Assert.AreEqual(8, sourceLots["mill-lot-001"], "source lot debited once");
+            Assert.AreEqual("mill-lot-001", shipment.CargoLotId);
+
+            LogisticsShipmentSaveDto saved = shipment.CaptureSaveDto();
+            LogisticsShipmentState restored = LogisticsShipmentState.FromSaveDto(saved);
+            Assert.AreEqual("mill-lot-001", restored.CargoLotId, "lot identity survives save/load");
+            Assert.IsTrue(restored.sourceLotDebitApplied, "debit marker survives save/load");
+
+            Assert.IsTrue(service.Dispatch(shipment, driver, null, hooks, out string dispatchReason), dispatchReason);
+            service.AdvanceTransit(shipment, 120f, hooks);
+            Assert.IsTrue(service.BeginUnloading(shipment, loader, hooks, out string unloadReason), unloadReason);
+            guard = 0;
+            while (shipment.Status != LogisticsShipmentStatus.Completed && guard++ < 10)
+                Assert.IsTrue(service.WorkUnloading(shipment, 60, hooks, out string workReason), workReason);
+
+            Assert.AreEqual(2, destinationLots["mill-lot-001"], "receiver credits the same lot identity");
+            Assert.AreEqual(2, shipment.DeliveredQuantityUnits);
+            Assert.IsFalse(service.BeginUnloading(shipment, loader, hooks, out string duplicateReason));
+            StringAssert.Contains("duplicate receipt", duplicateReason.ToLowerInvariant());
+            Assert.AreEqual(2, destinationLots["mill-lot-001"], "repeat receipt does not duplicate stock");
+            Assert.IsTrue(service.VerifyConservation(shipment, 2, out string conservationReason), conservationReason);
+        }
+
+        [Test]
+        public void LotCustody_MissingSourceDebitAuthority_RefusesLoadWithoutAffectingLegacyShipments()
+        {
+            LogisticsShipmentState strict = service.CreateShipment("ship-lot-no-debit", "mill-1", "store-1",
+                5, GrainSpec(), "wagon-1", hooks, out _);
+            Assert.IsTrue(service.TryBindSourceLot(strict, "named-source-lot", "flour-sack", out string bindReason), bindReason);
+            hooks.CommitSourceLot = null;
+            Assert.IsFalse(service.BeginLoading(strict, loader, hooks, out string beginReason));
+            StringAssert.Contains("debit authority", beginReason);
+            Assert.IsFalse(strict.loadApplied);
+            Assert.IsFalse(strict.sourceLotDebitApplied);
+
+            // Existing construction/legacy freight remains on its original path.
+            LogisticsShipmentState legacy = service.CreateShipment("construction-legacy", "supplier", "site",
+                5, GrainSpec(), "wagon-1", hooks, out string legacyReason);
+            Assert.IsNotNull(legacy, legacyReason);
+            Assert.IsTrue(service.BeginLoading(legacy, loader, hooks, out string legacyBegin), legacyBegin);
+            int guard = 0;
+            while (!legacy.loadApplied && guard++ < 10)
+                Assert.IsTrue(service.WorkLoading(legacy, 60, hooks, out string legacyWork), legacyWork);
+            Assert.IsTrue(legacy.loadApplied, "legacy construction path unaffected");
+        }
+
+        [Test]
+        public void LotCustody_OneLotCannotBeBoundToTwoShipmentRecords()
+        {
+            LogisticsShipmentState first = service.CreateShipment("lot-owner-1", "mill-1", "bakery-1",
+                2, GrainSpec(), "wagon-1", hooks, out string firstReason);
+            Assert.IsNotNull(first, firstReason);
+            Assert.IsTrue(service.TryBindSourceLot(first, "shared-lot", "bakery_flour_sack", out string firstBind), firstBind);
+
+            var secondWagon = new EquipmentAsset
+            {
+                AssetId = "wagon-2", Kind = "farm-wagon", DisplayName = "Second wagon",
+                Condition01 = 0.9f, PayloadMassCapacityKg = 1000f, CargoVolumeCapacityM3 = 4f,
+            };
+            service.RegisterWagon(secondWagon);
+            LogisticsShipmentState second = service.CreateShipment("lot-owner-2", "mill-1", "bakery-1",
+                2, GrainSpec(), "wagon-2", hooks, out string secondReason);
+            Assert.IsNotNull(second, secondReason);
+            Assert.IsFalse(service.TryBindSourceLot(second, "shared-lot", "bakery_flour_sack", out string duplicateReason));
+            StringAssert.Contains("already assigned", duplicateReason);
+        }
+
+        [Test]
+        public void LotCustody_MissingReceiverRefusesBeforeUnloadingTaskStarts()
+        {
+            var sourceLots = new Dictionary<string, int> { ["source-lot"] = 5 };
+            hooks.CommitSourceLot = (LogisticsShipmentState s, int quantity, out string reason) =>
+            {
+                reason = string.Empty;
+                if (!sourceLots.TryGetValue(s.CargoLotId, out int units) || units < quantity)
+                {
+                    reason = "source stock shortfall";
+                    return false;
+                }
+                sourceLots[s.CargoLotId] = units - quantity;
+                return true;
+            };
+            LogisticsShipmentState shipment = service.CreateShipment("no-receiver", "mill-1", "bakery-1",
+                5, GrainSpec(), "wagon-1", hooks, out string createReason);
+            Assert.IsNotNull(shipment, createReason);
+            Assert.IsTrue(service.TryBindSourceLot(shipment, "source-lot", "bakery_flour_sack", out string bindReason), bindReason);
+            Assert.IsTrue(service.BeginLoading(shipment, loader, hooks, out string loadingReason), loadingReason);
+            Assert.IsTrue(service.WorkLoading(shipment, 60, hooks, out string workReason), workReason);
+            Assert.AreEqual(0, sourceLots["source-lot"]);
+            Assert.IsTrue(shipment.sourceLotDebitApplied);
+            Assert.IsTrue(service.Dispatch(shipment, driver, null, hooks, out string dispatchReason), dispatchReason);
+            service.AdvanceTransit(shipment, shipment.transitDurationGameSeconds, hooks);
+
+            hooks.ReceiveCargoLot = null;
+            Assert.IsFalse(service.BeginUnloading(shipment, loader, hooks, out string unloadReason));
+            StringAssert.Contains("lot receiver", unloadReason);
+            Assert.AreEqual(5, shipment.RemainingQuantityUnits, "cargo remains aboard the wagon until an authority accepts it");
+            Assert.IsFalse(shipment.deliveryApplied);
         }
 
         [Test]

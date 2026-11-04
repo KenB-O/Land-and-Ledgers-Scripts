@@ -123,7 +123,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             GeneralStoreCategoryOffer offer = FindOffer(itemId);
             if (offer == null) return 0;
             return offer.UsesItemLevelInventory
-                ? manager.GetItemSellingPriceCents(itemId)
+                ? offer.ItemPriceOverrideCents > 0 ? offer.ItemPriceOverrideCents : manager.GetItemSellingPriceCents(itemId)
                 : CategoryPricePerUnitCents(offer.CategoryId) * Math.Max(1, offer.StoreUnitsPerItemUnit);
         }
 

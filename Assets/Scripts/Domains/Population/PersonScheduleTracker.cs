@@ -424,8 +424,9 @@ namespace LandLedgers.Population
             }
 
             var rejections = new List<string>();
-            int fallback = -1;
-            string fallbackReason = null;
+            int preferredWoman = -1;
+            int adultFallback = -1;
+            int youngWorkerFallback = -1;
 
             for (int i = 0; i < memberIds.Count; i++)
             {
@@ -470,24 +471,40 @@ namespace LandLedgers.Population
                     }
                 }
 
-                // Prefer full adults; young workers are the fallback.
+                // The current settlement household-shopping rule assigns
+                // errands to an available adult woman first. If none is free,
+                // another adult can still keep the household supplied; a
+                // young worker remains the last fallback.
                 if (person.ageBand >= AgeBand.Adult18Plus)
                 {
-                    reason = null;
-                    return personId;
+                    if (person.isFemale)
+                    {
+                        if (preferredWoman < 0) preferredWoman = personId;
+                    }
+                    else if (adultFallback < 0)
+                    {
+                        adultFallback = personId;
+                    }
                 }
-
-                if (fallback < 0)
+                else if (youngWorkerFallback < 0)
                 {
-                    fallback = personId;
-                    fallbackReason = null;
+                    youngWorkerFallback = personId;
                 }
             }
 
-            if (fallback >= 0)
+            if (preferredWoman >= 0)
             {
-                reason = fallbackReason;
-                return fallback;
+                return preferredWoman;
+            }
+
+            if (adultFallback >= 0)
+            {
+                return adultFallback;
+            }
+
+            if (youngWorkerFallback >= 0)
+            {
+                return youngWorkerFallback;
             }
 
             reason = "No available shopper: " + string.Join(" ", rejections);

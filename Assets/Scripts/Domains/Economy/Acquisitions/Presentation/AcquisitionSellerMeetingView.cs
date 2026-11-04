@@ -146,8 +146,12 @@ namespace LandLedgers.UI
             SetPrimaryActionLabel(!string.IsNullOrWhiteSpace(state.FormalActionLabel) ? state.FormalActionLabel : "No Action");
             SetPrimaryInteractable(state.CanAdvanceDeal);
             RebuildProcessRail(state);
-            RebuildResponseButtons(state);
-            SetSelectedResponseIndex(responseButtons.Count > 0 ? 0 : -1);
+            // The old meeting presented conversational readouts as clickable
+            // deal actions.  The formal workflow below is the only purchase
+            // authority; keep the legacy response region empty so a buyer
+            // cannot mistake informational options for transaction steps.
+            RebuildResponseButtons(null);
+            SetSelectedResponseIndex(-1);
             ResetBodyScrollPosition();
         }
 

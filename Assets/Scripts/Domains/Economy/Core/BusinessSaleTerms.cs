@@ -4,6 +4,42 @@ using UnityEngine;
 
 namespace LandLedgers.Economy
 {
+    public enum BusinessSaleReviewStage
+    {
+        None = 0,
+        ListingReviewed = 1,
+        TermsReviewed = 2,
+    }
+
+    /// <summary>UI gate requiring a separate listing review, terms review and explicit final confirmation.</summary>
+    public sealed class BusinessSaleReviewFlow
+    {
+        public int BuildingId { get; private set; } = -1;
+        public BusinessSaleReviewStage Stage { get; private set; }
+        public bool CanConfirm(int buildingId) => BuildingId == buildingId && Stage == BusinessSaleReviewStage.TermsReviewed;
+
+        public BusinessSaleReviewStage ReviewListing(int buildingId)
+        {
+            if (buildingId < 0) return Stage;
+            if (BuildingId != buildingId || Stage == BusinessSaleReviewStage.None)
+            {
+                BuildingId = buildingId;
+                Stage = BusinessSaleReviewStage.ListingReviewed;
+            }
+            else if (Stage == BusinessSaleReviewStage.ListingReviewed)
+            {
+                Stage = BusinessSaleReviewStage.TermsReviewed;
+            }
+            return Stage;
+        }
+
+        public void Reset()
+        {
+            BuildingId = -1;
+            Stage = BusinessSaleReviewStage.None;
+        }
+    }
+
     /// <summary>
     /// P1: explicit business sale terms (Canon XXVII Part IX §9.1 — "Cash inclusion
     /// is an explicit transaction term"). Sale of a business does NOT silently

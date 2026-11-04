@@ -1,0 +1,218 @@
+fileFormatVersion: 2
+guid: ab26bc229b365da4888a648584b7d291
+ModelImporter:
+  serializedVersion: 23
+  fileIDToRecycleName:
+    100000: //RootNode
+    100002: CartCloth_a
+    100004: CartDoor
+    100006: CartLockerL
+    100008: CartLockerR
+    100010: Wheels_back
+    100012: Wheels_Front
+    100014: Cart
+    100016: Cart001
+    100018: Cart_LOD0
+    100020: Cart_LOD1
+    100022: Cart_LOD2
+    100024: Cart_LOD2 1
+    100026: CartCloth_a001
+    100028: CartCloth_a002
+    100030: CartDoor001
+    100032: CartDoor002
+    100034: CartLockerL001
+    100036: CartLockerR001
+    100038: Wheels_back001
+    100040: Wheels_back002
+    100042: Wheels_Front001
+    100044: Wheels_Front002
+    400000: //RootNode
+    400002: CartCloth_a
+    400004: CartDoor
+    400006: CartLockerL
+    400008: CartLockerR
+    400010: Wheels_back
+    400012: Wheels_Front
+    400014: Cart
+    400016: Cart001
+    400018: Cart_LOD0
+    400020: Cart_LOD1
+    400022: Cart_LOD2
+    400024: Cart_LOD2 1
+    400026: CartCloth_a001
+    400028: CartCloth_a002
+    400030: CartDoor001
+    400032: CartDoor002
+    400034: CartLockerL001
+    400036: CartLockerR001
+    400038: Wheels_back001
+    400040: Wheels_back002
+    400042: Wheels_Front001
+    400044: Wheels_Front002
+    2100000: Cart
+    2100002: CartWheels
+    2100004: CartCloth
+    2300000: //RootNode
+    2300002: CartCloth_a
+    2300004: CartDoor
+    2300006: CartLockerL
+    2300008: CartLockerR
+    2300010: Wheels_back
+    2300012: Wheels_Front
+    2300014: Cart
+    2300016: Cart001
+    2300018: Cart_LOD2 1
+    2300020: CartCloth_a001
+    2300022: CartCloth_a002
+    2300024: CartDoor001
+    2300026: CartDoor002
+    2300028: CartLockerL001
+    2300030: CartLockerR001
+    2300032: Wheels_back001
+    2300034: Wheels_back002
+    2300036: Wheels_Front001
+    2300038: Wheels_Front002
+    3300000: //RootNode
+    3300002: CartCloth_a
+    3300004: CartDoor
+    3300006: CartLockerL
+    3300008: CartLockerR
+    3300010: Wheels_back
+    3300012: Wheels_Front
+    3300014: Cart
+    3300016: Cart001
+    3300018: Cart_LOD2 1
+    3300020: CartCloth_a001
+    3300022: CartCloth_a002
+    3300024: CartDoor001
+    3300026: CartDoor002
+    3300028: CartLockerL001
+    3300030: CartLockerR001
+    3300032: Wheels_back001
+    3300034: Wheels_back002
+    3300036: Wheels_Front001
+    3300038: Wheels_Front002
+    4300000: Cart
+    4300002: CartCloth_a
+    4300004: CartDoor
+    4300006: CartLockerL
+    4300008: CartLockerR
+    4300010: Wheels_back
+    4300012: Wheels_Front
+    4300014: Cart001
+    4300016: CartCloth_a001
+    4300018: CartDoor001
+    4300020: CartLockerL001
+    4300022: CartLockerR001
+    4300024: Wheels_back001
+    4300026: Wheels_Front001
+    4300028: Cart_LOD2
+    4300030: CartCloth_a002
+    4300032: CartDoor002
+    4300034: Wheels_back002
+    4300036: Wheels_Front002
+    2186277476908879412: ImportLogs
+  externalObjects:
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cart
+    second: {fileID: 2100000, guid: 299fd0bd77e0f4d48ba86889b2f6f53c, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: CartCloth
+    second: {fileID: 2100000, guid: c62f4a949082da544a894627d5412fd0, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: CartWheels
+    second: {fileID: 2100000, guid: 284df9e77cc41db4f883137abbdb212e, type: 2}
+  materials:
+    importMaterials: 1
+    materialName: 0
+    materialSearch: 1
+    materialLocation: 1
+  animations:
+    legacyGenerateAnimations: 4
+    bakeSimulation: 0
+    resampleCurves: 1
+    optimizeGameObjects: 0
+    motionNodeName: 
+    rigImportErrors: 
+    rigImportWarnings: 
+    animationImportErrors: 
+    animationImportWarnings: 
+    animationRetargetingWarnings: 
+    animationDoRetargetingWarnings: 0
+    importAnimatedCustomProperties: 0
+    importConstraints: 0
+    animationCompression: 1
+    animationRotationError: 0.5
+    animationPositionError: 0.5
+    animationScaleError: 0.5
+    animationWrapMode: 0
+    extraExposedTransformPaths: []
+    extraUserProperties: []
+    clipAnimations: []
+    isReadable: 1
+  meshes:
+    lODScreenPercentages: []
+    globalScale: 1
+    meshCompression: 0
+    addColliders: 0
+    importVisibility: 1
+    importBlendShapes: 1
+    importCameras: 1
+    importLights: 1
+    swapUVChannels: 0
+    generateSecondaryUV: 1
+    useFileUnits: 1
+    optimizeMeshForGPU: 1
+    keepQuads: 0
+    weldVertices: 1
+    preserveHierarchy: 0
+    indexFormat: 0
+    secondaryUVAngleDistortion: 8
+    secondaryUVAreaDistortion: 15.000001
+    secondaryUVHardAngle: 88
+    secondaryUVPackMargin: 4
+    useFileScale: 1
+    previousCalculatedGlobalScale: 1
+    hasPreviousCalculatedGlobalScale: 0
+  tangentSpace:
+    normalSmoothAngle: 60
+    normalImportMode: 0
+    tangentImportMode: 3
+    normalCalculationMode: 4
+  importAnimation: 1
+  copyAvatar: 0
+  humanDescription:
+    serializedVersion: 2
+    human: []
+    skeleton: []
+    armTwist: 0.5
+    foreArmTwist: 0.5
+    upperLegTwist: 0.5
+    legTwist: 0.5
+    armStretch: 0.05
+    legStretch: 0.05
+    feetSpacing: 0
+    rootMotionBoneName: 
+    hasTranslationDoF: 0
+    hasExtraRoot: 0
+    skeletonHasParents: 1
+  lastHumanDescriptionAvatarSource: {instanceID: 0}
+  animationType: 0
+  humanoidOversampling: 1
+  additionalBone: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 151648
+  packageName: Western Town Environment
+  packageVersion: 1.1
+  assetPath: Assets/Western/Models/Propses/Models/Carriage_a.FBX
+  uploadId: 359150

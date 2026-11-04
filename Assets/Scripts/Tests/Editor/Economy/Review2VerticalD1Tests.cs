@@ -112,8 +112,9 @@ namespace LandLedgers.Tests.Economy
             public int DeliveryFeeCents(string itemId, int units) => 0;
         }
 
-        private sealed class RefusingCreditPort : IBusinessCashPort
+        private sealed class RefusingCreditPort : IBusinessIdentityCashPort
         {
+            public string BusinessId => "pierce-bakery-1";
             public int BalanceCents => 999999;
             public string TryDebit(int amountCents, string reason) => null;
             public string Credit(int amountCents, string reason) => "test port refuses credit";
@@ -230,7 +231,8 @@ namespace LandLedgers.Tests.Economy
             };
         }
 
-        private static IBusinessCashPort ProductionPort(BusinessRuntimeState runtime)
+        // Production settlement requires the adapter to prove which Business owns each balance.
+        private static IBusinessIdentityCashPort ProductionPort(BusinessRuntimeState runtime)
         {
             return new Series2BusinessRuntimeCashPort(runtime);
         }

@@ -572,6 +572,7 @@ namespace LandLedgers.Persistence
     {
         public string shipmentId = string.Empty;
         public string transferAgreementId = string.Empty;
+        public string freightServiceAgreementId = string.Empty;
         public LogisticsShipmentKind shipmentKind;
         public LogisticsCargoClass cargoClass;
         public LogisticsSupplierClass supplierClass;
@@ -587,6 +588,10 @@ namespace LandLedgers.Persistence
         public string freightPayerBusinessInstanceId = string.Empty;
         public string sourceCategoryId = string.Empty;
         public string destinationCategoryId = string.Empty;
+        public string cargoLotId = string.Empty;
+        public string cargoSkuId = string.Empty;
+        public bool requiresSourceLotCustody;
+        public bool sourceLotDebitApplied;
         public string summaryLabel = string.Empty;
         public string blockedReason = string.Empty;
         public int plannedQuantityUnits;
@@ -597,6 +602,7 @@ namespace LandLedgers.Persistence
         public int sellerUnitRevenueCents;
         public int buyerUnitCostCents;
         public int freightChargeCents;
+        public bool requiresDispatchAuthorization;
         public bool sourceCommittedAtSchedule;
         public bool loadApplied;
         public bool deliveryApplied;

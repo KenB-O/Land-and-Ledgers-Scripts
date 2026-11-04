@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using LandLedgers.CameraSystem;
+using LandLedgers.Economy;
 using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using LandLedgers.Reporting;
@@ -19,6 +21,7 @@ namespace LandLedgers.World
         [SerializeField] private TownWorldController townWorld;
         [SerializeField] private GeneralStorePanelController managementPanel;
         [SerializeField] private PopulationManager populationManager;
+        [SerializeField] private SharedBusinessRuntimeManager sharedBusinessRuntime;
         [SerializeField] private LayerMask raycastMask = ~0;
         [SerializeField, Min(1f)] private float raycastDistance = 2000f;
         [SerializeField] private bool logTargetDiagnostics = false;
@@ -334,6 +337,7 @@ namespace LandLedgers.World
             townWorld ??= FindAnyObjectByType<TownWorldController>();
             managementPanel ??= FindAnyObjectByType<GeneralStorePanelController>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
         }
 
         private void ShowPersonInspection(int personId)
@@ -375,8 +379,13 @@ namespace LandLedgers.World
             AppendPersonField(text, "Household", household != null ? household.householdName : null, showDevelopmentPersonDetails || household != null);
             AppendPersonField(text, "Occupation", !string.IsNullOrWhiteSpace(person.professionName) ? person.professionName : person.professionId, showDevelopmentPersonDetails || !string.IsNullOrWhiteSpace(person.professionName));
             AppendPersonField(text, "Schedule", person.scheduleState.ToString(), showDevelopmentPersonDetails);
-            AppendPersonField(text, "Home building", person.homeBuildingId >= 0 ? person.homeBuildingId.ToString("000") : null, showDevelopmentPersonDetails);
-            AppendPersonField(text, "Workplace", person.workplaceBuildingId >= 0 ? person.workplaceBuildingId.ToString("000") : null, showDevelopmentPersonDetails);
+            AppendPersonField(text, "Home", DescribeBuilding(person.homeBuildingId), person.homeBuildingId >= 0);
+            AppendPersonField(text, "Workplace", DescribeWorkplace(person.workplaceBuildingId), person.workplaceBuildingId >= 0);
+            AppendPersonField(text, "Businesses owned", DescribeOwnedBusinesses(person.id), true);
+            string skillSummary = person.visibleWorkerProfile != null && person.visibleWorkerProfile.IsInitialized
+                ? $"General skill estimate {person.visibleWorkerProfile.generalSkill}/100"
+                : "No skill estimate recorded";
+            AppendPersonField(text, "Skills", skillSummary, true);
             AppendPersonField(text, "Destination", person.currentDestinationBuildingId >= 0 ? person.currentDestinationBuildingId.ToString("000") : null, showDevelopmentPersonDetails);
 
             AppendRelations(text, person);
@@ -391,6 +400,45 @@ namespace LandLedgers.World
             }
 
             return text.ToString().TrimEnd();
+        }
+
+        private string DescribeBuilding(int buildingId)
+        {
+            if (buildingId < 0) return "Unknown";
+            if (townWorld != null && townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building)
+                && building?.definition != null)
+            {
+                return $"{building.definition.DisplayName} ({buildingId:000})";
+            }
+            return $"Building {buildingId:000}";
+        }
+
+        private string DescribeWorkplace(int buildingId)
+        {
+            if (buildingId < 0) return "No current workplace recorded";
+            BusinessInstanceState business = sharedBusinessRuntime != null
+                ? sharedBusinessRuntime.FindByBuildingId(buildingId)
+                : null;
+            return business != null
+                ? $"{business.RuntimeDisplayName} at {DescribeBuilding(buildingId)}"
+                : DescribeBuilding(buildingId);
+        }
+
+        private string DescribeOwnedBusinesses(int personId)
+        {
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime?.Businesses;
+            if (businesses == null) return "Business records unavailable";
+            var names = new StringBuilder();
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business?.Owner == null
+                    || business.Owner.OwnerKind != BusinessOwnerKind.Npc
+                    || business.Owner.PersonId != personId) continue;
+                if (names.Length > 0) names.Append(", ");
+                names.Append(business.RuntimeDisplayName);
+            }
+            return names.Length > 0 ? names.ToString() : "None recorded";
         }
 
         private static void AppendPersonField(StringBuilder text, string label, string value, bool isKnown)

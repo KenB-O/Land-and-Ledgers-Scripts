@@ -132,25 +132,6 @@ namespace LandLedgers.Economy.Creation
         }
 
         /// <summary>
-        /// Opt-in, no-capital development roster for the six-person vertical
-        /// slice. Stable founder IDs map to Kennedy (P001), Glen (P003), and
-        /// Jacob (P005). It creates no starting inventory or cash and is never
-        /// selected by ordinary scenarios.
-        /// </summary>
-        public static List<OpeningRosterEntry> SixPersonDevelopment()
-        {
-            return new List<OpeningRosterEntry>
-            {
-                new OpeningRosterEntry(BusinessType.GeneralStore, "Baldwin-Ooms General Store", "Kennedy Baldwin-Ooms",
-                    new PremisesRequirement(customerFacing: true, minAreaSqFt: 800), 0, 1),
-                new OpeningRosterEntry(BusinessType.Bakery, "Pierce Bakery", "Glen Pierce",
-                    new PremisesRequirement(customerFacing: true, foodHandling: true, minAreaSqFt: 500), 0, 3),
-                new OpeningRosterEntry(BusinessType.FuelDealer, "Boniecki Fuel Dealer", "Jacob Boniecki",
-                    new PremisesRequirement(yardStorage: true, minAreaSqFt: 600), 0, 5),
-            };
-        }
-
-        /// <summary>
         /// Creates each roster entry through the formation workflow, skipping types that
         /// already exist. Returns the number created. Failures are diagnostic, never fatal.
         /// </summary>

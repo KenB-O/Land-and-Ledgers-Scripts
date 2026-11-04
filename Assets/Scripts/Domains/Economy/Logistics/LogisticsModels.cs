@@ -79,6 +79,7 @@ namespace LandLedgers.Economy
     {
         [SerializeField] public string shipmentId = string.Empty;
         [SerializeField] public string transferAgreementId = string.Empty;
+        [SerializeField] public string freightServiceAgreementId = string.Empty;
         [SerializeField] public LogisticsShipmentKind shipmentKind;
         [SerializeField] public LogisticsCargoClass cargoClass;
         [SerializeField] public LogisticsSupplierClass supplierClass;
@@ -94,6 +95,13 @@ namespace LandLedgers.Economy
         [SerializeField] public string freightPayerBusinessInstanceId = string.Empty;
         [SerializeField] public string sourceCategoryId = string.Empty;
         [SerializeField] public string destinationCategoryId = string.Empty;
+        // Stable physical identity for this shipment's cargo. A lot-backed
+        // shipment sets this to the actual source lot id before loading; legacy
+        // shipments receive a shipment-scoped identity when created.
+        [SerializeField] public string cargoLotId = string.Empty;
+        [SerializeField] public string cargoSkuId = string.Empty;
+        [SerializeField] public bool requiresSourceLotCustody;
+        [SerializeField] public bool sourceLotDebitApplied;
         [SerializeField] public string summaryLabel = string.Empty;
         [SerializeField] public string blockedReason = string.Empty;
         [SerializeField] public int plannedQuantityUnits;
@@ -105,6 +113,7 @@ namespace LandLedgers.Economy
         [SerializeField] public int sellerUnitRevenueCents;
         [SerializeField] public int buyerUnitCostCents;
         [SerializeField] public int freightChargeCents;
+        [SerializeField] public bool requiresDispatchAuthorization;
         [SerializeField] public bool sourceCommittedAtSchedule;
         [SerializeField] public bool loadApplied;
         [SerializeField] public bool deliveryApplied;
@@ -128,6 +137,7 @@ namespace LandLedgers.Economy
 
         public string ShipmentId => shipmentId ?? string.Empty;
         public string TransferAgreementId => transferAgreementId ?? string.Empty;
+        public string FreightServiceAgreementId => freightServiceAgreementId ?? string.Empty;
         public LogisticsCargoClass CargoClass => cargoClass;
         public ShipmentHaulingMode HaulingMode => haulingMode;
         public LogisticsShipmentStatus Status => state;
@@ -135,6 +145,7 @@ namespace LandLedgers.Economy
         public LogisticsRoutePlan RoutePlan => routePlan ??= new LogisticsRoutePlan();
         public string CarrierBusinessInstanceId => carrierBusinessInstanceId ?? string.Empty;
         public string FreightPayerBusinessInstanceId => freightPayerBusinessInstanceId ?? string.Empty;
+        public string CargoLotId => cargoLotId ?? string.Empty;
         public int PlannedQuantityUnits => Mathf.Max(0, plannedQuantityUnits);
         public int RemainingQuantityUnits => Mathf.Max(0, remainingQuantityUnits);
         public int DeliveredQuantityUnits => Mathf.Max(0, deliveredQuantityUnits);
@@ -224,6 +235,7 @@ namespace LandLedgers.Economy
             {
                 shipmentId = ShipmentId,
                 transferAgreementId = TransferAgreementId,
+                freightServiceAgreementId = FreightServiceAgreementId,
                 shipmentKind = shipmentKind,
                 cargoClass = cargoClass,
                 supplierClass = supplierClass,
@@ -239,6 +251,10 @@ namespace LandLedgers.Economy
                 freightPayerBusinessInstanceId = freightPayerBusinessInstanceId ?? string.Empty,
                 sourceCategoryId = sourceCategoryId ?? string.Empty,
                 destinationCategoryId = destinationCategoryId ?? string.Empty,
+                cargoLotId = cargoLotId ?? string.Empty,
+                cargoSkuId = cargoSkuId ?? string.Empty,
+                requiresSourceLotCustody = requiresSourceLotCustody,
+                sourceLotDebitApplied = sourceLotDebitApplied,
                 summaryLabel = summaryLabel ?? string.Empty,
                 blockedReason = blockedReason ?? string.Empty,
                 plannedQuantityUnits = PlannedQuantityUnits,
@@ -247,6 +263,7 @@ namespace LandLedgers.Economy
                 sellerUnitRevenueCents = Mathf.Max(0, sellerUnitRevenueCents),
                 buyerUnitCostCents = Mathf.Max(0, buyerUnitCostCents),
                 freightChargeCents = FreightChargeCents,
+                requiresDispatchAuthorization = requiresDispatchAuthorization,
                 sourceCommittedAtSchedule = sourceCommittedAtSchedule,
                 loadApplied = loadApplied,
                 deliveryApplied = deliveryApplied,
@@ -276,6 +293,7 @@ namespace LandLedgers.Economy
 
             state.shipmentId = dto.shipmentId ?? string.Empty;
             state.transferAgreementId = dto.transferAgreementId ?? string.Empty;
+            state.freightServiceAgreementId = dto.freightServiceAgreementId ?? string.Empty;
             state.shipmentKind = dto.shipmentKind;
             state.cargoClass = dto.cargoClass;
             state.supplierClass = dto.supplierClass;
@@ -291,6 +309,12 @@ namespace LandLedgers.Economy
             state.freightPayerBusinessInstanceId = dto.freightPayerBusinessInstanceId ?? string.Empty;
             state.sourceCategoryId = dto.sourceCategoryId ?? string.Empty;
             state.destinationCategoryId = dto.destinationCategoryId ?? string.Empty;
+            state.cargoLotId = string.IsNullOrWhiteSpace(dto.cargoLotId)
+                ? "freight-cargo:" + (dto.shipmentId ?? string.Empty)
+                : dto.cargoLotId;
+            state.cargoSkuId = dto.cargoSkuId ?? string.Empty;
+            state.requiresSourceLotCustody = dto.requiresSourceLotCustody;
+            state.sourceLotDebitApplied = dto.sourceLotDebitApplied;
             state.summaryLabel = dto.summaryLabel ?? string.Empty;
             state.blockedReason = dto.blockedReason ?? string.Empty;
             state.plannedQuantityUnits = Mathf.Max(0, dto.plannedQuantityUnits);
@@ -299,6 +323,7 @@ namespace LandLedgers.Economy
             state.sellerUnitRevenueCents = Mathf.Max(0, dto.sellerUnitRevenueCents);
             state.buyerUnitCostCents = Mathf.Max(0, dto.buyerUnitCostCents);
             state.freightChargeCents = Mathf.Max(0, dto.freightChargeCents);
+            state.requiresDispatchAuthorization = dto.requiresDispatchAuthorization;
             state.sourceCommittedAtSchedule = dto.sourceCommittedAtSchedule;
             state.loadApplied = dto.loadApplied;
             state.deliveryApplied = dto.deliveryApplied;

@@ -142,6 +142,10 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private string lastMovementStatus;
 
+        [SerializeField, Min(0.1f)]
+        [Tooltip("Maximum horizontal distance from a building's path anchor to confirm an explicit travel task arrival.")]
+        private float explicitTravelArrivalRadiusMeters = 1.5f;
+
         private readonly List<ManagedPersonAgent> agents = new();
         private bool workRoutesIssued;
         private bool shoppingRoutesIssued;
@@ -675,6 +679,60 @@ namespace LandLedgers.FirstLedger
 
             RefreshMovementStatus($"Sent {sent} agents for {nextState}.");
             return sent;
+        }
+
+        /// <summary>
+        /// Starts a named person's existing world-space custom path for a task.
+        /// Arrival-driven travel remains open until the actor reaches the target
+        /// anchor; a JourneyModel estimate does not complete the task.
+        /// </summary>
+        public bool TryStartExplicitRoute(int personId, int targetBuildingId, PopulationScheduleState nextState)
+        {
+            if (personId < 0 || targetBuildingId < 0) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.person.currentDestinationBuildingId == targetBuildingId
+                    && managed.mover != null && (managed.mover.IsArrivedVisible || managed.mover.IsRouteActive))
+                {
+                    managed.person.scheduleState = nextState;
+                    return true;
+                }
+                return TrySendAgent(managed, targetBuildingId, nextState, out _);
+            }
+            return false;
+        }
+
+        public bool IsAtExplicitBuilding(int personId, int targetBuildingId)
+        {
+            return TryGetExplicitArrival(personId, targetBuildingId, out _, out _, out _);
+        }
+
+        public bool TryGetExplicitArrival(int personId, int targetBuildingId,
+            out Vector3 actorPosition, out float distanceToDestination, out bool arrived)
+        {
+            actorPosition = Vector3.zero;
+            distanceToDestination = float.PositiveInfinity;
+            arrived = false;
+            if (personId < 0 || targetBuildingId < 0 || pathingManager == null) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.mover == null || !TryGetDoorAnchor(targetBuildingId, out BuildingAnchor targetAnchor)) return false;
+                actorPosition = managed.mover.transform.position;
+                Vector3 destination = pathingManager.CoordToPathWorld(targetAnchor.coord);
+                Vector2 actorXZ = new Vector2(actorPosition.x, actorPosition.z);
+                Vector2 destinationXZ = new Vector2(destination.x, destination.z);
+                distanceToDestination = Vector2.Distance(actorXZ, destinationXZ);
+                arrived = managed.person.currentDestinationBuildingId == targetBuildingId
+                    && managed.mover.IsArrivedVisible && !managed.mover.IsRouteActive
+                    && managed.mover.RemainingPathWaypointCount == 0
+                    && distanceToDestination <= Mathf.Max(0.1f, explicitTravelArrivalRadiusMeters);
+                return true;
+            }
+            return false;
         }
 
         private bool TrySendAgent(ManagedPersonAgent managed, int targetBuildingId, PopulationScheduleState nextState, out ScheduledRouteFailureKind failureKind)

@@ -48,7 +48,7 @@ namespace LandLedgers.Editor.Time
         }
 
         [Test]
-        public void NightExposureIsStrongAtRealTimeAndSubtleAt25xAndFaster()
+        public void NightExposureStaysVisibleAtRealTimeAndAcceleratedSpeeds()
         {
             float realTimeNight = DayNightVisualController.ResolveNightExposureStops(
                 0f, SimulationSpeed.RealTime, 0.0007f);
@@ -59,7 +59,8 @@ namespace LandLedgers.Editor.Time
 
             Assert.That(realTimeNight, Is.LessThanOrEqualTo(-3.9f));
             Assert.That(at25xNight, Is.LessThan(0f));
-            Assert.That(Mathf.Abs(at25xNight), Is.LessThan(0.8f));
+            Assert.That(Mathf.Abs(at25xNight), Is.GreaterThan(2f));
+            Assert.That(Mathf.Abs(at100xNight), Is.GreaterThan(2f));
             Assert.That(Mathf.Abs(at100xNight), Is.LessThan(Mathf.Abs(at25xNight)));
         }
 

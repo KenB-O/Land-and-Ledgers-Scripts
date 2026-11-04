@@ -178,6 +178,7 @@ namespace LandLedgers.FirstLedger
         private string ownerDisplayName = "Player";
 
         [SerializeField]
+        [Tooltip("Minimum labor-access category for General Store hiring candidates. YoungWorker admits eligible 16–17 year olds; it excludes household helpers and junior low-trust workers. This is an eligibility filter, not a staffing target.")]
         private LaborAccessLevel minimumHireLaborAccess = LaborAccessLevel.YoungWorker;
 
         [SerializeField]
@@ -417,6 +418,18 @@ namespace LandLedgers.FirstLedger
         /// </summary>
         public GeneralStoreTradingPort BuildHouseholdTradingPort(BusinessInstanceState npcBusiness)
         {
+            return BuildHouseholdTradingPort(npcBusiness, null);
+        }
+
+        /// <summary>
+        /// Includes a runtime feed SKU only when a household item definition,
+        /// an owner-entered price, and identified physical Business lots exist.
+        /// Category aggregates alone never prove a SKU offer.
+        /// </summary>
+        public GeneralStoreTradingPort BuildHouseholdTradingPort(
+            BusinessInstanceState npcBusiness,
+            Review2StoreFeedRegistry runtimeFeedRegistry)
+        {
             if (npcBusiness == null || npcBusiness.RuntimeState == null || storeDefinition == null)
                 return BuildHouseholdTradingPort();
 
@@ -455,6 +468,57 @@ namespace LandLedgers.FirstLedger
                         offers.Add(exactOffer);
                     }
                     exactOffer.OfferedItemIds.Add(itemId);
+                }
+            }
+
+            Review2StoreFeedItem runtimeFeed = runtimeFeedRegistry?.Find(npcBusiness.InstanceId);
+            if (runtimeFeed != null)
+            {
+                HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(runtimeFeed.FeedItemId);
+                bool exactUnit = householdItem != null
+                    && !string.IsNullOrWhiteSpace(runtimeFeed.UnitLabel)
+                    && string.Equals(householdItem.UnitLabel.Trim(), runtimeFeed.UnitLabel.Trim(), StringComparison.OrdinalIgnoreCase);
+                int identifiedUnits = npcBusiness.RuntimeState.GetRetailItemStockUnits(
+                    runtimeFeed.FeedItemId, runtimeFeed.FeedCategoryId);
+                if (runtimeFeed.RetailPriceCents <= 0)
+                {
+                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: the owner has not supplied a positive retail price.", this);
+                }
+                else if (!exactUnit)
+                {
+                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: no household item definition has the matching unit '{runtimeFeed.UnitLabel}'.", this);
+                }
+                else if (identifiedUnits > 0)
+                {
+                    bool alreadyOffered = false;
+                    foreach (GeneralStoreCategoryOffer existingOffer in offers)
+                    {
+                        if (existingOffer?.OfferedItemIds == null) continue;
+                        foreach (string existingItemId in existingOffer.OfferedItemIds)
+                        {
+                            if (!string.Equals(existingItemId, runtimeFeed.FeedItemId, StringComparison.OrdinalIgnoreCase)) continue;
+                            alreadyOffered = true;
+                            break;
+                        }
+                        if (alreadyOffered) break;
+                    }
+
+                    if (!alreadyOffered)
+                    {
+                        var runtimeOffer = new GeneralStoreCategoryOffer
+                        {
+                            CategoryId = runtimeFeed.FeedCategoryId,
+                            StoreUnitsPerItemUnit = 1,
+                            UsesItemLevelInventory = true,
+                            ItemPriceOverrideCents = runtimeFeed.RetailPriceCents,
+                        };
+                        runtimeOffer.OfferedItemIds.Add(runtimeFeed.FeedItemId);
+                        offers.Add(runtimeOffer);
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: no available identified item lots back it.", this);
                 }
             }
 
@@ -1537,7 +1601,7 @@ namespace LandLedgers.FirstLedger
 
             builder.AppendLine("Staffing");
             builder.AppendLine($"Owner {ownerDisplayName}");
-            builder.AppendLine($"Staffing {runtimeState.FilledWorkerCount}/{runtimeState.TargetWorkerCount} | Service Efficiency {efficiency:P0}{fallback}");
+            builder.AppendLine($"Staffing {runtimeState.FilledWorkerCount} | Service Efficiency {efficiency:P0}{fallback}");
 
             int openSlotCount = GetOpenWorkerSlotCount();
             if (openSlotCount > 0)
@@ -1650,6 +1714,16 @@ namespace LandLedgers.FirstLedger
             {
                 message = "General Store shell exists, but no store runtime is available.";
                 return false;
+            }
+
+            if (currentBusiness.Owner?.OwnerKind == BusinessOwnerKind.Player)
+            {
+                if (runtimeState.ActiveRequiredWorkerCount < runtimeState.RequiredWorkerCount)
+                {
+                    message = "Business established with open positions. No one is hired automatically; use Staffing to select workers.";
+                    lastStaffingSummary = message;
+                }
+                return true;
             }
 
             if (runtimeState.RequiredWorkerCount <= 0 || runtimeState.ActiveRequiredWorkerCount >= runtimeState.RequiredWorkerCount)
@@ -2172,7 +2246,13 @@ namespace LandLedgers.FirstLedger
 
         private void AssignStoreWorkersFromPopulation()
         {
-            if (runtimeState == null || populationManager == null || populationManager.State == null)
+            // Population workplaceBuildingId can be a generated offer hint. It is
+            // not player consent or an EmploymentRelationship, so never import it
+            // into a player-owned store's actual roster.
+            if (runtimeState == null
+                || currentBusiness?.Owner?.OwnerKind == BusinessOwnerKind.Player
+                || populationManager == null
+                || populationManager.State == null)
             {
                 return;
             }
@@ -5417,25 +5497,38 @@ namespace LandLedgers.FirstLedger
     /// </summary>
     public static class ScenarioOpeningStockEndowment
     {
-        public static bool TryApply(SixPersonDevelopmentFixture fixture, BusinessInstanceState business,
-            GeneralStoreBusinessDefinition definition, int scenarioSeed, int dayIndex,
+        public static bool TryApply(DevelopmentTownConfiguration configuration, string businessKey,
+            BusinessInstanceState business, GeneralStoreBusinessDefinition definition, int scenarioSeed, int dayIndex,
             out string report, out string error)
         {
             report = string.Empty;
             error = string.Empty;
-            if (fixture == null || business?.RuntimeState == null || definition == null
-                || business.BusinessType != BusinessType.GeneralStore || business.Owner == null
-                || business.Owner.OwnerKind != BusinessOwnerKind.Npc)
+            if (configuration == null || !configuration.TryGetBusiness(businessKey, out _)
+                || business?.RuntimeState == null || business.Owner == null
+                || business.Owner.OwnerKind != BusinessOwnerKind.Npc || definition == null)
             {
-                error = "The development opening-stock endowment requires a configured fixture and an existing NPC General Store runtime.";
+                error = "Development opening inventory requires a valid configuration, configured business, catalog, and NPC-owned business runtime.";
                 return false;
             }
 
-            string endowmentId = $"scenario-opening-endowment:{fixture.ProfileId}:{business.InstanceId}:{scenarioSeed}";
+            DevelopmentTownConfiguration.BusinessOpeningInventory businessInventory = null;
+            foreach (DevelopmentTownConfiguration.BusinessOpeningInventory candidate in configuration.OpeningInventory)
+                if (candidate != null && string.Equals(candidate.businessKey, businessKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    businessInventory = candidate;
+                    break;
+                }
+            if (businessInventory == null)
+            {
+                report = $"No opening inventory is configured for business '{businessKey}'; no goods were seeded.";
+                return true;
+            }
+
+            string endowmentId = $"development-town-opening-inventory:{configuration.ConfigurationId}:{businessKey}:{business.InstanceId}:{scenarioSeed}";
             BusinessRuntimeState state = business.RuntimeState;
             if (state.HasAppliedScenarioEndowment(endowmentId))
             {
-                report = $"Opening stock endowment already recorded for {business.InstanceId}; no stock recreated.";
+                report = $"Opening inventory allocation already recorded for {business.InstanceId}; no stock recreated.";
                 return true;
             }
 
@@ -5445,22 +5538,22 @@ namespace LandLedgers.FirstLedger
                 if (items[i] != null && !string.IsNullOrWhiteSpace(items[i].ItemId)) itemById[items[i].ItemId] = items[i];
 
             var stockReport = new StringBuilder();
-            foreach (SixPersonDevelopmentFixture.OpeningRetailStockRange range in fixture.OpeningStoreStock)
+            foreach (DevelopmentTownConfiguration.OpeningInventoryItem range in businessInventory.items ?? Array.Empty<DevelopmentTownConfiguration.OpeningInventoryItem>())
             {
-                if (range == null || !fixture.TryResolveOpeningStoreStock(range.itemId, scenarioSeed, out int quantity))
+                if (range == null || !configuration.TryResolveOpeningInventory(businessKey, range.itemId, scenarioSeed, out int quantity))
                 {
-                    error = "The development fixture contains an invalid opening stock range.";
+                    error = $"Opening inventory for '{businessKey}' contains an invalid item range.";
                     return false;
                 }
                 if (!itemById.TryGetValue(range.itemId, out ItemDefinition item)
                     || definition.FindCategory(item.CategoryId) is not ItemCategoryDefinition category
                     || !category.ContainsItem(item.ItemId))
                 {
-                    error = $"Opening-stock SKU '{range.itemId}' is missing from the Business catalog or its declared category.";
+                    error = $"Opening-inventory SKU '{range.itemId}' for '{businessKey}' is not declared by the available item catalog and category.";
                     return false;
                 }
 
-                string lotId = $"opening-endowment:{fixture.ProfileId}:{business.InstanceId}:{scenarioSeed}:{item.ItemId}";
+                string lotId = $"opening-endowment:{configuration.ConfigurationId}:{business.InstanceId}:{scenarioSeed}:{item.ItemId}";
                 BusinessRetailItemLotState existing = state.FindRetailItemLot(lotId);
                 if (existing != null)
                 {
@@ -5471,7 +5564,7 @@ namespace LandLedgers.FirstLedger
                         || !string.Equals(existing.OwnerBusinessId, business.InstanceId, StringComparison.Ordinal)
                         || !string.Equals(existing.CustodianBusinessId, business.InstanceId, StringComparison.Ordinal))
                     {
-                        error = $"Existing opening lot '{lotId}' does not match the fixture seed and Business ownership.";
+                        error = $"Existing opening lot '{lotId}' does not match the configuration and business ownership.";
                         return false;
                     }
                 }
@@ -5479,10 +5572,10 @@ namespace LandLedgers.FirstLedger
                 {
                     string refusal = state.TryAddRetailItemLot(lotId, item.ItemId, item.CategoryId, item.Unit,
                         quantity, business.InstanceId, business.InstanceId,
-                        $"scenario-opening-endowment:{fixture.ProfileId}", dayIndex);
+                        $"development-town-opening-inventory:{configuration.ConfigurationId}:{businessKey}", dayIndex);
                     if (!string.IsNullOrWhiteSpace(refusal))
                     {
-                        error = $"Opening stock endowment refused for {item.ItemId}: {refusal}";
+                        error = $"Opening inventory refused for '{businessKey}/{item.ItemId}': {refusal}";
                         return false;
                     }
                 }
@@ -5493,11 +5586,13 @@ namespace LandLedgers.FirstLedger
 
             if (!state.RecordAppliedScenarioEndowment(endowmentId))
             {
-                error = $"Could not record opening stock endowment '{endowmentId}'.";
+                error = $"Could not record opening inventory allocation '{endowmentId}'.";
                 return false;
             }
-            report = $"Applied finite fixture endowment to {business.InstanceId}, owner P{business.Owner.PersonId:000}: {stockReport}.";
+            report = $"Applied configured opening inventory to '{businessKey}' ({business.InstanceId}), owner P{business.Owner.PersonId:000}: {stockReport}.";
             return true;
         }
+
+
     }
 }

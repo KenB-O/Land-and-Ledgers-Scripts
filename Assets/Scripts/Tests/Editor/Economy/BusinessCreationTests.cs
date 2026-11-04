@@ -363,35 +363,6 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void OpeningRoster_SixPersonDevelopment_UsesNamedOwnersWithoutGrantingCapital()
-        {
-            List<OpeningRosterEntry> roster = OpeningBusinessRoster.SixPersonDevelopment();
-
-            Assert.AreEqual(3, roster.Count);
-            CollectionAssert.AreEqual(
-                new[] { BusinessType.GeneralStore, BusinessType.Bakery, BusinessType.FuelDealer },
-                roster.ConvertAll(entry => entry.BusinessType));
-            CollectionAssert.AreEqual(new[] { 1, 3, 5 }, roster.ConvertAll(entry => entry.OwnerPersonId));
-            CollectionAssert.AreEqual(
-                new[] { "Kennedy Baldwin-Ooms", "Glen Pierce", "Jacob Boniecki" },
-                roster.ConvertAll(entry => entry.OwnerDisplayName));
-            Assert.IsTrue(roster.TrueForAll(entry => entry.StartingCapitalCents == 0),
-                "The development roster must not create opening business cash.");
-            for (int i = 0; i < roster.Count; i++)
-            {
-                CreateBusinessIntent intent = roster[i].ToIntent();
-                Assert.AreEqual(roster[i].OwnerPersonId, intent.Ownership.Shares[0].Owner.PersonId);
-                Assert.AreEqual(BusinessOwnerKind.Npc, intent.Ownership.Shares[0].Owner.OwnerKind);
-                Assert.AreEqual(0, intent.StartingCapitalCents);
-            }
-
-            List<OpeningRosterEntry> canonical = OpeningBusinessRoster.Default();
-            Assert.AreEqual(10, canonical.Count,
-                "Opting into the six-person development roster must not alter ordinary scenario defaults.");
-            Assert.AreEqual(BusinessType.Butcher, canonical[2].BusinessType);
-        }
-
-        [Test]
         public void OpeningRoster_EnsureViaWorkflow_SkipsExistingTypes()
         {
             var authority = new BusinessCreationAuthority();

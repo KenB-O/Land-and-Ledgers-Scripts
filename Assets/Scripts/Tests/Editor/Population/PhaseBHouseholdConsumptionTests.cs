@@ -373,6 +373,26 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void Shortage_ExactlyAtConfiguredLowBoundary_OpensNeedBeforeStockout()
+        {
+            var needs = new HouseholdNeedRegistry();
+            var monitor = new HouseholdShortageMonitor(needs) { LowDaysThreshold = 1f };
+            var household = new HouseholdState { id = 721 };
+            var inventory = new HouseholdInventory(721);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.FlourId, 2, 1, "existing household stock"));
+
+            monitor.Evaluate(household, inventory,
+                new Dictionary<string, int> { { HouseholdItemCatalog.FlourId, 2 } },
+                false, new HouseholdSupplyAccess { HasGeneralStore = true, HasCash = true }, 0, 0, 12);
+
+            HouseholdPurchasingNeed need = needs.GetOpenNeed(721, HouseholdItemCatalog.FlourId);
+            Assert.NotNull(need, "At one day of stock the production policy must queue shopping before the larder empties.");
+            Assert.Greater(need.UnitsNeeded, 0);
+            Assert.AreEqual(2, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                "Opening a need is diagnostic state and does not consume household inventory.");
+        }
+
+        [Test]
         public void Shortage_ReEvaluation_UpdatesSingleNeed_NoDuplicates()
         {
             var needs = new HouseholdNeedRegistry();

@@ -985,6 +985,18 @@ namespace LandLedgers.Economy
 
         public bool TrySellPlayerBusiness(int buildingId, out string message)
         {
+            message = "Business sale not completed: review the live listing and terms, then use the separate Confirm Sale action.";
+            return false;
+        }
+
+        public bool TrySellPlayerBusiness(int buildingId, bool explicitConfirmation, out string message)
+        {
+            if (!explicitConfirmation)
+            {
+                message = "Business sale not completed: explicit confirmation is required after listing and terms review.";
+                return false;
+            }
+
             if (!TryEstimatePlayerBusinessSaleOffer(buildingId, out int offerCents, out string saleRead))
             {
                 message = saleRead;
@@ -2341,7 +2353,7 @@ namespace LandLedgers.Economy
 
             return deal.stage switch
             {
-                AcquisitionDealStage.Inquiry => NeedsProofOfFunds(deal)
+                AcquisitionDealStage.Inquiry => deal.proofStatus != AcquisitionProofStatus.Verified
                     ? PresentProofOfFunds(listing, deal, out message)
                     : CommitEarnest(listing, deal, out message),
                 AcquisitionDealStage.EarnestCommitted => RunDiligence(listing, deal, out message),
@@ -4126,9 +4138,7 @@ namespace LandLedgers.Economy
         [Obsolete("Use TryAdvanceSelectedAcquisition; retained for UI compatibility.")]
         private bool TryDirectPurchaseSelected(AcquisitionMarketSection section, out string message)
         {
-            return section == AcquisitionMarketSection.Businesses
-                ? TryPurchaseBusiness(out message)
-                : TryPurchaseLand(out message);
+            return TryAdvanceSelectedAcquisition(section, out message);
         }
 
         public bool TryGetSelectedListing(AcquisitionMarketSection section, out AcquisitionListing listing)
@@ -7955,30 +7965,26 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            if (!deal.proofRequired)
+            int askingPriceCents = Mathf.Max(0, listing.askingPriceCents);
+            int availableCashCents = Mathf.Max(0, GetAvailableCashCents());
+            int shortfallCents = Mathf.Max(0, askingPriceCents - availableCashCents);
+            deal.proofPresentedDayIndex = GetCurrentDayIndex();
+            if (shortfallCents == 0 && askingPriceCents > 0)
             {
                 deal.proofStatus = AcquisitionProofStatus.Verified;
+                deal.statusText = $"Proof of funds accepted: {FormatMoney(availableCashCents)} of player-controlled owner cash covers the {FormatMoney(askingPriceCents)} asking price.";
                 RefreshDealWorkflowReadouts(listing, deal);
-                message = "Proof of funds is not required on this file.";
-                return true;
-            }
-
-            AcquisitionProofStatus status = EvaluateProofStatus(listing, deal, out float proofRatio, out float requiredRatio, out bool lenderReady);
-            deal.proofStatus = status;
-            deal.proofPresentedDayIndex = status >= AcquisitionProofStatus.Presented ? GetCurrentDayIndex() : -1;
-            RefreshDealWorkflowReadouts(listing, deal);
-            if (status == AcquisitionProofStatus.Verified)
-            {
-                deal.statusText = $"Proof of funds accepted. Visible coverage {FormatPercent(proofRatio)} against file threshold {FormatPercent(requiredRatio)}.";
                 marketStatus = deal.statusText;
                 lastPurchaseSummary = deal.statusText;
                 message = $"{deal.statusText} Next: commit earnest.";
                 return true;
             }
 
-            deal.statusText = lenderReady
-                ? $"Proof shown but seller still wants a stronger file. Visible coverage {FormatPercent(proofRatio)} against threshold {FormatPercent(requiredRatio)}."
-                : $"Proof blocked. Visible coverage {FormatPercent(proofRatio)} is below the seller threshold {FormatPercent(requiredRatio)}.";
+            deal.proofStatus = AcquisitionProofStatus.Requested;
+            deal.statusText = askingPriceCents <= 0
+                ? "Proof of funds blocked: this listing has no positive asking price."
+                : $"Proof of funds refused: player-controlled owner cash is {FormatMoney(availableCashCents)}; the asking price is {FormatMoney(askingPriceCents)}; shortfall {FormatMoney(shortfallCents)}. Business cash is separate and must be transferred through its own authority before it can fund a purchase.";
+            RefreshDealWorkflowReadouts(listing, deal);
             marketStatus = deal.statusText;
             lastPurchaseSummary = deal.statusText;
             message = deal.statusText;
@@ -7999,6 +8005,21 @@ namespace LandLedgers.Economy
                 marketStatus = deal.statusText;
                 lastPurchaseSummary = deal.statusText;
                 message = deal.statusText;
+                return false;
+            }
+
+            if (listing.kind == AcquisitionListingKind.Business)
+            {
+                // Do not move money using a calculated earnest percentage. The
+                // live business listing has no seller-authored earnest amount or
+                // refund/forfeit conditions, and FinancialObligationAuthority is
+                // a debt ledger rather than an escrow book. Refuse before cash
+                // moves instead of claiming a refundable deposit exists.
+                message = "Earnest blocked: this business listing has no seller-agreed earnest amount or refund/forfeit conditions, and the current financial obligation authority has no escrow record. No money moved. The seller must supply those terms before this acquisition can proceed.";
+                deal.statusText = message;
+                marketStatus = message;
+                lastPurchaseSummary = message;
+                RefreshDealWorkflowReadouts(listing, deal);
                 return false;
             }
 

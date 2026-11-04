@@ -28,7 +28,9 @@
 //     carries exactly the caller-supplied registration values.
 //   - Store feed registrations (D2 Review2StoreFeedItem):
 //     business instance id, feed category id, feed item id,
-//     display name, unit label, store units per feed unit.
+//     display name, unit label, store units per feed unit, and
+//     an optional owner-entered retail price. A zero price remains
+//     unpriced and cannot produce a household offer.
 //     Again caller-supplied values verbatim, never a canon item.
 //
 // WHAT IS NOT PERSISTED, and why that is honest, not a hole:
@@ -105,6 +107,17 @@ namespace LandLedgers.Persistence
         public string DisplayName = string.Empty;
         public string UnitLabel = string.Empty;
         public int StoreUnitsPerFeedUnit;
+        public int FeedUnitsPerStoreUnitNumerator;
+        public int FeedUnitsPerStoreUnitDenominator = 1;
+        public int UnusedFeedUnits;
+        public int RetailPriceCents;
+    }
+
+    [Serializable]
+    public sealed class Review2D3HorseFeedCarryDto
+    {
+        public string HorseId = string.Empty;
+        public int UnusedFeedUnits;
     }
 
     /// <summary>Review 2 vertical D3 save section.</summary>
@@ -113,6 +126,7 @@ namespace LandLedgers.Persistence
     {
         public List<Review2D3RuntimeItemDto> RuntimeItems = new List<Review2D3RuntimeItemDto>();
         public List<Review2D3StoreFeedDto> StoreFeeds = new List<Review2D3StoreFeedDto>();
+        public List<Review2D3HorseFeedCarryDto> HorseFeedCarries = new List<Review2D3HorseFeedCarryDto>();
     }
 
     /// <summary>
@@ -131,11 +145,28 @@ namespace LandLedgers.Persistence
         /// is what the store resolver reads.
         /// </summary>
         public List<Review2D3StoreFeedDto> StoreFeeds = new List<Review2D3StoreFeedDto>();
+        public List<Review2D3HorseFeedCarryDto> HorseFeedCarries = new List<Review2D3HorseFeedCarryDto>();
 
         /// <summary>The live feed registry (D2). Drivers that add a store feed item must add it through this registry (via Review2StoreHorseFeed.AddFeedItem) so Capture sees it.</summary>
         public Review2StoreFeedRegistry FeedRegistry = new Review2StoreFeedRegistry();
 
         public List<string> LastCaptureDiagnostics = new List<string>();
+
+        public int GetHorseFeedCarry(string horseId)
+        {
+            if (string.IsNullOrWhiteSpace(horseId)) return 0;
+            Review2D3HorseFeedCarryDto entry = HorseFeedCarries.Find(x => x != null
+                && string.Equals(x.HorseId, horseId, StringComparison.Ordinal));
+            return entry != null ? Math.Max(0, entry.UnusedFeedUnits) : 0;
+        }
+
+        public void SetHorseFeedCarry(string horseId, int unusedFeedUnits)
+        {
+            if (string.IsNullOrWhiteSpace(horseId)) return;
+            HorseFeedCarries.RemoveAll(x => x == null || string.Equals(x.HorseId, horseId, StringComparison.Ordinal));
+            int amount = Math.Max(0, unusedFeedUnits);
+            if (amount > 0) HorseFeedCarries.Add(new Review2D3HorseFeedCarryDto { HorseId = horseId, UnusedFeedUnits = amount });
+        }
 
         private static Review2D3RuntimeItemDto CopyRuntimeItem(Review2D3RuntimeItemDto source)
         {
@@ -162,6 +193,10 @@ namespace LandLedgers.Persistence
                 DisplayName = source.DisplayName ?? string.Empty,
                 UnitLabel = source.UnitLabel ?? string.Empty,
                 StoreUnitsPerFeedUnit = source.StoreUnitsPerFeedUnit,
+                FeedUnitsPerStoreUnitNumerator = source.FeedUnitsPerStoreUnitNumerator,
+                FeedUnitsPerStoreUnitDenominator = source.FeedUnitsPerStoreUnitDenominator,
+                UnusedFeedUnits = source.UnusedFeedUnits,
+                RetailPriceCents = source.RetailPriceCents,
             };
         }
 
@@ -176,6 +211,10 @@ namespace LandLedgers.Persistence
                 DisplayName = source.DisplayName ?? string.Empty,
                 UnitLabel = source.UnitLabel ?? string.Empty,
                 StoreUnitsPerFeedUnit = source.StoreUnitsPerFeedUnit,
+                FeedUnitsPerStoreUnitNumerator = source.FeedUnitsPerStoreUnitNumerator,
+                FeedUnitsPerStoreUnitDenominator = source.FeedUnitsPerStoreUnitDenominator,
+                UnusedFeedUnits = source.UnusedFeedUnits,
+                RetailPriceCents = source.RetailPriceCents,
             };
         }
 
@@ -243,6 +282,11 @@ namespace LandLedgers.Persistence
             }
             feeds.Sort((a, b) => string.Compare(a.BusinessInstanceId, b.BusinessInstanceId, StringComparison.OrdinalIgnoreCase));
             dto.StoreFeeds = feeds;
+            dto.HorseFeedCarries = new List<Review2D3HorseFeedCarryDto>();
+            foreach (Review2D3HorseFeedCarryDto carry in HorseFeedCarries ?? new List<Review2D3HorseFeedCarryDto>())
+                if (carry != null && !string.IsNullOrWhiteSpace(carry.HorseId) && carry.UnusedFeedUnits > 0)
+                    dto.HorseFeedCarries.Add(new Review2D3HorseFeedCarryDto { HorseId = carry.HorseId, UnusedFeedUnits = carry.UnusedFeedUnits });
+            dto.HorseFeedCarries.Sort((a, b) => string.Compare(a.HorseId, b.HorseId, StringComparison.Ordinal));
             StoreFeeds = new List<Review2D3StoreFeedDto>();
             foreach (Review2D3StoreFeedDto feed in feeds)
                 StoreFeeds.Add(CopyStoreFeed(feed));
@@ -269,6 +313,7 @@ namespace LandLedgers.Persistence
             diag = diag ?? new List<string>();
             RuntimeItems.Clear();
             StoreFeeds.Clear();
+            HorseFeedCarries.Clear();
             if (FeedRegistry == null) FeedRegistry = new Review2StoreFeedRegistry();
             FeedRegistry.Clear();
             if (dto == null)
@@ -303,9 +348,18 @@ namespace LandLedgers.Persistence
                     diag.Add("Review2VerticalD3Save: store feed registration with an empty id skipped on restore.");
                     continue;
                 }
-                if (feed.StoreUnitsPerFeedUnit <= 0)
+                int numerator = feed.FeedUnitsPerStoreUnitNumerator > 0
+                    ? feed.FeedUnitsPerStoreUnitNumerator : 1;
+                int denominator = feed.FeedUnitsPerStoreUnitNumerator > 0
+                    ? feed.FeedUnitsPerStoreUnitDenominator : feed.StoreUnitsPerFeedUnit;
+                if (numerator <= 0 || denominator <= 0)
                 {
-                    diag.Add("Review2VerticalD3Save: store feed item '" + feed.FeedItemId + "' has no positive conversion on restore — skipped, never a silent 1:1.");
+                    diag.Add("Review2VerticalD3Save: store feed item '" + feed.FeedItemId + "' has no positive rational conversion on restore — skipped, never a silent 1:1.");
+                    continue;
+                }
+                if (feed.RetailPriceCents < 0)
+                {
+                    diag.Add("Review2VerticalD3Save: store feed item '" + feed.FeedItemId + "' has a negative owner-entered price on restore — skipped.");
                     continue;
                 }
                 Review2StoreFeedItem existing = FeedRegistry.Find(feed.BusinessInstanceId);
@@ -313,7 +367,9 @@ namespace LandLedgers.Persistence
                 {
                     if (string.Equals(existing.FeedItemId, feed.FeedItemId, StringComparison.OrdinalIgnoreCase)
                         && string.Equals(existing.FeedCategoryId, feed.FeedCategoryId, StringComparison.OrdinalIgnoreCase)
-                        && existing.StoreUnitsPerFeedUnit == feed.StoreUnitsPerFeedUnit)
+                    && Review2StoreHorseFeed.EffectiveNumerator(existing) == numerator
+                    && Review2StoreHorseFeed.EffectiveDenominator(existing) == denominator
+                    && existing.RetailPriceCents == feed.RetailPriceCents)
                     {
                         continue;
                     }
@@ -328,8 +384,21 @@ namespace LandLedgers.Persistence
                     DisplayName = feed.DisplayName ?? string.Empty,
                     UnitLabel = feed.UnitLabel ?? string.Empty,
                     StoreUnitsPerFeedUnit = feed.StoreUnitsPerFeedUnit,
+                    FeedUnitsPerStoreUnitNumerator = numerator,
+                    FeedUnitsPerStoreUnitDenominator = denominator,
+                    UnusedFeedUnits = Math.Max(0, feed.UnusedFeedUnits),
+                    RetailPriceCents = feed.RetailPriceCents,
                 });
                 StoreFeeds.Add(CopyStoreFeed(feed));
+            }
+            foreach (Review2D3HorseFeedCarryDto carry in dto.HorseFeedCarries ?? new List<Review2D3HorseFeedCarryDto>())
+            {
+                if (carry == null || string.IsNullOrWhiteSpace(carry.HorseId) || carry.UnusedFeedUnits <= 0)
+                {
+                    diag.Add("Review2VerticalD3Save: invalid animal feed carry skipped on restore.");
+                    continue;
+                }
+                SetHorseFeedCarry(carry.HorseId.Trim(), carry.UnusedFeedUnits);
             }
             diag.Add("Review2VerticalD3Save: restore complete (" + RuntimeItems.Count + " runtime item(s), " +
                 StoreFeeds.Count + " store feed registration(s), clear-then-load, idempotent).");

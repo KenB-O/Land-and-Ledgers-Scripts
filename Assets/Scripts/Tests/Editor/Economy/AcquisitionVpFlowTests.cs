@@ -18,6 +18,78 @@ namespace LandLedgers.Editor.Economy
     public sealed class AcquisitionVpFlowTests
     {
         [Test]
+        public void AcquisitionProofOfFunds_RefusesCashShortfallAndKeepsListingUnowned()
+        {
+            using TestWorld context = TestWorld.Create(0);
+            Assert.Greater(context.AcquisitionMarket.BusinessListings.Count, 0);
+            AcquisitionListing listing = context.AcquisitionMarket.BusinessListings[0];
+            int buildingId = listing.buildingId;
+
+            Assert.IsTrue(context.AcquisitionMarket.TrySelectListingByBuildingId(buildingId, out AcquisitionMarketSection section, out _));
+            Assert.IsTrue(context.AcquisitionMarket.TryPurchaseSelected(section, out string inquiryMessage), inquiryMessage);
+            Assert.IsFalse(context.AcquisitionMarket.TryPresentProofOfFunds(listing.listingId, out string refusal));
+
+            StringAssert.Contains("Proof of funds refused", refusal);
+            StringAssert.Contains("shortfall", refusal);
+            Assert.IsFalse(context.TownWorld.Buildings[buildingId].playerOwned);
+            Assert.AreEqual(0, context.PlayerPortfolio.OwnerCashCents);
+        }
+
+        [Test]
+        public void BusinessAcquisition_StopsBeforeEarnestWhenSellerTermsAndEscrowAreMissing()
+        {
+            using TestWorld context = TestWorld.Create(10000000);
+            AcquisitionListing listing = context.AcquisitionMarket.BusinessListings[0];
+            int buildingId = listing.buildingId;
+            int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
+
+            Assert.IsTrue(context.AcquisitionMarket.TrySelectListingByBuildingId(
+                buildingId, out AcquisitionMarketSection section, out _));
+            Assert.IsTrue(context.AcquisitionMarket.TryPurchaseSelected(section, out string inquiry), inquiry);
+            Assert.IsTrue(context.AcquisitionMarket.TryPresentProofOfFunds(listing.listingId, out string proof), proof);
+            Assert.IsFalse(context.AcquisitionMarket.TryPurchaseSelected(section, out string refusal));
+
+            StringAssert.Contains("Earnest blocked", refusal);
+            StringAssert.Contains("no escrow record", refusal);
+            Assert.AreEqual(ownerCashBefore, context.PlayerPortfolio.OwnerCashCents);
+            Assert.IsFalse(context.TownWorld.Buildings[buildingId].playerOwned);
+            Assert.AreNotEqual(BusinessOwnerKind.Player,
+                context.SharedBusinessRuntime.FindByBuildingId(buildingId).Owner.OwnerKind);
+        }
+
+        [Test]
+        public void SingleSellInvocation_RefusesWithoutSeparateExplicitConfirmation()
+        {
+            using TestWorld context = TestWorld.Create(10000000);
+            BusinessInstanceState business = context.SharedBusinessRuntime.Businesses[0];
+            int buildingId = business.AssignedBuildingId;
+            int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
+            BusinessOwnerKind ownerBefore = business.Owner.OwnerKind;
+
+            Assert.IsFalse(context.AcquisitionMarket.TrySellPlayerBusiness(buildingId, out string refusal));
+            StringAssert.Contains("separate Confirm Sale", refusal);
+            Assert.AreEqual(ownerCashBefore, context.PlayerPortfolio.OwnerCashCents);
+            Assert.AreEqual(ownerBefore, business.Owner.OwnerKind);
+        }
+
+        [Test]
+        public void LegacyDirectBusinessPurchase_OnlyOpensInquiryAndDoesNotTransferOwnership()
+        {
+            using TestWorld context = TestWorld.Create(10000000);
+            AcquisitionListing listing = context.AcquisitionMarket.BusinessListings[0];
+            BusinessInstanceState business = context.SharedBusinessRuntime.FindByBuildingId(listing.buildingId);
+            int cashBefore = context.PlayerPortfolio.OwnerCashCents;
+
+            Assert.IsTrue(InvokeDirectPurchase(
+                context.AcquisitionMarket, AcquisitionMarketSection.Businesses, out string message), message);
+
+            Assert.IsFalse(context.TownWorld.Buildings[listing.buildingId].playerOwned);
+            Assert.AreNotEqual(BusinessOwnerKind.Player, business.Owner.OwnerKind);
+            Assert.AreEqual(cashBefore, context.PlayerPortfolio.OwnerCashCents);
+            StringAssert.Contains("Inquiry", message);
+        }
+
+        [Test]
         public void LandAcquisitionRequiresInquiryEarnestDiligenceAgreementBeforeClose()
         {
             using TestWorld context = TestWorld.Create(10000000);
@@ -978,26 +1050,6 @@ namespace LandLedgers.Editor.Economy
             AcquisitionMarketManager market = context.AcquisitionMarket;
             string text = market.BuildAcquisitionDecisionClimateSummary();
             StringAssert.Contains("Decision climate", text);
-        }
-
-        [Test]
-        public void SellingPlayerBusinessCreditsOwnerCashAndTransfersOwnershipAway()
-        {
-            using TestWorld context = TestWorld.Create(10000000);
-            Assert.IsTrue(context.AdvanceBusinessListingToClose(out string closeMessage), closeMessage);
-
-            BusinessInstanceState business = context.SharedBusinessRuntime.Businesses
-                .First(candidate => candidate != null
-                    && candidate.BusinessType != BusinessType.GeneralStore
-                    && candidate.Owner != null
-                    && candidate.Owner.OwnerKind == BusinessOwnerKind.Player);
-            int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
-
-            Assert.IsTrue(context.AcquisitionMarket.TrySellPlayerBusiness(business.AssignedBuildingId, out string saleMessage), saleMessage);
-
-            Assert.Greater(context.PlayerPortfolio.OwnerCashCents, ownerCashBefore);
-            Assert.AreNotEqual(BusinessOwnerKind.Player, business.Owner.OwnerKind);
-            StringAssert.Contains("Sold", saleMessage);
         }
 
         [Test]

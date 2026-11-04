@@ -303,6 +303,10 @@ namespace LandLedgers.Persistence
 
         public int BakeryPlannedDayIndex = -1;
         public List<string> BakeryPlannedBatchIds = new List<string>();
+        // Additive live Bakery owner state. Older saves leave this null; the
+        // bootstrap-owned runtime remains empty until the authored Bakery is
+        // configured, while current saves round-trip its actual lots/batches.
+        public LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime.BakeryShopRuntimeSaveDto BakeryRuntime;
 
         public FuelYardByproductIntake.FuelYardByproductIntakeSaveDto FuelIntake;
         public FreightShipmentService.FreightServiceSaveDto Freight;
@@ -340,6 +344,7 @@ namespace LandLedgers.Persistence
         public Pass4AutoSleep AutoSleep;
 
         public Series2BakeryProductionDriver BakeryDriver;
+        public LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime BakeryRuntime;
 
         public FuelYardByproductIntake FuelIntake;
         public FreightProductionDriver FreightDriver;
@@ -528,6 +533,17 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no Pass 6 bakery driver supplied; planned day/batch section saved empty.");
+            }
+
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakeryRuntime =
+                BakeryRuntime ?? BakeryDriver?.Bakery;
+            if (bakeryRuntime != null)
+            {
+                dto.BakeryRuntime = bakeryRuntime.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no live BakeryShopRuntime supplied; bakery stock and production state saved empty.");
             }
 
             if (FuelIntake != null)
@@ -740,6 +756,26 @@ namespace LandLedgers.Persistence
             else if (dto.BakeryPlannedBatchIds != null && dto.BakeryPlannedBatchIds.Count > 0)
             {
                 diag.Add("Series2Pass9Save: bakery plan present in save but no bakery driver supplied; plan NOT restored.");
+            }
+
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakeryRuntime =
+                BakeryRuntime ?? BakeryDriver?.Bakery;
+            if (bakeryRuntime != null && dto.BakeryRuntime != null)
+            {
+                if (!string.Equals(bakeryRuntime.BusinessInstanceId,
+                        dto.BakeryRuntime.BusinessInstanceId ?? string.Empty,
+                        StringComparison.Ordinal))
+                {
+                    diag.Add($"Series2Pass9Save: Bakery runtime identity mismatch; live '{bakeryRuntime.BusinessInstanceId}' was not overwritten by saved '{dto.BakeryRuntime.BusinessInstanceId}'.");
+                }
+                else
+                {
+                    bakeryRuntime.LoadFromSaveDto(dto.BakeryRuntime);
+                }
+            }
+            else if (dto.BakeryRuntime != null)
+            {
+                diag.Add("Series2Pass9Save: Bakery runtime data present in save but no live runtime owner was supplied; bakery state NOT restored.");
             }
 
             // Pass 8 fuel intake lots (DTO already existed).

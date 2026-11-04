@@ -1,0 +1,211 @@
+using LandLedgers.Economy.Freight;
+using NUnit.Framework;
+
+namespace LandLedgers.EditorTests.Economy
+{
+    public sealed class FreightServiceAgreementTests
+    {
+        [Test]
+        public void QuoteCalculator_ChargesAuthoredRoundTripAndOptionalBaseFeeInWholeCents()
+        {
+            Assert.IsTrue(FreightServiceQuoteCalculator.TryCalculate(50f, 25, 1, true,
+                out FreightServiceQuote quote, out string reason), reason);
+            Assert.AreEqual(50f, quote.OneWayDistanceMiles);
+            Assert.AreEqual(100, quote.ChargeableMiles);
+            Assert.AreEqual(100, quote.MileageChargeCents);
+            Assert.AreEqual(125, quote.TotalPriceCents);
+            Assert.AreEqual("Expected round trip, loaded outward and empty return", quote.DistanceBasis);
+
+            Assert.IsTrue(FreightServiceQuoteCalculator.TryCalculate(50f, 0, 1, false,
+                out FreightServiceQuote noDispatchFee, out reason), reason);
+            Assert.AreEqual(50, noDispatchFee.ChargeableMiles);
+            Assert.AreEqual(50, noDispatchFee.TotalPriceCents);
+        }
+
+        [Test]
+        public void QuoteCalculator_UsesExplicitWholeMileCeilingAndRejectsInvalidInputs()
+        {
+            Assert.IsTrue(FreightServiceQuoteCalculator.TryCalculate(1.01f, 0, 1, true,
+                out FreightServiceQuote quote, out string reason), reason);
+            Assert.AreEqual(3, quote.ChargeableMiles);
+            Assert.AreEqual(3, quote.TotalPriceCents);
+            Assert.IsFalse(FreightServiceQuoteCalculator.TryCalculate(0f, 25, 1, true, out _, out _));
+            Assert.IsFalse(FreightServiceQuoteCalculator.TryCalculate(5f, -1, 1, true, out _, out _));
+        }
+
+        [Test]
+        public void AgreementBook_RefusesDuplicateRequestAndAcceptanceAndPreservesQuotedTerms()
+        {
+            var book = new FreightServiceAgreementBook();
+            var request = new FreightServiceRequest
+            {
+                RequestId = "request-1", RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = "lot-1", Quantity = 1,
+                RequestingPersonId = 4, CarrierOperatorPersonId = 7,
+                PickupLocationId = "millbrook-pickup", DestinationLocationId = "bakery-door"
+            };
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.That(book.CreateRequest(new FreightServiceRequest
+            {
+                RequestId = "request-1", RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = "lot-2", Quantity = 1
+            }, out _), Does.Contain("already exists"));
+
+            FreightServiceQuote quote = new FreightServiceQuote
+            {
+                QuoteId = "quote-1", OneWayDistanceMiles = 50, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = 125, PayerBusinessId = "bakery-1"
+            };
+            Assert.IsNull(book.SetQuote(request.RequestId, quote));
+            Assert.IsNull(book.Accept(request.RequestId, 7, 2, 3600f, out FreightServiceAgreement agreement));
+            Assert.AreEqual("freight-agreement:request-1", agreement.AgreementId);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+            Assert.AreEqual("quote-1", agreement.QuoteId);
+            quote.TotalPriceCents = 999;
+            Assert.AreEqual(125, agreement.AgreedPriceCents, "Acceptance keeps a snapshot of the quoted price.");
+            Assert.That(book.Accept(request.RequestId, 7, 2, 3600f, out _), Does.Contain("No presented"));
+            Assert.That(book.CreateRequest(new FreightServiceRequest
+            {
+                RequestId = "request-2", RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = "lot-1", Quantity = 1
+            }, out _), Does.Contain("already has request"));
+        }
+
+        [Test]
+        public void AgreementBook_RefusesShipmentRelinkingAndCapturesPendingPaymentTerms()
+        {
+            var book = new FreightServiceAgreementBook();
+            var request = new FreightServiceRequest
+            {
+                RequestId = "request-1", RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = "lot-1", Quantity = 1,
+                CarrierOperatorPersonId = 7
+            };
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.IsNull(book.SetQuote("request-1", new FreightServiceQuote
+            {
+                QuoteId = "quote-1", OneWayDistanceMiles = 50, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = 125, PayerBusinessId = "bakery-1",
+                PaymentTiming = "After successful delivery"
+            }));
+            Assert.IsNull(book.Accept("request-1", 7, 1, 1, out FreightServiceAgreement agreement));
+            Assert.IsNull(book.LinkShipment(agreement.AgreementId, "shipment-1"));
+            Assert.That(book.LinkShipment(agreement.AgreementId, "shipment-2"), Does.Contain("different shipment"));
+            Assert.AreEqual("shipment-1", request.ShipmentId);
+            Assert.AreEqual("After successful delivery", agreement.PaymentTiming);
+            Assert.AreEqual("Pending pickup", agreement.FulfilmentStatus);
+
+            FreightServiceAgreementBook restored = new FreightServiceAgreementBook();
+            restored.RestoreSaveDto(book.CaptureSaveDto());
+            FreightServiceAgreement restoredAgreement = restored.FindAgreement(agreement.AgreementId);
+            Assert.IsNotNull(restoredAgreement);
+            Assert.AreEqual(125, restoredAgreement.AgreedPriceCents);
+            Assert.AreEqual("shipment-1", restoredAgreement.ShipmentId);
+            Assert.AreEqual("shipment-1", restored.FindRequest("request-1").ShipmentId);
+        }
+
+        [Test]
+        public void AgreementBook_RetainsAcceptedTermsAcrossRegistrationRefusalAndRetriesOnce()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+            const string refusal = "FreightShipmentService: wagon is temporarily reserved.";
+            string first = book.TryRegisterShipment(agreement.AgreementId,
+                (FreightServiceAgreement accepted, out string shipmentId, out string reason) =>
+                {
+                    shipmentId = string.Empty;
+                    reason = refusal;
+                    return false;
+                }, out bool alreadyRegistered);
+            Assert.IsFalse(alreadyRegistered);
+            Assert.AreEqual(refusal, first);
+            Assert.IsTrue(agreement.ShipmentRegistrationPending);
+            Assert.AreEqual(refusal, agreement.ShipmentRegistrationFailureReason);
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+
+            int createCalls = 0;
+            string retry = book.TryRegisterShipment(agreement.AgreementId,
+                (FreightServiceAgreement accepted, out string shipmentId, out string reason) =>
+                {
+                    createCalls++;
+                    shipmentId = "freight-shipment:request-1";
+                    reason = string.Empty;
+                    return true;
+                }, out alreadyRegistered);
+            Assert.IsNull(retry);
+            Assert.IsFalse(alreadyRegistered);
+            Assert.AreEqual(1, createCalls);
+            Assert.AreEqual("freight-shipment:request-1", agreement.ShipmentId);
+            Assert.IsFalse(agreement.ShipmentRegistrationPending);
+            Assert.AreEqual(string.Empty, agreement.ShipmentRegistrationFailureReason);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+
+            Assert.IsNull(book.TryRegisterShipment(agreement.AgreementId,
+                (FreightServiceAgreement accepted, out string shipmentId, out string reason) =>
+                {
+                    createCalls++;
+                    shipmentId = "duplicate";
+                    reason = string.Empty;
+                    return true;
+                }, out alreadyRegistered));
+            Assert.IsTrue(alreadyRegistered);
+            Assert.AreEqual(1, createCalls, "A linked agreement must never invoke shipment creation again.");
+            Assert.AreEqual("freight-shipment:request-1", agreement.ShipmentId);
+        }
+
+        [Test]
+        public void AgreementBook_PreparationRequiresItsLinkedShipment()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.That(book.MarkPreparedForDispatch(agreement.AgreementId, "unlinked"), Does.Contain("registered shipment"));
+            Assert.IsNull(book.LinkShipment(agreement.AgreementId, "freight-shipment:request-1"));
+            Assert.That(book.MarkPreparedForDispatch(agreement.AgreementId, agreement.ShipmentId, 3599f), Does.Contain("precedes agreement acceptance"));
+            Assert.IsNull(book.MarkPreparedForDispatch(agreement.AgreementId, agreement.ShipmentId, 3600f));
+            Assert.AreEqual("Prepared for dispatch", agreement.FulfilmentStatus);
+            Assert.AreEqual(3600f, agreement.PreparedGameSeconds);
+
+            Assert.IsNull(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T20"));
+            Assert.AreEqual("T20", agreement.DispatchTaskId);
+            Assert.AreEqual("Dispatch assigned", agreement.FulfilmentStatus);
+            Assert.IsNull(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T20"),
+                "Repeated registration of the same dispatch task is idempotent.");
+            Assert.That(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T21"),
+                Does.Contain("different dispatch task"));
+
+            FreightServiceAgreementBook restored = new FreightServiceAgreementBook();
+            restored.RestoreSaveDto(book.CaptureSaveDto());
+            FreightServiceAgreement restoredAgreement = restored.FindAgreement(agreement.AgreementId);
+            Assert.AreEqual(3600f, restoredAgreement.PreparedGameSeconds);
+            Assert.AreEqual("T20", restoredAgreement.DispatchTaskId);
+            Assert.AreEqual("Dispatch assigned", restoredAgreement.FulfilmentStatus);
+        }
+
+        private static FreightServiceAgreementBook CreateAcceptedBook(out FreightServiceAgreement agreement)
+        {
+            FreightServiceAgreementBook book = new FreightServiceAgreementBook();
+            var request = new FreightServiceRequest
+            {
+                RequestId = "request-1", RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = "lot-1", Quantity = 1,
+                RequestingPersonId = 4, CarrierOperatorPersonId = 7
+            };
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.IsNull(book.SetQuote(request.RequestId, new FreightServiceQuote
+            {
+                QuoteId = "quote-1", OneWayDistanceMiles = 50, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = 125, PayerBusinessId = "bakery-1"
+            }));
+            Assert.IsNull(book.Accept(request.RequestId, 7, 1, 3600f, out agreement));
+            return book;
+        }
+    }
+}

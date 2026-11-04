@@ -1,0 +1,255 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace LandLedgers.Population
+{
+    /// <summary>One complete, reusable, development-only town startup dataset.</summary>
+    [CreateAssetMenu(fileName = "DevelopmentTownConfiguration", menuName = "Land & Ledgers/Development/Town Configuration", order = 980)]
+    public sealed class DevelopmentTownConfiguration : ScriptableObject
+    {
+        [Serializable]
+        public sealed class PersonDefinition
+        {
+            public string key = string.Empty;
+            public string firstName = string.Empty;
+            public string lastName = string.Empty;
+            [Min(18)] public int age = 30;
+            public bool ageIsProvisionalCalibration;
+            public bool isFemale;
+            public string occupation = "Unemployed";
+            [Tooltip("Ordinal of a real residential building sorted by TownWorld building ID.")]
+            public int homeBuildingOrdinal;
+        }
+
+        [Serializable]
+        public sealed class HouseholdDefinition
+        {
+            public string key = string.Empty;
+            public string displayName = string.Empty;
+            public string surname = string.Empty;
+            public string[] memberPersonKeys = Array.Empty<string>();
+            [Tooltip("Ordinal of a real residential building sorted by TownWorld building ID.")]
+            public int homeBuildingOrdinal;
+            [Min(0)] public int openingCashCents;
+        }
+
+        public enum RelationshipKind { Spouse, Sibling }
+
+        [Serializable]
+        public sealed class RelationshipDefinition
+        {
+            public string firstPersonKey = string.Empty;
+            public string secondPersonKey = string.Empty;
+            public RelationshipKind relationship;
+        }
+
+        [Serializable]
+        public sealed class BusinessDefinition
+        {
+            public string key = string.Empty;
+            [Tooltip("Existing runtime operation ID, such as general-store, bakery, fuel-dealer, or livery-freight. More than one business may use an operation.")]
+            public string operationId = string.Empty;
+            public string ownerPersonKey = string.Empty;
+            public string businessId = string.Empty;
+            public string premisesId = string.Empty;
+            public bool premisesRequired = true;
+            [Min(0)] public int openingCashCents;
+            [Tooltip("Optional freight quote calibration for this business. Values are development data, not canonical prices.")]
+            public FreightServiceRateCard freightRateCard;
+        }
+
+        [Serializable]
+        public sealed class FreightServiceRateCard
+        {
+            [Min(0)] public int baseServiceFeeCents;
+            [Min(0)] public int ratePerMileCents;
+            [Tooltip("One-time development tariff: charge the expected round trip from pickup to delivery and back.")]
+            public bool chargeRoundTrip = true;
+        }
+
+        [Serializable]
+        public sealed class BusinessCashTarget
+        {
+            public string businessKey = string.Empty;
+            [Min(0)] public int targetCashCents;
+        }
+
+        [Serializable]
+        public sealed class HouseholdCashTarget
+        {
+            [Tooltip("Person key whose legitimate shared household ledger receives the allocation.")]
+            public string anchorPersonKey = string.Empty;
+            [Min(0)] public int targetCashCents;
+        }
+
+        [Serializable]
+        public sealed class OpeningInventoryItem
+        {
+            public string itemId = string.Empty;
+            [Min(0)] public int minimumUnits;
+            [Min(0)] public int maximumUnits;
+        }
+
+        [Serializable]
+        public sealed class BusinessOpeningInventory
+        {
+            public string businessKey = string.Empty;
+            public OpeningInventoryItem[] items = Array.Empty<OpeningInventoryItem>();
+        }
+
+        [SerializeField] private string configurationId = "millbrook-development-town";
+        [SerializeField, Min(0), Tooltip("Deterministic development fixture calibration; not canonical world-generation policy.")]
+        private int seedOffset = 9217;
+        [SerializeField] private PersonDefinition[] people = Array.Empty<PersonDefinition>();
+        [SerializeField] private HouseholdDefinition[] households = Array.Empty<HouseholdDefinition>();
+        [SerializeField] private RelationshipDefinition[] relationships = Array.Empty<RelationshipDefinition>();
+        [SerializeField] private BusinessDefinition[] businesses = Array.Empty<BusinessDefinition>();
+        [SerializeField] private BusinessCashTarget[] businessCashTargets = Array.Empty<BusinessCashTarget>();
+        [SerializeField] private HouseholdCashTarget[] householdCashTargets = Array.Empty<HouseholdCashTarget>();
+        [SerializeField] private BusinessOpeningInventory[] openingInventory = Array.Empty<BusinessOpeningInventory>();
+        [SerializeField] private string freightBusinessKey = "freight-company";
+        [SerializeField] private string openingHorseId = "A0";
+        [SerializeField] private string openingWagonId = "opening-freight-wagon";
+
+        public string ConfigurationId => configurationId ?? string.Empty;
+        public int SeedOffset => seedOffset;
+        public IReadOnlyList<PersonDefinition> People => people ?? Array.Empty<PersonDefinition>();
+        public IReadOnlyList<HouseholdDefinition> Households => households ?? Array.Empty<HouseholdDefinition>();
+        public IReadOnlyList<RelationshipDefinition> Relationships => relationships ?? Array.Empty<RelationshipDefinition>();
+        public IReadOnlyList<BusinessDefinition> Businesses => businesses ?? Array.Empty<BusinessDefinition>();
+        public IReadOnlyList<BusinessCashTarget> BusinessCashTargets => businessCashTargets ?? Array.Empty<BusinessCashTarget>();
+        public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => householdCashTargets ?? Array.Empty<HouseholdCashTarget>();
+        public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => openingInventory ?? Array.Empty<BusinessOpeningInventory>();
+        public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
+        public string OpeningHorseId => openingHorseId ?? string.Empty;
+        public string OpeningWagonId => openingWagonId ?? string.Empty;
+
+        public bool TryGetPerson(string personKey, out PersonDefinition result)
+        {
+            result = null;
+            if (string.IsNullOrWhiteSpace(personKey)) return false;
+            foreach (PersonDefinition person in People)
+                if (person != null && string.Equals(person.key, personKey.Trim(), StringComparison.OrdinalIgnoreCase))
+                { result = person; return true; }
+            return false;
+        }
+
+        public bool TryGetPersonIndex(string personKey, out int index)
+        {
+            index = -1;
+            if (string.IsNullOrWhiteSpace(personKey)) return false;
+            for (int i = 0; i < People.Count; i++)
+                if (People[i] != null && string.Equals(People[i].key, personKey.Trim(), StringComparison.OrdinalIgnoreCase))
+                { index = i; return true; }
+            return false;
+        }
+
+        public int ResolveRuntimePersonId(string personKey)
+        {
+            if (string.IsNullOrWhiteSpace(personKey)) return -1;
+            int id = 1;
+            foreach (HouseholdDefinition household in Households)
+                foreach (string memberKey in household.memberPersonKeys ?? Array.Empty<string>())
+                {
+                    if (string.Equals(memberKey, personKey, StringComparison.OrdinalIgnoreCase)) return id;
+                    id++;
+                }
+            return -1;
+        }
+
+        public bool TryGetBusiness(string businessKey, out BusinessDefinition result)
+        {
+            result = null;
+            if (string.IsNullOrWhiteSpace(businessKey)) return false;
+            foreach (BusinessDefinition candidate in Businesses)
+                if (candidate != null && string.Equals(candidate.key, businessKey.Trim(), StringComparison.OrdinalIgnoreCase))
+                { result = candidate; return true; }
+            return false;
+        }
+
+        public bool TryResolveOpeningInventory(string businessKey, string itemId, int scenarioSeed, out int quantity)
+        {
+            quantity = 0;
+            if (string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(businessKey)) return false;
+            foreach (BusinessOpeningInventory entry in OpeningInventory)
+            {
+                if (entry == null || !string.Equals(entry.businessKey, businessKey, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (OpeningInventoryItem item in entry.items ?? Array.Empty<OpeningInventoryItem>())
+                {
+                    if (item == null || !string.Equals(item.itemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
+                    int min = Mathf.Max(0, item.minimumUnits);
+                    int max = Mathf.Max(min, item.maximumUnits);
+                    uint hash = 2166136261u ^ unchecked((uint)scenarioSeed);
+                    string key = ConfigurationId + ":" + businessKey.Trim().ToLowerInvariant() + ":" + itemId.Trim().ToLowerInvariant();
+                    for (int i = 0; i < key.Length; i++) { hash ^= key[i]; hash *= 16777619u; }
+                    hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15;
+                    quantity = min + (int)(hash % (uint)(max - min + 1));
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public bool Validate(out string error)
+        {
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(ConfigurationId)) { error = "Development town configuration needs a stable ID."; return false; }
+            if (People.Count == 0 || Households.Count == 0 || Businesses.Count == 0) { error = "Development town must define people, households, and businesses directly."; return false; }
+            var personKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (PersonDefinition person in People)
+                if (person == null || string.IsNullOrWhiteSpace(person.key) || string.IsNullOrWhiteSpace(person.firstName)
+                    || string.IsNullOrWhiteSpace(person.lastName) || person.age < 18 || person.homeBuildingOrdinal < 0
+                    || !personKeys.Add(person.key)) { error = "Development people need unique keys, names, adult ages, and valid home ordinals."; return false; }
+            var assigned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var householdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var homeOrdinals = new HashSet<int>();
+            foreach (HouseholdDefinition household in Households)
+            {
+                if (household == null || string.IsNullOrWhiteSpace(household.key) || string.IsNullOrWhiteSpace(household.surname)
+                    || household.homeBuildingOrdinal < 0 || household.openingCashCents < 0 || !householdKeys.Add(household.key)
+                    || !homeOrdinals.Add(household.homeBuildingOrdinal) || household.memberPersonKeys == null || household.memberPersonKeys.Length == 0)
+                { error = "Development households need unique keys, distinct home ordinals, non-negative opening cash, and members."; return false; }
+                foreach (string memberKey in household.memberPersonKeys)
+                    if (!personKeys.Contains(memberKey) || !assigned.Add(memberKey)) { error = "Each development resident must reference exactly one configured household."; return false; }
+            }
+            if (assigned.Count != personKeys.Count) { error = "Every configured resident must belong to a household."; return false; }
+            foreach (RelationshipDefinition relation in Relationships)
+                if (relation == null || !personKeys.Contains(relation.firstPersonKey) || !personKeys.Contains(relation.secondPersonKey)
+                    || string.Equals(relation.firstPersonKey, relation.secondPersonKey, StringComparison.OrdinalIgnoreCase))
+                { error = "Development relationships must reference two distinct configured residents."; return false; }
+            var businessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BusinessDefinition business in Businesses)
+            {
+                if (business == null || string.IsNullOrWhiteSpace(business.key) || string.IsNullOrWhiteSpace(business.operationId)
+                    || !personKeys.Contains(business.ownerPersonKey) || business.openingCashCents < 0 || !businessKeys.Add(business.key))
+                { error = "Development businesses need unique keys, an operation ID, a configured owner, and non-negative opening cash."; return false; }
+                if (business.freightRateCard != null
+                    && (business.freightRateCard.baseServiceFeeCents < 0 || business.freightRateCard.ratePerMileCents < 0))
+                { error = $"Development business '{business.key}' has a freight rate card with a negative fee."; return false; }
+            }
+            if (!TryGetBusiness(FreightBusinessKey, out _) || string.IsNullOrWhiteSpace(OpeningHorseId) || string.IsNullOrWhiteSpace(OpeningWagonId))
+            { error = "Development transport startup must identify its configured freight business, horse, and wagon."; return false; }
+            var cashBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BusinessCashTarget target in BusinessCashTargets)
+                if (target == null || !TryGetBusiness(target.businessKey, out _) || target.targetCashCents < 0 || !cashBusinessKeys.Add(target.businessKey))
+                { error = "Business cash targets must reference unique configured businesses and non-negative balances."; return false; }
+            var cashHouseholdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (HouseholdCashTarget target in HouseholdCashTargets)
+                if (target == null || !TryGetPerson(target.anchorPersonKey, out _) || target.targetCashCents < 0 || !cashHouseholdKeys.Add(target.anchorPersonKey))
+                { error = "Household cash targets must reference unique configured residents and non-negative balances."; return false; }
+            var inventoryBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BusinessOpeningInventory entry in OpeningInventory)
+            {
+                if (entry == null || !TryGetBusiness(entry.businessKey, out _) || !inventoryBusinessKeys.Add(entry.businessKey))
+                { error = "Opening inventory entries must reference unique configured businesses."; return false; }
+                var items = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (OpeningInventoryItem item in entry.items ?? Array.Empty<OpeningInventoryItem>())
+                    if (item == null || string.IsNullOrWhiteSpace(item.itemId) || item.minimumUnits < 0 || item.maximumUnits < item.minimumUnits || !items.Add(item.itemId))
+                    { error = $"Opening inventory for '{entry.businessKey}' contains an invalid or duplicate item range."; return false; }
+            }
+            return true;
+        }
+
+    }
+}

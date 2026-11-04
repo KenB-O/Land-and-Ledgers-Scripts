@@ -1,4 +1,5 @@
 using TMPro;
+using LandLedgers.FirstLedger;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -144,6 +145,8 @@ namespace LandLedgers.UI
         [SerializeField] private Button previousListingButton;
         [SerializeField] private Button nextListingButton;
         [SerializeField] private Button buyListingButton;
+        [SerializeField] private Button acquireOpeningTransportButton;
+        [SerializeField] private Button acquireOpeningWagonButton;
 
         [Header("Government")]
         [SerializeField] private RectTransform governmentSummarySectionRoot;
@@ -151,6 +154,7 @@ namespace LandLedgers.UI
         [SerializeField] private RectTransform governmentOwnerImplicationsSectionRoot;
         [SerializeField] private TMP_Text governmentTitleText;
         [SerializeField] private TMP_Text governmentSummaryText;
+        [SerializeField] private TMP_Text governmentBusinessRosterText;
         [SerializeField] private TMP_Text governmentEffectsText;
         [SerializeField] private TMP_Text governmentOwnerImplicationsText;
         [SerializeField] private Button governmentFocusButton;
@@ -280,11 +284,14 @@ namespace LandLedgers.UI
         public Button PreviousListingButton => previousListingButton;
         public Button NextListingButton => nextListingButton;
         public Button BuyListingButton => buyListingButton;
+        public Button AcquireOpeningTransportButton => acquireOpeningTransportButton;
+        public Button AcquireOpeningWagonButton => acquireOpeningWagonButton;
         public RectTransform GovernmentSummarySectionRoot => governmentSummarySectionRoot;
         public RectTransform GovernmentEffectsSectionRoot => governmentEffectsSectionRoot;
         public RectTransform GovernmentOwnerImplicationsSectionRoot => governmentOwnerImplicationsSectionRoot;
         public TMP_Text GovernmentTitleText => governmentTitleText;
         public TMP_Text GovernmentSummaryText => governmentSummaryText;
+        public TMP_Text GovernmentBusinessRosterText => governmentBusinessRosterText;
         public TMP_Text GovernmentEffectsText => governmentEffectsText;
         public TMP_Text GovernmentOwnerImplicationsText => governmentOwnerImplicationsText;
         public Button GovernmentFocusButton => governmentFocusButton;
@@ -330,6 +337,7 @@ namespace LandLedgers.UI
             openExistingBusinessFormationButton = openExistingBusinessFormationButton != null ? openExistingBusinessFormationButton : FindButton(root, "NewBusiness_OpenFormationButton");
             newBusinessSummaryText = newBusinessSummaryText != null ? newBusinessSummaryText : FindText(root, "NewBusiness_SummaryText");
             dialogueStatusText = dialogueStatusText != null ? dialogueStatusText : FindText(root, "Dialogue_StatusText");
+            InitializeStandalonePageSummaries();
             propertyListTitleText = propertyListTitleText != null ? propertyListTitleText : FindText(root, "PropertyList_Title");
             propertyListContent = propertyListContent != null ? propertyListContent : FindRect(root, "PropertyList_Content");
             propertyRowTemplate = propertyRowTemplate != null ? propertyRowTemplate : FindButton(root, "PropertyRow_Template");
@@ -384,6 +392,8 @@ namespace LandLedgers.UI
             acquisitionHistoryText = acquisitionHistoryText != null ? acquisitionHistoryText : FindText(root, "AcquisitionHistory_BodyText");
             acquisitionWorkflowButton = acquisitionWorkflowButton != null ? acquisitionWorkflowButton : FindButton(root, "AcquisitionWorkflowButton");
             acquisitionFocusButton = acquisitionFocusButton != null ? acquisitionFocusButton : FindButton(root, "AcquisitionFocusButton");
+            acquireOpeningTransportButton = acquireOpeningTransportButton != null ? acquireOpeningTransportButton : FindButton(root, "Acquisition_AcquireOpeningTransportButton");
+            acquireOpeningWagonButton = acquireOpeningWagonButton != null ? acquireOpeningWagonButton : FindButton(root, "Acquisition_AcquireOpeningWagonButton");
             previousListingButton = previousListingButton != null ? previousListingButton : FindButton(root, "PreviousListingButton");
             nextListingButton = nextListingButton != null ? nextListingButton : FindButton(root, "NextListingButton");
             buyListingButton = buyListingButton != null ? buyListingButton : FindButton(root, "BuyListingButton");
@@ -399,6 +409,7 @@ namespace LandLedgers.UI
             governmentTitleText = governmentTitleText != null ? governmentTitleText : FindText(root, "Government_TitleText");
             governmentSummaryText = governmentSummaryText != null ? governmentSummaryText : FindText(root, "Government_SummaryText");
             governmentSummaryText = governmentSummaryText != null ? governmentSummaryText : FindText(root, "GovernmentSummary_BodyText");
+            governmentBusinessRosterText = governmentBusinessRosterText != null ? governmentBusinessRosterText : FindText(root, "TownBusinessRoster_BodyText");
             governmentEffectsText = governmentEffectsText != null ? governmentEffectsText : FindText(root, "Government_EffectsText");
             governmentEffectsText = governmentEffectsText != null ? governmentEffectsText : FindText(root, "GovernmentEffects_BodyText");
             governmentOwnerImplicationsText = governmentOwnerImplicationsText != null ? governmentOwnerImplicationsText : FindText(root, "GovernmentOwnerImplicationsText");
@@ -406,6 +417,7 @@ namespace LandLedgers.UI
             governmentFocusButton = governmentFocusButton != null ? governmentFocusButton : FindButton(root, "GovernmentFocusButton");
             EnsureGovernmentDashboardControls(canRepairAuthoredReferences);
             ConfigureDashboardCard(governmentSummaryText, 104f);
+            ConfigureDashboardCard(governmentBusinessRosterText, 150f);
             ConfigureDashboardCard(governmentEffectsText, 154f);
             ConfigureDashboardCard(governmentOwnerImplicationsText, 118f);
             resourcesSummaryText = resourcesSummaryText != null ? resourcesSummaryText : FindText(root, "ResourcesSummaryText");
@@ -539,6 +551,7 @@ namespace LandLedgers.UI
                 && buyListingButton != null
                 && governmentTitleText != null
                 && governmentSummaryText != null
+                && governmentBusinessRosterText != null
                 && governmentEffectsText != null
                 && governmentOwnerImplicationsText != null
                 && resourcesSummaryText != null
@@ -598,6 +611,8 @@ namespace LandLedgers.UI
             UITooltipRegistry.Attach(acquisitionBusinessesButton, "Business Listings", "Show operating businesses available for acquisition.");
             UITooltipRegistry.Attach(acquisitionWorkflowButton, "Open Formal Acquisition", "Open the selected lead in the full acquisition workflow.");
             UITooltipRegistry.Attach(acquisitionFocusButton, "Inspect Site", "Move the camera to the selected lead when it has a town location.");
+            UITooltipRegistry.Attach(acquireOpeningTransportButton, "Acquire Opening Horse", "Purchase the available opening horse separately through Business cash, ownership transfer, and horse housing.");
+            UITooltipRegistry.Attach(acquireOpeningWagonButton, "Acquire Opening Wagon", "Purchase the available opening wagon separately through Business cash and ownership transfer.");
             UITooltipRegistry.Attach(previousListingButton, "Previous Lead", "Select the previous lead in the active acquisition section.");
             UITooltipRegistry.Attach(nextListingButton, "Next Lead", "Select the next lead in the active acquisition section.");
             UITooltipRegistry.Attach(buyListingButton, "Advance Process", "Advance the selected lead through inquiry, earnest, diligence, terms, and closing.");
@@ -668,7 +683,6 @@ namespace LandLedgers.UI
             SetTabButtonLabel(newBusinessTabButton, "New Business");
             SetTabButtonLabel(dialogueTabButton, "Dialogue");
 
-            bool businesses = tab == ManagementPanelTab.Properties || tab == ManagementPanelTab.Finances;
             bool town = tab == ManagementPanelTab.Government || tab == ManagementPanelTab.Resources;
             SetButtonSelected(propertiesTabButton, tab == ManagementPanelTab.Properties);
             SetButtonSelected(financesTabButton, tab == ManagementPanelTab.Finances);
@@ -677,10 +691,6 @@ namespace LandLedgers.UI
             SetButtonSelected(resourcesTabButton, false);
             SetButtonSelected(newBusinessTabButton, tab == ManagementPanelTab.NewBusiness);
             SetButtonSelected(dialogueTabButton, tab == ManagementPanelTab.Dialogue);
-            if (businesses && propertiesTabButton != null)
-            {
-                SetButtonSelected(propertiesTabButton, true);
-            }
         }
 
         private void BindPrimaryTabListeners()
@@ -703,12 +713,42 @@ namespace LandLedgers.UI
 
         private void OpenNewBusinessTab()
         {
+            Debug.Log("[ManagementUI] New Business tab click received; opening formation workflow.", this);
             ShowTab(ManagementPanelTab.NewBusiness);
+            OpenBusinessFormationFlow();
         }
 
         private void OpenDialogueTab()
         {
             ShowTab(ManagementPanelTab.Dialogue);
+        }
+
+        private void InitializeStandalonePageSummaries()
+        {
+            if (newBusinessSummaryText != null)
+            {
+                newBusinessSummaryText.text =
+                    "Start a Business identity here. Establishment does not grant premises, equipment, workers, inventory, or cash. Use the existing creation workflow to name and establish the entity, then acquire the resources its actual work requires.";
+                newBusinessSummaryText.gameObject.SetActive(true);
+            }
+
+            if (dialogueStatusText != null)
+            {
+                dialogueStatusText.text =
+                    "Supported interactions: open a seller meeting for a selected Acquisitions listing, or review and hire a candidate from a Business Staffing panel. Direct resident conversations, supplier introductions, and relocation requests are not connected to this screen yet.";
+                dialogueStatusText.gameObject.SetActive(true);
+            }
+
+            if (openExistingBusinessFormationButton != null)
+            {
+                openExistingBusinessFormationButton.gameObject.SetActive(true);
+                openExistingBusinessFormationButton.interactable = true;
+                TMP_Text label = openExistingBusinessFormationButton.GetComponentInChildren<TMP_Text>(true);
+                if (label != null)
+                {
+                    label.text = "Start New Business";
+                }
+            }
         }
 
         private void ClearStandaloneTabSelection()
@@ -736,15 +776,27 @@ namespace LandLedgers.UI
 
         private void OpenExistingBusinessFormation()
         {
-            Button existingWorkflowButton = FindButton(transform, "Management_CreateBusinessButton");
-            if (existingWorkflowButton == null || !existingWorkflowButton.interactable)
+            OpenBusinessFormationFlow();
+        }
+
+        private void OpenBusinessFormationFlow()
+        {
+            string message = "Business formation is not initialized in this session.";
+            BusinessCreationPanelController formation = FindAnyObjectByType<BusinessCreationPanelController>();
+            Debug.Log($"[ManagementUI] Formation lookup: found={(formation != null)}, " +
+                $"configured={(formation != null && formation.IsConfigured)}, " +
+                $"active={(formation != null && formation.gameObject.activeInHierarchy)}.", this);
+            if (formation == null || !formation.TryOpenFormFromManagementTab(out message))
             {
-                SetStatusText("Business formation is not initialized in this session.");
+                Debug.LogWarning($"[ManagementUI] Formation did not open: {message}", this);
+                SetStatusText(string.IsNullOrWhiteSpace(message)
+                    ? "Business formation is not initialized in this session."
+                    : message);
                 return;
             }
 
-            existingWorkflowButton.gameObject.SetActive(true);
-            existingWorkflowButton.onClick.Invoke();
+            Debug.Log($"[ManagementUI] Formation result: open={formation.IsOpen}; {message}", this);
+            SetStatusText(message);
         }
 
         public void SetAcquisitionSectionActive(bool landActive)
@@ -1023,6 +1075,18 @@ namespace LandLedgers.UI
             ConfigureActionButton(acquisitionFocusButton, "Inspect Site", 126f);
             ConfigureActionButton(previousListingButton, "Previous Lead", 132f);
             ConfigureActionButton(nextListingButton, "Next Lead", 116f);
+            if (acquireOpeningTransportButton == null && canCreate)
+            {
+                acquireOpeningTransportButton = Instantiate(buyListingButton, parent);
+                acquireOpeningTransportButton.name = "Acquisition_AcquireOpeningTransportButton";
+            }
+            if (acquireOpeningWagonButton == null && canCreate)
+            {
+                acquireOpeningWagonButton = Instantiate(buyListingButton, parent);
+                acquireOpeningWagonButton.name = "Acquisition_AcquireOpeningWagonButton";
+            }
+            ConfigureActionButton(acquireOpeningTransportButton, "Acquire Horse", 150f, true);
+            ConfigureActionButton(acquireOpeningWagonButton, "Acquire Wagon", 150f, true);
 
             if (!canCreate)
             {
@@ -1034,6 +1098,8 @@ namespace LandLedgers.UI
             SetSiblingIndexIfNeeded(acquisitionFocusButton.transform, 2);
             SetSiblingIndexIfNeeded(previousListingButton.transform, 3);
             SetSiblingIndexIfNeeded(nextListingButton.transform, 4);
+            SetSiblingIndexIfNeeded(acquireOpeningTransportButton?.transform, 5);
+            SetSiblingIndexIfNeeded(acquireOpeningWagonButton?.transform, 6);
         }
 
         public void EnsurePropertyDetailScrollBody(bool canCreate)
@@ -1519,6 +1585,15 @@ namespace LandLedgers.UI
                 "Town status loads at runtime.",
                 104f,
                 canCreate);
+            governmentBusinessRosterText = EnsureSectionBody(
+                parent,
+                "TownBusinessRoster_Section",
+                "Town Businesses",
+                governmentBusinessRosterText,
+                "TownBusinessRoster_BodyText",
+                "Town business records load at runtime.",
+                150f,
+                canCreate);
             governmentEffectsText = EnsureSectionBody(
                 parent,
                 "GovernmentEffects_Section",
@@ -1541,6 +1616,13 @@ namespace LandLedgers.UI
             governmentSummarySectionRoot = governmentSummaryText != null
                 ? governmentSummaryText.transform.parent as RectTransform
                 : governmentSummarySectionRoot;
+            if (governmentBusinessRosterText != null)
+            {
+                ConfigureFinanceText(governmentBusinessRosterText);
+                governmentBusinessRosterText.fontSize = 16f;
+                governmentBusinessRosterText.lineSpacing = 4f;
+                ConfigureDashboardCard(governmentBusinessRosterText, 150f);
+            }
             governmentEffectsSectionRoot = governmentEffectsText != null
                 ? governmentEffectsText.transform.parent as RectTransform
                 : governmentEffectsSectionRoot;
@@ -2682,6 +2764,16 @@ namespace LandLedgers.UI
             {
                 MoveToParent(body, section);
                 body.transform.SetAsLastSibling();
+                if (Application.isPlaying)
+                {
+                    RectTransform bodyRect = body.rectTransform;
+                    bodyRect.anchorMin = new Vector2(0f, 1f);
+                    bodyRect.anchorMax = new Vector2(1f, 1f);
+                    bodyRect.pivot = new Vector2(0.5f, 1f);
+                    bodyRect.anchoredPosition = Vector2.zero;
+                    bodyRect.sizeDelta = new Vector2(0f, minHeight);
+                }
+
                 ConfigureFinanceText(body);
                 ConfigureDashboardCard(body, minHeight);
             }

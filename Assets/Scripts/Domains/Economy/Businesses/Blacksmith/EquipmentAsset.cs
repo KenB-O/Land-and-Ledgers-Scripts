@@ -52,6 +52,14 @@ namespace LandLedgers.Economy.Blacksmith
         public List<string> DraftAnimalIds = new List<string>();
         public string CurrentDriverPersonId = string.Empty;
         public string CurrentShipmentId = string.Empty;
+        // Physical hitch state is separate from a freight dispatch assignment.
+        // These additive fields persist with the existing EquipmentAsset record.
+        public List<string> HitchingAnimalIds = new List<string>();
+        public string HitchPreparationTaskId = string.Empty;
+        public string HitchPreparationTravelTaskId = string.Empty;
+        public string HitchPreparationReservationId = string.Empty;
+        public string HitchPreparationShipmentId = string.Empty;
+        public bool HitchPreparationAttempted;
         public bool IsWagon => !string.IsNullOrWhiteSpace(Kind) && Kind.IndexOf("wagon", StringComparison.OrdinalIgnoreCase) >= 0;
         public bool IsTransportAssigned => DraftAnimalIds.Count > 0 || !string.IsNullOrWhiteSpace(CurrentDriverPersonId) || !string.IsNullOrWhiteSpace(CurrentShipmentId);
 

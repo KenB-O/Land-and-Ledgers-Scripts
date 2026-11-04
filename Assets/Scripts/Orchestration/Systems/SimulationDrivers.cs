@@ -7,9 +7,14 @@ using LandLedgers.Persistence;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Estates;
 using LandLedgers.Economy.Farming.Integration;
+using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
+using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Recruitment;
@@ -63,6 +68,82 @@ namespace LandLedgers.Orchestration.Systems
     /// </summary>
     public sealed class SimulationDrivers : MonoBehaviour, IPassXlPlayerFlagHolder
     {
+        private const string HorseFeedSku = "store_horse_feed_sack";
+        private const string HorseFeedCategory = "animal_feed";
+        private const string HorseFeedUnit = "sack";
+        private const int HorseFeedUnitsPerSack = 2;
+        private const int HorseFeedTriggerDays = 2;
+        private const int HorseFeedTargetDays = 7;
+        private const int HorseShoppingCarryLimitSacks = 50;
+        private const string BusinessFeedShoppingTaskId = "business-feed-shopping";
+        private const string OpeningHitchTaskId = "opening-wagon-hitch-preparation";
+        private const string OpeningHitchPostId = "opening-freight-hitching-post";
+        private const string BusinessFeedTaskPrefix = "business-feed-trip:";
+        private const string DevelopmentHitchTaskPrefix = "development-hitch:";
+        private const string FreightMeetingTaskPrefix = "freight-meeting:";
+        private const string FreightMeetingTaskId = "freight-service-meeting";
+        private const string FreightDispatchTaskPrefix = "freight-dispatch:";
+        private const string FreightDispatchTaskId = "freight-dispatch-assignment";
+        private readonly HashSet<string> businessFeedNeedsOpen = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<int> businessFeedWaitingForHomeLogged = new HashSet<int>();
+        private readonly Dictionary<string, string> businessFeedLastStockRefusal = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly HashSet<string> horseCareRiskAlreadyLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> taskStartRefusalAlreadyLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> freightAgreementBlockersLogged = new HashSet<string>(StringComparer.Ordinal);
+
+        [Serializable]
+        private sealed class BusinessFeedTripTaskData
+        {
+            public string Stage = string.Empty;
+            public string BusinessId = string.Empty;
+            public string StoreId = string.Empty;
+            public int PersonId = -1;
+            public string OriginLocationId = string.Empty;
+            public string StoreLocationId = string.Empty;
+            public int StoreBuildingId = -1;
+            public int HomeBuildingId = -1;
+            public int Sacks;
+            public int DayIndex;
+            public string TransactionId = string.Empty;
+            public BusinessFeedPurchase.Batch Batch;
+        }
+
+        [Serializable]
+        private sealed class DevelopmentHitchTaskData
+        {
+            public string WagonId = string.Empty;
+            public string HitchTaskId = string.Empty;
+            public int PersonId = -1;
+            public int StagingBuildingId = -1;
+            public string StagingLocationId = string.Empty;
+            public int DurationMinutes;
+        }
+
+        [Serializable]
+        private sealed class FreightMeetingTripTaskData
+        {
+            public string RequestId = string.Empty;
+            public int RequestingPersonId = -1;
+            public int CarrierOperatorPersonId = -1;
+            public int MeetingBuildingId = -1;
+            public string MeetingLocationId = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class FreightDispatchTaskData
+        {
+            public string AgreementId = string.Empty;
+            public string ShipmentId = string.Empty;
+            public int OperatorPersonId = -1;
+            public string HorseId = string.Empty;
+            public string WagonId = string.Empty;
+        }
+
+        [SerializeField, Min(1), Tooltip("Provisional development-only duration for the one-time opening wagon hitch task; not economic canon.")]
+        private int developmentHitchMinutes = 10;
+        [SerializeField, Min(1), Tooltip("Provisional development-only time spent in a direct freight-service meeting; not economic canon.")]
+        private int freightMeetingMinutes = 5;
+
         [SerializeField, Tooltip("CLN-1 hub owning the authorities. Found automatically if empty.")]
         private SimulationSystemsHub hub;
 
@@ -103,6 +184,37 @@ namespace LandLedgers.Orchestration.Systems
         // consults it only as the third branch of
         // ResolveHorseFeedStock, after farm and livery.
         private readonly Review2StoreFeedRegistry storeFeedRegistry = new Review2StoreFeedRegistry();
+        private Review2VerticalD3SaveState review2D3SaveState;
+        private OffMapNamedSkuProcurementService storeFeedProcurement;
+        private BusinessInstanceState storeFeedProcurementBusiness;
+        private DevelopmentTownConfiguration developmentTownConfiguration;
+        private OffMapAidBusinessRuntime millbrookAidRuntime;
+        private int lastMillbrookAidAttemptDay = -1;
+        private string lastMillbrookAidRefusal = string.Empty;
+        public Review2StoreFeedRegistry StoreFeedRegistry => storeFeedRegistry;
+
+        public void AttachMillbrookAidRuntime(OffMapAidBusinessRuntime runtime)
+        {
+            millbrookAidRuntime = runtime;
+        }
+
+        public void AttachDevelopmentTownConfiguration(DevelopmentTownConfiguration configuration)
+        {
+            developmentTownConfiguration = configuration;
+        }
+
+        public void AttachReview2D3SaveState(Review2VerticalD3SaveState state)
+        {
+            review2D3SaveState = state;
+        }
+
+        public void AttachStoreFeedProcurement(
+            OffMapNamedSkuProcurementService procurement,
+            BusinessInstanceState storeBusiness)
+        {
+            storeFeedProcurement = procurement;
+            storeFeedProcurementBusiness = storeBusiness;
+        }
 
         /// <summary>
         /// D2 owner operation, for the bootstrapper / store UI to
@@ -617,7 +729,14 @@ namespace LandLedgers.Orchestration.Systems
             EnsureGeneralStorePostOffice(diagnostics);
             foreach (string diagnostic in diagnostics)
             {
-                Debug.LogWarning($"[SimulationDrivers] {diagnostic}", this);
+                if (diagnostic != null && diagnostic.Contains(" registered at ", StringComparison.Ordinal))
+                {
+                    Debug.Log($"[SimulationDrivers] {diagnostic}", this);
+                }
+                else
+                {
+                    Debug.LogWarning($"[SimulationDrivers] {diagnostic}", this);
+                }
             }
         }
 
@@ -673,6 +792,11 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.LogWarning("[SimulationDrivers] Rebind found no SimulationSystemsHub — drivers idle.");
                 return;
             }
+
+            hub.Tasks.RegisterDefinition(new TaskDefinition(BusinessFeedShoppingTaskId, "Business Feed Shopping", 15), out _);
+            hub.Tasks.RegisterDefinition(new TaskDefinition(OpeningHitchTaskId, "Hitch Opening Freight Wagon", Math.Max(1, developmentHitchMinutes)), out _);
+            hub.Tasks.RegisterDefinition(new TaskDefinition(FreightMeetingTaskId, "Freight Service Meeting", Math.Max(1, freightMeetingMinutes)), out _);
+            hub.Tasks.RegisterDefinition(new TaskDefinition(FreightDispatchTaskId, "Dispatch Accepted Freight Shipment", 1), out _);
 
             AcquisitionMarketManager acquisitionMarket = FindAnyObjectByType<AcquisitionMarketManager>();
             hub.AttachParcelWorld(townWorld, acquisitionMarket != null ? acquisitionMarket.Titles : null);
@@ -1432,6 +1556,8 @@ namespace LandLedgers.Orchestration.Systems
 
             int absoluteDayIndex = timeManager.CurrentAbsoluteDayIndex;
 
+            DriveMillbrookAidTable(absoluteDayIndex);
+
             // Pass XI WS1 start contract: the day change drives dated
             // objective evaluation for the active scenario.
             EvaluateScenarioObjectives(absoluteDayIndex);
@@ -1518,11 +1644,14 @@ namespace LandLedgers.Orchestration.Systems
             // the NX-1B nutrition teeth never bit. Wire it here with the
             // work-time budgets so missed meals reduce usable minutes for real.
             DriveBoardingHouseDays(absoluteDayIndex);
+            DriveStoreFeedProcurement(absoluteDayIndex);
+            DriveBusinessHorseFeedProcurement(absoluteDayIndex);
             DriveDailyNeeds(absoluteDayIndex);
             // Pass VII Workstream B (P1-5): daily horse care had no production
             // caller — horses never tired and never needed care. Fed from the
             // farm's real feed stock now; unfed horses degrade loudly.
             DriveHorseCareDay(absoluteDayIndex);
+            DriveOpeningHitchPreparation(absoluteDayIndex);
             DriveTenancyPayments(absoluteDayIndex);
             // Pass VIII Worker 2: the absent-occupant boundary — an absent
             // person (dead or departed from the town roster) must not hold
@@ -1553,6 +1682,56 @@ namespace LandLedgers.Orchestration.Systems
             // layoff knowledge routes into real job applications.
             DriveSocialDay(absoluteDayIndex);
             DriveAutonomousLabor(absoluteDayIndex);
+        }
+
+        private void DriveMillbrookAidTable(int absoluteDayIndex)
+        {
+            if (millbrookAidRuntime == null || sharedBusinessRuntime == null) return;
+            foreach (string message in millbrookAidRuntime.ApplyWeeklyReplenishment(absoluteDayIndex))
+                Debug.Log("[OffMapAid] " + message, this);
+
+            if (lastMillbrookAidAttemptDay == absoluteDayIndex || millbrookAidRuntime.HasOrder("opening-flour-b1")) return;
+            lastMillbrookAidAttemptDay = absoluteDayIndex;
+            BusinessInstanceState bakery = null;
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate != null && candidate.BusinessType == BusinessType.Bakery)
+                {
+                    bakery = candidate;
+                    break;
+                }
+            }
+            if (bakery?.RuntimeState == null) return;
+
+            int stockBefore = millbrookAidRuntime.GetInventoryUnits("bakery_flour_sack");
+            int supplierCashBefore = millbrookAidRuntime.CashCents;
+            string buyerName = bakery.Owner != null && !string.IsNullOrWhiteSpace(bakery.Owner.DisplayName)
+                ? bakery.Owner.DisplayName : bakery.RuntimeDisplayName;
+            string buyerId = bakery.InstanceId;
+            IBusinessCashPort buyerCash = new Series2BusinessRuntimeCashPort(bakery.RuntimeState);
+            int cashBefore = buyerCash.BalanceCents;
+            string payerDescription = $"Bakery business cash authority ({bakery.InstanceId})";
+            string refusal = millbrookAidRuntime.TryPlaceOrder(
+                "opening-flour-b1", buyerId, buyerName, 1, buyerCash, absoluteDayIndex, out OffMapAidCargoLot lot);
+            if (!string.IsNullOrWhiteSpace(refusal))
+            {
+                if (!string.Equals(lastMillbrookAidRefusal, refusal, StringComparison.Ordinal))
+                {
+                    Debug.LogWarning($"[OffMapAid] flour order refused: buyer='{buyerName}' payer='{payerDescription}', " +
+                        $"Millbrook flour={stockBefore} lb and cash={supplierCashBefore}c before; buyer cash={cashBefore}c; " +
+                        $"reason={refusal}", this);
+                    lastMillbrookAidRefusal = refusal;
+                }
+                return;
+            }
+
+            lastMillbrookAidRefusal = string.Empty;
+            Debug.Log($"[OffMapAid] flour order completed: buyer='{buyerName}' ({bakery.InstanceId}) paid Millbrook Grain Co. " +
+                $"{lot.TotalCostCents}c for {lot.PackageUnits} {lot.OrderUnit} ({lot.InventoryUnits} lb flour = " +
+                $"{lot.BakeryUnits} bakery units); payer='{payerDescription}' cash {cashBefore}->{buyerCash.BalanceCents}c; " +
+                $"Millbrook flour {stockBefore}->{millbrookAidRuntime.GetInventoryUnits(lot.SkuId)} lb, " +
+                $"Millbrook cash {supplierCashBefore}->{millbrookAidRuntime.CashCents}c, " +
+                $"pickup lot='{lot.LotId}' (not yet freight-picked-up or delivered).", this);
         }
 
         /// <summary>
@@ -2118,8 +2297,20 @@ namespace LandLedgers.Orchestration.Systems
         {
             get
             {
+                LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+                LandLedgers.Persistence.Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+                if (pass9?.FreightDriver != null && !ReferenceEquals(freightProduction, pass9.FreightDriver))
+                {
+                    freightProduction = pass9.FreightDriver;
+                    freightShipmentService = freightProduction.Service;
+                }
                 freightShipmentService ??= new LandLedgers.Economy.Logistics.FreightShipmentService();
                 freightProduction ??= new LandLedgers.Economy.Freight.FreightProductionDriver(freightShipmentService);
+                if (pass9 != null && pass9.FreightDriver == null)
+                {
+                    pass9.FreightDriver = freightProduction;
+                    Debug.Log("[FreightSave] SimulationDrivers registered its freight driver with the Pass 9 save owner.", this);
+                }
                 return freightProduction;
             }
         }
@@ -2174,6 +2365,11 @@ namespace LandLedgers.Orchestration.Systems
 
             if (FreightProduction.Companies.Count == 0)
             {
+                // Request/meeting diagnostics must not be hidden behind the
+                // shipment driver's empty-company guard. The request path
+                // performs its own participant/type checks and can explain
+                // why B3 was not registered as a carrier.
+                DriveMillbrookFreightNegotiation(absoluteDayIndex);
                 return;
             }
 
@@ -2190,6 +2386,23 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             var diag = new List<string>();
+            // The detailed freight authority is the single owner of source-lot
+            // pickup and destination custody. Register the already-authored
+            // opening wagon and bind Millbrook's paid lot to the Bakery's
+            // pound-based stock when a commissioned shipment reaches these
+            // lifecycle callbacks. No shipment or contract is created here.
+            LandLedgers.Economy.Blacksmith.EquipmentAsset openingWagon = hub.TransportAssets?.Get("opening-freight-wagon");
+            if (openingWagon != null)
+                FreightProduction.Service.RegisterWagon(openingWagon);
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery =
+                save?.Series2Pass9State?.BakeryRuntime ?? save?.Series2Pass9State?.BakeryDriver?.Bakery;
+            LandLedgers.Economy.Businesses.GeneralStore.MillbrookFlourFreightCustodyAdapter millbrookCustody =
+                millbrookAidRuntime != null && bakery != null && hub.Ids != null
+                    ? new LandLedgers.Economy.Businesses.GeneralStore.MillbrookFlourFreightCustodyAdapter(
+                        millbrookAidRuntime, bakery, hub.Ids)
+                    : null;
             var hooks = new LandLedgers.Economy.Logistics.FreightShipmentHooks
             {
                 Tasks = hub.Tasks,
@@ -2200,12 +2413,196 @@ namespace LandLedgers.Orchestration.Systems
                 NowGameSeconds = AbsoluteNowGameSeconds(),
                 ReceiveShipment = ReceiveFreightIntoDestinationStock,
             };
+            if (millbrookCustody != null)
+            {
+                hooks.CommitSourceLot = (LandLedgers.Economy.LogisticsShipmentState shipment,
+                    int quantityUnits, out string reason) =>
+                    millbrookCustody.CommitSourceLot(shipment, quantityUnits, out reason);
+                hooks.ReceiveCargoLot = (LandLedgers.Economy.LogisticsShipmentState shipment,
+                    int quantityUnits, out string reason) =>
+                    millbrookCustody.ReceiveCargoLot(shipment, quantityUnits, absoluteDayIndex, out reason);
+            }
+            RetryPendingFreightShipmentRegistrations(absoluteDayIndex);
             FreightProduction.AdvanceTick(86400f, hooks, handler, diag);
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] freight day " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
+            DrivePreparedFreightDispatchAssignments(absoluteDayIndex);
+            DriveMillbrookFreightNegotiation(absoluteDayIndex);
+        }
+
+        private void DrivePreparedFreightDispatchAssignments(int dayIndex)
+        {
+            if (FreightProduction?.ServiceAgreements?.Agreements == null) return;
+            foreach (FreightServiceAgreement agreement in FreightProduction.ServiceAgreements.Agreements.ToList())
+            {
+                if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted
+                    || agreement.PreparedGameSeconds <= 0f
+                    || !string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)) continue;
+                BusinessInstanceState freight = FindBusiness(agreement.CarrierBusinessId);
+                LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
+                AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
+                EquipmentAsset wagon = hub?.TransportAssets?.Get("opening-freight-wagon");
+                if (freight == null || shipment == null || horse == null || wagon == null)
+                {
+                    string missing = string.Join(", ", new[]
+                    {
+                        freight == null ? "carrier business" : null,
+                        shipment == null ? "linked shipment" : null,
+                        horse == null ? "A0" : null,
+                        wagon == null ? "assigned wagon" : null
+                    }.Where(value => value != null));
+                    LogFreightAgreementBlockerOnce("dispatch-prerequisite:" + agreement.AgreementId,
+                        $"[FreightDispatch] Accepted agreement '{agreement.AgreementId}' remains prepared; dispatch assignment deferred because {missing} is unresolved.");
+                    continue;
+                }
+                CreatePreparedFreightDispatchTask(agreement, shipment, freight, horse, wagon, dayIndex);
+            }
+        }
+
+        private void DriveMillbrookFreightNegotiation(int dayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
+                || millbrookAidRuntime == null || developmentTownConfiguration == null)
+            {
+                string missing = string.Join(", ", new[]
+                {
+                    hub == null ? "SimulationSystemsHub" : null,
+                    sharedBusinessRuntime == null ? "SharedBusinessRuntimeManager" : null,
+                    populationManager?.State == null ? "population state" : null,
+                    millbrookAidRuntime == null ? "Millbrook runtime" : null,
+                    developmentTownConfiguration == null ? "development-town rate configuration" : null
+                }.Where(value => value != null));
+                LogFreightAgreementBlockerOnce("dependencies", $"[FreightAgreement] Daily request driver is connected on day {dayIndex}, but cannot evaluate the opening order because {missing} is unresolved.");
+                return;
+            }
+            if (!sharedBusinessRuntime.TryFindByInstanceId("business_bakery_001", out BusinessInstanceState bakery)
+                && !sharedBusinessRuntime.TryFindByInstanceId("bakery_001", out bakery))
+                bakery = sharedBusinessRuntime.Businesses.FirstOrDefault(b => b != null && b.BusinessType == BusinessType.Bakery);
+            BusinessInstanceState carrier = null;
+            bool carrierFound = sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out carrier);
+            if (bakery?.RuntimeState == null || bakery.Owner == null || bakery.Owner.PersonId < 0
+                || !carrierFound
+                || carrier?.Owner == null || carrier.Owner.PersonId < 0
+                || carrier.BusinessType != BusinessType.LiveryFreight)
+            {
+                string state = $"Bakery={(bakery == null ? "missing" : $"{bakery.InstanceId},owner={bakery.Owner?.PersonId ?? -1},cashPort={bakery.RuntimeState != null}")}; " +
+                    $"B3={(carrier == null ? "missing" : $"{carrier.InstanceId},owner={carrier.Owner?.PersonId ?? -1},cashPort={carrier.RuntimeState != null}")}; " +
+                    $"businesses={string.Join(",", sharedBusinessRuntime.Businesses.Where(b => b != null).Select(b => b.InstanceId + "/" + b.BusinessType))}.";
+                LogFreightAgreementBlockerOnce("businesses", $"[FreightAgreement] Daily request driver cannot resolve its participants on day {dayIndex}: {state}");
+                return;
+            }
+
+            OffMapAidCargoLot lot = millbrookAidRuntime.Lots.FirstOrDefault(candidate => candidate != null
+                && string.Equals(candidate.LotId, "aidlot-millbrook_grain_co:opening-flour-b1", StringComparison.Ordinal)
+                && string.Equals(candidate.BuyerBusinessId, bakery.InstanceId, StringComparison.Ordinal));
+            if (lot == null || lot.SourceCommitted || lot.Received)
+            {
+                string lotState = lot == null
+                    ? $"target paid lot absent; Millbrook='{millbrookAidRuntime.BusinessId}', lotCount={millbrookAidRuntime.Lots?.Count ?? 0}, candidates={string.Join(",", millbrookAidRuntime.Lots?.Where(item => item != null).Select(item => item.LotId + "/buyer=" + item.BuyerBusinessId) ?? Enumerable.Empty<string>())}"
+                    : $"lot='{lot.LotId}', sourceCommitted={lot.SourceCommitted}, received={lot.Received}, buyer='{lot.BuyerBusinessId}', SKU='{lot.SkuId}', quantity={lot.PackageUnits} {lot.OrderUnit}";
+                LogFreightAgreementBlockerOnce("lot", $"[FreightAgreement] Daily request driver cannot open a request on day {dayIndex}: {lotState}.");
+                return;
+            }
+
+            FreightServiceAgreementBook book = FreightProduction.ServiceAgreements;
+            const string requestId = "freight-request:opening-flour-b1";
+            FreightServiceRequest request = book.FindRequest(requestId);
+            if (request == null)
+            {
+                request = new FreightServiceRequest
+                {
+                    RequestId = requestId,
+                    RequestingBusinessId = bakery.InstanceId,
+                    RequestingPersonId = bakery.Owner.PersonId,
+                    CarrierBusinessId = carrier.InstanceId,
+                    CarrierOperatorPersonId = carrier.Owner.PersonId,
+                    PickupBusinessId = millbrookAidRuntime.BusinessId,
+                    PickupLocationId = "offmap-pickup:" + millbrookAidRuntime.BusinessId,
+                    DestinationBusinessId = bakery.InstanceId,
+                    DestinationLocationId = bakery.AssignedBuildingId >= 0
+                        ? TownJourneyNetworkBuilder.LocationIdForBuilding(bakery.AssignedBuildingId) : string.Empty,
+                    CargoLotId = lot.LotId,
+                    CargoSkuId = lot.SkuId,
+                    Quantity = lot.PackageUnits,
+                    QuantityUnit = lot.OrderUnit,
+                    RequestedService = "One-time collection of the paid Millbrook flour lot and delivery to Bakery B1",
+                    IsRecurring = false
+                };
+                string createRefusal = book.CreateRequest(request, out FreightServiceRequest duplicate);
+                if (createRefusal != null)
+                {
+                    if (!string.Equals(createRefusal, "Freight request already exists; duplicate request creation refused.", StringComparison.Ordinal))
+                        Debug.LogWarning($"[FreightAgreement] Request for lot '{lot.LotId}' refused: {createRefusal}", this);
+                    return;
+                }
+                Debug.Log($"[FreightAgreement] One-time freight request '{requestId}' recorded: Glen P{bakery.Owner.PersonId}/B1 '{bakery.InstanceId}' " +
+                    $"requests carrier B3 '{carrier.InstanceId}' for supplier '{millbrookAidRuntime.BusinessId}', lot='{lot.LotId}', " +
+                    $"quantity={lot.PackageUnits} {lot.OrderUnit}; status=Open. No freight payment or pickup occurred.", this);
+            }
+
+            if (request.Status == FreightServiceRequestStatus.Accepted || request.Status == FreightServiceRequestStatus.Refused
+                || request.Status == FreightServiceRequestStatus.MeetingScheduled) return;
+            if (!string.IsNullOrWhiteSpace(request.ContactTravelTaskId))
+            {
+                WorkTask existingTravel = hub.Tasks.FindTaskByIdString(request.ContactTravelTaskId);
+                if (existingTravel != null && existingTravel.IsOpen) return;
+                request.ContactTravelTaskId = string.Empty;
+            }
+
+            PersonState glen = populationManager.State.GetPerson(request.RequestingPersonId);
+            PersonState ethan = populationManager.State.GetPerson(request.CarrierOperatorPersonId);
+            if (glen == null || ethan == null || ethan.homeBuildingId < 0 ||
+                request.DestinationBusinessId != bakery.InstanceId)
+            {
+                Debug.LogWarning($"[FreightAgreement] Request '{requestId}' remains open: Glen/Ethan or B3's meeting location is unresolved " +
+                    $"(Glen={glen != null}, Ethan={ethan != null}, Ethan home={ethan?.homeBuildingId}).", this);
+                return;
+            }
+
+            EnsureTownJourneyNetwork();
+            string origin = ResolvePersonJourneyLocation(glen.id);
+            string meetingLocation = TownJourneyNetworkBuilder.LocationIdForBuilding(ethan.homeBuildingId);
+            JourneyRoute route = !string.IsNullOrWhiteSpace(origin) && !string.IsNullOrWhiteSpace(meetingLocation)
+                ? hub.Journeys.FindRoute(origin, meetingLocation, TravelMode.Foot) : null;
+            if (route == null || !route.Found)
+            {
+                string refusal = route?.Diagnostic ?? "Glen's current location or Ethan's meeting location has no authored route.";
+                Debug.LogWarning($"[FreightAgreement] Request '{requestId}' remains open: Glen cannot physically reach B3 staging: {refusal}", this);
+                return;
+            }
+
+            var trip = new FreightMeetingTripTaskData
+            {
+                RequestId = requestId,
+                RequestingPersonId = glen.id,
+                CarrierOperatorPersonId = ethan.id,
+                MeetingBuildingId = ethan.homeBuildingId,
+                MeetingLocationId = meetingLocation
+            };
+            WorkTask travel = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(bakery.InstanceId)), dayIndex,
+                Math.Max(1, route.TotalMinutes), customerRef: FreightMeetingTaskPrefix + "travel:" + requestId,
+                termsRef: JsonUtility.ToJson(trip));
+            request.ContactTravelTaskId = travel.TaskId.ToString();
+            if (!TryStartBusinessPersonTask(travel, glen, dayIndex, PersonActivityKind.Travel,
+                    ethan.homeBuildingId, out string assignmentRefusal))
+            {
+                Debug.LogWarning($"[FreightAgreement] Glen's contact travel for request '{requestId}' was not assigned: {assignmentRefusal}", this);
+                return;
+            }
+            Debug.Log($"[FreightAgreement] Glen P{glen.id} was assigned contact travel task '{travel.TaskId}' to Ethan P{ethan.id} " +
+                $"at B3 staging building {ethan.homeBuildingId}; route={route.TotalMiles:0.00} mi local, " +
+                $"planned estimate={route.TotalMinutes} min, task completes only on visible arrival. Request='{requestId}'.", this);
+        }
+
+        private void LogFreightAgreementBlockerOnce(string key, string message)
+        {
+            if (freightAgreementBlockersLogged.Add(key))
+                Debug.LogWarning(message, this);
         }
 
         private EntityId ResolveFreightHandler(BusinessInstanceState carrier)
@@ -2382,7 +2779,12 @@ namespace LandLedgers.Orchestration.Systems
                 out var boardingMeals,
                 out var hotelMeals);
 
+            // Kennedy's current development rule: open food errands at about
+            // one day of stock, before today's meal resolution can consume
+            // the last reserve. This is a scenario-side playtest setting;
+            // the shortage authority's general default remains unchanged.
             var diag = new List<string>();
+            DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
             IEmbodiedPurchaseExecutor dailyPurchaseExecutor = householdShoppingLoop == null
                 ? purchaseExecutor
                 : null;
@@ -2398,7 +2800,51 @@ namespace LandLedgers.Orchestration.Systems
                     $"{report.PurchasesMade} purchases ({report.SpendCents}c).");
             }
 
-            DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
+            // Keep the daily summary auditable by resident. These are read-only
+            // projections of the meal authority's persisted records; they do
+            // not create meals or affect nutrition.
+            if (hub.MealLog != null && populationManager.State.households != null)
+            {
+                foreach (HouseholdState household in populationManager.State.households)
+                {
+                    if (household == null) continue;
+                    foreach (HouseholdMealRecord meal in hub.MealLog.GetMeals(household.id))
+                    {
+                        if (meal == null || meal.DayIndex != absoluteDayIndex) continue;
+                        PersonState eater = populationManager.State.GetPerson(meal.PersonId);
+                        string consumed = meal.ItemsConsumed == null || meal.ItemsConsumed.Count == 0
+                            ? "recorded external meal"
+                            : string.Join(", ", meal.ItemsConsumed.Select(item =>
+                                $"{item.ItemId} x{item.QuantityUnits}"));
+                        Debug.Log($"[FoodEconomy] meal served: person='{eater?.DisplayName ?? $"P{meal.PersonId}"}', " +
+                            $"household=H{meal.HouseholdId}, slot={meal.Slot}, source={meal.SourceKind}, " +
+                            $"consumed={consumed}.");
+                    }
+
+                    int cashCents = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
+                    foreach (MissedMealRecord missed in hub.MealLog.GetMissedMeals(household.id))
+                    {
+                        if (missed == null || missed.DayIndex != absoluteDayIndex) continue;
+                        PersonState person = populationManager.State.GetPerson(missed.PersonId);
+                        HouseholdInventory inventory = hub.HouseholdInventories.Get(household.id);
+                        int availableFoodUnits = 0;
+                        if (inventory != null)
+                        {
+                            foreach (string itemId in MealSchedulingPolicy.Default.MealItemPriority)
+                            {
+                                HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
+                                if (definition != null && definition.IsFood)
+                                    availableFoodUnits += inventory.GetAvailableUnits(itemId);
+                            }
+                        }
+                        Debug.LogWarning($"[FoodEconomy] meal missed: person='{person?.DisplayName ?? $"P{missed.PersonId}"}', " +
+                            $"household=H{missed.HouseholdId}, slot={missed.Slot}, reason='{missed.Reason}', " +
+                            $"food stock at meal resolution={availableFoodUnits} units, " +
+                            $"household cash={cashCents}c. Shopping is a separate later step; cash alone does not prove a valid seller or stock.", this);
+                    }
+                }
+            }
+
             DriveEmbodiedShopping(absoluteDayIndex, diag);
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
             if (diag.Count > 0)
@@ -2407,15 +2853,22 @@ namespace LandLedgers.Orchestration.Systems
                 // These diagnostics explain blocked journeys, suppliers,
                 // affordability and unmet meals; they do not alter state.
                 const int maxDiagnosticsPerDay = 12;
-                int shown = Math.Min(diag.Count, maxDiagnosticsPerDay);
-                var visible = new List<string>(shown);
-                for (int i = 0; i < shown; i++)
+                var visible = new List<string>(Math.Min(diag.Count, maxDiagnosticsPerDay));
+                foreach (string message in diag)
                 {
-                    visible.Add(diag[i]);
+                    if (visible.Count >= maxDiagnosticsPerDay) break;
+                    if (!string.IsNullOrWhiteSpace(message)
+                        && message.StartsWith("[FoodEconomy] purchase", StringComparison.Ordinal))
+                        visible.Add(message);
+                }
+                for (int i = 0; i < diag.Count && visible.Count < maxDiagnosticsPerDay; i++)
+                {
+                    if (!string.IsNullOrWhiteSpace(diag[i]) && !visible.Contains(diag[i]))
+                        visible.Add(diag[i]);
                 }
 
-                string omitted = diag.Count > shown
-                    ? $" | ... {diag.Count - shown} additional diagnostic(s) omitted"
+                string omitted = diag.Count > visible.Count
+                    ? $" | ... {diag.Count - visible.Count} additional diagnostic(s) omitted"
                     : string.Empty;
                 Debug.LogWarning($"[SimulationDrivers] household needs day {absoluteDayIndex}: " +
                     string.Join(" | ", visible) + omitted, this);
@@ -2430,9 +2883,1317 @@ namespace LandLedgers.Orchestration.Systems
         /// are named loudly. A horse holding a draft reservation eats the
         /// working ration — draft power has honest upkeep.
         /// </summary>
+        private void DriveBusinessHorseFeedProcurement(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
+                || hub.Animals == null || hub.Journeys == null) return;
+            if (!sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)
+                || freight?.RuntimeState == null || freight.Owner == null || freight.Owner.PersonId < 0) return;
+
+            var ownedHorses = new List<AnimalState>();
+            int dailyFeedUnits = 0;
+            int carriedFeedUnits = 0;
+            foreach (AnimalState horse in hub.Animals.ActiveAnimals)
+            {
+                if (horse == null || !horse.IsActive || horse.Species != AnimalSpecies.Horse
+                    || horse.OwnerKind != AnimalOwnerKind.Business || horse.OwnerId != freight.InstanceId) continue;
+                ownedHorses.Add(horse);
+                bool working = hub.DraftPower != null && hub.DraftPower.IsAnimalReserved(horse.AnimalId);
+                dailyFeedUnits += Math.Max(1, Mathf.CeilToInt(working
+                    ? HorseCareDriver.DailyFeedUnitsPerWorkingHorse
+                    : HorseCareDriver.DailyFeedUnitsPerHorse));
+                carriedFeedUnits += review2D3SaveState != null
+                    ? review2D3SaveState.GetHorseFeedCarry(horse.AnimalId.ToString()) : 0;
+            }
+            if (ownedHorses.Count == 0 || dailyFeedUnits <= 0) return;
+
+            int sacksBefore = freight.RuntimeState.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory);
+            int feedUnitsBefore = Math.Max(0, sacksBefore * HorseFeedUnitsPerSack + carriedFeedUnits);
+            float daysLeft = (float)feedUnitsBefore / dailyFeedUnits;
+            if (daysLeft > HorseFeedTriggerDays)
+            {
+                businessFeedNeedsOpen.Remove(freight.InstanceId);
+                return;
+            }
+
+            if (businessFeedNeedsOpen.Add(freight.InstanceId))
+                Debug.Log($"[BusinessFeed] Shortage detected for B3 '{freight.InstanceId}': " +
+                    $"A0+business-owned horses have {feedUnitsBefore} usable feed unit(s) for {dailyFeedUnits} unit(s)/day " +
+                    $"({daysLeft:0.0} days); trigger is {HorseFeedTriggerDays} days or less.", this);
+
+            int sacksNeeded = BusinessFeedPurchase.PackagesToTarget(
+                feedUnitsBefore, dailyFeedUnits, HorseFeedTargetDays, HorseFeedUnitsPerSack);
+            if (sacksNeeded <= 0) return;
+            if (sacksNeeded > HorseShoppingCarryLimitSacks)
+            {
+                Debug.LogWarning($"[BusinessFeed] Need retained for '{freight.InstanceId}': {daysLeft:0.0} feed days remain, " +
+                    $"but {sacksNeeded} sacks exceeds Ethan's {HorseShoppingCarryLimitSacks}-item carrying limit; no purchase occurred.", this);
+                return;
+            }
+
+            // Keep one need/task open through the physical purchase and return.
+            // Do not revalidate the store as if Ethan were free to place a new
+            // order while paid cargo is still in his custody.
+            if (HasOpenBusinessFeedTask(freight.InstanceId)) return;
+
+            var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            BusinessInstanceState store = null;
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate != null && candidate.BusinessType == BusinessType.GeneralStore
+                    && candidate.RuntimeState != null) { store = candidate; break; }
+            }
+            if (storeManager == null || store == null)
+            {
+                Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': staffed B0 General Store runtime is unavailable; " +
+                    "no purchase or task completed.", this);
+                return;
+            }
+
+            GeneralStoreTradingPort storePort = storeManager.BuildHouseholdTradingPort(store, storeFeedRegistry);
+            if (storePort == null || !storePort.UsesItemLevelInventory(HorseFeedSku)
+                || storePort.ItemPricePerUnitCents(HorseFeedSku) <= 0
+                || storePort.ItemStockUnits(HorseFeedSku) < sacksNeeded)
+            {
+                string refusal = $"B0 cannot offer {sacksNeeded} '{HorseFeedSku}' sacks at a positive owner-set price " +
+                    $"(stock={storePort?.ItemStockUnits(HorseFeedSku) ?? 0}, price={storePort?.ItemPricePerUnitCents(HorseFeedSku) ?? 0}c); no cash or stock moved.";
+                if (!businessFeedLastStockRefusal.TryGetValue(freight.InstanceId, out string priorRefusal)
+                    || !string.Equals(priorRefusal, refusal, StringComparison.Ordinal))
+                {
+                    businessFeedLastStockRefusal[freight.InstanceId] = refusal;
+                    Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': {refusal}", this);
+                }
+                return;
+            }
+            businessFeedLastStockRefusal.Remove(freight.InstanceId);
+
+            PersonState ethan = populationManager.State.GetPerson(freight.Owner.PersonId);
+            if (ethan == null)
+            {
+                Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': owner Person P{freight.Owner.PersonId} is unavailable.", this);
+                return;
+            }
+
+            if (ethan.homeBuildingId < 0)
+            {
+                Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': Ethan P{ethan.id} has no home/staging building for the physical errand.", this);
+                return;
+            }
+
+            LandLedgers.FirstLedger.PopulationPathingDirector pathing =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            bool physicallyAtHome = pathing != null
+                && pathing.IsAtExplicitBuilding(ethan.id, ethan.homeBuildingId);
+            if (!physicallyAtHome)
+            {
+                if (businessFeedWaitingForHomeLogged.Add(ethan.id))
+                    Debug.Log($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': Ethan P{ethan.id} is not physically at home/staging building {ethan.homeBuildingId}; " +
+                        "the purchase trip waits until the existing custom navigation confirms his return there.", this);
+                return;
+            }
+            businessFeedWaitingForHomeLogged.Remove(ethan.id);
+
+            // A feed run begins from B3's defined home/staging location. Do not
+            // trust a stale workplace/current-destination value as its origin.
+            string startLocation = TownJourneyNetworkBuilder.LocationIdForBuilding(ethan.homeBuildingId);
+            string returnLocation = startLocation;
+            if (string.IsNullOrWhiteSpace(startLocation) || hub.Journeys.GetLocation(startLocation) == null)
+            {
+                Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': Ethan has no valid custom-navigation origin.", this);
+                return;
+            }
+
+            int unitPrice = storePort.ItemPricePerUnitCents(HorseFeedSku);
+            int totalCost = checked(unitPrice * sacksNeeded);
+            var buyerCash = new Series2BusinessRuntimeCashPort(freight.RuntimeState);
+            if (buyerCash.BalanceCents < totalCost)
+            {
+                Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': B3 has {buyerCash.BalanceCents}c, " +
+                    $"purchase requires {totalCost}c; no purchase occurred.", this);
+                return;
+            }
+
+            CategoryStockState businessFeed = freight.RuntimeState.GetCategoryStock(HorseFeedCategory);
+            int storageNeeded = (businessFeed?.CurrentStockUnits ?? 0) + sacksNeeded;
+            if ((businessFeed?.TargetStockUnits ?? 0) < storageNeeded)
+            {
+                int previousCapacity = businessFeed?.TargetStockUnits ?? 0;
+                int capacity = freight.RuntimeState.EnsureCategoryStorageCapacity(HorseFeedCategory, storageNeeded);
+                businessFeed = freight.RuntimeState.GetCategoryStock(HorseFeedCategory);
+                Debug.Log($"[BusinessFeed] B3 animal-feed storage capacity reserved for its finite seven-day horse-feed need: " +
+                    $"{previousCapacity}->{capacity} sack(s), current={businessFeed?.CurrentStockUnits ?? 0}, " +
+                    $"purchase={sacksNeeded} sack(s). No inventory or cash was created.", this);
+            }
+
+            JourneyRoute outwardRoute = hub.Journeys.FindRoute(startLocation, storePort.LocationId, TravelMode.Foot);
+            JourneyRoute returnRoute = hub.Journeys.FindRoute(storePort.LocationId, returnLocation, TravelMode.Foot);
+            if (!outwardRoute.Found || !returnRoute.Found)
+            {
+                Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': custom navigation cannot route Ethan's " +
+                    $"round trip (outbound='{outwardRoute.Diagnostic}', return='{returnRoute.Diagnostic}').", this);
+                return;
+            }
+
+            var trip = new BusinessFeedTripTaskData
+            {
+                Stage = "outbound",
+                BusinessId = freight.InstanceId,
+                StoreId = store.InstanceId,
+                PersonId = ethan.id,
+                OriginLocationId = startLocation,
+                StoreLocationId = storePort.LocationId,
+                StoreBuildingId = store.AssignedBuildingId,
+                HomeBuildingId = ethan.homeBuildingId,
+                Sacks = sacksNeeded,
+                DayIndex = absoluteDayIndex,
+                TransactionId = $"business-feed:{freight.InstanceId}:{absoluteDayIndex}",
+            };
+            WorkTask outbound = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(freight.InstanceId)), absoluteDayIndex,
+                Math.Max(1, outwardRoute.TotalMinutes),
+                customerRef: BusinessFeedTaskPrefix + "outbound:" + trip.TransactionId,
+                termsRef: JsonUtility.ToJson(trip));
+            if (!TryStartBusinessPersonTask(outbound, ethan, absoluteDayIndex,
+                    PersonActivityKind.Shopping, store.AssignedBuildingId, out string taskRefusal))
+            {
+                Debug.LogWarning($"[BusinessFeed] Feed need retained for '{freight.InstanceId}': Ethan's outbound task could not start: {taskRefusal}", this);
+                return;
+            }
+
+            Debug.Log($"[BusinessFeed] Procurement task assigned for B3 '{freight.InstanceId}': Ethan P{ethan.id} " +
+                $"is assigned to travel to B0 for {sacksNeeded} sacks; task='{outbound.TaskId}' remains open until confirmed arrival, B3={buyerCash.BalanceCents}c, " +
+                $"B0 stock={storePort.ItemStockUnits(HorseFeedSku)} sack(s).", this);
+        }
+
+        private bool HasOpenBusinessFeedTask(string businessId)
+        {
+            if (hub?.Tasks == null) return false;
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task != null && task.IsOpen
+                    && task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal)
+                    && task.TermsRef.Contains("\"BusinessId\":\"" + businessId + "\"")) return true;
+            }
+            return false;
+        }
+
+        private bool TryStartBusinessPersonTask(WorkTask task, PersonState ethan, int dayIndex,
+            PersonActivityKind activity, int destinationBuildingId, out string refusal)
+        {
+            refusal = null;
+            if (task == null || ethan == null || hub?.Tasks == null || hub.PersonSchedules == null)
+            {
+                refusal = "task, person, TaskAuthority, or PersonScheduleTracker is unavailable.";
+                return false;
+            }
+
+            bool alreadyScheduled = false;
+            foreach (PersonActivityReservation reservation in hub.PersonSchedules.ActiveFor(ethan.id, dayIndex))
+            {
+                if (reservation != null && string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal))
+                {
+                    alreadyScheduled = true;
+                    break;
+                }
+            }
+            if (!alreadyScheduled)
+            {
+                int nowMinute = timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480;
+                int startMinute = FindAvailablePersonStartMinute(ethan.id, dayIndex, nowMinute,
+                    IsArrivalDrivenTravelTask(task) ? 1 : Math.Max(1, task.MinutesRemaining));
+                if (startMinute < 0)
+                {
+                    refusal = $"P{ethan.id} has no available time window today for the task.";
+                    return false;
+                }
+
+                // Do not assign and then interrupt a queued activity when today's
+                // calendar is full. The task remains queued for the next legitimate
+                // opening instead of becoming permanently unusable.
+                if (task.Status == TaskStatus.Queued
+                    && !hub.Tasks.AssignTask(task.TaskId, EntityId.For(EntityKind.Person, ethan.id),
+                        hub.WorkTimeBudgets, dayIndex, out refusal)) return false;
+                if (task.Status != TaskStatus.Assigned)
+                {
+                    refusal = $"task '{task.TaskId}' is {task.Status}, expected Queued or Assigned.";
+                    return false;
+                }
+
+                PersonActivityKind reservedActivity = task.DefinitionId == JourneyTravel.TravelTaskId
+                    ? PersonActivityKind.Travel : activity;
+                int reservationMinutes = IsArrivalDrivenTravelTask(task)
+                    ? FindTravelReservationWindowMinutes(ethan.id, dayIndex, startMinute)
+                    : Math.Max(1, task.MinutesRemaining);
+                string scheduleRefusal = hub.PersonSchedules.TryReserve(ethan.id, reservedActivity, dayIndex,
+                    startMinute, reservationMinutes, TaskReservationLabel(task));
+                if (scheduleRefusal != null)
+                {
+                    if (task.Status == TaskStatus.Assigned)
+                        hub.Tasks.InterruptTask(task.TaskId, hub.WorkTimeBudgets, out _);
+                    refusal = scheduleRefusal;
+                    return false;
+                }
+            }
+            else if (task.Status == TaskStatus.Queued)
+            {
+                refusal = $"task '{task.TaskId}' cannot already have a schedule reservation while still queued.";
+                return false;
+            }
+
+            if (task.Status != TaskStatus.Assigned)
+            {
+                refusal = $"task '{task.TaskId}' is {task.Status}, expected Queued or Assigned.";
+                return false;
+            }
+
+            // Assignment and the exclusive schedule window are now established.
+            // StartTask is called by the ShortTick path only when simulated time
+            // actually enters that window.
+            return true;
+        }
+
+        private int FindTravelReservationWindowMinutes(int personId, int dayIndex, int startMinute)
+        {
+            int endMinute = 1440;
+            foreach (PersonActivityReservation reservation in hub.PersonSchedules.ActiveFor(personId, dayIndex))
+            {
+                if (reservation == null || reservation.Released) continue;
+                if (reservation.StartMinuteOfDay > startMinute && reservation.StartMinuteOfDay < endMinute)
+                    endMinute = reservation.StartMinuteOfDay;
+            }
+
+            // A route remains active until actual arrival. This schedule lease
+            // only occupies the free portion of today's calendar; extending it
+            // blindly to midnight would collide with authored sleep/rest.
+            return Math.Max(1, endMinute - startMinute);
+        }
+
+        private bool BeginScheduledBusinessPersonTask(WorkTask task, PersonState ethan, int dayIndex,
+            int tickStartMinute, int tickEndMinute, int destinationBuildingId, out string refusal)
+        {
+            refusal = null;
+            if (task == null || ethan == null || task.Status != TaskStatus.Assigned) return true;
+            PersonActivityReservation active = null;
+            foreach (PersonActivityReservation reservation in hub.PersonSchedules.ActiveFor(ethan.id, dayIndex))
+            {
+                if (reservation != null && string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal))
+                {
+                    active = reservation;
+                    break;
+                }
+            }
+            if (active == null || tickEndMinute <= active.StartMinuteOfDay || tickStartMinute >= active.EndMinuteOfDay)
+                return true;
+
+            if (!hub.Tasks.StartTask(task.TaskId, dayIndex, out refusal)) return false;
+            if (task.DefinitionId == JourneyTravel.TravelTaskId && destinationBuildingId >= 0)
+            {
+                LandLedgers.FirstLedger.PopulationPathingDirector presentation =
+                    FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+                PopulationScheduleState destinationState = PopulationScheduleState.AtWork;
+                if (task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal))
+                {
+                    BusinessFeedTripTaskData trip = JsonUtility.FromJson<BusinessFeedTripTaskData>(task.TermsRef);
+                    destinationState = trip?.Stage == "return"
+                        ? PopulationScheduleState.ReturningHome : PopulationScheduleState.GoingShopping;
+                }
+                else if (task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal))
+                    destinationState = PopulationScheduleState.AtWork;
+                if (presentation == null || !presentation.TryStartExplicitRoute(ethan.id, destinationBuildingId, destinationState))
+                {
+                    ReleaseTaskPersonSchedule(task, dayIndex);
+                    hub.Tasks.InterruptTask(task.TaskId, hub.WorkTimeBudgets, out _);
+                    refusal = $"custom world pathing could not start P{ethan.id}'s route to building {destinationBuildingId}.";
+                    return false;
+                }
+                if (presentation.TryGetExplicitArrival(ethan.id, destinationBuildingId,
+                        out Vector3 originPosition, out float initialDistance, out _))
+                {
+                    Debug.Log($"[BusinessTravel] Departure: person=P{ethan.id}, task='{task.TaskId}', " +
+                        $"origin position={originPosition}, destination building={destinationBuildingId}, " +
+                        $"initial route distance={initialDistance:0.00}m; travelling by custom navigation.", this);
+                }
+            }
+            if (task.DefinitionId == BusinessFeedShoppingTaskId)
+                ethan.scheduleState = PopulationScheduleState.AtStore;
+            else if (task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal))
+            {
+                BusinessFeedTripTaskData trip = JsonUtility.FromJson<BusinessFeedTripTaskData>(task.TermsRef);
+                ethan.scheduleState = trip?.Stage == "return"
+                    ? PopulationScheduleState.ReturningHome : PopulationScheduleState.GoingShopping;
+            }
+            int actualStartMinute = Math.Max(active.StartMinuteOfDay, tickStartMinute);
+            bool arrivalDrivenTravel = IsArrivalDrivenTravelTask(task);
+            Debug.Log($"[BusinessTask] P{ethan.id} started task '{task.TaskId}' ({task.DefinitionId}) " +
+                $"at game minute {actualStartMinute}; " + (arrivalDrivenTravel
+                    ? "occupancy lasts until confirmed navigation arrival."
+                    : $"planned={task.MinutesRemaining} minute(s)."), this);
+            if (task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal))
+                Debug.Log($"[Hitching] Ethan P{ethan.id} began custom-navigation travel to the staged A0 and wagon; " +
+                    $"task='{task.TaskId}', duration={task.MinutesRemaining} in-game minutes.", this);
+            else if (!string.IsNullOrWhiteSpace(task.CustomerRef)
+                && (task.CustomerRef.StartsWith("development-preparation:", StringComparison.Ordinal)
+                    || task.CustomerRef.StartsWith("freight-preparation:", StringComparison.Ordinal)))
+            {
+                EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
+                AnimalState horse = FindOpeningFreightHorse(wagon?.OwnerId);
+                if (horse != null)
+                {
+                    horse.TransportState = HorseTransportState.AvailableUnsecured;
+                    horse.SecuredFixtureId = string.Empty;
+                }
+                Debug.Log($"[Hitching] Timed task '{task.TaskId}' started at the staging area; " +
+                    $"A0 released from the post, wagon remains separate for {task.MinutesRemaining} in-game minutes.", this);
+            }
+            return true;
+        }
+
+        private int FindAvailablePersonStartMinute(int personId, int dayIndex, int nowMinute, int durationMinutes)
+        {
+            int candidate = Math.Max(480, nowMinute);
+            List<PersonActivityReservation> existing = hub.PersonSchedules.ActiveFor(personId, dayIndex);
+            while (candidate + durationMinutes <= 1440)
+            {
+                PersonActivityReservation overlap = null;
+                foreach (PersonActivityReservation reservation in existing)
+                {
+                    if (reservation == null || reservation.Released) continue;
+                    if (candidate < reservation.EndMinuteOfDay && reservation.StartMinuteOfDay < candidate + durationMinutes)
+                    {
+                        overlap = reservation;
+                        break;
+                    }
+                }
+                if (overlap == null) return candidate;
+                candidate = Math.Max(candidate + 1, overlap.EndMinuteOfDay);
+            }
+            return -1;
+        }
+
+        private void ReleaseTaskPersonSchedule(WorkTask task, int dayIndex)
+        {
+            if (task == null || hub?.PersonSchedules == null || !task.HasAssignee) return;
+            foreach (PersonActivityReservation reservation in hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex))
+            {
+                if (reservation != null
+                    && string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal))
+                {
+                    hub.PersonSchedules.Release(reservation.ReservationId);
+                    return;
+                }
+            }
+        }
+
+        private void StartQueuedBusinessFeedTasks(int dayIndex, int tickStartMinute, int tickEndMinute)
+        {
+            if (hub?.Tasks == null || sharedBusinessRuntime == null || populationManager?.State == null) return;
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task == null || (task.Status != TaskStatus.Queued && task.Status != TaskStatus.Assigned)
+                    || !task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal)) continue;
+                BusinessFeedTripTaskData trip = JsonUtility.FromJson<BusinessFeedTripTaskData>(task.TermsRef);
+                PersonState person = trip != null ? populationManager.State.GetPerson(trip.PersonId) : null;
+                if (trip == null || person == null) continue;
+                int targetBuildingId = trip.Stage == "outbound" ? trip.StoreBuildingId
+                    : trip.Stage == "return" ? trip.HomeBuildingId : -1;
+                if (!TryStartBusinessPersonTask(task, person, dayIndex, PersonActivityKind.Shopping,
+                        targetBuildingId, out string prepareRefusal))
+                {
+                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                        Debug.LogWarning($"[BusinessFeed] Task '{task.TaskId}' could not reserve Ethan's time: {prepareRefusal}", this);
+                    continue;
+                }
+                if (!BeginScheduledBusinessPersonTask(task, person, dayIndex, tickStartMinute,
+                        tickEndMinute, targetBuildingId, out string startRefusal)
+                    && taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                    Debug.LogWarning($"[BusinessFeed] Task '{task.TaskId}' could not start at its scheduled time: {startRefusal}", this);
+            }
+        }
+
+        private void StartQueuedFreightMeetingTasks(int dayIndex, int tickStartMinute, int tickEndMinute)
+        {
+            FreightServiceAgreementBook book = FreightProduction.ServiceAgreements;
+            foreach (FreightServiceRequest request in book.Requests)
+                if (request != null && request.Status == FreightServiceRequestStatus.AtMeeting)
+                    TryScheduleFreightMeeting(request, dayIndex);
+
+            if (hub?.Tasks == null || populationManager?.State == null) return;
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task == null || (task.Status != TaskStatus.Queued && task.Status != TaskStatus.Assigned)
+                    || !task.CustomerRef.StartsWith(FreightMeetingTaskPrefix, StringComparison.Ordinal)) continue;
+                FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
+                PersonState requester = trip != null ? populationManager.State.GetPerson(trip.RequestingPersonId) : null;
+                if (trip == null || requester == null) continue;
+                int target = task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal)
+                    ? trip.MeetingBuildingId : -1;
+                PersonActivityKind activity = target >= 0 ? PersonActivityKind.Travel : PersonActivityKind.Work;
+                if (!TryStartBusinessPersonTask(task, requester, dayIndex, activity, target, out string prepareRefusal))
+                {
+                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                        Debug.LogWarning($"[FreightAgreement] Glen's task '{task.TaskId}' could not reserve time: {prepareRefusal}", this);
+                    continue;
+                }
+                TaskStatus before = task.Status;
+                if (!BeginScheduledBusinessPersonTask(task, requester, dayIndex, tickStartMinute,
+                        tickEndMinute, target, out string startRefusal))
+                {
+                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                        Debug.LogWarning($"[FreightAgreement] Task '{task.TaskId}' could not start: {startRefusal}", this);
+                    continue;
+                }
+                if (target < 0 && before == TaskStatus.Assigned && task.Status == TaskStatus.InProgress)
+                {
+                    FreightServiceRequest live = book.FindRequest(trip.RequestId);
+                    FreightServiceQuote quote = live?.Quote;
+                    if (quote != null)
+                        Debug.Log($"[FreightAgreement] In-person quote presented to Glen P{trip.RequestingPersonId} at B3: " +
+                            $"Millbrook Grain Co. → Bakery B1, one-way={quote.OneWayDistanceMiles:0.0} mi, " +
+                            $"chargeable={quote.ChargeableMiles} mi ({quote.DistanceBasis}), base={quote.BaseServiceFeeCents}c, " +
+                            $"rate={quote.RatePerMileCents}c/mi, mileage={quote.MileageChargeCents}c, total={quote.TotalPriceCents}c, " +
+                            $"payer={quote.PayerBusinessId}, payment={quote.PaymentTiming}; meeting task='{task.TaskId}'.", this);
+                }
+            }
+        }
+
+        private void HandleCompletedFreightMeetingTravelTask(WorkTask task, int dayIndex)
+        {
+            if (task == null || !task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal)) return;
+            FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
+            FreightServiceRequest request = trip != null ? FreightProduction.ServiceAgreements.FindRequest(trip.RequestId) : null;
+            PersonState glen = trip != null ? populationManager?.State?.GetPerson(trip.RequestingPersonId) : null;
+            if (trip == null || request == null || glen == null || request.Status != FreightServiceRequestStatus.Open) return;
+            SetPersonJourneyLocation(glen.id, trip.MeetingLocationId);
+            glen.scheduleState = PopulationScheduleState.AtWork;
+            request.ContactTravelTaskId = string.Empty;
+            string refusal = FreightProduction.ServiceAgreements.SetStatus(request.RequestId, FreightServiceRequestStatus.AtMeeting);
+            if (refusal != null)
+            {
+                Debug.LogWarning($"[FreightAgreement] Glen arrived for '{request.RequestId}' but the request could not enter its meeting state: {refusal}", this);
+                return;
+            }
+            Debug.Log($"[FreightAgreement] Glen P{glen.id} physically arrived at Ethan's B3 meeting location: building {trip.MeetingBuildingId}, " +
+                $"location='{trip.MeetingLocationId}', task='{task.TaskId}'. No quote has been accepted yet.", this);
+            TryScheduleFreightMeeting(request, dayIndex);
+        }
+
+        private void TryScheduleFreightMeeting(FreightServiceRequest request, int dayIndex)
+        {
+            if (request == null || request.Status != FreightServiceRequestStatus.AtMeeting
+                || hub?.Tasks == null || hub.PersonSchedules == null || populationManager?.State == null) return;
+            PersonState glen = populationManager.State.GetPerson(request.RequestingPersonId);
+            PersonState ethan = populationManager.State.GetPerson(request.CarrierOperatorPersonId);
+            BusinessInstanceState bakery = FindBusiness(request.RequestingBusinessId);
+            BusinessInstanceState carrier = FindBusiness(request.CarrierBusinessId);
+            if (glen == null || ethan == null || bakery?.Owner == null || carrier?.Owner == null
+                || ethan.homeBuildingId < 0 || glen.homeBuildingId < 0)
+            {
+                Debug.LogWarning($"[FreightAgreement] Meeting '{request.RequestId}' deferred: requester, operator, or staging building is unresolved.", this);
+                return;
+            }
+            if (!IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId)
+                || !IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            if (HasOpenAssignedTask(glen.id) || HasOpenAssignedTask(ethan.id)) return;
+
+            if (request.Quote == null)
+            {
+                DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
+                if (!developmentTownConfiguration.TryGetBusiness(developmentTownConfiguration.FreightBusinessKey, out carrierDefinition)
+                    || carrierDefinition?.freightRateCard == null)
+                {
+                    Debug.LogWarning($"[FreightAgreement] Request '{request.RequestId}' is waiting: B3 has no configured freight rate card.", this);
+                    return;
+                }
+                float oneWayMiles = millbrookAidRuntime != null ? millbrookAidRuntime.PickupRouteMilesFromTown : 0f;
+                if (!FreightServiceQuoteCalculator.TryCalculate(oneWayMiles,
+                        carrierDefinition.freightRateCard.baseServiceFeeCents,
+                        carrierDefinition.freightRateCard.ratePerMileCents,
+                        carrierDefinition.freightRateCard.chargeRoundTrip,
+                        out FreightServiceQuote quote, out string quoteRefusal))
+                {
+                    Debug.LogWarning($"[FreightAgreement] Request '{request.RequestId}' has no valid Millbrook quote: {quoteRefusal}", this);
+                    return;
+                }
+                quote.QuoteId = "freight-quote:" + request.RequestId;
+                quote.RateCardBusinessId = carrier.InstanceId;
+                quote.PayerBusinessId = bakery.InstanceId;
+                quote.DistanceBasis = carrierDefinition.freightRateCard.chargeRoundTrip
+                    ? "Authored Millbrook one-way supplier route, charged as expected outward-loaded and empty-return mileage"
+                    : "Authored one-way Millbrook supplier route";
+                string quoteProblem = FreightProduction.ServiceAgreements.SetQuote(request.RequestId, quote);
+                if (quoteProblem != null)
+                {
+                    Debug.LogWarning($"[FreightAgreement] Request '{request.RequestId}' quote refused: {quoteProblem}", this);
+                    return;
+                }
+                FreightProduction.ServiceAgreements.SetStatus(request.RequestId, FreightServiceRequestStatus.AtMeeting);
+            }
+
+            int minutes = Math.Max(1, freightMeetingMinutes);
+            int startMinute = FindCommonPersonStartMinute(glen.id, ethan.id, dayIndex,
+                timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480, minutes);
+            if (startMinute < 0) return;
+            var trip = new FreightMeetingTripTaskData
+            {
+                RequestId = request.RequestId,
+                RequestingPersonId = glen.id,
+                CarrierOperatorPersonId = ethan.id,
+                MeetingBuildingId = ethan.homeBuildingId,
+                MeetingLocationId = TownJourneyNetworkBuilder.LocationIdForBuilding(ethan.homeBuildingId)
+            };
+            WorkTask meeting = hub.Tasks.CreateTaskWithPlannedMinutes(FreightMeetingTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(bakery.InstanceId)), dayIndex,
+                minutes, customerRef: FreightMeetingTaskPrefix + "session:" + request.RequestId,
+                termsRef: JsonUtility.ToJson(trip));
+            if (!hub.Tasks.AssignTask(meeting.TaskId, EntityId.For(EntityKind.Person, glen.id),
+                    hub.WorkTimeBudgets, dayIndex, out string assignmentRefusal))
+            {
+                hub.Tasks.CancelTask(meeting.TaskId, hub.WorkTimeBudgets);
+                Debug.LogWarning($"[FreightAgreement] Meeting task for '{request.RequestId}' could not assign Glen's time: {assignmentRefusal}", this);
+                return;
+            }
+            string operatorLabel = "freight-meeting-operator:" + request.RequestId;
+            string operatorRefusal = hub.PersonSchedules.TryReserve(ethan.id, PersonActivityKind.Work,
+                dayIndex, startMinute, minutes, operatorLabel);
+            if (operatorRefusal != null)
+            {
+                hub.Tasks.CancelTask(meeting.TaskId, hub.WorkTimeBudgets);
+                Debug.LogWarning($"[FreightAgreement] Meeting task for '{request.RequestId}' could not reserve Ethan's time: {operatorRefusal}", this);
+                return;
+            }
+            string requesterRefusal = hub.PersonSchedules.TryReserve(glen.id, PersonActivityKind.Work,
+                dayIndex, startMinute, minutes, TaskReservationLabel(meeting));
+            if (requesterRefusal != null)
+            {
+                ReleasePersonScheduleByLabel(ethan.id, dayIndex, operatorLabel);
+                hub.Tasks.CancelTask(meeting.TaskId, hub.WorkTimeBudgets);
+                Debug.LogWarning($"[FreightAgreement] Meeting task for '{request.RequestId}' could not reserve Glen's time: {requesterRefusal}", this);
+                return;
+            }
+            request.MeetingTaskId = meeting.TaskId.ToString();
+            request.MeetingOperatorReservationId = operatorLabel;
+            FreightProduction.ServiceAgreements.SetStatus(request.RequestId, FreightServiceRequestStatus.MeetingScheduled);
+            Debug.Log($"[FreightAgreement] Direct meeting reserved for Glen P{glen.id} and Ethan P{ethan.id}: " +
+                $"task='{meeting.TaskId}', starts={startMinute} min, duration={minutes} in-game minutes; " +
+                $"both persons reserved, quote total={request.Quote.TotalPriceCents}c. No contract or shipment yet.", this);
+        }
+
+        private int FindCommonPersonStartMinute(int firstPersonId, int secondPersonId, int dayIndex, int nowMinute, int duration)
+        {
+            int candidate = Math.Max(480, nowMinute);
+            for (int i = 0; i < 64; i++)
+            {
+                int first = FindAvailablePersonStartMinute(firstPersonId, dayIndex, candidate, duration);
+                int second = FindAvailablePersonStartMinute(secondPersonId, dayIndex, candidate, duration);
+                if (first < 0 || second < 0) return -1;
+                int next = Math.Max(first, second);
+                if (next == candidate && candidate + duration <= 1440) return candidate;
+                candidate = next;
+            }
+            return -1;
+        }
+
+        private bool HasOpenAssignedTask(int personId)
+        {
+            if (hub?.Tasks == null) return true;
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+                if (task != null && task.IsOpen && task.HasAssignee && task.AssigneeId.Id == personId) return true;
+            return false;
+        }
+
+        private void ReleasePersonScheduleByLabel(int personId, int dayIndex, string label)
+        {
+            if (hub?.PersonSchedules == null || string.IsNullOrWhiteSpace(label)) return;
+            foreach (PersonActivityReservation reservation in hub.PersonSchedules.ActiveFor(personId, dayIndex))
+                if (reservation != null && string.Equals(reservation.Label, label, StringComparison.Ordinal))
+                {
+                    hub.PersonSchedules.Release(reservation.ReservationId);
+                    return;
+                }
+        }
+
+        private BusinessInstanceState FindBusiness(string businessId)
+        {
+            if (sharedBusinessRuntime == null || string.IsNullOrWhiteSpace(businessId)) return null;
+            return sharedBusinessRuntime.Businesses.FirstOrDefault(b => b != null
+                && string.Equals(b.InstanceId, businessId, StringComparison.Ordinal));
+        }
+
+        private void HandleCompletedFreightMeetingTask(WorkTask task, int dayIndex)
+        {
+            if (task == null || !task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "session:", StringComparison.Ordinal)) return;
+            FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
+            FreightServiceAgreementBook book = FreightProduction.ServiceAgreements;
+            FreightServiceRequest request = trip != null ? book.FindRequest(trip.RequestId) : null;
+            if (trip == null || request == null || request.Status != FreightServiceRequestStatus.MeetingScheduled
+                || !string.Equals(request.MeetingTaskId, task.TaskId.ToString(), StringComparison.Ordinal)) return;
+
+            ReleasePersonScheduleByLabel(trip.CarrierOperatorPersonId, dayIndex, request.MeetingOperatorReservationId);
+            PersonState glen = populationManager?.State?.GetPerson(trip.RequestingPersonId);
+            PersonState ethan = populationManager?.State?.GetPerson(trip.CarrierOperatorPersonId);
+            BusinessInstanceState bakery = FindBusiness(request.RequestingBusinessId);
+            BusinessInstanceState carrier = FindBusiness(request.CarrierBusinessId);
+            OffMapAidCargoLot lot = millbrookAidRuntime?.Lots?.FirstOrDefault(candidate => candidate != null
+                && string.Equals(candidate.LotId, request.CargoLotId, StringComparison.Ordinal));
+            EquipmentAsset wagon = hub?.TransportAssets?.Get("opening-freight-wagon");
+            AnimalState horse = FindOpeningFreightHorse(request.CarrierBusinessId);
+
+            string refusal = null;
+            if (glen == null || ethan == null || bakery?.RuntimeState == null || carrier?.RuntimeState == null)
+                refusal = "Glen, Ethan, or a participant's business cash authority is unavailable at meeting completion.";
+            else if (!IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId)
+                || !IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId))
+                refusal = "Both participants are not physically present at the Freight Company meeting location.";
+            else if (HasOpenAssignedTask(ethan.id))
+                refusal = "Ethan has an incompatible assigned or in-progress task at acceptance time.";
+            else if (request.Quote == null || bakery.RuntimeState.CurrentCashCents < request.Quote.TotalPriceCents)
+                refusal = $"Bakery B1 has {bakery?.RuntimeState?.CurrentCashCents ?? 0}c available for a {request.Quote?.TotalPriceCents ?? 0}c agreed charge.";
+            else if (lot == null || lot.SourceCommitted || lot.Received || lot.PackageUnits != request.Quantity
+                || !string.Equals(lot.SkuId, request.CargoSkuId, StringComparison.Ordinal)
+                || !string.Equals(lot.BuyerBusinessId, bakery.InstanceId, StringComparison.Ordinal))
+                refusal = "The exact paid Millbrook lot is absent, committed, received, or inconsistent with the request.";
+            else if (horse == null || horse.OwnerKind != AnimalOwnerKind.Business
+                || !string.Equals(horse.OwnerId, carrier.InstanceId, StringComparison.Ordinal)
+                || !HorseAuthority.IsWorkReady(horse))
+                refusal = "A0 is unavailable or not work-ready for Freight Company B3.";
+            else if (wagon == null || !wagon.IsWagon || wagon.OwnerKind != "business"
+                || !string.Equals(wagon.OwnerId, carrier.InstanceId, StringComparison.Ordinal))
+                refusal = "The existing opening wagon is unavailable or is not owned by Freight Company B3.";
+
+            if (refusal == null)
+            {
+                EnsureFreightCompany(carrier);
+                hub.TransportAssets.Register(wagon);
+                string capacityConflict = FreightProduction.Service.FindExclusivityConflict(null, wagon.AssetId,
+                    EntityId.Invalid, null);
+                if (!string.IsNullOrWhiteSpace(capacityConflict)) refusal = capacityConflict;
+                else if (hub.Reservations != null && hub.Reservations.IsReserved(
+                    ReservationKeyConventions.Asset(wagon.AssetId), AbsoluteNowGameSeconds()))
+                    refusal = $"Wagon '{wagon.AssetId}' is held by another equipment reservation.";
+            }
+
+            if (refusal != null)
+            {
+                book.SetStatus(request.RequestId, FreightServiceRequestStatus.Refused, refusal);
+                Debug.LogWarning($"[FreightAgreement] Ethan P{trip.CarrierOperatorPersonId} refused request '{request.RequestId}' after the timed meeting: {refusal}", this);
+                return;
+            }
+
+            if (book.Accept(request.RequestId, trip.CarrierOperatorPersonId, dayIndex,
+                    AbsoluteNowGameSeconds(), out FreightServiceAgreement agreement) != null)
+            {
+                refusal = "The request could not be accepted by the service-agreement authority.";
+                book.SetStatus(request.RequestId, FreightServiceRequestStatus.Refused, refusal);
+                Debug.LogWarning($"[FreightAgreement] Ethan's acceptance for '{request.RequestId}' was refused: {refusal}", this);
+                return;
+            }
+
+            TryRegisterAcceptedFreightShipment(agreement, dayIndex);
+        }
+
+        private void RetryPendingFreightShipmentRegistrations(int dayIndex)
+        {
+            FreightServiceAgreementBook book = FreightProduction?.ServiceAgreements;
+            if (book == null) return;
+            foreach (FreightServiceAgreement agreement in book.Agreements.ToList())
+                if (agreement != null && agreement.Status == FreightServiceAgreementStatus.Accepted
+                    && string.IsNullOrWhiteSpace(agreement.ShipmentId)
+                    && agreement.ShipmentRegistrationPending)
+                    TryRegisterAcceptedFreightShipment(agreement, dayIndex);
+        }
+
+        private void TryRegisterAcceptedFreightShipment(FreightServiceAgreement agreement, int dayIndex)
+        {
+            if (agreement == null || string.IsNullOrWhiteSpace(agreement.AgreementId)) return;
+            FreightServiceAgreementBook book = FreightProduction?.ServiceAgreements;
+            FreightServiceRequest request = book?.FindRequest(agreement.RequestId);
+            BusinessInstanceState bakery = FindBusiness(agreement.CustomerBusinessId);
+            BusinessInstanceState carrier = FindBusiness(agreement.CarrierBusinessId);
+            OffMapAidCargoLot lot = millbrookAidRuntime?.Lots?.FirstOrDefault(candidate => candidate != null
+                && string.Equals(candidate.LotId, agreement.CargoLotId, StringComparison.Ordinal));
+            EquipmentAsset wagon = hub?.TransportAssets?.Get("opening-freight-wagon");
+            AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
+            string failure = null;
+            if (book == null || request == null || bakery == null || carrier == null || lot == null || wagon == null || horse == null)
+                failure = "Shipment retry prerequisites unresolved: " +
+                    string.Join(", ", new[] { request == null ? "freight request" : null,
+                        bakery == null ? "customer business" : null, carrier == null ? "carrier business" : null,
+                        lot == null ? "paid source lot" : null, wagon == null ? "registered wagon" : null,
+                        horse == null ? "assigned horse" : null }.Where(value => value != null));
+            else if (lot.SourceCommitted || lot.Received || lot.PackageUnits != request.Quantity
+                || !string.Equals(lot.SkuId, request.CargoSkuId, StringComparison.Ordinal))
+                failure = $"Paid lot '{lot.LotId}' is no longer eligible for this pending shipment registration.";
+
+            if (failure != null)
+            {
+                string prior = agreement.ShipmentRegistrationFailureReason;
+                book.RecordShipmentRegistrationFailure(agreement.AgreementId, failure);
+                if (!string.Equals(prior, failure, StringComparison.Ordinal))
+                    Debug.LogWarning($"[FreightAgreement] Accepted agreement '{agreement.AgreementId}' awaits shipment registration: {failure}", this);
+                return;
+            }
+
+            EnsureFreightCompany(carrier);
+            hub.TransportAssets.Register(wagon);
+            string stableShipmentId = "freight-shipment:" + agreement.RequestId;
+            string priorFailure = agreement.ShipmentRegistrationFailureReason;
+            string registrationRefusal = book.TryRegisterShipment(agreement.AgreementId,
+                (FreightServiceAgreement accepted, out string shipmentId, out string reason) =>
+                {
+                    shipmentId = string.Empty;
+                    reason = string.Empty;
+                    LogisticsShipmentState priorShipment = FreightProduction.AllShipments().FirstOrDefault(item => item != null
+                        && string.Equals(item.ShipmentId, stableShipmentId, StringComparison.Ordinal));
+                    if (priorShipment != null)
+                    {
+                        if (priorShipment.Status != LogisticsShipmentStatus.Planned || !priorShipment.requiresDispatchAuthorization
+                            || !string.Equals(priorShipment.freightServiceAgreementId, accepted.AgreementId, StringComparison.Ordinal)
+                            || !string.Equals(priorShipment.CargoLotId, accepted.CargoLotId, StringComparison.Ordinal))
+                        {
+                            reason = $"Stable shipment id '{stableShipmentId}' already exists but does not match the accepted pending agreement/lot.";
+                            return false;
+                        }
+                        shipmentId = priorShipment.ShipmentId;
+                        return true;
+                    }
+
+                    const float poundsToKg = 0.45359237f;
+                    var diagnostics = new List<string>();
+                    var hooks = new LandLedgers.Economy.Logistics.FreightShipmentHooks
+                    {
+                        Tasks = hub.Tasks, Budgets = hub.WorkTimeBudgets, DayIndex = dayIndex,
+                        Diagnostics = diagnostics, Reservations = hub.Reservations,
+                        NowGameSeconds = AbsoluteNowGameSeconds()
+                    };
+                    LogisticsShipmentState created = FreightProduction.CreateShipment(
+                        carrier.InstanceId, stableShipmentId, millbrookAidRuntime.BusinessId, bakery.InstanceId,
+                        lot.PackageUnits,
+                        new LandLedgers.Economy.Logistics.FreightCargoSpec
+                        {
+                            MassKgPerUnit = lot.InventoryUnits * poundsToKg,
+                            VolumeM3PerUnit = 0.01f * Math.Max(1, lot.PackageUnits)
+                        }, wagon.AssetId, hooks, EntityId.For(EntityKind.Person, accepted.AcceptingOperatorPersonId),
+                        new List<EntityId> { horse.AnimalId }, accepted.AgreedPriceCents, accepted.PayerBusinessId,
+                        diagnostics, out reason, accepted.AgreementId, lot.LotId, lot.SkuId,
+                        holdForDispatchAuthorization: true);
+                    if (created == null || created.IsPreLoadBlocked) return false;
+                    shipmentId = created.ShipmentId;
+                    if (diagnostics.Count > 0)
+                        Debug.Log("[FreightAgreement] Shipment authority: " + string.Join(" | ", diagnostics), this);
+                    return true;
+                }, out bool alreadyRegistered);
+
+            if (registrationRefusal != null)
+            {
+                if (!string.Equals(priorFailure, registrationRefusal, StringComparison.Ordinal))
+                    Debug.LogWarning($"[FreightAgreement] Accepted agreement '{agreement.AgreementId}' retained, shipment registration pending: {registrationRefusal}", this);
+                return;
+            }
+            FreightServiceAgreement linked = book.FindAgreement(agreement.AgreementId);
+            LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(item => item != null
+                && string.Equals(item.ShipmentId, linked?.ShipmentId, StringComparison.Ordinal));
+            if (shipment == null) return;
+            string quoteSummary = $"chargeable={linked.ChargeableMiles} mi, base={linked.BaseServiceFeeCents}c + " +
+                $"{linked.RatePerMileCents}c/mi = {linked.AgreedPriceCents}c";
+            Debug.Log($"[FreightAgreement] {(alreadyRegistered ? "Recovered existing" : "Registered")} shipment '{shipment.ShipmentId}' " +
+                $"for accepted agreement '{linked.AgreementId}' ({quoteSummary}); lot='{shipment.CargoLotId}', " +
+                $"status={shipment.Status}, dispatch hold={shipment.requiresDispatchAuthorization}, " +
+                $"no pickup, cargo transfer, or freight payment occurred.", this);
+        }
+
+        private void HandleCompletedBusinessFeedTask(WorkTask task, int dayIndex)
+        {
+            if (task == null || !task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal)) return;
+            BusinessFeedTripTaskData trip = JsonUtility.FromJson<BusinessFeedTripTaskData>(task.TermsRef);
+            if (trip == null || sharedBusinessRuntime == null) return;
+            if (!sharedBusinessRuntime.TryFindByInstanceId(trip.BusinessId, out BusinessInstanceState buyer)
+                || buyer?.RuntimeState == null) return;
+            PersonState ethan = populationManager?.State?.GetPerson(trip.PersonId);
+            if (ethan == null) return;
+
+            int currentDay = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : dayIndex;
+            if (trip.Stage == "outbound")
+            {
+                SetPersonJourneyLocation(ethan.id, trip.StoreLocationId);
+                ethan.scheduleState = PopulationScheduleState.GoingShopping;
+                Debug.Log($"[BusinessFeed] Ethan P{ethan.id} completed outbound travel to B0 at game minute " +
+                    $"{Mathf.FloorToInt(AbsoluteNowGameSeconds() / 60f)}; purchase may begin after the counter task.", this);
+                WorkTask shop = hub.Tasks.CreateTaskWithPlannedMinutes(BusinessFeedShoppingTaskId,
+                    EntityId.For(EntityKind.Business, StableBusinessRuntimeId(trip.BusinessId)), currentDay, 15,
+                    customerRef: BusinessFeedTaskPrefix + "shop:" + trip.TransactionId,
+                    termsRef: JsonUtility.ToJson(new BusinessFeedTripTaskData
+                    {
+                        Stage = "shop", BusinessId = trip.BusinessId, StoreId = trip.StoreId,
+                        PersonId = trip.PersonId, OriginLocationId = trip.OriginLocationId,
+                        StoreLocationId = trip.StoreLocationId, StoreBuildingId = trip.StoreBuildingId,
+                        HomeBuildingId = trip.HomeBuildingId, Sacks = trip.Sacks,
+                        DayIndex = trip.DayIndex, TransactionId = trip.TransactionId,
+                    }));
+                TryStartBusinessPersonTask(shop, ethan, currentDay, PersonActivityKind.Shopping, -1, out _);
+                return;
+            }
+
+            if (trip.Stage == "shop")
+            {
+                if (!sharedBusinessRuntime.TryFindByInstanceId(trip.StoreId, out BusinessInstanceState store)
+                    || store?.RuntimeState == null)
+                {
+                    Debug.LogWarning($"[BusinessFeed] B0 disappeared before checkout for trip '{trip.TransactionId}'; need remains open.", this);
+                    return;
+                }
+                var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                GeneralStoreTradingPort port = manager?.BuildHouseholdTradingPort(store, storeFeedRegistry);
+                trip.DayIndex = currentDay;
+                if (port == null || !port.UsesItemLevelInventory(HorseFeedSku)
+                    || port.ItemStockUnits(HorseFeedSku) < trip.Sacks)
+                {
+                    Debug.LogWarning($"[BusinessFeed] Purchase refused for B3 '{trip.BusinessId}' at B0: requested {trip.Sacks} " +
+                        $"'{HorseFeedSku}' sacks, usable stock={port?.ItemStockUnits(HorseFeedSku) ?? 0}; need remains open.", this);
+                    trip.Batch = null;
+                }
+                else
+                {
+                    string tradeRefusal = port.TradingCapability?.CheckTradable(currentDay, 600);
+                    if (tradeRefusal != null)
+                    {
+                        Debug.LogWarning($"[BusinessFeed] Purchase refused at B0 for '{trip.TransactionId}': {tradeRefusal}; need remains open.", this);
+                        trip.Batch = null;
+                    }
+                    else
+                    {
+                        int b3CashBefore = buyer.RuntimeState.CurrentCashCents;
+                        int b0CashBefore = store.RuntimeState.CurrentCashCents;
+                        int b0StockBefore = port.ItemStockUnits(HorseFeedSku);
+                        var buyerCash = new Series2BusinessRuntimeCashPort(buyer.RuntimeState);
+                        BusinessFeedPurchase.Result purchase = BusinessFeedPurchase.PurchaseAtStore(
+                            trip.TransactionId, port, store.RuntimeState, buyer.RuntimeState, buyerCash,
+                            HorseFeedSku, HorseFeedCategory, HorseFeedUnit, trip.Sacks, currentDay);
+                        trip.Batch = purchase.Succeeded ? purchase.Batch : null;
+                        if (!purchase.Succeeded)
+                            Debug.LogWarning($"[BusinessFeed] Purchase refused for B3 '{trip.BusinessId}': {purchase.Refusal}; need remains open.", this);
+                        else
+                            Debug.Log($"[BusinessFeed] Ethan P{ethan.id} completed B3 purchase at B0: {trip.Sacks} sacks " +
+                                $"at {purchase.Batch.UnitPriceCents}c each; B3 cash {b3CashBefore}->{buyer.RuntimeState.CurrentCashCents}c, " +
+                                $"B0 cash {b0CashBefore}->{store.RuntimeState.CurrentCashCents}c, stock {b0StockBefore}->" +
+                                $"{port.ItemStockUnits(HorseFeedSku)} sack(s), source lots=" +
+                                string.Join(",", purchase.Batch.SourceLots.ConvertAll(part => $"{part.LotId}:{part.Units}")) +
+                                $"; transaction='{trip.TransactionId}'.", this);
+                    }
+                }
+
+                trip.Stage = "return";
+                WorkTask returning = CreateBusinessFeedTravelTask(trip, currentDay, trip.StoreLocationId,
+                    trip.OriginLocationId, trip.HomeBuildingId);
+                // The purchased batch remains serialized on this queued task if Ethan
+                // cannot start the return immediately; retries never debit B3 again.
+                if (!TryStartBusinessPersonTask(returning, ethan, currentDay, PersonActivityKind.Shopping,
+                        trip.HomeBuildingId, out string returnRefusal))
+                {
+                    Debug.LogWarning($"[BusinessFeed] Return task '{returning.TaskId}' retained with its exact custody batch: " +
+                        returnRefusal, this);
+                }
+                else Debug.Log($"[BusinessFeed] Ethan P{ethan.id} return task '{returning.TaskId}' is assigned and reserved " +
+                    $"for trip '{trip.TransactionId}'; custody={(trip.Batch != null ? trip.Batch.Units + " sack(s)" : "empty")}.", this);
+                return;
+            }
+
+            if (trip.Stage == "return")
+            {
+                SetPersonJourneyLocation(ethan.id, trip.OriginLocationId);
+                ethan.scheduleState = PopulationScheduleState.AtHome;
+                if (trip.Batch == null)
+                {
+                    Debug.Log($"[BusinessFeed] Ethan P{ethan.id} returned from B0 without a purchase; B3 '{trip.BusinessId}' need remains open.", this);
+                    return;
+                }
+                int stockBefore = buyer.RuntimeState.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory);
+                BusinessFeedPurchase.Result receipt = BusinessFeedPurchase.ReceiveAtBusiness(trip.Batch, buyer.RuntimeState);
+                if (!receipt.Succeeded)
+                {
+                    Debug.LogWarning($"[BusinessFeed] B3 receipt refused after Ethan returned; custody batch '{trip.TransactionId}' retained: " +
+                        receipt.Refusal, this);
+                    return;
+                }
+                int stockAfter = buyer.RuntimeState.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory);
+                Debug.Log($"[BusinessFeed] Ethan P{ethan.id} returned and B3 received {trip.Batch.Units} real feed sacks; " +
+                    $"stock {stockBefore}->{stockAfter}, receipt lots=" +
+                    string.Join(",", trip.Batch.SourceLots.ConvertAll(part => "feed-purchase:" + trip.Batch.TransactionId + ":" + part.LotId)) +
+                    $"; transaction='{trip.TransactionId}'.", this);
+                businessFeedNeedsOpen.Remove(trip.BusinessId);
+            }
+        }
+
+        private WorkTask CreateBusinessFeedTravelTask(BusinessFeedTripTaskData trip, int dayIndex,
+            string origin, string destination, int destinationBuildingId)
+        {
+            JourneyRoute route = hub.Journeys.FindRoute(origin, destination, TravelMode.Foot);
+            trip.Stage = "return";
+            WorkTask task = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(trip.BusinessId)), dayIndex,
+                Math.Max(1, route.Found ? route.TotalMinutes : 1),
+                customerRef: BusinessFeedTaskPrefix + "return:" + trip.TransactionId,
+                termsRef: JsonUtility.ToJson(trip));
+            return task;
+        }
+
+        private void DriveOpeningHitchPreparation(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
+                || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)
+                || freight?.Owner == null || freight.Owner.PersonId < 0) return;
+            AnimalState horse = null;
+            foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
+                if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
+                    && candidate.AnimalId.ToString() == "A0" && candidate.OwnerKind == AnimalOwnerKind.Business
+                    && candidate.OwnerId == freight.InstanceId) { horse = candidate; break; }
+            EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
+            if (horse == null || wagon == null || wagon.OwnerKind != "business" || wagon.OwnerId != freight.InstanceId
+                || wagon.HitchingAnimalIds == null || wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString())) return;
+
+            FreightServiceAgreement agreement = FreightProduction?.ServiceAgreements?.Agreements?.FirstOrDefault(candidate =>
+                candidate != null && candidate.Status == FreightServiceAgreementStatus.Accepted
+                && !string.IsNullOrWhiteSpace(candidate.ShipmentId)
+                && string.Equals(candidate.CarrierBusinessId, freight.InstanceId, StringComparison.Ordinal));
+            if (agreement == null || string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)) return;
+            LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
+            if (shipment == null || shipment.Status != LogisticsShipmentStatus.Planned
+                || !shipment.requiresDispatchAuthorization
+                || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)) return;
+            if (wagon.HitchPreparationAttempted
+                && string.Equals(wagon.HitchPreparationShipmentId, shipment.ShipmentId, StringComparison.Ordinal)) return;
+            if (!HorseAuthority.IsWorkReady(horse))
+            {
+                LogFreightAgreementBlockerOnce("hitch-readiness:" + shipment.ShipmentId,
+                    $"[Hitching] Shipment '{shipment.ShipmentId}' remains pending: A0 is not work-ready (health={horse.Health01:0.00}, nutrition={horse.Nutrition01:0.00}, fatigue={horse.Fatigue01:0.00}).");
+                return;
+            }
+
+            PersonState ethan = populationManager.State.GetPerson(freight.Owner.PersonId);
+            if (ethan == null) return;
+            string staging = ethan.homeBuildingId >= 0
+                ? TownJourneyNetworkBuilder.LocationIdForBuilding(ethan.homeBuildingId)
+                : string.Empty;
+            string origin = ResolvePersonJourneyLocation(ethan.id);
+            if (string.IsNullOrWhiteSpace(staging) || hub.Journeys.GetLocation(staging) == null
+                || (origin != staging && (string.IsNullOrWhiteSpace(origin) || !hub.Journeys.FindRoute(origin, staging, TravelMode.Foot).Found)))
+            {
+                Debug.LogWarning($"[Hitching] Development preparation not assigned: Ethan cannot reach A0 and wagon staging at '{staging}'.", this);
+                return;
+            }
+
+            // The current opening business meeting leaves Ethan at this staging
+            // location. Keep the accepted shipment pending until he is physically
+            // there; the next stage can schedule an arrival-driven approach if
+            // future dispatch work leaves him elsewhere.
+            if (!IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+
+            EntityId businessOwner = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(freight.InstanceId));
+            WorkTask hitch = hub.Tasks.CreateTaskWithPlannedMinutes(OpeningHitchTaskId, businessOwner,
+                absoluteDayIndex, Math.Max(1, developmentHitchMinutes),
+                customerRef: $"freight-preparation:{agreement.AgreementId}:{shipment.ShipmentId}:A0:{wagon.AssetId}");
+            string taskId = hitch.TaskId.ToString();
+            wagon.HitchPreparationAttempted = true;
+            wagon.HitchPreparationTaskId = taskId;
+            wagon.HitchPreparationShipmentId = shipment.ShipmentId;
+            Debug.Log($"[Hitching] Accepted shipment '{shipment.ShipmentId}' queued one preparation task '{taskId}' " +
+                $"for Ethan P{ethan.id}; A0 and wagon reservations will be acquired only when a legitimate " +
+                $"{Math.Max(1, developmentHitchMinutes)}-minute work window is available.", this);
+        }
+
+        private void StartQueuedOpeningHitchTask(int dayIndex, int tickStartMinute, int tickEndMinute)
+        {
+            if (hub?.Tasks == null || sharedBusinessRuntime == null || populationManager?.State == null
+                || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)) return;
+            EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
+            if (wagon == null || string.IsNullOrWhiteSpace(wagon.HitchPreparationTaskId)) return;
+            WorkTask hitch = hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTaskId);
+            PersonState ethan = freight.Owner != null ? populationManager.State.GetPerson(freight.Owner.PersonId) : null;
+            if (hitch == null || ethan == null) return;
+
+            if (hitch.Status != TaskStatus.Queued && hitch.Status != TaskStatus.Assigned) return;
+            if (!IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            int nowMinute = timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : tickStartMinute;
+            PersonActivityReservation scheduled = hub.PersonSchedules.ActiveFor(ethan.id, dayIndex)
+                .FirstOrDefault(reservation => reservation != null
+                    && string.Equals(reservation.Label, TaskReservationLabel(hitch), StringComparison.Ordinal));
+            int startMinute = scheduled != null ? scheduled.StartMinuteOfDay
+                : FindAvailablePersonStartMinute(ethan.id, dayIndex, nowMinute, Math.Max(1, hitch.MinutesRemaining));
+            if (startMinute < 0 || startMinute > tickEndMinute) return;
+
+            AnimalState horse = FindOpeningFreightHorse(freight.InstanceId);
+            if (horse == null || !HorseAuthority.IsWorkReady(horse)) return;
+            float startSeconds = AbsoluteNowGameSeconds() + Math.Max(0, startMinute - nowMinute) * 60f;
+            float endSeconds = startSeconds + Math.Max(1, hitch.MinutesRemaining) * 60f;
+            var availability = new AnimalAvailabilityAuthority(hub.ReservationAuthority);
+            if (horse.CurrentAssignmentId != hitch.TaskId.ToString())
+            {
+                string horseRefusal = HorseAuthority.TryReserveUse(horse, HorseUseKind.Draft,
+                    hitch.TaskId.ToString(), availability, startSeconds, endSeconds, out _);
+                if (horseRefusal != null)
+                {
+                    if (taskStartRefusalAlreadyLogged.Add("horse:" + hitch.TaskId))
+                        Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' remains queued; A0 reservation refused: {horseRefusal}", this);
+                    return;
+                }
+            }
+            if (string.IsNullOrWhiteSpace(wagon.HitchPreparationReservationId))
+            {
+                var wagonRequest = new ReservationRequest(hitch.TaskId.ToString(), "accepted freight shipment hitch preparation");
+                wagonRequest.Items.Add(new ReservationItem(ReservationKeyConventions.Asset(wagon.AssetId), 1f, startSeconds, endSeconds));
+                string wagonRefusal = hub.ReservationAuthority.TryReserveAll(wagonRequest, out ReservationHandle wagonHold);
+                if (wagonRefusal != null)
+                {
+                    HorseAuthority.ReleaseUse(horse, availability);
+                    if (taskStartRefusalAlreadyLogged.Add("wagon:" + hitch.TaskId))
+                        Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' remains queued; wagon reservation refused: {wagonRefusal}", this);
+                    return;
+                }
+                wagon.HitchPreparationReservationId = wagonHold?.ReservationId ?? string.Empty;
+            }
+
+            bool wasQueued = hitch.Status == TaskStatus.Queued;
+            if (!TryStartBusinessPersonTask(hitch, ethan, dayIndex, PersonActivityKind.Work, -1, out string prepareRefusal))
+            {
+                ReleaseOpeningHitchReservations(horse, wagon);
+                if (taskStartRefusalAlreadyLogged.Add("schedule:" + hitch.TaskId))
+                    Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' retained queued until Ethan has a valid work opening: {prepareRefusal}", this);
+                return;
+            }
+            if (wasQueued && hitch.Status == TaskStatus.Assigned)
+                Debug.Log($"[Hitching] Ethan P{ethan.id} assigned hitch task '{hitch.TaskId}' at minute {startMinute}; " +
+                    $"HorseAuthority reserved A0 and ReservationAuthority reserved wagon '{wagon.AssetId}'.", this);
+            if (!BeginScheduledBusinessPersonTask(hitch, ethan, dayIndex, tickStartMinute,
+                    tickEndMinute, -1, out string startRefusal)
+                && taskStartRefusalAlreadyLogged.Add("start:" + hitch.TaskId))
+            {
+                ReleaseOpeningHitchReservations(horse, wagon);
+                Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' remains pending; start refused: {startRefusal}", this);
+            }
+        }
+
+        private void HandleCompletedOpeningHitchTask(WorkTask task, int dayIndex)
+        {
+            if (task == null || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)) return;
+            EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
+            if (wagon == null) return;
+            if (task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal))
+            {
+                DevelopmentHitchTaskData trip = JsonUtility.FromJson<DevelopmentHitchTaskData>(task.TermsRef);
+                if (trip == null || trip.HitchTaskId != wagon.HitchPreparationTaskId) return;
+                PersonState ethan = populationManager?.State?.GetPerson(trip.PersonId);
+                AnimalState horse = FindOpeningFreightHorse(freight.InstanceId);
+                if (ethan == null || horse == null) return;
+                SetPersonJourneyLocation(ethan.id, trip.StagingLocationId);
+                horse.TransportState = HorseTransportState.AvailableUnsecured;
+                horse.SecuredFixtureId = string.Empty;
+                Debug.Log($"[Hitching] Ethan P{ethan.id} reached staging after task '{task.TaskId}' " +
+                    $"at game minute {Mathf.FloorToInt(AbsoluteNowGameSeconds() / 60f)}; A0 released from post, " +
+                    $"wagon='{wagon.AssetId}' still separate.", this);
+                return;
+            }
+
+            if (!string.Equals(task.TaskId.ToString(), wagon.HitchPreparationTaskId, StringComparison.Ordinal)) return;
+            AnimalState attachedHorse = FindOpeningFreightHorse(freight.InstanceId);
+            if (attachedHorse == null) return;
+            if (wagon.HitchingAnimalIds == null) wagon.HitchingAnimalIds = new List<string>();
+            if (!wagon.HitchingAnimalIds.Contains(attachedHorse.AnimalId.ToString()))
+                wagon.HitchingAnimalIds.Add(attachedHorse.AnimalId.ToString());
+            attachedHorse.TransportState = HorseTransportState.AttachedToWagon;
+            attachedHorse.AttachedWagonAssetId = wagon.AssetId;
+            attachedHorse.SecuredFixtureId = string.Empty;
+            attachedHorse.PhysicalLocationId = OpeningHitchPostId;
+            FindAnyObjectByType<OpeningTransportPresentationController>()?.RefreshPresentationState(attachedHorse, wagon);
+            ReleaseOpeningHitchReservations(attachedHorse, wagon);
+            FreightServiceAgreement agreement = FreightProduction?.ServiceAgreements?.Agreements?.FirstOrDefault(candidate => candidate != null
+                && candidate.Status == FreightServiceAgreementStatus.Accepted
+                && string.Equals(candidate.ShipmentId, wagon.HitchPreparationShipmentId, StringComparison.Ordinal));
+            LogisticsShipmentState shipment = FreightProduction?.AllShipments()?.FirstOrDefault(candidate => candidate != null
+                && string.Equals(candidate.ShipmentId, wagon.HitchPreparationShipmentId, StringComparison.Ordinal));
+            string preparationRefusal = agreement == null ? "Accepted shipment agreement is unavailable." :
+                attachedHorse.OwnerKind != AnimalOwnerKind.Business
+                || !string.Equals(attachedHorse.OwnerId, freight.InstanceId, StringComparison.Ordinal)
+                || !string.Equals(attachedHorse.AttachedWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
+                || wagon.HitchingAnimalIds == null || !wagon.HitchingAnimalIds.Contains(attachedHorse.AnimalId.ToString())
+                    ? "Prepared horse/wagon identity or B3 ownership does not match the accepted shipment." :
+                shipment == null || shipment.Status != LogisticsShipmentStatus.Planned || !shipment.requiresDispatchAuthorization
+                || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)
+                    ? "Shipment is not the accepted agreement's planned, pickup-held shipment." :
+                FreightProduction.ServiceAgreements.MarkPreparedForDispatch(agreement.AgreementId,
+                    wagon.HitchPreparationShipmentId, AbsoluteNowGameSeconds());
+            if (preparationRefusal != null)
+                Debug.LogError($"[Hitching] Task '{task.TaskId}' attached A0, but shipment preparation could not be recorded: {preparationRefusal}", this);
+            else
+                CreatePreparedFreightDispatchTask(agreement, shipment, freight, attachedHorse, wagon, dayIndex);
+            int workedMinutes = Math.Max(0, task.PlannedMinutes - task.MinutesRemaining);
+            Debug.Log($"[Hitching] Freight preparation task '{task.TaskId}' completed after {workedMinutes} elapsed in-game " +
+                $"minute(s): A0='{attachedHorse.AnimalId}' attached to wagon='{wagon.AssetId}'; " +
+                $"shipment='{wagon.HitchPreparationShipmentId}' " +
+                (preparationRefusal == null ? $"prepared at absolute {AbsoluteNowGameSeconds():0}s (day {dayIndex}) after agreement acceptance at {agreement.AcceptedGameSeconds:0}s (day {agreement.AcceptedDayIndex}); " : "remains not marked prepared; ") +
+                $"identities unchanged, " +
+                $"no pickup, cargo movement, or freight payment occurred.", this);
+        }
+
+        private void CreatePreparedFreightDispatchTask(FreightServiceAgreement agreement,
+            LogisticsShipmentState shipment, BusinessInstanceState freight, AnimalState horse,
+            EquipmentAsset wagon, int dayIndex)
+        {
+            if (hub?.Tasks == null || agreement == null || shipment == null || freight?.Owner == null
+                || horse == null || wagon == null)
+            {
+                LogFreightAgreementBlockerOnce("dispatch-context:" + agreement?.AgreementId,
+                    "[FreightDispatch] Prepared shipment retained; TaskAuthority, agreement, shipment, Ethan, A0, or wagon is unresolved.");
+                return;
+            }
+            int operatorId = freight.Owner.PersonId;
+            if (operatorId < 0 || operatorId != agreement.AcceptingOperatorPersonId)
+            {
+                LogFreightAgreementBlockerOnce("dispatch-operator:" + shipment.ShipmentId,
+                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; B3 operator P{operatorId} does not match accepted operator P{agreement.AcceptingOperatorPersonId}.");
+                return;
+            }
+            if (agreement.Status != FreightServiceAgreementStatus.Accepted
+                || !string.Equals(agreement.ShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
+                || !string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)
+                || shipment.Status != LogisticsShipmentStatus.Planned || !shipment.requiresDispatchAuthorization
+                || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)
+                || !string.Equals(shipment.physicalWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
+                || shipment.physicalTransportBound)
+            {
+                LogFreightAgreementBlockerOnce("dispatch-state:" + shipment.ShipmentId,
+                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; accepted agreement, shipment hold, or status did not match.");
+                return;
+            }
+            if (horse.OwnerKind != AnimalOwnerKind.Business || !string.Equals(horse.OwnerId, freight.InstanceId, StringComparison.Ordinal)
+                || horse.TransportState != HorseTransportState.AttachedToWagon
+                || !string.Equals(horse.AttachedWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
+                || wagon.OwnerKind != "business" || !string.Equals(wagon.OwnerId, freight.InstanceId, StringComparison.Ordinal)
+                || wagon.HitchingAnimalIds == null || !wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString()))
+            {
+                LogFreightAgreementBlockerOnce("dispatch-team:" + shipment.ShipmentId,
+                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; A0/wagon attachment or B3 ownership is invalid.");
+                return;
+            }
+
+            string taskRef = FreightDispatchTaskPrefix + agreement.AgreementId + ":" + shipment.ShipmentId;
+            if (!string.IsNullOrWhiteSpace(agreement.DispatchTaskId))
+            {
+                WorkTask recorded = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
+                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal)) return;
+                LogFreightAgreementBlockerOnce("dispatch-task-missing:" + agreement.AgreementId,
+                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' retains its recorded task ID '{agreement.DispatchTaskId}', but that TaskAuthority record is unavailable; no replacement was created.");
+                return;
+            }
+
+            // Recover an already-created-but-not-linked task by its stable reference before creating anything.
+            WorkTask existing = hub.Tasks.GetAllOpenTasks().FirstOrDefault(candidate => candidate != null
+                && string.Equals(candidate.CustomerRef, taskRef, StringComparison.Ordinal));
+            if (existing != null)
+            {
+                string recoveryRefusal = FreightProduction.ServiceAgreements.RegisterDispatchTask(
+                    agreement.AgreementId, shipment.ShipmentId, existing.TaskId.ToString());
+                if (recoveryRefusal != null)
+                    LogFreightAgreementBlockerOnce("dispatch-link-existing:" + agreement.AgreementId,
+                        $"[FreightDispatch] Existing task '{existing.TaskId}' could not be linked: {recoveryRefusal}");
+                return;
+            }
+
+            var terms = new FreightDispatchTaskData
+            {
+                AgreementId = agreement.AgreementId,
+                ShipmentId = shipment.ShipmentId,
+                OperatorPersonId = operatorId,
+                HorseId = horse.AnimalId.ToString(),
+                WagonId = wagon.AssetId
+            };
+            // The existing freight driver owns the shipment's team plan. Rebind it to the verified
+            // prepared team; the shipment remains authorization-held, so this cannot begin loading.
+            FreightProduction.SetDispatchPlan(shipment.ShipmentId,
+                EntityId.For(EntityKind.Person, operatorId), new List<EntityId> { horse.AnimalId });
+            WorkTask dispatch = hub.Tasks.CreateTaskWithPlannedMinutes(FreightDispatchTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(freight.InstanceId)), dayIndex, 1,
+                customerRef: taskRef, termsRef: JsonUtility.ToJson(terms));
+            string linkRefusal = FreightProduction.ServiceAgreements.RegisterDispatchTask(
+                agreement.AgreementId, shipment.ShipmentId, dispatch.TaskId.ToString());
+            if (linkRefusal != null)
+            {
+                Debug.LogError($"[FreightDispatch] TaskAuthority created '{dispatch.TaskId}' for shipment '{shipment.ShipmentId}', but agreement linking failed: {linkRefusal}. The task remains queued; no departure or pickup occurred.", this);
+                return;
+            }
+            Debug.Log($"[FreightDispatch] One queued TaskAuthority assignment '{dispatch.TaskId}' created for Ethan P{operatorId}: " +
+                $"agreement='{agreement.AgreementId}', shipment='{shipment.ShipmentId}', horse='{horse.AnimalId}', wagon='{wagon.AssetId}'. " +
+                $"The FreightProductionDriver team plan is bound to Ethan and A0; the queued task is eligible for scheduling and has not started. " +
+                $"Acceptance={agreement.AcceptedGameSeconds:0}s/day {agreement.AcceptedDayIndex}, preparation={agreement.PreparedGameSeconds:0}s/day {dayIndex}. Shipment remains Planned with dispatch hold; no departure, pickup, custody change, or payment occurred.", this);
+        }
+
+        private AnimalState FindOpeningFreightHorse(string businessId)
+        {
+            if (hub?.Animals == null) return null;
+            foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
+                if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
+                    && candidate.AnimalId.ToString() == "A0" && candidate.OwnerKind == AnimalOwnerKind.Business
+                    && candidate.OwnerId == businessId) return candidate;
+            return null;
+        }
+
+        private void ReleaseOpeningHitchReservations(AnimalState horse, EquipmentAsset wagon)
+        {
+            if (horse != null)
+                HorseAuthority.ReleaseUse(horse, new AnimalAvailabilityAuthority(hub.ReservationAuthority));
+            if (wagon != null && !string.IsNullOrWhiteSpace(wagon.HitchPreparationReservationId))
+            {
+                hub.ReservationAuthority.Release(wagon.HitchPreparationReservationId);
+                wagon.HitchPreparationReservationId = string.Empty;
+            }
+        }
+
+        private void MonitorOpeningHitchCancellation(int dayIndex)
+        {
+            EquipmentAsset wagon = hub?.TransportAssets?.Get("opening-freight-wagon");
+            if (wagon == null || !wagon.HitchPreparationAttempted
+                || string.IsNullOrWhiteSpace(wagon.HitchPreparationTaskId)) return;
+            WorkTask hitch = hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTaskId);
+            WorkTask travel = string.IsNullOrWhiteSpace(wagon.HitchPreparationTravelTaskId)
+                ? null : hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTravelTaskId);
+            bool cancelled = IsHitchTaskCancelled(hitch) || IsHitchTaskCancelled(travel);
+            if (!cancelled) return;
+
+            AnimalState horse = FindOpeningFreightHorse(wagon.OwnerId);
+            if (horse != null && horse.TransportState != HorseTransportState.AttachedToWagon)
+            {
+                horse.TransportState = HorseTransportState.SecuredAtHitchingPost;
+                horse.SecuredFixtureId = OpeningHitchPostId;
+                horse.AttachedWagonAssetId = string.Empty;
+            }
+            if (hitch != null && hitch.IsOpen) hub.Tasks.CancelTask(hitch.TaskId, hub.WorkTimeBudgets);
+            ReleaseOpeningHitchReservations(horse, wagon);
+            wagon.HitchPreparationTaskId = string.Empty;
+            wagon.HitchPreparationTravelTaskId = string.Empty;
+            wagon.HitchPreparationShipmentId = string.Empty;
+            wagon.HitchPreparationAttempted = false;
+            FindAnyObjectByType<OpeningTransportPresentationController>()?.RefreshPresentationState(horse, wagon);
+            Debug.LogWarning($"[Hitching] Development preparation cancelled or failed on day {dayIndex}; " +
+                $"horse and wagon reservations released, A0 returned to its separate hitch-post state.", this);
+        }
+
+        private static bool IsHitchTaskCancelled(WorkTask task) => task != null
+            && (task.Status == TaskStatus.Cancelled || task.Status == TaskStatus.Failed
+                || task.Status == TaskStatus.Interrupted);
+
         private void DriveHorseCareDay(int absoluteDayIndex)
         {
             if (hub == null || hub.Animals == null) return;
+            var beforeByHorse = new Dictionary<EntityId, (int StockUnits, float Nutrition01, string Owner)>();
+            foreach (AnimalState horse in hub.Animals.ActiveAnimals)
+            {
+                if (horse == null || horse.Species != AnimalSpecies.Horse || !horse.IsActive
+                    || horse.LastCareDayIndex >= absoluteDayIndex) continue;
+                IHorseFeedStock source = ResolveHorseFeedStock(horse);
+                beforeByHorse[horse.AnimalId] = (
+                    source?.FeedStockUnits ?? 0,
+                    horse.Nutrition01,
+                    horse.OwnerId ?? string.Empty);
+            }
             var diagnostics = new List<string>();
             int unfed = HorseCareDriver.CareDay(
                 hub.Animals,
@@ -2440,10 +4201,70 @@ namespace LandLedgers.Orchestration.Systems
                 horse => horse != null && hub.DraftPower.IsAnimalReserved(horse.AnimalId),
                 absoluteDayIndex,
                 diagnostics);
-            if (unfed > 0 || diagnostics.Count > 0)
+            foreach (AnimalState horse in hub.Animals.ActiveAnimals)
             {
-                Debug.Log("[SimulationDrivers] horse care day " + absoluteDayIndex + ": " +
-                    unfed + " unfed | " + string.Join(" | ", diagnostics));
+                if (horse == null || horse.Species != AnimalSpecies.Horse
+                    || !beforeByHorse.TryGetValue(horse.AnimalId, out var before)) continue;
+                IHorseFeedStock afterSource = ResolveHorseFeedStock(horse);
+                int stockAfter = afterSource?.FeedStockUnits ?? 0;
+                int drawnUnits = Math.Max(0, before.StockUnits - stockAfter);
+                if (drawnUnits > 0)
+                {
+                    horseCareRiskAlreadyLogged.Remove(horse.AnimalId.ToString());
+                    Debug.Log($"[AnimalCare] horse fed: horse='{horse.AnimalId}', owner='{before.Owner}', " +
+                        $"feed drawn={drawnUnits} feed unit(s), stock after={stockAfter}, " +
+                        $"nutrition {before.Nutrition01:0.00}->{horse.Nutrition01:0.00}.");
+                }
+                else if (horse.Nutrition01 < before.Nutrition01 || afterSource == null || stockAfter <= 0)
+                {
+                    if (horseCareRiskAlreadyLogged.Add(horse.AnimalId.ToString()))
+                        Debug.LogWarning($"[AnimalCare] horse at risk: horse='{horse.AnimalId}', owner='{before.Owner}', " +
+                            $"feed drawn=0, feed stock after={stockAfter}, nutrition " +
+                            $"{before.Nutrition01:0.00}->{horse.Nutrition01:0.00}; " +
+                            (afterSource == null ? "no registered owner feed source." : "registered source had no available feed."), this);
+                }
+            }
+            if (diagnostics.Count > 0 && unfed == 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] horse care day " + absoluteDayIndex + ": " +
+                    string.Join(" | ", diagnostics));
+            }
+        }
+
+        private void DriveStoreFeedProcurement(int absoluteDayIndex)
+        {
+            if (storeFeedProcurement == null || storeFeedProcurementBusiness?.RuntimeState == null) return;
+            BusinessRuntimeState storeRuntime = storeFeedProcurementBusiness.RuntimeState;
+            storeFeedProcurement.ReceiveArrivals(absoluteDayIndex, null);
+            // ReceiveArrivals settles the purchase and persists its named
+            // source lot before this retail-lot transfer. Retry any remaining
+            // source lots after a refused destination receipt; already
+            // received retail lot ids are an idempotency guard.
+            foreach (NamedSkuLot lot in storeFeedProcurement.Lots)
+            {
+                if (lot == null || lot.RemainingUnits <= 0) continue;
+                int transferUnits = lot.RemainingUnits;
+                int cashBeforeReceipt = storeRuntime.CurrentCashCents;
+                int retailStockBefore = storeRuntime.GetRetailItemStockUnits(lot.SkuId, "animal_feed");
+                PurchasedRetailLotReceipt.Result receipt = PurchasedRetailLotReceipt.Transfer(
+                    storeFeedProcurement, storeRuntime, lot, "animal_feed", "sack", absoluteDayIndex);
+                if (!receipt.Received)
+                {
+                    if (!receipt.Duplicate && receipt.Units > 0)
+                        Debug.LogWarning($"[FeedSupply] Retail receipt for supplier lot '{lot.LotId}' " +
+                            $"({receipt.Units} sacks) refused: {receipt.Refusal} " +
+                            $"Source lot restored: {receipt.SourceRestored}.", this);
+                    continue;
+                }
+                Debug.Log($"[FeedSupply] General Store B0 received {transferUnits} purchased sack(s) of {lot.SkuId} " +
+                    $"from external-market supplier lot '{lot.LotId}' (receipt {lot.ReceiptId}, order {lot.OrderId}); " +
+                    $"business paid {lot.TotalCostCents}c on arrival, cash {cashBeforeReceipt}->{storeRuntime.CurrentCashCents}c; " +
+                    $"identified SKU stock {retailStockBefore}->{storeRuntime.GetRetailItemStockUnits(lot.SkuId, "animal_feed")} sack(s). " +
+                    $"retailLot='{receipt.RetailLotId}'; source provenance: {lot.Provenance}", this);
+                var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                if (storeManager != null)
+                    RegisterGeneralStoreSupplier(storeManager.BuildHouseholdTradingPort(
+                        storeFeedProcurementBusiness, storeFeedRegistry));
             }
         }
 
@@ -2451,8 +4272,36 @@ namespace LandLedgers.Orchestration.Systems
         {
             return ResolveOwnerScopedHorseFeedStock(horse, (ownerKind, ownerId) =>
             {
-                if (hub == null || ownerKind != AnimalOwnerKind.Business || string.IsNullOrWhiteSpace(ownerId))
+                if (hub == null || string.IsNullOrWhiteSpace(ownerId))
                     return null;
+
+                if (ownerKind == AnimalOwnerKind.Person || ownerKind == AnimalOwnerKind.Household)
+                {
+                    int householdId = -1;
+                    if (ownerKind == AnimalOwnerKind.Household)
+                    {
+                        int.TryParse(ownerId, out householdId);
+                    }
+                    else
+                    {
+                        string personText = ownerId.StartsWith("P", StringComparison.OrdinalIgnoreCase)
+                            ? ownerId.Substring(1) : ownerId;
+                        if (int.TryParse(personText, out int personId))
+                            householdId = householdMemberships != null
+                                ? householdMemberships.GetActiveHouseholdId(personId) : -1;
+                    }
+                    if (householdId < 0 || hub.HouseholdInventories == null) return null;
+                    HouseholdInventory inventory = hub.HouseholdInventories.Get(householdId);
+                    if (inventory == null) return null;
+                    string carryKey = horse != null ? horse.AnimalId.ToString() : ownerId;
+                    return new Review2HouseholdHorseFeed(
+                        inventory, "store_horse_feed_sack", 2, 1,
+                        timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                        review2D3SaveState != null ? review2D3SaveState.GetHorseFeedCarry(carryKey) : 0,
+                        amount => review2D3SaveState?.SetHorseFeedCarry(carryKey, amount));
+                }
+
+                if (ownerKind != AnimalOwnerKind.Business) return null;
 
                 if (ownerId.StartsWith("farm:", StringComparison.Ordinal))
                     return hub.FarmSlice != null ? new HorseFeedStockAdapter(hub.FarmSlice.Feed) : null;
@@ -2474,6 +4323,25 @@ namespace LandLedgers.Orchestration.Systems
                             return Review2StoreHorseFeed.FeedStockForBusiness(
                                 owner.RuntimeState, feedItem, null);
                         }
+                    }
+
+                    // Freight horse feed belongs to the horse's business
+                    // owner. The opening development SKU is sold in sacks;
+                    // one sack is explicitly converted to two care units.
+                    // Partial-package carry is persisted by horse identity.
+                    if (owner.BusinessType == BusinessType.LiveryFreight)
+                    {
+                        string carryKey = horse != null ? horse.AnimalId.ToString() : ownerId;
+                        return new BusinessHorseFeedStockAdapter(
+                            owner.RuntimeState,
+                            "store_horse_feed_sack",
+                            "animal_feed",
+                            "sack",
+                            2,
+                            1,
+                            () => review2D3SaveState != null
+                                ? review2D3SaveState.GetHorseFeedCarry(carryKey) : 0,
+                            amount => review2D3SaveState?.SetHorseFeedCarry(carryKey, amount));
                     }
                     return null;
                 }
@@ -3252,6 +5120,8 @@ namespace LandLedgers.Orchestration.Systems
                     continue;
                 }
 
+                if (IsArrivalDrivenTravelTask(task)) continue;
+
                 string eventId;
                 hub.DueEvents.Schedule(
                     DueEventKind.TaskCompletionDue,
@@ -3275,6 +5145,13 @@ namespace LandLedgers.Orchestration.Systems
                 return; // already handled; completion cancels its events
             }
 
+            if (IsArrivalDrivenTravelTask(task))
+            {
+                // Physical travel has no duration-based completion. The custom
+                // pathing actor's arrival check owns this transition.
+                return;
+            }
+
             // Top up any unrecorded minutes so budget accounting stays truthful,
             // then resolve the outcome exactly like the per-tick driver.
             if (task.MinutesRemaining > 0)
@@ -3293,6 +5170,9 @@ namespace LandLedgers.Orchestration.Systems
             else
             {
                 ReleaseAutonomousTaskReservation(task, dayIndex);
+                HandleCompletedBusinessFeedTask(task, dayIndex);
+                HandleCompletedOpeningHitchTask(task, dayIndex);
+                HandleCompletedFreightMeetingTask(task, dayIndex);
             }
         }
 
@@ -3393,6 +5273,7 @@ namespace LandLedgers.Orchestration.Systems
         private void AdvanceAutonomousWork(int wholeMinutes, int dayIndex, int minuteOfDay)
         {
             if (hub == null || wholeMinutes <= 0 || sharedBusinessRuntime == null) return;
+            int tickStartMinute = Math.Max(0, minuteOfDay - wholeMinutes);
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
                 if (business == null) continue;
@@ -3400,29 +5281,41 @@ namespace LandLedgers.Orchestration.Systems
                 foreach (WorkTask task in hub.Tasks.GetOpenTasks(owner))
                 {
                     if (task == null || task.Status != TaskStatus.InProgress || !task.HasAssignee) continue;
+                    if (IsArrivalDrivenTravelTask(task)) continue;
                     List<PersonActivityReservation> activeReservations =
                         hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex);
-                    bool scheduledNow = false;
+                    int scheduledMinutes = 0;
                     for (int i = 0; i < activeReservations.Count; i++)
                     {
                         PersonActivityReservation reservation = activeReservations[i];
                         if (reservation != null &&
-                            reservation.Activity == PersonActivityKind.Work &&
+                            (reservation.Activity == PersonActivityKind.Work
+                                || reservation.Activity == PersonActivityKind.Shopping) &&
                             string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal) &&
-                            minuteOfDay >= reservation.StartMinuteOfDay &&
-                            minuteOfDay < reservation.EndMinuteOfDay)
+                            tickStartMinute < reservation.EndMinuteOfDay &&
+                            reservation.StartMinuteOfDay < minuteOfDay)
                         {
-                            scheduledNow = true;
+                            int overlapStart = Math.Max(tickStartMinute, reservation.StartMinuteOfDay);
+                            int overlapEnd = Math.Min(minuteOfDay, reservation.EndMinuteOfDay);
+                            scheduledMinutes = Math.Max(scheduledMinutes, overlapEnd - overlapStart);
                             break;
                         }
                     }
-                    if (!scheduledNow) continue;
-                    if (hub.Tasks.RecordWorkProgress(task.TaskId, wholeMinutes, hub.WorkTimeBudgets,
+                    if (scheduledMinutes <= 0) continue;
+                    int workMinutes = scheduledMinutes;
+                    if (workMinutes <= 0) continue;
+                    if (hub.Tasks.RecordWorkProgress(task.TaskId, workMinutes, hub.WorkTimeBudgets,
                         dayIndex, out bool reachedCompletion, out _))
                     {
                         if (reachedCompletion)
                         {
                             CompleteTaskWithCausalOutcome(task, dayIndex, wholeMinutes);
+                            if (task.Status == TaskStatus.Complete)
+                            {
+                                HandleCompletedBusinessFeedTask(task, dayIndex);
+                                HandleCompletedOpeningHitchTask(task, dayIndex);
+                                HandleCompletedFreightMeetingTask(task, dayIndex);
+                            }
                         }
                         if (!task.IsOpen)
                         {
@@ -3431,6 +5324,76 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+        }
+
+        private bool IsArrivalDrivenTravelTask(WorkTask task)
+        {
+            return task != null && task.DefinitionId == JourneyTravel.TravelTaskId
+                && (task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal)
+                    || task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal)
+                    || task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal));
+        }
+
+        private void ResolveArrivalDrivenTravelTasks(int dayIndex)
+        {
+            if (hub?.Tasks == null || populationManager?.State == null) return;
+            LandLedgers.FirstLedger.PopulationPathingDirector presentation =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            if (presentation == null) return;
+
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task == null || task.Status != TaskStatus.InProgress || !IsArrivalDrivenTravelTask(task)
+                    || !task.HasAssignee || !TryGetPresentationTravelTarget(task, out int targetBuildingId)) continue;
+
+                if (!presentation.TryGetExplicitArrival(task.AssigneeId.Id, targetBuildingId,
+                        out Vector3 position, out float distance, out bool arrived) || !arrived) continue;
+
+                CompleteTaskWithCausalOutcome(task, dayIndex, 1);
+                if (task.Status != TaskStatus.Complete) continue;
+                ReleaseAutonomousTaskReservation(task, dayIndex);
+                Debug.Log($"[BusinessTravel] Arrival confirmed: person=P{task.AssigneeId.Id}, task='{task.TaskId}', " +
+                    $"building={targetBuildingId}, position={position}, distance={distance:0.00}m; task completed by navigation arrival.", this);
+                HandleCompletedBusinessFeedTask(task, dayIndex);
+                HandleCompletedOpeningHitchTask(task, dayIndex);
+                HandleCompletedFreightMeetingTravelTask(task, dayIndex);
+            }
+        }
+
+        private bool TryGetPresentationTravelTarget(WorkTask task, out int targetBuildingId)
+        {
+            targetBuildingId = -1;
+            if (task == null) return false;
+            if (task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal))
+            {
+                BusinessFeedTripTaskData trip = JsonUtility.FromJson<BusinessFeedTripTaskData>(task.TermsRef);
+                if (trip == null) return false;
+                targetBuildingId = trip.Stage == "outbound" ? trip.StoreBuildingId
+                    : trip.Stage == "return" ? trip.HomeBuildingId : -1;
+                return targetBuildingId >= 0;
+            }
+            if (task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal))
+            {
+                DevelopmentHitchTaskData trip = JsonUtility.FromJson<DevelopmentHitchTaskData>(task.TermsRef);
+                if (trip == null) return false;
+                targetBuildingId = trip.StagingBuildingId;
+                return targetBuildingId >= 0;
+            }
+            if (task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal))
+            {
+                FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
+                if (trip == null) return false;
+                targetBuildingId = trip.MeetingBuildingId;
+                return targetBuildingId >= 0;
+            }
+            return false;
+        }
+
+        private bool IsPersonVisuallyAtBuilding(int personId, int buildingId)
+        {
+            LandLedgers.FirstLedger.PopulationPathingDirector presentation =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            return presentation != null && presentation.IsAtExplicitBuilding(personId, buildingId);
         }
 
         private void ReleaseAutonomousTaskReservation(WorkTask task, int dayIndex)
@@ -3731,7 +5694,10 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             var policy = MealSchedulingPolicy.Default;
-            var monitor = new HouseholdShortageMonitor(hub.PurchasingNeeds);
+            var monitor = new HouseholdShortageMonitor(hub.PurchasingNeeds)
+            {
+                LowDaysThreshold = 1f
+            };
             bool isColdSeason = IsColdSeasonMonth();
             foreach (HouseholdState household in populationManager.State.households)
             {
@@ -3892,6 +5858,18 @@ namespace LandLedgers.Orchestration.Systems
                         string.Join(" | ", domesticDiag.Take(20)));
                 }
             }
+
+            int activityWindowEndMinute = Mathf.FloorToInt(context.TimeOfDay01 * 1440f);
+            int activityWindowMinutes = Mathf.Max(1,
+                Mathf.CeilToInt(context.TickIntervalGameSeconds / DurationConventions.SecondsPerMinute));
+            StartQueuedBusinessFeedTasks(context.Date.AbsoluteDayIndex,
+                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+            StartQueuedFreightMeetingTasks(context.Date.AbsoluteDayIndex,
+                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+            StartQueuedOpeningHitchTask(context.Date.AbsoluteDayIndex,
+                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+            ResolveArrivalDrivenTravelTasks(context.Date.AbsoluteDayIndex);
+            MonitorOpeningHitchCancellation(context.Date.AbsoluteDayIndex);
 
             // Player travel advances with the clock (whole minutes only).
             // Pass XL player-as-NPC playtest: when the flag is on, player-

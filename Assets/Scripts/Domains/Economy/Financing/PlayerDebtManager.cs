@@ -594,6 +594,25 @@ namespace LandLedgers.Economy.Financing
             return $"Estimated total scheduled repayment incl. bank fee: {FormatMoney(estimate.estimatedTotalOwedCents)}";
         }
 
+        /// <summary>
+        /// Shows the complete current application basis before the player submits.
+        /// This desk only accepts working-capital applications; the displayed
+        /// eligibility is an estimate and never grants or reserves funds.
+        /// </summary>
+        public string BuildApplicationPreviewText()
+        {
+            BankLoanUnderwritingResult estimate = EvaluateRequestedAmount();
+            string eligibility = estimate != null && estimate.Approved
+                ? "currently meets the underwriting estimate"
+                : "does not currently meet the underwriting estimate";
+            string reason = estimate == null
+                ? "No underwriting result is available."
+                : !string.IsNullOrWhiteSpace(estimate.declineReason)
+                    ? estimate.declineReason
+                    : estimate.summary;
+            return $"Application purpose: Working Capital. Eligibility: {eligibility}. {reason} Terms and repayment shown below are estimates from the current lender profile; funds are not granted unless an explicit application is submitted, approved, and the lender has available capital.";
+        }
+
         public string BuildLenderStandingText()
         {
             int currentDay = GetCurrentDayIndex();

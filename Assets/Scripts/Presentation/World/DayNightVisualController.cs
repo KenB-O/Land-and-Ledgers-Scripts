@@ -92,7 +92,11 @@ namespace LandLedgers.Presentation
             }
 
             float normalizedSpeed = Mathf.Max(1f, speedMultiplier);
-            return 1f / (1f + Mathf.Log(normalizedSpeed, 2f));
+            float softened = 1f / (1f + Mathf.Log(normalizedSpeed, 2f));
+            // Keep an unmistakable night presentation at every supported speed.
+            // Acceleration softens transitions, but no longer washes the 100x
+            // night effect down to less than one stop of exposure change.
+            return 0.5f + softened * 0.5f;
         }
 
         public static float ResolveNightLevel(float timeOfDay01, SimulationSpeed speed, float speedMultiplier)

@@ -86,6 +86,7 @@ namespace LandLedgers.Tests.Economy
         private const string FeedCategoryId = "d3-feed-cat";
         private const string StoreBusinessId = "general-store-1";
         private const int StoreUnitsPerFeedUnit = 2;
+        private const int StoreFeedRetailPriceCents = 47;
         private const int HouseholdUnitsPerFeedUnit = 1;
 
         private static AnimalState RegisterHorse(AnimalRegistry registry, string ownerId, AnimalOwnerKind ownerKind, int dayIndex)
@@ -119,6 +120,7 @@ namespace LandLedgers.Tests.Economy
                 DisplayName = "Test Horse Feed",
                 UnitLabel = "sack",
                 StoreUnitsPerFeedUnit = StoreUnitsPerFeedUnit,
+                RetailPriceCents = StoreFeedRetailPriceCents,
             }, diag), "owner add must succeed; diag: " + string.Join("; ", diag));
             Assert.AreEqual(storeUnits, store.AddCategoryStockUnits(FeedCategoryId, storeUnits),
                 "stocking after the add must land exactly; the add itself creates no stock");
@@ -126,6 +128,34 @@ namespace LandLedgers.Tests.Economy
         }
 
         // ---------- D3 save adoption ----------
+
+        [Test]
+        public void D3FeedOwnerPriceUpdate_IsExplicitAndCreatesNoStock()
+        {
+            var store = new BusinessRuntimeState();
+            store.BindBusinessIdentity(StoreBusinessId);
+            var registry = new Review2StoreFeedRegistry();
+            var diagnostics = new List<string>();
+            var registration = new Review2StoreFeedItem
+            {
+                BusinessInstanceId = StoreBusinessId,
+                FeedCategoryId = FeedCategoryId,
+                FeedItemId = FeedItemId,
+                DisplayName = "Test Horse Feed",
+                UnitLabel = "sack",
+                StoreUnitsPerFeedUnit = StoreUnitsPerFeedUnit,
+            };
+
+            Assert.IsNull(Review2StoreHorseFeed.AddFeedItem(store, registry, registration, diagnostics));
+            Assert.AreEqual(0, store.GetCategoryStock(FeedCategoryId).CurrentStockUnits,
+                "registering an offer must not create physical stock");
+            registration.RetailPriceCents = StoreFeedRetailPriceCents;
+            Assert.IsNull(Review2StoreHorseFeed.AddFeedItem(store, registry, registration, diagnostics));
+            Assert.AreEqual(StoreFeedRetailPriceCents, registry.Find(StoreBusinessId).RetailPriceCents,
+                "the owner can explicitly set the runtime offer price");
+            Assert.AreEqual(0, store.GetCategoryStock(FeedCategoryId).CurrentStockUnits,
+                "price edits do not alter category stock");
+        }
 
         [Test]
         public void D3Save_MidRunSaveRestore_StoreFeedAndRuntimeItemStillFeed()
@@ -142,6 +172,8 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(1, dto.StoreFeeds.Count, "exactly the one store feed registration is captured");
             Assert.AreEqual(StoreBusinessId, dto.StoreFeeds[0].BusinessInstanceId);
             Assert.AreEqual(StoreUnitsPerFeedUnit, dto.StoreFeeds[0].StoreUnitsPerFeedUnit);
+            Assert.AreEqual(StoreFeedRetailPriceCents, dto.StoreFeeds[0].RetailPriceCents,
+                "owner-entered feed price persists as data, without becoming a default price");
 
             // Restore into a fresh state, as a load would: the
             // store runtime object stands in for the runtime
@@ -157,6 +189,7 @@ namespace LandLedgers.Tests.Economy
             Assert.IsNotNull(restoredFeed, "the restored registry must resolve the store feed item");
             Assert.AreEqual(FeedItemId, restoredFeed.FeedItemId);
             Assert.AreEqual(StoreUnitsPerFeedUnit, restoredFeed.StoreUnitsPerFeedUnit);
+            Assert.AreEqual(StoreFeedRetailPriceCents, restoredFeed.RetailPriceCents);
 
             // The restored registration still feeds a store horse.
             var ids = new EntityIdRegistry();

@@ -23,6 +23,10 @@ namespace LandLedgers.Economy.Farming.Integration
     {
         private readonly BusinessRuntimeState storeRuntime;
         private readonly string feedCategoryId;
+        private readonly string feedItemId;
+        private readonly int feedUnitsNumerator;
+        private readonly int storeUnitsDenominator;
+        private readonly Review2StoreFeedItem registration;
 
         public StoreHorseFeedStockAdapter(
             BusinessRuntimeState storeRuntime,
@@ -31,7 +35,19 @@ namespace LandLedgers.Economy.Farming.Integration
         {
             this.storeRuntime = storeRuntime;
             this.feedCategoryId = string.IsNullOrWhiteSpace(feedCategoryId) ? string.Empty : feedCategoryId.Trim();
-            StoreUnitsPerFeedUnit = storeUnitsPerFeedUnit;
+            this.storeUnitsDenominator = storeUnitsPerFeedUnit;
+            feedUnitsNumerator = 1;
+            feedItemId = string.Empty;
+        }
+
+        public StoreHorseFeedStockAdapter(BusinessRuntimeState storeRuntime, Review2StoreFeedItem registration)
+        {
+            this.storeRuntime = storeRuntime;
+            this.registration = registration;
+            feedCategoryId = registration?.FeedCategoryId?.Trim() ?? string.Empty;
+            feedItemId = registration?.FeedItemId?.Trim() ?? string.Empty;
+            feedUnitsNumerator = Review2StoreHorseFeed.EffectiveNumerator(registration);
+            storeUnitsDenominator = Review2StoreHorseFeed.EffectiveDenominator(registration);
         }
 
         public string FeedCategoryId => feedCategoryId;
@@ -42,29 +58,54 @@ namespace LandLedgers.Economy.Farming.Integration
         /// adapter then holds 0 feed units and takes 0, never a
         /// silent 1:1. This follows the Pass C map rule.
         /// </summary>
-        public int StoreUnitsPerFeedUnit { get; }
+        public int StoreUnitsPerFeedUnit => feedUnitsNumerator > 0
+            ? Math.Max(1, (storeUnitsDenominator + feedUnitsNumerator - 1) / feedUnitsNumerator)
+            : 0;
 
         public int FeedStockUnits
         {
             get
             {
-                if (storeRuntime == null || StoreUnitsPerFeedUnit <= 0) return 0;
-                CategoryStockState stock = storeRuntime.GetCategoryStock(feedCategoryId);
-                return stock != null ? stock.CurrentStockUnits / StoreUnitsPerFeedUnit : 0;
+                if (storeRuntime == null || storeUnitsDenominator <= 0 || feedUnitsNumerator <= 0) return 0;
+                int packageUnits = string.IsNullOrEmpty(feedItemId)
+                    ? storeRuntime.GetCategoryStock(feedCategoryId)?.CurrentStockUnits ?? 0
+                    : storeRuntime.GetRetailItemStockUnits(feedItemId, feedCategoryId);
+                return Math.Max(0, registration?.UnusedFeedUnits ?? 0)
+                    + (packageUnits * feedUnitsNumerator / storeUnitsDenominator);
             }
         }
 
         public int TakeFeedUnits(int requestedUnits)
         {
-            if (storeRuntime == null || StoreUnitsPerFeedUnit <= 0 || requestedUnits <= 0) return 0;
-            int storeUnitsNeeded = requestedUnits * StoreUnitsPerFeedUnit;
-            if (!storeRuntime.TryConsumeCategoryStockUnits(feedCategoryId, storeUnitsNeeded, out int consumedStoreUnits)
-                || consumedStoreUnits <= 0)
+            if (storeRuntime == null || storeUnitsDenominator <= 0 || feedUnitsNumerator <= 0 || requestedUnits <= 0) return 0;
+            int carried = Math.Max(0, registration?.UnusedFeedUnits ?? 0);
+            int available = FeedStockUnits;
+            if (available < requestedUnits) return 0;
+
+            int deficit = Math.Max(0, requestedUnits - carried);
+            int packageUnitsNeeded = deficit == 0 ? 0
+                : (deficit * storeUnitsDenominator + feedUnitsNumerator - 1) / feedUnitsNumerator;
+            int deliveredByPackages = packageUnitsNeeded * feedUnitsNumerator / storeUnitsDenominator;
+            while (packageUnitsNeeded > 0 && deliveredByPackages < deficit)
             {
-                return 0;
+                packageUnitsNeeded++;
+                deliveredByPackages = packageUnitsNeeded * feedUnitsNumerator / storeUnitsDenominator;
             }
 
-            return consumedStoreUnits / StoreUnitsPerFeedUnit;
+            if (packageUnitsNeeded > 0)
+            {
+                bool consumed = string.IsNullOrEmpty(feedItemId)
+                    ? storeRuntime.TryConsumeCategoryStockUnits(feedCategoryId, packageUnitsNeeded, out int categoryUnits)
+                        && categoryUnits == packageUnitsNeeded
+                    : storeRuntime.TryConsumeRetailItemStockUnits(feedItemId, feedCategoryId, packageUnitsNeeded, out int itemUnits)
+                        && itemUnits == packageUnitsNeeded;
+                if (!consumed) return 0;
+            }
+
+            if (registration != null)
+                registration.UnusedFeedUnits = Math.Max(0, carried + deliveredByPackages - requestedUnits);
+
+            return requestedUnits;
         }
     }
 }

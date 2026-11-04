@@ -20,6 +20,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public int StoreUnitsPerItemUnit = 1;
         /// <summary>When true, SKU stock is backed by identified Business inventory lots.</summary>
         public bool UsesItemLevelInventory;
+        /// <summary>Optional owner-entered price for runtime-registered SKU offers.</summary>
+        public int ItemPriceOverrideCents;
     }
 
     /// <summary>

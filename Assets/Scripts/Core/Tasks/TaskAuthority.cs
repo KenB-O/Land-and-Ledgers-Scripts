@@ -303,6 +303,18 @@ namespace LandLedgers.Tasks
                 return false;
             }
 
+            if (task.HasAssignee)
+            {
+                foreach (WorkTask activeTask in tasks)
+                {
+                    if (activeTask == null || ReferenceEquals(activeTask, task) || !activeTask.HasAssignee
+                        || activeTask.Status != TaskStatus.InProgress || activeTask.AssigneeId != task.AssigneeId) continue;
+                    rejectionReason = "Cannot start task " + taskId + ": " + task.AssigneeId
+                        + " is already occupied by in-progress task " + activeTask.TaskId + ".";
+                    return false;
+                }
+            }
+
             // Pass VIII Worker 7: a worker who became unavailable between
             // assignment and start (death, above all) must not start work.
             if (IsWorkerUnavailable != null && task.HasAssignee)

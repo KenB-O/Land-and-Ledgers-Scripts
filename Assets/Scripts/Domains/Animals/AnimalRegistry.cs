@@ -4,6 +4,16 @@ using LandLedgers.Primitives;
 
 namespace LandLedgers.Animals
 {
+    /// <summary>Persistent physical/work state for a horse's transport presentation.</summary>
+    public enum HorseTransportState
+    {
+        AvailableUnsecured = 0,
+        SecuredAtHitchingPost = 1,
+        AttachedToWagon = 2,
+        TravellingOrWorking = 3,
+        ReceivingCare = 4,
+    }
+
     /// <summary>Species supported by the animal authority. Breed is a free string.</summary>
     public enum AnimalSpecies
     {
@@ -176,6 +186,11 @@ namespace LandLedgers.Animals
         /// </summary>
         public string CurrentReservationId = string.Empty;
         public int LastCareDayIndex = -1;
+        // Additive development freight state. Persisted with AnimalState; it does not
+        // change identity, ownership, or the HorseAuthority care/work condition.
+        public HorseTransportState TransportState = HorseTransportState.AvailableUnsecured;
+        public string SecuredFixtureId = string.Empty;
+        public string AttachedWagonAssetId = string.Empty;
     }
 
     /// <summary>

@@ -133,6 +133,9 @@ namespace LandLedgers.Persistence
         /// </summary>
         public OffMapNamedSkuProcurementService PassXlProcurementService { get; set; }
 
+        /// <summary>Live Millbrook table authority; its stock, retained cash, and pickup lots are part of the slice save.</summary>
+        public OffMapAidBusinessRuntime MillbrookAidRuntime { get; set; }
+
         /// <summary>
         /// Series 2 Pass 9, following the PassXlProcurementService
         /// pattern exactly: the live Pass 9 save holder (Pass 2/3/
@@ -478,7 +481,7 @@ namespace LandLedgers.Persistence
             // service is diagnosed, never crashed on.
             foreach (string passXlDiagnostic in PassXlSliceSaveCoordinator.Restore(
                 save != null ? save.passXlSlice : null,
-                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null, Series2Pass10State, Review2VerticalD3SaveState))
+                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null, Series2Pass10State, Review2VerticalD3SaveState, MillbrookAidRuntime))
             {
                 Debug.Log($"[SaveLoad] {passXlDiagnostic}");
             }
@@ -801,7 +804,7 @@ namespace LandLedgers.Persistence
                 // Drivers are found, not assumed; a null driver or a
                 // null procurement service reads as defaults.
                 passXlSlice = PassXlSliceSaveCoordinator.Capture(
-                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService, Series2Pass9State, Series2Pass10State, Review2VerticalD3SaveState),
+                    populationManager, FindAnyObjectByType<SimulationDrivers>(), PassXlProcurementService, Series2Pass9State, Series2Pass10State, Review2VerticalD3SaveState, MillbrookAidRuntime),
                 migrationManifest = SaveMigrationEnvelope.CaptureForSave(activeMigrationManifest),
                 manifest = new SaveManifestDto
                 {

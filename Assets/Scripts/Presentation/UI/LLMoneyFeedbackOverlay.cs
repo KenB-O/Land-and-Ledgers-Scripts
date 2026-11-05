@@ -9,6 +9,16 @@ using UnityEditor;
 
 namespace LandLedgers.UI
 {
+    /// <summary>
+    /// RETIRED overnight 2026-11-04. The floating money splash (bill
+    /// graphic plus amount text rising over the game view) is gone:
+    /// no production code invokes Show, the feedback service's overlay
+    /// path was removed, and scene authoring no longer creates this
+    /// object. The class is kept, with Show and GetOrCreate intact,
+    /// only so existing scenes and prefabs that reference it still
+    /// load. Do not wire it back up; money feedback is sound plus
+    /// status text plus the ledger and management-UI readouts.
+    /// </summary>
     [DisallowMultipleComponent]
     public sealed class LLMoneyFeedbackOverlay : MonoBehaviour
     {

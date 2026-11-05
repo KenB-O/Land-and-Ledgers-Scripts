@@ -88,7 +88,10 @@ namespace LandLedgers.EditorTools
             EnsureAuthoredScenarioStartPanel(scene, canvas);
             EnsureHudSurfaces(scene);
             EnsureAuthoredTooltip(canvas);
-            EnsureAuthoredMoneyFeedback(canvas);
+            // Overnight 2026-11-04: the floating money-feedback overlay
+            // is retired. Scene authoring no longer creates the overlay
+            // object; scenes that already have one keep a dormant
+            // component that nothing invokes.
             EnsureBusinessCreationUi(scene, businesses);
             WireBootstrapper(scene, civic, businesses, logistics, townPulse, opportunities, debt, portfolio, saveLoad, pathing, guidance, worldInteraction);
 
@@ -290,33 +293,6 @@ namespace LandLedgers.EditorTools
             tooltip.gameObject.SetActive(false);
             EditorUtility.SetDirty(tooltip.gameObject);
             EditorUtility.SetDirty(tooltip);
-        }
-
-        private static void EnsureAuthoredMoneyFeedback(Canvas canvas)
-        {
-            LLMoneyFeedbackOverlay overlay = canvas.GetComponentInChildren<LLMoneyFeedbackOverlay>(true);
-            if (overlay == null)
-            {
-                GameObject root = new("LL_MoneyFeedbackOverlay", typeof(RectTransform), typeof(CanvasGroup));
-                Undo.RegisterCreatedObjectUndo(root, "Author persistent money feedback UI");
-                root.transform.SetParent(canvas.transform, false);
-                overlay = Undo.AddComponent<LLMoneyFeedbackOverlay>(root);
-            }
-
-            RectTransform rect = overlay.transform as RectTransform;
-            rect.anchorMin = Vector2.zero;
-            rect.anchorMax = Vector2.one;
-            rect.offsetMin = Vector2.zero;
-            rect.offsetMax = Vector2.zero;
-            CanvasGroup group = overlay.GetComponent<CanvasGroup>();
-            if (group != null)
-            {
-                group.interactable = false;
-                group.blocksRaycasts = false;
-                group.ignoreParentGroups = true;
-            }
-            EditorUtility.SetDirty(overlay.gameObject);
-            EditorUtility.SetDirty(overlay);
         }
 
         private static void EnsurePopulationAgentRoot(PopulationPathingDirector director)

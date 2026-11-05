@@ -45,11 +45,13 @@ namespace LandLedgers.UI
 
         [Header("Playback")]
         [SerializeField, Range(0f, 1f)] private float masterVolume = 0.75f;
+        // Overnight 2026-11-04: retired. The floating money splash is
+        // gone (see PlayInternal); this setting is retained only so
+        // older scenes still load, and is never read.
         [SerializeField] private bool showMoneyOverlay = true;
         [SerializeField, Range(0f, 1f)] private float duplicateFeedbackCooldownSeconds = 0.18f;
 
         private AudioSource audioSource;
-        private LLMoneyFeedbackOverlay overlay;
         private readonly Dictionary<string, float> recentFeedbackTimes = new();
 
         public static LLFeedbackService Instance
@@ -145,8 +147,15 @@ namespace LandLedgers.UI
 
         private void PlayInternal(LLFeedbackKind kind, string context, Canvas canvas, Vector2? anchoredPosition)
         {
-            // Retain the serialized setting for scene compatibility; the money splash
-            // is intentionally disabled for normal gameplay.
+            // Overnight 2026-11-04: the floating money splash is retired,
+            // not merely disabled. No code path in this repo invokes the
+            // money overlay anymore (the dead EnsureOverlay path was
+            // removed with it), and scene authoring no longer creates
+            // the overlay object. Money feedback is sound plus status
+            // text plus the ledger and management-UI readouts; the
+            // transactions themselves are untouched by this service.
+            // The serialized showMoneyOverlay setting is retained only
+            // so older scenes still load, and is never read.
             _ = showMoneyOverlay;
             if (!ShouldPlay(kind, context))
             {
@@ -163,11 +172,6 @@ namespace LandLedgers.UI
             {
                 Debug.LogWarning(warning, this);
             }
-
-            // Money remains audibly and textually accounted for by the ledger/UI
-            // readouts, but normal transactions must not splash a floating cash
-            // graphic over the game view. Keep the overlay implementation available
-            // for legacy asset compatibility; it is intentionally not invoked.
         }
 
         private bool ShouldPlay(LLFeedbackKind kind, string context)
@@ -257,26 +261,5 @@ namespace LandLedgers.UI
         }
 #endif
 
-        private LLMoneyFeedbackOverlay EnsureOverlay(Canvas canvas)
-        {
-            if (overlay == null || overlay.gameObject == null)
-            {
-                overlay = null;
-                Canvas targetCanvas = canvas != null ? canvas : FindAnyObjectByType<Canvas>();
-                overlay = LLMoneyFeedbackOverlay.GetOrCreate(targetCanvas);
-                return overlay;
-            }
-
-            return overlay;
-        }
-
-        private static bool IsMoneyKind(LLFeedbackKind kind)
-        {
-            return kind == LLFeedbackKind.SmallCash
-                || kind == LLFeedbackKind.MediumCash
-                || kind == LLFeedbackKind.HeavyCash
-                || kind == LLFeedbackKind.StampApproval
-                || kind == LLFeedbackKind.LedgerClose;
-        }
     }
 }

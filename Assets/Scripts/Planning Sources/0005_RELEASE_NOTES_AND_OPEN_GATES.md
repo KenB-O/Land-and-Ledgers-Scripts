@@ -1,3 +1,23 @@
+# Land & Ledgers documentation v3.1 — rolling release notes
+
+**Date:** 2026-11-04. **Studio:** Deadscripts Interactive. **Baseline:** full v3.0 October 31 package, unchanged Bibles.
+
+## Changes in this edition
+- Ingested the Nov 4 owner Comprehensive Design Decision Handoff: **97 classified sections** from Parts 1–15, **24 explicit no-Canon safeguards**, Part 17 economic foundation priority and Part 18 documentation policy.
+- Added separate earlier working note on three realism modes, explicitly **not finalized**.
+- Updated source routes, root agent/navigation instructions, authority status and the two relevant specialist Markdown/PDF/DOCX references.
+- Added 8 user-observed human playtest reproduction cases, marked **not verified**.
+- Added source routing, full A–H reconciliation, topic index and future engineering implications; no code changes authorized or claimed.
+
+## Authority and unchanged pending gates
+- Complete Canon XXXI and Technical XIV originals remain authoritative, unchanged. Post-Canon confirmed November 4 rules supplement them within exact scope.
+- Proposals **001–105 approved; 106–145 pending as numbered proposals**, even if a narrower independent Nov 4 decision overlaps.
+- First Vein conceptual results remain non-Unity evidence. Current Nov 4 human reports are not independently reproduced.
+- No exhaustive independent semantic no-loss certification and no live Unity-code/scene verification.
+- Historical law, lease risk, inheritance, youth work, loan eligibility and exact economic calibration have research holds.
+
+## Previous v3.0 release notes (preserved)
+
 # v3.0 release notes — 2026-10-31
 
 ## Corrected architecture / document authority

@@ -1,4 +1,4 @@
-Topic,Exact_relative_path,Description,Status
+﻿Topic,Exact_relative_path,Description,Status
 Start,0000_START_HERE_READ_ME_FIRST.md,Current root navigation,MUST READ FIRST
 Agent instructions,AGENTS.md,"Agent behaviour, version/authority and deployment",MUST READ SECOND
 Gameplay governing,01_GOVERNING_ORIGINALS/Canonical_Bible_XXXI_Source_2026-10-07.pdf,"Complete governing Canon, 346 PDF pages",AUTHORITATIVE
@@ -21,3 +21,16 @@ Corrected tests,06_SCENARIOS_AND_TESTS/CORRECTED_16_REGRESSION_FIXTURE_REFERENCE
 First Vein 7 goals,06_SCENARIOS_AND_TESTS/FIRST_VEIN_SEVEN_GOALS_SOURCE.md,Seven exact game goals and conceptual results,SCENARIO SOURCE; NOT UNITY VERIFIED
 Codex P0 handoff,07_CODEX_IMPLEMENTATION_HANDOFF/READ_FIRST_IMPLEMENTATION_PRIORITIES.md,Prioritized repository audit and implementation roadmap,ACTIONABLE HANDOFF
 Past file preservation,90_ARCHIVE/PRIOR_PACKAGE_CONTENT_MAP.csv,Older v2.1/2.2/2.3 contents mapped by SHA,ARCHIVAL EVIDENCE
+Nov 4 approved user decisions,02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_POST_CANON_USER_DESIGN_DECISIONS_2026-11-04.md,97 separately classified post-Canon owner handoff decisions,CURRENT DATED DESIGN DECISION LAYER
+Nov 4 machine-readable decision register,02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_POST_CANON_USER_DESIGN_DECISIONS_2026-11-04.csv,"Decision statuses, scope, examples and topic source routing",CURRENT TRACEABLE REGISTER
+Nov 4 not Canon,02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_EXPLICIT_NONCANON_ITEMS_2026-11-04.md,24 explicit numerical/example exclusions,DO NOT PROMOTE
+Three realism modes working note,02_APPROVED_AND_SOURCE_BACKED_UPDATES/06_WORKING_NOTE_THREE_REALISM_MODES_2026-11-02.md,Previous owner preference; not final ruleset,WORKING PREFERENCE
+Nov 4 source routing,05_TRACEABILITY/NOV04_USER_DECISION_SOURCE_ROUTING.csv,Per-decision topical original-PDF routes; not exact semantic signoff,TOPIC TRACEABILITY
+Nov 4 reconciliation A to H,05_TRACEABILITY/NOV04_RECONCILIATION_OUTCOME_A_TO_H.md,Prior covered/new/open/conflicts/engineering implications,CURRENT HANDOFF SUMMARY
+Nov 4 playtest defect reproduction,06_SCENARIOS_AND_TESTS/NOV04_HUMAN_PLAYTEST_OBSERVATIONS_REPRO_LIST.csv,Eight human-reported live-play issues for later test,UNVERIFIED OBSERVATIONS
+Nov 4 topic index,08_SEARCH_INDEXES/NOV04_USER_DECISIONS_TOPIC_ROUTER.csv,Exact path by 97 item IDs and area,SEARCH INDEX
+v3.1 release brief,0006_V31_RELEASE_BRIEF.pdf,"Rolling release, latest authority and QA caveats",CURRENT RELEASE SUMMARY
+November 4 exact file changelog,05_TRACEABILITY/NOV04_EXACT_FILE_CHANGELOG.md,New and changed files relative to v3.0,CURRENT RELEASE AUDIT
+Post-Canon decision register PDF,02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_POST_CANON_USER_DESIGN_DECISIONS_2026-11-04.pdf,Readable formatted 97-item decision layer,DATED POST-CANON DESIGN SOURCE
+Post-Canon decision register DOCX,02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_POST_CANON_USER_DESIGN_DECISIONS_2026-11-04.docx,Editable formatted 97-item decision layer,DATED POST-CANON DESIGN SOURCE
+Nov4 A-H report PDF,05_TRACEABILITY/NOV04_RECONCILIATION_OUTCOME_A_TO_H.pdf,"Evidence category overview, decisions open",RECONCILIATION REPORT

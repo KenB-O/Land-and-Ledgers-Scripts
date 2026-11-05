@@ -295,3 +295,12 @@
 
 ## VI. Package status
 This document catalogs and organizes scenario evidence. It is NOT a full playable scenario pack, nor a pass/fail record of Unity tests.
+
+
+## November 4, 2026 human playtest report — observations, not Unity verification by documentation manager
+
+The owner reported behavior observed while operating the small development-town scene. This evidence is **human report** and may help reproduce problems, but this documentation update did not access the scene, runtime logs or live repository. The immediate objective is a circular Bakery / legitimate freight / household consumption chain. Do not mark the complete chain as passed.
+
+The exact reproducibility checklist is `06_SCENARIOS_AND_TESTS/NOV04_HUMAN_PLAYTEST_OBSERVATIONS_REPRO_LIST.csv`. It covers walking speed, NPC selection, startup objectives, camera range, UI overlap, horse/wagon transforms, development-fixture counts and Millbrook rate-card assumptions.
+
+Glen, Ethan, Shane and the nine-resident town are **illustrative or development fixtures**, not global required outcomes. Owner-confirmed design mechanics live in `02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_POST_CANON_USER_DESIGN_DECISIONS_2026-11-04.md`; do not elevate this scenario report into overriding Canon.

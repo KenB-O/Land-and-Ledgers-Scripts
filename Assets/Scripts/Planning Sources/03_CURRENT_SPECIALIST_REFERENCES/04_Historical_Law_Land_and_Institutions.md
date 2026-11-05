@@ -233,3 +233,16 @@ Prioritize original Dakota territorial statutes, South Dakota codifications, cou
 ## Mining land, title and contract research holds (31 October 2026)
 
 The First Vein conceptual scenario exposed a need for **dated Dakota/Black Hills legal research** on 1872 Mining Law mineral and millsite entry, allowable site sizes/qualifications, patent/fee title, Indigenous/treaty restrictions, mineral/water/tailings use, purchase-money security, recorded deeds and priority, oral promises, notice, tenant trade fixtures, early cancellation and land improvement compensation. These are **questions requiring verified statute, record and jurisdiction evidence**, not universal resolved rules. Use Canon 05/14 and Technical T015/T039 for design invariants pending research. Source: First Vein handoff, 2026-10-29, Parts 5.5, 5.7 and 8.
+
+
+## November 4, 2026 research holds — not legal determinations
+
+New user-confirmed design intent requires **future dated and jurisdiction-specific research**, but this addendum does not assert new historical legal facts. Research should clarify:
+
+- Estate/succession and creditor procedure after owner death (decisions 12.1–12.2), including the possible rights and constraints of surviving spouses/heirs and business management. Do **not** infer automatic spousal title.
+- Whether and how an oral ordinary freight agreement is provable/enforceable under the applicable territorial/state law and time (decision 9.5).
+- Rental equipment liability, loss allocation, maintenance, surety and the admissibility of oral/written evidence (6.7).
+- Transfer restrictions on fee title, claimed public land, liened equipment, leased commercial space and business interests (2.5, 6.1, 7.2–7.3).
+- Youth work and apprenticeship in period-specific economic contexts (10.1), without rigid generic age-class rules.
+
+Use existing Canon XXXI / Technical XIV until researched authority specifically narrows a right; no universal mechanical block or law is established here.

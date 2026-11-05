@@ -24,3 +24,8 @@
 - Obtain current Unity repository evidence before declaring implementation or risk resolved.
 - New First Vein specifics may require period law research before turning example rights/amounts into universal gameplay law.
 - Proposals 106–145 remain pending; implementation of already-established original doctrine is separate.
+
+
+## November 4 owner-directed priority update (docs only)
+
+For later authorized implementation work, the immediate goal is the **Bakery → legitimate freight → delivered flour/fuel → bread production → customers → household consumption loop**. Read `NOV04_DESIGN_TO_IMPLEMENTATION_IMPLICATIONS_NOT_A_CODING_TASK.md` and the 97-entry dated decision register. This update does not authorize game-code changes; no live Unity verification is asserted.

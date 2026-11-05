@@ -4147,6 +4147,111 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        private void StartQueuedFreightDispatchTasks(int dayIndex, int tickStartMinute, int tickEndMinute)
+        {
+            FreightServiceAgreementBook agreements = FreightProduction?.ServiceAgreements;
+            if (agreements?.Agreements == null || hub?.Tasks == null || populationManager?.State == null)
+                return;
+
+            foreach (FreightServiceAgreement agreement in agreements.Agreements.ToList())
+            {
+                if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted
+                    || agreement.PreparedGameSeconds <= 0f || string.IsNullOrWhiteSpace(agreement.DispatchTaskId))
+                    continue;
+
+                WorkTask task = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
+                if (task == null || (task.Status != TaskStatus.Queued && task.Status != TaskStatus.Assigned))
+                    continue;
+
+                LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
+                BusinessInstanceState freight = FindBusiness(agreement.CarrierBusinessId);
+                int operatorId = freight?.Owner?.PersonId ?? -1;
+                PersonState operatorPerson = operatorId >= 0 ? populationManager.State.GetPerson(operatorId) : null;
+                AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
+                EquipmentAsset wagon = hub.TransportAssets?.Get("opening-freight-wagon");
+                FreightDispatchTaskData taskData = string.IsNullOrWhiteSpace(task.TermsRef)
+                    ? null : JsonUtility.FromJson<FreightDispatchTaskData>(task.TermsRef);
+                string expectedRef = FreightDispatchTaskPrefix + agreement.AgreementId + ":" + agreement.ShipmentId;
+                bool horseReservedForShipment = horse != null
+                    && horse.CurrentUse == HorseUseKind.Draft
+                    && string.Equals(horse.CurrentAssignmentId, shipment?.ShipmentId, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(horse.CurrentReservationId);
+                bool wagonReservedForShipment = wagon != null
+                    && wagon.IsTransportAssigned
+                    && string.Equals(wagon.CurrentShipmentId, shipment?.ShipmentId, StringComparison.Ordinal)
+                    && string.Equals(wagon.CurrentDriverPersonId, operatorId.ToString(), StringComparison.Ordinal)
+                    && wagon.DraftAnimalIds != null
+                    && wagon.DraftAnimalIds.Contains(horse != null ? horse.AnimalId.ToString() : string.Empty);
+                string refusal = agreement.PreparedGameSeconds <= agreement.AcceptedGameSeconds
+                    ? "shipment preparation does not chronologically follow agreement acceptance."
+                    : shipment == null || shipment.Status != LogisticsShipmentStatus.Planned
+                        || !shipment.requiresDispatchAuthorization
+                        || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)
+                        ? "the linked shipment is not still held in Planned status for dispatch preparation."
+                    : freight == null || operatorPerson == null || operatorId != agreement.AcceptingOperatorPersonId
+                        ? $"B3 operator P{operatorId} does not resolve to accepted operator P{agreement.AcceptingOperatorPersonId}."
+                    : taskData == null || !string.Equals(task.CustomerRef, expectedRef, StringComparison.Ordinal)
+                        || taskData.OperatorPersonId != operatorId
+                        || !string.Equals(taskData.AgreementId, agreement.AgreementId, StringComparison.Ordinal)
+                        || !string.Equals(taskData.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal)
+                        ? "the recorded TaskAuthority assignment does not match the accepted agreement and shipment identities."
+                    : horse == null || horse.OwnerKind != AnimalOwnerKind.Business
+                        || !string.Equals(horse.OwnerId, freight.InstanceId, StringComparison.Ordinal)
+                        || !string.Equals(taskData.HorseId, horse.AnimalId.ToString(), StringComparison.Ordinal)
+                        || horse.TransportState != HorseTransportState.AttachedToWagon
+                        || !string.Equals(horse.AttachedWagonAssetId, taskData.WagonId, StringComparison.Ordinal)
+                        || ((horse.CurrentUse != HorseUseKind.None || !string.IsNullOrWhiteSpace(horse.CurrentAssignmentId))
+                            && !horseReservedForShipment)
+                        || !HorseAuthority.IsWorkReady(horse)
+                        ? "A0 is not the available, work-ready B3 horse attached to this shipment's wagon."
+                    : wagon == null || !wagon.IsWagon || !wagon.IsUsable
+                        || !string.Equals(wagon.AssetId, taskData.WagonId, StringComparison.Ordinal)
+                        || wagon.OwnerKind != "business" || !string.Equals(wagon.OwnerId, freight.InstanceId, StringComparison.Ordinal)
+                        || !string.Equals(wagon.HitchPreparationShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
+                        || wagon.HitchingAnimalIds == null || !wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString())
+                        || !string.Equals(shipment.physicalWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
+                        || (wagon.IsReserved && !string.Equals(wagon.ReservedFor, shipment.ShipmentId, StringComparison.Ordinal))
+                        || (wagon.IsTransportAssigned && !wagonReservedForShipment)
+                        ? "the assigned wagon is unavailable, not attached to A0, or not prepared for this shipment."
+                    : task.HasAssignee && task.AssigneeId.Id != operatorId
+                        ? $"dispatch task '{task.TaskId}' is already assigned to P{task.AssigneeId.Id}, not Ethan P{operatorId}."
+                        : null;
+
+                if (refusal != null)
+                {
+                    LogFreightAgreementBlockerOnce("dispatch-start-prerequisite:" + task.TaskId,
+                        $"[FreightDispatch] Queued task '{task.TaskId}' retained; start refused: {refusal}");
+                    continue;
+                }
+
+                if (!TryStartBusinessPersonTask(task, operatorPerson, dayIndex, PersonActivityKind.Work,
+                        -1, out string schedulingRefusal))
+                {
+                    LogFreightAgreementBlockerOnce("dispatch-start-schedule:" + task.TaskId,
+                        $"[FreightDispatch] Task '{task.TaskId}' remains queued for Ethan P{operatorId}; schedule/task authority refused: {schedulingRefusal}");
+                    continue;
+                }
+
+                TaskStatus before = task.Status;
+                if (!BeginScheduledBusinessPersonTask(task, operatorPerson, dayIndex, tickStartMinute,
+                        tickEndMinute, -1, out string startRefusal))
+                {
+                    LogFreightAgreementBlockerOnce("dispatch-start-transition:" + task.TaskId,
+                        $"[FreightDispatch] Task '{task.TaskId}' remains assigned to Ethan P{operatorId}; TaskAuthority refused start: {startRefusal}");
+                    continue;
+                }
+
+                if (before != TaskStatus.InProgress && task.Status == TaskStatus.InProgress)
+                {
+                    Debug.Log($"[FreightDispatch] Existing dispatch task '{task.TaskId}' started for Ethan P{operatorId} " +
+                        $"at absolute simulation time {AbsoluteNowGameSeconds():0}s (day {dayIndex}); " +
+                        $"agreement='{agreement.AgreementId}', shipment='{shipment.ShipmentId}', A0='{horse.AnimalId}', " +
+                        $"wagon='{wagon.AssetId}'. Work-time reservation is active; no departure, arrival, pickup, cargo transfer, or payment occurred.", this);
+                }
+            }
+        }
+
         private void MonitorOpeningHitchCancellation(int dayIndex)
         {
             EquipmentAsset wagon = hub?.TransportAssets?.Get("opening-freight-wagon");
@@ -5889,6 +5994,14 @@ namespace LandLedgers.Orchestration.Systems
                 AdvanceAutonomousWork(tickWholeMinutes, context.Date.AbsoluteDayIndex,
                     Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
             }
+
+            // Accepted freight dispatch is an occupied business activity, not
+            // a journey. Start it through the same TaskAuthority and person
+            // schedule path after autonomous progress for this tick, so the
+            // newly-started one-minute assignment cannot be consumed by the
+            // time window that made it eligible.
+            StartQueuedFreightDispatchTasks(context.Date.AbsoluteDayIndex,
+                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
 
             // Pass IV (Worker 1): player-issued tasks progress in real time instead of
             // stalling in InProgress (extends the AdvanceAutonomousWork pattern).

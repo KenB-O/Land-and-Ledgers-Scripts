@@ -1,9 +1,17 @@
-# 0000 — LAND & LEDGERS DOCUMENTATION v3.0 — START HERE
+# 0000 — LAND & LEDGERS DOCUMENTATION v3.1 — START HERE
 
-**Studio:** Dead Scripts Interactive · **Edition:** v3.0 (rolling release, 2026-10-31) · **Purpose:** reliable complete governing sources for ChatGPT and Codex.
+**Studio:** Deadscripts Interactive · **Edition:** v3.1 (rolling release, 2026-11-04) · **Purpose:** reliable complete governing sources for ChatGPT and Codex.
 
 ## READ IN THIS ORDER
 1. **THIS FILE**. 2. [`AGENTS.md`](AGENTS.md). 3. [`0003_AUTHORITY_PRECEDENCE_AND_STATUS.md`](0003_AUTHORITY_PRECEDENCE_AND_STATUS.md). 4. Consult [`0001_DOCUMENT_ROUTER.csv`](0001_DOCUMENT_ROUTER.csv) for the *exact* document path.
+
+
+## NEW AS OF NOVEMBER 4, 2026 — READ BEFORE ANY NEW DESIGN WORK
+- **User-approved dated design directions:** `02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_POST_CANON_USER_DESIGN_DECISIONS_2026-11-04.md` (97 individually classified entries; direct November 4 owner handoff). This is the active **post-Canon user-decision layer**, subordinate only to older rules where no explicit newer approved change exists.
+- **Decision classifications / exclusions:** `.csv` companion and `02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_EXPLICIT_NONCANON_ITEMS_2026-11-04.md` (24 non-Canonical examples and provisional numbers).
+- **Three realism modes:** `02_APPROVED_AND_SOURCE_BACKED_UPDATES/06_WORKING_NOTE_THREE_REALISM_MODES_2026-11-02.md` is an earlier owner preference, **not a finalized mode specification**.
+- **Reconciliation and handoff:** `05_TRACEABILITY/NOV04_RECONCILIATION_OUTCOME_A_TO_H.md`; only the user-reported implementation issues in `06_SCENARIOS_AND_TESTS/NOV04_HUMAN_PLAYTEST_OBSERVATIONS_REPRO_LIST.csv`, none independently tested here.
+- **Critical scope:** this release updates **documentation only**. Do not hand the 97 design entries to Codex as blanket permission for a coding sweep. Preserve source-only versus Unity-verified distinctions.
 
 ## GOVERNING SOURCES — NEVER REPLACE WITH SHORT SUMMARY
 - `01_GOVERNING_ORIGINALS/Canonical_Bible_XXXI_Source_2026-10-07.pdf` — **346 complete original PDF pages**, unchanged governing gameplay base.
@@ -31,7 +39,7 @@
 - The specifically named independent v2.3 audit and 78-file inventory were not among available source files; their findings were treated as user-reported audit requirements, not as a document that was actually read.
 
 ## TWO DESTINATIONS, SAME RELEASE
-1. ChatGPT Project Sources receives this **single v3.0 ZIP**.
+1. ChatGPT Project Sources receives this **single v3.1 ZIP**.
 2. Codex on Kens-PC deploys it **extracted** into `F:\Land & Ledgers\Planning Sources`; no additional nested root. Use `0004_CODEX_EXTRACT_AND_REPLACE.md` for transactional backup and safe managed-file replacement. Do not modify Unity code during documentation installation.
 
-**Never describe v3.0 as final.** It is a rolling documentation release with stable provenance and an unresolved independent-review gate.
+**Never describe v3.1 as final.** It is a rolling documentation release with stable provenance and an unresolved independent-review gate.

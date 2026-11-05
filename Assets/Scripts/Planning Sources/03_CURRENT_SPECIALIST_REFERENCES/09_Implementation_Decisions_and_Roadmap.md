@@ -183,3 +183,14 @@ The user requested that First Vein decisions be placed in the ordinary design an
 **Research holds:** 1877 Black Hills gold geology/prices, assay variability, freight, milling recovery, seller-financed property records, territorial millsite rights, livestock handling and updated statutory terms. Do not convert fictional simulated prices or 1890 outcome into calibration data.
 
 **Document-authority gate:** Working v0.4 consolidation still requires comprehensive source-by-source no-loss signoff before retiring preserved original baselines. There is no automatic approval of numbered proposals 106–145.
+
+
+## November 4, 2026 owner priority and implementation holds (documentation only)
+
+Priority is an **autonomous, cyclical and physically conserved** economy: Bakery flour need → credible freight terms → actual loaded shipment → regional arrival and return → unloading and receipt → freight settlement → fuel and production inputs → bread → customer sale → household consumption → repeat. Report each separately verified implementation stage, never a single conceptual test as complete.
+
+After this foundation, the owner prioritizes economic agency and depth such as NPC formation/competition, asset trading and leasing, real-estate and business transfers, credit, failure/recovery, functional space and staffing. Detailed succession law remains lower priority. The ordering guides resources, not an inflexible unlock chain.
+
+**Reported implementation observations requiring live verification:** `DevelopmentTownConfiguration` consolidation; nine residents/five households/four businesses; Millbrook sample 50-mile one-way journey and 125-cent rate card; startup entering First Ledger; NPC moving unusually quickly; NPC clicking selects a Building; prefab horse/wagon transforms; camera zoom limits; crowded town UI. Do not treat any as verified by this documentation release.
+
+Full scoped decisions: `02_APPROVED_AND_SOURCE_BACKED_UPDATES/05_POST_CANON_USER_DESIGN_DECISIONS_2026-11-04.md`. Reproduction list: `06_SCENARIOS_AND_TESTS/NOV04_HUMAN_PLAYTEST_OBSERVATIONS_REPRO_LIST.csv`.

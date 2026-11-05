@@ -1,0 +1,9 @@
+﻿Issue_ID,User_observation_or_report,Required_reproduction_or_evidence,Decision_ID,Verification_Status
+LL-NOV04-001,NPC walking speed,"Measure real position delta, simulation ticks, time multiplier; test at 1x and accelerated clocks",10.5,NOT AUDITED IN UNITY
+LL-NOV04-002,NPC versus building selection,Reproduce actor click selecting underlying building; inspect selection filters and raycast/target hierarchy,14.7,NOT AUDITED IN UNITY
+LL-NOV04-003,Open Frontier startup,Check Open Frontier selection without forced First Ledger objectives,14.1,NOT AUDITED IN UNITY
+LL-NOV04-004,Town and management UI,"Capture readability: overlaps, density, excessive text and meaningless choices",14.8,NOT AUDITED IN UNITY
+LL-NOV04-005,Camera zoom constraints,Record current minimum/maximum camera zoom and performance before tuning,14.5,NOT AUDITED IN UNITY
+LL-NOV04-006,Horse/wagon transforms,"Inspect double-scale/floating while preserving user-authored anchors, prefab scale/rotation",14.9,NOT AUDITED IN UNITY
+LL-NOV04-007,Development-town fixture,"Verify nine residents, five households and four businesses in scene/config; do not use as global world-generation target",14.2,NOT AUDITED IN UNITY
+LL-NOV04-008,Freight prototype rate card,Confirm Millbrook distance and intended chargeable mileage policy; compare observed quote with 125-cent fixture example,9.8,NOT AUDITED IN UNITY

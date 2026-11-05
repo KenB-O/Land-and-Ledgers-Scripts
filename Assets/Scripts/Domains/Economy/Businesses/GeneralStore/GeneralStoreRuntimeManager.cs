@@ -2334,9 +2334,9 @@ namespace LandLedgers.FirstLedger
         /// <summary>
         /// Slice 11: the daily restock review through the restock driver.
         /// Same guard as the weekly path: no drive before a real store is
-        /// formed and bound. Slice 16 wires the regional suppliers in here:
-        /// with no suppliers registered yet this places no orders and records
-        /// the gap once per day.
+        /// formed and bound. The manager registers the authored Ashford and
+        /// Redfield supplier adapters before reviewing demand; the separate
+        /// weekly off-map reorder remains available for uncovered categories.
         /// </summary>
         private void DriveDailyRestock()
         {

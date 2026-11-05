@@ -29,6 +29,7 @@ using LandLedgers.Skills;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
+using LandLedgers.World.Regional;
 using LandLedgers.World;
 using LandLedgers.World.Property;
 using UnityEngine;
@@ -270,6 +271,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
         private int lastTownJourneyWorldSignature = int.MinValue;
+        private string lastRegionalJourneyRegistrationFailure = string.Empty;
 
         /// <summary>
         /// Pass XII Worker A (LL-PLAY-002/003): true while this instance
@@ -5786,24 +5788,59 @@ namespace LandLedgers.Orchestration.Systems
                 ? sharedBusinessRuntime.Businesses
                 : Array.Empty<BusinessInstanceState>();
             int signature = CalculateTownJourneyWorldSignature(townWorld, businesses);
-            if (signature == lastTownJourneyWorldSignature) return;
+            if (signature != lastTownJourneyWorldSignature)
+            {
+                Vector3 townCenter = townWorld.Settings != null
+                    ? townWorld.Settings.worldCenter
+                    : townWorld.Grid.Origin + new Vector3(
+                        townWorld.Grid.Width * townWorld.Grid.CellSizeMeters * 0.5f,
+                        0f,
+                        townWorld.Grid.Depth * townWorld.Grid.CellSizeMeters * 0.5f);
+                TownJourneyNetworkBuilder.BuildResult result = TownJourneyNetworkBuilder.Synchronize(
+                    hub.Journeys, townWorld.Grid, townCenter, townWorld.Plots, townWorld.Buildings, businesses);
+                if (result.RoadComponents <= 0) return;
 
-            Vector3 townCenter = townWorld.Settings != null
-                ? townWorld.Settings.worldCenter
-                : townWorld.Grid.Origin + new Vector3(
-                    townWorld.Grid.Width * townWorld.Grid.CellSizeMeters * 0.5f,
-                    0f,
-                    townWorld.Grid.Depth * townWorld.Grid.CellSizeMeters * 0.5f);
-            TownJourneyNetworkBuilder.BuildResult result = TownJourneyNetworkBuilder.Synchronize(
-                hub.Journeys, townWorld.Grid, townCenter, townWorld.Plots, townWorld.Buildings, businesses);
-            if (result.RoadComponents <= 0) return;
+                Journeys = hub.Journeys;
+                lastTownJourneyWorldSignature = signature;
+                if (result.RoutableBuildings <= 0)
+                    Debug.LogWarning("[SimulationDrivers] " + result.Diagnostic, this);
+                else
+                    Debug.Log("[SimulationDrivers] " + result.Diagnostic, this);
+            }
 
-            Journeys = hub.Journeys;
-            lastTownJourneyWorldSignature = signature;
-            if (result.RoutableBuildings <= 0)
-                Debug.LogWarning("[SimulationDrivers] " + result.Diagnostic, this);
-            else
-                Debug.Log("[SimulationDrivers] " + result.Diagnostic, this);
+            EnsureRegionalJourneyRoutes();
+        }
+
+        /// <summary>
+        /// Registers the authored off-map regional locations only after the
+        /// generated town journey graph has established its real town-center
+        /// anchor. ApplyAll is idempotent, so this also repairs a missing
+        /// regional registration after restore or route reconstruction without
+        /// duplicating locations or replacing local roads.
+        /// </summary>
+        private void EnsureRegionalJourneyRoutes()
+        {
+            if (hub == null || hub.Journeys.GetLocation("town-center") == null) return;
+
+            var diagnostics = new List<string>();
+            int registered = RegionalTownRegistry.ApplyAll(hub.Journeys, diagnostics);
+            if (registered < 0)
+            {
+                string failure = string.Join(" ", diagnostics);
+                if (!string.Equals(lastRegionalJourneyRegistrationFailure, failure, StringComparison.Ordinal))
+                {
+                    lastRegionalJourneyRegistrationFailure = failure;
+                    Debug.LogWarning("[SimulationDrivers] Regional journey registration refused: " + failure, this);
+                }
+                return;
+            }
+
+            lastRegionalJourneyRegistrationFailure = string.Empty;
+            if (registered > 0)
+            {
+                Debug.Log($"[SimulationDrivers] Registered {registered} authored regional journey locations " +
+                    "(Ashford and Redfield) on the hub JourneyModel.", this);
+            }
         }
 
         private static int CalculateTownJourneyWorldSignature(

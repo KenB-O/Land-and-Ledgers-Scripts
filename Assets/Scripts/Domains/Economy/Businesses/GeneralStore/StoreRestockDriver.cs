@@ -12,9 +12,8 @@
 // The driver is deliberately boring: one drive per day (a second call the
 // same day is a no-op), the reorder threshold is caller-supplied, and the
 // diagnostics are the service's own lines plus the no-supplier notice.
-// Open orders live in memory in the service; save/load for them is not
-// built yet, and the weekly pending-reorder queue remains the durable
-// route until it is.
+// Orders, deliveries, and sequence counters are persisted by the owned
+// StoreRestockService through the regional supply save DTO.
 using System;
 using System.Collections.Generic;
 using LandLedgers.World.Regional;

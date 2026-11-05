@@ -71,6 +71,47 @@ namespace LandLedgers.Population
         public bool AllowNewArrivals = true;
 
         /// <summary>
+        /// Overnight 2026-11-04: development-town mortality switch. Default
+        /// true, so every existing scenario and test is unchanged. When false,
+        /// MortalityDriver.RecordDeath suppresses the fatal transition
+        /// (logging it once per person in <see cref="SuppressedDeathPersonIds"/>)
+        /// instead of recording the death, ending employment, or opening an
+        /// estate. Nonfatal consequences (hunger, illness, fatigue, hardship)
+        /// are simulated elsewhere and are NOT suppressed by this flag.
+        /// PopulationManager sets this from DevelopmentTownConfiguration for
+        /// the development town; all other scenarios leave it true.
+        /// </summary>
+        public bool EnableMortality = true;
+
+        /// <summary>
+        /// Overnight 2026-11-04: development-town fertility switch. Default
+        /// true, so every existing scenario and test is unchanged. When false,
+        /// BirthDriver starts no new pregnancy and delivers no birth; due
+        /// pregnancies are deferred (recorded once per mother in
+        /// <see cref="DeferredBirthMotherIds"/>) and deliver once the flag is
+        /// true again. PopulationManager sets this from
+        /// DevelopmentTownConfiguration for the development town.
+        /// </summary>
+        public bool EnableFertility = true;
+
+        /// <summary>
+        /// Person ids for which a suppressed death has already been logged.
+        /// Owned by PopulationManager (the context is rebuilt daily, so a
+        /// set on the context alone could not dedupe across days). Null-safe:
+        /// drivers treat a null set as "log this occurrence" within the call.
+        /// Session-only by design: it is not persisted, so a restored game
+        /// may log one further suppression for the same person.
+        /// </summary>
+        public HashSet<int> SuppressedDeathPersonIds = new HashSet<int>();
+
+        /// <summary>
+        /// Mother person ids for which a deferred birth has already been
+        /// logged while fertility is disabled. Same ownership and
+        /// session-only rules as <see cref="SuppressedDeathPersonIds"/>.
+        /// </summary>
+        public HashSet<int> DeferredBirthMotherIds = new HashSet<int>();
+
+        /// <summary>
         /// Pass XL phase 4 (finding F09): when false, MigrationDriver
         /// skips departures (MigrateOut) as well as arrivals. Default
         /// true, so every existing scenario and test is byte-for-byte
@@ -188,6 +229,14 @@ namespace LandLedgers.Population
                 return;
             }
 
+            // Overnight 2026-11-04: fertility disabled (development town) —
+            // no new pregnancy begins. Existing pregnancies are untouched here;
+            // EvaluateBirths defers their delivery while disabled.
+            if (!ctx.EnableFertility)
+            {
+                return;
+            }
+
             ctx.Anchor.FromAbsoluteDay(ctx.CurrentDayIndex, out int year, out int month, out int day);
             for (int i = 0; i < ctx.Population.people.Count; i++)
             {
@@ -272,6 +321,23 @@ namespace LandLedgers.Population
                 PregnancyRecord pregnancy = ctx.Pregnancies[i];
                 if (pregnancy == null || pregnancy.dueDayIndex > ctx.CurrentDayIndex)
                 {
+                    continue;
+                }
+
+                // Overnight 2026-11-04: fertility disabled (development town) —
+                // a due birth is deferred, not delivered and not deleted. The
+                // pregnancy stays in the list and delivers once fertility is
+                // re-enabled (possibly past its due day, which is the honest
+                // consequence of pausing births). Logged once per mother.
+                if (!ctx.EnableFertility)
+                {
+                    var deferred = ctx.DeferredBirthMotherIds ?? new HashSet<int>();
+                    if (deferred.Add(pregnancy.motherPersonId))
+                    {
+                        ctx.Diagnostics.Add(
+                            $"BirthDriver: birth deferred for P{pregnancy.motherPersonId} (due day {pregnancy.dueDayIndex}, fertility disabled).");
+                    }
+
                     continue;
                 }
 
@@ -482,11 +548,38 @@ namespace LandLedgers.Population
         /// Records a death through the lifecycle authority, cancels the birthday
         /// event, and opens the estate. Public so tests and the household-split
         /// driver can route every death through the same path.
+        /// Overnight 2026-11-04: when ctx.EnableMortality is false, the death
+        /// is suppressed and logged instead (see the gate above); no side
+        /// effect of a real death happens.
         /// </summary>
         public static void RecordDeath(DemographicDriverContext ctx, PersonState person, string cause)
         {
             if (ctx == null || person == null || person.deathDayIndex >= 0)
             {
+                return;
+            }
+
+            // Overnight 2026-11-04: mortality disabled (development town).
+            // This is the single production death funnel, so gating here
+            // covers old age, illness, injury, and sudden events alike:
+            // nothing is recorded, no estate opens, no employment ends,
+            // ownership and membership are untouched, and the person stays
+            // in the population. Nonfatal consequences continue to be
+            // simulated by their own systems. The prevented death is logged
+            // once per person (PopulationManager owns the set, because this
+            // context is rebuilt daily) with the absolute simulation day
+            // and calendar date, so a person in a continuously fatal
+            // condition does not spam the log on every day boundary.
+            if (!ctx.EnableMortality)
+            {
+                var suppressed = ctx.SuppressedDeathPersonIds ?? new HashSet<int>();
+                if (suppressed.Add(person.id))
+                {
+                    ctx.Anchor.FromAbsoluteDay(ctx.CurrentDayIndex, out int sYear, out int sMonth, out int sDay);
+                    ctx.Diagnostics.Add(
+                        $"[DevelopmentPopulation] Death suppressed Person=P{person.id} Cause={cause} Day={ctx.CurrentDayIndex} Date={sYear:D4}-{sMonth:D2}-{sDay:D2} Mortality disabled");
+                }
+
                 return;
             }
 

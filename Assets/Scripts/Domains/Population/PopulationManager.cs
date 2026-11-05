@@ -121,6 +121,33 @@ namespace LandLedgers.Population
         /// </summary>
         public bool SuppressMigrantArrivals { get; set; }
 
+        /// <summary>
+        /// Overnight 2026-11-04: development-town mortality/fertility
+        /// switches, defaulting to normal behaviour (true). Set from
+        /// DevelopmentTownConfiguration in GeneratePopulationSnapshot and
+        /// re-pushed daily by SimulationDrivers from the attached
+        /// configuration, so a Continued development town keeps the
+        /// toggles even though population is not regenerated on load.
+        /// These are session flags, not persisted population state: if no
+        /// configuration is attached on load, they stay at their default
+        /// (enabled), which is the safe normal-behaviour fallback.
+        /// </summary>
+        public bool MortalityEnabled { get; set; } = true;
+        public bool FertilityEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Overnight 2026-11-04: person ids whose suppressed death has
+        /// already been logged this session, and mother ids whose deferred
+        /// birth has already been logged. Passed into each day's fresh
+        /// DemographicDriverContext so the drivers can dedupe across days.
+        /// Not persisted: a restored game may log one further suppression
+        /// or deferral for the same person.
+        /// </summary>
+        private readonly HashSet<int> suppressedDeathPersonIds = new HashSet<int>();
+        private readonly HashSet<int> deferredBirthMotherIds = new HashSet<int>();
+        public IReadOnlyCollection<int> SuppressedDeathPersonIds => suppressedDeathPersonIds;
+        public IReadOnlyCollection<int> DeferredBirthMotherIds => deferredBirthMotherIds;
+
         /// <summary>Pass V P1-3: the population-wide kinship authority.</summary>
         public KinshipRegistry Kinship => kinshipRegistry;
 
@@ -201,6 +228,14 @@ namespace LandLedgers.Population
         public void GeneratePopulationSnapshot(DevelopmentTownConfiguration configuration)
         {
             SuppressMigrantArrivals = configuration != null;
+            // Overnight 2026-11-04: a null configuration means non-development
+            // generation, which keeps normal mortality and fertility. A
+            // development configuration supplies both switches; both are
+            // false by default on the configuration, so the current
+            // development town runs with turnover removed unless the
+            // authored configuration explicitly opts back in.
+            MortalityEnabled = configuration == null || configuration.EnableMortality;
+            FertilityEnabled = configuration == null || configuration.EnableFertility;
             AutoWireReferences();
             sharedBusinessRuntime?.InitializeIfNeeded();
             EnsureDemographicStack(freshKinship: true);
@@ -590,6 +625,10 @@ namespace LandLedgers.Population
                 Diagnostics = demographicDiagnostics,
                 GameSecondsPerDay = secondsPerDay,
                 AllowNewArrivals = !SuppressMigrantArrivals,
+                EnableMortality = MortalityEnabled,
+                EnableFertility = FertilityEnabled,
+                SuppressedDeathPersonIds = suppressedDeathPersonIds,
+                DeferredBirthMotherIds = deferredBirthMotherIds,
             };
             DemographicDriverSchedule.EvaluateDay(ctx);
             DemographicDriverSchedule.EvaluateMonth(ctx);

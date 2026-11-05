@@ -1449,6 +1449,19 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         private void DriveDemographicDay(int absoluteDayIndex)
         {
+            // Overnight 2026-11-04: re-apply the attached development-town
+            // mortality/fertility switches every day. Population generation
+            // sets them on New Game, but a Continued game never regenerates,
+            // so without this push a restored development town would silently
+            // revert to normal mortality and fertility. When no development
+            // configuration is attached, the manager's own values are left
+            // untouched (normal behaviour for every other scenario).
+            if (populationManager != null && developmentTownConfiguration != null)
+            {
+                populationManager.MortalityEnabled = developmentTownConfiguration.EnableMortality;
+                populationManager.FertilityEnabled = developmentTownConfiguration.EnableFertility;
+            }
+
             populationManager?.DriveDemographicDay(absoluteDayIndex);
             DriveEstateAdvancement(absoluteDayIndex);
             if (hub?.DomesticLaborDriver != null)

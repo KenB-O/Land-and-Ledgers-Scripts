@@ -111,6 +111,10 @@ namespace LandLedgers.Population
         [SerializeField] private string freightBusinessKey = "freight-company";
         [SerializeField] private string openingHorseId = "A0";
         [SerializeField] private string openingWagonId = "opening-freight-wagon";
+        [SerializeField, Tooltip("Overnight 2026-11-04: development-town mortality switch. FALSE by default, so the current development town runs with population turnover removed as a testing variable. A prevented death is logged once per person as a suppressed death (see MortalityDriver) and leaves the person, their employment, and their ownership intact. This is a development-town setting only: scenarios that do not use this configuration keep normal mortality.")]
+        private bool enableMortality;
+        [SerializeField, Tooltip("Overnight 2026-11-04: development-town fertility switch. FALSE by default, so the current development town starts no new pregnancies and delivers no births while disabled. Pregnancies already underway are deferred, not deleted, and deliver once fertility is re-enabled. This is a development-town setting only: scenarios that do not use this configuration keep normal fertility.")]
+        private bool enableFertility;
 
         public string ConfigurationId => configurationId ?? string.Empty;
         public int SeedOffset => seedOffset;
@@ -124,6 +128,8 @@ namespace LandLedgers.Population
         public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
         public string OpeningHorseId => openingHorseId ?? string.Empty;
         public string OpeningWagonId => openingWagonId ?? string.Empty;
+        public bool EnableMortality => enableMortality;
+        public bool EnableFertility => enableFertility;
 
         public bool TryGetPerson(string personKey, out PersonDefinition result)
         {

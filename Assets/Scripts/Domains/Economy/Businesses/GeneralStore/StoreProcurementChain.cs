@@ -30,6 +30,26 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         int Ship(string categoryId, int units, int dayIndex, List<string> diagnostics);
     }
 
+    /// <summary>
+    /// Slice 18: optional exact-item extension for upstream suppliers.
+    /// A category-only supplier stays source compatible; a supplier that
+    /// can quote, count, and ship a NAMED item implements this so the
+    /// chain can choose the cheapest deliverable item inside a category
+    /// (flour from Millbrook vs Redfield, tea at its own price) instead
+    /// of the category's cheapest item standing in for all of them.
+    /// </summary>
+    public interface IItemLevelUpstreamGoodsSupplier : IUpstreamGoodsSupplier
+    {
+        /// <summary>Items this supplier offers in the category with stock on hand.</summary>
+        IReadOnlyList<string> OfferedItemsInCategory(string categoryId);
+        /// <summary>Wholesale cents per unit for a named item; 0 when not offered or out of stock.</summary>
+        int QuoteItemUnitCostCents(string itemId);
+        /// <summary>Units of a named item on hand.</summary>
+        int AvailableItemUnits(string itemId);
+        /// <summary>Ships a named item from real stock; returns units actually shipped.</summary>
+        int ShipItem(string itemId, int units, int dayIndex, List<string> diagnostics);
+    }
+
     /// <summary>Phase C: one real supplier order from the store to upstream.</summary>
     [Serializable]
     public sealed class StoreProcurementOrder
@@ -37,6 +57,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string OrderId = string.Empty;
         public string StoreBusinessId = string.Empty;
         public string CategoryId = string.Empty;
+        /// <summary>
+        /// Slice 18: the named item this order buys, when the chain chose
+        /// item-level. Empty = a category order (the pre-Slice-18 shape):
+        /// the supplier ships its cheapest item in the category.
+        /// </summary>
+        public string ItemId = string.Empty;
         public int UnitsOrdered;
         public int UnitCostCents;
         /// <summary>
@@ -71,6 +97,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string DeliveryId = string.Empty;
         public string OrderId = string.Empty;
         public string CategoryId = string.Empty;
+        /// <summary>Slice 18: the named item this delivery carries, when the order was item-level. Empty for category deliveries.</summary>
+        public string ItemId = string.Empty;
         public int Units;
         public int ShippedDayIndex;
         public int TransitMinutes;
@@ -126,7 +154,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             List<IUpstreamGoodsSupplier> upstreamSuppliers,
             int dayIndex,
             float reorderThreshold01,
-            Func<IUpstreamGoodsSupplier, string, int, int> deliveredCostPerUnitCents = null)
+            Func<IUpstreamGoodsSupplier, string, string, int, int> deliveredCostPerUnitCents = null)
         {
             if (store == null || store.CategoryOffers == null)
             {
@@ -166,6 +194,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
+                // Slice 18: item-level choice first (needs an item-level
+                // port and item-level suppliers). It picks the cheapest
+                // deliverable (supplier, item) pair that passes ITS OWN
+                // item price — so tea and coffee, whose delivered costs
+                // sit above the category average but below their own
+                // prices, become orderable, and the flour crossover
+                // (near vs far by order size) becomes visible to the
+                // chain. When no item pair passes, the category path
+                // below runs unchanged.
+                if (TryPlaceItemLevelOrder(store, upstreamSuppliers, categoryId, missing, dayIndex, deliveredCostPerUnitCents))
+                {
+                    continue;
+                }
+
                 IUpstreamGoodsSupplier best = ChooseSupplier(upstreamSuppliers, categoryId, missing, dayIndex, deliveredCostPerUnitCents);
                 if (best == null)
                 {
@@ -189,7 +231,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 // still records the goods cost the supplier is paid.
                 int deliveredCost = 0;
                 if (deliveredCostPerUnitCents != null)
-                    deliveredCost = Math.Max(0, deliveredCostPerUnitCents(best, categoryId, orderUnits));
+                    deliveredCost = Math.Max(0, deliveredCostPerUnitCents(best, categoryId, string.Empty, orderUnits));
                 int costForNoLossCheck = deliveredCostPerUnitCents != null ? deliveredCost : unitCost;
 
                 int sellingPrice = Math.Max(0, store.CategoryPricePerUnitCents(categoryId));
@@ -201,27 +243,125 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
 
                 int leadDays = Math.Max(0, best.LeadTimeDays(categoryId));
-                var order = new StoreProcurementOrder
-                {
-                    OrderId = $"po-{store.StoreBusinessId}-{dayIndex}-{nextOrderSequence++}",
-                    StoreBusinessId = store.StoreBusinessId,
-                    CategoryId = categoryId,
-                    UnitsOrdered = orderUnits,
-                    UnitCostCents = unitCost,
-                    DeliveredCostCentsPerUnit = deliveredCost,
-                    UpstreamSupplierId = best.SupplierId,
-                    UpstreamSupplierName = best.SupplierName,
-                    OrderDayIndex = Math.Max(0, dayIndex),
-                    ExpectedArrivalDayIndex = Math.Max(0, dayIndex) + leadDays,
-                    Stage = StoreProcurementStage.Ordered,
-                    Provenance = $"order {orderUnits}u {categoryId} from {best.SupplierName} @ {unitCost}c/u",
-                };
-                order.Provenance = $"order {order.OrderId}: " + order.Provenance;
+                var order = BuildOrder(store, best, categoryId, string.Empty, orderUnits, unitCost, deliveredCost, leadDays, dayIndex);
                 orders.Add(order);
                 diagnostics.Add($"Day {dayIndex}: {order.Provenance} (arrives ~day {order.ExpectedArrivalDayIndex}).");
             }
 
             ConsolidateTodayShipments(store.StoreBusinessId, dayIndex);
+        }
+
+        /// <summary>
+        /// Slice 18: item-level ordering inside a category need. Scans
+        /// every (item-level supplier, offered item) pair in the category,
+        /// keeps the pairs whose cost sits below the ITEM's own selling
+        /// price, and places one order for the cheapest such pair. The
+        /// need itself is still the category shortfall (per-item targets
+        /// do not exist in the runtime). Returns false when the port is
+        /// not item-level, no supplier is item-level, or no pair passes
+        /// the no-loss check — the caller then runs the category path.
+        /// </summary>
+        private bool TryPlaceItemLevelOrder(
+            IGeneralStoreTradingPort store,
+            List<IUpstreamGoodsSupplier> upstreamSuppliers,
+            string categoryId,
+            int missing,
+            int dayIndex,
+            Func<IUpstreamGoodsSupplier, string, string, int, int> deliveredCostPerUnitCents)
+        {
+            var itemPort = store as IItemLevelGeneralStoreTradingPort;
+            if (itemPort == null || upstreamSuppliers == null)
+            {
+                return false;
+            }
+
+            IUpstreamGoodsSupplier bestSupplier = null;
+            string bestItemId = null;
+            int bestGoods = 0;
+            int bestDelivered = 0;
+            int bestUnits = 0;
+            int bestCostForCheck = int.MaxValue;
+
+            for (int s = 0; s < upstreamSuppliers.Count; s++)
+            {
+                var itemSupplier = upstreamSuppliers[s] as IItemLevelUpstreamGoodsSupplier;
+                if (itemSupplier == null) continue;
+                IReadOnlyList<string> items = itemSupplier.OfferedItemsInCategory(categoryId);
+                if (items == null) continue;
+                for (int j = 0; j < items.Count; j++)
+                {
+                    string itemId = items[j];
+                    if (string.IsNullOrWhiteSpace(itemId)) continue;
+                    int available = Math.Max(0, itemSupplier.AvailableItemUnits(itemId));
+                    if (available <= 0) continue;
+                    int orderUnits = Math.Min(missing, available);
+                    if (orderUnits <= 0) continue;
+                    int goods = Math.Max(0, itemSupplier.QuoteItemUnitCostCents(itemId));
+                    if (goods <= 0) continue;
+                    int delivered = 0;
+                    if (deliveredCostPerUnitCents != null)
+                        delivered = Math.Max(0, deliveredCostPerUnitCents(itemSupplier, categoryId, itemId, orderUnits));
+                    int costForCheck = deliveredCostPerUnitCents != null ? delivered : goods;
+                    int sellingPrice = Math.Max(0, itemPort.ItemPricePerUnitCents(itemId));
+                    if (sellingPrice <= 0 || costForCheck >= sellingPrice) continue;
+                    if (costForCheck < bestCostForCheck
+                        || (costForCheck == bestCostForCheck && bestSupplier != null
+                            && (string.CompareOrdinal(itemSupplier.SupplierId, bestSupplier.SupplierId) < 0
+                                || (string.Equals(itemSupplier.SupplierId, bestSupplier.SupplierId, StringComparison.Ordinal)
+                                    && string.CompareOrdinal(itemId, bestItemId) < 0))))
+                    {
+                        bestSupplier = itemSupplier;
+                        bestItemId = itemId;
+                        bestGoods = goods;
+                        bestDelivered = delivered;
+                        bestUnits = orderUnits;
+                        bestCostForCheck = costForCheck;
+                    }
+                }
+            }
+
+            if (bestSupplier == null)
+            {
+                return false;
+            }
+
+            int leadDays = Math.Max(0, bestSupplier.LeadTimeDays(categoryId));
+            StoreProcurementOrder order = BuildOrder(store, bestSupplier, categoryId, bestItemId, bestUnits, bestGoods, bestDelivered, leadDays, dayIndex);
+            orders.Add(order);
+            diagnostics.Add($"Day {dayIndex}: {order.Provenance} (arrives ~day {order.ExpectedArrivalDayIndex}).");
+            return true;
+        }
+
+        private StoreProcurementOrder BuildOrder(
+            IGeneralStoreTradingPort store,
+            IUpstreamGoodsSupplier supplier,
+            string categoryId,
+            string itemId,
+            int orderUnits,
+            int unitCost,
+            int deliveredCost,
+            int leadDays,
+            int dayIndex)
+        {
+            string what = string.IsNullOrWhiteSpace(itemId) ? categoryId : itemId;
+            var order = new StoreProcurementOrder
+            {
+                OrderId = $"po-{store.StoreBusinessId}-{dayIndex}-{nextOrderSequence++}",
+                StoreBusinessId = store.StoreBusinessId,
+                CategoryId = categoryId,
+                ItemId = itemId ?? string.Empty,
+                UnitsOrdered = orderUnits,
+                UnitCostCents = unitCost,
+                DeliveredCostCentsPerUnit = deliveredCost,
+                UpstreamSupplierId = supplier.SupplierId,
+                UpstreamSupplierName = supplier.SupplierName,
+                OrderDayIndex = Math.Max(0, dayIndex),
+                ExpectedArrivalDayIndex = Math.Max(0, dayIndex) + leadDays,
+                Stage = StoreProcurementStage.Ordered,
+                Provenance = $"order {orderUnits}u {what} from {supplier.SupplierName} @ {unitCost}c/u",
+            };
+            order.Provenance = $"order {order.OrderId}: " + order.Provenance;
+            return order;
         }
 
         /// <summary>
@@ -323,7 +463,19 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
-                int shipped = Math.Max(0, supplier.Ship(order.CategoryId, order.UnitsOrdered, dayIndex, outDiagnostics));
+                // Slice 18: an item-level order ships the NAMED item from
+                // real stock; a category order ships the supplier's
+                // cheapest items in the category, as before.
+                int shipped;
+                if (!string.IsNullOrWhiteSpace(order.ItemId)
+                    && supplier is IItemLevelUpstreamGoodsSupplier itemSupplier)
+                {
+                    shipped = Math.Max(0, itemSupplier.ShipItem(order.ItemId, order.UnitsOrdered, dayIndex, outDiagnostics));
+                }
+                else
+                {
+                    shipped = Math.Max(0, supplier.Ship(order.CategoryId, order.UnitsOrdered, dayIndex, outDiagnostics));
+                }
                 if (shipped <= 0)
                 {
                     order.Stage = StoreProcurementStage.Cancelled;
@@ -338,6 +490,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     DeliveryId = $"dlv-{order.OrderId}-{nextDeliverySequence++}",
                     OrderId = order.OrderId,
                     CategoryId = order.CategoryId,
+                    ItemId = order.ItemId ?? string.Empty,
                     Units = shipped,
                     ShippedDayIndex = Math.Max(0, dayIndex),
                     TransitMinutes = 0,
@@ -420,7 +573,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         private static IUpstreamGoodsSupplier ChooseSupplier(
             List<IUpstreamGoodsSupplier> suppliers, string categoryId, int unitsNeeded, int dayIndex,
-            Func<IUpstreamGoodsSupplier, string, int, int> deliveredCostPerUnitCents = null)
+            Func<IUpstreamGoodsSupplier, string, string, int, int> deliveredCostPerUnitCents = null)
         {
             IUpstreamGoodsSupplier best = null;
             int bestCost = int.MaxValue;
@@ -460,7 +613,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 {
                     int orderSize = Math.Max(1, Math.Min(unitsNeeded, available));
                     int delivered = Math.Max(0, deliveredCostPerUnitCents(
-                        supplier, categoryId, orderSize));
+                        supplier, categoryId, string.Empty, orderSize));
                     if (delivered <= 0) continue;
                     comparisonCost = delivered;
                 }
@@ -605,6 +758,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 OrderId = source.OrderId ?? string.Empty,
                 StoreBusinessId = source.StoreBusinessId ?? string.Empty,
                 CategoryId = source.CategoryId ?? string.Empty,
+                ItemId = source.ItemId ?? string.Empty,
                 UnitsOrdered = source.UnitsOrdered,
                 UnitCostCents = source.UnitCostCents,
                 DeliveredCostCentsPerUnit = source.DeliveredCostCentsPerUnit,
@@ -626,6 +780,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 DeliveryId = source.DeliveryId ?? string.Empty,
                 OrderId = source.OrderId ?? string.Empty,
                 CategoryId = source.CategoryId ?? string.Empty,
+                ItemId = source.ItemId ?? string.Empty,
                 Units = source.Units,
                 ShippedDayIndex = source.ShippedDayIndex,
                 TransitMinutes = source.TransitMinutes,

@@ -71,7 +71,7 @@ namespace LandLedgers.World.Regional
     }
 
     /// <summary>One regional business as a live upstream supplier.</summary>
-    public sealed class RegionalSupplierAdapter : IUpstreamGoodsSupplier
+    public sealed class RegionalSupplierAdapter : IUpstreamGoodsSupplier, IItemLevelUpstreamGoodsSupplier
     {
         /// <summary>Wagon miles per day: 4 mph x 24 h. Lead time is one-way miles / 96, rounded up.</summary>
         public const float WagonMilesPerDay = 96f;
@@ -254,6 +254,58 @@ namespace LandLedgers.World.Regional
             {
                 diagnostics.Add($"RegionalSupplier '{SupplierName}' had no {categoryId} to ship.");
             }
+            return shipped;
+        }
+
+        /// <summary>
+        /// Slice 18: the item-level supplier surface. The category quote
+        /// names the cheapest item; these methods name the item itself,
+        /// so the chain can choose (and ship) one item instead of the
+        /// category's cheapest standing in for all of them.
+        /// </summary>
+        public IReadOnlyList<string> OfferedItemsInCategory(string categoryId)
+        {
+            var items = new List<string>();
+            if (string.IsNullOrWhiteSpace(categoryId)) return items;
+            for (int i = 0; i < definition.Offers.Length; i++)
+            {
+                RegionalBusinessRegistry.RegionalOffer offer = definition.Offers[i];
+                if (offer == null || string.IsNullOrWhiteSpace(offer.ItemId)) continue;
+                if (!string.Equals(RegionalItemCategories.CategoryForItem(offer.ItemId), categoryId,
+                    StringComparison.OrdinalIgnoreCase)) continue;
+                if (OnHandUnits(offer.ItemId) <= 0) continue;
+                items.Add(offer.ItemId);
+            }
+            return items;
+        }
+
+        public int QuoteItemUnitCostCents(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId)) return 0;
+            if (OnHandUnits(itemId) <= 0) return 0;
+            int price = RegionalBusinessRegistry.WholesalePrice(definition, itemId);
+            return price == int.MaxValue ? 0 : Math.Max(0, price);
+        }
+
+        public int AvailableItemUnits(string itemId)
+        {
+            return OnHandUnits(itemId);
+        }
+
+        public int ShipItem(string itemId, int units, int dayIndex, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (string.IsNullOrWhiteSpace(itemId) || units <= 0) return 0;
+            int have = OnHandUnits(itemId);
+            int shipped = Math.Min(Math.Max(0, units), have);
+            if (shipped <= 0)
+            {
+                diagnostics.Add($"RegionalSupplier '{SupplierName}' had no '{itemId}' to ship.");
+                return 0;
+            }
+            onHand[itemId] = have - shipped;
+            diagnostics.Add($"RegionalSupplier '{SupplierName}' shipped {shipped}u {itemId} " +
+                $"on day {Math.Max(0, dayIndex)}; {onHand[itemId]}u {itemId} remain on hand.");
             return shipped;
         }
 

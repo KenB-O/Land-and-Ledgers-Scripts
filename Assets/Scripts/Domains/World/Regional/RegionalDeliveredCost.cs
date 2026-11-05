@@ -68,17 +68,46 @@ namespace LandLedgers.World.Regional
             if (supplier == null || string.IsNullOrWhiteSpace(categoryId) || units <= 0) return 0;
             int goods = Math.Max(0, supplier.QuoteUnitCostCents(categoryId));
             if (goods <= 0) return 0;
+            int freight = SoloFreightCents(supplier, card);
+            if (freight < 0) return goods; // No freight data for this supplier: goods-only, honestly.
+            int total = goods * units + freight;
+            return (total + units - 1) / units; // ceiling division
+        }
+
+        /// <summary>
+        /// Slice 18: delivered cents per unit for a NAMED item: that
+        /// item's wholesale price plus the same solo freight, over the
+        /// order size. Returns 0 when the item cannot be priced. The
+        /// category calculator above prices the category's cheapest item;
+        /// this one prices the item the chain actually chose.
+        /// </summary>
+        public static int DeliveredCentsPerUnitForItem(
+            IUpstreamGoodsSupplier supplier, string itemId, int units,
+            RegionalFreightRateCard card)
+        {
+            if (supplier == null || string.IsNullOrWhiteSpace(itemId) || units <= 0) return 0;
+            var itemSupplier = supplier as IItemLevelUpstreamGoodsSupplier;
+            if (itemSupplier == null) return 0;
+            int goods = Math.Max(0, itemSupplier.QuoteItemUnitCostCents(itemId));
+            if (goods <= 0) return 0;
+            int freight = SoloFreightCents(supplier, card);
+            if (freight < 0) return goods;
+            int total = goods * units + freight;
+            return (total + units - 1) / units; // ceiling division
+        }
+
+        /// <summary>Solo freight cents for one shipment from a regional supplier's town. -1 when the supplier has no freight data.</summary>
+        private static int SoloFreightCents(IUpstreamGoodsSupplier supplier, RegionalFreightRateCard card)
+        {
             var regional = supplier as RegionalSupplierAdapter;
-            if (regional == null) return goods; // No freight data for this supplier: goods-only, honestly.
+            if (regional == null) return -1;
             RegionalTownRegistry.RegionalTownDefinition town = null;
             for (int i = 0; i < RegionalTownRegistry.All.Length; i++)
                 if (string.Equals(RegionalTownRegistry.All[i].TownId, regional.TownId,
                     StringComparison.OrdinalIgnoreCase))
                     town = RegionalTownRegistry.All[i];
-            if (town == null) return goods;
-            int freight = FreightCentsForSoloShipment(RegionalTownRegistry.HomeToCentreMiles(town), card);
-            int total = goods * units + freight;
-            return (total + units - 1) / units; // ceiling division
+            if (town == null) return -1;
+            return FreightCentsForSoloShipment(RegionalTownRegistry.HomeToCentreMiles(town), card);
         }
     }
 

@@ -153,7 +153,7 @@ namespace LandLedgers.Tests.World
             var smallDriver = new StoreRestockDriver();
             smallDriver.RegisterSupplier(near);
             smallDriver.RegisterSupplier(far);
-            smallDriver.DeliveredCostPerUnitCents = (supplier, category, units) =>
+            smallDriver.DeliveredCostPerUnitCents = (supplier, category, itemId, units) =>
             {
                 int goods = supplier.QuoteUnitCostCents(category);
                 float miles = supplier.SupplierId == "near" ? 50f : 100f;

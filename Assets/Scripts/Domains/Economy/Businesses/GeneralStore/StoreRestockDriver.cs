@@ -34,12 +34,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         /// <summary>
         /// Slice 15: optional delivered-cost function (supplier, category,
-        /// order units) -&gt; delivered cents per unit. Null (the default)
-        /// keeps the historical goods-quote-only choice. The manager sets
-        /// this from the regional freight quotes when regional suppliers
-        /// are registered; the chain itself never invents a freight rate.
+        /// item, order units) -&gt; delivered cents per unit. The item is
+        /// empty for a category order and names the item for an item-level
+        /// order (Slice 18). Null (the default) keeps the historical
+        /// goods-quote-only choice. The manager sets this from the
+        /// regional freight quotes when regional suppliers are
+        /// registered; the chain itself never invents a freight rate.
         /// </summary>
-        public Func<IUpstreamGoodsSupplier, string, int, int> DeliveredCostPerUnitCents { get; set; }
+        public Func<IUpstreamGoodsSupplier, string, string, int, int> DeliveredCostPerUnitCents { get; set; }
 
         public void RegisterSupplier(IUpstreamGoodsSupplier supplier)
         {

@@ -2379,9 +2379,12 @@ namespace LandLedgers.FirstLedger
             regionalSuppliers = RegionalSupplierSet.CreateAll();
             foreach (RegionalSupplierAdapter adapter in regionalSuppliers)
                 restockDriver.RegisterSupplier(adapter);
-            restockDriver.DeliveredCostPerUnitCents = (supplier, categoryId, units) =>
-                RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, categoryId, units,
-                    RegionalFreightRateCard.OpeningCompany);
+            restockDriver.DeliveredCostPerUnitCents = (supplier, categoryId, itemId, units) =>
+                string.IsNullOrWhiteSpace(itemId)
+                    ? RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, categoryId, units,
+                        RegionalFreightRateCard.OpeningCompany)
+                    : RegionalDeliveredCost.DeliveredCentsPerUnitForItem(supplier, itemId, units,
+                        RegionalFreightRateCard.OpeningCompany);
         }
 
         private void OnWeekChanged(SimulationDateChangedContext context)

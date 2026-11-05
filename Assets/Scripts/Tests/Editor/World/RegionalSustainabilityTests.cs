@@ -68,7 +68,7 @@ namespace LandLedgers.Tests.World
             var driver = new StoreRestockDriver();
             foreach (RegionalSupplierAdapter adapter in adapters)
                 driver.RegisterSupplier(adapter);
-            driver.DeliveredCostPerUnitCents = (supplier, category, units) =>
+            driver.DeliveredCostPerUnitCents = (supplier, category, itemId, units) =>
                 RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, category, units,
                     RegionalFreightRateCard.OpeningCompany);
             return driver;

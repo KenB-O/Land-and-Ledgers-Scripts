@@ -194,6 +194,16 @@ namespace LandLedgers.Economy.Logistics
         /// Pass IX WS3 (A4-13): releases the reservation-authority hold taken
         /// at Dispatch for a shipment that reached a terminal state (or was
         /// abandoned by its driver). Idempotent.
+        /// Slice S3: the owner is the shipment id itself, not a "freight:"
+        /// prefix — the S3 draft-team bind (WagonAuthority.TryAssignDraftTeam,
+        /// owner = the shipment id) and this dispatch hold are ONE logical
+        /// holder for the same team, and the unified authority exempts
+        /// same-owner holds from conflicting. A prefixed owner made Dispatch
+        /// refuse its own team's animal key forever (capacity 1, overlapping
+        /// 1) once the team was bound at dispatch completion. Releasing by
+        /// shipment id also releases the bind's record at completion, when
+        /// the haul is over; the horse/wagon mirror fields are still cleared
+        /// by the terminal sweep (ReleaseDraftTeam).
         /// </summary>
         public void ReleaseShipmentReservations(LogisticsShipmentState shipment)
         {
@@ -201,7 +211,7 @@ namespace LandLedgers.Economy.Logistics
             if (dispatchAuthorities.TryGetValue(shipment.ShipmentId, out IUnifiedReservationAuthority authority)
                 && authority != null)
             {
-                authority.ReleaseAllForTask("freight:" + shipment.ShipmentId);
+                authority.ReleaseAllForTask(shipment.ShipmentId);
             }
             dispatchAuthorities.Remove(shipment.ShipmentId);
         }
@@ -503,8 +513,16 @@ namespace LandLedgers.Economy.Logistics
             }
             if (hooks != null && hooks.Reservations != null)
             {
+                // Slice S3: the reservation owner is the shipment id itself.
+                // The draft-team bind made at dispatch completion
+                // (WagonAuthority.TryAssignDraftTeam) already holds the same
+                // animal key under this same owner; the unified authority
+                // exempts same-owner holds ("one logical holder"), so this
+                // dispatch hold extends the team's hold instead of refusing
+                // against it. A different owner string here made Dispatch
+                // refuse forever once the team was bound.
                 var request = new ReservationRequest(
-                    "freight:" + shipment.ShipmentId, "freight haul " + shipment.ShipmentId);
+                    shipment.ShipmentId, "freight haul " + shipment.ShipmentId);
                 request.Items.Add(new ReservationItem(
                     ReservationKeyConventions.Asset(shipment.physicalWagonAssetId),
                     1f, hooks.NowGameSeconds, float.MaxValue));

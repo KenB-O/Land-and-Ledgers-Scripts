@@ -2461,6 +2461,7 @@ namespace LandLedgers.Orchestration.Systems
             }
             RetryPendingFreightShipmentRegistrations(absoluteDayIndex);
             FreightProduction.AdvanceTick(86400f, hooks, handler, diag);
+            ReleaseTerminalFreightDraftTeams();
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] freight day " + absoluteDayIndex + ": " +
@@ -2468,6 +2469,40 @@ namespace LandLedgers.Orchestration.Systems
             }
             DrivePreparedFreightDispatchAssignments(absoluteDayIndex);
             DriveMillbrookFreightNegotiation(absoluteDayIndex);
+        }
+
+        /// <summary>Slice S3: release draft-team bindings for detailed shipments
+        /// that reached a terminal state, so the horse and wagon are free for
+        /// the next shipment. Only releases bindings this slice created (the
+        /// wagon and the horse both still name the terminal shipment); never
+        /// touches a team bound to a different live shipment. Idempotent:
+        /// a released binding no longer names the shipment, so a later sweep
+        /// skips it.</summary>
+        private void ReleaseTerminalFreightDraftTeams()
+        {
+            if (FreightProduction == null || hub?.TransportAssets == null || hub.ReservationAuthority == null)
+                return;
+            EquipmentAsset openingWagon = hub.TransportAssets.Get("opening-freight-wagon");
+            if (openingWagon == null)
+                return;
+            foreach (LogisticsShipmentState shipment in FreightProduction.AllShipments())
+            {
+                if (shipment == null
+                    || (shipment.Status != LogisticsShipmentStatus.Completed
+                        && shipment.Status != LogisticsShipmentStatus.Failed))
+                    continue;
+                if (!string.Equals(shipment.physicalWagonAssetId, openingWagon.AssetId, StringComparison.Ordinal))
+                    continue;
+                if (!string.Equals(openingWagon.CurrentShipmentId, shipment.ShipmentId, StringComparison.Ordinal))
+                    continue;
+                AnimalState horse = FindOpeningFreightHorse(shipment.CarrierBusinessInstanceId);
+                if (horse == null
+                    || !string.Equals(horse.CurrentAssignmentId, shipment.ShipmentId, StringComparison.Ordinal))
+                    continue;
+                WagonAuthority.ReleaseDraftTeam(openingWagon, new List<AnimalState> { horse },
+                    new AnimalAvailabilityAuthority(hub.ReservationAuthority));
+                Debug.Log($"[FreightDispatch] Terminal shipment '{shipment.ShipmentId}' released its draft team (A0 + opening wagon).", this);
+            }
         }
 
         private void DrivePreparedFreightDispatchAssignments(int dayIndex)
@@ -5650,15 +5685,6 @@ namespace LandLedgers.Orchestration.Systems
                     || !string.Equals(taskData.HorseId, horse?.AnimalId.ToString(), StringComparison.Ordinal)
                     || !string.Equals(taskData.WagonId, shipment.physicalWagonAssetId, StringComparison.Ordinal)
                     ? "completed task terms do not match the accepted shipment equipment identities."
-                : horse == null || horse.CurrentUse != HorseUseKind.Draft
-                    || !string.Equals(horse.CurrentAssignmentId, shipment.ShipmentId, StringComparison.Ordinal)
-                    || horse.TransportState != HorseTransportState.AttachedToWagon
-                    || !string.Equals(horse.AttachedWagonAssetId, taskData.WagonId, StringComparison.Ordinal)
-                    ? "A0 is not still attached and reserved for this shipment."
-                : wagon == null || !wagon.IsTransportAssigned
-                    || !string.Equals(wagon.CurrentShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
-                    || !string.Equals(wagon.CurrentDriverPersonId, operatorId.ToString(), StringComparison.Ordinal)
-                    ? "the wagon is not still assigned to this shipment and operator."
                 : null;
 
             if (refusal != null)
@@ -5668,8 +5694,48 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Slice S3: bind the draft team here, after every identity check
+            // has passed and before authorization. The hitch reserved the
+            // horse under the hitch task id and released it on completion, so
+            // no production code has bound the team yet; the bind is the
+            // missing production step. Already bound to this shipment counts
+            // as success (idempotent: the integration fixture pre-binds, and
+            // a save/restore re-run of this handler must not double-hold).
+            // Window is float.MaxValue per the existing Dispatch/mount
+            // precedent; the hold is bounded by the terminal release in
+            // ReleaseTerminalFreightDraftTeams, not by the window.
+            bool alreadyBound = horse != null && wagon != null
+                && horse.CurrentUse == HorseUseKind.Draft
+                && string.Equals(horse.CurrentAssignmentId, shipment.ShipmentId, StringComparison.Ordinal)
+                && string.Equals(wagon.CurrentShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
+                && string.Equals(wagon.CurrentDriverPersonId, operatorId.ToString(), StringComparison.Ordinal);
+            bool justBound = false;
+            if (!alreadyBound)
+            {
+                if (horse == null || wagon == null)
+                {
+                    LogFreightAgreementBlockerOnce("dispatch-bind:" + shipment.ShipmentId,
+                        $"[FreightDispatch] Completed task '{task.TaskId}' did not authorize shipment '{shipment.ShipmentId}': the draft team does not resolve.");
+                    return;
+                }
+                string bindRefusal = WagonAuthority.TryAssignDraftTeam(wagon, new List<AnimalState> { horse },
+                    operatorId.ToString(), shipment.ShipmentId,
+                    new AnimalAvailabilityAuthority(hub.ReservationAuthority),
+                    AbsoluteNowGameSeconds(), float.MaxValue);
+                if (bindRefusal != null)
+                {
+                    LogFreightAgreementBlockerOnce("dispatch-bind:" + shipment.ShipmentId,
+                        $"[FreightDispatch] Completed task '{task.TaskId}' did not authorize shipment '{shipment.ShipmentId}': draft team binding refused: {bindRefusal}");
+                    return;
+                }
+                justBound = true;
+            }
+
             if (!FreightProduction.AuthorizeShipmentDispatch(shipment.ShipmentId, out string authorizationRefusal))
             {
+                if (justBound)
+                    WagonAuthority.ReleaseDraftTeam(wagon, new List<AnimalState> { horse },
+                        new AnimalAvailabilityAuthority(hub.ReservationAuthority));
                 LogFreightAgreementBlockerOnce("dispatch-authorization:" + shipment.ShipmentId,
                     $"[FreightDispatch] Completed task '{task.TaskId}' could not release shipment '{shipment.ShipmentId}' from dispatch hold: {authorizationRefusal}");
                 return;

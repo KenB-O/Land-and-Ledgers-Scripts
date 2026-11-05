@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.FirstLedger;
@@ -9,6 +10,7 @@ using LandLedgers.Persistence;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace LandLedgers.EditorTests.Economy
 {
@@ -123,6 +125,26 @@ namespace LandLedgers.EditorTests.Economy
             foreach (ItemCategoryDefinition category in definition.Categories)
                 Assert.AreEqual(0, playerStore.RuntimeState.GetCategoryStock(category.CategoryId).CurrentStockUnits,
                     "Authored catalog/profile defaults are not a physical opening receipt.");
+        }
+
+        [Test]
+        public void UnchangedDroppedOfferDiagnosticsAreReportedOncePerManager()
+        {
+            GeneralStoreBusinessDefinition definition = LoadDefinition();
+            GameObject host = new GameObject(nameof(UnchangedDroppedOfferDiagnosticsAreReportedOncePerManager));
+            try
+            {
+                GeneralStoreRuntimeManager manager = ConfigureManager(host, definition);
+                BusinessInstanceState store = CreateNpcStore(definition);
+                LogAssert.Expect(LogType.Warning, new Regex("General Store 'general_store_060' omits item offer\\(s\\):"));
+
+                manager.BuildHouseholdTradingPort(store);
+                manager.BuildHouseholdTradingPort(store);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
         }
 
         [Test]

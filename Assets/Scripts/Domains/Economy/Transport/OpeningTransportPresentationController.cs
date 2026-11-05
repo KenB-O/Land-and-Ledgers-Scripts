@@ -223,7 +223,10 @@ namespace LandLedgers.Economy.Transport
                     activeHorseView.transform.SetParent(transportGroup, true);
                 if (activeWagonView.transform.parent != transportGroup)
                     activeWagonView.transform.SetParent(transportGroup, true);
-                activeHorseView.gameObject.GetComponent<TransportAnimatorState>()?.SetState(TransportVisualState.DrivingWagon);
+                // Attachment is not movement. Keep the horse at rest until a
+                // transport movement authority actually advances the coupled
+                // pair; dispatch preparation alone must not play a walking loop.
+                activeHorseView.gameObject.GetComponent<TransportAnimatorState>()?.SetState(TransportVisualState.Idle);
                 Debug.Log($"[OpeningTransportPresentation] attached state shown: horse='{horse.AnimalId}' and wagon='{wagon.AssetId}' are siblings under the transport group; identities and world transforms unchanged.", this);
             }
             else

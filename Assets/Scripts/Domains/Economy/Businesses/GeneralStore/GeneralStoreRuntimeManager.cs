@@ -256,6 +256,12 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private int lastDailyMissedPriceUnits;
 
+        // Port construction can occur repeatedly during household shopping.
+        // Remember the last unchanged catalog rejection so the genuine
+        // configuration issue remains visible without repeating the same
+        // warning for every household/tick.
+        private string lastHouseholdOfferDiagnosticSignature = string.Empty;
+
         [Header("Latest Customer Sale Provenance")]
         [SerializeField]
         private int lastCustomerHouseholdId = -1;
@@ -587,8 +593,13 @@ namespace LandLedgers.FirstLedger
 
             if (droppedReasons.Count > 0)
             {
-                Debug.LogWarning("General Store '" + npcBusiness.InstanceId + "' omits item offer(s): " +
-                    string.Join(" ", droppedReasons), this);
+                string detail = string.Join(" ", droppedReasons);
+                string signature = npcBusiness.InstanceId + "|" + detail;
+                if (!string.Equals(signature, lastHouseholdOfferDiagnosticSignature, StringComparison.Ordinal))
+                {
+                    lastHouseholdOfferDiagnosticSignature = signature;
+                    Debug.LogWarning("General Store '" + npcBusiness.InstanceId + "' omits item offer(s): " + detail, this);
+                }
             }
 
             var capability = new StoreTradingCapability { Staffed = npcBusiness.RuntimeState.FilledWorkerCount > 0 };

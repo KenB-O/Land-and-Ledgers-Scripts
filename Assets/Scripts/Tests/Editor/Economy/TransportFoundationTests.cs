@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -162,6 +163,60 @@ namespace LandLedgers.EditorTests.Economy
             Assert.That(animator.applyRootMotion, Is.False);
             Assert.That(animator.runtimeAnimatorController, Is.Not.Null);
             Assert.That(animator.runtimeAnimatorController.name, Is.EqualTo("Transport Anim Controller"));
+        }
+
+        [Test]
+        public void AttachedStationaryHorseRemainsIdleUnderNeutralTransportRoot()
+        {
+            var ids = new EntityIdRegistry();
+            AnimalState horse = new AnimalRegistry(ids).RegisterAnimal(
+                AnimalSpecies.Horse, "draft", AnimalSex.Male, AnimalOwnerKind.Business, "B-1", 0, "test");
+            horse.TransportState = HorseTransportState.AttachedToWagon;
+            horse.AttachedWagonAssetId = "WG-idle-1";
+            var wagon = new EquipmentAsset
+            {
+                AssetId = "WG-idle-1",
+                Kind = WagonAuthority.DefaultKind,
+                HitchingAnimalIds = new List<string> { horse.AnimalId.ToString() },
+            };
+
+            var host = new GameObject(nameof(AttachedStationaryHorseRemainsIdleUnderNeutralTransportRoot));
+            try
+            {
+                Transform neutralRoot = new GameObject("Neutral Transport Root").transform;
+                neutralRoot.SetParent(host.transform, false);
+                GameObject horseObject = new GameObject("Horse View");
+                horseObject.transform.SetParent(host.transform, false);
+                HorseWorldView horseView = horseObject.AddComponent<HorseWorldView>();
+                horseObject.AddComponent<TransportAnimatorState>();
+                GameObject wagonObject = new GameObject("Wagon View");
+                wagonObject.transform.SetParent(host.transform, false);
+                WagonWorldView wagonView = wagonObject.AddComponent<WagonWorldView>();
+
+                OpeningTransportPresentationController presentation = host.AddComponent<OpeningTransportPresentationController>();
+                SetPrivateField(presentation, "transportGroup", neutralRoot);
+                SetPrivateField(presentation, "activeHorseView", horseView);
+                SetPrivateField(presentation, "activeWagonView", wagonView);
+
+                presentation.RefreshPresentationState(horse, wagon);
+
+                Assert.That(horseObject.transform.parent, Is.SameAs(neutralRoot));
+                Assert.That(wagonObject.transform.parent, Is.SameAs(neutralRoot));
+                Assert.That(horseObject.transform.parent, Is.SameAs(wagonObject.transform.parent));
+                Assert.That(horseObject.GetComponent<TransportAnimatorState>().State, Is.EqualTo(TransportVisualState.Idle),
+                    "A prepared but stationary horse must not loop its driving animation.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        private static void SetPrivateField<T>(object target, string fieldName, T value)
+        {
+            FieldInfo field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, "Expected presentation seam field " + fieldName);
+            field.SetValue(target, value);
         }
     }
 }

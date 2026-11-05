@@ -128,12 +128,25 @@ namespace LandLedgers.Economy.Equipment
             "skimmer", "cutting board", "mixing bowls", "measuring cups",
             "sharpening steel", "pot holders");
 
+        /// <summary>
+        /// Slice S2 (2026-11-05, plan 02 §4): the baker's hand tool kit.
+        /// Contents are the existing documentation in
+        /// BakeryBreadCatalog.BakerHandKitId ("peels, troughs, scales,
+        /// knives") — no contents invented. The bake oven itself is
+        /// capacity/scale (Canon 4.7): it lives in the BakeOven
+        /// workstation, never in this kit.
+        /// </summary>
+        public static ToolKitDefinition BakerHandKit => Kit(
+            "baker-hand-kit", "Baker's Hand Tool Kit", "baker",
+            "Canon Part V: Bakery",
+            "peels", "troughs", "scales", "knives");
+
         /// <summary>All Group B kit definitions, for catalog-driven UI and validation.</summary>
         public static List<ToolKitDefinition> All => new List<ToolKitDefinition>
         {
             CarpenterHandToolKit, MasonKit, TailorHandKit, BarberKit, DoctorBag,
             WheelwrightKit, StableGroomingKit, MinerHandKit, FarrierKit, RanchTackKit,
-            FieldHandKit, CookHandKit,
+            FieldHandKit, CookHandKit, BakerHandKit,
         };
 
         public static ToolKitDefinition Get(string kitId)

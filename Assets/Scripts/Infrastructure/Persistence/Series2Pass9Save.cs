@@ -83,8 +83,10 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Sawmill;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.FreightFuel;
 using LandLedgers.Economy.Labor;
@@ -311,6 +313,14 @@ namespace LandLedgers.Persistence
         public FuelYardByproductIntake.FuelYardByproductIntakeSaveDto FuelIntake;
         public FreightShipmentService.FreightServiceSaveDto Freight;
         public Pass9FuelSourceParamsDto FuelSourceParams;
+
+        /// <summary>
+        /// Slice S2: per-business equipment registers (ovens' component
+        /// assets + tool kits). Additive; old saves leave this empty and
+        /// load with empty registers — the kit/oven gates then refuse
+        /// honestly until the scenario endowment runs on a NewGame.
+        /// </summary>
+        public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
     }
 
     /// <summary>
@@ -350,6 +360,14 @@ namespace LandLedgers.Persistence
         public FreightProductionDriver FreightDriver;
         public Series2CarrierSettlement CarrierSettlement;
         public Series2DealerBakeryFuelSource FuelSource;
+
+        /// <summary>
+        /// Slice S2: live per-business equipment registers, held here so
+        /// the Pass 9 seam persists them. The hub owns the live
+        /// dictionary; the bootstrap registers these instances into it
+        /// on NewGame seeding and re-registers restored ones after a load.
+        /// </summary>
+        public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
 
         /// <summary>
         /// Fuel-source parameters recovered by the last Restore,
@@ -553,6 +571,22 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no fuel-yard intake supplied; fuel lots saved empty (the intake already had a DTO — it only needed this wiring).");
+            }
+
+            // Slice S2: equipment registers. Deep-copied, so later live
+            // mutation cannot rewrite the saved section; a register with
+            // no business id is skipped, never invented.
+            if (EquipmentRegisters != null && EquipmentRegisters.Count > 0)
+            {
+                foreach (BusinessEquipmentRegister register in EquipmentRegisters)
+                {
+                    if (register == null || string.IsNullOrWhiteSpace(register.BusinessInstanceId)) continue;
+                    dto.EquipmentRegisters.Add(CopyEquipmentRegister(register));
+                }
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no business equipment registers supplied; equipment section saved empty.");
             }
 
             if (FreightDriver != null)
@@ -788,6 +822,17 @@ namespace LandLedgers.Persistence
                 diag.Add("Series2Pass9Save: fuel intake lots present in save but no intake supplied; fuel lots NOT restored.");
             }
 
+            // Slice S2: equipment registers — clear-then-load, idempotent.
+            // Old saves carry no section and restore as empty registers;
+            // restoring twice rebuilds the same registers, never duplicates.
+            // The bootstrap re-registers these into the hub after a load.
+            EquipmentRegisters.Clear();
+            foreach (BusinessEquipmentRegister saved in dto.EquipmentRegisters ?? new List<BusinessEquipmentRegister>())
+            {
+                if (saved == null || string.IsNullOrWhiteSpace(saved.BusinessInstanceId)) continue;
+                EquipmentRegisters.Add(CopyEquipmentRegister(saved));
+            }
+
             // Pass 8 freight: shipments round-trip in the DTO
             // (including deliveryApplied and
             // freightRevenueCollected). The settlement set is
@@ -823,6 +868,94 @@ namespace LandLedgers.Persistence
             }
 
             diag.Add("Series2Pass9Save: restore complete (clear-then-load, idempotent). Adapter DayIndex is NOT restored by design — the day driver sets it at day start. Pass 5 leads/visits are NOT in this section — Pass 10 scope.");
+        }
+
+        /// <summary>
+        /// Slice S2: deep copy of one equipment register (assets + kits),
+        /// so the saved section and the restored state never alias the
+        /// live register. Every field is carried: a copy that dropped
+        /// condition, ownership, or provenance would silently re-issue
+        /// equipment the business had worn, sold, or never owned.
+        /// </summary>
+        private static BusinessEquipmentRegister CopyEquipmentRegister(BusinessEquipmentRegister source)
+        {
+            var copy = new BusinessEquipmentRegister
+            {
+                BusinessInstanceId = source.BusinessInstanceId ?? string.Empty,
+            };
+            if (source.Assets != null)
+                foreach (EquipmentAsset asset in source.Assets)
+                {
+                    if (asset == null) continue;
+                    copy.Assets.Add(CopyEquipmentAsset(asset));
+                }
+            if (source.Kits != null)
+                foreach (ToolKitInstance kit in source.Kits)
+                {
+                    if (kit == null) continue;
+                    copy.Kits.Add(new ToolKitInstance
+                    {
+                        InstanceId = kit.InstanceId ?? string.Empty,
+                        KitId = kit.KitId ?? string.Empty,
+                        Condition01 = kit.Condition01,
+                        OwnerKind = kit.OwnerKind ?? string.Empty,
+                        OwnerId = kit.OwnerId ?? string.Empty,
+                        LocationId = kit.LocationId ?? string.Empty,
+                        ReservedBy = kit.ReservedBy ?? string.Empty,
+                        ReservedFor = kit.ReservedFor ?? string.Empty,
+                        MaintenanceLog = new List<string>(kit.MaintenanceLog ?? new List<string>()),
+                    });
+                }
+            return copy;
+        }
+
+        private static EquipmentAsset CopyEquipmentAsset(EquipmentAsset source)
+        {
+            var copy = new EquipmentAsset
+            {
+                AssetId = source.AssetId ?? string.Empty,
+                Kind = source.Kind ?? string.Empty,
+                DisplayName = source.DisplayName ?? string.Empty,
+                Condition01 = source.Condition01,
+                OwnerKind = source.OwnerKind ?? string.Empty,
+                OwnerId = source.OwnerId ?? string.Empty,
+                LocationId = source.LocationId ?? string.Empty,
+                ReservedBy = source.ReservedBy ?? string.Empty,
+                ReservedFor = source.ReservedFor ?? string.Empty,
+                MadeByBusinessId = source.MadeByBusinessId ?? string.Empty,
+                MadeByBusinessName = source.MadeByBusinessName ?? string.Empty,
+                MaterialLotIds = new List<string>(source.MaterialLotIds ?? new List<string>()),
+                MadeDayIndex = source.MadeDayIndex,
+                MaintenanceLog = new List<string>(source.MaintenanceLog ?? new List<string>()),
+                WagonSubtype = source.WagonSubtype ?? string.Empty,
+                PayloadMassCapacityKg = source.PayloadMassCapacityKg,
+                CargoVolumeCapacityM3 = source.CargoVolumeCapacityM3,
+                StorageLocationId = source.StorageLocationId ?? string.Empty,
+                DraftAnimalIds = new List<string>(source.DraftAnimalIds ?? new List<string>()),
+                CurrentDriverPersonId = source.CurrentDriverPersonId ?? string.Empty,
+                CurrentShipmentId = source.CurrentShipmentId ?? string.Empty,
+                HitchingAnimalIds = new List<string>(source.HitchingAnimalIds ?? new List<string>()),
+                HitchPreparationTaskId = source.HitchPreparationTaskId ?? string.Empty,
+                HitchPreparationTravelTaskId = source.HitchPreparationTravelTaskId ?? string.Empty,
+                HitchPreparationReservationId = source.HitchPreparationReservationId ?? string.Empty,
+                HitchPreparationShipmentId = source.HitchPreparationShipmentId ?? string.Empty,
+                HitchPreparationAttempted = source.HitchPreparationAttempted,
+            };
+            if (source.OwnershipHistory != null)
+                foreach (EquipmentOwnershipRecord record in source.OwnershipHistory)
+                {
+                    if (record == null) continue;
+                    copy.OwnershipHistory.Add(new EquipmentOwnershipRecord
+                    {
+                        FromOwnerKind = record.FromOwnerKind ?? string.Empty,
+                        FromOwnerId = record.FromOwnerId ?? string.Empty,
+                        ToOwnerKind = record.ToOwnerKind ?? string.Empty,
+                        ToOwnerId = record.ToOwnerId ?? string.Empty,
+                        DayIndex = record.DayIndex,
+                        Reason = record.Reason ?? string.Empty,
+                    });
+                }
+            return copy;
         }
 
         private static Pass9CatalogLineDto CopyLine(Pass3ProductLine line)

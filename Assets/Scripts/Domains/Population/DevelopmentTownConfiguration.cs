@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -98,6 +100,31 @@ namespace LandLedgers.Population
             public OpeningInventoryItem[] items = Array.Empty<OpeningInventoryItem>();
         }
 
+        /// <summary>
+        /// Slice S2 (2026-11-05, plan 02 §4): one bake oven's component
+        /// asset ids, in BakeOven definition order (oven-chamber,
+        /// kneading-table, proofing-rack, bake-peels). The ids are
+        /// scenario-authored; the kinds come from the definition.
+        /// </summary>
+        [Serializable]
+        public sealed class OvenEquipment
+        {
+            public string[] componentAssetIds = Array.Empty<string>();
+        }
+
+        /// <summary>
+        /// Slice S2: scenario-owned opening equipment for one business —
+        /// the equipment analogue of BusinessOpeningInventory. Zero by
+        /// default: a business with no entry here gets no equipment.
+        /// </summary>
+        [Serializable]
+        public sealed class BusinessOpeningEquipment
+        {
+            public string businessKey = string.Empty;
+            public OvenEquipment[] ovens = Array.Empty<OvenEquipment>();
+            public string[] kitIds = Array.Empty<string>();
+        }
+
         [SerializeField] private string configurationId = "millbrook-development-town";
         [SerializeField, Min(0), Tooltip("Deterministic development fixture calibration; not canonical world-generation policy.")]
         private int seedOffset = 9217;
@@ -108,6 +135,7 @@ namespace LandLedgers.Population
         [SerializeField] private BusinessCashTarget[] businessCashTargets = Array.Empty<BusinessCashTarget>();
         [SerializeField] private HouseholdCashTarget[] householdCashTargets = Array.Empty<HouseholdCashTarget>();
         [SerializeField] private BusinessOpeningInventory[] openingInventory = Array.Empty<BusinessOpeningInventory>();
+        [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
         [SerializeField] private string freightBusinessKey = "freight-company";
         [SerializeField] private string openingHorseId = "A0";
         [SerializeField] private string openingWagonId = "opening-freight-wagon";
@@ -125,6 +153,7 @@ namespace LandLedgers.Population
         public IReadOnlyList<BusinessCashTarget> BusinessCashTargets => businessCashTargets ?? Array.Empty<BusinessCashTarget>();
         public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => householdCashTargets ?? Array.Empty<HouseholdCashTarget>();
         public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => openingInventory ?? Array.Empty<BusinessOpeningInventory>();
+        public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
         public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
         public string OpeningHorseId => openingHorseId ?? string.Empty;
         public string OpeningWagonId => openingWagonId ?? string.Empty;
@@ -253,6 +282,22 @@ namespace LandLedgers.Population
                 foreach (OpeningInventoryItem item in entry.items ?? Array.Empty<OpeningInventoryItem>())
                     if (item == null || string.IsNullOrWhiteSpace(item.itemId) || item.minimumUnits < 0 || item.maximumUnits < item.minimumUnits || !items.Add(item.itemId))
                     { error = $"Opening inventory for '{entry.businessKey}' contains an invalid or duplicate item range."; return false; }
+            }
+            // Slice S2: opening equipment is optional and zero by default.
+            // When present, every entry must name a configured business, every
+            // kit id must resolve in the ToolKitCatalog, and every oven entry
+            // must list exactly the BakeOven definition's component count.
+            foreach (BusinessOpeningEquipment entry in OpeningEquipment)
+            {
+                if (entry == null || !TryGetBusiness(entry.businessKey, out _))
+                { error = "Opening equipment entries must reference configured businesses."; return false; }
+                foreach (string kitId in entry.kitIds ?? Array.Empty<string>())
+                    if (string.IsNullOrWhiteSpace(kitId) || ToolKitCatalog.Get(kitId.Trim()) == null)
+                    { error = $"Opening equipment for '{entry.businessKey}' names an unknown tool kit '{kitId}'."; return false; }
+                foreach (OvenEquipment oven in entry.ovens ?? Array.Empty<OvenEquipment>())
+                    if (oven == null || oven.componentAssetIds == null
+                        || oven.componentAssetIds.Length != WorkstationCatalog.BakeOven.Components.Count)
+                    { error = $"Opening equipment for '{entry.businessKey}' lists an oven whose component count must equal the BakeOven definition ({WorkstationCatalog.BakeOven.Components.Count})."; return false; }
             }
             return true;
         }

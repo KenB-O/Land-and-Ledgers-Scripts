@@ -5537,15 +5537,17 @@ namespace LandLedgers.Orchestration.Systems
             }
             driver.AdoptPlannedBatches(dayIndex, planned, diagnostics);
 
-            // Baker's hand kit via the existing equipment authority: the
-            // EquipmentTaskGate.CheckCodes pattern (ForHolder +
-            // CheckTaskRequirements on a kit code). No production kit
-            // register exists for the bakery yet
-            // (SimulationSystemsHub.CollectGateKits returns empty), so no
-            // kit is supplied here and the check refuses — logged as the
-            // next blocker, never defaulted true.
+            // Slice S2 (2026-11-05, plan 02 §4): baker's hand kit via the
+            // existing equipment authority — the EquipmentTaskGate
+            // pattern (ForHolder + CheckTaskRequirements on a kit code),
+            // now reading the bakery's hub-owned equipment register.
+            // A bakery with no register (or no kit in it) still refuses
+            // here, logged as the next blocker, never defaulted true.
+            LandLedgers.Economy.Equipment.BusinessEquipmentRegister bakeryRegister =
+                hub != null ? hub.EquipmentRegisterFor(bakery.BusinessInstanceId) : null;
             var kitAvailability = EquipmentRequirements.ForHolder(
-                "business", bakery.BusinessInstanceId, dayIndex, null, null, null);
+                "business", bakery.BusinessInstanceId, dayIndex,
+                bakeryRegister?.Assets, bakeryRegister?.Kits, null);
             var kitStub = new TaskDefinition("bakery-daily-bake", "daily bakery bake", 1);
             kitStub.EquipmentClasses.Add(EquipmentRequirementCodes.Kit(
                 LandLedgers.Economy.Businesses.Bakery.BakeryBreadCatalog.BakerHandKitId));
@@ -5557,11 +5559,10 @@ namespace LandLedgers.Orchestration.Systems
             // Oven component finder, following the proven
             // BlacksmithRuntime.EstablishForgeStationFromComponents
             // closure pattern: look up by asset id in the ovens'
-            // installed components, return a view or null. No production
-            // register holds bakery oven component assets
-            // (kind/condition/usable) yet (D-3), so every lookup returns
-            // null today; with no ovens installed CountReadyOvens is 0
-            // regardless and Precheck refuses "no ready bake oven".
+            // installed components, return a real view from the
+            // bakery's equipment register. Slice S2: components with
+            // no asset record in the register still return null —
+            // unverifiable components never satisfy the oven gate.
             var installedOvenComponents = new HashSet<string>(StringComparer.Ordinal);
             foreach (var oven in bakery.Ovens)
             {
@@ -5574,10 +5575,22 @@ namespace LandLedgers.Orchestration.Systems
             Func<string, LandLedgers.Economy.Equipment.Workstations.WorkstationComponentView?> findComponent = assetId =>
             {
                 if (string.IsNullOrWhiteSpace(assetId) || !installedOvenComponents.Contains(assetId)) return null;
-                // Installed, but no component asset record exists in
-                // production to build a usable view from — unverifiable
-                // components never satisfy the oven gate.
-                return null;
+                LandLedgers.Economy.Blacksmith.EquipmentAsset asset = null;
+                if (bakeryRegister?.Assets != null)
+                    foreach (var candidate in bakeryRegister.Assets)
+                        if (candidate != null && string.Equals(candidate.AssetId, assetId, StringComparison.Ordinal))
+                        {
+                            asset = candidate;
+                            break;
+                        }
+                if (asset == null) return null;
+                return new LandLedgers.Economy.Equipment.Workstations.WorkstationComponentView
+                {
+                    AssetId = asset.AssetId,
+                    Kind = asset.Kind,
+                    Condition01 = asset.Condition01,
+                    IsUsable = asset.IsUsable,
+                };
             };
 
             int baked = driver.RunScheduledDay(

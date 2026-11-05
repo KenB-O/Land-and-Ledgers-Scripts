@@ -157,6 +157,40 @@ namespace LandLedgers.Orchestration.Systems
         public FreightResourcePool FreightPool => freightPool ??= new FreightResourcePool();
         public TransportAssetRegistry TransportAssets => transportAssets ??= new TransportAssetRegistry();
 
+        // Slice S2 (2026-11-05, plan 02 §4): hub-owned per-business
+        // equipment registers (ovens' component assets + tool kits),
+        // keyed by business instance id. The registers are the live
+        // holders; the Pass 9 save seam persists them and the bootstrap
+        // re-registers restored ones after a load. A business with no
+        // register holds no equipment — the gate still refuses loudly.
+        private Dictionary<string, BusinessEquipmentRegister> equipmentRegisters;
+
+        /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
+        public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            equipmentRegisters ??= new Dictionary<string, BusinessEquipmentRegister>(StringComparer.Ordinal);
+            if (!equipmentRegisters.TryGetValue(businessInstanceId, out BusinessEquipmentRegister register) || register == null)
+            {
+                register = new BusinessEquipmentRegister { BusinessInstanceId = businessInstanceId };
+                equipmentRegisters[businessInstanceId] = register;
+            }
+            return register;
+        }
+
+        /// <summary>
+        /// Slice S2: adopts a register (e.g. one restored from the Pass 9
+        /// save seam) as the hub's live holder for its business. Replaces
+        /// by business id, never merges — the save data is authoritative,
+        /// and re-registering the same register is idempotent.
+        /// </summary>
+        public void RegisterBusinessEquipment(BusinessEquipmentRegister register)
+        {
+            if (register == null || string.IsNullOrWhiteSpace(register.BusinessInstanceId)) return;
+            equipmentRegisters ??= new Dictionary<string, BusinessEquipmentRegister>(StringComparer.Ordinal);
+            equipmentRegisters[register.BusinessInstanceId] = register;
+        }
+
         // Pass IV Worker 2: the unified reservation authority (persisted),
         // the hub-owned draft-power service (reserves through the authority),
         // and the equipment capacity service (6 capacity models).
@@ -230,21 +264,45 @@ namespace LandLedgers.Orchestration.Systems
             Tasks.SetExecutionGate(gate);
         }
 
-        /// <summary>Pass IV: production equipment assets visible to the task gate.</summary>
+        /// <summary>
+        /// Pass IV: production equipment assets visible to the task gate —
+        /// the wagon asset registry plus every hub-owned per-business
+        /// equipment register (Slice S2). Kinds with no production
+        /// register still refuse loudly until provisioned.
+        /// </summary>
         private List<EquipmentAsset> CollectGateAssets()
         {
             var assets = new List<EquipmentAsset>();
             foreach (var asset in TransportAssets.Assets)
                 if (asset != null) assets.Add(asset);
+            if (equipmentRegisters != null)
+                foreach (var register in equipmentRegisters.Values)
+                {
+                    if (register?.Assets == null) continue;
+                    foreach (var asset in register.Assets)
+                        if (asset != null) assets.Add(asset);
+                }
             return assets;
         }
 
         /// <summary>
-        /// Pass IV: production toolkits visible to the task gate. No production
-        /// kit register exists yet (BusinessEquipmentRegister has no production
-        /// holders) — kit requirements refuse loudly until kits are provisioned.
+        /// Pass IV: production toolkits visible to the task gate. Slice S2:
+        /// every hub-owned per-business equipment register contributes its
+        /// kits; a business with no register still holds no kit, and kit
+        /// requirements refuse loudly until kits are provisioned.
         /// </summary>
-        private List<ToolKitInstance> CollectGateKits() => new List<ToolKitInstance>();
+        private List<ToolKitInstance> CollectGateKits()
+        {
+            var kits = new List<ToolKitInstance>();
+            if (equipmentRegisters != null)
+                foreach (var register in equipmentRegisters.Values)
+                {
+                    if (register?.Kits == null) continue;
+                    foreach (var kit in register.Kits)
+                        if (kit != null) kits.Add(kit);
+                }
+            return kits;
+        }
         public FarmFlowLedger FarmFlows => farmFlows ??= new FarmFlowLedger();
         public BusinessCapabilityRegistry Capabilities => capabilityRegistry ??= new BusinessCapabilityRegistry();
         public BusinessOperatingLedger OperatingLedger => operatingLedger ??= new BusinessOperatingLedger();

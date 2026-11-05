@@ -5,6 +5,7 @@ using System.Text;
 using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Core;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Bakery;
@@ -515,6 +516,8 @@ namespace LandLedgers.FirstLedger
                 developmentNpcStore = FindDevelopmentNpcGeneralStore();
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedDevelopmentBusinessOpeningInventory();
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    SeedDevelopmentBusinessOpeningEquipment();
                 if (startupIntent == WorldStartupIntent.NewGame && simulationDrivers != null && developmentNpcStore?.RuntimeState != null)
                     ConfigurePlaytestHorseFeed(developmentNpcStore, simulationDrivers);
             }
@@ -672,6 +675,15 @@ namespace LandLedgers.FirstLedger
             // forwards an already-assigned PlayerDirector without clearing
             // one that bootstrap assignment has not set yet.
             FindAnyObjectByType<SimulationDrivers>()?.Rebind();
+            // Slice S2: re-attach the Pass 9 equipment registers restored
+            // from the save into the hub's per-business dictionary, so the
+            // task gate and the bakery drive read the restored kits/assets
+            // on Continue. The save data is authoritative; re-registering
+            // replaces by business id, never merges, and is idempotent.
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub != null && saveLoadManager?.Series2Pass9State?.EquipmentRegisters != null)
+                foreach (BusinessEquipmentRegister restored in saveLoadManager.Series2Pass9State.EquipmentRegisters)
+                    systemsHub.RegisterBusinessEquipment(restored);
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)
             {
@@ -1242,6 +1254,69 @@ namespace LandLedgers.FirstLedger
 
             // No fixture-specific inventory fallback: all configured opening stock
             // must pass through the generic DevelopmentTownConfiguration entries.
+        }
+
+        /// <summary>
+        /// Slice S2 (2026-11-05, plan 02 §4): NewGame-only seeding of
+        /// scenario-owned opening equipment for the Bakery, beside the
+        /// opening-inventory seeding above. Finds the Bakery the same
+        /// way ConfigureLiveBakerySaveOwner does, gets/creates its
+        /// hub-owned equipment register, and applies exactly what the
+        /// configuration lists (zero by default). The register is kept on
+        /// the Pass 9 state so the save seam persists it; on Continue the
+        /// registers come back from the save via MarkRestoredFromSave,
+        /// never from a second seeding. Refusals are Debug.LogError, the
+        /// same posture as the inventory seeding.
+        /// </summary>
+        private void SeedDevelopmentBusinessOpeningEquipment()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null) return;
+            string bakeryKey = null;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
+                if (slot != null && ToBusinessType(slot.operationId) == BusinessType.Bakery)
+                {
+                    bakeryKey = slot.key;
+                    break;
+                }
+            if (string.IsNullOrWhiteSpace(bakeryKey))
+            {
+                Debug.LogError("[WorldStartup] Opening equipment for the bakery refused: no bakery business is configured.", this);
+                return;
+            }
+            BusinessInstanceState bakeryBusiness = FindDevelopmentBusiness(BusinessType.Bakery);
+            if (bakeryBusiness?.RuntimeState == null)
+            {
+                Debug.LogError($"[WorldStartup] Opening equipment for '{bakeryKey}' refused: the configured bakery runtime does not exist.", this);
+                return;
+            }
+            Series2Pass9SaveState pass9 = saveLoadManager?.Series2Pass9State;
+            if (pass9?.BakeryRuntime == null)
+            {
+                Debug.LogError($"[WorldStartup] Opening equipment for '{bakeryKey}' refused: no live bakery runtime is registered on the Pass 9 state.", this);
+                return;
+            }
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogError($"[WorldStartup] Opening equipment for '{bakeryKey}' refused: no SimulationSystemsHub is present.", this);
+                return;
+            }
+            BusinessEquipmentRegister register = systemsHub.EquipmentRegisterFor(bakeryBusiness.InstanceId);
+            var diag = new List<string>();
+            if (!ScenarioOpeningEquipmentEndowment.TryApply(configuration, bakeryKey, pass9.BakeryRuntime,
+                    bakeryBusiness.RuntimeState, register,
+                    timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                    diag, out string equipmentReport, out string equipmentError))
+            {
+                Debug.LogError($"[WorldStartup] {equipmentError}", this);
+                return;
+            }
+            if (!pass9.EquipmentRegisters.Exists(existing => existing != null
+                    && string.Equals(existing.BusinessInstanceId, bakeryBusiness.InstanceId, StringComparison.Ordinal)))
+                pass9.EquipmentRegisters.Add(register);
+            Debug.Log($"[WorldStartup] {equipmentReport}", this);
+            foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
         }
 
         private void ConfigureOpeningBusinessRoster()

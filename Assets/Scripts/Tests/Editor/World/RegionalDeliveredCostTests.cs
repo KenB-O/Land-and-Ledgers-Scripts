@@ -184,6 +184,126 @@ namespace LandLedgers.Tests.World
         }
 
         [Test]
+        public void CategoryPath_DeliveredCostAtOrAbovePrice_WithholdsOrder_GoodsOnlyWouldPlace()
+        {
+            // The category path's delivered-cost no-loss check: goods 20c/18c
+            // both pass the 30c selling price, but delivered 33c (near,
+            // cheapest) / 41c (far) do not, so the solo-freight check
+            // withholds the order instead of placing it at a loss.
+            var near = new FixtureSupplier { SupplierId = "near", SupplierName = "Near Supplier" };
+            near.Stock["staple_food"] = 500;
+            near.Quotes["staple_food"] = 20;
+            var far = new FixtureSupplier { SupplierId = "far", SupplierName = "Far Supplier" };
+            far.Stock["staple_food"] = 500;
+            far.Quotes["staple_food"] = 18;
+            var card = RegionalFreightRateCard.OpeningCompany;
+
+            var port = new StubStorePort();
+            port.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            port.Stock["staple_food"] = 10;
+            port.Targets["staple_food"] = 20;
+            port.Prices["staple_food"] = 30;
+            port.CashBalance = 100000;
+            var driver = new StoreRestockDriver();
+            driver.RegisterSupplier(near);
+            driver.RegisterSupplier(far);
+            driver.DeliveredCostPerUnitCents = (supplier, category, itemId, units) =>
+            {
+                int goods = supplier.QuoteUnitCostCents(category);
+                float miles = supplier.SupplierId == "near" ? 50f : 100f;
+                int freight = RegionalDeliveredCost.FreightCentsForSoloShipment(miles, card);
+                return (goods * units + freight + units - 1) / units;
+            };
+            Assert.IsTrue(driver.DriveDaily(port, 0, 0.5f));
+            Assert.AreEqual(0, driver.Restock.Orders.Count,
+                "Goods 20c/18c pass the 30c price, but delivered 33c (near, cheapest) does not, " +
+                "so the solo-freight no-loss check withholds the order.");
+            Assert.IsTrue(string.Join("\n", driver.Restock.Diagnostics).Contains(
+                "cheapest delivered cost 33c meets or exceeds the selling price 30c"),
+                "Withholding diagnostic: " + string.Join(" | ", driver.Restock.Diagnostics));
+
+            // Goods-only control: the identical setup with no delivered-cost
+            // delegate places exactly one order from the far supplier (18c
+            // beats 20c on goods alone) — the contrast proves the delivered
+            // check, not the goods check, is what withholds above.
+            var controlNear = new FixtureSupplier { SupplierId = "near", SupplierName = "Near Supplier" };
+            controlNear.Stock["staple_food"] = 500;
+            controlNear.Quotes["staple_food"] = 20;
+            var controlFar = new FixtureSupplier { SupplierId = "far", SupplierName = "Far Supplier" };
+            controlFar.Stock["staple_food"] = 500;
+            controlFar.Quotes["staple_food"] = 18;
+            var controlPort = new StubStorePort();
+            controlPort.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            controlPort.Stock["staple_food"] = 10;
+            controlPort.Targets["staple_food"] = 20;
+            controlPort.Prices["staple_food"] = 30;
+            controlPort.CashBalance = 100000;
+            var controlDriver = new StoreRestockDriver();
+            controlDriver.RegisterSupplier(controlNear);
+            controlDriver.RegisterSupplier(controlFar);
+            Assert.IsTrue(controlDriver.DriveDaily(controlPort, 0, 0.5f));
+            Assert.AreEqual(1, controlDriver.Restock.Orders.Count);
+            Assert.AreEqual("far", controlDriver.Restock.Orders[0].UpstreamSupplierId);
+            Assert.AreEqual(18, controlDriver.Restock.Orders[0].UnitCostCents);
+            Assert.AreEqual(0, controlDriver.Restock.Orders[0].DeliveredCostCentsPerUnit,
+                "No delegate supplied, so no delivered cost is recorded.");
+        }
+
+        [Test]
+        public void CategoryPath_MillbrookSmallOrderWithheld_LargeOrderPlaced()
+        {
+            // Same branch with real regional adapters and authored production
+            // numbers: Millbrook flour is 20c goods, delivered 33c at 10u
+            // and 22c at 90u, against a 24c staple_food selling price — so
+            // the solo-freight check withholds the small order and places
+            // the large one. Millbrook starts with 96u, so availability is
+            // not the reason for the withholding.
+            var card = RegionalFreightRateCard.OpeningCompany;
+
+            // Setup A (withheld): 10u missing.
+            RegionalSupplierAdapter millbrookA = RegionalSupplierSet.CreateAll()
+                .Find(a => a.SupplierId == "millbrook_grain_co");
+            var smallPort = new StubStorePort();
+            smallPort.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            smallPort.Stock["staple_food"] = 10;
+            smallPort.Targets["staple_food"] = 20;
+            smallPort.Prices["staple_food"] = 24;
+            smallPort.CashBalance = 100000;
+            var smallDriver = new StoreRestockDriver();
+            smallDriver.RegisterSupplier(millbrookA);
+            smallDriver.DeliveredCostPerUnitCents = (supplier, category, itemId, units) =>
+                RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, category, units, card);
+            Assert.IsTrue(smallDriver.DriveDaily(smallPort, 0, 0.5f));
+            Assert.AreEqual(0, smallDriver.Restock.Orders.Count,
+                "Millbrook delivered 33c at 10u meets or exceeds the 24c price, so the order is withheld.");
+            Assert.IsTrue(string.Join("\n", smallDriver.Restock.Diagnostics).Contains(
+                "cheapest delivered cost 33c meets or exceeds the selling price 24c"),
+                "Withholding diagnostic: " + string.Join(" | ", smallDriver.Restock.Diagnostics));
+
+            // Setup B (placed): 90u missing, fresh adapter so the scenarios
+            // stay hermetic.
+            RegionalSupplierAdapter millbrookB = RegionalSupplierSet.CreateAll()
+                .Find(a => a.SupplierId == "millbrook_grain_co");
+            var largePort = new StubStorePort();
+            largePort.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            largePort.Stock["staple_food"] = 10;
+            largePort.Targets["staple_food"] = 100;
+            largePort.Prices["staple_food"] = 24;
+            largePort.CashBalance = 100000;
+            var largeDriver = new StoreRestockDriver();
+            largeDriver.RegisterSupplier(millbrookB);
+            largeDriver.DeliveredCostPerUnitCents = smallDriver.DeliveredCostPerUnitCents;
+            Assert.IsTrue(largeDriver.DriveDaily(largePort, 0, 0.5f));
+            Assert.AreEqual(1, largeDriver.Restock.Orders.Count);
+            Assert.AreEqual("millbrook_grain_co", largeDriver.Restock.Orders[0].UpstreamSupplierId);
+            Assert.AreEqual(string.Empty, largeDriver.Restock.Orders[0].ItemId,
+                "A category order: StubStorePort is not item-level, so the item path never runs.");
+            Assert.AreEqual(20, largeDriver.Restock.Orders[0].UnitCostCents);
+            Assert.AreEqual(90, largeDriver.Restock.Orders[0].UnitsOrdered);
+            Assert.AreEqual(22, largeDriver.Restock.Orders[0].DeliveredCostCentsPerUnit);
+        }
+
+        [Test]
         public void MultiStop_OneAshfordJourney_ThreeStops_InNearestFirstOrder()
         {
             JourneyModel model = ModelWithTowns();

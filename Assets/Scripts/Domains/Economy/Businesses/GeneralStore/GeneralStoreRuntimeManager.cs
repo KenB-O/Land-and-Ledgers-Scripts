@@ -338,6 +338,14 @@ namespace LandLedgers.FirstLedger
         [SerializeField, TextArea(2, 8)]
         private string lastReorderDebugSummary = "No reorder review resolved yet.";
 
+        // Slice 11: the daily restock drive (StoreRestockService + supplier
+        // list). The supplier list starts empty in production; P3 registers
+        // regional businesses here. The weekly off-map reorder is untouched.
+        private readonly StoreRestockDriver restockDriver = new StoreRestockDriver();
+
+        [SerializeField, TextArea(2, 5)]
+        private string lastDailyRestockSummary = "No daily restock review has run yet.";
+
         [SerializeField, TextArea(2, 5)]
         private string lastStaffingSummary = "No staffing changes yet.";
 
@@ -2271,6 +2279,25 @@ namespace LandLedgers.FirstLedger
         private void OnDayChanged(SimulationDateChangedContext context)
         {
             ResolveDailySales();
+            DriveDailyRestock();
+        }
+
+        /// <summary>
+        /// Slice 11: the daily restock review through the restock driver.
+        /// Same guard as the weekly path: no drive before a real store is
+        /// formed and bound. With no suppliers registered yet this places
+        /// no orders and records the gap once per day.
+        /// </summary>
+        private void DriveDailyRestock()
+        {
+            if (!InitializeIfNeeded()) return;
+            if (currentBusiness == null || runtimeState == null) return;
+            int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
+            if (dayIndex < 0) return;
+            GeneralStoreTradingPort port = BuildHouseholdTradingPort(currentBusiness);
+            if (port == null) return;
+            if (restockDriver.DriveDaily(port, dayIndex, GetEffectiveReorderThreshold01()))
+                lastDailyRestockSummary = restockDriver.LastDailySummary;
         }
 
         private void OnWeekChanged(SimulationDateChangedContext context)

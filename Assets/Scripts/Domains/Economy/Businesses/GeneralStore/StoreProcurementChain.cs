@@ -46,6 +46,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public StoreProcurementStage Stage;
         public string Provenance = string.Empty;
         public string CancelReason = string.Empty;
+        /// <summary>
+        /// Overnight 2026-11-04: orders placed the same day with the same
+        /// supplier share one shipment group, so the freight layer can move
+        /// them as one load. Grouping never creates an order: every grouped
+        /// order independently passed the threshold, availability, and
+        /// no-loss checks below. Empty when the supplier has only one order
+        /// that day. Operational only; not part of the save shape yet.
+        /// </summary>
+        public string ShipmentGroupId = string.Empty;
     }
 
     /// <summary>Phase C: one delivery in transit — goods exist but are NOT store stock yet.</summary>
@@ -86,6 +95,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         private readonly List<string> diagnostics = new List<string>();
         private int nextOrderSequence;
         private int nextDeliverySequence;
+        private int nextShipmentGroupSequence;
 
         public IReadOnlyList<StoreProcurementOrder> Orders => orders;
         public IReadOnlyList<StoreDelivery> Deliveries => deliveries;
@@ -95,6 +105,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// Daily review: for each stocked category below the reorder
         /// threshold with no open order, place a real order with the best
         /// upstream supplier. Never duplicates an open order per category.
+        /// Overnight 2026-11-04: an order is placed only when it can
+        /// plausibly profit — the cheapest quote must sit below the
+        /// store's selling price for the category, since transport and
+        /// handling on top of a break-even quote would already lose
+        /// money. Orders placed the same day with the same supplier are
+        /// grouped into one shipment group for a single freight movement;
+        /// grouping never invents demand, it only tags orders that each
+        /// independently earned their place.
         /// </summary>
         public void EvaluateRestock(
             IGeneralStoreTradingPort store,
@@ -156,6 +174,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
+                int sellingPrice = Math.Max(0, store.CategoryPricePerUnitCents(categoryId));
+                if (sellingPrice <= 0 || unitCost >= sellingPrice)
+                {
+                    diagnostics.Add($"Day {dayIndex}: no restock for '{categoryId}' — cheapest quote {unitCost}c meets or exceeds " +
+                        $"the selling price {sellingPrice}c, so the sale would not profit. Order withheld, not placed at a loss.");
+                    continue;
+                }
+
                 int leadDays = Math.Max(0, best.LeadTimeDays(categoryId));
                 var order = new StoreProcurementOrder
                 {
@@ -174,6 +200,66 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 order.Provenance = $"order {order.OrderId}: " + order.Provenance;
                 orders.Add(order);
                 diagnostics.Add($"Day {dayIndex}: {order.Provenance} (arrives ~day {order.ExpectedArrivalDayIndex}).");
+            }
+
+            ConsolidateTodayShipments(store.StoreBusinessId, dayIndex);
+        }
+
+        /// <summary>
+        /// Tags today's orders from any supplier with two or more orders
+        /// into one shipment group each, so one freight movement can carry
+        /// them. Orders already grouped (a repeated same-day review) keep
+        /// their group; singleton orders stay ungrouped.
+        /// </summary>
+        private void ConsolidateTodayShipments(string storeBusinessId, int dayIndex)
+        {
+            var bySupplier = new Dictionary<string, List<StoreProcurementOrder>>(StringComparer.OrdinalIgnoreCase);
+            foreach (StoreProcurementOrder order in orders)
+            {
+                if (order == null || order.Stage != StoreProcurementStage.Ordered
+                    || order.OrderDayIndex != Math.Max(0, dayIndex)
+                    || !string.Equals(order.StoreBusinessId, storeBusinessId, StringComparison.OrdinalIgnoreCase)
+                    || string.IsNullOrWhiteSpace(order.UpstreamSupplierId))
+                {
+                    continue;
+                }
+
+                if (!bySupplier.TryGetValue(order.UpstreamSupplierId, out List<StoreProcurementOrder> group))
+                {
+                    group = new List<StoreProcurementOrder>();
+                    bySupplier[order.UpstreamSupplierId] = group;
+                }
+
+                group.Add(order);
+            }
+
+            foreach (KeyValuePair<string, List<StoreProcurementOrder>> pair in bySupplier)
+            {
+                if (pair.Value.Count < 2) continue;
+                string groupId = null;
+                foreach (StoreProcurementOrder order in pair.Value)
+                {
+                    if (!string.IsNullOrWhiteSpace(order.ShipmentGroupId))
+                    {
+                        groupId = order.ShipmentGroupId;
+                        break;
+                    }
+                }
+
+                if (groupId == null)
+                {
+                    groupId = $"ship-{storeBusinessId}-{Math.Max(0, dayIndex)}-{pair.Key}-{nextShipmentGroupSequence++}";
+                    diagnostics.Add($"Day {dayIndex}: {pair.Value.Count} orders from '{pair.Value[0].UpstreamSupplierName}' " +
+                        $"consolidated into shipment {groupId} for one freight movement.");
+                }
+
+                foreach (StoreProcurementOrder order in pair.Value)
+                {
+                    if (string.IsNullOrWhiteSpace(order.ShipmentGroupId))
+                    {
+                        order.ShipmentGroupId = groupId;
+                    }
+                }
             }
         }
 

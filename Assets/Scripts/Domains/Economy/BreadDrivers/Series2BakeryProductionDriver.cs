@@ -42,13 +42,19 @@ namespace LandLedgers.Economy.BreadDrivers
     public sealed class Series2BakeryProductionDriver
     {
         private readonly BakeryShopRuntime bakery;
-        private readonly ISeries2BakeryFuelSource fuelSource;
+        private ISeries2BakeryFuelSource fuelSource;
 
         public Series2BakeryProductionDriver(
             BakeryShopRuntime bakery, ISeries2BakeryFuelSource fuelSource)
         {
             this.bakery = bakery;
             this.fuelSource = fuelSource;
+        }
+
+        /// <summary>Rebinds the fuel authority after bootstrap or restore.</summary>
+        public void AttachFuelSource(ISeries2BakeryFuelSource source)
+        {
+            if (source != null) fuelSource = source;
         }
 
         public BakeryShopRuntime Bakery => bakery;

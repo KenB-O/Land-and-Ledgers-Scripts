@@ -220,6 +220,41 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(shipment.requiresDispatchAuthorization);
         }
 
+        [Test]
+        public void CompletedDispatchTask_AuthorizesPreparedShipmentExactlyOnce_WithoutMovingCargo()
+        {
+            InvokeProductionActivation(Day);
+            Assert.AreEqual(TaskStatus.InProgress, dispatchTask.Status);
+            Assert.IsTrue(shipment.requiresDispatchAuthorization);
+
+            MethodInfo advance = typeof(SimulationDrivers).GetMethod("AdvanceAutonomousWork",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(advance);
+            advance.Invoke(drivers, new object[] { 1, Day, 481 });
+
+            Assert.AreEqual(TaskStatus.Complete, dispatchTask.Status);
+            Assert.IsFalse(shipment.requiresDispatchAuthorization,
+                "the validated completed TaskAuthority task must release the shipment's persisted dispatch hold");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status,
+                "dispatch authorization must not imply travel, pickup, or loading");
+            Assert.IsFalse(shipment.loadApplied);
+            Assert.AreEqual(LotId, shipment.CargoLotId);
+            Assert.AreEqual(AgreementId, shipment.freightServiceAgreementId);
+            Assert.AreEqual(dispatchTask.TaskId.ToString(), agreement.DispatchTaskId);
+            Assert.AreEqual(HorseUseKind.Draft, horse.CurrentUse);
+            Assert.AreEqual(ShipmentId, wagon.CurrentShipmentId);
+
+            MethodInfo reconcile = typeof(SimulationDrivers).GetMethod("ReconcileCompletedFreightDispatchTasks",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(reconcile);
+            reconcile.Invoke(drivers, null);
+            reconcile.Invoke(drivers, null);
+            Assert.AreEqual(TaskStatus.Complete, dispatchTask.Status);
+            Assert.IsFalse(shipment.requiresDispatchAuthorization);
+            Assert.AreSame(dispatchTask, hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId),
+                "recovery must reuse the original completed dispatch assignment");
+        }
+
         private void InvokeProductionActivation(int day)
         {
             SetClock(day);

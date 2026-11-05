@@ -15,6 +15,7 @@ using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Recruitment;
@@ -1643,6 +1644,7 @@ namespace LandLedgers.Orchestration.Systems
             // boundary. This is execution of an already-started physical process;
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
+            DriveBakeryWholesalePlanning(absoluteDayIndex);
 
             // Muse Phase I: trade-credit aging is a daily read/transition over
             // the shared FinancialObligationAuthority. It never creates cash
@@ -5476,6 +5478,135 @@ namespace LandLedgers.Orchestration.Systems
         private void CompleteTaskWithCausalOutcome(WorkTask task, int dayIndex, int baseMinutesFallback)
         {
             hub.Tasks.CompleteTask(task.TaskId, ResolveCausalOutcome(task, dayIndex, baseMinutesFallback), dayIndex, hub.WorkTimeBudgets);
+            if (task.Status == TaskStatus.Complete)
+                HandleCompletedFreightDispatchTask(task);
+        }
+
+        /// <summary>
+        /// Plans only demand already present in the Bakery's authored
+        /// wholesale accounts. This does not choose a product or batch count.
+        /// Actual production remains gated by configured equipment, fuel,
+        /// ingredients, and the existing scheduled production authority.
+        /// </summary>
+        private void DriveBakeryWholesalePlanning(int dayIndex)
+        {
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState state = save != null ? save.Series2Pass9State : null;
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery =
+                state?.BakeryRuntime ?? state?.BakeryDriver?.Bakery;
+            if (bakery == null) return;
+
+            if (state.BakeryDriver == null)
+            {
+                LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource source = state.FuelSource
+                    ?? (LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource)
+                        new LandLedgers.Economy.BreadDrivers.Series2InStockBakeryFuelSource(bakery);
+                state.BakeryDriver = new Series2BakeryProductionDriver(bakery, source);
+            }
+            else
+            {
+                LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource source = state.FuelSource
+                    ?? (LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource)
+                        new LandLedgers.Economy.BreadDrivers.Series2InStockBakeryFuelSource(bakery);
+                state.BakeryDriver.AttachFuelSource(source);
+            }
+
+            if (bakery.WholesaleAccounts == null || bakery.WholesaleAccounts.Count == 0) return;
+            var diagnostics = new List<string>();
+            List<string> planned = bakery.PlanWholesaleBatches(dayIndex, diagnostics);
+            if (planned != null && planned.Count > 0)
+                Debug.Log($"[BakeryProduction] Day {dayIndex}: planned {planned.Count} batch(es) from existing wholesale accounts. " +
+                    "Execution awaits the scheduled baker/equipment/input path; no production was run by planning.", this);
+            if (diagnostics.Count > 0)
+                Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
+        }
+
+        /// <summary>
+        /// Releases a dispatch-preparation hold only after TaskAuthority has
+        /// completed the exact linked assignment. The shipment's persisted
+        /// authorization flag is the idempotency marker, so a retry after
+        /// restore is safe and cannot authorize a different shipment.
+        /// </summary>
+        private void HandleCompletedFreightDispatchTask(WorkTask task)
+        {
+            if (task == null || task.Status != TaskStatus.Complete
+                || (task.Outcome != TaskOutcome.Success && task.Outcome != TaskOutcome.AcceptableWithVariation)
+                || task.DefinitionId != FreightDispatchTaskId
+                || string.IsNullOrWhiteSpace(task.TermsRef)
+                || FreightProduction?.ServiceAgreements == null)
+                return;
+
+            FreightDispatchTaskData taskData = JsonUtility.FromJson<FreightDispatchTaskData>(task.TermsRef);
+            if (taskData == null || string.IsNullOrWhiteSpace(taskData.AgreementId)
+                || string.IsNullOrWhiteSpace(taskData.ShipmentId)) return;
+            FreightServiceAgreement agreement = FreightProduction.ServiceAgreements.FindAgreement(taskData.AgreementId);
+            LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                && string.Equals(candidate.ShipmentId, taskData.ShipmentId, StringComparison.Ordinal));
+            if (agreement == null || shipment == null || !shipment.requiresDispatchAuthorization) return;
+
+            string expectedRef = FreightDispatchTaskPrefix + agreement.AgreementId + ":" + agreement.ShipmentId;
+            BusinessInstanceState carrier = FindBusiness(agreement.CarrierBusinessId);
+            int operatorId = carrier?.Owner?.PersonId ?? -1;
+            AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
+            EquipmentAsset wagon = hub?.TransportAssets?.Get(taskData.WagonId);
+            string refusal = agreement.Status != FreightServiceAgreementStatus.Accepted
+                || !string.Equals(agreement.DispatchTaskId, task.TaskId.ToString(), StringComparison.Ordinal)
+                || !string.Equals(agreement.ShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
+                || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)
+                || agreement.PreparedGameSeconds <= agreement.AcceptedGameSeconds
+                    ? "completed task is not linked to the accepted, chronologically prepared agreement."
+                : shipment.Status != LogisticsShipmentStatus.Planned || shipment.loadApplied
+                    ? "shipment is not still Planned and unloaded."
+                : !task.HasAssignee || task.AssigneeId.Kind != EntityKind.Person
+                    || task.AssigneeId.Id != agreement.AcceptingOperatorPersonId
+                    || taskData.OperatorPersonId != agreement.AcceptingOperatorPersonId
+                    || operatorId != agreement.AcceptingOperatorPersonId
+                    ? "completed dispatch assignee does not match the accepted B3 operator."
+                : !string.Equals(task.CustomerRef, expectedRef, StringComparison.Ordinal)
+                    || !string.Equals(taskData.HorseId, horse?.AnimalId.ToString(), StringComparison.Ordinal)
+                    || !string.Equals(taskData.WagonId, shipment.physicalWagonAssetId, StringComparison.Ordinal)
+                    ? "completed task terms do not match the accepted shipment equipment identities."
+                : horse == null || horse.CurrentUse != HorseUseKind.Draft
+                    || !string.Equals(horse.CurrentAssignmentId, shipment.ShipmentId, StringComparison.Ordinal)
+                    || horse.TransportState != HorseTransportState.AttachedToWagon
+                    || !string.Equals(horse.AttachedWagonAssetId, taskData.WagonId, StringComparison.Ordinal)
+                    ? "A0 is not still attached and reserved for this shipment."
+                : wagon == null || !wagon.IsTransportAssigned
+                    || !string.Equals(wagon.CurrentShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
+                    || !string.Equals(wagon.CurrentDriverPersonId, operatorId.ToString(), StringComparison.Ordinal)
+                    ? "the wagon is not still assigned to this shipment and operator."
+                : null;
+
+            if (refusal != null)
+            {
+                LogFreightAgreementBlockerOnce("dispatch-completion:" + task.TaskId,
+                    $"[FreightDispatch] Completed task '{task.TaskId}' did not authorize shipment '{shipment.ShipmentId}': {refusal}");
+                return;
+            }
+
+            if (!FreightProduction.AuthorizeShipmentDispatch(shipment.ShipmentId, out string authorizationRefusal))
+            {
+                LogFreightAgreementBlockerOnce("dispatch-authorization:" + shipment.ShipmentId,
+                    $"[FreightDispatch] Completed task '{task.TaskId}' could not release shipment '{shipment.ShipmentId}' from dispatch hold: {authorizationRefusal}");
+                return;
+            }
+
+            Debug.Log($"[FreightDispatch] Task '{task.TaskId}' completed and authorized dispatch for agreement '{agreement.AgreementId}', " +
+                $"shipment '{shipment.ShipmentId}', operator P{operatorId} at absolute simulation time {AbsoluteNowGameSeconds():0}s. " +
+                "Shipment remains Planned; no movement, loading, pickup, delivery, or payment was performed.", this);
+        }
+
+        /// <summary>Recovers a save boundary where task completion persisted but hold release did not.</summary>
+        private void ReconcileCompletedFreightDispatchTasks()
+        {
+            if (FreightProduction?.ServiceAgreements?.Agreements == null || hub?.Tasks == null) return;
+            foreach (FreightServiceAgreement agreement in FreightProduction.ServiceAgreements.Agreements)
+            {
+                if (agreement == null || string.IsNullOrWhiteSpace(agreement.DispatchTaskId)) continue;
+                WorkTask task = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
+                if (task != null && task.Status == TaskStatus.Complete)
+                    HandleCompletedFreightDispatchTask(task);
+            }
         }
 
         private TaskOutcome ResolveCausalOutcome(WorkTask task, int dayIndex, int baseMinutesFallback = 1)
@@ -6202,6 +6333,7 @@ namespace LandLedgers.Orchestration.Systems
             // time window that made it eligible.
             StartQueuedFreightDispatchTasks(context.Date.AbsoluteDayIndex,
                 Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+            ReconcileCompletedFreightDispatchTasks();
 
             // Pass IV (Worker 1): player-issued tasks progress in real time instead of
             // stalling in InProgress (extends the AdvanceAutonomousWork pattern).

@@ -1643,13 +1643,17 @@ namespace LandLedgers.FirstLedger
             }
 
             pass9.BakeryRuntime = liveBakeryRuntime;
+            LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource liveFuelSource = pass9.FuelSource
+                ?? (LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource)
+                    new LandLedgers.Economy.BreadDrivers.Series2InStockBakeryFuelSource(liveBakeryRuntime);
             if (pass9.BakeryDriver == null)
             {
-                // The live identity/save owner is established here. A production
-                // fuel source is attached only by the daily operations wiring;
-                // this driver therefore refuses baking until that authority exists.
-                pass9.BakeryDriver = new Series2BakeryProductionDriver(liveBakeryRuntime, null);
+                // Verify only provenance-tracked fuel already in the bakery.
+                // Dealer supply is attached only when its real intake authority
+                // exists; this fallback never creates fuel.
+                pass9.BakeryDriver = new Series2BakeryProductionDriver(liveBakeryRuntime, liveFuelSource);
             }
+            else pass9.BakeryDriver.AttachFuelSource(liveFuelSource);
             // Detailed freight state is owned by the same Pass 9 save section
             // before any daily driver can create or restore a shipment.
             // SimulationDrivers reuses this instance; it must not keep a

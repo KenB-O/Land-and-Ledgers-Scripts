@@ -304,6 +304,80 @@ namespace LandLedgers.Tests.World
         }
 
         [Test]
+        public void CategoryPath_MercantileQuoteRisesAsStockDrains_FlipsSupplierToRedfield()
+        {
+            // The category quote is the cheapest IN-STOCK item, so as
+            // Ashford Mercantile's sugar (5c) and salt (7c) drain, its
+            // delivered staple cost at 90u climbs 7c -> 9c (salt) -> 15c
+            // (potatoes) — and at 15c Redfield Grain's potatoes (14c)
+            // win a category order the mercantile used to win. Only the
+            // two contenders are registered: with all twelve suppliers,
+            // Redfield General Store's sugar (delivered 9c at 90u:
+            // (6x90+225)/90 = 8.5, ceiling 9c) would win the drained
+            // scenario instead — a true fact, but a different flip.
+            var card = RegionalFreightRateCard.OpeningCompany;
+
+            // Control half (fresh stock): the mercantile wins at 7c.
+            List<RegionalSupplierAdapter> adapters = RegionalSupplierSet.CreateAll();
+            RegionalSupplierAdapter mercantile = adapters.Find(a => a.SupplierId == "ashford_general_mercantile");
+            RegionalSupplierAdapter redfieldGrain = adapters.Find(a => a.SupplierId == "redfield_grain_feed");
+            Assert.AreEqual(7, RegionalDeliveredCost.DeliveredCentsPerUnit(mercantile, "staple_food", 90, card));
+            var port = new StubStorePort();
+            port.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            port.Stock["staple_food"] = 10;
+            port.Targets["staple_food"] = 100;
+            port.Prices["staple_food"] = 24;
+            port.CashBalance = 100000;
+            var driver = new StoreRestockDriver();
+            driver.RegisterSupplier(mercantile);
+            driver.RegisterSupplier(redfieldGrain);
+            driver.DeliveredCostPerUnitCents = (supplier, category, itemId, units) =>
+                RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, category, units, card);
+            Assert.IsTrue(driver.DriveDaily(port, 0, 0.5f));
+            Assert.AreEqual(1, driver.Restock.Orders.Count);
+            StoreProcurementOrder order = driver.Restock.Orders[0];
+            Assert.AreEqual("ashford_general_mercantile", order.UpstreamSupplierId);
+            Assert.AreEqual(string.Empty, order.ItemId,
+                "A category order: StubStorePort is not item-level, so the item path never runs.");
+            Assert.AreEqual(5, order.UnitCostCents, "Sugar is the cheapest in-stock staple.");
+            Assert.AreEqual(7, order.DeliveredCostCentsPerUnit);
+            Assert.AreEqual(90, order.UnitsOrdered);
+
+            // Drained half (fresh adapters, fresh port/driver, same
+            // price): sugar and salt are gone, so the mercantile's
+            // cheapest in-stock staple is potatoes at 13c goods.
+            List<RegionalSupplierAdapter> drainedAdapters = RegionalSupplierSet.CreateAll();
+            RegionalSupplierAdapter drainedMercantile = drainedAdapters.Find(a => a.SupplierId == "ashford_general_mercantile");
+            RegionalSupplierAdapter drainedRedfieldGrain = drainedAdapters.Find(a => a.SupplierId == "redfield_grain_feed");
+            var diag = new List<string>();
+            drainedMercantile.ShipItem("sugar", int.MaxValue, 0, diag);
+            drainedMercantile.ShipItem("salt", int.MaxValue, 0, diag);
+            Assert.AreEqual(15, RegionalDeliveredCost.DeliveredCentsPerUnit(drainedMercantile, "staple_food", 90, card),
+                "Potatoes are now the cheapest in-stock staple: (13x90+125+89)/90 = 15c.");
+            Assert.AreEqual(14, RegionalDeliveredCost.DeliveredCentsPerUnit(drainedRedfieldGrain, "staple_food", 90, card),
+                "Redfield Grain potatoes: (11x90+225+89)/90 = 14c.");
+            var drainedPort = new StubStorePort();
+            drainedPort.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            drainedPort.Stock["staple_food"] = 10;
+            drainedPort.Targets["staple_food"] = 100;
+            drainedPort.Prices["staple_food"] = 24;
+            drainedPort.CashBalance = 100000;
+            var drainedDriver = new StoreRestockDriver();
+            drainedDriver.RegisterSupplier(drainedMercantile);
+            drainedDriver.RegisterSupplier(drainedRedfieldGrain);
+            drainedDriver.DeliveredCostPerUnitCents = driver.DeliveredCostPerUnitCents;
+            Assert.IsTrue(drainedDriver.DriveDaily(drainedPort, 0, 0.5f));
+            Assert.AreEqual(1, drainedDriver.Restock.Orders.Count);
+            StoreProcurementOrder drainedOrder = drainedDriver.Restock.Orders[0];
+            Assert.AreEqual("redfield_grain_feed", drainedOrder.UpstreamSupplierId,
+                "The quote rise flips the supplier: 15c loses to 14c.");
+            Assert.AreEqual(string.Empty, drainedOrder.ItemId);
+            Assert.AreEqual(11, drainedOrder.UnitCostCents, "Potatoes are Redfield Grain's cheapest in-stock staple.");
+            Assert.AreEqual(14, drainedOrder.DeliveredCostCentsPerUnit);
+            Assert.AreEqual(90, drainedOrder.UnitsOrdered);
+        }
+
+        [Test]
         public void MultiStop_OneAshfordJourney_ThreeStops_InNearestFirstOrder()
         {
             JourneyModel model = ModelWithTowns();

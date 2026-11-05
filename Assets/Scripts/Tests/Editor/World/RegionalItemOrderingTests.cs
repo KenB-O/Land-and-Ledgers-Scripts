@@ -179,6 +179,74 @@ namespace LandLedgers.Tests.World
         }
 
         [Test]
+        public void FlourTie_At50Units_TieBreakPicksMillbrookDespiteListOrder()
+        {
+            // Missing 50u: Millbrook and Redfield flour both deliver at
+            // 23c (ceiling division: (1000+125+49)/50 = 23,
+            // (900+225+49)/50 = 23). The chain's explicitly coded
+            // tie-break prefers the lexicographically smaller SupplierId,
+            // so Millbrook wins — even though Redfield is registered
+            // FIRST here, which rules out first-in-list winning.
+            // The tie is worth exactly 100c (50u x (20c - 18c) goods).
+            RegionalSupplierAdapter millbrook = Adapter("millbrook_grain_co");
+            RegionalSupplierAdapter redfield = Adapter("redfield_grain_feed");
+            Drain(redfield, "potatoes"); // only flour in play
+            ItemStorePort port = StaplePort(50, 100, "flour"); // missing 50u at the 0.5 threshold
+            StoreRestockDriver driver = DriverWith(redfield, millbrook); // Redfield registered first
+            var card = RegionalFreightRateCard.OpeningCompany;
+            Assert.AreEqual(23, RegionalDeliveredCost.DeliveredCentsPerUnitForItem(millbrook, "flour", 50, card));
+            Assert.AreEqual(23, RegionalDeliveredCost.DeliveredCentsPerUnitForItem(redfield, "flour", 50, card));
+            Assert.IsTrue(driver.DriveDaily(port, 0, 0.5f));
+            Assert.AreEqual(1, driver.Restock.Orders.Count);
+            StoreProcurementOrder order = driver.Restock.Orders[0];
+            Assert.AreEqual("flour", order.ItemId);
+            Assert.AreEqual("millbrook_grain_co", order.UpstreamSupplierId,
+                "The tie-break beats list order — Redfield was registered first.");
+            Assert.AreEqual(20, order.UnitCostCents, "The supplier is paid its goods price.");
+            Assert.AreEqual(23, order.DeliveredCostCentsPerUnit);
+            Assert.AreEqual(50, order.UnitsOrdered);
+            // Millbrook lead is 1 day: the order ships and arrives day 1.
+            Assert.IsTrue(driver.DriveDaily(port, 1, 0.5f));
+            Assert.AreEqual(100, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(99000, port.CashBalance, "100000 - 50u x 20c.");
+            Assert.AreEqual(96 - 50, millbrook.OnHandUnits("flour"), "Only the ordered flour left Millbrook.");
+            Assert.AreEqual(96, redfield.OnHandUnits("flour"), "The losing supplier is untouched.");
+        }
+
+        [Test]
+        public void FlourCrossover_FlipsAt57Units_NotAt50()
+        {
+            // The tie holds through 56u (23c vs 23c) and Redfield first
+            // wins at 57u (23c vs 22c) — not at the naive 50u boundary,
+            // because ceiling division holds the tie for 7 more units.
+            RegionalSupplierAdapter millbrook = Adapter("millbrook_grain_co");
+            RegionalSupplierAdapter redfield = Adapter("redfield_grain_feed");
+            Drain(redfield, "potatoes"); // only flour in play
+            ItemStorePort port = StaplePort(43, 100, "flour"); // missing 57u
+            StoreRestockDriver driver = DriverWith(millbrook, redfield);
+            var card = RegionalFreightRateCard.OpeningCompany;
+            Assert.AreEqual(23, RegionalDeliveredCost.DeliveredCentsPerUnitForItem(millbrook, "flour", 57, card));
+            Assert.AreEqual(22, RegionalDeliveredCost.DeliveredCentsPerUnitForItem(redfield, "flour", 57, card));
+            Assert.IsTrue(driver.DriveDaily(port, 0, 0.5f));
+            Assert.AreEqual(1, driver.Restock.Orders.Count);
+            StoreProcurementOrder order = driver.Restock.Orders[0];
+            Assert.AreEqual("flour", order.ItemId);
+            Assert.AreEqual("redfield_grain_feed", order.UpstreamSupplierId);
+            Assert.AreEqual(18, order.UnitCostCents);
+            Assert.AreEqual(22, order.DeliveredCostCentsPerUnit);
+            Assert.AreEqual(57, order.UnitsOrdered);
+            // Redfield lead is 2 days: nothing has arrived after day 1.
+            Assert.IsTrue(driver.DriveDaily(port, 1, 0.5f));
+            Assert.AreEqual(43, port.CategoryStockUnits("staple_food"), "Nothing received yet.");
+            Assert.AreEqual(100000, port.CashBalance, "Nothing paid yet.");
+            // Day 2: the flour lands.
+            Assert.IsTrue(driver.DriveDaily(port, 2, 0.5f));
+            Assert.AreEqual(100, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(98974, port.CashBalance, "100000 - 57u x 18c.");
+            Assert.AreEqual(96 - 57, redfield.OnHandUnits("flour"));
+        }
+
+        [Test]
         public void CheapestPassingItem_Wins_WhenSeveralPass()
         {
             // Missing 90u with the whole region on offer: sugar from

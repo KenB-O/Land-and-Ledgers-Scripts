@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using LandLedgers.Orchestration.Scenarios.FirstLedger;
 using LandLedgers.Orchestration.Scenarios.Generation;
+using LandLedgers.Orchestration.Scenarios.OpenFrontier;
 using LandLedgers.Reporting;
 using NUnit.Framework;
 
@@ -139,11 +141,27 @@ namespace LandLedgers.Editor.Orchestration
         {
             Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(string.Empty));
             Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(null));
-            Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("the-first-ledger"));
+            // Overnight 2026-11-04: Pass XII asserted "the-first-ledger",
+            // an id nothing else uses. The live First Ledger id is
+            // FirstLedgerScenario.ScenarioId ("first-ledger", matching
+            // FirstLedger.asset); the gate must recognize that id.
+            Assert.AreEqual("first-ledger", FirstLedgerScenario.ScenarioId);
+            Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(FirstLedgerScenario.ScenarioId));
             Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("saloon-circuit"));
-            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("the-first-ledger-2"));
-            Assert.AreEqual(string.Empty, ScenarioGuidanceGate.SuppressionReason("the-first-ledger"));
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("first-ledger-2"));
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("the-first-ledger"),
+                "The stale Pass XII id must not match anything.");
+            Assert.AreEqual(string.Empty, ScenarioGuidanceGate.SuppressionReason(FirstLedgerScenario.ScenarioId));
             Assert.IsTrue(ScenarioGuidanceGate.SuppressionReason("saloon-circuit").Contains("saloon-circuit"));
+        }
+
+        [Test]
+        public void GuidanceGate_OpenFrontierSuppressesFirstSessionGuidance()
+        {
+            Assert.AreEqual("open-frontier", OpenFrontierScenario.ScenarioId);
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(OpenFrontierScenario.ScenarioId));
+            Assert.IsTrue(ScenarioGuidanceGate.SuppressionReason(OpenFrontierScenario.ScenarioId)
+                .Contains(OpenFrontierScenario.ScenarioId));
         }
 
         [Test]
@@ -151,10 +169,11 @@ namespace LandLedgers.Editor.Orchestration
         {
             Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(string.Empty, true));
             Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(null, true));
-            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("the-first-ledger", true));
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(FirstLedgerScenario.ScenarioId, true));
             Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("saloon-circuit", true));
+            Assert.IsFalse(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(OpenFrontierScenario.ScenarioId, true));
             Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(string.Empty, false));
-            Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance("the-first-ledger", false));
+            Assert.IsTrue(ScenarioGuidanceGate.ShouldShowFirstSessionGuidance(FirstLedgerScenario.ScenarioId, false));
         }
 
         [Test]

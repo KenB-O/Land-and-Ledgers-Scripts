@@ -148,7 +148,13 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
     /// </summary>
     public sealed class ScenarioObjectiveService
     {
-        /// <summary>The First Ledger scenario id as recorded by this service.</summary>
+        /// <summary>
+        /// Overnight 2026-11-04: stale. This held "the-first-ledger", an
+        /// id nothing else in the repo uses; the live First Ledger id
+        /// is FirstLedgerScenario.ScenarioId ("first-ledger"). Kept only
+        /// so existing references still compile — do not match on it.
+        /// </summary>
+        [System.Obsolete("Use FirstLedgerScenario.ScenarioId (\"first-ledger\"). This constant held a stale id.")]
         public const string FirstLedgerScenarioId = "the-first-ledger";
 
         private sealed class DatedQualifier

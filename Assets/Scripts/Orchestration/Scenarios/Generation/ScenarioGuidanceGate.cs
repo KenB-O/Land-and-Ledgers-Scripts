@@ -1,3 +1,5 @@
+using LandLedgers.Orchestration.Scenarios.FirstLedger;
+
 namespace LandLedgers.Orchestration.Scenarios.Generation
 {
     /// <summary>
@@ -12,8 +14,15 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
     /// step did not fit the selected scenario.
     ///
     /// Rule (pure, testable; the manager consults it in RefreshGuidance):
-    /// - Active scenario is the First Ledger ("the-first-ledger") → show.
+    /// - Active scenario is the First Ledger ("first-ledger") → show.
     ///   Those steps describe that scenario's actual start.
+    ///   Overnight 2026-11-04 correction: Pass XII compared against
+    ///   "the-first-ledger", an id nothing else in the repo uses. The
+    ///   live First Ledger asset (FirstLedger.asset) and its code
+    ///   definition (FirstLedgerScenario) both use "first-ledger", so
+    ///   the gate now compares against that constant instead of the
+    ///   stale one. Any other scenario id — including Open Frontier
+    ///   ("open-frontier") — suppresses, by the same rule.
     /// - No scenario id is known (empty: legacy saves and scenes that do
     ///   not bind scenario context yet) → show. Fail-open, so existing
     ///   First Ledger sessions without a bound scenario context do not
@@ -36,7 +45,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
         public static bool ShouldShowFirstSessionGuidance(string activeScenarioId)
         {
             if (string.IsNullOrEmpty(activeScenarioId)) return true;
-            return string.Equals(activeScenarioId, ScenarioObjectiveService.FirstLedgerScenarioId, System.StringComparison.Ordinal);
+            return string.Equals(activeScenarioId, FirstLedgerScenario.ScenarioId, System.StringComparison.Ordinal);
         }
 
         /// <summary>

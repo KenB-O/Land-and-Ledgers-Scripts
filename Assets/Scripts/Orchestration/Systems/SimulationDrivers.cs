@@ -592,12 +592,32 @@ namespace LandLedgers.Orchestration.Systems
                 populationManager.State.people, supplierDirectory.All, sellerKnowledge, dayIndex);
         }
 
-        /// <summary>Pure policy seam used to protect the generic placeholder id.</summary>
+        /// <summary>
+        /// Pure policy seam used to protect the generic placeholder id.
+        /// A registered adapter whose business id fell back to
+        /// "general-store" (the trading port's fallback when no Business
+        /// is attached) is still a real storefront when it has a real
+        /// building location: the placeholder itself has no building, so
+        /// it stays excluded, while a building-backed storefront can no
+        /// longer be registered yet invisible to every household's
+        /// shopping (the overnight 2026-11-04 "unavailable seller" hole:
+        /// registered, stocked, staffed, and open, but never known).
+        /// </summary>
         public static bool IsEligibleLocalGeneralStoreSupplier(IGoodsSupplier supplier)
         {
-            return supplier is LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter
-                && !string.IsNullOrWhiteSpace(supplier.SupplierBusinessId)
-                && !string.Equals(supplier.SupplierBusinessId, "general-store", StringComparison.Ordinal);
+            if (supplier is not LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter adapter
+                || string.IsNullOrWhiteSpace(adapter.SupplierBusinessId))
+            {
+                return false;
+            }
+
+            if (!string.Equals(adapter.SupplierBusinessId, "general-store", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return !string.IsNullOrWhiteSpace(adapter.LocationId)
+                && adapter.LocationId.StartsWith("building:", StringComparison.Ordinal);
         }
 
         /// <summary>Idempotent, narrowly scoped local-store knowledge policy.</summary>

@@ -355,13 +355,29 @@ namespace LandLedgers.FirstLedger
         public int StoreBuildingId => storeBuildingId;
 
         /// <summary>
-        /// Builds the legacy player-store trading port. Single-SKU categories
-        /// retain exact item identity; pooled multi-SKU categories are never
-        /// projected as multiple item offers.
+        /// Builds the fallback trading port used before a specific store
+        /// Business exists (bootstrap registration, non-development builds,
+        /// or a store whose NPC record could not be resolved). Single-SKU
+        /// categories retain the exact legacy item identity. Multi-SKU
+        /// categories now project the same per-item offers Series 2 Pass 7
+        /// built for the NPC overload, drawing from the pooled category
+        /// stock (the Pass 7 shared-pool caveat applies: one pool per
+        /// category, so total units sold across its items can never exceed
+        /// the pool, even though each item alone reports the pool size).
+        /// Previously this port offered nothing for a multi-SKU category,
+        /// so a stocked staple_food shelf was invisible to the household
+        /// shopping loop: every food need failed as "unavailable seller"
+        /// while walk-in category sales still moved goods. An item is
+        /// offered only when its authored store unit matches the household
+        /// unit, so a sack-priced good is never sold as pounds; price is
+        /// enforced at sale time (a zero category-average price still
+        /// refuses honestly). Dropped items are warned about once here,
+        /// at port build, never per tick.
         /// </summary>
         public GeneralStoreTradingPort BuildHouseholdTradingPort()
         {
             var offers = new List<GeneralStoreCategoryOffer>();
+            var droppedReasons = new List<string>();
             // Bootstrap registers this port before the player has formed a
             // Business. Derive its declared category-to-item offers from the
             // authored store definition, not from the manager's then-null
@@ -401,9 +417,41 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
-                // The aggregate cannot identify an individual SKU. The NPC
-                // store overload below advertises these only when item lots
-                // supply identity, quantity, owner, custody and provenance.
+                // Multi-SKU category: per-item offers over the pooled stock,
+                // exactly as the NPC overload projects them, minus the
+                // identified-lot requirement (this port has no Business
+                // whose lots could back them). Unit mismatch still drops
+                // the item: pooled units must mean the same thing on both
+                // sides of the counter.
+                var categoryItemIds = new List<string>();
+                ReadOnlySpan<string> declaredItemIds = category.ItemIds;
+                for (int j = 0; j < declaredItemIds.Length; j++)
+                    if (!string.IsNullOrWhiteSpace(declaredItemIds[j])) categoryItemIds.Add(declaredItemIds[j]);
+                var builderDiag = new List<string>();
+                List<GeneralStoreCategoryOffer> perItemOffers =
+                    Series2TradingPortBuilder.BuildPerItemOffers(category.CategoryId, categoryItemIds, builderDiag);
+                foreach (string builderReason in builderDiag)
+                    droppedReasons.Add(builderReason);
+                foreach (GeneralStoreCategoryOffer candidate in perItemOffers)
+                {
+                    if (candidate?.OfferedItemIds == null || candidate.OfferedItemIds.Count != 1) continue;
+                    string itemId = candidate.OfferedItemIds[0];
+                    if (!HouseholdUnitsMatch(storeDefinition, itemId))
+                    {
+                        droppedReasons.Add(
+                            $"Series2TradingPort: '{itemId}' in '{category.CategoryId}' is not offered from the fallback port: " +
+                            "its authored store unit does not match the household unit.");
+                        continue;
+                    }
+
+                    offers.Add(candidate);
+                }
+            }
+
+            if (droppedReasons.Count > 0)
+            {
+                Debug.LogWarning("General Store fallback trading port omits item offer(s): " +
+                    string.Join("; ", droppedReasons), this);
             }
 
             var capability = new StoreTradingCapability { Staffed = false };
@@ -434,6 +482,7 @@ namespace LandLedgers.FirstLedger
                 return BuildHouseholdTradingPort();
 
             var offers = new List<GeneralStoreCategoryOffer>();
+            var droppedReasons = new List<string>();
             ReadOnlySpan<ItemCategoryDefinition> categories = storeDefinition.Categories;
             for (int categoryIndex = 0; categoryIndex < categories.Length; categoryIndex++)
             {
@@ -445,7 +494,7 @@ namespace LandLedgers.FirstLedger
                     if (!string.IsNullOrWhiteSpace(declaredItemIds[i])) categoryItemIds.Add(declaredItemIds[i]);
 
                 List<GeneralStoreCategoryOffer> validatedItems = Series2TradingPortBuilder.BuildPerItemOffers(
-                    category.CategoryId, categoryItemIds, null);
+                    category.CategoryId, categoryItemIds, droppedReasons);
                 GeneralStoreCategoryOffer exactOffer = null;
                 foreach (GeneralStoreCategoryOffer candidate in validatedItems)
                 {
@@ -453,9 +502,23 @@ namespace LandLedgers.FirstLedger
                     string itemId = candidate.OfferedItemIds[0];
                     ItemDefinition item = FindAuthoredStoreItem(itemId);
                     HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(itemId);
-                    if (item == null || householdItem == null
-                        || !string.Equals(item.Unit.Trim(), householdItem.UnitLabel.Trim(), StringComparison.OrdinalIgnoreCase)
-                        || GetItemSellingPriceCents(itemId) <= 0) continue;
+                    string dropReason = null;
+                    if (item == null || householdItem == null)
+                        dropReason = "no authored store item or household item definition";
+                    else if (!string.Equals(item.Unit?.Trim(), householdItem.UnitLabel?.Trim(), StringComparison.OrdinalIgnoreCase))
+                        dropReason = $"authored store unit '{item.Unit}' does not match household unit '{householdItem.UnitLabel}'";
+                    else if (GetItemSellingPriceCents(itemId) <= 0)
+                        dropReason = "the owner has not set a positive selling price";
+                    if (dropReason != null)
+                    {
+                        // Overnight 2026-11-04: previously silent. A dropped
+                        // offer is exactly how a stocked shelf becomes
+                        // invisible to household shopping, so it is warned
+                        // about once here, at port build, never per tick.
+                        droppedReasons.Add(
+                            $"General Store '{npcBusiness.InstanceId}' does not offer '{itemId}' from '{category.CategoryId}': {dropReason}.");
+                        continue;
+                    }
 
                     if (exactOffer == null)
                     {
@@ -520,6 +583,12 @@ namespace LandLedgers.FirstLedger
                 {
                     Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: no available identified item lots back it.", this);
                 }
+            }
+
+            if (droppedReasons.Count > 0)
+            {
+                Debug.LogWarning("General Store '" + npcBusiness.InstanceId + "' omits item offer(s): " +
+                    string.Join(" ", droppedReasons), this);
             }
 
             var capability = new StoreTradingCapability { Staffed = npcBusiness.RuntimeState.FilledWorkerCount > 0 };

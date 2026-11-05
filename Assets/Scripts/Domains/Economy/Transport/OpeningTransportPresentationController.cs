@@ -24,6 +24,12 @@ namespace LandLedgers.Economy.Transport
         private Transform horseContainer;
         private Transform wagonContainer;
         private Transform fixtureContainer;
+        // Overnight 2026-11-04: the neutral root a hitched pair shares.
+        // The horse used to be parented under the wagon's hitch anchor,
+        // which compounded the wagon's scale onto the horse and snapped
+        // the horse onto the anchor point. Hitched horse and wagon are
+        // siblings here instead, and neither is ever the other's child.
+        private Transform transportGroup;
 
         public void Present(
             SimulationSystemsHub systems,
@@ -140,7 +146,7 @@ namespace LandLedgers.Economy.Transport
                 wagonView = wagonRoot.GetComponent<WagonWorldView>();
                 if (wagonView == null) Destroy(wagonRoot);
             }
-            else if (wagonView.transform.parent != wagonContainer)
+            else if (wagonView.transform.parent != wagonContainer && !IsAttachedToHorse(horse, wagon))
                 wagonView.transform.SetParent(wagonContainer, true);
             if (wagonView == null)
             {
@@ -201,16 +207,31 @@ namespace LandLedgers.Economy.Transport
                 && wagon.HitchingAnimalIds != null && wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString());
             if (attached)
             {
-                Transform anchor = activeWagonView.HitchPoint != null ? activeWagonView.HitchPoint : activeWagonView.transform;
-                activeHorseView.transform.SetParent(anchor, false);
-                activeHorseView.transform.localPosition = Vector3.zero;
+                // Overnight 2026-11-04: siblings under the neutral group
+                // root, never parent and child. World transforms are
+                // preserved (worldPositionStays), so the horse keeps the
+                // position the hitch task left it in, the wagon's scale
+                // no longer compounds onto the horse, and the authored
+                // hitch anchors are untouched. This is hierarchy only;
+                // coupled navigation of the pair is still future work.
+                if (transportGroup == null)
+                {
+                    Debug.LogError("[OpeningTransportPresentation] Refused to show attached state: no transport group exists; horse and wagon left unparented rather than re-attached under the wagon.", this);
+                    return;
+                }
+                if (activeHorseView.transform.parent != transportGroup)
+                    activeHorseView.transform.SetParent(transportGroup, true);
+                if (activeWagonView.transform.parent != transportGroup)
+                    activeWagonView.transform.SetParent(transportGroup, true);
                 activeHorseView.gameObject.GetComponent<TransportAnimatorState>()?.SetState(TransportVisualState.DrivingWagon);
-                Debug.Log($"[OpeningTransportPresentation] attached state shown: horse='{horse.AnimalId}' wagon='{wagon.AssetId}' at hitch anchor; identities unchanged.", this);
+                Debug.Log($"[OpeningTransportPresentation] attached state shown: horse='{horse.AnimalId}' and wagon='{wagon.AssetId}' are siblings under the transport group; identities and world transforms unchanged.", this);
             }
             else
             {
                 if (horseContainer != null && activeHorseView.transform.parent != horseContainer)
                     activeHorseView.transform.SetParent(horseContainer, true);
+                if (wagonContainer != null && activeWagonView.transform.parent != wagonContainer)
+                    activeWagonView.transform.SetParent(wagonContainer, true);
                 if (hitchingPost != null && horse.TransportState == HorseTransportState.SecuredAtHitchingPost)
                     activeHorseView.transform.position = hitchingPost.transform.position + Vector3.right * 0.35f;
                 activeHorseView.gameObject.GetComponent<TransportAnimatorState>()?.SetState(TransportVisualState.Idle);
@@ -220,6 +241,11 @@ namespace LandLedgers.Economy.Transport
         private bool IsAttachedToWagon(AnimalState horse)
             => horse != null && horse.TransportState == HorseTransportState.AttachedToWagon
                && !string.IsNullOrWhiteSpace(horse.AttachedWagonAssetId);
+
+        private bool IsAttachedToHorse(AnimalState horse, EquipmentAsset wagon)
+            => horse != null && wagon != null
+               && horse.TransportState == HorseTransportState.AttachedToWagon
+               && string.Equals(horse.AttachedWagonAssetId, wagon.AssetId, System.StringComparison.Ordinal);
 
         private void EnsurePhysicalContainers(Transform worldRoot)
         {
@@ -233,6 +259,9 @@ namespace LandLedgers.Economy.Transport
             horseContainer = EnsureContainer(runtimeRoot, "Animals");
             wagonContainer = EnsureContainer(runtimeRoot, "Transport");
             fixtureContainer = EnsureContainer(runtimeRoot, "World Fixtures");
+            // Find-or-create by name: repeated hitching, and repeated
+            // presentation, must never duplicate the group.
+            transportGroup = EnsureContainer(runtimeRoot, "Horse and Wagon Transport Group");
         }
 
         private static Transform EnsureContainer(Transform parent, string name)

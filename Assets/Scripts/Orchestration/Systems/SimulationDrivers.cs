@@ -3894,7 +3894,14 @@ namespace LandLedgers.Orchestration.Systems
                 || !shipment.requiresDispatchAuthorization
                 || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)) return;
             if (wagon.HitchPreparationAttempted
-                && string.Equals(wagon.HitchPreparationShipmentId, shipment.ShipmentId, StringComparison.Ordinal)) return;
+                && string.Equals(wagon.HitchPreparationShipmentId, shipment.ShipmentId, StringComparison.Ordinal))
+            {
+                // Queued by an earlier run (possibly before this fix sent
+                // Ethan to staging): make sure the arrival-driven travel
+                // exists rather than waiting on a coincidence again.
+                EnsureOpeningHitchTravel(absoluteDayIndex, freight, wagon, shipment.ShipmentId);
+                return;
+            }
             if (!HorseAuthority.IsWorkReady(horse))
             {
                 LogFreightAgreementBlockerOnce("hitch-readiness:" + shipment.ShipmentId,
@@ -3915,12 +3922,6 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            // The current opening business meeting leaves Ethan at this staging
-            // location. Keep the accepted shipment pending until he is physically
-            // there; the next stage can schedule an arrival-driven approach if
-            // future dispatch work leaves him elsewhere.
-            if (!IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
-
             EntityId businessOwner = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(freight.InstanceId));
             WorkTask hitch = hub.Tasks.CreateTaskWithPlannedMinutes(OpeningHitchTaskId, businessOwner,
                 absoluteDayIndex, Math.Max(1, developmentHitchMinutes),
@@ -3932,6 +3933,87 @@ namespace LandLedgers.Orchestration.Systems
             Debug.Log($"[Hitching] Accepted shipment '{shipment.ShipmentId}' queued one preparation task '{taskId}' " +
                 $"for Ethan P{ethan.id}; A0 and wagon reservations will be acquired only when a legitimate " +
                 $"{Math.Max(1, developmentHitchMinutes)}-minute work window is available.", this);
+
+            // Overnight 2026-11-04: queuing no longer waits for the
+            // coincidence of Ethan already being at staging. The hitch
+            // work itself still requires him visually at staging when it
+            // starts (the ShortTick starter keeps that gate), but when he
+            // is elsewhere an arrival-driven travel task — the variant
+            // the completion handler already understands — now brings
+            // him there. Previously the driver returned silently here,
+            // so an agreement accepted on day 3 could sit until day 15
+            // waiting for Ethan's autonomous day to happen to leave him
+            // idle at home with a free window. No priority change: the
+            // travel task competes for Ethan's time like any other task,
+            // and the hitch task still needs its work window plus horse
+            // and wagon reservations before it starts.
+            if (!IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId))
+                EnsureOpeningHitchTravel(absoluteDayIndex, freight, wagon, shipment.ShipmentId);
+        }
+
+        /// <summary>
+        /// Overnight 2026-11-04: ensures one arrival-driven travel task
+        /// exists to bring Ethan to A0/wagon staging for an already-queued
+        /// hitch preparation. The wagon's HitchPreparationTravelTaskId is
+        /// the duplicate guard and the cancellation monitor's handle: a
+        /// cancelled or failed travel task resets the whole preparation
+        /// through MonitorOpeningHitchCancellation, so a fresh attempt can
+        /// be queued again. When Ethan's journey location is already
+        /// staging but his visual agent has not arrived at the door, no
+        /// travel task is created — the ShortTick starter starts the
+        /// hitch task once the visual arrival lands.
+        /// </summary>
+        private void EnsureOpeningHitchTravel(int dayIndex, BusinessInstanceState freight, EquipmentAsset wagon, string shipmentId)
+        {
+            if (hub?.Tasks == null || populationManager?.State == null || freight?.Owner == null || freight.Owner.PersonId < 0
+                || wagon == null || string.IsNullOrWhiteSpace(wagon.HitchPreparationTaskId)
+                || string.IsNullOrWhiteSpace(shipmentId)) return;
+            PersonState ethan = populationManager.State.GetPerson(freight.Owner.PersonId);
+            if (ethan == null || ethan.homeBuildingId < 0) return;
+            if (IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            if (!string.IsNullOrWhiteSpace(wagon.HitchPreparationTravelTaskId))
+            {
+                WorkTask existingTravel = hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTravelTaskId);
+                if (existingTravel != null && existingTravel.IsOpen) return;
+                wagon.HitchPreparationTravelTaskId = string.Empty;
+            }
+
+            string staging = TownJourneyNetworkBuilder.LocationIdForBuilding(ethan.homeBuildingId);
+            string origin = ResolvePersonJourneyLocation(ethan.id);
+            if (string.IsNullOrWhiteSpace(staging) || hub.Journeys.GetLocation(staging) == null) return;
+            if (string.Equals(origin, staging, StringComparison.Ordinal)) return;
+            JourneyRoute route = string.IsNullOrWhiteSpace(origin)
+                ? null : hub.Journeys.FindRoute(origin, staging, TravelMode.Foot);
+            if (route == null || !route.Found)
+            {
+                LogFreightAgreementBlockerOnce("hitch-travel-route:" + shipmentId,
+                    $"[Hitching] Shipment '{shipmentId}' cannot send Ethan to staging: no route from '{origin}' to '{staging}'.");
+                return;
+            }
+
+            var trip = new DevelopmentHitchTaskData
+            {
+                WagonId = wagon.AssetId,
+                HitchTaskId = wagon.HitchPreparationTaskId,
+                PersonId = ethan.id,
+                StagingBuildingId = ethan.homeBuildingId,
+                StagingLocationId = staging,
+                DurationMinutes = Math.Max(1, route.TotalMinutes),
+            };
+            WorkTask travel = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(freight.InstanceId)), dayIndex,
+                Math.Max(1, route.TotalMinutes),
+                customerRef: DevelopmentHitchTaskPrefix + "travel:" + shipmentId,
+                termsRef: JsonUtility.ToJson(trip));
+            wagon.HitchPreparationTravelTaskId = travel.TaskId.ToString();
+            if (!TryStartBusinessPersonTask(travel, ethan, dayIndex, PersonActivityKind.Travel, ethan.homeBuildingId, out string refusal))
+            {
+                if (taskStartRefusalAlreadyLogged.Add("hitch-travel:" + travel.TaskId))
+                    Debug.LogWarning($"[Hitching] Ethan's staging travel for shipment '{shipmentId}' could not reserve time: {refusal}", this);
+                return;
+            }
+            Debug.Log($"[Hitching] Ethan P{ethan.id} assigned staging travel task '{travel.TaskId}' to building {ethan.homeBuildingId} " +
+                $"for shipment '{shipmentId}'; the hitch task starts only after visible arrival.", this);
         }
 
         private void StartQueuedOpeningHitchTask(int dayIndex, int tickStartMinute, int tickEndMinute)
@@ -3943,6 +4025,11 @@ namespace LandLedgers.Orchestration.Systems
             WorkTask hitch = hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTaskId);
             PersonState ethan = freight.Owner != null ? populationManager.State.GetPerson(freight.Owner.PersonId) : null;
             if (hitch == null || ethan == null) return;
+
+            // Overnight 2026-11-04: while staging travel is the current
+            // phase, drive it (mirroring the freight-meeting travel
+            // starter) and leave the hitch task alone until arrival.
+            if (TryStartQueuedOpeningHitchTravel(dayIndex, tickStartMinute, tickEndMinute, wagon, ethan)) return;
 
             if (hitch.Status != TaskStatus.Queued && hitch.Status != TaskStatus.Assigned) return;
             if (!IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
@@ -4003,6 +4090,46 @@ namespace LandLedgers.Orchestration.Systems
                 ReleaseOpeningHitchReservations(horse, wagon);
                 Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' remains pending; start refused: {startRefusal}", this);
             }
+        }
+
+        /// <summary>
+        /// Overnight 2026-11-04: ShortTick driver for the staging travel
+        /// task created by EnsureOpeningHitchTravel. Returns true when a
+        /// travel task for this hitch is the current phase (handled this
+        /// tick, whether it started, is waiting on its window, or was
+        /// refused), so the caller leaves the hitch task alone until
+        /// arrival. Returns false when no travel task applies — including
+        /// when Ethan is already visually at staging, so a stale travel
+        /// record can never block the hitch start. Mirrors the
+        /// freight-meeting travel starter exactly: reserve, then begin
+        /// only inside the tick window.
+        /// </summary>
+        private bool TryStartQueuedOpeningHitchTravel(int dayIndex, int tickStartMinute, int tickEndMinute, EquipmentAsset wagon, PersonState ethan)
+        {
+            if (hub?.Tasks == null || wagon == null || ethan == null
+                || string.IsNullOrWhiteSpace(wagon.HitchPreparationTaskId)
+                || IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return false;
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task == null || (task.Status != TaskStatus.Queued && task.Status != TaskStatus.Assigned)
+                    || !task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal)) continue;
+                DevelopmentHitchTaskData trip = JsonUtility.FromJson<DevelopmentHitchTaskData>(task.TermsRef);
+                if (trip == null || !string.Equals(trip.HitchTaskId, wagon.HitchPreparationTaskId, StringComparison.Ordinal)) continue;
+                if (!TryStartBusinessPersonTask(task, ethan, dayIndex, PersonActivityKind.Travel, trip.StagingBuildingId, out string prepareRefusal))
+                {
+                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                        Debug.LogWarning($"[Hitching] Ethan's staging travel task '{task.TaskId}' could not reserve time: {prepareRefusal}", this);
+                    return true;
+                }
+                if (!BeginScheduledBusinessPersonTask(task, ethan, dayIndex, tickStartMinute, tickEndMinute, trip.StagingBuildingId, out string startRefusal))
+                {
+                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                        Debug.LogWarning($"[Hitching] Ethan's staging travel task '{task.TaskId}' could not start: {startRefusal}", this);
+                    return true;
+                }
+                return true;
+            }
+            return false;
         }
 
         private void HandleCompletedOpeningHitchTask(WorkTask task, int dayIndex)

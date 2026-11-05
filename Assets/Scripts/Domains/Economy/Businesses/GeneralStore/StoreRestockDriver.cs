@@ -32,6 +32,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string LastDailySummary { get; private set; } = "No daily restock review has run yet.";
 
+        /// <summary>
+        /// Slice 15: optional delivered-cost function (supplier, category,
+        /// order units) -&gt; delivered cents per unit. Null (the default)
+        /// keeps the historical goods-quote-only choice. The manager sets
+        /// this from the regional freight quotes when regional suppliers
+        /// are registered; the chain itself never invents a freight rate.
+        /// </summary>
+        public Func<IUpstreamGoodsSupplier, string, int, int> DeliveredCostPerUnitCents { get; set; }
+
         public void RegisterSupplier(IUpstreamGoodsSupplier supplier)
         {
             if (supplier == null || string.IsNullOrWhiteSpace(supplier.SupplierId)) return;
@@ -53,7 +62,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             lastDrivenDayIndex = day;
 
             int diagBefore = restock.Diagnostics.Count;
-            restock.EvaluateRestock(store, suppliers, day, reorderThreshold01);
+            restock.EvaluateRestock(store, suppliers, day, reorderThreshold01, DeliveredCostPerUnitCents);
             restock.AdvanceDay(store, suppliers, day, diagnostics);
 
             var fresh = new List<string>();

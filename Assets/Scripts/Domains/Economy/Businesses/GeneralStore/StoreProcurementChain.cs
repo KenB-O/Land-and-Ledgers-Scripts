@@ -39,6 +39,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string CategoryId = string.Empty;
         public int UnitsOrdered;
         public int UnitCostCents;
+        /// <summary>
+        /// Slice 15: delivered cents per unit (goods + solo freight) when the
+        /// order was chosen on delivered cost; 0 when it was chosen on the
+        /// goods quote alone. The supplier is paid UnitCostCents; freight is
+        /// a separate carrier settlement. New field: 0 on old saves.
+        /// </summary>
+        public int DeliveredCostCentsPerUnit;
         public string UpstreamSupplierId = string.Empty;
         public string UpstreamSupplierName = string.Empty;
         public int OrderDayIndex;
@@ -118,7 +125,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             IGeneralStoreTradingPort store,
             List<IUpstreamGoodsSupplier> upstreamSuppliers,
             int dayIndex,
-            float reorderThreshold01)
+            float reorderThreshold01,
+            Func<IUpstreamGoodsSupplier, string, int, int> deliveredCostPerUnitCents = null)
         {
             if (store == null || store.CategoryOffers == null)
             {
@@ -158,7 +166,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
-                IUpstreamGoodsSupplier best = ChooseSupplier(upstreamSuppliers, categoryId, missing, dayIndex);
+                IUpstreamGoodsSupplier best = ChooseSupplier(upstreamSuppliers, categoryId, missing, dayIndex, deliveredCostPerUnitCents);
                 if (best == null)
                 {
                     diagnostics.Add($"Day {dayIndex}: no upstream supplier can quote '{categoryId}' — restock delayed, not faked.");
@@ -174,10 +182,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
+                // Slice 15: when a delivered-cost function is supplied, the
+                // choice AND the no-loss check both run on delivered cost
+                // (goods + solo freight), because freight on top of a
+                // break-even goods quote already loses money. The order
+                // still records the goods cost the supplier is paid.
+                int deliveredCost = 0;
+                if (deliveredCostPerUnitCents != null)
+                    deliveredCost = Math.Max(0, deliveredCostPerUnitCents(best, categoryId, orderUnits));
+                int costForNoLossCheck = deliveredCostPerUnitCents != null ? deliveredCost : unitCost;
+
                 int sellingPrice = Math.Max(0, store.CategoryPricePerUnitCents(categoryId));
-                if (sellingPrice <= 0 || unitCost >= sellingPrice)
+                if (sellingPrice <= 0 || costForNoLossCheck >= sellingPrice)
                 {
-                    diagnostics.Add($"Day {dayIndex}: no restock for '{categoryId}' — cheapest quote {unitCost}c meets or exceeds " +
+                    diagnostics.Add($"Day {dayIndex}: no restock for '{categoryId}' — cheapest {(deliveredCostPerUnitCents != null ? "delivered" : "")} cost {costForNoLossCheck}c meets or exceeds " +
                         $"the selling price {sellingPrice}c, so the sale would not profit. Order withheld, not placed at a loss.");
                     continue;
                 }
@@ -190,6 +208,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     CategoryId = categoryId,
                     UnitsOrdered = orderUnits,
                     UnitCostCents = unitCost,
+                    DeliveredCostCentsPerUnit = deliveredCost,
                     UpstreamSupplierId = best.SupplierId,
                     UpstreamSupplierName = best.SupplierName,
                     OrderDayIndex = Math.Max(0, dayIndex),
@@ -400,7 +419,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         }
 
         private static IUpstreamGoodsSupplier ChooseSupplier(
-            List<IUpstreamGoodsSupplier> suppliers, string categoryId, int unitsNeeded, int dayIndex)
+            List<IUpstreamGoodsSupplier> suppliers, string categoryId, int unitsNeeded, int dayIndex,
+            Func<IUpstreamGoodsSupplier, string, int, int> deliveredCostPerUnitCents = null)
         {
             IUpstreamGoodsSupplier best = null;
             int bestCost = int.MaxValue;
@@ -429,9 +449,25 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
-                if (quote < bestCost)
+                // Slice 15: when a delivered-cost function is supplied, the
+                // comparison runs on delivered cost per unit for the order
+                // size that would actually ship (min of needed and
+                // available), not the goods quote. A supplier whose
+                // delivered cost cannot be priced (0) is skipped, never
+                // silently compared on goods alone.
+                int comparisonCost = quote;
+                if (deliveredCostPerUnitCents != null)
                 {
-                    bestCost = quote;
+                    int orderSize = Math.Max(1, Math.Min(unitsNeeded, available));
+                    int delivered = Math.Max(0, deliveredCostPerUnitCents(
+                        supplier, categoryId, orderSize));
+                    if (delivered <= 0) continue;
+                    comparisonCost = delivered;
+                }
+
+                if (comparisonCost < bestCost)
+                {
+                    bestCost = comparisonCost;
                     best = supplier;
                 }
             }

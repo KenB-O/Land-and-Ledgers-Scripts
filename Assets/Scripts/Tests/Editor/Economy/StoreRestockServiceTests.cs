@@ -395,5 +395,112 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(StoreProcurementStage.Ordered, second.Stage);
             Assert.AreEqual(80, second.UnitsOrdered);
         }
+
+        [Test]
+        public void Threshold_HealthExactlyAtThreshold_Orders()
+        {
+            var port = StoreWith("staple_food", 50, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            Assert.AreEqual(1, service.Orders.Count, "Health exactly at the threshold orders: the skip is strict '>', so health <= threshold is the order case.");
+            Assert.AreEqual(50, service.Orders[0].UnitsOrdered, "The order covers the full shortfall (100 - 50).");
+            Assert.AreEqual(StoreProcurementStage.Ordered, service.Orders[0].Stage);
+        }
+
+        [Test]
+        public void Threshold_HealthJustAboveThreshold_DoesNotOrder()
+        {
+            var port = StoreWith("staple_food", 51, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            Assert.AreEqual(0, service.Orders.Count, "One unit over the line and the day passes with no order.");
+        }
+
+        [Test]
+        public void ThresholdZero_EmptyStore_Orders()
+        {
+            var port = StoreWith("staple_food", 0, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0f);
+            Assert.AreEqual(1, service.Orders.Count, "Threshold 0 still orders — but only from exactly empty.");
+            Assert.AreEqual(100, service.Orders[0].UnitsOrdered);
+        }
+
+        [Test]
+        public void ThresholdZero_OneUnitInStock_DoesNotOrder()
+        {
+            var port = StoreWith("staple_food", 1, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0f);
+            Assert.AreEqual(0, service.Orders.Count, "At threshold 0, a single unit on the shelf is enough to hold the order.");
+        }
+
+        [Test]
+        public void ThresholdNegative_ClampsToZero()
+        {
+            // Case A: empty store at a negative threshold orders — without
+            // the Math.Max(0f, ...) clamp, health 0 > -0.5 would skip.
+            var portA = StoreWith("staple_food", 0, 100, 120);
+            var upstreamA = new FakeUpstreamSupplier();
+            upstreamA.Stock["staple_food"] = 500;
+            upstreamA.Quotes["staple_food"] = 80;
+            var serviceA = new StoreRestockService();
+            serviceA.EvaluateRestock(portA, new List<IUpstreamGoodsSupplier> { upstreamA }, 0, -0.5f);
+            Assert.AreEqual(1, serviceA.Orders.Count, "A negative threshold clamps to 0, so an empty store still orders.");
+            Assert.AreEqual(100, serviceA.Orders[0].UnitsOrdered);
+
+            // Case B (fresh service): one unit in stock at a negative
+            // threshold behaves exactly as threshold 0 — no order.
+            var portB = StoreWith("staple_food", 1, 100, 120);
+            var upstreamB = new FakeUpstreamSupplier();
+            upstreamB.Stock["staple_food"] = 500;
+            upstreamB.Quotes["staple_food"] = 80;
+            var serviceB = new StoreRestockService();
+            serviceB.EvaluateRestock(portB, new List<IUpstreamGoodsSupplier> { upstreamB }, 0, -0.5f);
+            Assert.AreEqual(0, serviceB.Orders.Count, "The clamped value behaves exactly as threshold 0.");
+        }
+
+        [Test]
+        public void ThresholdOne_FullStock_DoesNotOrder_ButOneMissingUnit_Orders()
+        {
+            // Case A: a full shelf at threshold 1 places no order — the
+            // missing <= 0 guard, not a phantom order, stops it.
+            var portA = StoreWith("staple_food", 100, 100, 120);
+            var upstreamA = new FakeUpstreamSupplier();
+            upstreamA.Stock["staple_food"] = 500;
+            upstreamA.Quotes["staple_food"] = 80;
+            var serviceA = new StoreRestockService();
+            serviceA.EvaluateRestock(portA, new List<IUpstreamGoodsSupplier> { upstreamA }, 0, 1.0f);
+            Assert.AreEqual(0, serviceA.Orders.Count, "Threshold 1 orders whenever anything is missing — nothing is missing here.");
+
+            // Case B (fresh service): one missing unit at threshold 1 orders 1u.
+            // Stated honestly: this pins threshold-1.0 behavior, not the
+            // > 1 clamp — the clamp is observationally indistinguishable
+            // from the missing guard (see the Slice 25 plan's "Swept").
+            var portB = StoreWith("staple_food", 99, 100, 120);
+            var upstreamB = new FakeUpstreamSupplier();
+            upstreamB.Stock["staple_food"] = 500;
+            upstreamB.Quotes["staple_food"] = 80;
+            var serviceB = new StoreRestockService();
+            serviceB.EvaluateRestock(portB, new List<IUpstreamGoodsSupplier> { upstreamB }, 0, 1.0f);
+            Assert.AreEqual(1, serviceB.Orders.Count);
+            Assert.AreEqual(1, serviceB.Orders[0].UnitsOrdered);
+        }
     }
 }

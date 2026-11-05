@@ -844,8 +844,53 @@ namespace LandLedgers.FirstLedger
                 lastReorderDebugSummary = lastReorderDebugSummary,
                 lastStaffingSummary = lastStaffingSummary,
                 lastCategoryDemandSummary = lastCategoryDemandSummary,
+                regionalSupply = CaptureRegionalSupplyDto(),
                 currentBusiness = currentBusiness != null ? currentBusiness.CaptureSaveDto() : null
             };
+        }
+
+        /// <summary>
+        /// Slice 17: assembles the regional supply DTO from the restock
+        /// driver (open orders, deliveries, sequences) and the twelve
+        /// supplier adapters (per-item on-hand stock, production weeks).
+        /// A fresh DTO every capture; the adapters and the driver own the
+        /// copy semantics.
+        /// </summary>
+        private RegionalSupplySaveDto CaptureRegionalSupplyDto()
+        {
+            var dto = new RegionalSupplySaveDto();
+            restockDriver.CaptureInto(dto);
+            if (regionalSuppliers != null)
+            {
+                foreach (RegionalSupplierAdapter adapter in regionalSuppliers)
+                    adapter.CaptureInto(dto);
+            }
+            return dto;
+        }
+
+        /// <summary>
+        /// Slice 17: restores the regional supply state. Adapters are
+        /// created first when they do not exist yet (a load can arrive
+        /// before the first daily restock); weekly production is NOT
+        /// driven here — the next DriveDailyRestock drives it with the
+        /// real day index, anchored on the restored production weeks. A
+        /// null DTO (an old save, or a missing save) restores the
+        /// registry's starting position: fresh stocks, no open orders.
+        /// Invalid saved entries are skipped with a warning, never
+        /// trusted blindly.
+        /// </summary>
+        private void RestoreRegionalSupply(RegionalSupplySaveDto dto)
+        {
+            EnsureRegionalSuppliersExist();
+            var diagnostics = new List<string>();
+            if (regionalSuppliers != null)
+            {
+                foreach (RegionalSupplierAdapter adapter in regionalSuppliers)
+                    adapter.RestoreFrom(dto, diagnostics);
+            }
+            restockDriver.RestoreFrom(dto, diagnostics);
+            foreach (string diagnostic in diagnostics)
+                Debug.LogWarning("[GeneralStore] " + diagnostic, this);
         }
 
         public void LoadFromSaveDto(GeneralStoreSaveDto dto)
@@ -859,6 +904,7 @@ namespace LandLedgers.FirstLedger
                 runtimeState = null;
                 storeMarginAdjustment01 = 0f;
                 status = "General Store save data was missing.";
+                RestoreRegionalSupply(null);
                 PushCashToHud();
                 return;
             }
@@ -904,6 +950,7 @@ namespace LandLedgers.FirstLedger
             runtimeState = currentBusiness != null ? currentBusiness.RuntimeState : null;
             RefreshReorderState();
             RefreshCurrentBusinessCapacityState();
+            RestoreRegionalSupply(dto.regionalSupply);
             PushCashToHud();
         }
 
@@ -2309,24 +2356,32 @@ namespace LandLedgers.FirstLedger
         /// daily restock driver. Created once and kept for the manager's
         /// lifetime; their weekly production is driven every day (same-week
         /// calls are no-ops inside the adapter). Delivered cost uses the
-        /// opening freight company's authored rate card. NOTE: adapter stock
-        /// is memory-only for now — on a save/load round trip it resets to
-        /// the registry's starting units, the same known gap as the
-        /// service's open orders. The weekly off-map reorder remains the
-        /// durable route until that save work lands.
+        /// opening freight company's authored rate card. Slice 17: the
+        /// adapters' stock and the driver's open orders now survive
+        /// save/load through GeneralStoreSaveDto.regionalSupply; the
+        /// weekly off-map reorder remains the durable route for anything
+        /// the regional chain cannot supply.
         /// </summary>
         private void EnsureRegionalSuppliers(int dayIndex)
         {
-            if (regionalSuppliers == null)
-            {
-                regionalSuppliers = RegionalSupplierSet.CreateAll();
-                foreach (RegionalSupplierAdapter adapter in regionalSuppliers)
-                    restockDriver.RegisterSupplier(adapter);
-                restockDriver.DeliveredCostPerUnitCents = (supplier, categoryId, units) =>
-                    RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, categoryId, units,
-                        RegionalFreightRateCard.OpeningCompany);
-            }
+            EnsureRegionalSuppliersExist();
             RegionalSupplierSet.DriveWeeklyProduction(regionalSuppliers, dayIndex);
+        }
+
+        /// <summary>
+        /// Slice 17: creates the twelve adapters once (and registers them
+        /// with the restock driver) without driving production — the load
+        /// path needs the adapters to exist before the day index is known.
+        /// </summary>
+        private void EnsureRegionalSuppliersExist()
+        {
+            if (regionalSuppliers != null) return;
+            regionalSuppliers = RegionalSupplierSet.CreateAll();
+            foreach (RegionalSupplierAdapter adapter in regionalSuppliers)
+                restockDriver.RegisterSupplier(adapter);
+            restockDriver.DeliveredCostPerUnitCents = (supplier, categoryId, units) =>
+                RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, categoryId, units,
+                    RegionalFreightRateCard.OpeningCompany);
         }
 
         private void OnWeekChanged(SimulationDateChangedContext context)

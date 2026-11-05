@@ -96,11 +96,82 @@ namespace LandLedgers.World.Regional
         public string SupplierName => definition.DisplayName;
         public string TownId => definition.TownId;
 
+        /// <summary>Production week the adapter has processed through (dayIndex / 7). -1 before the first drive.</summary>
+        public int LastProductionWeek => lastProductionWeek;
+
         /// <summary>Units of one item on hand right now.</summary>
         public int OnHandUnits(string itemId)
         {
             if (string.IsNullOrWhiteSpace(itemId)) return 0;
             return onHand.TryGetValue(itemId, out int units) ? units : 0;
+        }
+
+        /// <summary>
+        /// Slice 17: appends this supplier's stock rows (one per offered
+        /// item, plus the production week) to a save DTO. Call once per
+        /// supplier per capture.
+        /// </summary>
+        public void CaptureInto(RegionalSupplySaveDto dto)
+        {
+            if (dto == null) return;
+            for (int i = 0; i < definition.Offers.Length; i++)
+            {
+                RegionalBusinessRegistry.RegionalOffer offer = definition.Offers[i];
+                if (offer == null || string.IsNullOrWhiteSpace(offer.ItemId)) continue;
+                dto.SupplierStocks.Add(new RegionalSupplierStockRow
+                {
+                    SupplierId = definition.BusinessId,
+                    ItemId = offer.ItemId,
+                    Units = OnHandUnits(offer.ItemId),
+                    LastProductionWeek = lastProductionWeek,
+                });
+            }
+        }
+
+        /// <summary>
+        /// Slice 17: clear-then-load for this supplier's stock. Every
+        /// offered item first resets to its registry starting units; rows
+        /// for this supplier then overwrite. Rows for other suppliers are
+        /// ignored; rows for items this supplier does not offer are skipped
+        /// with a diagnostic; negative units are clamped to zero with a
+        /// diagnostic. A missing row therefore restores starting stock,
+        /// never a stale value.
+        /// </summary>
+        public void RestoreFrom(RegionalSupplySaveDto dto, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            for (int i = 0; i < definition.Offers.Length; i++)
+            {
+                RegionalBusinessRegistry.RegionalOffer offer = definition.Offers[i];
+                if (offer != null && !string.IsNullOrWhiteSpace(offer.ItemId))
+                    onHand[offer.ItemId] = Math.Max(0, offer.StartingUnits);
+            }
+            lastProductionWeek = -1;
+            if (dto == null || dto.SupplierStocks == null) return;
+            int restoredWeek = -1;
+            for (int i = 0; i < dto.SupplierStocks.Count; i++)
+            {
+                RegionalSupplierStockRow row = dto.SupplierStocks[i];
+                if (row == null) continue;
+                if (!string.Equals(row.SupplierId, definition.BusinessId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (string.IsNullOrWhiteSpace(row.ItemId) || !onHand.ContainsKey(row.ItemId))
+                {
+                    diagnostics.Add($"RegionalSupplier '{SupplierName}': save row for unknown item '{row.ItemId}' skipped.");
+                    continue;
+                }
+                if (row.Units < 0)
+                {
+                    diagnostics.Add($"RegionalSupplier '{SupplierName}': save row for '{row.ItemId}' had negative units ({row.Units}); clamped to 0.");
+                    onHand[row.ItemId] = 0;
+                }
+                else
+                {
+                    onHand[row.ItemId] = row.Units;
+                }
+                if (row.LastProductionWeek >= 0)
+                    restoredWeek = Math.Max(restoredWeek, row.LastProductionWeek);
+            }
+            if (restoredWeek >= 0) lastProductionWeek = restoredWeek;
         }
 
         public int QuoteUnitCostCents(string categoryId)

@@ -506,5 +506,133 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             return null;
         }
+
+        /// <summary>
+        /// Slice 17: captures this service's half of the regional save
+        /// state — open orders, in-transit deliveries, and the sequences —
+        /// as deep copies into the DTO. The supplier stocks are captured
+        /// by the adapters; the manager assembles the whole DTO.
+        /// </summary>
+        public void CaptureInto(LandLedgers.World.Regional.RegionalSupplySaveDto dto)
+        {
+            if (dto == null) return;
+            dto.Orders = new List<StoreProcurementOrder>();
+            for (int i = 0; i < orders.Count; i++)
+                if (orders[i] != null) dto.Orders.Add(CopyOrder(orders[i]));
+            dto.Deliveries = new List<StoreDelivery>();
+            for (int i = 0; i < deliveries.Count; i++)
+                if (deliveries[i] != null) dto.Deliveries.Add(CopyDelivery(deliveries[i]));
+            dto.NextOrderSequence = nextOrderSequence;
+            dto.NextDeliverySequence = nextDeliverySequence;
+            dto.NextShipmentGroupSequence = nextShipmentGroupSequence;
+        }
+
+        /// <summary>
+        /// Slice 17: clear-then-load for the service's orders, deliveries,
+        /// and sequences. Invalid entries (missing ids, non-positive units,
+        /// negative costs, undefined stages) are skipped with a diagnostic;
+        /// sequences restore verbatim (they are next-values, so skipped
+        /// entries can never collide with a future id). Idempotent: a
+        /// second restore of the same DTO reproduces the same state.
+        /// </summary>
+        public void RestoreFrom(LandLedgers.World.Regional.RegionalSupplySaveDto dto, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            orders.Clear();
+            deliveries.Clear();
+            nextOrderSequence = 0;
+            nextDeliverySequence = 0;
+            nextShipmentGroupSequence = 0;
+            if (dto == null) return;
+
+            if (dto.Orders != null)
+            {
+                foreach (StoreProcurementOrder order in dto.Orders)
+                {
+                    if (!IsRestorableOrder(order))
+                    {
+                        diagnostics.Add("StoreRestockService: skipped an unrestorable saved order (missing id, non-positive units, negative cost, or unknown stage).");
+                        continue;
+                    }
+                    orders.Add(CopyOrder(order));
+                }
+            }
+            if (dto.Deliveries != null)
+            {
+                foreach (StoreDelivery delivery in dto.Deliveries)
+                {
+                    if (!IsRestorableDelivery(delivery))
+                    {
+                        diagnostics.Add("StoreRestockService: skipped an unrestorable saved delivery (missing ids or non-positive units).");
+                        continue;
+                    }
+                    deliveries.Add(CopyDelivery(delivery));
+                }
+            }
+            nextOrderSequence = Math.Max(0, dto.NextOrderSequence);
+            nextDeliverySequence = Math.Max(0, dto.NextDeliverySequence);
+            nextShipmentGroupSequence = Math.Max(0, dto.NextShipmentGroupSequence);
+        }
+
+        private static bool IsRestorableOrder(StoreProcurementOrder order)
+        {
+            if (order == null) return false;
+            if (string.IsNullOrWhiteSpace(order.OrderId)) return false;
+            if (string.IsNullOrWhiteSpace(order.StoreBusinessId)) return false;
+            if (string.IsNullOrWhiteSpace(order.CategoryId)) return false;
+            if (order.UnitsOrdered <= 0) return false;
+            if (order.UnitCostCents < 0 || order.DeliveredCostCentsPerUnit < 0) return false;
+            if (!Enum.IsDefined(typeof(StoreProcurementStage), order.Stage)) return false;
+            return true;
+        }
+
+        private static bool IsRestorableDelivery(StoreDelivery delivery)
+        {
+            if (delivery == null) return false;
+            if (string.IsNullOrWhiteSpace(delivery.DeliveryId)) return false;
+            if (string.IsNullOrWhiteSpace(delivery.OrderId)) return false;
+            if (string.IsNullOrWhiteSpace(delivery.CategoryId)) return false;
+            // Units is the units still to receive: zero is legitimate for
+            // a fully received delivery (Received = true). Negative is not.
+            if (delivery.Units < 0) return false;
+            return true;
+        }
+
+        private static StoreProcurementOrder CopyOrder(StoreProcurementOrder source)
+        {
+            return new StoreProcurementOrder
+            {
+                OrderId = source.OrderId ?? string.Empty,
+                StoreBusinessId = source.StoreBusinessId ?? string.Empty,
+                CategoryId = source.CategoryId ?? string.Empty,
+                UnitsOrdered = source.UnitsOrdered,
+                UnitCostCents = source.UnitCostCents,
+                DeliveredCostCentsPerUnit = source.DeliveredCostCentsPerUnit,
+                UpstreamSupplierId = source.UpstreamSupplierId ?? string.Empty,
+                UpstreamSupplierName = source.UpstreamSupplierName ?? string.Empty,
+                OrderDayIndex = source.OrderDayIndex,
+                ExpectedArrivalDayIndex = source.ExpectedArrivalDayIndex,
+                Stage = source.Stage,
+                Provenance = source.Provenance ?? string.Empty,
+                CancelReason = source.CancelReason ?? string.Empty,
+                ShipmentGroupId = source.ShipmentGroupId ?? string.Empty,
+            };
+        }
+
+        private static StoreDelivery CopyDelivery(StoreDelivery source)
+        {
+            return new StoreDelivery
+            {
+                DeliveryId = source.DeliveryId ?? string.Empty,
+                OrderId = source.OrderId ?? string.Empty,
+                CategoryId = source.CategoryId ?? string.Empty,
+                Units = source.Units,
+                ShippedDayIndex = source.ShippedDayIndex,
+                TransitMinutes = source.TransitMinutes,
+                Arrived = source.Arrived,
+                Received = source.Received,
+                Provenance = source.Provenance ?? string.Empty,
+            };
+        }
     }
 }

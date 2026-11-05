@@ -1449,6 +1449,7 @@ namespace LandLedgers.Persistence
             EnsureTopLevel(ref save.businesses.townPulse, report, "Town pulse state");
             EnsureList(ref save.businesses.townPulse.lastDailyCategoryResults, report, "Town pulse category results");
             EnsureTopLevel(ref save.businesses.deepGeneralStore, report, "Deep general store state");
+            EnsureTopLevel(ref save.businesses.deepGeneralStore.regionalSupply, report, "Deep general store regional supply");
             EnsureTopLevel(ref save.businesses.deepGeneralStore.currentBusiness, report, "Deep general store business");
             EnsureTopLevel(ref save.businesses.deepGeneralStore.currentBusiness.owner, report, "Deep general store owner");
             EnsureTopLevel(ref save.businesses.deepGeneralStore.currentBusiness.cashTransferRule, report, "Deep general store cash transfer rule");
@@ -1460,6 +1461,9 @@ namespace LandLedgers.Persistence
             EnsureTopLevel(ref save.businesses.deepGeneralStore.currentBusiness.runtime.mainFocus, report, "Deep general store focus");
             EnsureTopLevel(ref save.businesses.deepGeneralStore.currentBusiness.runtime.capacity, report, "Deep general store capacity");
             EnsureList(ref save.businesses.deepGeneralStore.currentBusiness.businessReputation.stockoutMemory, report, "Deep general store stockout memory");
+            EnsureList(ref save.businesses.deepGeneralStore.regionalSupply.SupplierStocks, report, "Regional supplier stocks");
+            EnsureList(ref save.businesses.deepGeneralStore.regionalSupply.Orders, report, "Regional restock orders");
+            EnsureList(ref save.businesses.deepGeneralStore.regionalSupply.Deliveries, report, "Regional restock deliveries");
             EnsureList(ref save.acquisition.opportunityWindows, report, "Acquisition opportunity windows");
             EnsureList(ref save.acquisition.ownedPlotIds, report, "Owned plot ids");
             EnsureList(ref save.acquisition.ownedBusinessBuildingIds, report, "Owned business building ids");

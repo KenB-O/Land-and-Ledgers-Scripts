@@ -15,6 +15,7 @@ using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.World;
 using LandLedgers.World.Property;
+using LandLedgers.World.Regional;
 
 namespace LandLedgers.Persistence
 {
@@ -854,6 +855,13 @@ namespace LandLedgers.Persistence
         public string lastReorderDebugSummary = string.Empty;
         public string lastStaffingSummary = string.Empty;
         public string lastCategoryDemandSummary = string.Empty;
+        /// <summary>
+        /// Slice 17: the regional supply state (supplier on-hand stock,
+        /// production weeks, open restock orders, in-transit deliveries,
+        /// sequences). New field: null on old saves, which restores to the
+        /// registry's starting position.
+        /// </summary>
+        public RegionalSupplySaveDto regionalSupply = new();
         public BusinessInstanceSaveDto currentBusiness = new();
     }
 

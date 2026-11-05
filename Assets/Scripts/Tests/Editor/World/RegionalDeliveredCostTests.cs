@@ -443,5 +443,119 @@ namespace LandLedgers.Tests.World
             Assert.AreEqual(1, unplanned.Count);
             Assert.AreEqual("po-x", unplanned[0].OrderId);
         }
+
+        [Test]
+        public void MultiStop_TwoOrdersSameSupplier_GroupIntoOneStop_SummedUnits()
+        {
+            JourneyModel model = ModelWithTowns();
+            var orders = new List<RegionalCollectionOrder>
+            {
+                new RegionalCollectionOrder { OrderId = "po-1", SupplierId = "ashford_general_mercantile", CategoryId = "staple_food", Units = 40 },
+                new RegionalCollectionOrder { OrderId = "po-2", SupplierId = "ashford_general_mercantile", CategoryId = "staple_food", Units = 60 },
+                new RegionalCollectionOrder { OrderId = "po-3", SupplierId = "ashford_blacksmith", CategoryId = "tools_hardware", Units = 20 },
+            };
+            var plans = RegionalMultiStopPlanner.Plan(model, orders,
+                RegionalMultiStopPlanner.DefaultWagonCapacityUnits,
+                RegionalFreightRateCard.OpeningCompany, out List<RegionalCollectionOrder> unplanned);
+            Assert.AreEqual(0, unplanned.Count);
+            Assert.AreEqual(1, plans.Count);
+            RegionalMultiStopPlan plan = plans[0];
+            Assert.AreEqual(2, plan.Stops.Count, "Two orders for one supplier make ONE stop.");
+            // Mercantile first (nearest): summed units, both order ids in input order.
+            Assert.AreEqual("ashford_general_mercantile", plan.Stops[0].SupplierId);
+            Assert.AreEqual(100, plan.Stops[0].Units, "40u + 60u summed into one stop.");
+            Assert.AreEqual(2, plan.Stops[0].OrderIds.Count);
+            Assert.AreEqual("po-1", plan.Stops[0].OrderIds[0]);
+            Assert.AreEqual("po-2", plan.Stops[0].OrderIds[1]);
+            Assert.AreEqual("Ashford General Mercantile", plan.Stops[0].SupplierName);
+            Assert.AreEqual("ashford-ashford_general_mercantile", plan.Stops[0].SiteLocationId);
+            Assert.AreEqual("ashford_blacksmith", plan.Stops[1].SupplierId);
+            Assert.AreEqual(20, plan.Stops[1].Units);
+            Assert.AreEqual("po-3", plan.Stops[1].OrderIds[0]);
+            // Same legs as the mercantile + blacksmith journey: 100.26 miles.
+            Assert.AreEqual(100.26f, plan.TotalMiles, 0.02f);
+            Assert.AreEqual(126, plan.FreightCents);
+            Assert.AreEqual(1504, plan.TotalMinutes);
+        }
+
+        [Test]
+        public void MultiStop_EqualDistanceStops_TieBreakPicksSmallerSupplierId()
+        {
+            JourneyModel model = ModelWithTowns();
+            // Both sites sit sqrt(0.0029) = 0.0539 mi from the centre, so the
+            // distances tie exactly; the dry-goods order is registered FIRST
+            // so the stop order pins the ordinal SupplierId tie-break, not
+            // registration order.
+            var orders = new List<RegionalCollectionOrder>
+            {
+                new RegionalCollectionOrder { OrderId = "po-d", SupplierId = "ashford_dry_goods", CategoryId = "dry_goods", Units = 10 },
+                new RegionalCollectionOrder { OrderId = "po-a", SupplierId = "ashford_apothecary", CategoryId = "medicine", Units = 10 },
+            };
+            var plans = RegionalMultiStopPlanner.Plan(model, orders,
+                RegionalMultiStopPlanner.DefaultWagonCapacityUnits,
+                RegionalFreightRateCard.OpeningCompany, out List<RegionalCollectionOrder> unplanned);
+            Assert.AreEqual(0, unplanned.Count);
+            Assert.AreEqual(1, plans.Count);
+            Assert.AreEqual(2, plans[0].Stops.Count);
+            Assert.AreEqual("ashford_apothecary", plans[0].Stops[0].SupplierId,
+                "Apothecary first despite the dry-goods order being registered first: ordinal tie-break on equal distance.");
+            Assert.AreEqual("ashford_dry_goods", plans[0].Stops[1].SupplierId);
+            Assert.AreEqual(100.22f, plans[0].TotalMiles, 0.02f);
+            Assert.AreEqual(126, plans[0].FreightCents);
+            Assert.AreEqual(1503, plans[0].TotalMinutes);
+        }
+
+        [Test]
+        public void MultiStop_StopFillingWagonExactly_Fits()
+        {
+            JourneyModel model = ModelWithTowns();
+            var orders = new List<RegionalCollectionOrder>
+            {
+                new RegionalCollectionOrder { OrderId = "po-1", SupplierId = "ashford_general_mercantile", CategoryId = "staple_food", Units = 60 },
+                new RegionalCollectionOrder { OrderId = "po-2", SupplierId = "ashford_blacksmith", CategoryId = "tools_hardware", Units = 40 },
+            };
+            var plans = RegionalMultiStopPlanner.Plan(model, orders, 100,
+                RegionalFreightRateCard.OpeningCompany, out List<RegionalCollectionOrder> unplanned);
+            // 60 + 40 == 100 == capacity: the fit check is strict >
+            // (RegionalDeliveredCost.cs:265), so a stop that fills the wagon
+            // exactly fits; a >= would leave the blacksmith unplanned.
+            Assert.AreEqual(0, unplanned.Count);
+            Assert.AreEqual(1, plans.Count);
+            Assert.AreEqual(2, plans[0].Stops.Count);
+            Assert.AreEqual(100.26f, plans[0].TotalMiles, 0.02f);
+            Assert.AreEqual(126, plans[0].FreightCents);
+            Assert.AreEqual(1504, plans[0].TotalMinutes);
+        }
+
+        [Test]
+        public void MultiStop_NothingFits_NoPlanReturned()
+        {
+            JourneyModel model = ModelWithTowns();
+            var orders = new List<RegionalCollectionOrder>
+            {
+                new RegionalCollectionOrder { OrderId = "po-1", SupplierId = "ashford_general_mercantile", CategoryId = "staple_food", Units = 10 },
+            };
+            var plans = RegionalMultiStopPlanner.Plan(model, orders, 1,
+                RegionalFreightRateCard.OpeningCompany, out List<RegionalCollectionOrder> unplanned);
+            // The town yields NO plan, not a plan with zero stops.
+            Assert.AreEqual(0, plans.Count);
+            Assert.AreEqual(1, unplanned.Count);
+            Assert.AreEqual("po-1", unplanned[0].OrderId, "The order is named, not silently dropped.");
+        }
+
+        [Test]
+        public void JourneyFreight_OneWayCard_HalvesTotalMiles()
+        {
+            Assert.AreEqual(126,
+                RegionalMultiStopPlanner.FreightCentsForJourney(100.89f, RegionalFreightRateCard.OpeningCompany),
+                "Round-trip control: 25c base + 101c for 100.89 miles.");
+            var oneWay = new RegionalFreightRateCard { BaseFeeCents = 25, PerMileCents = 1, ChargeRoundTrip = false };
+            Assert.AreEqual(76,
+                RegionalMultiStopPlanner.FreightCentsForJourney(100.89f, oneWay),
+                "Journey miles already include the return leg, so a one-way card is charged on half: 25 + ceil(50.445).");
+            Assert.AreEqual(50,
+                RegionalMultiStopPlanner.FreightCentsForJourney(50f, oneWay),
+                "Exact-half case: 25 + 25.");
+        }
     }
 }

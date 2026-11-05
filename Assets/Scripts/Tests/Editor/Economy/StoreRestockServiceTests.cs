@@ -241,5 +241,159 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(StoreProcurementStage.InTransit, service.Orders[0].Stage,
                 "The delivery waits at the dock honestly instead of vanishing or conjuring stock.");
         }
+
+        [Test]
+        public void ShipShort_CancelsOrderWhenSupplierShipsNothing()
+        {
+            var port = StoreWith("staple_food", 20, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            Assert.AreEqual(1, service.Orders.Count);
+            StoreProcurementOrder order = service.Orders[0];
+            Assert.AreEqual(80, order.UnitsOrdered);
+
+            upstream.Stock["staple_food"] = 0;
+            var diagnostics = new List<string>();
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 2, diagnostics);
+
+            Assert.AreEqual(0, service.Deliveries.Count, "A shipment of nothing creates no delivery.");
+            Assert.AreEqual(StoreProcurementStage.Cancelled, order.Stage);
+            Assert.IsTrue(order.CancelReason.Contains("shipped nothing"),
+                "Cancel reason names the empty shipment, got: " + order.CancelReason);
+            string log = string.Join(" ", diagnostics);
+            Assert.IsTrue(log.Contains("cancelled"), "Diagnostics record the cancellation, got: " + log);
+            Assert.IsTrue(log.Contains("No stock conjured"), "Diagnostics confirm nothing was invented, got: " + log);
+            Assert.AreEqual(50000, port.CashBalance, "Ordering plus a failed shipment moves no money.");
+            Assert.AreEqual(20, port.CategoryStockUnits("staple_food"), "Ordering plus a failed shipment moves no goods.");
+        }
+
+        [Test]
+        public void ShipShort_PartialShipmentDeliversOnlyWhatShipped()
+        {
+            var port = StoreWith("staple_food", 20, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            StoreProcurementOrder order = service.Orders[0];
+
+            upstream.Stock["staple_food"] = 30;
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 2, new List<string>());
+
+            Assert.AreEqual(1, service.Deliveries.Count, "A short shipment creates exactly one delivery.");
+            Assert.IsTrue(service.Deliveries[0].Received,
+                "The 30u delivery is fully received the same day (30u fits the 80u of shelf room).");
+            Assert.AreEqual(0, service.Deliveries[0].Units,
+                "A fully received delivery holds no units back; the 30u shipped is proven by the payment and stock below.");
+            Assert.AreEqual(StoreProcurementStage.Received, order.Stage);
+            Assert.AreEqual(50000 - 30 * 80, port.CashBalance, "Only the 30u actually shipped are paid for.");
+            Assert.AreEqual(20 + 30, port.CategoryStockUnits("staple_food"), "Only the 30u actually shipped are booked.");
+            Assert.AreEqual(0, upstream.AvailableUnits("staple_food"), "The supplier was drained by the short shipment.");
+
+            upstream.Stock["staple_food"] = 500;
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 3, 0.5f);
+            Assert.AreEqual(2, service.Orders.Count, "The 50u shortfall self-heals on the next review instead of being silently lost.");
+            StoreProcurementOrder second = service.Orders[1];
+            Assert.IsTrue(second.OrderId != order.OrderId, "The shortfall order is a new order, not the old one revived.");
+            Assert.AreEqual(StoreProcurementStage.Ordered, second.Stage);
+            Assert.AreEqual(50, second.UnitsOrdered, "The new order covers exactly the shortfall (100 - 50).");
+        }
+
+        [Test]
+        public void ReceiveShort_PartialReceiptLeavesRemainderAtDock_ThenCompletesWithoutDoublePay()
+        {
+            var port = StoreWith("staple_food", 0, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            Assert.AreEqual(1, service.Orders.Count);
+            StoreProcurementOrder order = service.Orders[0];
+            Assert.AreEqual(100, order.UnitsOrdered);
+
+            // 90u reached the shelf by another receipt first (direct
+            // test manipulation, stated here): only 10u of room remains.
+            port.Stock["staple_food"] = 90;
+            var diagnostics = new List<string>();
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 2, diagnostics);
+
+            Assert.AreEqual(50000 - 10 * 80, port.CashBalance, "Only the 10u that fit are paid for on day 2.");
+            Assert.AreEqual(100, port.CategoryStockUnits("staple_food"), "Only the 10u that fit are booked on day 2.");
+            Assert.AreEqual(1, service.Deliveries.Count);
+            Assert.AreEqual(90, service.Deliveries[0].Units, "The other 90u stay on the delivery, unreceived.");
+            Assert.IsFalse(service.Deliveries[0].Received);
+            Assert.AreEqual(StoreProcurementStage.InTransit, order.Stage, "The order stays in transit until its delivery is fully received.");
+            string log = string.Join(" ", diagnostics);
+            Assert.IsTrue(log.Contains("still at the dock"), "Diagnostics name the remainder honestly, got: " + log);
+
+            port.Targets["staple_food"] = 200;
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 3, new List<string>());
+
+            Assert.IsTrue(service.Deliveries[0].Received, "The remainder is received once the shelf has room.");
+            Assert.AreEqual(StoreProcurementStage.Received, order.Stage);
+            Assert.AreEqual(50000 - 100 * 80, port.CashBalance,
+                "Total paid across both receipts is exactly 100 x 80c — the 10u from day 2 are never paid twice.");
+            Assert.AreEqual(190, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(400, upstream.AvailableUnits("staple_food"), "Supplier stock was debited once, at ship time.");
+        }
+
+        [Test]
+        public void Order_CancelledWhenSupplierDisappearsBeforeShipDay()
+        {
+            var port = StoreWith("staple_food", 20, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            StoreProcurementOrder order = service.Orders[0];
+
+            // Contract test: the production supplier list is fixed, so
+            // this pins the defensive branch for a future supplier-set
+            // change rather than a live production path.
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier>(), 2, new List<string>());
+
+            Assert.AreEqual(StoreProcurementStage.Cancelled, order.Stage);
+            Assert.IsTrue(order.CancelReason.Contains("gone"),
+                "Cancel reason names the missing supplier, got: " + order.CancelReason);
+            Assert.AreEqual(0, service.Deliveries.Count, "A cancelled order creates no delivery.");
+            Assert.AreEqual(50000, port.CashBalance);
+            Assert.AreEqual(20, port.CategoryStockUnits("staple_food"));
+        }
+
+        [Test]
+        public void CancelledOrder_DoesNotBlockNextReview()
+        {
+            var port = StoreWith("staple_food", 20, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            StoreProcurementOrder first = service.Orders[0];
+
+            upstream.Stock["staple_food"] = 0;
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 2, new List<string>());
+            Assert.AreEqual(StoreProcurementStage.Cancelled, first.Stage);
+
+            upstream.Stock["staple_food"] = 500;
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 3, 0.5f);
+
+            Assert.AreEqual(2, service.Orders.Count, "Cancellation clears the open-order block, so the category can be re-ordered the next day.");
+            StoreProcurementOrder second = service.Orders[1];
+            Assert.IsTrue(second.OrderId != first.OrderId, "The re-order is a new order.");
+            Assert.AreEqual(StoreProcurementStage.Ordered, second.Stage);
+            Assert.AreEqual(80, second.UnitsOrdered);
+        }
     }
 }

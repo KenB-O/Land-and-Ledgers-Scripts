@@ -124,8 +124,12 @@ namespace LandLedgers.World.Property
                 }
                 if (exempt)
                 {
+                    // Overnight 2026-11-04: an exemption is steady state,
+                    // not a new event. Logging it every sweep meant the
+                    // daily driver warned every day forever for an absent
+                    // person whose arrangement had not changed at all.
+                    // The count still surfaces in the change summary below.
                     result.ExemptedPersonIds.Add(personId);
-                    diag.Add($"HousingAbsenceSweep: P{personId} is absent but holds a valid arrangement — occupancy stands.");
                     continue;
                 }
 
@@ -145,8 +149,16 @@ namespace LandLedgers.World.Property
                 }
             }
 
-            diag.Add($"HousingAbsenceSweep: day {dayIndex} — {result.PersonsResolved} absent person(s) resolved, " +
-                     $"{result.OccupanciesEnded} occupanc(ies) ended, {result.ExemptedPersonIds.Count} exempted by valid arrangement.");
+            // Overnight 2026-11-04: the summary used to be appended on
+            // every sweep, which guaranteed a daily driver warning even
+            // when nobody was absent and nothing changed. It is now
+            // emitted only when the sweep actually changed something;
+            // errors above still always surface.
+            if (result.PersonsResolved > 0 || result.OccupanciesEnded > 0)
+            {
+                diag.Add($"HousingAbsenceSweep: day {dayIndex} — {result.PersonsResolved} absent person(s) resolved, " +
+                         $"{result.OccupanciesEnded} occupanc(ies) ended, {result.ExemptedPersonIds.Count} exempted by valid arrangement.");
+            }
             return result;
         }
     }

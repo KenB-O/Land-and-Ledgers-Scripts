@@ -1884,7 +1884,10 @@ namespace LandLedgers.World
 
             if (savedRevision < terrainContentRevision)
             {
-                Debug.LogWarning($"[TownWorld] Save terrain revision {savedRevision} validated against current revision {terrainContentRevision}; all saved anchor, road, plot, building, and resource positions remain compatible.", this);
+                // Overnight 2026-11-04: this is a successful compatibility
+                // outcome, not a problem — it was misclassified as a
+                // warning and re-logged on every load of an older save.
+                Debug.Log($"[TownWorld] Save terrain revision {savedRevision} validated against current revision {terrainContentRevision}; all saved anchor, road, plot, building, and resource positions remain compatible.", this);
             }
 
             return true;

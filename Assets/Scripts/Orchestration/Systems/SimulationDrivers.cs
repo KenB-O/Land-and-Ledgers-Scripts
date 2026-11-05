@@ -2833,27 +2833,18 @@ namespace LandLedgers.Orchestration.Systems
                     $"{report.PurchasesMade} purchases ({report.SpendCents}c).");
             }
 
-            // Keep the daily summary auditable by resident. These are read-only
+            // Keep missed meals auditable by resident. These are read-only
             // projections of the meal authority's persisted records; they do
-            // not create meals or affect nutrition.
+            // not create meals or affect nutrition. Served meals are no
+            // longer logged one line per person per slot (overnight
+            // 2026-11-04: up to dozens of routine lines a day); the daily
+            // needs summary above counts them and MealLog persists each
+            // record with its consumed items.
             if (hub.MealLog != null && populationManager.State.households != null)
             {
                 foreach (HouseholdState household in populationManager.State.households)
                 {
                     if (household == null) continue;
-                    foreach (HouseholdMealRecord meal in hub.MealLog.GetMeals(household.id))
-                    {
-                        if (meal == null || meal.DayIndex != absoluteDayIndex) continue;
-                        PersonState eater = populationManager.State.GetPerson(meal.PersonId);
-                        string consumed = meal.ItemsConsumed == null || meal.ItemsConsumed.Count == 0
-                            ? "recorded external meal"
-                            : string.Join(", ", meal.ItemsConsumed.Select(item =>
-                                $"{item.ItemId} x{item.QuantityUnits}"));
-                        Debug.Log($"[FoodEconomy] meal served: person='{eater?.DisplayName ?? $"P{meal.PersonId}"}', " +
-                            $"household=H{meal.HouseholdId}, slot={meal.Slot}, source={meal.SourceKind}, " +
-                            $"consumed={consumed}.");
-                    }
-
                     int cashCents = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
                     foreach (MissedMealRecord missed in hub.MealLog.GetMissedMeals(household.id))
                     {
@@ -6117,10 +6108,22 @@ namespace LandLedgers.Orchestration.Systems
                     timeManager.AbsoluteGameSeconds,
                     hub.Tasks, hub.WorkTimeBudgets, hub.PersonSchedules,
                     hub.DomesticLabor, hub.DueEvents, domesticDiag);
-                if (domesticDiag.Count > 0)
+                // Overnight 2026-11-04: the tick log used to print every
+                // routine domestic event (planned, started, completed) on
+                // every advancing tick. Only genuine failures surface now;
+                // routine activity stays in the driver's own records.
+                var domesticFailures = new List<string>();
+                foreach (string line in domesticDiag)
                 {
-                    Debug.Log("[SimulationDrivers] domestic labor tick: " +
-                        string.Join(" | ", domesticDiag.Take(20)));
+                    if (line != null && (line.Contains("failed") || line.Contains("INCONSISTENCY")
+                        || line.Contains("UNRESOLVED") || line.Contains("missing")
+                        || line.Contains("not registered") || line.Contains("cancelled")))
+                        domesticFailures.Add(line);
+                }
+                if (domesticFailures.Count > 0)
+                {
+                    Debug.LogWarning("[SimulationDrivers] domestic labor failures: " +
+                        string.Join(" | ", domesticFailures.Take(20)));
                 }
             }
 

@@ -144,3 +144,210 @@ additional scenarios Kennedy wants are not source-complete.
 The source side (scenario start wiring, dated qualifiers, rebuild
 after load, failure notice board contract) is done and tested;
 the scene remainder must not be described as source work.
+
+## November 5, 2026 — Owner design decisions (Muse session)
+
+Date: 2026-11-05. Owner-approved design principles recorded by
+Kennedy during the November 5, 2026 Muse development session.
+These are design principles, not implementation. Nothing in this
+section authorizes code changes; each principle states the rule
+and what must not happen meanwhile. No Canon document is modified
+by this record. The full brief text lives in the session handoff
+record (workspace: land-and-ledgers/regional-2026-11-05/
+37-final-handoff-record.md, section 9).
+
+### D1 — Historical realism (APPROVED PRINCIPLE)
+
+Land & Ledgers prioritizes historical plausibility and realism in
+its economic and social simulation. The intended opening era is
+approximately 1870, with scenarios potentially continuing into the
+early twentieth century. Consequence: economy and society design
+must stay plausible for that era. What must NOT happen meanwhile:
+no anachronistic mechanic justified as convenience.
+
+### D2 — NPC autonomy (APPROVED PRINCIPLE)
+
+NPCs behave as independent people and entrepreneurs. They pursue
+opportunities, assess risks, and make decisions based on their
+knowledge, personality, experience, capital, skills, and
+relationships. They may make mistakes, learn from mistakes, and
+become wealthy or bankrupt. Their decisions must remain causally
+understandable and economically plausible. The simulation must not
+guarantee their success. Consequence: systems must allow genuine
+NPC failure and success, not scripted outcomes. What must NOT
+happen meanwhile: no hidden success guarantee, no NPC behavior
+that cannot be explained from its own state and history.
+
+### D3 — Business decisions (APPROVED PRINCIPLE)
+
+Businesses use historical sales, current inventory, projected
+demand, lead times, cash, labour capacity, and risk preferences
+when making decisions. Stock replenishment should use
+forward-looking reserve levels rather than waiting until inventory
+is completely exhausted. Businesses may schedule work in advance.
+Unexpected events can change their priorities. Repeated failures
+caused by insufficient labour may motivate hiring or delegation.
+Family succession, retirement, and apprenticeship are legitimate
+influences on employment decisions. Consequence: replenishment
+and employment systems must be forward-looking and event-aware.
+What must NOT happen meanwhile: no wait-until-empty replenishment
+presented as the intended design.
+
+### D4 — Business relationships (APPROVED PRINCIPLE)
+
+NPCs should build genuine business and personal relationships
+through repeated interactions. Trust, loyalty, grievances,
+reputation, family connections, and previous dealings matter. A
+supplier may extend credit to a trusted merchant. A long-standing
+customer may remain loyal despite a competitor offering a slightly
+lower price. Business relationships should emerge from actual
+history and actions rather than arbitrary bonuses. Consequence:
+relationship effects must be traceable to recorded history.
+What must NOT happen meanwhile: no arbitrary relationship bonus
+with no recorded cause.
+
+### D5 — Credit and financial hardship (APPROVED PRINCIPLE)
+
+Distinguish ordinary trade credit from formal loans. Households
+and businesses may seek assistance from family, friends, private
+lenders, and institutions. Debt preferences differ between
+individuals. Financial hardship may produce asset sales,
+employment changes, business closure, bankruptcy, or ownership
+transfers. The economy must not artificially protect businesses
+from legitimate failure. Consequence: failure paths (closure,
+bankruptcy, transfer) are legitimate outcomes, not errors.
+What must NOT happen meanwhile: no artificial stabilizer that
+rescues a failing business, and no conflation of trade credit
+with formal loans.
+
+### D6 — Player knowledge (APPROVED PRINCIPLE)
+
+The floating camera does not provide omniscience. It provides
+visual observation of the playable world. The player may observe
+buildings, construction, traffic, businesses opening and closing,
+and other publicly visible events. However, clicking an unfamiliar
+person or building must not reveal information the player has not
+learned. An unmarked unfamiliar building may remain unidentified.
+A visible business sign can provide legitimate public information.
+Personal knowledge may come from prior visits, conversations,
+correspondence, public records, family connections, or other
+legitimate sources. The player must not automatically know
+private finances, hidden debts, unpublished contracts, personal
+relationships, private intentions, unknown identities, or private
+inventory information. Trade negotiations and information
+discovery should involve the actual player character, legitimate
+communication, or authorized delegation. Knowledge acquired
+through another NPC should have an identifiable informational
+source. NPCs should operate under comparable information
+limitations appropriate to their circumstances. Consequence: any
+information display must be traceable to a legitimate source.
+What must NOT happen meanwhile: no UI that reveals private state
+the player has not learned.
+
+### D7 — Player activity (APPROVED PRINCIPLE)
+
+The player should have many meaningful decisions available
+throughout a session without excessive notifications or artificial
+busywork. The player can customize a business template, select
+products, compare suppliers, establish contracts, set prices,
+acquire land, hire workers, seek construction quotations, and
+pursue expansion. Businesses and market opportunities should
+create emergent work rather than relying exclusively on scripted
+objectives. Consequence: systems should generate decisions from
+the economy, not from a script queue. What must NOT happen
+meanwhile: no notification spam or busywork presented as content.
+
+### D8 — NPC competition (APPROVED PRINCIPLE)
+
+NPC businesses may deliberately compete against one another and
+the player. They can use legitimate strategies involving prices,
+suppliers, customer relationships, hiring, property, and other
+economic opportunities. Scenario difficulty may affect competitor
+aggressiveness and attention toward the player. It must not give
+competitors impossible information, unlimited resources, or
+arbitrary advantages. Competitors can fail while attempting
+aggressive strategies. Consequence: competition is real but fair;
+difficulty tunes attention, never omniscience or resources.
+What must NOT happen meanwhile: no competitor advantage that
+cannot be explained by its own state.
+
+### D9 — On-map and off-map towns (APPROVED PRINCIPLE)
+
+Scenarios may contain multiple fully playable on-map settlements.
+Ashford and Redfield remain off-map economic towns. They should
+have persistent businesses and physical economic locations but
+are not intended to become explorable 3D settlements. Trade,
+credit, and correspondence can connect the player to those towns
+without rendering them. Consequence: regional towns are economic
+entities with locations, not scenes. What must NOT happen
+meanwhile: no 3D settlement work for Ashford or Redfield, and no
+claim that they are playable settlements.
+
+### D10 — Simulation speed (FUTURE REVIEW, NOT APPROVED)
+
+Kennedy wants a future review of simulation speeds. The present
+fastest practical normal-play settings make individual actions
+difficult to observe. Potential normal-play day lengths include
+60 seconds and 120 seconds. Real time and accelerated simulation
+speeds should be labelled accurately. No final new clock
+configuration was approved on November 5, 2026. Do not change
+simulation timing during this wrap-up. TimeManager was not
+modified on November 5, 2026. Consequence: timing is a future
+design and testing priority, not a current change. What must NOT
+happen meanwhile: no clock change, no speed relabelling, and no
+claim that a new configuration was approved.
+
+## November 5, 2026 — Session decisions (regional economy)
+
+Date: 2026-11-05. Decisions ONLY Kennedy can make, blocking
+further work on the November 5 regional economy. Recorded in the
+session decision briefs (workspace: land-and-ledgers/
+regional-2026-11-05/20-decision-briefs.md). Nothing here
+authorizes implementation.
+
+### R1 — Whole-package retail purchase, flour sacks (DECISION REQUIRED)
+
+The conversion number is settled: 1 sack = 10 lb (Series2FlourUnit
+Conversion precedent, asset agrees). The open question is ONLY
+household purchase semantics. Options: (A) whole sacks only —
+purchases round up to sack multiples at 35c per 10 lb received;
+(B) broken bulk at 3.5c/lb — invents bulk-breaking and needs a
+sack-remainder rule; (C) keep dropped — households cannot buy
+flour at all. What must NOT happen meanwhile: no bulk-breaking
+rule invented, no sack weight assumed beyond the authored 10 lb.
+
+### R2 — Freight allocation across a day's shipment group (DECISION REQUIRED)
+
+Delivered-cost choice assumes solo freight per order (Slice 15,
+documented conservative). Options: (A) keep solo until Codex
+freight execution exists; (B) marginal-zero — first order that
+day bears full freight, later ones free; (C) split by units —
+two-pass collect-then-choose restructure of EvaluateRestock.
+What must NOT happen meanwhile: no shared-freight assumption in
+the choice, and no re-pricing after cancellation (the chain does
+not re-price).
+
+### R3 — Demand model for non-food household goods (DECISION REQUIRED)
+
+Corrected November 5, 2026: the shopping loop is purely
+need-driven, and in production needs come only from the shortage
+monitor evaluating MealItemPriority (7 foods) plus fuel wood.
+Sugar, coffee, tea, salt, soap, and candles — already in the
+catalog and stocked by the store — never generate a need and
+never sell. Appending the 18 unoffered items' definitions to the
+household catalog would make them offerable and holdable and
+change exactly zero sales. The real decision is whether to extend
+the demand model to non-food household goods (a Canon-adjacent
+design choice: consumption rates, need thresholds, whether fresh
+beef/bacon/cheese demand displaces preserved_meat). What must NOT
+happen meanwhile: no catalog append presented as coverage, and
+no demand rate invented.
+
+### R4 — Daily bakery bake policy (DECISION REQUIRED, OPEN SINCE OVERNIGHT)
+
+Product, batch count, fuel, and off-map receipt for the bakery's
+daily baking. The bakery driver is unwired in production (null
+fuel source; the live bakery never bakes via the driver) and the
+daily bake policy is Kennedy's decision, not an agent's to invent.
+What must NOT happen meanwhile: no invented bake quantities,
+product mix, or fuel consumption rates.

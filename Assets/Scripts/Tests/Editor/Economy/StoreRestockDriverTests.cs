@@ -5,6 +5,7 @@
 using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Population;
+using LandLedgers.World.Regional;
 using NUnit.Framework;
 
 namespace LandLedgers.EditorTests.Economy
@@ -183,6 +184,108 @@ namespace LandLedgers.EditorTests.Economy
         {
             var driver = new StoreRestockDriver();
             Assert.IsFalse(driver.DriveDaily(null, 0, 0.5f));
+        }
+
+        [Test]
+        public void DriverCapture_RoundTrip_PreservesOpenOrderAndSequences()
+        {
+            (StoreRestockDriver driver, StubStorePort port, FixtureSupplier _) =
+                Setup(storeStock: 10, storeTarget: 100, storePrice: 50, storeCash: 100000,
+                    supplierStock: 500, quote: 20, leadDays: 2);
+            Assert.IsTrue(driver.DriveDaily(port, 0, 0.5f));
+            Assert.AreEqual(1, driver.Restock.Orders.Count);
+            Assert.AreEqual("po-general-store-1-0-0", driver.Restock.Orders[0].OrderId);
+
+            // These two calls use the exact argument shapes the manager
+            // uses (GeneralStoreRuntimeManager lines 862/891), so their
+            // compilation in the harness validates the manager's call
+            // syntax even though the manager file itself is excluded.
+            var dto = new RegionalSupplySaveDto();
+            driver.CaptureInto(dto);
+            Assert.AreEqual(1, dto.Orders.Count);
+            Assert.AreEqual("po-general-store-1-0-0", dto.Orders[0].OrderId);
+            Assert.AreEqual(90, dto.Orders[0].UnitsOrdered);
+            Assert.AreEqual(20, dto.Orders[0].UnitCostCents);
+            Assert.AreEqual(StoreProcurementStage.Ordered, dto.Orders[0].Stage);
+            Assert.AreEqual(1, dto.NextOrderSequence);
+            Assert.AreEqual(0, dto.NextDeliverySequence);
+
+            var diagnostics = new List<string>();
+            var fresh = new StoreRestockDriver();
+            fresh.RestoreFrom(dto, diagnostics);
+            Assert.AreEqual(0, diagnostics.Count, "A clean restore reports nothing.");
+            Assert.AreEqual(1, fresh.Restock.Orders.Count);
+            Assert.AreEqual("po-general-store-1-0-0", fresh.Restock.Orders[0].OrderId);
+            Assert.AreEqual(90, fresh.Restock.Orders[0].UnitsOrdered);
+            Assert.AreEqual(20, fresh.Restock.Orders[0].UnitCostCents);
+            Assert.AreEqual(StoreProcurementStage.Ordered, fresh.Restock.Orders[0].Stage);
+            Assert.AreEqual(0, fresh.Restock.Deliveries.Count);
+        }
+
+        [Test]
+        public void DriverRestore_ThenDrive_ContinuesChainWithConservation()
+        {
+            (StoreRestockDriver driver, StubStorePort port, FixtureSupplier _) =
+                Setup(storeStock: 10, storeTarget: 100, storePrice: 50, storeCash: 100000,
+                    supplierStock: 500, quote: 20, leadDays: 2);
+            Assert.IsTrue(driver.DriveDaily(port, 0, 0.5f));
+
+            var dto = new RegionalSupplySaveDto();
+            driver.CaptureInto(dto);
+
+            // The supplier is outside the driver, so the restored driver
+            // gets a second FixtureSupplier with the same 500u stock.
+            var fresh = new StoreRestockDriver();
+            var freshSupplier = new FixtureSupplier();
+            freshSupplier.Stock["staple_food"] = 500;
+            freshSupplier.Quotes["staple_food"] = 20;
+            freshSupplier.LeadDays["staple_food"] = 2;
+            fresh.RegisterSupplier(freshSupplier);
+            fresh.RestoreFrom(dto, new List<string>());
+
+            Assert.IsTrue(fresh.DriveDaily(port, 2, 0.5f));
+            Assert.AreEqual(StoreProcurementStage.Received, fresh.Restock.Orders[0].Stage);
+            Assert.AreEqual(100, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(100000 - 90 * 20, port.CashBalance);
+            Assert.AreEqual(410, freshSupplier.AvailableUnits("staple_food"),
+                "The restored chain ships from real stock, pays real cash, and receives real stock exactly as the unrestored chain does.");
+        }
+
+        [Test]
+        public void DriverRestore_NullDto_ClearsAndRestoreTwice_IsIdempotent()
+        {
+            (StoreRestockDriver driver, StubStorePort port, FixtureSupplier _) =
+                Setup(storeStock: 10, storeTarget: 100, storePrice: 50, storeCash: 100000,
+                    supplierStock: 500, quote: 20, leadDays: 2);
+            Assert.IsTrue(driver.DriveDaily(port, 0, 0.5f));
+            Assert.AreEqual(1, driver.Restock.Orders.Count);
+
+            var diagnostics = new List<string>();
+            driver.RestoreFrom(null, diagnostics);
+            Assert.AreEqual(0, driver.Restock.Orders.Count, "Restore of a null DTO clears the open order.");
+            Assert.AreEqual(0, driver.Restock.Deliveries.Count);
+
+            (StoreRestockDriver driven, StubStorePort _, FixtureSupplier _) =
+                Setup(storeStock: 10, storeTarget: 100, storePrice: 50, storeCash: 100000,
+                    supplierStock: 500, quote: 20, leadDays: 2);
+            Assert.IsTrue(driven.DriveDaily(port, 0, 0.5f));
+            var dto = new RegionalSupplySaveDto();
+            driven.CaptureInto(dto);
+
+            var fresh = new StoreRestockDriver();
+            fresh.RestoreFrom(dto, new List<string>());
+            var first = new RegionalSupplySaveDto();
+            fresh.CaptureInto(first);
+            fresh.RestoreFrom(dto, new List<string>());
+            var second = new RegionalSupplySaveDto();
+            fresh.CaptureInto(second);
+
+            Assert.AreEqual(1, fresh.Restock.Orders.Count);
+            Assert.AreEqual(first.Orders.Count, second.Orders.Count);
+            Assert.AreEqual(first.Orders[0].OrderId, second.Orders[0].OrderId);
+            Assert.AreEqual(first.NextOrderSequence, second.NextOrderSequence);
+            Assert.AreEqual(first.NextDeliverySequence, second.NextDeliverySequence);
+            Assert.AreEqual(first.NextShipmentGroupSequence, second.NextShipmentGroupSequence);
         }
     }
 }

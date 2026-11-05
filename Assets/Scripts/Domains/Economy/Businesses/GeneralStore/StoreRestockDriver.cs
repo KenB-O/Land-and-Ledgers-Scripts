@@ -17,6 +17,7 @@
 // route until it is.
 using System;
 using System.Collections.Generic;
+using LandLedgers.World.Regional;
 
 namespace LandLedgers.Economy.Businesses.GeneralStore
 {
@@ -50,6 +51,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 if (string.Equals(suppliers[i].SupplierId, supplier.SupplierId, StringComparison.OrdinalIgnoreCase)) return;
             suppliers.Add(supplier);
         }
+
+        /// <summary>
+        /// Slice 23: save/load seam for the driver. Slice 17's manager wiring
+        /// (GeneralStoreRuntimeManager CaptureRegionalSupplyDto /
+        /// RestoreRegionalSupply) calls these on the driver; they delegate to
+        /// the owned restock service, which owns the orders, deliveries, and
+        /// sequences. No driver-owned state is persisted: lastDrivenDayIndex
+        /// is deliberately NOT saved — DriveDailyRestock runs only from
+        /// OnDayChanged, and the manager (hence the driver) lives across
+        /// LoadFromSaveDto in the same session, so no same-day double-drive
+        /// path exists through a load.
+        /// </summary>
+        public void CaptureInto(RegionalSupplySaveDto dto) => restock.CaptureInto(dto);
+        public void RestoreFrom(RegionalSupplySaveDto dto, List<string> diagnostics) => restock.RestoreFrom(dto, diagnostics);
 
         /// <summary>
         /// Runs the daily restock review and advance for one day. Returns

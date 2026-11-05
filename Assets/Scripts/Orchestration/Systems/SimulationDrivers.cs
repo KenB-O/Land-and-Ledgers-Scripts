@@ -3700,6 +3700,10 @@ namespace LandLedgers.Orchestration.Systems
             hub.TransportAssets.Register(wagon);
             string stableShipmentId = "freight-shipment:" + agreement.RequestId;
             string priorFailure = agreement.ShipmentRegistrationFailureReason;
+            // Slice S4: route resolved by this registration attempt, for the
+            // registration log. Empty when the shipment already existed.
+            string resolvedSiteLocationId = string.Empty;
+            float resolvedTransitSeconds = 0f;
             string registrationRefusal = book.TryRegisterShipment(agreement.AgreementId,
                 (FreightServiceAgreement accepted, out string shipmentId, out string reason) =>
                 {
@@ -3728,6 +3732,41 @@ namespace LandLedgers.Orchestration.Systems
                         Diagnostics = diagnostics, Reservations = hub.Reservations,
                         NowGameSeconds = AbsoluteNowGameSeconds()
                     };
+                    // Slice S4: honest transit duration from the live journey
+                    // route (supplier site -> town-center, the loaded return
+                    // leg, one-way). A missing site or unroutable pair is a
+                    // registration failure — the agreement stays pending for
+                    // daily retry. Never create with the 120 s default as a
+                    // silent fallback: that would reintroduce the dishonesty
+                    // this slice exists to remove.
+                    string siteLocationId = null;
+                    foreach (RegionalTownRegistry.RegionalTownDefinition town in RegionalTownRegistry.All)
+                    {
+                        if (town?.Sites == null) continue;
+                        foreach (RegionalTownRegistry.RegionalBusinessSite site in town.Sites)
+                        {
+                            if (site != null && string.Equals(site.BusinessId, millbrookAidRuntime.BusinessId, StringComparison.Ordinal))
+                            {
+                                siteLocationId = RegionalTownRegistry.SiteLocationId(town, site);
+                                break;
+                            }
+                        }
+                        if (!string.IsNullOrWhiteSpace(siteLocationId)) break;
+                    }
+                    if (string.IsNullOrWhiteSpace(siteLocationId))
+                    {
+                        reason = $"Millbrook supplier '{millbrookAidRuntime.BusinessId}' has no registered regional site.";
+                        return false;
+                    }
+                    if (!FreightProductionDriver.TryResolveTransitGameSeconds(
+                            Journeys ?? hub.Journeys, siteLocationId, "town-center",
+                            out float transitSeconds, out string routeReason))
+                    {
+                        reason = routeReason;
+                        return false;
+                    }
+                    resolvedSiteLocationId = siteLocationId;
+                    resolvedTransitSeconds = transitSeconds;
                     LogisticsShipmentState created = FreightProduction.CreateShipment(
                         carrier.InstanceId, stableShipmentId, millbrookAidRuntime.BusinessId, bakery.InstanceId,
                         lot.PackageUnits,
@@ -3738,7 +3777,7 @@ namespace LandLedgers.Orchestration.Systems
                         }, wagon.AssetId, hooks, EntityId.For(EntityKind.Person, accepted.AcceptingOperatorPersonId),
                         new List<EntityId> { horse.AnimalId }, accepted.AgreedPriceCents, accepted.PayerBusinessId,
                         diagnostics, out reason, accepted.AgreementId, lot.LotId, lot.SkuId,
-                        holdForDispatchAuthorization: true);
+                        holdForDispatchAuthorization: true, transitDurationGameSeconds: transitSeconds);
                     if (created == null || created.IsPreLoadBlocked) return false;
                     shipmentId = created.ShipmentId;
                     if (diagnostics.Count > 0)
@@ -3758,9 +3797,15 @@ namespace LandLedgers.Orchestration.Systems
             if (shipment == null) return;
             string quoteSummary = $"chargeable={linked.ChargeableMiles} mi, base={linked.BaseServiceFeeCents}c + " +
                 $"{linked.RatePerMileCents}c/mi = {linked.AgreedPriceCents}c";
+            // Slice S4: name the route and duration. When this call resolved
+            // the route, both numbers are shown; for a recovered shipment the
+            // duration is read off the shipment itself (set at its creation).
+            string transitSummary = !string.IsNullOrWhiteSpace(resolvedSiteLocationId) && resolvedTransitSeconds > 0f
+                ? $"transit={resolvedTransitSeconds:F0}s (route {resolvedSiteLocationId}->town-center, quote one-way={request.Quote?.OneWayDistanceMiles ?? 0f:F1} mi)"
+                : $"transit={shipment.transitDurationGameSeconds:F0}s";
             Debug.Log($"[FreightAgreement] {(alreadyRegistered ? "Recovered existing" : "Registered")} shipment '{shipment.ShipmentId}' " +
                 $"for accepted agreement '{linked.AgreementId}' ({quoteSummary}); lot='{shipment.CargoLotId}', " +
-                $"status={shipment.Status}, dispatch hold={shipment.requiresDispatchAuthorization}, " +
+                $"status={shipment.Status}, dispatch hold={shipment.requiresDispatchAuthorization}, {transitSummary}, " +
                 $"no pickup, cargo transfer, or freight payment occurred.", this);
         }
 

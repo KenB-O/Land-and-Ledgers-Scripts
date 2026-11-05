@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Freight
@@ -146,6 +147,52 @@ namespace LandLedgers.Economy.Freight
         }
 
         /// <summary>
+        /// Slice S4 (2026-11-05): resolves an honest transit duration for a
+        /// detailed shipment from its live JourneyModel route — one-way miles
+        /// at the Canon wagon speed (4 mph), converted to game-seconds.
+        /// Pure and stateless: no invented passage — an unroutable pair
+        /// refuses with the route diagnostic, and a null model or missing
+        /// location id refuses naming the missing input. No floor here; the
+        /// 60 s floor lives in CreateShipment, mirroring the LRM factories.
+        /// </summary>
+        public static bool TryResolveTransitGameSeconds(
+            JourneyModel journeys,
+            string originLocationId,
+            string destinationLocationId,
+            out float transitGameSeconds,
+            out string reason)
+        {
+            transitGameSeconds = 0f;
+            reason = string.Empty;
+            if (journeys == null)
+            {
+                reason = "FreightProductionDriver: no journey model supplied for transit resolution.";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(originLocationId))
+            {
+                reason = "FreightProductionDriver: no origin location id supplied for transit resolution.";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(destinationLocationId))
+            {
+                reason = "FreightProductionDriver: no destination location id supplied for transit resolution.";
+                return false;
+            }
+            JourneyRoute route = journeys.FindRoute(originLocationId, destinationLocationId, TravelMode.Wagon);
+            if (route == null || !route.Found)
+            {
+                reason = "FreightProductionDriver: no wagon route from '" + originLocationId
+                    + "' to '" + destinationLocationId + "'"
+                    + (route != null && !string.IsNullOrWhiteSpace(route.Diagnostic)
+                        ? " — " + route.Diagnostic : string.Empty);
+                return false;
+            }
+            transitGameSeconds = route.TotalMinutes * 60f;
+            return true;
+        }
+
+        /// <summary>
         /// Creates a detailed shipment through the system of record and
         /// accepts it with the carrier company. The dispatch plan (real
         /// driver + animals) is recorded for the tick drive. Returns null
@@ -170,7 +217,8 @@ namespace LandLedgers.Economy.Freight
             string freightServiceAgreementId = "",
             string sourceLotId = "",
             string sourceSkuId = "",
-            bool holdForDispatchAuthorization = false)
+            bool holdForDispatchAuthorization = false,
+            float transitDurationGameSeconds = 0f)
         {
             reason = string.Empty;
             diagnostics = diagnostics ?? new List<string>();
@@ -225,6 +273,11 @@ namespace LandLedgers.Economy.Freight
             shipment.freightPayerBusinessInstanceId = freightPayerBusinessId ?? string.Empty;
             shipment.freightServiceAgreementId = freightServiceAgreementId ?? string.Empty;
             shipment.requiresDispatchAuthorization = holdForDispatchAuthorization;
+            // Slice S4: a route-derived duration overrides the 120 s field
+            // default (LRM 60 s floor). <= 0 means unset: legacy callers keep
+            // the default unchanged.
+            if (transitDurationGameSeconds > 0f)
+                shipment.transitDurationGameSeconds = Mathf.Max(60f, transitDurationGameSeconds);
             if (!company.TryAcceptShipment(shipment, diagnostics))
             {
                 reason = "FreightProductionDriver: carrier '" + carrierBusinessId + "' refused shipment '" + shipmentId + "'.";

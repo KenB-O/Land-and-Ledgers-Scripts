@@ -5514,9 +5514,80 @@ namespace LandLedgers.Orchestration.Systems
             if (bakery.WholesaleAccounts == null || bakery.WholesaleAccounts.Count == 0) return;
             var diagnostics = new List<string>();
             List<string> planned = bakery.PlanWholesaleBatches(dayIndex, diagnostics);
-            if (planned != null && planned.Count > 0)
-                Debug.Log($"[BakeryProduction] Day {dayIndex}: planned {planned.Count} batch(es) from existing wholesale accounts. " +
-                    "Execution awaits the scheduled baker/equipment/input path; no production was run by planning.", this);
+            if (planned == null || planned.Count == 0)
+            {
+                if (diagnostics.Count > 0)
+                    Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
+                return;
+            }
+
+            // Slice S1 (2026-11-05, food-economy trace §4.2): execution
+            // wiring. The runtime-level plan is adopted into the driver
+            // (no re-planning, no duplicate batches) and the planned day
+            // is run through the driver's existing guards. Until a
+            // wholesale account exists this block is unreachable; until
+            // flour/fuel/kit/oven exist the run refuses loudly and bakes
+            // nothing — the daily log then names the exact first refusal.
+            var driver = state.BakeryDriver;
+            if (driver == null)
+            {
+                if (diagnostics.Count > 0)
+                    Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
+                return;
+            }
+            driver.AdoptPlannedBatches(dayIndex, planned, diagnostics);
+
+            // Baker's hand kit via the existing equipment authority: the
+            // EquipmentTaskGate.CheckCodes pattern (ForHolder +
+            // CheckTaskRequirements on a kit code). No production kit
+            // register exists for the bakery yet
+            // (SimulationSystemsHub.CollectGateKits returns empty), so no
+            // kit is supplied here and the check refuses — logged as the
+            // next blocker, never defaulted true.
+            var kitAvailability = EquipmentRequirements.ForHolder(
+                "business", bakery.BusinessInstanceId, dayIndex, null, null, null);
+            var kitStub = new TaskDefinition("bakery-daily-bake", "daily bakery bake", 1);
+            kitStub.EquipmentClasses.Add(EquipmentRequirementCodes.Kit(
+                LandLedgers.Economy.Businesses.Bakery.BakeryBreadCatalog.BakerHandKitId));
+            string kitRefusal = EquipmentRequirements.CheckTaskRequirements(kitStub, kitAvailability, diagnostics);
+            bool bakerKitUsable = kitRefusal == null;
+            if (!bakerKitUsable)
+                diagnostics.Add("DriveBakeryWholesalePlanning: no usable baker's hand kit registered for the bakery — the kit gate is the next blocker (D-3).");
+
+            // Oven component finder, following the proven
+            // BlacksmithRuntime.EstablishForgeStationFromComponents
+            // closure pattern: look up by asset id in the ovens'
+            // installed components, return a view or null. No production
+            // register holds bakery oven component assets
+            // (kind/condition/usable) yet (D-3), so every lookup returns
+            // null today; with no ovens installed CountReadyOvens is 0
+            // regardless and Precheck refuses "no ready bake oven".
+            var installedOvenComponents = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var oven in bakery.Ovens)
+            {
+                if (oven == null || oven.Station == null || oven.Station.ComponentAssetIds == null) continue;
+                foreach (string componentId in oven.Station.ComponentAssetIds)
+                {
+                    if (!string.IsNullOrWhiteSpace(componentId)) installedOvenComponents.Add(componentId);
+                }
+            }
+            Func<string, LandLedgers.Economy.Equipment.Workstations.WorkstationComponentView?> findComponent = assetId =>
+            {
+                if (string.IsNullOrWhiteSpace(assetId) || !installedOvenComponents.Contains(assetId)) return null;
+                // Installed, but no component asset record exists in
+                // production to build a usable view from — unverifiable
+                // components never satisfy the oven gate.
+                return null;
+            };
+
+            int baked = driver.RunScheduledDay(
+                dayIndex, bakerKitUsable,
+                LandLedgers.Economy.Equipment.Workstations.WorkstationCatalog.BakeOven,
+                findComponent, null, diagnostics, hub != null ? hub.Ids : null);
+            if (baked >= 0)
+                Debug.Log($"[BakeryProduction] Day {dayIndex}: baked {baked} of {planned.Count} planned batch(es).", this);
+            else
+                Debug.Log($"[BakeryProduction] Day {dayIndex}: planned {planned.Count} batch(es); baked nothing — first refusal is in the [BakeryProduction] diagnostics.", this);
             if (diagnostics.Count > 0)
                 Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
         }

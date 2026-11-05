@@ -134,6 +134,57 @@ namespace LandLedgers.Economy.BreadDrivers
         }
 
         /// <summary>
+        /// Slice S1 (2026-11-05, food-economy trace §4.2): records batches
+        /// the shop runtime already planned (e.g. via
+        /// BakeryShopRuntime.PlanWholesaleBatches) as this driver's plan
+        /// for the day, WITHOUT re-planning. Re-planning via PlanBatches
+        /// would create duplicate batches; adopting only points the driver
+        /// at ids the runtime already holds. Same validation posture as
+        /// RestorePlannedState: ids are preserved verbatim, an id the
+        /// runtime no longer holds is warned about (never silently
+        /// dropped), and RunScheduledDay still re-validates through
+        /// Precheck before any bake, so an adopted plan can never bake
+        /// blind. Idempotent: adopting the same day twice yields the
+        /// same plan. This is NOT RestorePlannedState — that method's
+        /// meaning is save/load restore, and conflating the two would
+        /// corrupt the save seam.
+        /// </summary>
+        public void AdoptPlannedBatches(int dayIndex, List<string> batchIds, List<string> diag)
+        {
+            PlannedDayIndex = dayIndex;
+            PlannedBatchIds.Clear();
+            if (batchIds == null) return;
+            foreach (string batchId in batchIds)
+            {
+                if (string.IsNullOrWhiteSpace(batchId)) continue;
+                string trimmed = batchId.Trim();
+                if (!PlannedBatchIds.Contains(trimmed)) PlannedBatchIds.Add(trimmed);
+            }
+
+            if (bakery != null && diag != null)
+            {
+                foreach (string batchId in PlannedBatchIds)
+                {
+                    bool found = false;
+                    foreach (var batch in bakery.Batches)
+                    {
+                        if (batch != null && string.Equals(batch.BatchId, batchId, System.StringComparison.Ordinal))
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found)
+                        diag.Add($"Series2BakeryProductionDriver: adopted planned batch '{batchId}' is not in the bakery runtime's batches; the plan is preserved, and Precheck will refuse a bake it cannot validate.");
+                }
+            }
+
+            if (diag != null)
+                diag.Add($"Series2BakeryProductionDriver: adopted {PlannedBatchIds.Count} runtime-planned batch(es) for day {dayIndex}; no batches re-planned.");
+        }
+
+        /// <summary>
         /// Pre-check for the planned batches: flour, notions, fuel, ready
         /// oven, hand kit. Returns null when the day may run, or a
         /// refusal diagnostic when it must not. Never truncates, never

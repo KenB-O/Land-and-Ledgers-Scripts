@@ -6,6 +6,7 @@ using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.World.Regional;
 using LandLedgers.Reputation;
 using LandLedgers.Time;
 using LandLedgers.UI;
@@ -342,6 +343,7 @@ namespace LandLedgers.FirstLedger
         // list). The supplier list starts empty in production; P3 registers
         // regional businesses here. The weekly off-map reorder is untouched.
         private readonly StoreRestockDriver restockDriver = new StoreRestockDriver();
+        private List<RegionalSupplierAdapter> regionalSuppliers;
 
         [SerializeField, TextArea(2, 5)]
         private string lastDailyRestockSummary = "No daily restock review has run yet.";
@@ -2285,8 +2287,9 @@ namespace LandLedgers.FirstLedger
         /// <summary>
         /// Slice 11: the daily restock review through the restock driver.
         /// Same guard as the weekly path: no drive before a real store is
-        /// formed and bound. With no suppliers registered yet this places
-        /// no orders and records the gap once per day.
+        /// formed and bound. Slice 16 wires the regional suppliers in here:
+        /// with no suppliers registered yet this places no orders and records
+        /// the gap once per day.
         /// </summary>
         private void DriveDailyRestock()
         {
@@ -2294,10 +2297,36 @@ namespace LandLedgers.FirstLedger
             if (currentBusiness == null || runtimeState == null) return;
             int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
             if (dayIndex < 0) return;
+            EnsureRegionalSuppliers(dayIndex);
             GeneralStoreTradingPort port = BuildHouseholdTradingPort(currentBusiness);
             if (port == null) return;
             if (restockDriver.DriveDaily(port, dayIndex, GetEffectiveReorderThreshold01()))
                 lastDailyRestockSummary = restockDriver.LastDailySummary;
+        }
+
+        /// <summary>
+        /// Slice 16: the regional suppliers (Ashford + Redfield) feed the
+        /// daily restock driver. Created once and kept for the manager's
+        /// lifetime; their weekly production is driven every day (same-week
+        /// calls are no-ops inside the adapter). Delivered cost uses the
+        /// opening freight company's authored rate card. NOTE: adapter stock
+        /// is memory-only for now — on a save/load round trip it resets to
+        /// the registry's starting units, the same known gap as the
+        /// service's open orders. The weekly off-map reorder remains the
+        /// durable route until that save work lands.
+        /// </summary>
+        private void EnsureRegionalSuppliers(int dayIndex)
+        {
+            if (regionalSuppliers == null)
+            {
+                regionalSuppliers = RegionalSupplierSet.CreateAll();
+                foreach (RegionalSupplierAdapter adapter in regionalSuppliers)
+                    restockDriver.RegisterSupplier(adapter);
+                restockDriver.DeliveredCostPerUnitCents = (supplier, categoryId, units) =>
+                    RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, categoryId, units,
+                        RegionalFreightRateCard.OpeningCompany);
+            }
+            RegionalSupplierSet.DriveWeeklyProduction(regionalSuppliers, dayIndex);
         }
 
         private void OnWeekChanged(SimulationDateChangedContext context)

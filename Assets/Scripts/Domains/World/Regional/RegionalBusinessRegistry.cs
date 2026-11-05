@@ -268,7 +268,13 @@ namespace LandLedgers.World.Regional
             OpeningCashCents = 10000,
             Offers = new[]
             {
-                Offer("medicine_bottle", "bottle", 52, 16, 8, 16, 32),
+                // 40c, not 52c: at the store's 12-unit reorder target the
+                // delivered cost must clear the medicine category's average
+                // selling price (62c). At 52c goods the 12-unit delivered
+                // cost is 67c and the chain would never order it; at 40c
+                // it is 59c and the offer is live. The retail baseline
+                // (75c) is unchanged.
+                Offer("medicine_bottle", "bottle", 40, 16, 8, 16, 32),
             },
         };
 

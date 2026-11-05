@@ -405,11 +405,13 @@ namespace LandLedgers.FirstLedger
                     // Legacy single-item path, preserved exactly: the one
                     // authored item must be the category's household
                     // representative and be contained in the category.
+                    // Slice 10: identical units resolve to factor 1; a
+                    // declared package conversion resolves to its factor.
                     string itemId = HouseholdItemForStoreCategory(category.CategoryId);
                     if (string.IsNullOrWhiteSpace(itemId)
                         || !string.Equals(itemId, singleItemId, StringComparison.OrdinalIgnoreCase)
                         || !category.ContainsItem(itemId)
-                        || !HouseholdUnitsMatch(storeDefinition, itemId))
+                        || !TryResolveStoreUnitsPerHouseholdUnit(storeDefinition, itemId, out int singleFactor, out string _))
                     {
                         continue;
                     }
@@ -418,7 +420,7 @@ namespace LandLedgers.FirstLedger
                     {
                         CategoryId = category.CategoryId,
                         OfferedItemIds = new List<string> { itemId },
-                        StoreUnitsPerItemUnit = 1,
+                        StoreUnitsPerItemUnit = singleFactor,
                     });
                     continue;
                 }
@@ -426,9 +428,10 @@ namespace LandLedgers.FirstLedger
                 // Multi-SKU category: per-item offers over the pooled stock,
                 // exactly as the NPC overload projects them, minus the
                 // identified-lot requirement (this port has no Business
-                // whose lots could back them). Unit mismatch still drops
-                // the item: pooled units must mean the same thing on both
-                // sides of the counter.
+                // whose lots could back them). Slice 10: a unit mismatch
+                // drops the item only when no package conversion is
+                // declared; a declared conversion sets the offer factor so
+                // pooled units mean the same thing on both sides.
                 var categoryItemIds = new List<string>();
                 ReadOnlySpan<string> declaredItemIds = category.ItemIds;
                 for (int j = 0; j < declaredItemIds.Length; j++)
@@ -442,14 +445,14 @@ namespace LandLedgers.FirstLedger
                 {
                     if (candidate?.OfferedItemIds == null || candidate.OfferedItemIds.Count != 1) continue;
                     string itemId = candidate.OfferedItemIds[0];
-                    if (!HouseholdUnitsMatch(storeDefinition, itemId))
+                    if (!TryResolveStoreUnitsPerHouseholdUnit(storeDefinition, itemId, out int candidateFactor, out string candidateReason))
                     {
                         droppedReasons.Add(
-                            $"Series2TradingPort: '{itemId}' in '{category.CategoryId}' is not offered from the fallback port: " +
-                            "its authored store unit does not match the household unit.");
+                            $"Series2TradingPort: '{itemId}' in '{category.CategoryId}' is not offered from the fallback port: {candidateReason}");
                         continue;
                     }
 
+                    candidate.StoreUnitsPerItemUnit = candidateFactor;
                     offers.Add(candidate);
                 }
             }
@@ -501,7 +504,12 @@ namespace LandLedgers.FirstLedger
 
                 List<GeneralStoreCategoryOffer> validatedItems = Series2TradingPortBuilder.BuildPerItemOffers(
                     category.CategoryId, categoryItemIds, droppedReasons);
-                GeneralStoreCategoryOffer exactOffer = null;
+                // Slice 10: exact offers group by conversion factor, because
+                // the factor lives on the offer and one category can hold
+                // items with different factors (lamp oil at 4, the rest at 1).
+                // The port finds offers by item id, so separate offers in the
+                // same category are safe.
+                var exactOffersByFactor = new List<GeneralStoreCategoryOffer>();
                 foreach (GeneralStoreCategoryOffer candidate in validatedItems)
                 {
                     if (candidate?.OfferedItemIds == null || candidate.OfferedItemIds.Count != 1) continue;
@@ -509,10 +517,11 @@ namespace LandLedgers.FirstLedger
                     ItemDefinition item = FindAuthoredStoreItem(itemId);
                     HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(itemId);
                     string dropReason = null;
+                    int factor = 1;
                     if (item == null || householdItem == null)
                         dropReason = "no authored store item or household item definition";
-                    else if (!string.Equals(item.Unit?.Trim(), householdItem.UnitLabel?.Trim(), StringComparison.OrdinalIgnoreCase))
-                        dropReason = $"authored store unit '{item.Unit}' does not match household unit '{householdItem.UnitLabel}'";
+                    else if (!RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(itemId, item.Unit, householdItem.UnitLabel, out factor, out string conversionReason))
+                        dropReason = conversionReason.TrimEnd('.');
                     else if (GetItemSellingPriceCents(itemId) <= 0)
                         dropReason = "the owner has not set a positive selling price";
                     if (dropReason != null)
@@ -526,14 +535,18 @@ namespace LandLedgers.FirstLedger
                         continue;
                     }
 
+                    GeneralStoreCategoryOffer exactOffer = null;
+                    foreach (GeneralStoreCategoryOffer existing in exactOffersByFactor)
+                        if (existing.StoreUnitsPerItemUnit == factor) { exactOffer = existing; break; }
                     if (exactOffer == null)
                     {
                         exactOffer = new GeneralStoreCategoryOffer
                         {
                             CategoryId = category.CategoryId,
-                            StoreUnitsPerItemUnit = 1,
+                            StoreUnitsPerItemUnit = factor,
                             UsesItemLevelInventory = true,
                         };
+                        exactOffersByFactor.Add(exactOffer);
                         offers.Add(exactOffer);
                     }
                     exactOffer.OfferedItemIds.Add(itemId);
@@ -544,18 +557,23 @@ namespace LandLedgers.FirstLedger
             if (runtimeFeed != null)
             {
                 HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(runtimeFeed.FeedItemId);
-                bool exactUnit = householdItem != null
-                    && !string.IsNullOrWhiteSpace(runtimeFeed.UnitLabel)
-                    && string.Equals(householdItem.UnitLabel.Trim(), runtimeFeed.UnitLabel.Trim(), StringComparison.OrdinalIgnoreCase);
+                // Slice 10: the feed SKU converts like any other item when a
+                // package conversion is declared (lamp oil quarts to gallons);
+                // otherwise it stays unoffered with the reason named.
+                int feedFactor = 1;
+                string feedReason = string.Empty;
+                bool feedConvertible = householdItem != null
+                    && RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(
+                        runtimeFeed.FeedItemId, runtimeFeed.UnitLabel, householdItem.UnitLabel, out feedFactor, out feedReason);
                 int identifiedUnits = npcBusiness.RuntimeState.GetRetailItemStockUnits(
                     runtimeFeed.FeedItemId, runtimeFeed.FeedCategoryId);
                 if (runtimeFeed.RetailPriceCents <= 0)
                 {
                     Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: the owner has not supplied a positive retail price.", this);
                 }
-                else if (!exactUnit)
+                else if (!feedConvertible)
                 {
-                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: no household item definition has the matching unit '{runtimeFeed.UnitLabel}'.", this);
+                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: {feedReason}", this);
                 }
                 else if (identifiedUnits > 0)
                 {
@@ -577,7 +595,7 @@ namespace LandLedgers.FirstLedger
                         var runtimeOffer = new GeneralStoreCategoryOffer
                         {
                             CategoryId = runtimeFeed.FeedCategoryId,
-                            StoreUnitsPerItemUnit = 1,
+                            StoreUnitsPerItemUnit = feedFactor,
                             UsesItemLevelInventory = true,
                             ItemPriceOverrideCents = runtimeFeed.RetailPriceCents,
                         };
@@ -616,15 +634,29 @@ namespace LandLedgers.FirstLedger
             return null;
         }
 
-        private bool HouseholdUnitsMatch(GeneralStoreBusinessDefinition definition, string itemId)
+        /// <summary>
+        /// Slice 10: resolves the offer factor for one item. Identical units
+        /// resolve to 1; a declared package conversion resolves to its
+        /// factor; anything else fails with the reason naming the missing
+        /// package definition. Replaces the old exact-equality gate.
+        /// </summary>
+        private bool TryResolveStoreUnitsPerHouseholdUnit(GeneralStoreBusinessDefinition definition, string itemId, out int storeUnitsPerHouseholdUnit, out string reason)
         {
+            storeUnitsPerHouseholdUnit = 1;
+            reason = string.Empty;
             HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(itemId);
-            if (definition == null || householdItem == null) return false;
-            ReadOnlySpan<ItemDefinition> items = definition.Items;
-            for (int i = 0; i < items.Length; i++)
-                if (items[i] != null && string.Equals(items[i].ItemId, itemId, StringComparison.OrdinalIgnoreCase))
-                    return string.Equals(items[i].Unit.Trim(), householdItem.UnitLabel.Trim(), StringComparison.OrdinalIgnoreCase);
-            return false;
+            if (definition == null || householdItem == null)
+            {
+                reason = $"no authored store item or household item definition for '{itemId}'.";
+                return false;
+            }
+            ItemDefinition item = FindAuthoredStoreItem(itemId);
+            if (item == null)
+            {
+                reason = $"no authored store item for '{itemId}'.";
+                return false;
+            }
+            return RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(itemId, item.Unit, householdItem.UnitLabel, out storeUnitsPerHouseholdUnit, out reason);
         }
 
         /// <summary>Uses the authored item's cost-plus retail policy and category markup.</summary>

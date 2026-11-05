@@ -260,13 +260,18 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
 
                 int exactRevenue = exactUnits * ItemPricePerUnitCents(itemId);
+                // Slice 10: the settlement posts STORE units consumed, not
+                // household units sold, matching the category path below and
+                // the sales observation's units. With a conversion factor
+                // (lamp oil: 4 quarts per gallon) the two differ.
+                int storeUnitsSold = exactUnits * ItemStoreUnitsPerUnit(itemId);
                 if (settlement != null && settlement.Mode == ShoppingSettlementMode.TradeCreditObligation)
                 {
-                    port.RecordCreditSettlement(categoryId, exactUnits, exactRevenue, settlement.ObligationId ?? string.Empty);
+                    port.RecordCreditSettlement(categoryId, storeUnitsSold, exactRevenue, settlement.ObligationId ?? string.Empty);
                 }
                 else
                 {
-                    exactPort.RecordItemCashSettlement(categoryId, exactUnits, exactRevenue);
+                    exactPort.RecordItemCashSettlement(categoryId, storeUnitsSold, exactRevenue);
                 }
 
                 lastReceiptId = $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
@@ -348,6 +353,26 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         {
             GeneralStoreCategoryOffer offer = FindOffer(categoryId);
             return offer != null ? Math.Max(1, offer.StoreUnitsPerItemUnit) : 1;
+        }
+
+        /// <summary>
+        /// Slice 10: the conversion factor for one ITEM, found by item id.
+        /// The category lookup above is ambiguous when one category holds
+        /// offers with different factors, so the exact-item settlement uses
+        /// this instead.
+        /// </summary>
+        private int ItemStoreUnitsPerUnit(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || port.CategoryOffers == null) return 1;
+            for (int i = 0; i < port.CategoryOffers.Count; i++)
+            {
+                GeneralStoreCategoryOffer offer = port.CategoryOffers[i];
+                if (offer?.OfferedItemIds == null) continue;
+                for (int j = 0; j < offer.OfferedItemIds.Count; j++)
+                    if (string.Equals(offer.OfferedItemIds[j], itemId, StringComparison.OrdinalIgnoreCase))
+                        return Math.Max(1, offer.StoreUnitsPerItemUnit);
+            }
+            return 1;
         }
     }
 }

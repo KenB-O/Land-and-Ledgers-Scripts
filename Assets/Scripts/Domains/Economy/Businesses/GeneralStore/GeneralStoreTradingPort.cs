@@ -113,8 +113,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         {
             GeneralStoreCategoryOffer offer = FindOffer(itemId);
             if (offer == null) return 0;
+            // Slice 10: the item-level path used to report raw retail stock
+            // (store units) as household units. When the offer carries a
+            // conversion factor, stock is counted in household units, the
+            // same as the category path already does.
             return offer.UsesItemLevelInventory
-                ? ActiveState?.GetRetailItemStockUnits(itemId, offer.CategoryId) ?? 0
+                ? (ActiveState?.GetRetailItemStockUnits(itemId, offer.CategoryId) ?? 0) / Math.Max(1, offer.StoreUnitsPerItemUnit)
                 : CategoryStockUnits(offer.CategoryId) / Math.Max(1, offer.StoreUnitsPerItemUnit);
         }
 
@@ -122,17 +126,28 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         {
             GeneralStoreCategoryOffer offer = FindOffer(itemId);
             if (offer == null) return 0;
-            return offer.UsesItemLevelInventory
+            // Slice 10: the item-level price is per STORE unit; the loop
+            // prices per HOUSEHOLD unit, so the offer factor multiplies it,
+            // the same as the category path already does. Factor 1 is a no-op.
+            int storeUnitPrice = offer.UsesItemLevelInventory
                 ? offer.ItemPriceOverrideCents > 0 ? offer.ItemPriceOverrideCents : manager.GetItemSellingPriceCents(itemId)
-                : CategoryPricePerUnitCents(offer.CategoryId) * Math.Max(1, offer.StoreUnitsPerItemUnit);
+                : CategoryPricePerUnitCents(offer.CategoryId);
+            return storeUnitPrice * Math.Max(1, offer.StoreUnitsPerItemUnit);
         }
 
         public bool TryConsumeItemStockUnits(string itemId, int units, out int consumedUnits)
         {
             consumedUnits = 0;
             GeneralStoreCategoryOffer offer = FindOffer(itemId);
-            return offer != null && offer.UsesItemLevelInventory && ActiveState != null
-                && ActiveState.TryConsumeRetailItemStockUnits(itemId, offer.CategoryId, units, out consumedUnits);
+            if (offer == null || !offer.UsesItemLevelInventory || ActiveState == null) return false;
+            // Slice 10: `units` are household units; the retail lots hold
+            // store units, so the factor converts before the all-or-nothing
+            // lot consumption. What comes back is household units sold.
+            int factor = Math.Max(1, offer.StoreUnitsPerItemUnit);
+            if (!ActiveState.TryConsumeRetailItemStockUnits(itemId, offer.CategoryId, units * factor, out int consumedStoreUnits))
+                return false;
+            consumedUnits = consumedStoreUnits / factor;
+            return consumedUnits > 0;
         }
 
         public void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents)

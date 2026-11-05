@@ -155,7 +155,11 @@ namespace LandLedgers.Tests.World
         public void Service_Restore_SkipsInvalidEntries()
         {
             var dto = new RegionalSupplySaveDto();
-            dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-good", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.Ordered });
+            // Slice 24: po-good is InTransit (not Ordered) because its live
+            // delivery dlv-good only legitimately pairs with an InTransit
+            // order — a live delivery for an Ordered order is now skipped
+            // at restore, so the "good" row must be a consistent pair.
+            dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-good", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.InTransit });
             dto.Orders.Add(new StoreProcurementOrder { OrderId = "", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.Ordered });
             dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-negative", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = -5, UnitCostCents = 5, Stage = StoreProcurementStage.Ordered });
             dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-bad-stage", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = (StoreProcurementStage)999 });
@@ -243,6 +247,127 @@ namespace LandLedgers.Tests.World
                         restoredAdapters[i].OnHandUnits(offer.ItemId),
                         $"Stock mismatch for {adapters[i].SupplierId}/{offer.ItemId}.");
             }
+        }
+
+        [Test]
+        public void Service_Restore_SkipsLiveDeliveryWithMissingOrder()
+        {
+            var dto = new RegionalSupplySaveDto();
+            dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-good", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.Ordered });
+            dto.Deliveries.Add(new StoreDelivery { DeliveryId = "dlv-settled", OrderId = "po-good", CategoryId = "staple_food", Units = 0, Received = true });
+            dto.Deliveries.Add(new StoreDelivery { DeliveryId = "dlv-orphan", OrderId = "po-missing", CategoryId = "staple_food", Units = 10, Arrived = true, Received = false });
+
+            var restored = new StoreRestockService();
+            var diag = new List<string>();
+            restored.RestoreFrom(dto, diag);
+            Assert.AreEqual(1, restored.Orders.Count);
+            Assert.AreEqual(1, restored.Deliveries.Count, "The settled history still loads — the stage-aware rule does not break the round-trip case.");
+            Assert.AreEqual("dlv-settled", restored.Deliveries[0].DeliveryId);
+            string log = string.Join(" ", diag);
+            Assert.IsTrue(log.Contains("dlv-orphan"), "The skipped orphan must be diagnosed by id, got: " + log);
+            Assert.IsTrue(log.Contains("missing"), "The diagnostic must name the missing order, got: " + log);
+        }
+
+        [Test]
+        public void Service_Restore_SkipsLiveDeliveryForCancelledOrder()
+        {
+            var dto = new RegionalSupplySaveDto();
+            dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-cancelled", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.Cancelled, CancelReason = "upstream shipped nothing (stock exhausted)" });
+            dto.Deliveries.Add(new StoreDelivery { DeliveryId = "dlv-cancelled", OrderId = "po-cancelled", CategoryId = "staple_food", Units = 10, Arrived = true, Received = false });
+
+            var restored = new StoreRestockService();
+            var diag = new List<string>();
+            restored.RestoreFrom(dto, diag);
+            Assert.AreEqual(1, restored.Orders.Count, "Cancelled orders are restorable stages — the order loads unchanged; only the unbacked delivery is refused.");
+            Assert.AreEqual(0, restored.Deliveries.Count, "A live delivery for a cancelled order never ships, so it must not load.");
+            string log = string.Join(" ", diag);
+            Assert.IsTrue(log.Contains("dlv-cancelled"), "The skipped delivery must be diagnosed by id, got: " + log);
+            Assert.IsTrue(log.Contains("Cancelled"), "The diagnostic must name the order stage, got: " + log);
+        }
+
+        [Test]
+        public void Service_Restore_SkipsLiveDeliveryForReceivedOrder()
+        {
+            var dto = new RegionalSupplySaveDto();
+            dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-received", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.Received });
+            dto.Deliveries.Add(new StoreDelivery { DeliveryId = "dlv-double", OrderId = "po-received", CategoryId = "staple_food", Units = 10, Arrived = true, Received = false });
+
+            var restored = new StoreRestockService();
+            var diag = new List<string>();
+            restored.RestoreFrom(dto, diag);
+            Assert.AreEqual(1, restored.Orders.Count);
+            Assert.AreEqual(0, restored.Deliveries.Count, "An order already Received has no live delivery left — the extra one would double-receive the same goods.");
+            string log = string.Join(" ", diag);
+            Assert.IsTrue(log.Contains("dlv-double"), "The skipped delivery must be diagnosed by id, got: " + log);
+            Assert.IsTrue(log.Contains("Received"), "The diagnostic must name the order stage, got: " + log);
+        }
+
+        [Test]
+        public void Service_Restore_KeepsLiveDeliveryForInTransitOrder_ThenReceivesWithPayment()
+        {
+            var dto = new RegionalSupplySaveDto();
+            dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-live", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.InTransit });
+            dto.Deliveries.Add(new StoreDelivery { DeliveryId = "dlv-live", OrderId = "po-live", CategoryId = "staple_food", Units = 10, Arrived = true, Received = false });
+
+            var service = new StoreRestockService();
+            var diag = new List<string>();
+            service.RestoreFrom(dto, diag);
+            Assert.AreEqual(1, service.Deliveries.Count, "The legitimate live-delivery pairing loads.");
+            Assert.AreEqual(0, diag.Count, "A clean restore reports nothing about the delivery.");
+
+            var port = new StubStorePort();
+            port.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            port.Stock["staple_food"] = 0;
+            port.Targets["staple_food"] = 100;
+            port.Prices["staple_food"] = 35;
+            port.CashBalance = 100000;
+
+            // Empty supplier list is correct here: the order is InTransit,
+            // not Ordered, so the shipping loop skips it and only the
+            // receipt loop runs.
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier>(), 1, new List<string>());
+            Assert.IsTrue(service.Deliveries[0].Received);
+            Assert.AreEqual(StoreProcurementStage.Received, service.Orders[0].Stage);
+            Assert.AreEqual(100000 - 10 * 5, port.CashBalance, "The restored delivery pays real cash for real stock.");
+            Assert.AreEqual(10, port.CategoryStockUnits("staple_food"));
+        }
+
+        [Test]
+        public void AdvanceDay_DoesNotReceiveDeliveryWhoseOrderWasCancelledAfterRestore()
+        {
+            var dto = new RegionalSupplySaveDto();
+            dto.Orders.Add(new StoreProcurementOrder { OrderId = "po-live", StoreBusinessId = "general-store-1", CategoryId = "staple_food", UnitsOrdered = 10, UnitCostCents = 5, Stage = StoreProcurementStage.InTransit });
+            dto.Deliveries.Add(new StoreDelivery { DeliveryId = "dlv-live", OrderId = "po-live", CategoryId = "staple_food", Units = 10, Arrived = true, Received = false });
+
+            var service = new StoreRestockService();
+            service.RestoreFrom(dto, new List<string>());
+            Assert.AreEqual(1, service.Deliveries.Count);
+
+            // Simulate a post-load cancellation reaching memory through
+            // another path (direct test manipulation, stated here).
+            service.Orders[0].Stage = StoreProcurementStage.Cancelled;
+
+            var port = new StubStorePort();
+            port.OfferList.Add(new GeneralStoreCategoryOffer { CategoryId = "staple_food", OfferedItemIds = new List<string> { "flour" }, StoreUnitsPerItemUnit = 1 });
+            port.Stock["staple_food"] = 0;
+            port.Targets["staple_food"] = 100;
+            port.Prices["staple_food"] = 35;
+            port.CashBalance = 100000;
+
+            var diag = new List<string>();
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier>(), 1, diag);
+            Assert.AreEqual(100000, port.CashBalance, "No cash moves for a delivery whose order is no longer live.");
+            Assert.AreEqual(0, port.CategoryStockUnits("staple_food"), "No stock books for a delivery whose order is no longer live.");
+            Assert.IsFalse(service.Deliveries[0].Received);
+            string log = string.Join(" ", diag);
+            Assert.IsTrue(log.Contains("no live order"), "The guard must diagnose the refusal, got: " + log);
+            Assert.IsTrue(log.Contains("dlv-live"), "The diagnostic must name the delivery, got: " + log);
+            // Note honestly: the order == null branch of the guard is
+            // unreachable through the public API once RestoreFrom filters
+            // (no public delivery adder exists), so it is covered by this
+            // test's guard mechanism plus the restore tests, not by a
+            // direct null-order receipt — defense in depth for a future
+            // delivery source, not a branch any current caller can fire.
         }
     }
 }

@@ -514,7 +514,17 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
 
                 StoreProcurementOrder order = FindOrder(delivery.OrderId);
-                int unitCost = order != null ? order.UnitCostCents : 0;
+                // Slice 24: defense in depth for the restore check above — a
+                // delivery with no live order never books stock, even if it
+                // reaches memory through another path. (A missing order would
+                // otherwise price at 0c below and SpendCash(0) would succeed.)
+                if (order == null || order.Stage != StoreProcurementStage.InTransit)
+                {
+                    outDiagnostics.Add($"Day {dayIndex}: {delivery.DeliveryId} WAITING — no live order for '{delivery.CategoryId}' (order '{delivery.OrderId}' " +
+                        (order == null ? "missing" : $"is {order.Stage}") + "). No stock booked.");
+                    continue;
+                }
+                int unitCost = order.UnitCostCents;
                 int receivable = Math.Max(0, store.CategoryReceivableUnits(delivery.CategoryId));
                 int unitsToReceive = Math.Min(delivery.Units, receivable);
                 if (unitsToReceive <= 0)
@@ -718,6 +728,29 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     {
                         diagnostics.Add("StoreRestockService: skipped an unrestorable saved delivery (missing ids or non-positive units).");
                         continue;
+                    }
+                    // Slice 24: a live delivery is a claim on a shipped order. A
+                    // settled delivery (Received) is history and loads as-is; a live
+                    // one loads only when its order exists and is InTransit — the
+                    // only stage a live delivery legitimately pairs with. Anything
+                    // else (missing order, Ordered/Cancelled/Received order) is an
+                    // inconsistent save: skipping it keeps AdvanceDay from receiving
+                    // stock for free (missing order prices at 0c) or twice (an order
+                    // already Received). Skipped deliveries are diagnosed, never
+                    // silently dropped.
+                    if (!delivery.Received)
+                    {
+                        StoreProcurementOrder order = FindOrder(delivery.OrderId);
+                        if (order == null)
+                        {
+                            diagnostics.Add($"StoreRestockService: skipped saved delivery '{delivery.DeliveryId}' — its order '{delivery.OrderId}' is missing.");
+                            continue;
+                        }
+                        if (order.Stage != StoreProcurementStage.InTransit)
+                        {
+                            diagnostics.Add($"StoreRestockService: skipped saved delivery '{delivery.DeliveryId}' — its order '{delivery.OrderId}' is {order.Stage}, not InTransit.");
+                            continue;
+                        }
                     }
                     deliveries.Add(CopyDelivery(delivery));
                 }

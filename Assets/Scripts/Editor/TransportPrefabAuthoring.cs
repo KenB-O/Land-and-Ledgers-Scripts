@@ -23,18 +23,6 @@ namespace LandLedgers.Editor
         private const string ControllerPath = "Assets/Characters/Animations/Transport Anim Controller.controller";
         private const string DrivingFbx = "Assets/Characters/Animations/X Bot@Driving.fbx";
 
-        public static void BuildTransportAssets()
-        {
-            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-            EnsurePrefab(HorseSource, HorsePrefab, true);
-            EnsurePrefab(WagonSource, WagonPrefab, false);
-            ConfigureDrivingImport();
-            BuildController();
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-            Debug.Log("TransportPrefabAuthoring: generated Horse/Wagon prefabs and transport controller.");
-        }
-
         private static void EnsurePrefab(string sourcePath, string targetPath, bool horse)
         {
             GameObject source = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePath);

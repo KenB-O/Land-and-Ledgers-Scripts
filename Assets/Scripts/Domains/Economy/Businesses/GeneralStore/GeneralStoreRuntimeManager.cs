@@ -992,60 +992,6 @@ namespace LandLedgers.FirstLedger
             PushCashToHud();
         }
 
-        public bool TrySpendPlayerCash(int cents, string reason, out string message)
-        {
-            if (!InitializeIfNeeded() || runtimeState == null)
-            {
-                message = "Store cash unavailable.";
-                return false;
-            }
-
-            int price = Mathf.Max(0, cents);
-            if (runtimeState.CurrentCashCents < price)
-            {
-                message = $"Not enough cash for {reason}. Need {FormatMoney(price)}, have {FormatMoney(runtimeState.CurrentCashCents)}.";
-                return false;
-            }
-
-            runtimeState.SpendCents(price);
-            PushCashToHud();
-            status = $"Spent {FormatMoney(price)} on {reason}.";
-            message = $"Purchased {reason} for {FormatMoney(price)}.";
-            return true;
-        }
-
-        public void RefundPlayerCash(int cents, string reason)
-        {
-            if (runtimeState == null || cents <= 0)
-            {
-                return;
-            }
-
-            int amount = Mathf.Max(0, cents);
-            runtimeState.AddCashCents(amount);
-            PushCashToHud();
-            status = $"Refunded {FormatMoney(amount)} after failed {reason}.";
-        }
-
-        public void AddPlayerCash(int cents, string reason)
-        {
-            if (!InitializeIfNeeded() || runtimeState == null || cents <= 0)
-            {
-                return;
-            }
-
-            int amount = Mathf.Max(0, cents);
-            runtimeState.AddCashCents(amount);
-            PushCashToHud();
-            string label = string.IsNullOrWhiteSpace(reason) ? "bank funds" : reason;
-            status = $"Received {FormatMoney(amount)} from {label}.";
-        }
-
-        public bool ShouldHouseholdShopToday(int householdId)
-        {
-            return EvaluateHouseholdShoppingPriority(householdId) > 0;
-        }
-
         public int EvaluateHouseholdShoppingPriority(int householdId)
         {
             return EvaluateHouseholdShoppingPriority(GetHousehold(householdId));
@@ -1514,11 +1460,6 @@ namespace LandLedgers.FirstLedger
             runtimeState.ResetWeekToDateSales();
         }
 
-        public string BuildStoreSummaryText()
-        {
-            return BuildStoreOverviewText() + "\n\n" + BuildStoreWorkersText() + "\n" + BuildStoreStockText();
-        }
-
         public string BuildStoreInspectionSummaryByBuildingId(int buildingId)
         {
             if (buildingId <= 0 || buildingId != storeBuildingId)
@@ -1798,11 +1739,6 @@ namespace LandLedgers.FirstLedger
             }
 
             return null;
-        }
-
-        public float GetEffectiveCategoryMarkupMultiplier(string categoryId)
-        {
-            return GetCategoryMarkupMultiplier(categoryId);
         }
 
         public static float ClampStoreMarginAdjustment(float adjustment01)
@@ -2214,36 +2150,6 @@ namespace LandLedgers.FirstLedger
             return trimmed.Substring(0, maxLength - 1) + "…";
         }
 
-
-        public string BuildStoreFinancesText()
-        {
-            if (runtimeState == null || storeDefinition == null)
-            {
-                return "General Store unavailable.";
-            }
-
-            System.Text.StringBuilder builder = new();
-            builder.AppendLine($"Business Cash {FormatMoney(runtimeState.CurrentCashCents)}");
-            builder.AppendLine($"Today: Revenue {FormatMoney(runtimeState.LastDailyRevenueCents)} | COGS {FormatMoney(lastDailyCostOfGoodsSoldCents)} | Gross {FormatMoney(GetLastDailyGrossProfitCents())}");
-            builder.AppendLine($"Reserve demand: local {FormatMoney(lastDailyReserveLocalSpendCents)} | off-map lost {FormatMoney(lastDailyReserveOffMapLostDemandCents)}");
-            builder.AppendLine($"Week: Revenue {FormatMoney(runtimeState.WeekToDateRevenueCents)} | COGS {FormatMoney(weekToDateCostOfGoodsSoldCents)} | Gross {FormatMoney(GetWeekToDateGrossProfitCents())} | Net {FormatMoney(EstimatedWeeklyNetCashFlowCents)}");
-            builder.AppendLine($"Payroll {FormatMoney(runtimeState.LastWeeklyPayrollCents)}/wk | Reorder queued {FormatMoney(lastWeeklyReorderQueuedCostCents)}");
-            builder.AppendLine($"Local supply {FormatMoney(lastWeeklyLocalSupplySpendCents)} | {lastWeeklyLocalSupplyUnitsReceived} units");
-            builder.AppendLine(BuildStorePostureLine());
-            builder.AppendLine(BuildDemandLossLine());
-            builder.AppendLine(BuildCashBridgeSummary());
-            if (lastWeeklyReorderTriggered || lastWeeklyReorderUnitsRemaining > 0)
-            {
-                builder.AppendLine($"Last reorder {FormatMoney(lastWeeklyReorderSpendCents)} | {lastWeeklyReorderUnitsReceived}/{lastWeeklyReorderUnitsQueued} units");
-            }
-
-            if (lastWeeklyCashConstrainedReorderUnits > 0)
-            {
-                builder.AppendLine($"Reorder held for cash: {lastWeeklyCashConstrainedReorderUnits} units | {FormatMoney(lastWeeklyCashConstrainedReorderCostCents)}");
-            }
-
-            return builder.ToString();
-        }
 
         public string BuildStoreSupplyReadinessLine()
         {

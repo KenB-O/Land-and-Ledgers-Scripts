@@ -91,7 +91,6 @@ namespace LandLedgers.Economy.Creation
         public void SetSelectedPropertyId(string value) => selectedPropertyId = value ?? string.Empty;
         public void SetFunctionalSpaceAssignment(string value) => functionalSpaceAssignment = value ?? string.Empty;
         public void SetPropertyAlreadyOccupied(bool value) => propertyAlreadyOccupied = value;
-        public void SetLeaseOrPurchasePriceCents(int value) => leaseOrPurchasePriceCents = Mathf.Max(0, value);
     }
 
     /// <summary>
@@ -130,12 +129,6 @@ namespace LandLedgers.Economy.Creation
         public bool HasManagingAuthority => hasManagingAuthority;
 
         public void SetOwner(BusinessOwnerIdentity value) => owner = value ?? BusinessOwnerIdentity.Player();
-        public void SetOwnershipPercent(float value) => ownershipPercent01 = Mathf.Clamp01(value);
-        public void SetCapitalContributionCents(int value) => capitalContributionCents = Mathf.Max(0, value);
-        public void SetProfitShare(float value) => profitShare01 = Mathf.Clamp01(value);
-        public void SetDebtExposureShare(float value) => debtExposureShare01 = Mathf.Clamp01(value);
-        public void SetHasManagingAuthority(bool value) => hasManagingAuthority = value;
-
         public OwnershipShare ToOwnershipShare()
         {
             return new OwnershipShare(owner, ownershipPercent01, capitalContributionCents, profitShare01, hasManagingAuthority);
@@ -144,9 +137,11 @@ namespace LandLedgers.Economy.Creation
 
     /// <summary>
     /// BIZ-1 (addendum): known capability → premises-requirement hints used by form
-    /// validation until BIZ-2 ships real capability definitions. Extension point:
-    /// <see cref="RegisterHint"/>. Deliberately keyed by CAPABILITY, never by
-    /// BusinessType (Tech X §3.2).
+    /// validation until BIZ-2 ships real capability definitions. Deliberately keyed
+    /// by CAPABILITY, never by BusinessType (Tech X §3.2). The 17 authored hints
+    /// below are the whole set: the RegisterHint extension point was removed in
+    /// Plan 05 W8 (zero callers) — re-add it when a caller needs to register a
+    /// hint at runtime.
     /// </summary>
     public static class CapabilityPremisesHints
     {
@@ -177,16 +172,6 @@ namespace LandLedgers.Economy.Creation
                 { "personal_service", new PremisesRequirement(customerFacing: true, minAreaSqFt: 200) },
                 { "medical", new PremisesRequirement(customerFacing: true, minAreaSqFt: 400) },
             };
-
-        public static void RegisterHint(string capabilityId, PremisesRequirement requirement)
-        {
-            if (string.IsNullOrWhiteSpace(capabilityId) || requirement == null)
-            {
-                return;
-            }
-
-            hints[capabilityId] = requirement;
-        }
 
         public static bool TryGetHint(string capabilityId, out PremisesRequirement requirement)
         {
@@ -283,11 +268,6 @@ namespace LandLedgers.Economy.Creation
             }
         }
 
-        public void ClearOwnerRows()
-        {
-            ownerRows?.Clear();
-        }
-
         public void AddCapability(string capabilityId)
         {
             capabilityIds ??= new List<string>();
@@ -295,11 +275,6 @@ namespace LandLedgers.Economy.Creation
             {
                 capabilityIds.Add(capabilityId);
             }
-        }
-
-        public void RemoveCapability(string capabilityId)
-        {
-            capabilityIds?.Remove(capabilityId);
         }
 
         /// <summary>

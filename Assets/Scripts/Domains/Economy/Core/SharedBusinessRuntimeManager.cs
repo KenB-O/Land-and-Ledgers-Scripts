@@ -1038,16 +1038,6 @@ namespace LandLedgers.Economy
             status = $"Shared businesses initialized. Total={businesses.Count}, LaunchCreated={created}, StartupRepairs={startupRepairs}, RelationshipRepairs={relationshipRepairs}.";
         }
 
-        public void ResolveBaselineOperations()
-        {
-            InitializeIfNeeded();
-            for (int i = 0; i < businesses.Count; i++)
-            {
-                businesses[i]?.ResolveWeeklyBaselineThroughput();
-                businesses[i]?.ResolveDailyBaselineService();
-            }
-        }
-
         /// <summary>
         /// P1: every BusinessType whose businesses get the weekly settlement reset
         /// and weekly payroll from <see cref="ResolveWeeklySharedOperations"/>.
@@ -1738,14 +1728,6 @@ namespace LandLedgers.Economy
             string commerce = BuildTownCommerceHeadline();
             string service = BuildTownServicePressureHeadline();
             return $"Decision climate: {commerce} | {service}";
-        }
-
-        public string BuildTownOperatingClimateSummary()
-        {
-            string commerce = BuildTownCommerceHeadline();
-            string ledger = BuildTownCommerceLedgerSummary();
-            string service = BuildTownServicePressureHeadline();
-            return $"Town climate: {commerce} | {ledger} | {service}";
         }
 
         public string BuildTownServicePressureHeadline()
@@ -3576,46 +3558,6 @@ namespace LandLedgers.Economy
         public bool IsWorkerFireMode(BusinessInstanceState business)
         {
             return GetOpenWorkerSlotCount(business) <= 0 && GetFilledWorkerSlotCount(business) > 0;
-        }
-
-        public bool TryCycleBusinessControlState(BusinessInstanceState business, out string message)
-        {
-            if (business == null)
-            {
-                message = "Business unavailable.";
-                return false;
-            }
-
-            if (business.Owner == null || business.Owner.OwnerKind != BusinessOwnerKind.Player)
-            {
-                message = $"{business.RuntimeDisplayName} is not player-owned.";
-                return false;
-            }
-
-            BusinessControlState state = business.CycleControlState();
-            message = $"{business.RuntimeDisplayName} control set to {ManagerPolicyEffects.GetDisplayName(state)}.";
-            status = message;
-            return true;
-        }
-
-        public bool TryCycleManagerPolicy(BusinessInstanceState business, out string message)
-        {
-            if (business == null)
-            {
-                message = "Business unavailable.";
-                return false;
-            }
-
-            if (business.Owner == null || business.Owner.OwnerKind != BusinessOwnerKind.Player)
-            {
-                message = $"{business.RuntimeDisplayName} is not player-owned.";
-                return false;
-            }
-
-            ManagerPolicyPreset policy = business.CycleManagerPolicy();
-            message = $"{business.RuntimeDisplayName} policy set to {ManagerPolicyEffects.GetDisplayName(policy)}.";
-            status = message;
-            return true;
         }
 
         public int GetWorkerSelectionCount(BusinessInstanceState business)

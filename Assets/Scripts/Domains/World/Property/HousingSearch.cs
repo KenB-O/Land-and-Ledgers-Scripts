@@ -179,15 +179,8 @@ namespace LandLedgers.World.Property
 
         public void AddRental(HousingSearchOption o) => rentals.Add(o);
         public void AddBoarding(HousingSearchOption o) => boarding.Add(o);
-        public void AddKinOffer(HousingSearchOption o) => kin.Add(o);
-        public void AddEmployerLodging(HousingSearchOption o) => employer.Add(o);
-        public void AddTemporaryShelter(HousingSearchOption o) => temporary.Add(o);
         public void AddPropertyForSale(HousingSearchOption o) => properties.Add(o);
-        public void AddSellerFinanceOffer(HousingSearchOption o) => sellerFinance.Add(o);
-        public void AddLenderOffer(HousingSearchOption o) => lenders.Add(o);
         public void AddLandParcel(HousingSearchOption o) => land.Add(o);
-        public void AddRelocationDestination(HousingSearchOption o) => relocation.Add(o);
-
         public List<HousingSearchOption> RentalListings(int requiredPlaces) => new List<HousingSearchOption>(rentals);
         public List<HousingSearchOption> BoardingVacancies(int requiredPlaces) => new List<HousingSearchOption>(boarding);
         public List<HousingSearchOption> KinOffers(int householdId) => new List<HousingSearchOption>(kin);
@@ -881,22 +874,6 @@ namespace LandLedgers.World.Property
                 Summary = "terms accepted — ready for Phase E seller-note issuance.",
             });
             diag.Add($"SellerFinanceNegotiationBook: '{negotiationId}' terms accepted (Phase E handoff).");
-            return null;
-        }
-
-        public string RecordDecline(string negotiationId, string bySeller, int dayIndex, List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            SellerFinanceNegotiation negotiation = Find(negotiationId);
-            if (negotiation == null)
-                return $"SellerFinanceNegotiationBook: unknown negotiation '{negotiationId}'.";
-            negotiation.Status = SellerFinanceNegotiationStatus.Declined;
-            negotiation.History.Add(new SellerFinanceNegotiationEvent
-            {
-                DayIndex = dayIndex, Actor = bySeller,
-                Summary = $"declined by {bySeller}.",
-            });
-            diag.Add($"SellerFinanceNegotiationBook: '{negotiationId}' declined.");
             return null;
         }
 

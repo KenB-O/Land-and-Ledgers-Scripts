@@ -1733,146 +1733,6 @@ namespace LandLedgers.Economy
             return TryQueueResolvedShellConstruction(plotId, definition, null, out message);
         }
 
-        public bool TryQueueConstructHouseOnOwnedPlot(int plotId, int optionIndex, out string message)
-        {
-            if (!TryResolveHouseBuildOption(plotId, optionIndex, out BuildingDefinition definition, out _, out message))
-            {
-                return false;
-            }
-
-            return TryQueueResolvedShellConstruction(plotId, definition, null, out message);
-        }
-
-        public bool TryQueueConstructBusinessShellOnOwnedPlot(int plotId, int businessOptionIndex, int shellOptionIndex, out string message)
-        {
-            if (!TryGetBusinessDevelopmentCandidate(businessOptionIndex, out BusinessActivationCandidateState candidate) || candidate == null)
-            {
-                message = "No business type is selected.";
-                return false;
-            }
-
-            if (!candidate.eligible)
-            {
-                message = string.IsNullOrWhiteSpace(candidate.reason)
-                    ? $"{candidate.displayName} is not available."
-                    : candidate.reason;
-                return false;
-            }
-
-            if (!TryResolveBusinessBuildOption(plotId, businessOptionIndex, shellOptionIndex, out BusinessType businessType, out BuildingDefinition definition, out _, out message))
-            {
-                return false;
-            }
-
-            return TryQueueResolvedShellConstruction(plotId, definition, businessType, out message);
-        }
-
-        public bool TryQueueStartBusinessFromOwnedShell(int buildingId, int optionIndex, out string message)
-        {
-            EnsureMarket();
-
-            if (!TryGetBusinessActivationCandidate(buildingId, optionIndex, out BusinessActivationCandidateState candidate) || candidate == null)
-            {
-                message = "No business activation candidate is selected.";
-                return false;
-            }
-
-            if (!candidate.eligible)
-            {
-                message = string.IsNullOrWhiteSpace(candidate.reason)
-                    ? $"{candidate.displayName} cannot start at this site."
-                    : candidate.reason;
-                return false;
-            }
-
-            if (HasActiveConstructionProjectForBuilding(buildingId, ConstructionProjectKind.BusinessFitOut))
-            {
-                message = $"A fit-out is already queued for Building {buildingId:000}.";
-                return false;
-            }
-
-            PlacedBuilding shell = GetBuilding(buildingId);
-            if (shell == null)
-            {
-                message = $"Building {buildingId:000} is no longer available.";
-                return false;
-            }
-
-            ConstructionInputQuote quote = BuildBusinessFitOutQuote(candidate, shell);
-            int weeks = Mathf.Max(1, townWorld != null && townWorld.Settings != null ? townWorld.Settings.GetTypicalRepairWeeks() : 1);
-            ConstructionProjectState project = new()
-            {
-                projectId = GenerateConstructionProjectId(),
-                projectKind = ConstructionProjectKind.BusinessFitOut,
-                progressState = ConstructionProjectProgressState.Queued,
-                title = $"{candidate.displayName} fit-out",
-                plotId = shell.plotId,
-                buildingId = buildingId,
-                hasBusinessIntent = true,
-                businessIntent = candidate.businessType,
-                queuedWeekKey = GetCurrentWeekKey(),
-                weeksRequired = weeks,
-                estimatedCashCostCents = quote.CashCostCents,
-                plannedLumberUnits = GetQuoteUnits(quote, ConstructionResourceKind.Lumber),
-                plannedNailsUnits = GetQuoteUnits(quote, ConstructionResourceKind.Nails),
-                plannedLaborUnits = GetQuoteUnits(quote, ConstructionResourceKind.Labor),
-                statusText = BuildQueuedConstructionStatusText(quote, shell.definition, weeks, $"Queued fit-out at Building {buildingId:000}.")
-            };
-
-            activeConstructionProjects.Add(project);
-            lastConstructionQueueSummary = BuildConstructionQueueSummary();
-            marketStatus = $"Queued {candidate.displayName} fit-out at Building {buildingId:000}.";
-            message = project.statusText;
-            return true;
-        }
-
-        public bool TryQueueBuildHouseholdUpgrade(int homeBuildingId, int optionIndex, out string message)
-        {
-            message = string.Empty;
-            if (!TryGetHouseholdUpgradeDefinition(optionIndex, out HouseholdUpgradeDefinition definition) || definition == null)
-            {
-                message = "No household upgrade is selected.";
-                return false;
-            }
-
-            if (!TryResolveHouseholdUpgradeTarget(homeBuildingId, definition.Kind, out _, out _, out message))
-            {
-                return false;
-            }
-
-            if (HasActiveConstructionProjectForBuilding(homeBuildingId, ConstructionProjectKind.HouseholdUpgrade))
-            {
-                message = $"A household upgrade is already queued for Building {homeBuildingId:000}.";
-                return false;
-            }
-
-            ConstructionInputQuote quote = BuildHouseholdUpgradeQuote(definition, homeBuildingId);
-            int weeks = Mathf.Max(1, townWorld != null && townWorld.Settings != null ? townWorld.Settings.GetTypicalRepairWeeks() : 1);
-            ConstructionProjectState project = new()
-            {
-                projectId = GenerateConstructionProjectId(),
-                projectKind = ConstructionProjectKind.HouseholdUpgrade,
-                progressState = ConstructionProjectProgressState.Queued,
-                title = definition.DisplayName,
-                buildingId = homeBuildingId,
-                plotId = GetBuilding(homeBuildingId) != null ? GetBuilding(homeBuildingId).plotId : -1,
-                householdUpgradeKind = (int)definition.Kind,
-                queuedWeekKey = GetCurrentWeekKey(),
-                weeksRequired = weeks,
-                estimatedCashCostCents = quote.CashCostCents,
-                plannedLumberUnits = GetQuoteUnits(quote, ConstructionResourceKind.Lumber),
-                plannedNailsUnits = GetQuoteUnits(quote, ConstructionResourceKind.Nails),
-                plannedLaborUnits = GetQuoteUnits(quote, ConstructionResourceKind.Labor),
-                statusText = BuildQueuedConstructionStatusText(quote, null, weeks, $"Queued household upgrade for Building {homeBuildingId:000}.")
-            };
-
-            activeConstructionProjects.Add(project);
-            lastConstructionQueueSummary = BuildConstructionQueueSummary();
-            marketStatus = $"Queued {definition.DisplayName} for Building {homeBuildingId:000}.";
-            message = project.statusText;
-            return true;
-        }
-
         public bool ResolveWeeklyConstructionQueue(out string summary)
         {
             AutoWire();
@@ -3032,41 +2892,6 @@ namespace LandLedgers.Economy
                 && IsWatchedListing(listing.listingId);
         }
 
-        public bool CycleSelectedIntegrationStance(AcquisitionMarketSection section, out string message)
-        {
-            EnsureMarket();
-            if (!TryGetSelectedListing(section, out AcquisitionListing listing) || listing == null)
-            {
-                message = "No listing is selected.";
-                return false;
-            }
-
-            AcquisitionDealState deal = FindDeal(listing.listingId);
-            if (deal == null)
-            {
-                message = "Open the process first before setting a post-close stance.";
-                return false;
-            }
-
-            deal.integrationStance = NextIntegrationStance(deal.integrationStance);
-            marketStatus = $"{GetListingDisplayName(listing)} stance set to {FormatIntegrationStance(deal.integrationStance)}.";
-            lastPurchaseSummary = marketStatus;
-            message = marketStatus;
-            return true;
-        }
-
-        public string GetSelectedIntegrationStanceLabel(AcquisitionMarketSection section)
-        {
-            EnsureMarket();
-            if (!TryGetSelectedListing(section, out AcquisitionListing listing) || listing == null)
-            {
-                return "No Stance";
-            }
-
-            AcquisitionDealState deal = FindDeal(listing.listingId);
-            return deal == null ? "No Stance" : FormatIntegrationStance(deal.integrationStance);
-        }
-
         public bool CycleSelectedSeriousness(AcquisitionMarketSection section, out string message)
         {
             EnsureMarket();
@@ -3377,12 +3202,6 @@ namespace LandLedgers.Economy
             }
 
             return $"Weekly review: {live} live | {urgent} urgent | {financingLed} financing-led | {stalled} stalled review mark(s).";
-        }
-
-        public string ProcessWeeklyAcquisitionReview()
-        {
-            EnsureMarket();
-            return RunWeeklyAcquisitionReview(GetCurrentDayIndex());
         }
 
         public string DebugRunWeeklyAcquisitionReviewAtDay(int currentDayIndex)
@@ -4168,11 +3987,6 @@ namespace LandLedgers.Economy
             return listing != null;
         }
 
-        public void RecordOwnershipAptitudeSource(OwnershipAptitudeSource source)
-        {
-            RecordOwnershipAptitudeGain(source);
-        }
-
         public bool TryGetLandAppreciationForPlot(int plotId, out LandAppreciationState appreciation)
         {
             EnsureMarket();
@@ -4422,21 +4236,6 @@ namespace LandLedgers.Economy
             return ownedBuildablePlots;
         }
 
-        public IReadOnlyList<BuildingDefinition> GetBuildOptionsForOwnedPlot(int plotId)
-        {
-            EnsureMarket();
-            RefreshOwnedBuildability();
-            for (int i = 0; i < ownedBuildablePlots.Count; i++)
-            {
-                if (ownedBuildablePlots[i].plotId == plotId)
-                {
-                    return ownedBuildablePlots[i].buildOptions;
-                }
-            }
-
-            return Array.Empty<BuildingDefinition>();
-        }
-
         public IReadOnlyList<BuildingDefinition> GetHouseBuildOptionsForOwnedPlot(int plotId)
         {
             EnsureMarket();
@@ -4527,13 +4326,6 @@ namespace LandLedgers.Economy
 
             TownPlot plot = GetPlot(plotId);
             return plot != null ? BuildBusinessShellOptions(plot, businessType) : Array.Empty<BuildingDefinition>();
-        }
-
-        public int GetConstructionCostForOwnedPlotOption(int plotId, int optionIndex)
-        {
-            return TryGetConstructionQuoteForOwnedPlotOption(plotId, optionIndex, out ConstructionInputQuote quote, out _)
-                ? quote.CashCostCents
-                : 0;
         }
 
         public bool TryGetConstructionFitForOwnedPlotOption(
@@ -8230,36 +8022,6 @@ namespace LandLedgers.Economy
             return true;
         }
 
-        /// <summary>
-        /// Records a negotiated seller-finance leg on the live deal. This is a
-        /// deal structure, not a new debt authority; the note is created only
-        /// at closing after the transfer succeeds.
-        /// </summary>
-        public bool ConfigureSellerFinancing(string listingId, int principalCents,
-            int annualInterestRateBps, int termDays, out string message)
-        {
-            AcquisitionDealState deal = FindDeal(listingId);
-            if (deal == null)
-            {
-                message = "No live acquisition deal is available.";
-                return false;
-            }
-
-            int price = Mathf.Max(1, deal.tentativePriceCents);
-            int maximum = Mathf.Max(0, price - Mathf.Max(0, deal.earnestMoneyCents));
-            deal.sellerFinancedPrincipalCents = Mathf.Clamp(principalCents, 0, maximum);
-            deal.sellerFinancingAnnualInterestRateBps = Mathf.Max(0, annualInterestRateBps);
-            deal.sellerFinancingTermDays = Mathf.Max(1, termDays);
-            deal.financingNeedCents = Mathf.Max(0, price - deal.earnestMoneyCents
-                - GetAvailableCashCents() - deal.sellerFinancedPrincipalCents);
-            deal.financingContingencyPresent = deal.financingNeedCents > 0;
-            message = deal.sellerFinancedPrincipalCents > 0
-                ? $"Seller financing set at {FormatMoney(deal.sellerFinancedPrincipalCents)}; the seller remains a creditor after closing."
-                : "Seller financing removed from this deal.";
-            deal.statusText = message;
-            return true;
-        }
-
         private bool TryResolveClosingFailure(
             AcquisitionListing listing,
             AcquisitionDealState deal,
@@ -8858,39 +8620,16 @@ namespace LandLedgers.Economy
         /// <summary>P5: title-chain diagnostics (recording notes and any problems).</summary>
         public IReadOnlyList<string> TitleDiagnostics => titleDiagnostics;
 
-        /// <summary>P5: the queryable T2F chain of title for a town plot (journey step 3).</summary>
-        public IReadOnlyList<TitleRecord> GetTitleChainForPlot(int plotId)
-        {
-            return titleAuthority.ChainOf(PlayerTitleBridge.ParcelKeyForPlot(plotId));
-        }
-
-        /// <summary>P5: the current record holder of a town plot per the title chain.</summary>
-        public string GetTitleHolderForPlot(int plotId)
-        {
-            return titleAuthority.CurrentHolder(PlayerTitleBridge.ParcelKeyForPlot(plotId));
-        }
-
         /// <summary>P5: the player's live property-tax assessments (journey step 5).</summary>
         public IReadOnlyList<TaxAssessment> PlayerPropertyTaxAssessments => PropertyTaxes.Taxes.AllAssessments;
 
         /// <summary>P5: property-tax driver diagnostics (levies, delinquencies, payments).</summary>
         public IReadOnlyList<string> PropertyTaxDiagnostics => PropertyTaxes.Diagnostics;
 
-        /// <summary>
-        /// P5: player-facing property-tax payment — spends owner cash first, then
-        /// books the payment against the assessment.
-        /// Pass IX WS6 (A1-07/A1-11): the optional hub civic treasury is the
-        /// payment's recipient — the absorbed amount is credited to it as
-        /// TaxReceived so player tax cents conserve end to end instead of
-        /// being destroyed. Callers with hub access pass
-        /// SimulationSystemsHub.CivicTreasury here.
-        /// </summary>
-        public bool TryPayPropertyTax(string assessmentId, int amountCents, out string message,
-            CivicTreasuryService hubCivicTreasury = null)
-        {
-            return PropertyTaxes.TryPayAssessment(assessmentId, amountCents, GetCurrentDayIndex(), out message, hubCivicTreasury);
-        }
-
+        // W8 (2026-11-06): BindPropertyDisputeService removed — zero callers,
+        // so no scene wiring ever replaced the lazy instance below with a
+        // hub-bound one. PropertyDisputes is now always the lazily created
+        // local service; re-add a binding point if hub mirroring is wanted.
         private PropertyDisputeService propertyDisputes;
 
         /// <summary>
@@ -8899,12 +8638,6 @@ namespace LandLedgers.Economy
         /// a hub-bound instance (mirroring into the hub PropertyInterestStore).
         /// </summary>
         public PropertyDisputeService PropertyDisputes => propertyDisputes ??= new PropertyDisputeService();
-
-        /// <summary>Pass IX WS6: binds the dispute service (e.g. hub-bound) used at acquisition/diligence.</summary>
-        public void BindPropertyDisputeService(PropertyDisputeService disputes)
-        {
-            if (disputes != null) propertyDisputes = disputes;
-        }
 
         private void RefundSpend(int cents, string label)
         {
@@ -10382,23 +10115,6 @@ namespace LandLedgers.Economy
                     && project.IsActive
                     && project.projectKind == projectKind
                     && project.plotId == plotId)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private bool HasActiveConstructionProjectForBuilding(int buildingId, ConstructionProjectKind projectKind)
-        {
-            for (int i = 0; i < activeConstructionProjects.Count; i++)
-            {
-                ConstructionProjectState project = activeConstructionProjects[i];
-                if (project != null
-                    && project.IsActive
-                    && project.projectKind == projectKind
-                    && project.buildingId == buildingId)
                 {
                     return true;
                 }

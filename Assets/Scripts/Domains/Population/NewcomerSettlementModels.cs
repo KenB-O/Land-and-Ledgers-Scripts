@@ -388,19 +388,6 @@ namespace LandLedgers.Population
             return HouseholdDwellingKind.OwnedHome;
         }
 
-        public static SettlementArrangement ResolveArrangementFromDwelling(HouseholdDwellingKind dwellingKind)
-        {
-            return dwellingKind switch
-            {
-                HouseholdDwellingKind.RentedHomeOrRoom => SettlementArrangement.Renting,
-                HouseholdDwellingKind.BoardingHouseLodging => SettlementArrangement.Boarding,
-                HouseholdDwellingKind.KinSharedHousehold => SettlementArrangement.Kin,
-                HouseholdDwellingKind.RoughTemporaryLodging => SettlementArrangement.Transient,
-                HouseholdDwellingKind.Departed => SettlementArrangement.Departed,
-                _ => SettlementArrangement.StableHousehold
-            };
-        }
-
         public static string GetDwellingDisplayName(HouseholdDwellingKind dwellingKind)
         {
             return dwellingKind switch

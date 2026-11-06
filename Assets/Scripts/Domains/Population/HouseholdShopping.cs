@@ -154,40 +154,6 @@ namespace LandLedgers.Population
             });
         }
 
-        /// <summary>
-        /// Seeds legitimate town knowledge: a resident knows every registered
-        /// supplier whose journey location is in their town. townOf maps a
-        /// supplier to its town id; the person's town comes from homeTownOf.
-        /// </summary>
-        public void SeedTownKnowledge(
-            int personId,
-            string personTownId,
-            ISupplierDirectory directory,
-            IEnumerable<IGoodsSupplier> allSuppliers,
-            Func<IGoodsSupplier, string> townOf,
-            int dayIndex,
-            string howLearned = "lives in the same town")
-        {
-            if (personId < 0 || string.IsNullOrWhiteSpace(personTownId) || allSuppliers == null)
-            {
-                return;
-            }
-
-            foreach (IGoodsSupplier supplier in allSuppliers)
-            {
-                if (supplier == null)
-                {
-                    continue;
-                }
-
-                string supplierTown = townOf != null ? townOf(supplier) : string.Empty;
-                if (string.Equals(supplierTown, personTownId, StringComparison.OrdinalIgnoreCase))
-                {
-                    LearnSupplier(personId, supplier.SupplierBusinessId, howLearned, dayIndex);
-                }
-            }
-        }
-
         public bool Knows(int personId, string supplierBusinessId)
         {
             for (int i = 0; i < records.Count; i++)

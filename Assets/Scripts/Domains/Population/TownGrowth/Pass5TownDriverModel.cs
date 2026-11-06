@@ -30,13 +30,6 @@ namespace LandLedgers.Population.TownGrowth
     ///     never activates it silently.
     /// Plain C#, no Unity dependency, Roslyn-testable.
     /// </summary>
-    public enum Pass5ArrivalChannel
-    {
-        LegacyRoll = 0,
-        Traveler = 1,
-        Recruitment = 2,
-    }
-
     public enum Pass5SliceDepartureGateDecision
     {
         Undecided = 0, // departures stay live on the legacy roll; do not assume gated

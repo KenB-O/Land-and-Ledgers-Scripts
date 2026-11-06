@@ -595,11 +595,6 @@ namespace LandLedgers.Population
             return departureMinutes.TryGetValue(planId, out int minute) ? minute : 600;
         }
 
-        public int GetPlanDay(string planId)
-        {
-            return planDays.TryGetValue(planId, out int day) ? day : 0;
-        }
-
         /// <summary>Captures plans AND their claim sets for the save pipeline.</summary>
         public HouseholdErrandPlanRegistrySaveDto CaptureSaveDto()
         {

@@ -709,12 +709,6 @@ namespace LandLedgers.Population
             return snapshot;
         }
 
-        public static int GetBoardingHouseOccupancy(PopulationState state, string businessInstanceId, int buildingId)
-        {
-            HouseholdState household = FindBoardingHouseGuestHousehold(state, businessInstanceId, buildingId);
-            return household != null && household.boarderPersonIds != null ? household.boarderPersonIds.Count : 0;
-        }
-
         public static NewcomerProfileDefinition GetProfileDefinition(NewcomerArrivalProfile profile)
         {
             return profile switch

@@ -196,16 +196,6 @@ namespace LandLedgers.Population
             return false;
         }
 
-        public bool TryGetPersonIndex(string personKey, out int index)
-        {
-            index = -1;
-            if (string.IsNullOrWhiteSpace(personKey)) return false;
-            for (int i = 0; i < People.Count; i++)
-                if (People[i] != null && string.Equals(People[i].key, personKey.Trim(), StringComparison.OrdinalIgnoreCase))
-                { index = i; return true; }
-            return false;
-        }
-
         public int ResolveRuntimePersonId(string personKey)
         {
             if (string.IsNullOrWhiteSpace(personKey)) return -1;

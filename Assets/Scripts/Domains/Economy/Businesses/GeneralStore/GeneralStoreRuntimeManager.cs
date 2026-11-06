@@ -321,6 +321,16 @@ namespace LandLedgers.FirstLedger
         [SerializeField, TextArea(1, 4)]
         private string lastWeeklyLocalSupplySummary = "No local supply received this week.";
 
+        // W1: the weekly reorder's named-supplier orders and loud refusals.
+        // Runtime diagnostic text, reset each weekly resolution; the refusal
+        // and order lines also enter the reorder debug summary (which is
+        // saved), so no save-format change is needed for them.
+        [SerializeField, TextArea(2, 5)]
+        private string lastWeeklyReorderRefusals = "No weekly reorder refusals.";
+
+        [SerializeField, TextArea(2, 5)]
+        private string lastWeeklyReorderNamedSummary = "No named-supplier weekly orders.";
+
         [SerializeField]
         private bool reorderNeeded;
 
@@ -756,6 +766,8 @@ namespace LandLedgers.FirstLedger
         public int LastWeeklyCashConstrainedReorderUnits => lastWeeklyCashConstrainedReorderUnits;
         public int LastWeeklyCashConstrainedReorderCostCents => lastWeeklyCashConstrainedReorderCostCents;
         public bool LastWeeklyReorderTriggered => lastWeeklyReorderTriggered;
+        public string LastWeeklyReorderRefusals => lastWeeklyReorderRefusals ?? string.Empty;
+        public string LastWeeklyReorderNamedSummary => lastWeeklyReorderNamedSummary ?? string.Empty;
         public bool HasLogisticsRuntime => logisticsRuntime != null;
         public int LastWeeklyLocalSupplySpendCents => lastWeeklyLocalSupplySpendCents;
         public int LastWeeklyLocalSupplyUnitsReceived => lastWeeklyLocalSupplyUnitsReceived;
@@ -1425,6 +1437,8 @@ namespace LandLedgers.FirstLedger
             lastWeeklyLocalSupplySpendCents = 0;
             lastWeeklyLocalSupplyUnitsReceived = 0;
             lastWeeklyLocalSupplySummary = "No local supply received this week.";
+            lastWeeklyReorderRefusals = "No weekly reorder refusals.";
+            lastWeeklyReorderNamedSummary = "No named-supplier weekly orders.";
             lastWeeklyCashConstrainedReorderUnits = 0;
             lastWeeklyCashConstrainedReorderCostCents = 0;
 
@@ -1690,6 +1704,74 @@ namespace LandLedgers.FirstLedger
             string source = string.IsNullOrWhiteSpace(sourceLabel) ? "Off-map freight" : sourceLabel.Trim();
             status = $"Received {acceptedUnits} off-map {GetCategoryDisplayName(categoryId)} from {source}.";
             return acceptedUnits;
+        }
+
+        /// <summary>
+        /// W1: receives a NAMED-supplier weekly reorder shipment. The
+        /// supplier is resolved from the registered regional adapters by
+        /// the id the weekly step stamped on the shipment; the pure
+        /// StoreWeeklyReorderPlanner receipt ships real supplier stock at
+        /// receipt time, stocks the store, and debits buyer cash. A
+        /// supplier that is gone, or ships nothing, refuses loudly with
+        /// the reason — the delivery branch then marks the shipment
+        /// Delayed, and the pending quantity re-queues through the
+        /// existing failure path. The seller revenue is NOT credited here:
+        /// it rides on the shipment (sellerUnitRevenueCents = goods quote)
+        /// and the delivery branch credits it through CreditSellerRevenue.
+        /// </summary>
+        public int ReceiveNamedSupplierReorderShipment(string categoryId, int units, int unitCostCents, string supplierId)
+        {
+            if (!InitializeIfNeeded() || runtimeState == null)
+            {
+                return 0;
+            }
+
+            IUpstreamGoodsSupplier supplier = FindRegionalSupplier(supplierId);
+            if (supplier == null)
+            {
+                status = $"Blocked named reorder intake for {GetCategoryDisplayName(categoryId)}: supplier '{supplierId}' is not registered.";
+                return 0;
+            }
+
+            int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
+            var diagnostics = new System.Collections.Generic.List<string>();
+            StoreWeeklyReorderPlanner.NamedSupplierReceiptResult result =
+                StoreWeeklyReorderPlanner.ReceiveNamedSupplierShipment(
+                    supplier, runtimeState, categoryId, units, unitCostCents,
+                    Mathf.Max(0, dayIndex), diagnostics);
+            if (result.AcceptedUnits <= 0)
+            {
+                status = $"Blocked named reorder intake for {GetCategoryDisplayName(categoryId)}: {result.RefusalReason}";
+                return 0;
+            }
+
+            lastWeeklyReorderSpendCents += result.BuyerSpendCents;
+            lastWeeklyReorderUnitsReceived += result.AcceptedUnits;
+            lastWeeklyReorderUnitsRemaining = GetPendingReorderUnits();
+            RefreshReorderState();
+            RefreshCurrentBusinessCapacityState();
+            PushCashToHud();
+            status = result.StatusLine;
+            return result.AcceptedUnits;
+        }
+
+        private IUpstreamGoodsSupplier FindRegionalSupplier(string supplierId)
+        {
+            if (string.IsNullOrWhiteSpace(supplierId) || regionalSuppliers == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < regionalSuppliers.Count; i++)
+            {
+                RegionalSupplierAdapter adapter = regionalSuppliers[i];
+                if (adapter != null && string.Equals(adapter.SupplierId, supplierId, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return adapter;
+                }
+            }
+
+            return null;
         }
 
         public float GetEffectiveCategoryMarkupMultiplier(string categoryId)
@@ -3704,6 +3786,17 @@ namespace LandLedgers.FirstLedger
                 runtimeState.StockHealth01);
             IReadOnlyList<CategoryStockState> reorderCategories = GetSurvivalOrderedReorderCategories();
             bool triageActive = IsLowCashTriageActive();
+
+            // W1 (Obj 47/49): the weekly reorder buys from NAMED regional
+            // suppliers through the same restock chain the daily drive uses.
+            // The suppliers must exist before choosing: the weekly step can
+            // run before any daily drive in the week.
+            int reorderDayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
+            if (reorderDayIndex >= 0)
+            {
+                EnsureRegionalSuppliers(reorderDayIndex);
+            }
+
             for (int i = 0; i < reorderCategories.Count; i++)
             {
                 CategoryStockState category = reorderCategories[i];
@@ -3726,30 +3819,80 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
-                int affordableUnits = Mathf.Min(pendingUnits, remainingCash / landedCost);
+                // W1 (Obj 47): the daily chain may already have ordered part
+                // of this need — allocate only the remainder, never the full
+                // pending quantity on top of the daily order.
+                int outstandingUnits = StoreWeeklyReorderPlanner.OutstandingOrderedUnits(
+                    restockDriver.Restock, category.CategoryId);
+                int netPendingUnits = StoreWeeklyReorderPlanner.WeeklyAllocationUnits(
+                    pendingUnits, outstandingUnits);
+                int affordableUnits = Mathf.Min(netPendingUnits, remainingCash / landedCost);
                 if (affordableUnits <= 0)
                 {
                     continue;
                 }
 
-                int queuedUnits = runtimeState.AllocatePendingReorderUnits(category.CategoryId, affordableUnits);
+                // W1: first ask the restock chain for a named supplier that
+                // can ship the units at the authored delivered cost.
+                if (!StoreWeeklyReorderPlanner.TryChooseNamedSupplier(
+                    restockDriver.Suppliers, category.CategoryId, affordableUnits,
+                    restockDriver.DeliveredCostPerUnitCents,
+                    out IUpstreamGoodsSupplier namedSupplier, out int goodsUnitCostCents,
+                    out int deliveredCostCentsPerUnit))
+                {
+                    // LOUD REFUSAL (W1): no registered supplier covers this
+                    // category. No shipment is created, no units are
+                    // allocated, and pending stays for the next weekly step.
+                    // The anonymous off-map shipment is NOT used as a
+                    // fallback — the gap is the signal, and it becomes an
+                    // Obj 30/32 config item (which categories each named
+                    // supplier actually covers).
+                    RecordWeeklyReorderRefusal(category.CategoryId,
+                        StoreWeeklyReorderPlanner.UncoveredCategoryReason(
+                            category.CategoryId, restockDriver.Suppliers.Count));
+                    continue;
+                }
+
+                int orderUnits = Mathf.Min(affordableUnits,
+                    Mathf.Max(0, namedSupplier.AvailableUnits(category.CategoryId)));
+                if (orderUnits <= 0)
+                {
+                    RecordWeeklyReorderRefusal(category.CategoryId,
+                        $"'{namedSupplier.SupplierName}' covers '{category.CategoryId}' " +
+                        "but holds no units to ship right now — weekly reorder refused; no anonymous off-map shipment was created.");
+                    continue;
+                }
+
+                int queuedUnits = runtimeState.AllocatePendingReorderUnits(category.CategoryId, orderUnits);
                 if (queuedUnits <= 0)
                 {
                     continue;
                 }
 
+                StoreWeeklyReorderPlanner.WeeklyReorderShipmentTerms terms =
+                    StoreWeeklyReorderPlanner.BuildShipmentTerms(
+                        namedSupplier, category.CategoryId, queuedUnits,
+                        goodsUnitCostCents, landedCost, deliveredCostCentsPerUnit);
                 LogisticsShipmentState shipment = logisticsRuntime.CreateOffMapInboundShipment(
                     currentBusiness,
                     category.CategoryId,
                     queuedUnits,
                     landedCost,
                     LogisticsShipmentDeliveryMode.ReceivePendingReorder,
-                    $"Regional freight {GetCategoryDisplayName(category.CategoryId)}");
+                    $"Regional freight {GetCategoryDisplayName(category.CategoryId)} via {namedSupplier.SupplierName}");
                 if (shipment == null || shipment.RoutePlan == null || shipment.RoutePlan.VisiblePath == null || shipment.RoutePlan.VisiblePath.Count <= 0)
                 {
                     runtimeState.GetCategoryStock(category.CategoryId)?.QueueReorderToTarget();
                     continue;
                 }
+
+                // The shipment carries the named supplier: the delivery
+                // branch routes to the named receipt (real stock via Ship())
+                // and credits the seller through CreditSellerRevenue. The
+                // buyer still pays the authored landed cost per unit.
+                shipment.sourceBusinessInstanceId = terms.SupplierId;
+                shipment.sellerUnitRevenueCents = Mathf.Max(0, terms.GoodsUnitCostCents);
+                AppendWeeklyReorderNamedOrder(terms);
 
                 int queuedCost = queuedUnits * landedCost;
                 remainingCash -= queuedCost;
@@ -3757,6 +3900,49 @@ namespace LandLedgers.FirstLedger
             }
 
             RecordCashConstrainedReorderRemainder();
+        }
+
+        /// <summary>
+        /// W1: records one loud weekly-reorder refusal (no named supplier
+        /// covers the category). The reason names the category and the
+        /// supplier gap; it goes to the console warning, the weekly
+        /// refusal summary, and the reorder debug summary — never silently.
+        /// </summary>
+        private void RecordWeeklyReorderRefusal(string categoryId, string reason)
+        {
+            string cleanReason = string.IsNullOrWhiteSpace(reason)
+                ? $"weekly reorder refused for '{categoryId}'."
+                : reason.Trim();
+            Debug.LogWarning($"[General Store][Reorder] {cleanReason}", this);
+            if (string.IsNullOrWhiteSpace(lastWeeklyReorderRefusals))
+            {
+                lastWeeklyReorderRefusals = cleanReason;
+            }
+            else if (!lastWeeklyReorderRefusals.Contains(cleanReason))
+            {
+                lastWeeklyReorderRefusals += "; " + cleanReason;
+            }
+        }
+
+        /// <summary>W1: records one named-supplier weekly order in the weekly summary.</summary>
+        private void AppendWeeklyReorderNamedOrder(StoreWeeklyReorderPlanner.WeeklyReorderShipmentTerms terms)
+        {
+            if (terms == null)
+            {
+                return;
+            }
+
+            string line = $"{terms.SupplierName}: {GetCategoryDisplayName(terms.CategoryId)} " +
+                $"{terms.Units}u @ {FormatMoney(terms.BuyerUnitCostCents)}/u " +
+                $"(seller {FormatMoney(terms.SellerRevenueCents)})";
+            if (string.IsNullOrWhiteSpace(lastWeeklyReorderNamedSummary))
+            {
+                lastWeeklyReorderNamedSummary = line;
+            }
+            else
+            {
+                lastWeeklyReorderNamedSummary += "; " + line;
+            }
         }
 
         private IReadOnlyList<CategoryStockState> GetSurvivalOrderedReorderCategories()
@@ -4035,7 +4221,9 @@ namespace LandLedgers.FirstLedger
                 + $"spent={FormatMoney(lastWeeklyReorderSpendCents)}; "
                 + $"cashHeld={lastWeeklyCashConstrainedReorderUnits} units/{FormatMoney(lastWeeklyCashConstrainedReorderCostCents)}; "
                 + $"queued={lastWeeklyReorderUnitsQueued} units; received={lastWeeklyReorderUnitsReceived} units; remaining={lastWeeklyReorderUnitsRemaining} units. "
-                + $"Queued categories: {reorderQueueSummary}";
+                + $"Queued categories: {reorderQueueSummary}"
+                + (string.IsNullOrWhiteSpace(lastWeeklyReorderNamedSummary) || lastWeeklyReorderNamedSummary == "No named-supplier weekly orders." ? string.Empty : $" Named orders: {lastWeeklyReorderNamedSummary}")
+                + (string.IsNullOrWhiteSpace(lastWeeklyReorderRefusals) || lastWeeklyReorderRefusals == "No weekly reorder refusals." ? string.Empty : $" Refusals: {lastWeeklyReorderRefusals}");
         }
 
         private static int ResolveStoreSlotWageCents(WorkerSlotState slot)

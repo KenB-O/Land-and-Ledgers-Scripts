@@ -1212,11 +1212,22 @@ namespace LandLedgers.Economy
                     if (generalStoreRuntime != null
                         && string.Equals(generalStoreRuntime.CurrentBusiness != null ? generalStoreRuntime.CurrentBusiness.InstanceId : string.Empty, shipment.destinationBusinessInstanceId, StringComparison.OrdinalIgnoreCase))
                     {
-                        int accepted = generalStoreRuntime.ReceiveOffMapReorderShipment(
-                            shipment.destinationCategoryId,
-                            deliveredUnits,
-                            shipment.buyerUnitCostCents,
-                            ResolveSummaryLabel(shipment));
+                        // W1: a shipment stamped with a named supplier id
+                        // (by the weekly step) receives through the named
+                        // receipt — real supplier stock via Ship(). A legacy
+                        // or anonymous shipment (empty source) keeps the
+                        // old receipt, and its seller revenue is uncredited.
+                        int accepted = !string.IsNullOrWhiteSpace(shipment.sourceBusinessInstanceId)
+                            ? generalStoreRuntime.ReceiveNamedSupplierReorderShipment(
+                                shipment.destinationCategoryId,
+                                deliveredUnits,
+                                shipment.buyerUnitCostCents,
+                                shipment.sourceBusinessInstanceId)
+                            : generalStoreRuntime.ReceiveOffMapReorderShipment(
+                                shipment.destinationCategoryId,
+                                deliveredUnits,
+                                shipment.buyerUnitCostCents,
+                                ResolveSummaryLabel(shipment));
                         shipment.remainingQuantityUnits = Mathf.Max(0, deliveredUnits - accepted);
                         shipment.deliveredQuantityUnits += accepted;
                         shipment.deliveryApplied = accepted >= deliveredUnits;
@@ -1230,6 +1241,27 @@ namespace LandLedgers.Economy
                             shipment.blockedReason = "general store reorder intake failed";
                             shipment.state = LogisticsShipmentStatus.Delayed;
                             NotifyTransferAgreementDeliveryBlocked(shipment, shipment.blockedReason);
+                        }
+                        else
+                        {
+                            // W1: credit the seller, mirroring the
+                            // GeneralStoreLocalSupply branch. For a named
+                            // regional supplier the source id resolves to no
+                            // town business, so no town-side credit is minted
+                            // — the supplier's revenue is off-map (its stock
+                            // decrement is the seller-side conservation) —
+                            // and the receipt is logged as such. For an
+                            // anonymous shipment the receipt is uncredited,
+                            // loudly, not silently.
+                            CreditSellerRevenue(shipment, accepted);
+                            if (string.IsNullOrWhiteSpace(shipment.sourceBusinessInstanceId))
+                            {
+                                Debug.LogWarning($"[Logistics] off-map reorder received {accepted}u {shipment.destinationCategoryId} with no named supplier — seller revenue uncredited (anonymous fallback).", this);
+                            }
+                            else
+                            {
+                                Debug.Log($"[Logistics] named reorder received {accepted}u {shipment.destinationCategoryId} from supplier '{shipment.sourceBusinessInstanceId}' for {FormatMoney(accepted * shipment.sellerUnitRevenueCents)} seller revenue (off-map).", this);
+                            }
                         }
 
                         return;

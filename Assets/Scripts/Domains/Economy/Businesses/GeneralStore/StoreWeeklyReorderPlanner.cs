@@ -8,8 +8,9 @@
 //   - OutstandingOrderedUnits: what the daily chain already has ordered or
 //     in transit for a category (open orders + unreceived deliveries).
 //   - WeeklyAllocationUnits: how many units the weekly step allocates for a
-//     category. W0 pins the CURRENT behaviour (pending, outstanding
-//     ignored); W1 flips it to max(0, pending - outstanding).
+//     category: max(0, pending - outstanding) — the Obj 47 shared
+//     outstanding-order check (W1). W0 pinned the pre-fix behaviour
+//     (pending, outstanding ignored).
 //   - TryChooseNamedSupplier: the cheapest registered supplier that can ship
 //     the units at a priceable delivered cost, mirroring the daily chain's
 //     choice (cheapest by delivered cost when a delivered-cost function is
@@ -71,17 +72,16 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         }
 
         /// <summary>
-        /// W0 CHARACTERIZATION — current behaviour, pinned before W1 changes
-        /// it: the weekly allocation is the pending quantity, and the
-        /// daily-chain outstanding quantity is ignored. With pending 50 and
-        /// 30 already ordered daily, this returns 50, so the town orders 80
-        /// for a need of 50. W1 flips this to
-        /// max(0, pending - outstanding). Do not "fix" this method without
-        /// flipping StoreWeeklyReorderCustodyTests with it.
+        /// W1 (Obj 47): the weekly allocation is the pending quantity MINUS
+        /// what the daily chain already ordered or has in transit for the
+        /// same category, floored at zero. With pending 50 and 30 already
+        /// ordered daily, this returns 20 — the town orders 50 total for a
+        /// need of 50, never 80. (W0 pinned the pre-fix behaviour, which
+        /// returned pending and ignored the outstanding quantity.)
         /// </summary>
         public static int WeeklyAllocationUnits(int pendingUnits, int outstandingUnits)
         {
-            return Math.Max(0, pendingUnits);
+            return Math.Max(0, pendingUnits - Math.Max(0, outstandingUnits));
         }
 
         /// <summary>
@@ -154,6 +154,169 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             goodsUnitCostCents = bestGoods;
             deliveredCostCentsPerUnit = bestDelivered;
             return true;
+        }
+
+        /// <summary>
+        /// W1: the shipment terms for one named-supplier weekly order. The
+        /// buyer pays the authored landed cost per unit (unchanged from the
+        /// anonymous path — plan §3); the seller is owed the goods quote per
+        /// unit. SellerRevenueCents is the total the named supplier earns on
+        /// this order, recorded exactly once per order — the shipment
+        /// carries it as sellerUnitRevenueCents so the delivery branch can
+        /// credit it through CreditSellerRevenue when the source resolves
+        /// to a town business. For an off-map regional supplier there is no
+        /// town seller cash account (the registry authors OpeningCashCents
+        /// only; the adapter holds no live cash ledger), so the revenue is
+        /// off-map by construction and the receipt logs it as such — the
+        /// seller-side conservation for a regional supplier is the Ship()
+        /// stock decrement, pinned by the receipt tests.
+        /// </summary>
+        public sealed class WeeklyReorderShipmentTerms
+        {
+            public string SupplierId = string.Empty;
+            public string SupplierName = string.Empty;
+            public string CategoryId = string.Empty;
+            public int Units;
+            public int BuyerUnitCostCents;
+            public int GoodsUnitCostCents;
+            public int DeliveredCostCentsPerUnit;
+            public int SellerRevenueCents;
+        }
+
+        public static WeeklyReorderShipmentTerms BuildShipmentTerms(
+            IUpstreamGoodsSupplier supplier,
+            string categoryId,
+            int units,
+            int goodsUnitCostCents,
+            int buyerUnitCostCents,
+            int deliveredCostCentsPerUnit)
+        {
+            if (supplier == null || string.IsNullOrWhiteSpace(categoryId) || units <= 0)
+            {
+                return null;
+            }
+
+            int goods = Math.Max(0, goodsUnitCostCents);
+            return new WeeklyReorderShipmentTerms
+            {
+                SupplierId = supplier.SupplierId ?? string.Empty,
+                SupplierName = supplier.SupplierName ?? string.Empty,
+                CategoryId = categoryId,
+                Units = units,
+                BuyerUnitCostCents = Math.Max(0, buyerUnitCostCents),
+                GoodsUnitCostCents = goods,
+                DeliveredCostCentsPerUnit = Math.Max(0, deliveredCostCentsPerUnit),
+                SellerRevenueCents = units * goods,
+            };
+        }
+
+        /// <summary>W1: the loud refusal when no registered supplier can cover a category.</summary>
+        public static string UncoveredCategoryReason(string categoryId, int registeredSupplierCount)
+        {
+            string category = string.IsNullOrWhiteSpace(categoryId) ? "unknown category" : categoryId.Trim();
+            return $"no registered supplier can ship '{category}' " +
+                $"({Math.Max(0, registeredSupplierCount)} suppliers registered) — " +
+                $"weekly reorder refused for '{category}'; no anonymous off-map shipment was created.";
+        }
+
+        /// <summary>W1: the outcome of receiving one named-supplier weekly shipment.</summary>
+        public sealed class NamedSupplierReceiptResult
+        {
+            public int AcceptedUnits;
+            public int ShippedUnits;
+            public int BuyerSpendCents;
+            /// <summary>Units the shipment still owes (shipped short of the requested units).</summary>
+            public int ShortfallUnits;
+            public string StatusLine = string.Empty;
+            public string RefusalReason = string.Empty;
+        }
+
+        /// <summary>
+        /// W1: receives one named-supplier weekly shipment against real
+        /// supplier stock and real store cash. The supplier ships at receipt
+        /// (not at order time — the daily chain's shape: Ship() then receive
+        /// in the same step), so a shipment that is blocked or never
+        /// delivered costs the supplier nothing and the pending quantity
+        /// re-queues through the existing failure path. The ship quantity is
+        /// capped at the store's receivable capacity, so shipped units can
+        /// never strand against a full shelf. When the supplier ships fewer
+        /// units than the shipment carried, the shortfall is NOT re-queued
+        /// to pending: the shipment keeps owing it (the delivery branch
+        /// marks Partial and re-delivers remainingQuantityUnits on the next
+        /// pass), so re-queuing would double-order. Buyer spend is accepted
+        /// × buyer unit cost (the authored landed cost); the seller revenue
+        /// is carried on the shipment terms, not spent here. Returns
+        /// accepted units (0 + RefusalReason on refusal).
+        /// </summary>
+        public static NamedSupplierReceiptResult ReceiveNamedSupplierShipment(
+            IUpstreamGoodsSupplier supplier,
+            BusinessRuntimeState storeState,
+            string categoryId,
+            int units,
+            int buyerUnitCostCents,
+            int dayIndex,
+            List<string> diagnostics)
+        {
+            var result = new NamedSupplierReceiptResult();
+            if (supplier == null)
+            {
+                result.RefusalReason = $"no named supplier for '{categoryId}' — receipt refused.";
+                result.StatusLine = result.RefusalReason;
+                return result;
+            }
+
+            if (storeState == null || string.IsNullOrWhiteSpace(categoryId) || units <= 0)
+            {
+                result.RefusalReason = "named-supplier receipt refused: missing store state, category, or units.";
+                result.StatusLine = result.RefusalReason;
+                return result;
+            }
+
+            CategoryStockState stock = storeState.GetCategoryStock(categoryId);
+            if (stock == null)
+            {
+                result.RefusalReason = $"named-supplier receipt refused: destination category missing: {categoryId}.";
+                result.StatusLine = result.RefusalReason;
+                return result;
+            }
+
+            int receivable = stock.TargetStockUnits > 0
+                ? Math.Max(0, stock.TargetStockUnits - stock.CurrentStockUnits)
+                : Math.Max(0, units);
+            if (receivable <= 0)
+            {
+                result.RefusalReason = $"named-supplier receipt refused: category full: {categoryId}.";
+                result.StatusLine = result.RefusalReason;
+                return result;
+            }
+
+            int toShip = Math.Min(Math.Max(0, units), receivable);
+            // Capture the goods quote BEFORE shipping: the quote names the
+            // cheapest in-stock item, and shipping can exhaust it.
+            int goodsQuoteCents = Math.Max(0, supplier.QuoteUnitCostCents(categoryId));
+            int shipped = Math.Max(0, supplier.Ship(categoryId, toShip, Math.Max(0, dayIndex), diagnostics ?? new List<string>()));
+            result.ShippedUnits = shipped;
+            if (shipped <= 0)
+            {
+                result.RefusalReason = $"named-supplier receipt refused: '{supplier.SupplierName}' shipped nothing for '{categoryId}'.";
+                result.StatusLine = result.RefusalReason;
+                return result;
+            }
+
+            int accepted = Math.Max(0, storeState.ApplyDeliveredShipment(categoryId, shipped));
+            result.AcceptedUnits = accepted;
+            int spend = accepted * Math.Max(0, buyerUnitCostCents);
+            result.BuyerSpendCents = spend;
+            if (spend > 0)
+            {
+                storeState.SpendCents(spend);
+            }
+
+            result.ShortfallUnits = Math.Max(0, units - shipped);
+            result.StatusLine = $"Received {accepted}u {categoryId} from {supplier.SupplierName} " +
+                $"for {spend}c (seller revenue {accepted * goodsQuoteCents}c off-map)" +
+                (result.ShortfallUnits > 0 ? $"; shortfall of {result.ShortfallUnits}u still owed by the shipment." : ".");
+            return result;
         }
     }
 }

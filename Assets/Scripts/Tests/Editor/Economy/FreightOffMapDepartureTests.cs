@@ -33,6 +33,7 @@ using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World;
 using LandLedgers.World.Journeys;
 using LandLedgers.World.Regional;
 using NUnit.Framework;
@@ -433,6 +434,83 @@ namespace LandLedgers.EditorTests.Economy
                 "only a Returned journey opens the return leg");
             Assert.IsFalse(authority.IsOffMapVehicle(WagonId),
                 "after the return, the wagon is home — the return leg has run, and no second leg starts");
+        }
+
+        [Test]
+        public void Return_BoardingRefusedWhenRiderFarFromExit()
+        {
+            // Slice R3 (2026-11-06, Objective 22): the §8 load case at
+            // the seam BeginCoupledReturn reads. A Departed journey
+            // restored from its DTO still gates the return leg (it
+            // completes on its due day and only then is Returned), and
+            // the pure board gate refuses a rider whose position is not
+            // within tolerance of the leg-start cell — the fresh scene
+            // after a mid-trip load has Ethan standing at staging/home,
+            // not at the exit, so the return leg must proceed riderless
+            // rather than teleporting or duplicating him.
+            //
+            // SCOPE NOTE: the director/controller parts (the board call
+            // in BeginCoupledReturn, the riderless-leg log) are
+            // source-reviewed only — SimulationDrivers, the director,
+            // and the presentation controller are harness-excluded.
+            // What IS harness-tested here is the exact pair of
+            // predicates the return leg reads: the restored journey
+            // gating (OffMapJourneyAuthority) and the board refusal
+            // (WagonRiderPlacement.TryAllowBoarding).
+            (JourneyModel model, OffMapJourneyAuthority authority, List<string> diag) = NewJourneyAuthority();
+
+            OffMapJourneyRecord wagonRecord = authority.DepartVehicle(
+                WagonId, "farmstead-f1", "Millbrook", 1, "Millbrook flour pickup",
+                new Dictionary<string, int>(), new List<string>(), Day,
+                _ => 0, (_, _) => null, diag);
+            Assert.IsNotNull(wagonRecord, "vehicle departure must succeed: " + string.Join("; ", diag));
+            Assert.AreEqual(OffMapJourneyState.Departed, wagonRecord.State);
+            int dueDay = wagonRecord.DueReturnDayIndex;
+
+            // Save mid-trip (journey Departed) and load into a fresh
+            // authority: the record survives the DTO round-trip.
+            OffMapJourneyAuthoritySaveDto dto = authority.CaptureSaveDto();
+            var reloaded = new OffMapJourneyAuthority(model);
+            reloaded.LoadFromSaveDto(dto);
+            OffMapJourneyRecord restored = reloaded.FindActiveByVehicle(WagonId);
+            Assert.IsNotNull(restored, "the Departed journey must survive the save/load round-trip");
+            Assert.AreEqual(wagonRecord.JourneyId, restored.JourneyId);
+            Assert.AreEqual(OffMapJourneyState.Departed, restored.State,
+                "a mid-trip load restores the journey as Departed — the return leg is still closed");
+            Assert.IsTrue(reloaded.IsOffMapVehicle(WagonId));
+
+            // On the due day the restored journey returns: only now
+            // does the return leg open.
+            List<OffMapJourneyRecord> done = reloaded.CompleteDueJourneys(dueDay, null, diag);
+            Assert.AreEqual(1, done.Count, string.Join("; ", diag));
+            Assert.AreEqual(OffMapJourneyState.Returned, restored.State,
+                "only a Returned journey opens the return leg, after a DTO restore exactly as without one");
+
+            // The leg-start cell is the exit cell; the rider in the
+            // fresh scene stands at staging, far from it.
+            Vector3 exitSeat = WagonRiderPlacement.CellCenter(new GridCoord(8, 2), 2f, Vector3.zero);
+            Vector3 riderAtStaging = new Vector3(5f, 0f, 5f);
+            Assert.IsTrue(Vector2.Distance(
+                    new Vector2(exitSeat.x, exitSeat.z), new Vector2(riderAtStaging.x, riderAtStaging.z))
+                > WagonRiderPlacement.BoardToleranceMetres,
+                "the fixture must actually place the rider beyond the boarding tolerance");
+            Assert.IsTrue(!WagonRiderPlacement.TryAllowBoarding(
+                isRouteActive: false, isHidden: false,
+                seatWorldPosition: exitSeat,
+                riderWorldPosition: riderAtStaging,
+                boardToleranceMetres: WagonRiderPlacement.BoardToleranceMetres,
+                out string refusalReason));
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(refusalReason),
+                "the riderless return must name its refusal reason");
+
+            // And the same gate allows a rider who IS at the exit —
+            // the refusal is about position, not about the load.
+            Assert.IsTrue(WagonRiderPlacement.TryAllowBoarding(
+                isRouteActive: false, isHidden: false,
+                seatWorldPosition: exitSeat,
+                riderWorldPosition: exitSeat,
+                boardToleranceMetres: WagonRiderPlacement.BoardToleranceMetres,
+                out _));
         }
     }
 }

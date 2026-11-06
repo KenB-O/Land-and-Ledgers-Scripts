@@ -906,6 +906,48 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
+        /// <summary>
+        /// Slice R3 (2026-11-06, Objective 22): dismount a rider at
+        /// the return leg's arrival. Idempotent no-op (true) when the
+        /// riding flag is not set, so a double call can never unparent
+        /// him twice or strand him. Re-parents to the agent root with
+        /// world-position-stays, then sets the world position to the
+        /// arrival cell centre and the rotation to the leg's last
+        /// heading, clears the flag, and calls ShowAtCurrentLocation —
+        /// which restores mover state ArrivedVisible, re-enables
+        /// renderers, and returns the Animator to the Locomotion state
+        /// at Blend 0 (standing idle). The dismount itself clears the
+        /// sitting pose; there is no separate "clear sitting" call, and
+        /// no code path can leave him parented-but-standing or
+        /// unparented-but-sitting.
+        ///
+        /// ORDERING (Note-R2): dismount runs BEFORE its show — the
+        /// show here is the last step, inside this method. Boarding
+        /// must always run AFTER any show (see TryBoardRider).
+        /// Returns false (no-op, no log spam) when the person has no
+        /// managed agent or no mover. Touches no schedule state, task
+        /// state, reservation, or shipment.
+        /// </summary>
+        public bool TryDismountRider(int personId, Vector3 groundPosition, Quaternion facing)
+        {
+            if (personId < 0) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.mover == null) return false;
+                if (!managed.isRiding) return true;
+                managed.mover.transform.SetParent(EnsureAgentRoot(), true);
+                managed.mover.transform.position = groundPosition;
+                managed.mover.transform.rotation = facing;
+                managed.isRiding = false;
+                managed.mover.ShowAtCurrentLocation();
+                Debug.Log($"[CoupledTransport] rider dismounted: P{personId} at staging.", this);
+                return true;
+            }
+            return false;
+        }
+
         public bool IsAtExplicitBuilding(int personId, int targetBuildingId)
         {
             return TryGetExplicitArrival(personId, targetBuildingId, out _, out _, out _);

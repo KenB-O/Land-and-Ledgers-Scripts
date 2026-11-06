@@ -43,6 +43,11 @@
 // line. The return leg reactivates the trio at the exit cell (the
 // presentation controller's BeginCoupledReturn) and walks the reversed
 // path back to staging.
+//
+// R3: on the return leg's arrival at staging the controller dismounts
+// Ethan (director.TryDismountRider — re-parent to the agent root at the
+// arrival cell centre, standing idle) before logging arrival; on
+// dismount failure he stays aboard rather than being placed wrong.
 using System.Collections.Generic;
 using LandLedgers.Population;
 using LandLedgers.World;
@@ -63,6 +68,7 @@ namespace LandLedgers.Economy.Transport
         private string legLabel = string.Empty;
         private bool hideOnArrival;
         private float distanceTravelledMetres;
+        private Quaternion lastHeading = Quaternion.identity;
         private bool legActive;
         private HorseWorldView horseView;
         private WagonWorldView wagonView;
@@ -128,6 +134,7 @@ namespace LandLedgers.Economy.Transport
             this.legLabel = string.IsNullOrWhiteSpace(legLabel) ? "coupled leg" : legLabel;
             this.hideOnArrival = hideOnArrival;
             distanceTravelledMetres = 0f;
+            lastHeading = Quaternion.identity;
             legActive = true;
             SetDriving(true);
             Debug.Log($"[CoupledTransport] {this.legLabel} started: {path.Count} waypoints from {path[0]} to {path[path.Count - 1]} at {wagonSpeedMetresPerSecond} m/s.", this);
@@ -186,6 +193,10 @@ namespace LandLedgers.Economy.Transport
             // (horseFacing = facing * Y90).
             if (heading.sqrMagnitude > 1e-6f)
             {
+                // Slice R3: keep the last non-zero heading as the
+                // dismount facing — Ethan stands facing the direction
+                // the team travelled when the return leg ends.
+                lastHeading = Quaternion.LookRotation(heading, Vector3.up);
                 Quaternion wagonFacing = Quaternion.LookRotation(heading, Vector3.up) * Quaternion.Euler(0f, -90f, 0f);
                 Quaternion horseFacing = wagonFacing * Quaternion.Euler(0f, 90f, 0f);
                 float turnDegrees = turnSpeedDegreesPerSecond * simulationDeltaSeconds;
@@ -219,6 +230,24 @@ namespace LandLedgers.Economy.Transport
                 }
                 else
                 {
+                    // Slice R3 (Objective 22): the return leg ends with
+                    // Ethan dismounting at the staging cell — after
+                    // legActive = false and SetDriving(false), before
+                    // the arrival log. On dismount failure he stays
+                    // aboard rather than being dropped somewhere wrong
+                    // (a stuck rider is visible and diagnosable; a
+                    // wrongly-placed Ethan is silent corruption). No
+                    // director / no rider means no dismount was ever
+                    // boarded, so nothing is attempted and nothing is
+                    // logged — the pair-moves-without-Ethan warning
+                    // already fired at leg start.
+                    if (director != null && ethanPersonId >= 0
+                        && !director.TryDismountRider(ethanPersonId,
+                            WagonRiderPlacement.CellCenter(path[path.Count - 1], cellSizeMetres, gridOrigin),
+                            lastHeading))
+                    {
+                        Debug.LogWarning($"[CoupledTransport] rider dismount failed for {legLabel}; Ethan stays aboard the wagon.", this);
+                    }
                     Debug.Log($"[CoupledTransport] {legLabel} arrived at {arrival}; team idle.", this);
                 }
             }

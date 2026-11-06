@@ -3722,6 +3722,10 @@ namespace LandLedgers.Orchestration.Systems
             // registration log. Empty when the shipment already existed.
             string resolvedSiteLocationId = string.Empty;
             float resolvedTransitSeconds = 0f;
+            // Slice S7: exit point resolved by this registration attempt, for
+            // the registration log. Empty when the shipment already existed
+            // or the exit point could not be resolved (non-gating — see below).
+            string resolvedExitSummary = string.Empty;
             string registrationRefusal = book.TryRegisterShipment(agreement.AgreementId,
                 (FreightServiceAgreement accepted, out string shipmentId, out string reason) =>
                 {
@@ -3785,6 +3789,23 @@ namespace LandLedgers.Orchestration.Systems
                     }
                     resolvedSiteLocationId = siteLocationId;
                     resolvedTransitSeconds = transitSeconds;
+                    // Slice S7: resolve the regional exit point for the
+                    // registration log. NON-GATING by design: an
+                    // exit-resolution failure is warned, never a registration
+                    // failure — nothing consumes the exit point yet, so
+                    // refusing a shipment over an unconsumed diagnostic
+                    // would block flour delivery for a log line.
+                    if (RegionalExitPointResolver.TryResolve(
+                            Journeys ?? hub.Journeys, "town-center", siteLocationId,
+                            out RegionalExitPoint exitPoint, out string exitReason))
+                    {
+                        resolvedExitSummary = $"exit={exitPoint.GatewayLocationId} {exitPoint.GatewayRouteMiles:F1} mi " +
+                            $"{exitPoint.GatewayTravelDays}d + {exitPoint.OffMapLegDays}d off-map, due-back +{exitPoint.DueReturnDayOffset}d";
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[FreightAgreement] Exit point unresolved for shipment '{stableShipmentId}': {exitReason}", this);
+                    }
                     LogisticsShipmentState created = FreightProduction.CreateShipment(
                         carrier.InstanceId, stableShipmentId, millbrookAidRuntime.BusinessId, bakery.InstanceId,
                         lot.PackageUnits,
@@ -3821,9 +3842,13 @@ namespace LandLedgers.Orchestration.Systems
             string transitSummary = !string.IsNullOrWhiteSpace(resolvedSiteLocationId) && resolvedTransitSeconds > 0f
                 ? $"transit={resolvedTransitSeconds:F0}s (route {resolvedSiteLocationId}->town-center, quote one-way={request.Quote?.OneWayDistanceMiles ?? 0f:F1} mi)"
                 : $"transit={shipment.transitDurationGameSeconds:F0}s";
+            // Slice S7: name the exit when this call resolved it; for a
+            // recovered shipment the exit was resolved at its creation and
+            // is not re-derived here.
+            string exitSummary = !string.IsNullOrWhiteSpace(resolvedExitSummary) ? ", " + resolvedExitSummary : string.Empty;
             Debug.Log($"[FreightAgreement] {(alreadyRegistered ? "Recovered existing" : "Registered")} shipment '{shipment.ShipmentId}' " +
                 $"for accepted agreement '{linked.AgreementId}' ({quoteSummary}); lot='{shipment.CargoLotId}', " +
-                $"status={shipment.Status}, dispatch hold={shipment.requiresDispatchAuthorization}, {transitSummary}, " +
+                $"status={shipment.Status}, dispatch hold={shipment.requiresDispatchAuthorization}, {transitSummary}{exitSummary}, " +
                 $"no pickup, cargo transfer, or freight payment occurred.", this);
         }
 

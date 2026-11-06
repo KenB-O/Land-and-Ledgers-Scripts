@@ -50,11 +50,6 @@ namespace LandLedgers.Directory
             return new EntityRef { Kind = EntityKind.Business, StableId = businessInstanceId ?? string.Empty };
         }
 
-        public static EntityRef ForBuilding(int buildingId)
-        {
-            return new EntityRef { Kind = EntityKind.Building, StableId = buildingId.ToString() };
-        }
-
         public static EntityRef ForEmployment(string employmentId)
         {
             return new EntityRef { Kind = EntityKind.Employment, StableId = employmentId ?? string.Empty };

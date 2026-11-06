@@ -106,11 +106,6 @@ namespace LandLedgers.Directory
             entities[entityRef] = entity;
         }
 
-        public bool UnregisterEntity(EntityRef entityRef)
-        {
-            return entities.Remove(entityRef);
-        }
-
         /// <summary>Existence check: is this entity currently registered?</summary>
         public bool Exists(EntityRef entityRef)
         {

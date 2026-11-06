@@ -30,11 +30,6 @@ namespace LandLedgers.Time
             }
         }
 
-        public static int DaysInYear(int year)
-        {
-            return IsLeapYear(year) ? 366 : 365;
-        }
-
         /// <summary>Days from civil 0000-03-01 to the given Gregorian date.</summary>
         public static int DaysFromCivil(int year, int month, int day)
         {

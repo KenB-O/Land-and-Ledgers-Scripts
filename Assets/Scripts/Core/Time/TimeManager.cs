@@ -219,39 +219,6 @@ namespace LandLedgers.Time
             }
         }
 
-        public void ResetToStartingDate()
-        {
-            InitializeState(true);
-        }
-
-        public void JumpToDate(int year, int month, int weekOfMonth, int dayOfWeek, float newTimeOfDay01)
-        {
-            if (settings == null)
-            {
-                return;
-            }
-
-            settings.Sanitize();
-            // Pass V P0-1: true Gregorian jump. weekOfMonth/dayOfWeek select the
-            // day-of-month within the real month (clamped to its length).
-            int clampedYear = Mathf.Max(1, year);
-            int clampedMonth = Mathf.Clamp(month, 1, 12);
-            int clampedWeek = Mathf.Max(1, weekOfMonth);
-            int clampedDay = Mathf.Clamp(dayOfWeek, 1, 7);
-            int dayOfMonth = Mathf.Clamp(
-                (clampedWeek - 1) * 7 + clampedDay,
-                1,
-                GregorianDateMath.DaysInMonth(clampedYear, clampedMonth));
-
-            calendarDayOffset = 0;
-            absoluteDayIndex = Mathf.Max(0, settings.Anchor.ToAbsoluteDay(clampedYear, clampedMonth, dayOfMonth));
-            currentDate = BuildTimelineDate();
-            ApplyTimeOfDay(Mathf.Clamp(newTimeOfDay01, 0f, 0.999f) * settings.GameSecondsPerDay);
-            ResetShortTickStateForCurrentTimeOfDay();
-            ResetFrameDiagnostics();
-            RefreshDebugState();
-        }
-
         /// <summary>
         /// Begins a fresh scenario on its authored Gregorian date. The campaign
         /// day index starts at zero, so existing economic authorities that use
@@ -732,11 +699,6 @@ namespace LandLedgers.Time
         public string GetReadableDate()
         {
             return $"{currentDayName}, {currentMonthName} {currentDate.DayOfMonth}, Year {currentDate.Year} (Week {currentDate.Week})";
-        }
-
-        public string GetReadableDateWithSeason()
-        {
-            return $"{GetReadableDate()} - {currentSeasonName}";
         }
 
         public string GetReadableClock()

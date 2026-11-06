@@ -241,16 +241,6 @@ namespace LandLedgers.Tasks
             return true;
         }
 
-        /// <summary>
-        /// Pass IV: releases every reservation owned by the task through the installed
-        /// authority and cancels its scheduled due events. Idempotent; safe when no
-        /// authority or scheduler is installed.
-        /// </summary>
-        public void ReleaseTaskReservations(EntityId taskId)
-        {
-            ReleaseTaskResources(FindTask(taskId));
-        }
-
         /// <summary>Pass IV: finds a task by its EntityId string form (due-event payloads).</summary>
         public WorkTask FindTaskByIdString(string taskIdString)
         {
@@ -278,25 +268,6 @@ namespace LandLedgers.Tasks
             }
 
             return open;
-        }
-
-        /// <summary>
-        /// Pass IV: sets per-instance physical inputs for method duration estimators
-        /// (mass, distance, crew...). Used by domain code that knows the real inputs
-        /// (e.g. freight quantity) before assignment runs the estimate.
-        /// </summary>
-        public bool SetTaskDurationInputs(EntityId taskId, TaskDurationInputs inputs, out string rejectionReason)
-        {
-            rejectionReason = null;
-            WorkTask task = FindTask(taskId);
-            if (task == null)
-            {
-                rejectionReason = "Unknown task: " + taskId;
-                return false;
-            }
-
-            task.SetDurationInputsOverride(inputs);
-            return true;
         }
 
         /// <summary>

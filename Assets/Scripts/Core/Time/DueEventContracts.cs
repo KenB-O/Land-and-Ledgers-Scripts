@@ -46,7 +46,7 @@ namespace LandLedgers.Time
         ActivityWindowDue = 9,
         /// <summary>
         /// Pass V P0-2: a person's birthday. Event id convention is
-        /// "birthday:{personId}" (see <see cref="DueEventIdConventions.ForBirthday"/>),
+        /// "birthday:{personId}" (see BirthDateAuthority.BirthdayEventIdPrefix),
         /// scheduled with an explicit id so rescheduling the same person is
         /// idempotent and never duplicates. APPEND-ONLY: never renumber.
         /// </summary>
@@ -155,23 +155,10 @@ namespace LandLedgers.Time
             return "due-" + kind + "-" + (taskEntityIdString ?? string.Empty);
         }
 
-        public static string ForProcess(string processId, DueEventKind kind)
-        {
-            return "due-" + kind + "-proc-" + (processId ?? string.Empty);
-        }
-
         public static string ForReservation(string reservationId)
         {
             return "due-ResourceReleaseDue-resv-" + (reservationId ?? string.Empty);
         }
 
-        /// <summary>
-        /// Pass V P0-2: stable birthday event id for a person. Delegates to the
-        /// birth-date authority so the convention lives in exactly one place.
-        /// </summary>
-        public static string ForBirthday(int personId)
-        {
-            return LandLedgers.Population.AgeAuthority.BirthdayEventId(personId);
-        }
     }
 }

@@ -168,13 +168,5 @@ namespace LandLedgers.Skills
             }
         }
 
-        /// <summary>
-        /// Legacy level projection (pre-Pass III API). Kept for the
-        /// deterministic migration formula only.
-        /// </summary>
-        public int LegacyLevel(int maxLevel)
-        {
-            return Math.Min(Math.Max(1, maxLevel), 1 + experience / SkillService.ExperiencePerLevel);
-        }
     }
 }

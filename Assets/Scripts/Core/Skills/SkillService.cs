@@ -383,26 +383,6 @@ namespace LandLedgers.Skills
             aptitudeStore.SetAptitude(personId.ToString(), family, learningRateMultiplier, day);
         }
 
-        public void SetDomainFamiliarity(EntityId personId, string domain, double familiarity01)
-        {
-            if (personId.Kind != EntityKind.Person)
-            {
-                return;
-            }
-
-            familiarityStore.SetFamiliarity(personId.ToString(), domain, familiarity01);
-        }
-
-        public double GetDomainFamiliarity(EntityId personId, string domain)
-        {
-            if (personId.Kind != EntityKind.Person)
-            {
-                return 0.0;
-            }
-
-            return familiarityStore.GetFamiliarity(personId.ToString(), domain);
-        }
-
         private void RebuildDefinitionLookupIfNeeded()
         {
             if (definitionLookup.Count == skillDefinitions.Count)

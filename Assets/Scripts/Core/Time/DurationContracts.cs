@@ -36,11 +36,6 @@ namespace LandLedgers.Time
             return WorkTimeMath.WholeMinutesUp(gameSeconds);
         }
 
-        /// <summary>Converts whole booking minutes back to game seconds for clock comparison.</summary>
-        public static float BookingMinutesToGameSeconds(int minutes)
-        {
-            return WorkTimeMath.MinutesToGameSeconds(minutes);
-        }
     }
 
     /// <summary>

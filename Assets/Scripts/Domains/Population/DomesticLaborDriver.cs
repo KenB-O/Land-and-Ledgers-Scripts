@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Population
 {
@@ -82,6 +83,23 @@ namespace LandLedgers.Population
         public IReadOnlyList<InFlightDomesticTask> InFlight => inFlight;
 
         /// <summary>
+        /// W2 (Obj 45 follow-up): the off-map journey authority, handed in
+        /// by the owner — SimulationDrivers.DriveDomesticLaborDay passes its
+        /// OffMapJourneys (the same predicate the F3 business-task guard
+        /// reads). The driver never constructs or finds the authority
+        /// itself. Null = unavailable: the driver logs once per day and
+        /// proceeds as before (fail-open with a loud log — never fail-closed
+        /// into dropping domestic work for everyone).
+        /// </summary>
+        public OffMapJourneyAuthority OffMapJourneys { get; set; }
+
+        // W2: day-keyed off-map logging state. One skip line per day per
+        // person; one unavailable-authority line per day.
+        private int offMapSkipLoggedDay = -1;
+        private readonly HashSet<int> offMapSkipLoggedPersons = new HashSet<int>();
+        private int offMapUnavailableLoggedDay = -1;
+
+        /// <summary>
         /// Day boundary: plans need-driven domestic tasks and re-drives tasks a
         /// previous start-failure orphaned (requeued by ReconcileStalled).
         /// Never invents persons, time, or budget.
@@ -147,7 +165,7 @@ namespace LandLedgers.Population
 
                 string reason;
                 int personId = FindFreeMemberForTaskWindow(inputs, want.definitionId, dayIndex,
-                    want.startMinute, tasks, schedules, budgets, out reason);
+                    want.startMinute, tasks, schedules, budgets, diag, out reason);
                 if (personId < 0)
                 {
                     diag.Add("DomesticLaborDriver: no free member for '" + want.definitionId +
@@ -207,6 +225,15 @@ namespace LandLedgers.Population
                 }
 
                 if (item.DayIndex != dayIndex || minuteOfDay < item.StartMinuteOfDay)
+                {
+                    continue;
+                }
+
+                // W2: never START a domestic task for an off-map person — a
+                // task planned while home must not start after a mid-day
+                // departure. The entry stays Pending (pruned stale the next
+                // day); the need re-plans on return.
+                if (IsOffMapPerson(item.PersonId, dayIndex, diag))
                 {
                     continue;
                 }
@@ -490,7 +517,7 @@ namespace LandLedgers.Population
                 int startMinute = StartMinuteFor(task.DefinitionId);
                 string reason;
                 int personId = FindFreeMemberForTaskWindow(inputs, task.DefinitionId, dayIndex,
-                    startMinute, tasks, schedules, budgets, out reason);
+                    startMinute, tasks, schedules, budgets, diag, out reason);
                 if (personId < 0)
                 {
                     diag.Add("DomesticLaborDriver: retained requeued task " + task.TaskId +
@@ -543,9 +570,47 @@ namespace LandLedgers.Population
             return 660;
         }
 
-        private static int FindFreeMemberForTaskWindow(DomesticDayInputs inputs, string definitionId,
+        /// <summary>
+        /// W2: the off-map predicate, read through the handed-in authority.
+        /// Day-keyed logging: one skip line per day per person; one
+        /// unavailable-authority line per day (fail-open with a loud log).
+        /// </summary>
+        private bool IsOffMapPerson(int personId, int dayIndex, List<string> diag)
+        {
+            if (OffMapJourneys == null)
+            {
+                if (offMapUnavailableLoggedDay != dayIndex)
+                {
+                    offMapUnavailableLoggedDay = dayIndex;
+                    diag?.Add("DomesticLaborDriver: off-map journey authority unavailable — proceeding WITHOUT the off-map guard (fail-open); off-map persons may still be assigned domestic work.");
+                }
+
+                return false;
+            }
+
+            bool offMap = OffMapJourneys.IsOffMapPerson(personId);
+            if (!offMap)
+            {
+                return false;
+            }
+
+            if (offMapSkipLoggedDay != dayIndex)
+            {
+                offMapSkipLoggedDay = dayIndex;
+                offMapSkipLoggedPersons.Clear();
+            }
+
+            if (offMapSkipLoggedPersons.Add(personId))
+            {
+                diag?.Add($"DomesticLaborDriver: P{personId} is off-map — domestic tasks skipped today, need stays open for return.");
+            }
+
+            return true;
+        }
+
+        private int FindFreeMemberForTaskWindow(DomesticDayInputs inputs, string definitionId,
             int dayIndex, int startMinute, TaskAuthority tasks, PersonScheduleTracker schedules,
-            WorkTimeBudgetStore budgets, out string reason)
+            WorkTimeBudgetStore budgets, List<string> diag, out string reason)
         {
             reason = null;
             if (inputs?.MemberIds == null || tasks == null)
@@ -559,6 +624,13 @@ namespace LandLedgers.Population
             ordered.Sort();
             foreach (int id in ordered)
             {
+                // W2: an off-map member is never free for domestic work.
+                if (IsOffMapPerson(id, dayIndex, diag))
+                {
+                    rejections.Add("P" + id + ": off-map (freight journey).");
+                    continue;
+                }
+
                 AgeBand age = inputs.AgeBandFor != null ? inputs.AgeBandFor(id) : AgeBand.Adult18Plus;
                 if (age < AgeBand.YoungWorker16To17) { rejections.Add("P" + id + ": too young."); continue; }
                 EntityId worker = EntityId.For(EntityKind.Person, id);

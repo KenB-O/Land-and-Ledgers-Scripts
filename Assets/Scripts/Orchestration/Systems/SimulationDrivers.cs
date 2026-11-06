@@ -1812,6 +1812,10 @@ namespace LandLedgers.Orchestration.Systems
         private void DriveDomesticLaborDay(int absoluteDayIndex)
         {
             if (hub == null || populationManager?.State?.households == null || householdMemberships == null) return;
+            // W2 (Obj 45): hand the off-map journey authority to the domestic
+            // driver — the same predicate the F3 business-task guard reads —
+            // so it never plans or starts domestic tasks for an off-map person.
+            hub.DomesticLaborDriver.OffMapJourneys = OffMapJourneys;
             var diag = new List<string>();
             // Register once: re-registering daily would spam duplicate
             // rejections into the diagnostics.

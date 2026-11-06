@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
 using UnityEngine;
@@ -125,6 +126,29 @@ namespace LandLedgers.Population
             public string[] kitIds = Array.Empty<string>();
         }
 
+        /// <summary>
+        /// Plan 01 (2026-11-06): one scenario-authored wholesale supply
+        /// agreement for a bakery seller — the account analogue of
+        /// BusinessOpeningEquipment. Zero by default: a seller with no
+        /// entry here gets no account from the config (the applicator
+        /// books the demand-derived fallback only when the config lists
+        /// no wholesale accounts at all). The units per delivery and
+        /// delivery cadence are scenario-authored here; D-1 stays open
+        /// until Kennedy sets standing terms.
+        /// </summary>
+        [Serializable]
+        public sealed class BakeryWholesaleAccountDefinition
+        {
+            public string sellerBusinessKey = string.Empty;
+            public string buyerBusinessKey = string.Empty;
+            public string productId = string.Empty;
+            [Min(0)] public int unitsPerDelivery;
+            [Min(0)] public int deliveryCadenceDays = 1;
+            [Min(0)] public int pricePerUnitCents;
+            public BakeryWholesaleFreshness freshness = BakeryWholesaleFreshness.FreshOrDayOld;
+            public int firstDeliveryDayIndex;
+        }
+
         [SerializeField] private string configurationId = "millbrook-development-town";
         [SerializeField, Min(0), Tooltip("Deterministic development fixture calibration; not canonical world-generation policy.")]
         private int seedOffset = 9217;
@@ -136,6 +160,7 @@ namespace LandLedgers.Population
         [SerializeField] private HouseholdCashTarget[] householdCashTargets = Array.Empty<HouseholdCashTarget>();
         [SerializeField] private BusinessOpeningInventory[] openingInventory = Array.Empty<BusinessOpeningInventory>();
         [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
+        [SerializeField] private BakeryWholesaleAccountDefinition[] wholesaleAccounts = Array.Empty<BakeryWholesaleAccountDefinition>();
         [SerializeField] private string freightBusinessKey = "freight-company";
         [SerializeField] private string openingHorseId = "A0";
         [SerializeField] private string openingWagonId = "opening-freight-wagon";
@@ -154,6 +179,7 @@ namespace LandLedgers.Population
         public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => householdCashTargets ?? Array.Empty<HouseholdCashTarget>();
         public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => openingInventory ?? Array.Empty<BusinessOpeningInventory>();
         public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
+        public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => wholesaleAccounts ?? Array.Empty<BakeryWholesaleAccountDefinition>();
         public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
         public string OpeningHorseId => openingHorseId ?? string.Empty;
         public string OpeningWagonId => openingWagonId ?? string.Empty;

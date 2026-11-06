@@ -518,6 +518,8 @@ namespace LandLedgers.FirstLedger
                     SeedDevelopmentBusinessOpeningInventory();
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedDevelopmentBusinessOpeningEquipment();
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    SeedBakeryWholesaleAccounts();
                 if (startupIntent == WorldStartupIntent.NewGame && simulationDrivers != null && developmentNpcStore?.RuntimeState != null)
                     ConfigurePlaytestHorseFeed(developmentNpcStore, simulationDrivers);
             }
@@ -1321,6 +1323,65 @@ namespace LandLedgers.FirstLedger
                     && string.Equals(existing.BusinessInstanceId, bakeryBusiness.InstanceId, StringComparison.Ordinal)))
                 pass9.EquipmentRegisters.Add(register);
             Debug.Log($"[WorldStartup] {equipmentReport}", this);
+            foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
+        }
+
+        /// <summary>
+        /// Plan 01 (2026-11-06): NewGame-only booking of the scenario-owned
+        /// bakery wholesale accounts, beside the opening-equipment seeding
+        /// above. Resolves the bakery key exactly like the equipment
+        /// seeder, finds the bakery and general-store businesses via the
+        /// existing FindDevelopmentBusiness, and books exactly what the
+        /// configuration lists (zero by default; the applicator books the
+        /// demand-derived fallback only when the config lists no wholesale
+        /// accounts at all). On Continue the accounts persist in the save
+        /// DTO and are never re-booked. Refusals are Debug.LogError, the
+        /// same posture as the equipment seeding.
+        /// </summary>
+        private void SeedBakeryWholesaleAccounts()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null) return;
+            string bakeryKey = null;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
+                if (slot != null && ToBusinessType(slot.operationId) == BusinessType.Bakery)
+                {
+                    bakeryKey = slot.key;
+                    break;
+                }
+            if (string.IsNullOrWhiteSpace(bakeryKey))
+            {
+                Debug.LogError("[WorldStartup] Wholesale accounts for the bakery refused: no bakery business is configured.", this);
+                return;
+            }
+            BusinessInstanceState bakeryBusiness = FindDevelopmentBusiness(BusinessType.Bakery);
+            if (bakeryBusiness?.RuntimeState == null)
+            {
+                Debug.LogError($"[WorldStartup] Wholesale accounts for '{bakeryKey}' refused: the configured bakery runtime does not exist.", this);
+                return;
+            }
+            BusinessInstanceState storeBusiness = FindDevelopmentBusiness(BusinessType.GeneralStore);
+            if (storeBusiness?.RuntimeState == null)
+            {
+                Debug.LogError($"[WorldStartup] Wholesale accounts for '{bakeryKey}' refused: the configured general-store runtime does not exist.", this);
+                return;
+            }
+            Series2Pass9SaveState pass9 = saveLoadManager?.Series2Pass9State;
+            if (pass9?.BakeryRuntime == null)
+            {
+                Debug.LogError($"[WorldStartup] Wholesale accounts for '{bakeryKey}' refused: no live bakery runtime is registered on the Pass 9 state.", this);
+                return;
+            }
+            var diag = new List<string>();
+            if (!ScenarioOpeningWholesaleAccounts.TryApply(configuration, bakeryKey, pass9.BakeryRuntime,
+                    bakeryBusiness.RuntimeState, storeBusiness,
+                    timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                    diag, out string wholesaleReport, out string wholesaleError))
+            {
+                Debug.LogError($"[WorldStartup] {wholesaleError}", this);
+                return;
+            }
+            Debug.Log($"[WorldStartup] {wholesaleReport}", this);
             foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
         }
 

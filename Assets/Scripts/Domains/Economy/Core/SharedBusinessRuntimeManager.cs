@@ -4937,7 +4937,7 @@ namespace LandLedgers.Economy
             }
 
             if (business?.RuntimeState != null
-                && (business.BusinessType == BusinessType.Bakery || business.BusinessType == BusinessType.FuelDealer))
+                && SharedBusinessWeeklyConverter.IsTaskBackedProductionType(business.BusinessType))
             {
                 // These businesses have detailed Task-backed production
                 // authorities, but the shared weekly category converter is not
@@ -4946,11 +4946,28 @@ namespace LandLedgers.Economy
                 // fixed-ratio output without the baker/fuel-yard operator doing
                 // work. Keep stock and cash untouched until their production
                 // drivers are bound to the shared Task and inventory authorities.
-                const string taskDriverBlockedReason = "Task-backed production driver is not connected; weekly category conversion is disabled";
+                // M3 (Plan 04, D-S3/D-S4): the seam record — the 0-output
+                // exclusion is recorded on the weekly operation record
+                // (helper), and the summary line names the owning driver
+                // and the driver-side stock/cash readable read-only from
+                // the shared RuntimeState. The driver's bin is NOT read or
+                // written here: the forwarder's bin values (flour lb in
+                // the bin, fuel units at the yard) are not reachable from
+                // SBRM without a new authority reference — that read path
+                // is owner/Codex work, not invented.
+                string taskDriverBlockedReason = SharedBusinessWeeklyConverter.RecordTaskBackedExclusion(business.RuntimeState);
                 business.ApplyWeeklyOperationResult(0);
-                business.RuntimeState.RecordWeeklyOperation(0, 0, "No production completed", taskDriverBlockedReason);
                 RecordOperationSummary(business, taskDriverBlockedReason);
-                AppendSummarySegment(summary, $"{business.BusinessType} production pending Task integration");
+                BusinessProfileDefinition seamProfile = FindProfile(business.BusinessType);
+                string seamInputCategory = seamProfile != null ? GetFirstCategoryId(seamProfile.InputCategoryIds) : null;
+                string seamOutputCategory = seamProfile != null ? GetFirstCategoryId(seamProfile.OutputCategoryIds) : null;
+                AppendSummarySegment(summary, SharedBusinessWeeklyConverter.BuildTaskBackedSeamSummary(
+                    business.BusinessType,
+                    business.RuntimeState.CurrentCashCents,
+                    seamInputCategory,
+                    string.IsNullOrWhiteSpace(seamInputCategory) ? 0 : GetCategoryStockUnits(business.RuntimeState, seamInputCategory),
+                    seamOutputCategory,
+                    string.IsNullOrWhiteSpace(seamOutputCategory) ? 0 : GetCategoryStockUnits(business.RuntimeState, seamOutputCategory)));
                 return;
             }
 
@@ -5098,7 +5115,20 @@ namespace LandLedgers.Economy
                 blockedReasons.Add($"input shortage: {inputCategoryId}");
             }
 
-            if (plannedUnits > 0 && !string.IsNullOrWhiteSpace(outputCategoryId) && outputRoom > 0)
+            // M3 cross-check (Plan 04, D-S3/D-S4): if the converter ever
+            // reaches the credit site for a Bakery/FuelDealer pool, refuse
+            // loudly instead of crediting. Unreachable while the seam
+            // early return above stands; the guard is the second line of
+            // defence, checked BEFORE any input is consumed or output
+            // credited so a trip never destroys inputs.
+            string taskBackedOutputRefusal = SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(business.BusinessType, outputCategoryId, plannedUnits);
+            if (taskBackedOutputRefusal != null)
+            {
+                blockedReasons.Add(taskBackedOutputRefusal);
+                AppendSummarySegment(summary, taskBackedOutputRefusal);
+            }
+
+            if (taskBackedOutputRefusal == null && plannedUnits > 0 && !string.IsNullOrWhiteSpace(outputCategoryId) && outputRoom > 0)
             {
                 int operableUnits = Mathf.Min(plannedUnits, outputRoom);
                 if (!string.IsNullOrWhiteSpace(inputCategoryId))

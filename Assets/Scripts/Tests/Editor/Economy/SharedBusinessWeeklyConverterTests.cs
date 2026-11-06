@@ -363,6 +363,88 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void BakeryConverter_NeverCreditsOutput()
+        {
+            // M3 (Plan 04, D-S3/D-S4): drive the seam at a bakery
+            // instance — 0 produced, the reason names the task-backed
+            // driver. The CONVERTER itself (SBRM) is harness-excluded;
+            // this test runs the seam the converter delegates to
+            // (SharedBusinessWeeklyConverter) against a real
+            // BusinessRuntimeState, which is exactly the record the
+            // converter writes.
+            Assert.AreEqual(RecordedBakeryFuelExclusionReason, SharedBusinessWeeklyConverter.TaskBackedExclusionReason,
+                "the helper's canonical reason matches the M0 transcription");
+            Assert.IsTrue(SharedBusinessWeeklyConverter.IsTaskBackedProductionType(BusinessType.Bakery));
+            Assert.AreEqual("BakeryWholesaleDailyDriver", SharedBusinessWeeklyConverter.TaskBackedDriverName(BusinessType.Bakery));
+
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity("bakery-1");
+            runtime.SetCurrentCashCents(2500);
+            runtime.EnsureCategoryStock("flour", 48, 100);
+            runtime.EnsureCategoryStock("bread", 0, 100);
+
+            string reason = SharedBusinessWeeklyConverter.RecordTaskBackedExclusion(runtime);
+            Assert.AreEqual(RecordedBakeryFuelExclusionReason, reason, "the recorded reason names the task-backed driver");
+            Assert.AreEqual(0, runtime.LastWeeklyOutputUnitsProduced, "0 produced");
+            Assert.AreEqual(0, runtime.LastWeeklyInputUnitsConsumed, "0 consumed");
+            Assert.AreEqual(RecordedBakeryFuelExclusionReason, runtime.LastWeeklyBlockedReason, "the standing reason is on the weekly operation record");
+            Assert.AreEqual(2500, runtime.CurrentCashCents, "cash untouched by the seam");
+            Assert.AreEqual(48, runtime.GetCategoryStock("flour").CurrentStockUnits, "stock untouched by the seam");
+            Assert.AreEqual(0, runtime.GetCategoryStock("bread").CurrentStockUnits);
+
+            string seam = SharedBusinessWeeklyConverter.BuildTaskBackedSeamSummary(
+                BusinessType.Bakery, runtime.CurrentCashCents, "flour", 48, "bread", 0);
+            Assert.IsTrue(seam.Contains("BakeryWholesaleDailyDriver"), "the seam line names the owning driver");
+            Assert.IsTrue(seam.Contains("cash 2500c"), "the seam line shows the readable shared cash");
+            Assert.IsTrue(seam.Contains("flour stock 48"), "the seam line shows the readable input stock");
+            Assert.IsTrue(seam.Contains("bread stock 0"), "the seam line shows the readable output stock");
+            Assert.IsTrue(seam.Contains("credits 0 output"), "the seam line states the 0-output exclusion");
+
+            string refusal = SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(BusinessType.Bakery, "bread", 5);
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(refusal), "a bakery output credit is refused loudly");
+            Assert.IsTrue(refusal.Contains("BakeryWholesaleDailyDriver"), "the refusal names the owning driver");
+            Assert.IsTrue(SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(BusinessType.Bakery, "bread", 0) == null, "zero credit needs no refusal");
+            Assert.IsTrue(SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(BusinessType.Bakery, null, 5) == null, "no output category, no refusal");
+            Assert.IsTrue(SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(BusinessType.CropFarm, "crop_food", 5) == null, "non-task-backed types are unaffected");
+        }
+
+        [Test]
+        public void FuelDealerConverter_NeverCreditsOutput()
+        {
+            // M3: the same seam for the fuel dealer — 0 produced, the
+            // reason names Series2DealerBakeryFuelSource.
+            Assert.IsTrue(SharedBusinessWeeklyConverter.IsTaskBackedProductionType(BusinessType.FuelDealer));
+            Assert.AreEqual("Series2DealerBakeryFuelSource", SharedBusinessWeeklyConverter.TaskBackedDriverName(BusinessType.FuelDealer));
+
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity("fuel-1");
+            runtime.SetCurrentCashCents(1200);
+            runtime.EnsureCategoryStock("fuel", 20, 100);
+            runtime.EnsureCategoryStock("fuel_wood", 0, 100);
+
+            string reason = SharedBusinessWeeklyConverter.RecordTaskBackedExclusion(runtime);
+            Assert.AreEqual(RecordedBakeryFuelExclusionReason, reason);
+            Assert.AreEqual(0, runtime.LastWeeklyOutputUnitsProduced, "0 produced");
+            Assert.AreEqual(0, runtime.LastWeeklyInputUnitsConsumed, "0 consumed");
+            Assert.AreEqual(RecordedBakeryFuelExclusionReason, runtime.LastWeeklyBlockedReason);
+            Assert.AreEqual(1200, runtime.CurrentCashCents, "cash untouched by the seam");
+            Assert.AreEqual(20, runtime.GetCategoryStock("fuel").CurrentStockUnits, "stock untouched by the seam");
+
+            string seam = SharedBusinessWeeklyConverter.BuildTaskBackedSeamSummary(
+                BusinessType.FuelDealer, runtime.CurrentCashCents, "fuel", 20, "fuel_wood", 0);
+            Assert.IsTrue(seam.Contains("Series2DealerBakeryFuelSource"), "the seam line names the owning driver");
+            Assert.IsTrue(seam.Contains("cash 1200c"));
+            Assert.IsTrue(seam.Contains("fuel stock 20"));
+            Assert.IsTrue(seam.Contains("credits 0 output"));
+
+            string refusal = SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(BusinessType.FuelDealer, "fuel_wood", 3);
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(refusal), "a fuel-dealer output credit is refused loudly");
+            Assert.IsTrue(refusal.Contains("Series2DealerBakeryFuelSource"));
+            Assert.IsTrue(SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(BusinessType.FuelDealer, "fuel_wood", 0) == null);
+            Assert.IsTrue(SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(BusinessType.Blacksmith, "nails", 3) == null, "non-task-backed types are unaffected");
+        }
+
+        [Test]
         public void RecordedSeamStrings_BakeryFuelExclusion_NoMintGuard_LocalOutlet()
         {
             // Transcription pins, NOT executable SBRM behaviour (SBRM is

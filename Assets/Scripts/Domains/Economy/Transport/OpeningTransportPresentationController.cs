@@ -317,6 +317,10 @@ namespace LandLedgers.Economy.Transport
             string legLabel = string.IsNullOrWhiteSpace(journeyId)
                 ? $"off-map journey for shipment '{shipment.ShipmentId}'"
                 : $"off-map journey '{journeyId}'";
+            // Slice R1 (Objective 22): board Ethan onto the DriverSeat
+            // before the leg starts. A refused board degrades to a
+            // riderless leg; a missing seat refuses the leg.
+            if (!TryBoardRiderForLeg(director, ethanId, legLabel)) return false;
             return controller.StartLeg(shipment.RoutePlan.VisiblePath, cellSize, origin,
                 wagonSpeed, TransportPairPlacement.PairSeparationMetres, turnSpeed,
                 director, ethanId, legLabel, hideOnArrival: true);
@@ -339,17 +343,52 @@ namespace LandLedgers.Economy.Transport
 
             // Reactivate the trio where the outbound leg left them: the
             // exit cell (first cell of the reversed path). Ethan comes back
-            // via his mover's show path, at his current location — the
-            // last escort waypoint, by the exit.
+            // via his mover's show path, at his current location — by the
+            // exit, where the outbound leg hid him (still parented to
+            // the seat; his transform never moved while hidden).
             var reversed = new List<GridCoord>(shipment.RoutePlan.VisiblePath);
             reversed.Reverse();
             if (activeHorseView != null) activeHorseView.gameObject.SetActive(true);
             if (activeWagonView != null) activeWagonView.gameObject.SetActive(true);
             if (director != null && ethanId >= 0) director.TryShowPersonAtCurrentLocation(ethanId);
             Debug.Log($"[CoupledTransport] team re-entered at {reversed[0]}, returning to staging.", this);
+            // Slice R1 (Objective 22): board him again AFTER the show —
+            // ShowAtCurrentLocation reverts his Animator to Locomotion,
+            // so boarding must follow it (Note-R2). He was never
+            // unparented at the exit, so this is an idempotent
+            // re-application of the seat + sitting pose.
+            string returnLegLabel = $"return leg for shipment '{shipment.ShipmentId}'";
+            if (!TryBoardRiderForLeg(director, ethanId, returnLegLabel)) return false;
             return controller.StartLeg(reversed, cellSize, origin,
                 wagonSpeed, TransportPairPlacement.PairSeparationMetres, turnSpeed,
-                director, ethanId, $"return leg for shipment '{shipment.ShipmentId}'", hideOnArrival: false);
+                director, ethanId, returnLegLabel, hideOnArrival: false);
+        }
+
+        /// <summary>
+        /// Slice R1 (Objective 22): board the driver onto the wagon's
+        /// DriverSeat for a leg. Returns false ONLY when the wagon has
+        /// no DriverSeat — that refuses the leg start (same posture as
+        /// a missing controller). A refused board degrades to a
+        /// riderless leg: the refusal is logged loudly and the leg
+        /// still starts (a presentation failure must not strand a
+        /// shipment). When no director/driver resolved, there is no
+        /// rider to board and the leg starts as before
+        /// (ResolveMovementInputs already warned).
+        /// </summary>
+        private bool TryBoardRiderForLeg(PopulationPathingDirector director, int ethanPersonId, string legLabel)
+        {
+            Transform seat = activeWagonView != null ? activeWagonView.DriverSeat : null;
+            if (seat == null)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to start {legLabel}: the wagon has no DriverSeat.", this);
+                return false;
+            }
+            if (director == null || ethanPersonId < 0) return true;
+            if (!director.TryBoardRider(ethanPersonId, seat, legLabel))
+            {
+                Debug.LogWarning($"[CoupledTransport] rider boarding refused for {legLabel}; team moves without a rider.", this);
+            }
+            return true;
         }
 
         private CoupledTransportMovementController ResolveMovementController()
@@ -400,7 +439,7 @@ namespace LandLedgers.Economy.Transport
             ethanPersonId = ParsePersonId(shipment?.physicalDriverPersonId);
             if (director == null || ethanPersonId < 0)
             {
-                Debug.LogWarning("[CoupledTransport] No director or driver person resolved for the escort; the pair moves without Ethan.", this);
+                Debug.LogWarning("[CoupledTransport] No director or driver person resolved for the rider; the pair moves without Ethan.", this);
                 director = null;
                 ethanPersonId = -1;
             }

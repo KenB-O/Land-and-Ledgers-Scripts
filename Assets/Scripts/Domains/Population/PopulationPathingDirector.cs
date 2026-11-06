@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Transport;
 using LandLedgers.Pathing;
 using LandLedgers.Population;
 using LandLedgers.Time;
@@ -693,6 +694,15 @@ namespace LandLedgers.FirstLedger
             {
                 ManagedPersonAgent managed = agents[i];
                 if (managed?.person == null || managed.person.id != personId) continue;
+                // Slice R1 (Objective 22): a rider aboard the wagon must
+                // never be route-started — StartRoute would snap the
+                // parented agent off the seat. F3 blocks task starts;
+                // this flag blocks route starts.
+                if (managed.isRiding)
+                {
+                    Debug.Log($"[CoupledTransport] refused explicit route for P{personId}: rider is aboard the wagon.", this);
+                    return false;
+                }
                 if (managed.person.currentDestinationBuildingId == targetBuildingId
                     && managed.mover != null && (managed.mover.IsArrivedVisible || managed.mover.IsRouteActive))
                 {
@@ -705,13 +715,16 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
-        /// Slice F4 (2026-11-06, Objective 23): cell-targeted thin API for
-        /// the coupled-transport escort. Mirrors TryStartExplicitRoute's
-        /// agent lookup, but sends the person to a grid cell instead of a
-        /// building — the escort walks Ethan waypoint-by-waypoint with the
-        /// wagon. Returns false (no-op, no log spam) when the person has no
-        /// managed agent or no mover. Never touches schedule state: the
-        /// mover owns locomotion and arrival, so the S5 arrival gates keep
+        /// Slice F4 (2026-11-06, Objective 23): cell-targeted thin API.
+        /// Mirrors TryStartExplicitRoute's agent lookup, but sends the
+        /// person to a grid cell instead of a building. Its only
+        /// production caller was the F4 coupled-transport escort, which
+        /// R1 (Objective 22) deleted — Ethan rides the wagon instead of
+        /// walking it. R4 deletes this method if it is still callerless;
+        /// until then it stays, guarded by the riding flag. Returns
+        /// false (no-op, no log spam) when the person has no managed
+        /// agent or no mover. Never touches schedule state: the mover
+        /// owns locomotion and arrival, so the S5 arrival gates keep
         /// working.
         /// </summary>
         public bool TrySendPersonToCell(int personId, GridCoord targetCell, bool hideWhenArrived)
@@ -722,6 +735,10 @@ namespace LandLedgers.FirstLedger
                 ManagedPersonAgent managed = agents[i];
                 if (managed?.person == null || managed.person.id != personId) continue;
                 if (managed.mover == null) return false;
+                // Slice R1 (Objective 22): refuse silently while the
+                // rider is aboard — same no-log-spam contract as the
+                // no-agent / no-mover returns above.
+                if (managed.isRiding) return false;
                 return managed.mover.MoveFromCurrentCellTo(targetCell, hideWhenArrived);
             }
             return false;
@@ -765,6 +782,90 @@ namespace LandLedgers.FirstLedger
                 managed.mover.ShowAtCurrentLocation();
                 return true;
             }
+            return false;
+        }
+
+        /// <summary>
+        /// Slice R1 (2026-11-06, Objective 22): the seated hip-height
+        /// offset applied at the board site. Default 0 — the agent root
+        /// (his feet) lands exactly on the seat anchor. VP-R1 (coder,
+        /// in-Editor; amended by the coordinator: no Unity editor or
+        /// scene access is available to this coder, so the measurement
+        /// is Codex's): if the PlayMode fit floats or sinks the rider,
+        /// the measured seated hip height from the X Bot@Driving clip
+        /// is applied here as a single named constant (negative when
+        /// the clip's hips sit above the root) — derived from the
+        /// asset, never invented, never a prefab move.
+        /// </summary>
+        private const float RiderSeatVerticalOffsetMetres = 0f;
+
+        /// <summary>
+        /// Slice R1 (2026-11-06, Objective 22): board a person onto
+        /// the wagon's DriverSeat. Parents the existing managed agent
+        /// to the seat (worldPositionStays false), so the rider
+        /// inherits exactly the wagon's position and rotation around
+        /// corners — parenting to the transport group root would follow
+        /// the horse's path point instead. Idempotent: when already
+        /// parented to the seat (the return leg, where he was never
+        /// unparented at the exit) the re-parent is skipped and the
+        /// sitting state is re-applied. Sets the riding flag, which
+        /// gates all three production route entry points until
+        /// TryDismountRider clears it.
+        ///
+        /// ORDERING (Note-R2): ShowAtCurrentLocation reverts the
+        /// Animator to Locomotion, so boarding must always run AFTER
+        /// any show — the return leg shows him, then boards him.
+        /// Returns false (no-op, no log spam beyond the refusal line)
+        /// when the person has no managed agent or no mover, the seat
+        /// is null, or the board gate refuses; the caller degrades to
+        /// a riderless leg.
+        /// </summary>
+        public bool TryBoardRider(int personId, Transform seat, string legLabel)
+        {
+            if (personId < 0 || seat == null) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.mover == null) return false;
+                if (!WagonRiderPlacement.TryAllowBoarding(managed.mover.IsRouteActive, managed.mover.IsHidden,
+                        seat.position, managed.mover.transform.position,
+                        WagonRiderPlacement.BoardToleranceMetres, out string refusalReason))
+                {
+                    Debug.LogWarning($"[CoupledTransport] rider boarding refused for {legLabel}: {refusalReason}.", this);
+                    return false;
+                }
+                if (managed.mover.transform.parent != seat)
+                {
+                    managed.mover.transform.SetParent(seat, false);
+                    managed.mover.transform.localPosition = new Vector3(0f, RiderSeatVerticalOffsetMetres, 0f);
+                    // The wagon's length runs along its local +X and
+                    // the agent's forward is his root +Z: a +90 deg yaw
+                    // maps local +Z onto local +X, so he faces along
+                    // the heading while seated.
+                    managed.mover.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
+                }
+                managed.isRiding = true;
+                // Sitting application is step 5 (R2 wires it for real;
+                // the R1 sequencing stub logs and returns false).
+                TrySetPersonSitting(personId, seated: true);
+                Debug.Log($"[CoupledTransport] rider boarded: P{personId} seated at DriverSeat for {legLabel}.", this);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Slice R2 (2026-11-06, Objective 22): apply (or clear) the
+        /// rider's sitting pose. R1 SEQUENCING STUB — the body is
+        /// implemented in R2; until then this logs and returns false so
+        /// the R1 commit builds, and boarding still succeeds (the rider
+        /// rides parented to the seat in whatever pose his Animator
+        /// holds).
+        /// </summary>
+        public bool TrySetPersonSitting(int personId, bool seated)
+        {
+            Debug.Log($"[CoupledTransport] sitting trigger not yet wired for P{personId} (seated={seated}); riding without the sitting pose.", this);
             return false;
         }
 
@@ -889,6 +990,13 @@ namespace LandLedgers.FirstLedger
         private bool TrySendAmbientRoute(ManagedPersonAgent managed, int attemptSalt, out AmbientRouteFailureKind failureKind)
         {
             failureKind = AmbientRouteFailureKind.CandidateNotReady;
+            // Slice R1 (Objective 22): never route a rider aboard the
+            // wagon — BeginDoorToDoor would snap the parented agent off
+            // the seat.
+            if (managed != null && managed.isRiding)
+            {
+                return false;
+            }
             if (!CanUseAgentForAmbientRoute(managed))
             {
                 return false;
@@ -1365,6 +1473,11 @@ namespace LandLedgers.FirstLedger
             public readonly AgentMover mover;
             public readonly BuildingAnchor homeAnchor;
             public AgentRouteMode routeMode;
+            // Slice R1 (Objective 22): true while the person is boarded
+            // on the wagon (set by TryBoardRider, cleared by
+            // TryDismountRider). Runtime-only, never serialized —
+            // boarding is re-derived at leg start (§8 of the plan).
+            public bool isRiding;
             public int ambientOriginBuildingId;
             public int ambientTargetBuildingId;
         }

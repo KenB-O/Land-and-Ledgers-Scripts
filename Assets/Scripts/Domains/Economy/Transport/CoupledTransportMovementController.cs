@@ -8,9 +8,11 @@
 // routePlan.visiblePath, handed in by F5's BeginCoupledDeparture /
 // BeginCoupledReturn) at the authored wagon grid speed, moving the
 // transport group so the horse lands on the path, placing the wagon at
-// its path-trailing position, facing both views to the path heading, and
-// escorting Ethan waypoint-by-waypoint under his own AgentMover via the
-// director's TrySendPersonToCell.
+// its path-trailing position, facing both views to the path heading.
+// Ethan rides the wagon, parented to its DriverSeat by the director
+// (R1, Objective 22) — he inherits the wagon's motion, so no escort
+// is needed or allowed: the F4 waypoint escort is deleted (it would
+// snap a parented agent off the seat via StartRoute).
 //
 // What it never does: no teleporting (every position is an interpolation
 // along the planned path, via CoupledTransportProgress); no fake movement
@@ -61,7 +63,6 @@ namespace LandLedgers.Economy.Transport
         private string legLabel = string.Empty;
         private bool hideOnArrival;
         private float distanceTravelledMetres;
-        private int lastEscortedWagonSegment = -1;
         private bool legActive;
         private HorseWorldView horseView;
         private WagonWorldView wagonView;
@@ -76,9 +77,9 @@ namespace LandLedgers.Economy.Transport
         /// shipment/journey start conditions (Planned + authorized +
         /// journey active/Returned) are checked by the caller (F5's Begin
         /// methods); this controller only walks the path it is given.
-        /// director/ethanPersonId may be absent (escort skipped, logged
-        /// once) — the pair still moves; the escort is presentation, not
-        /// the trip itself.
+        /// director/ethanPersonId may be absent (hide/dismount skipped,
+        /// logged once) — the pair still moves; Ethan's presence is
+        /// presentation, not the trip itself.
         /// </summary>
         /// <param name="hideOnArrival">Slice F5: true on the outbound leg —
         /// on arrival at the exit cell the trio leaves the map visually
@@ -127,7 +128,6 @@ namespace LandLedgers.Economy.Transport
             this.legLabel = string.IsNullOrWhiteSpace(legLabel) ? "coupled leg" : legLabel;
             this.hideOnArrival = hideOnArrival;
             distanceTravelledMetres = 0f;
-            lastEscortedWagonSegment = -1;
             legActive = true;
             SetDriving(true);
             Debug.Log($"[CoupledTransport] {this.legLabel} started: {path.Count} waypoints from {path[0]} to {path[path.Count - 1]} at {wagonSpeedMetresPerSecond} m/s.", this);
@@ -193,7 +193,9 @@ namespace LandLedgers.Economy.Transport
                 horseView.transform.rotation = Quaternion.RotateTowards(horseView.transform.rotation, horseFacing, turnDegrees);
             }
 
-            EscortEthan();
+            // R1 (Objective 22): no escort. Ethan rides the wagon,
+            // parented to its DriverSeat; the F4 waypoint escort is
+            // deleted — it would snap him off the seat via StartRoute.
 
             if (remainingMetres <= 0f)
             {
@@ -220,32 +222,6 @@ namespace LandLedgers.Economy.Transport
                     Debug.Log($"[CoupledTransport] {legLabel} arrived at {arrival}; team idle.", this);
                 }
             }
-        }
-
-        private void EscortEthan()
-        {
-            if (director == null || ethanPersonId < 0) return;
-
-            // The escort follows the WAGON's segment, not the horse's: the
-            // wagon is ~1.2 cells behind the horse, so sending Ethan to the
-            // next waypoint after the wagon's segment keeps him at most one
-            // cell ahead of the wagon — inside the 5 m acceptance
-            // threshold for "with the team", never used as a movement
-            // constant. He walks at his own authored pedestrian speed
-            // (faster than the wagon), so he arrives just ahead and waits.
-            if (!CoupledTransportProgress.TryAdvance(path, distanceTravelledMetres - pairSeparationMetres,
-                    cellSizeMetres, gridOrigin, out int wagonSegment, out _, out _, out _))
-            {
-                return;
-            }
-            if (wagonSegment <= lastEscortedWagonSegment) return;
-            lastEscortedWagonSegment = wagonSegment;
-            int nextIndex = wagonSegment + 1;
-            if (nextIndex < 0 || nextIndex >= path.Count) return;
-            // One attempt per waypoint advance; a false return (no managed
-            // agent / no mover) is silent by the director API's contract —
-            // the pair still moves, Ethan simply does not follow.
-            director.TrySendPersonToCell(ethanPersonId, path[nextIndex], hideWhenArrived: false);
         }
 
         private void SetDriving(bool driving)

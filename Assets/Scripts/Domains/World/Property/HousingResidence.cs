@@ -115,26 +115,6 @@ namespace LandLedgers.World.Property
             return record;
         }
 
-        /// <summary>
-        /// Phase D: escalates or de-escalates an open condition (e.g. a
-        /// temporary condition becoming precarious after eviction).
-        /// </summary>
-        public string SetConditionKind(int personId, ResidentialConditionKind kind, string reason, int dayIndex, List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            if (!currentByPerson.TryGetValue(personId, out ResidentialConditionRecord record)
-                || record == null || !record.IsCurrent)
-            {
-                return $"ResidentialConditionRegistry.SetConditionKind: P{personId} has no open condition record.";
-            }
-
-            record.Condition = kind;
-            record.LastEvaluatedDayIndex = dayIndex;
-            if (!string.IsNullOrWhiteSpace(reason)) record.Notes = reason;
-            diag.Add($"ResidentialConditionRegistry: P{personId} condition now {kind} — {reason}.");
-            return null;
-        }
-
         public ResidentialConditionRecord CurrentConditionFor(int personId)
         {
             return currentByPerson.TryGetValue(personId, out ResidentialConditionRecord record)

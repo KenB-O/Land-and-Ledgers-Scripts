@@ -378,11 +378,6 @@ namespace LandAndLedgers.Buildings
             }
         }
 
-        public static LLColliderAuthoringMode InferColliderModeFromName(string sourceName)
-        {
-            return InferColliderModeFromCategory(InferCategoryFromName(sourceName));
-        }
-
         private void ApplyRendererSettings(Renderer[] renderers, bool castShadows, bool receiveShadows)
         {
             for (int i = 0; i < renderers.Length; i++)

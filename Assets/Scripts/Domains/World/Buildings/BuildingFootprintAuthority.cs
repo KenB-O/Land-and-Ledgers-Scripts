@@ -98,23 +98,6 @@ namespace LandLedgers.World
             return rootWorldPosition + rootWorldRotation * scaledLocalPoint;
         }
 
-        public Vector3 ResolveRootPositionForRoadAccess(Vector3 targetRoadAccessWorldPoint, Quaternion rootWorldRotation, Vector3 rootWorldScale)
-        {
-            Vector3 scaledLocalPoint = Vector3.Scale(RoadAccessLocalPoint, rootWorldScale);
-            return targetRoadAccessWorldPoint - rootWorldRotation * scaledLocalPoint;
-        }
-
-        public Vector3 GetCornerLocalPoint(int index)
-        {
-            return index switch
-            {
-                0 => frontLeftCornerLocal,
-                1 => frontRightCornerLocal,
-                2 => backRightCornerLocal,
-                3 => backLeftCornerLocal,
-                _ => Vector3.zero
-            };
-        }
         public Vector2Int ReconcileWithDefinitionFootprint(Vector2Int definitionFootprintSizeCells)
         {
             return ReconcileWithDefinitionFootprint(definitionFootprintSizeCells, out _, out _, out _);
@@ -137,20 +120,6 @@ namespace LandLedgers.World
                 ? $"Prefab footprint authority expanded the grid claim from definition {definitionMinimum.x}x{definitionMinimum.y} to {resolved.x}x{resolved.y}. Visual prefab scale remains authored."
                 : $"Definition footprint {definitionMinimum.x}x{definitionMinimum.y} satisfies prefab footprint authority minimum {authorityMinimumSizeCells.x}x{authorityMinimumSizeCells.y}. Visual prefab scale remains authored.";
             return resolved;
-        }
-
-        public string BuildRuntimeAuthoritySummary(Vector2Int definitionFootprintSizeCells)
-        {
-            Vector2Int resolved = ReconcileWithDefinitionFootprint(
-                definitionFootprintSizeCells,
-                out Vector2Int authorityMinimum,
-                out bool expandedByAuthority,
-                out _);
-
-            Vector2Int definitionMinimum = SanitizeCellSize(definitionFootprintSizeCells);
-            string mode = useCornerAuthoring ? "corner-authored" : "integer fallback";
-            string expansion = expandedByAuthority ? "expanded grid claim" : "definition-sized grid claim";
-            return $"Footprint authority: {mode} minimum {authorityMinimum.x}x{authorityMinimum.y}; definition {definitionMinimum.x}x{definitionMinimum.y}; resolved placement {resolved.x}x{resolved.y}; {expansion}; visual scale preserved.";
         }
 
         public bool TryBuildAuthoringWarningSummary(out string warningSummary)
@@ -229,33 +198,6 @@ namespace LandLedgers.World
             return true;
         }
 
-
-        public void SetCornerLocalPoint(int index, Vector3 localPoint)
-        {
-            switch (index)
-            {
-                case 0:
-                    frontLeftCornerLocal = localPoint;
-                    break;
-                case 1:
-                    frontRightCornerLocal = localPoint;
-                    break;
-                case 2:
-                    backRightCornerLocal = localPoint;
-                    break;
-                case 3:
-                    backLeftCornerLocal = localPoint;
-                    break;
-            }
-
-            NormalizeAuthoring();
-        }
-
-        public void SetFrontDoorLocalPoint(Vector3 localPoint)
-        {
-            frontDoorLocalPoint = localPoint;
-            NormalizeAuthoring();
-        }
 
         [ContextMenu("Fit Authoring Corners To Renderer Bounds")]
         private void FitAuthoringCornersToRendererBounds()

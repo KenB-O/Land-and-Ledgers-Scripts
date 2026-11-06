@@ -628,20 +628,6 @@ namespace LandLedgers.World
             return builder.ToString().Trim();
         }
 
-        public string BuildTerrainTileInspectionSummary(string tileId)
-        {
-            RegionalWorldState state = ResolveState();
-            if (state == null)
-            {
-                return "[RegionalTerrain] Tile inspection unavailable: no regional world is available.";
-            }
-
-            RegionalTerrainTileRecord tile = FindTileById(state, tileId);
-            return tile != null
-                ? "[RegionalTerrain] " + BuildTileInspectionLine(tile, 0f)
-                : $"[RegionalTerrain] Tile '{tileId}' was not found.";
-        }
-
         public string BuildRegionalRouteInspectionSummary(string corridorId)
         {
             RegionalWorldState state = ResolveState();
@@ -1146,17 +1132,6 @@ namespace LandLedgers.World
             return Vector2.Distance(point, a + ab * t);
         }
 
-
-        public bool SetTileActive(string tileId, bool active)
-        {
-            if (string.IsNullOrWhiteSpace(tileId) || !terrainsByTileId.TryGetValue(tileId, out Terrain terrain) || terrain == null)
-            {
-                return false;
-            }
-
-            terrain.gameObject.SetActive(active);
-            return true;
-        }
 
         [ContextMenu("Clear Regional Terrain Tiles")]
         public void ClearTiles()

@@ -201,41 +201,6 @@ namespace LandLedgers.World
             return TryGetAuthoredMarkerLocalPoint(anchorType, preferRoadAccessMarker: false, out localPoint, out source);
         }
 
-        public bool TryResolveVisualRootPositionForRoadAccess(
-            Vector3 targetRoadAccessWorldPoint,
-            Quaternion visualRotation,
-            out Vector3 visualRootWorldPosition,
-            out string source)
-        {
-            if (!TryGetRoadAccessLocalPoint(out Vector3 localPoint, out source))
-            {
-                visualRootWorldPosition = targetRoadAccessWorldPoint;
-                return false;
-            }
-
-            Vector3 scaledLocalPoint = Vector3.Scale(localPoint, ResolveEffectiveVisualRootScale());
-            visualRootWorldPosition = targetRoadAccessWorldPoint - visualRotation * scaledLocalPoint;
-            return true;
-        }
-
-        public bool TryResolveFootprintOriginForRoadAccess(
-            Vector3 targetRoadAccessWorldPoint,
-            Quaternion visualRotation,
-            out Vector3 footprintOriginWorldPosition,
-            out string source)
-        {
-            if (!TryGetRoadAccessLocalPoint(out Vector3 localPoint, out source))
-            {
-                footprintOriginWorldPosition = targetRoadAccessWorldPoint;
-                return false;
-            }
-
-            Vector3 scaledLocalPoint = Vector3.Scale(localPoint, ResolveEffectiveVisualRootScale());
-            Vector3 rotatedVisualOffset = visualRotation * (visualPositionOffset + scaledLocalPoint);
-            footprintOriginWorldPosition = targetRoadAccessWorldPoint - rotatedVisualOffset;
-            return true;
-        }
-
         public bool CanUsePlot(PlotZone plotZone)
         {
             if (allowedPlotZone == plotZone)

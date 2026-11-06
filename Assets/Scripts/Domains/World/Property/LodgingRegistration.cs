@@ -113,19 +113,6 @@ namespace LandLedgers.World.Property
             return null;
         }
 
-        /// <summary>The active registration selling one space, if any.</summary>
-        public LodgingRegistration FindActiveRegistrationForSpace(string spaceId)
-        {
-            if (string.IsNullOrWhiteSpace(spaceId)) return null;
-            foreach (LodgingRegistration registration in registrations.Values)
-            {
-                if (registration != null && registration.IsActive
-                    && string.Equals(registration.SpaceId, spaceId, StringComparison.Ordinal))
-                    return registration;
-            }
-            return null;
-        }
-
         /// <summary>Every active registration for one business, in registration order.</summary>
         public List<LodgingRegistration> ActiveRegistrationsForBusiness(string businessInstanceId)
         {

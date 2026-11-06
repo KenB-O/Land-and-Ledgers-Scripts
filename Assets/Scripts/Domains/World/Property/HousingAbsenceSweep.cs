@@ -47,11 +47,6 @@ namespace LandLedgers.World.Property
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
         /// <summary>
-        /// Strict default: no arrangement exempts an absent person.
-        /// </summary>
-        public static bool StrictNoExemption(ResidentialOccupancy occupancy) => false;
-
-        /// <summary>
         /// Lenient-policy helper: true when the occupancy names an
         /// agreement that still stands on dayIndex (not ended). The
         /// autonomy worker can pass occ => AgreementStillStands(housing,

@@ -147,17 +147,6 @@ namespace LandLedgers.Pathing
             return true;
         }
 
-        public bool TryFindDoorAnchorByDefinitionId(string buildingDefinitionId, out PlacedBuilding building, out BuildingAnchor anchor)
-        {
-            string requestedId = buildingDefinitionId ?? string.Empty;
-            return TryFindAnchor(
-                placedBuilding => placedBuilding.definition != null
-                    && string.Equals(placedBuilding.definition.BuildingId, requestedId, StringComparison.OrdinalIgnoreCase),
-                AnchorType.FrontDoor,
-                out building,
-                out anchor);
-        }
-
         public bool TryFindDoorAnchorByPlotZone(PlotZone zone, out PlacedBuilding building, out BuildingAnchor anchor)
         {
             return TryFindAnchor(
@@ -165,11 +154,6 @@ namespace LandLedgers.Pathing
                 AnchorType.FrontDoor,
                 out building,
                 out anchor);
-        }
-
-        public bool TryFindDoorAnchor(Predicate<PlacedBuilding> buildingFilter, out PlacedBuilding building, out BuildingAnchor anchor)
-        {
-            return TryFindAnchor(buildingFilter, AnchorType.FrontDoor, out building, out anchor);
         }
 
         public bool TryFindAnchorByBuildingId(int buildingId, AnchorType anchorType, out PlacedBuilding building, out BuildingAnchor anchor)

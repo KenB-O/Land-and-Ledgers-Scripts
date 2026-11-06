@@ -2512,17 +2512,6 @@ namespace LandLedgers.World
             return RegionalParcelAuthority.BuildInspectionReadout(regionalWorld, parcel);
         }
 
-        public string BuildRegionalParcelInspectionSummaryAtWorldPosition(Vector3 worldPosition, float maxDistanceMeters = 640f)
-        {
-            if (regionalWorld == null)
-            {
-                return "Regional parcel inspection: no regional foundation is available.";
-            }
-
-            Vector2 regionalPoint = new(worldPosition.x, worldPosition.z);
-            return regionalWorld.BuildNearestParcelInspectionReadout(regionalPoint, maxDistanceMeters);
-        }
-
         public string BuildRegionalRouteInspectionSummary(string corridorId)
         {
             if (regionalWorld == null)

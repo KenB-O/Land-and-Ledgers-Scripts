@@ -60,16 +60,6 @@ namespace LandLedgers.World
         public bool AllowBroadResourcePlacementWhenNoAllowedZones => allowBroadResourcePlacementWhenNoAllowedZones;
         public bool VerboseStartupLogging => verboseStartupLogging;
 
-        public Terrain[] GetResolvedTerrains()
-        {
-            return ResolveTerrains();
-        }
-
-        public WorldPlacementMaskVolume[] GetResolvedMaskVolumes()
-        {
-            return ResolveMasks();
-        }
-
         public bool TryValidateConfiguration(out string error)
         {
             List<string> failures = new();

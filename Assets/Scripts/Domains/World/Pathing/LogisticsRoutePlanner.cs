@@ -132,25 +132,6 @@ namespace LandLedgers.Pathing
             return true;
         }
 
-        public bool TryFindNearestEdgeRoad(GridCoord pivot, out GridCoord roadCoord)
-        {
-            roadCoord = default;
-            TownGrid grid = townWorld != null ? townWorld.Grid : null;
-            if (grid == null)
-            {
-                return false;
-            }
-
-            List<GridCoord> candidates = CollectEdgeRoadCandidates(pivot, grid, 1);
-            if (candidates.Count <= 0)
-            {
-                return false;
-            }
-
-            roadCoord = candidates[0];
-            return true;
-        }
-
         private LogisticsRoutePlan CreatePlanShell(LogisticsRouteRequest request)
         {
             return new LogisticsRoutePlan

@@ -173,7 +173,6 @@ namespace LandAndLedgers.Buildings.Editor
             public static WallSlot Solid() => new WallSlot { subtype = "Solid", allowFallbackToSolid = true };
             public static WallSlot Window() => new WallSlot { subtype = "Window", allowFallbackToSolid = true };
             public static WallSlot Door() => new WallSlot { subtype = "Door", allowFallbackToSolid = true };
-            public static WallSlot WindowDoor() => new WallSlot { subtype = "WindowDoor", allowFallbackToSolid = true };
             public static WallSlot Empty() => new WallSlot { subtype = "", allowFallbackToSolid = false };
         }
 

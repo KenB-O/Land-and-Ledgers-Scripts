@@ -45,9 +45,5 @@ namespace LandLedgers.World
             return $"({x}, {z})";
         }
 
-        public Vector2Int ToVector2Int()
-        {
-            return new Vector2Int(x, z);
-        }
     }
 }

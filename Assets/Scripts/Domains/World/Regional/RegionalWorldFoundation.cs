@@ -1400,12 +1400,6 @@ namespace LandLedgers.World
             return $"{Population} people around a {identity}; {burden}; {permanence}; {risk}; {succession}.";
         }
 
-        public string BuildSuccessionPlanningReadout()
-        {
-            string context = string.IsNullOrWhiteSpace(SuccessionContext) ? "No succession context recorded." : SuccessionContext;
-            return $"{SettlementId}: {SuccessionRole} / rank {RegionalHierarchyRank}; gravity {RegionalGravity01:P0}; foothold challenge {FootholdChallenge01:P0}; readiness {SuccessionReadiness01:P0}. {context}";
-        }
-
         public string BuildDetailedSettlementInspectionReadout()
         {
             StringBuilder builder = new();

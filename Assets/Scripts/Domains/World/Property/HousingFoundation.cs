@@ -568,21 +568,6 @@ namespace LandLedgers.World.Property
             return result;
         }
 
-        /// <summary>
-        /// Phase D: the spaces one person currently occupies (read-side for
-        /// the residential-condition registry).
-        /// </summary>
-        public List<AccommodationSpace> CurrentSpacesForPerson(int personId)
-        {
-            var result = new List<AccommodationSpace>();
-            foreach (ResidentialOccupancy occ in CurrentOccupanciesForPerson(personId))
-            {
-                AccommodationSpace space = FindSpace(occ.SpaceId);
-                if (space != null) result.Add(space);
-            }
-            return result;
-        }
-
         /// <summary>Phase D: space lookup for suitability evaluation.</summary>
         public AccommodationSpace FindSpace(string spaceId)
         {

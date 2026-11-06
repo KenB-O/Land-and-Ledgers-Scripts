@@ -487,17 +487,6 @@ namespace LandLedgers.World
             regionalInspectionOpportunityDigestLimit = Mathf.Clamp(regionalInspectionOpportunityDigestLimit, 1, 8);
         }
 
-        public string BuildConstructionTradeSummary()
-        {
-            string carpenterLine = guaranteeLocalCarpenter
-                ? $"Local carpenter trade active ({Mathf.Max(1, minimumLocalCarpenterCount)} available)"
-                : "No guaranteed local carpenter trade";
-            string houseLine = FormatWeekRange(houseBuildDurationWeeks, "House builds");
-            string businessLine = FormatWeekRange(businessBuildDurationWeeks, "Business builds");
-            string repairLine = FormatWeekRange(repairDurationWeeks, "Repairs");
-            return carpenterLine + " | " + houseLine + " | " + businessLine + " | " + repairLine;
-        }
-
         public string BuildCarpenterAvailabilitySummary()
         {
             if (!guaranteeLocalCarpenter)
@@ -519,11 +508,6 @@ namespace LandLedgers.World
         public int GetTypicalBusinessBuildWeeks()
         {
             return GetTypicalWeeks(businessBuildDurationWeeks);
-        }
-
-        public int GetTypicalRepairWeeks()
-        {
-            return GetTypicalWeeks(repairDurationWeeks);
         }
 
         public int GetTypicalBuildWeeksForDefinition(BuildingDefinition definition)

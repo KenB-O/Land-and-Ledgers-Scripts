@@ -969,38 +969,6 @@ namespace LandLedgers.World.Property
 
         #region Default → real enforcement
 
-        /// <summary>
-        /// Routes a defaulted property obligation into the REAL workout and
-        /// enforcement machinery (Phase E): the creditor's workout response,
-        /// up to foreclosure through <see cref="ForeclosureService"/>. The
-        /// service marks delinquency; the workout decides.
-        /// </summary>
-        public void ProcessPropertyDefault(
-            EntityIdRegistry ids, FinancialObligationAuthority authority, CreditRegistry registry,
-            CreditCashBridge cash, CreditWorkoutService workout, ForeclosureService foreclosure,
-            TitleAuthority titles, IReadOnlyDictionary<string, CreditParticipantService> creditors,
-            NpcPropertyHolding holding, string obligationId, int dayIndex,
-            CreditEventLog events, List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            if (authority == null || holding == null || string.IsNullOrWhiteSpace(obligationId))
-            {
-                diag.Add("NpcPropertyLife.ProcessPropertyDefault: authority, holding and obligation required.");
-                return;
-            }
-            FinancialObligation obligation = authority.Find(obligationId);
-            if (obligation == null || obligation.Settled)
-            {
-                diag.Add($"NpcPropertyLife.ProcessPropertyDefault: obligation '{obligationId}' unknown or settled — nothing to enforce.");
-                return;
-            }
-            authority.MarkDelinquent(obligationId);
-            holding.Decisions.Add($"day {dayIndex}: obligation '{obligationId}' delinquent — routed to the real workout/enforcement machinery.");
-            diag.Add($"NpcPropertyLife: H{holding.OwnerHouseholdId} defaulted on '{obligationId}' — entering the real workout path.");
-            workout?.ProcessNamedObligations(ids, authority, registry, cash, foreclosure, titles,
-                creditors, new[] { obligationId }, dayIndex, events, diag);
-        }
-
         #endregion
 
         private static string MoveCash(CreditCashBridge cash, string payer, string payee, int amountCents,

@@ -441,17 +441,6 @@ namespace LandLedgers.World.Journeys
             return compare != 0 ? compare : string.Compare(left.RoadName, right.RoadName, StringComparison.Ordinal);
         }
 
-        /// <summary>Straight-line miles between two locations (for authored estimates).</summary>
-        public float CrowFliesMiles(string fromLocationId, string toLocationId)
-        {
-            JourneyLocation a = GetLocation(fromLocationId);
-            JourneyLocation b = GetLocation(toLocationId);
-            if (a == null || b == null) return -1f;
-            float dx = a.XMiles - b.XMiles;
-            float dz = a.ZMiles - b.ZMiles;
-            return Mathf.Sqrt(dx * dx + dz * dz);
-        }
-
         /// <summary>Save support (CLN-1 pattern).</summary>
         public JourneyModelSaveDto CaptureSaveDto()
         {

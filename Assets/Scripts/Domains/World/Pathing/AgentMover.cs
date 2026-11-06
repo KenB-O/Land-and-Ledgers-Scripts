@@ -212,25 +212,6 @@ namespace LandLedgers.Pathing
             return true;
         }
 
-        public bool MoveFromCurrentCellTo(GridCoord target, bool hideWhenArrived = true)
-        {
-            EnsureReferences();
-            if (pathingManager == null || pathingManager.Grid == null)
-            {
-                return false;
-            }
-
-            GridCoord start = pathingManager.Grid.WorldToCoord(transform.position);
-            if (!pathingManager.TryFindPath(start, target, out PathingResult result, this, $"{name} cell-to-cell"))
-            {
-                return false;
-            }
-
-            BuildingAnchor targetAnchor = new BuildingAnchor { type = AnchorType.FrontDoor, coord = target };
-            StartRoute(result.Path, start, targetAnchor, hideWhenArrived, null, null);
-            return true;
-        }
-
         private void StartRoute(IReadOnlyList<GridCoord> path, GridCoord startCoord, BuildingAnchor targetAnchor, bool hideWhenArrived, BuildingDoorAnimator startDoorAnimator, BuildingDoorAnimator targetDoorAnimator)
         {
             currentTargetAnchor = targetAnchor;

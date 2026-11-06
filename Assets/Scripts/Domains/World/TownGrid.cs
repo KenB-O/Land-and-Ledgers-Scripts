@@ -98,18 +98,6 @@ namespace LandLedgers.World
             return true;
         }
 
-        public static GridCoord Offset(GridCoord coord, GridDirection direction, int distance)
-        {
-            return direction switch
-            {
-                GridDirection.North => new GridCoord(coord.x, coord.z + distance),
-                GridDirection.East => new GridCoord(coord.x + distance, coord.z),
-                GridDirection.South => new GridCoord(coord.x, coord.z - distance),
-                GridDirection.West => new GridCoord(coord.x - distance, coord.z),
-                _ => coord
-            };
-        }
-
         public static GridCoord RotateLocalFrontOffset(GridCoord frontCenter, GridDirection frontageDirection, Vector2Int offset)
         {
             return frontageDirection switch

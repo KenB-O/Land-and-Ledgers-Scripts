@@ -105,20 +105,6 @@ namespace LandLedgers.World.Property
             IndexPlotLink(record);
         }
 
-        /// <summary>Removes a parcel (rollback path only — history is otherwise never deleted).</summary>
-        public bool RemoveParcel(string parcelId)
-        {
-            if (!parcels.TryGetValue(parcelId, out ParcelRecord record)) return false;
-            parcels.Remove(parcelId);
-            if (!string.IsNullOrWhiteSpace(record.PlotId) &&
-                parcelByPlotKey.TryGetValue(record.PlotId, out string mapped) &&
-                string.Equals(mapped, parcelId, StringComparison.Ordinal))
-            {
-                parcelByPlotKey.Remove(record.PlotId);
-            }
-            return true;
-        }
-
         public ParcelRecord GetParcel(string parcelId)
         {
             return !string.IsNullOrWhiteSpace(parcelId) && parcels.TryGetValue(parcelId, out ParcelRecord r) ? r : null;
@@ -161,14 +147,6 @@ namespace LandLedgers.World.Property
             }
 
             return null;
-        }
-
-        public IReadOnlyList<ParcelRecord> ParcelsWithStatus(LandStatus status)
-        {
-            var result = new List<ParcelRecord>();
-            foreach (ParcelRecord record in parcels.Values)
-                if (record.Status == status && !record.IsRetired) result.Add(record);
-            return result;
         }
 
         public HoldingRecord CreateHolding(string name, string notes)

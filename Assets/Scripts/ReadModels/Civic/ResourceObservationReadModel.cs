@@ -31,6 +31,13 @@ namespace LandLedgers.Reporting
     ///   no district instead of a zero that reads as "depleted".
     /// - Units: percentages are 0-1 index values rendered as %, never
     ///   tonnes, ounces, or any physical unit.
+    ///
+    /// W10 (Plan 05, W-11) test seam: the Resources tab DOES display
+    /// resource data, but with the old bare-percentage copy — the exact
+    /// wording this doc flags. Adopting this model's corrected wording
+    /// is a visible copy change for Kennedy/Codex, not a neutral wiring,
+    /// so the tab keeps reading RegionalResourceSnapshot directly and
+    /// this model stays test-pinned.
     /// </summary>
     [Serializable]
     public sealed class ResourceObservationReadModel

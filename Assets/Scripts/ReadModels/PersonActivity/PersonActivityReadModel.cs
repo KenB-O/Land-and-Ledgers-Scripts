@@ -13,6 +13,10 @@ namespace LandLedgers.Reporting
     /// to anyone but the subject. Strangers at a shared/public location see the
     /// activity but not the purpose, employer, task, or blockers; the full
     /// record is visible only to the subject and their household.
+    ///
+    /// W10 (Plan 05, W-11) test seam: no panel displays a person's live
+    /// activity history. It stays test-pinned until an activity panel
+    /// section lands.
     /// </summary>
     [Serializable]
     public sealed class PersonActivityReadModel

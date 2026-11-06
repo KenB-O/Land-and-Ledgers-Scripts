@@ -36,6 +36,9 @@ namespace LandLedgers.Reporting
     ///
     /// Clicking, selection, camera, and HUD presentation are Codex
     /// work. This model is the data contract the click handler binds.
+    ///
+    /// W10 (Plan 05, W-11) test seam: no person-click inspection panel
+    /// exists yet. It stays test-pinned until that handler lands.
     /// </summary>
     [Serializable]
     public sealed class PersonInspectionReadModel

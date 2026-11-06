@@ -189,6 +189,44 @@ namespace LandLedgers.Editor.Orchestration
         }
 
         [Test]
+        public void Civic_BuilderMatchesPanelText()
+        {
+            // W10 (Plan 05, W-11): the Civic tab now reads this builder
+            // (GeneralStorePanelController.UpdateGovernment). These exact
+            // equalities are the wiring's value-identity proof: the
+            // builder produces the strings the panel used to compute
+            // inline with BuildGovernmentSummaryText /
+            // BuildGovernmentEffectsText /
+            // BuildGovernmentOwnerImplicationsBodyText (removed with the
+            // wiring). One cosmetic difference is intentional: the old
+            // effects text ended with a trailing newline (AppendLine);
+            // the builder's does not.
+            SettlementCivicReadModel noAuthority = SettlementCivicReadModel.Build(
+                false, false, string.Empty, string.Empty, string.Empty,
+                0, 0, 0f, 0f, 0f, 0f, string.Empty);
+            Assert.AreEqual("Civic", noAuthority.TitleText);
+            Assert.AreEqual("Civic records unavailable. Town Hall authority has not been established in this save.", noAuthority.SummaryText);
+            Assert.AreEqual("Confidence +0% | Town maturity +0% | Immigration pull +0% | Land confidence +0%", noAuthority.EffectsText);
+            Assert.AreEqual("Implication: No civic uplift is improving land confidence, migration, or town-center prestige yet.", noAuthority.OwnerImplicationsText);
+
+            SettlementCivicReadModel notBuilt = SettlementCivicReadModel.Build(
+                true, false, "Town Hall", "Town Council", "Civic",
+                0, 0, 0f, 0f, 0f, 0f, string.Empty);
+            Assert.AreEqual("Civic: Town Hall", notBuilt.TitleText);
+            Assert.AreEqual("Status: no town hall yet | Steward: Town Council | Civic\nPublic civic anchor inactive; town confidence remains mostly private-market led.", notBuilt.SummaryText);
+            Assert.AreEqual("Implication: Town Hall: no town hall yet | Civic confidence +0% | Maturity +0%", notBuilt.OwnerImplicationsText);
+
+            SettlementCivicReadModel built = SettlementCivicReadModel.Build(
+                true, true, "Town Hall", "Town Council", "Civic",
+                7, 12, 0.25f, 0.5f, 0.1f, 0.75f,
+                "Town Hall: thriving | Civic confidence +25% | Maturity +50%");
+            Assert.AreEqual("Civic: Town Hall", built.TitleText);
+            Assert.AreEqual("Status: Built | Steward: Town Council | Civic\nPublic civic site: Plot 007 | Building 012", built.SummaryText);
+            Assert.AreEqual("Confidence +25% | Town maturity +50%\nImmigration pull +10% | Land confidence +75%", built.EffectsText);
+            Assert.AreEqual("Implication: Town Hall: thriving | Civic confidence +25% | Maturity +50%", built.OwnerImplicationsText);
+        }
+
+        [Test]
         public void Resources_PercentagesAreProspectivityNeverReserves()
         {
             ResourceObservationReadModel model = ResourceObservationReadModel.Build(

@@ -15,6 +15,10 @@ namespace LandLedgers.Reporting
     /// present at the equipment's location (or its owner/manager) sees
     /// condition and occupancy. WHO holds a reservation is visible only to
     /// the owner/manager; everyone else sees "occupied".
+    ///
+    /// W10 (Plan 05, W-11) test seam: no equipment panel exists; no live
+    /// display shows equipment condition, reservations, or maintenance.
+    /// It stays test-pinned until an equipment panel section lands.
     /// </summary>
     [Serializable]
     public sealed class EquipmentReadModel

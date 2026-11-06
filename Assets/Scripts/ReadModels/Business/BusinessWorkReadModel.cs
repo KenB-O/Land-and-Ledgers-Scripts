@@ -16,6 +16,13 @@ namespace LandLedgers.Reporting
     /// business location or to the owner/manager. Financials (cash position,
     /// wages paid, margins) are visible ONLY to the owner and delegated
     /// managers — never to a competitor standing in the shop.
+    ///
+    /// W10 (Plan 05, W-11) test seam: no panel displays this task-level
+    /// work picture (open/active/waiting tasks, labor-demand rows); the
+    /// live management text (SBRM BuildManagementText) shows
+    /// staffing/cash/payroll summaries, a different shape. Wiring would
+    /// add a display, not swap one — it stays test-pinned until a
+    /// work-detail panel section lands.
     /// </summary>
     [Serializable]
     public sealed class BusinessWorkReadModel

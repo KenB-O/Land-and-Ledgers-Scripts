@@ -1092,6 +1092,22 @@ namespace LandLedgers.Orchestration.Systems
             {
                 sharedBusinessRuntime.HouseholdLedgers = hub.HouseholdLedgers;
                 sharedBusinessRuntime.PersonHouseholdIdLookup = ResolvePersonHouseholdId;
+                // W10 (Plan 05, W-16): assign the household-needs registry
+                // so the weekly demand signal collects real household needs
+                // (the HouseholdShortageMonitor writes them into
+                // hub.PurchasingNeeds). Verified no leak into the
+                // business-procurement coverage signal:
+                // SharedBusinessWeeklyProcurement.TryGetDemandUnits counts
+                // BuyerKind "business" intents only (pinned by
+                // SharedBusinessDemandWiringTests
+                // .WeeklyPass_CollectsDemandBeforeProcurement), so a
+                // household intent can never cover a business need. The
+                // weekly summary's "real demand: N intents" line now counts
+                // household intents too. Assigned here, at bootstrap, before
+                // the first CollectRealDemand / RegisterBusinessInputNeed
+                // constructs the RealDemandSource (its lazy ??= captures
+                // the registry at construction time).
+                sharedBusinessRuntime.HouseholdNeedRegistry = hub.PurchasingNeeds;
                 sharedBusinessRuntime.WireHouseholdCashToBusinesses();
                 // Pass IX WS1 (A3-10/A3-12): the single debt authority, so
                 // payroll escrows and operating-liability accruals post named

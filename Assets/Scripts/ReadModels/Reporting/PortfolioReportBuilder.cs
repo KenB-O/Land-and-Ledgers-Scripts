@@ -5,6 +5,13 @@ using LandLedgers.Time;
 
 namespace LandLedgers.Reporting
 {
+    /// <summary>
+    /// W10 (Plan 05, W-11) test seam: the live Finances tab reads
+    /// PlayerPortfolioManager / BusinessPortfolioSummary, not this builder,
+    /// and its snapshot input (PortfolioReportSnapshot) has no production
+    /// producer. It stays test-pinned until a portfolio-report panel
+    /// section lands.
+    /// </summary>
     public static class PortfolioReportBuilder
     {
         public static PortfolioWeeklySummary BuildWeekly(PortfolioReportSnapshot snapshot)

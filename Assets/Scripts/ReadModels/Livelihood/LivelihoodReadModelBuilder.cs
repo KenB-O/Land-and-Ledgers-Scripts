@@ -24,6 +24,10 @@ namespace LandLedgers.Reporting
     /// shown fully only to a linked observer (same household or a documented
     /// contact-graph link). Strangers see masked placeholders — NPC private
     /// information is never disclosed automatically.
+    ///
+    /// W10 (Plan 05, W-11) test seam: no panel displays a person's
+    /// livelihood detail. It stays test-pinned until a livelihood panel
+    /// section lands.
     /// </summary>
     public sealed class LivelihoodReadModelBuilder
     {

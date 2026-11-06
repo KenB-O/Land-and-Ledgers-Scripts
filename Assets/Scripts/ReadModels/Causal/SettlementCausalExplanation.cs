@@ -21,6 +21,10 @@ namespace LandLedgers.Reporting
     /// Callers must feed this model from real records only (employment
     /// registry, obligation authority, freight records, business
     /// lifecycle). It performs no world reads itself.
+    ///
+    /// W10 (Plan 05, W-11) test seam: no panel displays causal
+    /// explanations. It stays test-pinned until a causal-explanation
+    /// panel section lands.
     /// </summary>
     [Serializable]
     public sealed class SettlementCausalExplanation

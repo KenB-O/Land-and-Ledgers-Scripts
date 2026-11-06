@@ -12,6 +12,7 @@ using LandLedgers.Economy.Financing;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Economy.Valuation;
 using LandLedgers.Population;
+using LandLedgers.Reporting;
 using LandLedgers.Time;
 using LandLedgers.Economy.Transport;
 using LandLedgers.UI;
@@ -4437,12 +4438,26 @@ namespace LandLedgers.FirstLedger
 
         private void UpdateGovernment()
         {
+            // W10 (Plan 05, W-11): the Civic tab reads the
+            // SettlementCivicReadModel builder, not the panel's own
+            // duplicated text helpers. The builder produces exactly the
+            // strings the panel used to compute inline (verified by
+            // Pass12PlayerExperienceReadModelTests
+            // .Civic_BuilderMatchesPanelText); the resident/business
+            // rosters stay panel-side — the builder does not cover them.
+            // Two cosmetic differences from the old inline text: the
+            // effects line no longer ends with a trailing newline, and a
+            // blank town-hall display name renders as "Civic" instead of
+            // an empty title.
             if (civicFoundation == null)
             {
-                SetText(view.GovernmentTitleText, "Civic");
-                SetText(view.GovernmentSummaryText, "Civic records unavailable. Town Hall authority has not been established in this save.\n\n" + BuildTownResidentRosterText());
-                SetText(view.GovernmentEffectsText, "Confidence +0% | Town maturity +0% | Immigration pull +0% | Land confidence +0%");
-                SetText(view.GovernmentOwnerImplicationsText, BuildGovernmentOwnerImplicationsBodyText("No civic uplift is improving land confidence, migration, or town-center prestige yet."));
+                SettlementCivicReadModel model = SettlementCivicReadModel.Build(
+                    false, false, string.Empty, string.Empty, string.Empty,
+                    0, 0, 0f, 0f, 0f, 0f, string.Empty);
+                SetText(view.GovernmentTitleText, model.TitleText);
+                SetText(view.GovernmentSummaryText, model.SummaryText + "\n\n" + BuildTownResidentRosterText());
+                SetText(view.GovernmentEffectsText, model.EffectsText);
+                SetText(view.GovernmentOwnerImplicationsText, model.OwnerImplicationsText);
                 SetButtonVisible(view.GovernmentFocusButton, false);
                 RefreshGovernmentLayout();
                 return;
@@ -4453,11 +4468,17 @@ namespace LandLedgers.FirstLedger
             TownHallContribution contribution = civicFoundation.CurrentTownHallContribution;
             bool built = townHall.Built;
 
-            SetText(view.GovernmentTitleText, $"Civic: {townHall.displayName}");
-            SetText(view.GovernmentSummaryText, BuildGovernmentSummaryText(townHall) + "\n\n" + BuildTownResidentRosterText());
+            SettlementCivicReadModel builtModel = SettlementCivicReadModel.Build(
+                true, built, townHall.displayName, townHall.ownerDisplayName, townHall.civicStatusLabel,
+                townHall.plotId, townHall.buildingId,
+                contribution.CivicConfidence01, contribution.TownMaturity01,
+                contribution.ImmigrationPull01, contribution.LandConfidence01,
+                civicFoundation.BuildCompactSummaryText());
+            SetText(view.GovernmentTitleText, builtModel.TitleText);
+            SetText(view.GovernmentSummaryText, builtModel.SummaryText + "\n\n" + BuildTownResidentRosterText());
             SetText(view.GovernmentBusinessRosterText, BuildTownBusinessRosterText());
-            SetText(view.GovernmentEffectsText, BuildGovernmentEffectsText(contribution));
-            SetText(view.GovernmentOwnerImplicationsText, BuildGovernmentOwnerImplicationsBodyText(civicFoundation.BuildCompactSummaryText()));
+            SetText(view.GovernmentEffectsText, builtModel.EffectsText);
+            SetText(view.GovernmentOwnerImplicationsText, builtModel.OwnerImplicationsText);
             SetButtonVisible(view.GovernmentFocusButton, built);
             SetButtonLabel(view.GovernmentFocusButton, "View Civic Site");
             SetButtonInteractable(view.GovernmentFocusButton, built);
@@ -4753,40 +4774,6 @@ namespace LandLedgers.FirstLedger
             {
                 strategyCamera.SetFocus(focusSite.AnchorPosition);
             }
-        }
-
-        private string BuildGovernmentSummaryText(TownHallState townHall)
-        {
-            if (townHall == null || !townHall.Built)
-            {
-                string owner = townHall != null && !string.IsNullOrWhiteSpace(townHall.ownerDisplayName)
-                    ? townHall.ownerDisplayName
-                    : "Town Council";
-                string status = townHall != null && !string.IsNullOrWhiteSpace(townHall.civicStatusLabel)
-                    ? townHall.civicStatusLabel
-                    : "Civic";
-                return $"Status: no town hall yet | Steward: {owner} | {status}\nPublic civic anchor inactive; town confidence remains mostly private-market led.";
-            }
-
-            return $"Status: Built | Steward: {townHall.ownerDisplayName} | {townHall.civicStatusLabel}\nPublic civic site: Plot {townHall.plotId:000} | Building {townHall.buildingId:000}";
-        }
-
-        private string BuildGovernmentEffectsText(TownHallContribution contribution)
-        {
-            StringBuilder builder = new();
-            builder.AppendLine($"Confidence +{FormatContributionPercent(contribution.CivicConfidence01)} | Town maturity +{FormatContributionPercent(contribution.TownMaturity01)}");
-            builder.AppendLine($"Immigration pull +{FormatContributionPercent(contribution.ImmigrationPull01)} | Land confidence +{FormatContributionPercent(contribution.LandConfidence01)}");
-            return builder.ToString();
-        }
-
-        private static string BuildGovernmentOwnerImplicationsBodyText(string compactSummary)
-        {
-            string summary = string.IsNullOrWhiteSpace(compactSummary)
-                ? "Town Hall: no town hall yet | Civic confidence +0% | Maturity +0%"
-                : compactSummary.Trim();
-            return summary.StartsWith("Implication:", StringComparison.OrdinalIgnoreCase)
-                ? summary
-                : $"Implication: {summary}";
         }
 
         private string BuildOffMarketText()
@@ -7959,11 +7946,6 @@ namespace LandLedgers.FirstLedger
         private static string FormatMoney(int cents)
         {
             return "$" + (cents / 100f).ToString("N2");
-        }
-
-        private static string FormatContributionPercent(float value01)
-        {
-            return $"{Mathf.RoundToInt(Mathf.Clamp01(value01) * 100f)}%";
         }
 
         private static string FormatSignedMoney(int cents)

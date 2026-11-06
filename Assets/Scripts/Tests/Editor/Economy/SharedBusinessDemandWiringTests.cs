@@ -165,13 +165,44 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void HouseholdNeedRegistry_Assigned_CollectsOpenHouseholdNeeds()
+        {
+            // W10 (Plan 05, W-16): the assigned side of the iff. With the
+            // registry assigned (SimulationDrivers wires hub.PurchasingNeeds
+            // into SBRM at bootstrap) and reserves topped up (no live
+            // shortfall), an open registry need produces exactly one
+            // household intent — the open-need channel is live. The
+            // procurement side is pinned separately:
+            // WeeklyPass_CollectsDemandBeforeProcurement proves a household
+            // intent never covers a business need, so the assignment cannot
+            // leak into the business-procurement coverage signal.
+            var f = new Fixture();
+            f.Population.GetHousehold(f.HouseholdId).reserves[0].currentUnits = 20;
+            f.FundHousehold(10000);
+            f.AddSupplier("store-1", "staple_food", 100, 120);
+
+            HouseholdPurchasingNeed need = f.Needs.CreateNeed(f.HouseholdId, "staple_food", 3);
+            need.UnitsNeeded = 5;
+            need.ReasonSummary = "test open need";
+
+            RealDemandSource assigned = f.NewSource(f.Needs, f.Population);
+            List<PurchaseIntent> intents = assigned.CollectDemand(3, f.Diag);
+            Assert.AreEqual(1, intents.Count, "assigned registry + one open need = one household intent");
+            Assert.AreEqual("household", intents[0].BuyerKind);
+            Assert.AreEqual("7", intents[0].BuyerId);
+            Assert.AreEqual("staple_food", intents[0].GoodsOrServiceId);
+            Assert.AreEqual(5, intents[0].QuantityUnits, "the open need's units, capped by stock and funds");
+        }
+
+        [Test]
         public void HouseholdNeedRegistry_Unassigned_CollectsNoHouseholdNeeds()
         {
-            // SBRM's HouseholdNeedRegistry is never assigned in production
-            // (no production assignment exists; SimulationSystemsHub
-            // .PurchasingNeeds is never wired to it). With the registry
-            // null AND reserves topped up (no live shortfall), collection
-            // returns NO household intents: the open-need channel is dead.
+            // The null-registry behaviour of the source itself: with the
+            // registry null AND reserves topped up (no live shortfall),
+            // collection returns NO household intents — the open-need
+            // channel is dead. (In production the registry IS assigned
+            // since W10/W-16; this test pins the source's null handling,
+            // not the production wiring.)
             var f = new Fixture();
             f.Population.GetHousehold(f.HouseholdId).reserves[0].currentUnits = 20;
             f.FundHousehold(10000);

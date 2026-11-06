@@ -31,10 +31,12 @@ namespace LandLedgers.Economy.Core
     /// Contract: desiredUnits / affordableUnits / unitCost are computed
     /// by the caller (SBRM still owns the landed-cost lookup and the
     /// reserve/budget math; ResolveDesiredUnits owns the covered-vs-
-    /// formula selection, with the survival formula transcribed from
-    /// CalculateSurvivalInputProcurementUnits). The caller passes both
-    /// reason strings preformatted. blockedReasons is appended to,
-    /// never pruned by this method.
+    /// formula selection, with the survival formula (shortfall +
+    /// min(pending, planned input units)) transcribed into this helper
+    /// — the old SBRM-side formula method was removed in the M5
+    /// dead-code sweep). The caller passes both reason strings
+    /// preformatted. blockedReasons is appended to, never pruned by
+    /// this method.
     /// </summary>
     public static class SharedBusinessWeeklyProcurement
     {

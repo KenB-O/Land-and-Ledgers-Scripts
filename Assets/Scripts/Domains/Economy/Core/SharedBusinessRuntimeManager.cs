@@ -348,6 +348,11 @@ namespace LandLedgers.Economy
             PopulationState population = populationManager != null ? populationManager.State : null;
             if (population?.people == null || EmploymentRegistry == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                if (population?.people == null)
+                    LogUnwiredAuthorityOncePerWeek("populationManager", "generated workplace assignments were not reconciled");
+                if (EmploymentRegistry == null)
+                    LogUnwiredAuthorityOncePerWeek("EmploymentRegistry", "generated workplace assignments were not reconciled");
                 return 0;
             }
 
@@ -456,7 +461,15 @@ namespace LandLedgers.Economy
 
         private int ReconcileOwnerOperatorPersonMirrors(PopulationState population)
         {
-            if (population?.people == null || businesses == null || EmploymentRegistry == null) return 0;
+            if (population?.people == null || businesses == null || EmploymentRegistry == null)
+            {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                if (population?.people == null)
+                    LogUnwiredAuthorityOncePerWeek("populationManager", "owner-operator person mirrors were not reconciled");
+                if (EmploymentRegistry == null)
+                    LogUnwiredAuthorityOncePerWeek("EmploymentRegistry", "owner-operator person mirrors were not reconciled");
+                return 0;
+            }
 
             int bound = 0;
             foreach (BusinessInstanceState business in businesses)
@@ -612,6 +625,14 @@ namespace LandLedgers.Economy
         /// even if the weekly pass is invoked twice in one week.
         /// </summary>
         private int lastUnregisteredHouseholdNeedsWeekKey = -1;
+
+        /// <summary>
+        /// M5 (Plan 04, D-S6): the week key each null-authority warning
+        /// was last logged for, keyed by "authority|consequence", so the
+        /// loud-wiring logs fire at most once per week per pair. Runtime
+        /// state only; never serialized.
+        /// </summary>
+        private readonly Dictionary<string, int> lastUnwiredAuthorityWarningWeekByPair = new();
 
         /// <summary>
         /// Pass VII Workstream A: collects real demand from live state. This is
@@ -1207,6 +1228,8 @@ namespace LandLedgers.Economy
         {
             if (playerPortfolio == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                LogUnwiredAuthorityOncePerWeek("playerPortfolio", "automatic cash transfers were skipped for this mode");
                 return 0;
             }
 
@@ -1381,6 +1404,9 @@ namespace LandLedgers.Economy
                 || populationManager.State == null
                 || populationManager.State.households == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                if (populationManager == null || populationManager.State == null || populationManager.State.households == null)
+                    LogUnwiredAuthorityOncePerWeek("populationManager", "occupied beds read as 0");
                 return 0;
             }
 
@@ -2811,160 +2837,6 @@ namespace LandLedgers.Economy
             return true;
         }
 
-        /// <summary>
-        /// Acquires the authored opening draft pair through the ordinary business
-        /// resource path. The opening Horse and Wagon are real registry entities;
-        /// this operation moves business cash, transfers title with provenance, and
-        /// rehomes the pair so a newly formed freight business can actually work.
-        /// It is deliberately narrow: later transport markets can replace this
-        /// opening-state offer without changing the Horse/Wagon authorities.
-        /// </summary>
-        public bool TryAcquireOpeningFreightTransport(
-            BusinessInstanceState buyer,
-            out string message)
-        {
-            AutoWire();
-            message = string.Empty;
-            if (buyer == null || buyer.BusinessType != BusinessType.LiveryFreight
-                || buyer.Owner == null || buyer.Owner.OwnerKind != BusinessOwnerKind.Player
-                || buyer.RuntimeState == null)
-            {
-                message = "A player-owned Livery & Freight business is required.";
-                return false;
-            }
-
-            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
-            if (hub == null)
-            {
-                message = "Transport authorities are unavailable.";
-                return false;
-            }
-
-            EquipmentAsset wagon = null;
-            foreach (EquipmentAsset candidate in hub.TransportAssets.Assets)
-            {
-                if (candidate != null && candidate.IsWagon
-                    && string.Equals(candidate.OwnerKind, "business", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(candidate.OwnerId, buyer.InstanceId, StringComparison.OrdinalIgnoreCase)
-                    && !candidate.IsTransportAssigned)
-                {
-                    wagon = candidate;
-                    break;
-                }
-            }
-
-            AnimalState horse = null;
-            foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
-            {
-                if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
-                    && candidate.OwnerKind == AnimalOwnerKind.Business
-                    && !string.Equals(candidate.OwnerId, buyer.InstanceId, StringComparison.OrdinalIgnoreCase)
-                    && candidate.CurrentUse == HorseUseKind.None)
-                {
-                    horse = candidate;
-                    break;
-                }
-            }
-
-            if (wagon == null || horse == null)
-            {
-                message = "No unassigned opening Horse/Wagon pair is available for purchase.";
-                return false;
-            }
-
-            string buyerHousingId = "player-livery-yard-" + buyer.InstanceId;
-            if (hub.TransportAssets.HorseHousing.Capacity(buyerHousingId) == 0)
-            {
-                string housingError = hub.TransportAssets.HorseHousing.AddHousing(buyerHousingId, 2);
-                if (housingError != null)
-                {
-                    message = housingError;
-                    return false;
-                }
-            }
-            if (hub.TransportAssets.HorseHousing.Occupied(buyerHousingId)
-                >= hub.TransportAssets.HorseHousing.Capacity(buyerHousingId))
-            {
-                message = $"Housing '{buyerHousingId}' has no available stall.";
-                return false;
-            }
-
-            BusinessInstanceState seller = FindByInstanceId(wagon.OwnerId);
-            if (seller == null || seller.RuntimeState == null
-                || !string.Equals(seller.InstanceId, horse.OwnerId, StringComparison.OrdinalIgnoreCase))
-            {
-                message = "Opening transport ownership is not held by one valid selling business.";
-                return false;
-            }
-
-            int priceCents = OpeningTransportStock.OpeningHorseSalePriceCents
-                + OpeningTransportStock.OpeningWagonSalePriceCents;
-            if (buyer.RuntimeState.CurrentCashCents < priceCents)
-            {
-                message = $"Transport purchase requires {priceCents}c; buyer has {buyer.RuntimeState.CurrentCashCents}c.";
-                return false;
-            }
-
-            string horseOwnerError = hub.Animals.TransferOwnership(
-                horse.AnimalId,
-                AnimalOwnerKind.Business,
-                buyer.InstanceId,
-                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
-                $"sold opening draft horse to {buyer.RuntimeDisplayName} for {OpeningTransportStock.OpeningHorseSalePriceCents}c");
-            if (horseOwnerError != null)
-            {
-                message = horseOwnerError;
-                return false;
-            }
-
-            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
-            string wagonOwnerError = wagon.TransferOwnership(
-                "business",
-                buyer.InstanceId,
-                $"sold opening freight wagon to {buyer.RuntimeDisplayName} for {OpeningTransportStock.OpeningWagonSalePriceCents}c",
-                dayIndex);
-            if (wagonOwnerError != null)
-            {
-                hub.Animals.TransferOwnership(
-                    horse.AnimalId,
-                    AnimalOwnerKind.Business,
-                    seller.InstanceId,
-                    dayIndex,
-                    "reversed failed opening transport sale");
-                message = wagonOwnerError;
-                return false;
-            }
-
-            buyer.RuntimeState.AdjustCashCents(-priceCents);
-            seller.RuntimeState.AdjustCashCents(priceCents);
-
-            hub.TransportAssets.HorseHousing.Release(OpeningTransportStock.OpeningHousingId, horse.AnimalId.ToString());
-            string assignError = hub.TransportAssets.HorseHousing.Assign(buyerHousingId, horse.AnimalId.ToString());
-            if (assignError != null)
-            {
-                message = assignError;
-                return false;
-            }
-
-            string housingStateError = HorseAuthority.SetHousing(horse, buyerHousingId, buyerHousingId);
-            if (housingStateError == null)
-            {
-                housingStateError = HorseAuthority.SetCustody(horse, "business", buyer.InstanceId);
-            }
-
-            wagon.LocationId = buyerHousingId;
-            wagon.StorageLocationId = buyerHousingId;
-            hub.Valuation.RegisterBusiness(buyer.InstanceId, buyer.RuntimeDisplayName, true);
-            hub.Valuation.RecordTransferableAssets(
-                buyer.InstanceId,
-                OpeningTransportStock.OpeningHorseSalePriceCents + OpeningTransportStock.OpeningWagonSalePriceCents);
-
-            message = housingStateError == null
-                ? $"Purchased opening Horse {horse.AnimalId} and Wagon {wagon.AssetId} for {priceCents}c."
-                : $"Purchased opening Horse {horse.AnimalId} and Wagon {wagon.AssetId}, but housing update reported: {housingStateError}";
-            return true;
-        }
-
         public bool TryAcquireOpeningHorse(BusinessInstanceState buyer, out string message)
         {
             AutoWire();
@@ -3937,6 +3809,11 @@ namespace LandLedgers.Economy
             return BusinessSiteSuitabilityEvaluator.CanOperate(profile, building, GetPlot(building != null ? building.plotId : -1));
         }
 
+        // M5 (Plan 04, D-S6) test seam: kept — invoked by
+        // Tests/PlayMode/PlayableScenarioStartupPlayModeTests via
+        // reflection to assert premises assignment succeeds. (The M0
+        // audit listed it as fully dead; that verdict was wrong — the
+        // PlayMode reflection callers were missed.)
         /// <summary>
         /// Establishes premises for an already formed player business. This keeps
         /// entity creation separate from property/site use while ensuring the site
@@ -4157,6 +4034,11 @@ namespace LandLedgers.Economy
         {
             if (linkedSawmillSupportNode == null || !linkedSawmillSupportNode.RemoteProductionEnabled)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                // Only the null node is a wiring gap; a disabled node is
+                // a config state, not a missing authority.
+                if (linkedSawmillSupportNode == null)
+                    LogUnwiredAuthorityOncePerWeek("linkedSawmillSupportNode", "linked sawmill support production was skipped");
                 return 0;
             }
 
@@ -5316,6 +5198,10 @@ namespace LandLedgers.Economy
                 || populationManager.State == null
                 || populationManager.State.households == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0
+                // (the service path's paid-visits gate: 0 visits = no
+                // service revenue).
+                LogUnwiredAuthorityOncePerWeek("populationManager", "paid service visits read as 0 (no service revenue)");
                 return 0;
             }
 
@@ -5546,17 +5432,6 @@ namespace LandLedgers.Economy
             return receivedUnits;
         }
 
-        private static int CalculateSurvivalInputProcurementUnits(
-            CategoryStockState stock,
-            int plannedInputUnits,
-            int productionShortfall)
-        {
-            int shortfall = Mathf.Max(0, productionShortfall);
-            int weeklyBuffer = Mathf.Max(0, plannedInputUnits);
-            int pendingBuffer = stock != null ? Mathf.Min(Mathf.Max(0, stock.PendingReorderUnits), weeklyBuffer) : 0;
-            return shortfall + pendingBuffer;
-        }
-
         private void ReleaseSuspendedPayrollWorkersFromPopulation(BusinessInstanceState business)
         {
             if (business == null
@@ -5670,6 +5545,8 @@ namespace LandLedgers.Economy
             return Mathf.Max(SharedOperatingCashFloorCents, survivalReserve + fragilityPadding);
         }
 
+        // M5 (Plan 04, D-S6) test seam: kept — test-only callers
+        // (ProfessionWaveRuntimeTests); no production callers.
         public int GetLocalTradeAdjustedSurvivalCashReserveCents(BusinessInstanceState business)
         {
             if (business == null || business.RuntimeState == null)
@@ -5814,22 +5691,6 @@ namespace LandLedgers.Economy
             blockedReasons.Add(trimmed);
         }
 
-        private static void RemoveBlockedReason(List<string> blockedReasons, string reason)
-        {
-            if (blockedReasons == null || string.IsNullOrWhiteSpace(reason))
-            {
-                return;
-            }
-
-            for (int i = blockedReasons.Count - 1; i >= 0; i--)
-            {
-                if (string.Equals(blockedReasons[i]?.Trim(), reason.Trim(), StringComparison.OrdinalIgnoreCase))
-                {
-                    blockedReasons.RemoveAt(i);
-                }
-            }
-        }
-
         private static string BuildBlockedReason(List<string> blockedReasons)
         {
             if (blockedReasons == null || blockedReasons.Count == 0)
@@ -5903,6 +5764,9 @@ namespace LandLedgers.Economy
             return fulfilledUnits;
         }
 
+        // M5 (Plan 04, D-S6) test seam: kept by design — the test-only
+        // entry point for the owned-business transfer agreements pass
+        // (BusinessTransferAgreementTests).
         public int ResolveOwnedBusinessTransferAgreementsForTests(int weekKey)
         {
             return ResolveOwnedBusinessTransferAgreements(weekKey, null);
@@ -6161,6 +6025,11 @@ namespace LandLedgers.Economy
                 || generalStoreRuntime.CurrentBusiness == null
                 || generalStoreRuntime.RuntimeState == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                // Only the null runtime is a wiring gap; the other arms
+                // are template/init/state guards.
+                if (generalStoreRuntime == null)
+                    LogUnwiredAuthorityOncePerWeek("generalStoreRuntime", "the recurring General Store order was not resolved");
                 return 0;
             }
 
@@ -7363,6 +7232,8 @@ namespace LandLedgers.Economy
             logisticsRuntime ??= FindAnyObjectByType<LogisticsRuntimeManager>();
             if (logisticsRuntime == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                LogUnwiredAuthorityOncePerWeek("logisticsRuntime", "the business-to-business transfer was refused with 0 units");
                 return 0;
             }
 
@@ -7414,6 +7285,9 @@ namespace LandLedgers.Economy
                 || shipment.RoutePlan.VisiblePath == null
                 || shipment.RoutePlan.VisiblePath.Count <= 0)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0
+                // (no shipment plan could be created for this transfer).
+                Debug.LogWarning($"[SharedBusinessRuntimeManager] TransferBetweenBusinesses: no shipment route for {source.RuntimeDisplayName}->{destination.RuntimeDisplayName} ({units} {sourceCategoryId}); no units moved.", this);
                 return 0;
             }
 
@@ -7469,6 +7343,11 @@ namespace LandLedgers.Economy
             AutoWire();
             if (generalStoreRuntime == null || !generalStoreRuntime.InitializeIfNeeded() || generalStoreRuntime.RuntimeState == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                // Only the null runtime is a wiring gap; the other arms
+                // are init/state guards.
+                if (generalStoreRuntime == null)
+                    LogUnwiredAuthorityOncePerWeek("generalStoreRuntime", "the transfer to the General Store was refused with 0 units");
                 return 0;
             }
 
@@ -7502,6 +7381,8 @@ namespace LandLedgers.Economy
             logisticsRuntime ??= FindAnyObjectByType<LogisticsRuntimeManager>();
             if (logisticsRuntime == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                LogUnwiredAuthorityOncePerWeek("logisticsRuntime", "the transfer to the General Store was refused with 0 units");
                 return 0;
             }
 
@@ -7563,6 +7444,9 @@ namespace LandLedgers.Economy
                 || shipment.RoutePlan.VisiblePath == null
                 || shipment.RoutePlan.VisiblePath.Count <= 0)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0
+                // (no shipment plan could be created for this transfer).
+                Debug.LogWarning($"[SharedBusinessRuntimeManager] TransferToGeneralStore: no shipment route for {source.RuntimeDisplayName}->General Store ({units} {sourceCategoryId}); no units moved.", this);
                 return 0;
             }
 
@@ -8345,6 +8229,8 @@ namespace LandLedgers.Economy
             return Mathf.Max(1, Mathf.FloorToInt(request * efficiency));
         }
 
+        // M5 (Plan 04, D-S6) test seam: kept — live internally (23
+        // call sites) and asserted by tests; not a duplicate.
         public float GetHealthAdjustedOperatingEfficiency01(BusinessInstanceState business)
         {
             BusinessRuntimeState runtime = business != null ? business.RuntimeState : null;
@@ -8872,6 +8758,9 @@ namespace LandLedgers.Economy
             return CalculateLocalWholesaleTransferPriceCents(sourceLandedCost, sourcePrice, storeRetailPrice);
         }
 
+        // M5 (Plan 04, D-S6) test seam: kept — production reaches it
+        // through GetAverageCategoryTransferPriceCents; also asserted
+        // directly by GeneralStoreEconomyRepairTests.
         public static int CalculateLocalWholesaleTransferPriceCents(
             int sourceLandedCostCents,
             int sourceTransferPriceCents,
@@ -9271,6 +9160,8 @@ namespace LandLedgers.Economy
             EnsureProfilesLoaded();
             if (townWorld == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                LogUnwiredAuthorityOncePerWeek("townWorld", "opening businesses were not ensured");
                 return 0;
             }
 
@@ -9623,6 +9514,9 @@ namespace LandLedgers.Economy
                 return true;
             }
 
+            // M5 (Plan 04, D-S6): kept — required member of
+            // IBusinessCreationContext (BusinessCreation.cs); zero
+            // callers is expected, not dead code.
             public void LogDiagnostic(string message)
             {
                 Debug.Log($"[BIZ-1] {message}");
@@ -9687,6 +9581,8 @@ namespace LandLedgers.Economy
         {
             if (townWorld == null)
             {
+                // M5 (Plan 04, D-S6): loud wiring — was a silent return 0.
+                LogUnwiredAuthorityOncePerWeek("townWorld", "the obsolete legacy passive-business seed did not run (no businesses ensured)");
                 return 0;
             }
 
@@ -9969,34 +9865,6 @@ namespace LandLedgers.Economy
             SortProfilesForDeterministicSeeding();
         }
 
-        /// <summary>
-        /// Returns the authored business catalog exposed by the shared runtime.
-        /// Formation UI must use this list rather than maintaining a second enum
-        /// list that can advertise types with no configured operating profile.
-        /// </summary>
-        public BusinessType[] GetPlayerCreatableBusinessTypes()
-        {
-            EnsureProfilesLoaded();
-            if (businessProfiles == null || businessProfiles.Length == 0)
-            {
-                return Array.Empty<BusinessType>();
-            }
-
-            List<BusinessType> types = new List<BusinessType>(businessProfiles.Length);
-            for (int i = 0; i < businessProfiles.Length; i++)
-            {
-                BusinessProfileDefinition profile = businessProfiles[i];
-                if (profile == null || profile.Business == null || types.Contains(profile.Business.BusinessType))
-                {
-                    continue;
-                }
-
-                types.Add(profile.Business.BusinessType);
-            }
-
-            return types.ToArray();
-        }
-
         private void Awake()
         {
             AutoWire();
@@ -10017,6 +9885,28 @@ namespace LandLedgers.Economy
             UnsubscribeFromTime();
         }
 
+        /// <summary>
+        /// M5 (Plan 04, D-S6): logs a null-authority warning at most once
+        /// per week per (authority, consequence) pair. The string is built
+        /// by SharedBusinessWiring (pinned by SharedBusinessWiringTests);
+        /// the MonoBehaviour logging here is source-reviewed. Week-keyed
+        /// because the call sites run many times per pass — a plain log
+        /// per call would flood the console.
+        /// </summary>
+        private void LogUnwiredAuthorityOncePerWeek(string authority, string consequence)
+        {
+            string warning = SharedBusinessWiring.BuildUnwiredAuthorityWarning(authority, consequence);
+            string pairKey = $"{authority ?? string.Empty}|{consequence ?? string.Empty}";
+            int weekKey = GetCurrentWeekKey();
+            if (lastUnwiredAuthorityWarningWeekByPair.TryGetValue(pairKey, out int lastWeek) && lastWeek == weekKey)
+            {
+                return;
+            }
+
+            lastUnwiredAuthorityWarningWeekByPair[pairKey] = weekKey;
+            Debug.LogWarning(warning, this);
+        }
+
         private void AutoWire()
         {
             townWorld ??= FindAnyObjectByType<TownWorldController>();
@@ -10030,6 +9920,26 @@ namespace LandLedgers.Economy
                 SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
                 EmploymentRegistry = hub != null ? hub.Employments : null;
             }
+
+            // M5 (Plan 04, D-S6): loud wiring — one warning per
+            // still-null authority, naming it and its consequence.
+            // Week-keyed per pair (see LogUnwiredAuthorityOncePerWeek):
+            // AutoWire runs dozens of times per pass, and a plain log
+            // per call would flood the console.
+            if (townWorld == null)
+                LogUnwiredAuthorityOncePerWeek("townWorld", "map, building, and premises resolution is unavailable");
+            if (populationManager == null)
+                LogUnwiredAuthorityOncePerWeek("populationManager", "population state, household visits, and demand collection are unavailable");
+            if (timeManager == null)
+                LogUnwiredAuthorityOncePerWeek("timeManager", "the simulation clock, week keys, and day index are unavailable");
+            if (generalStoreRuntime == null)
+                LogUnwiredAuthorityOncePerWeek("generalStoreRuntime", "General Store transfers and recurring store orders are unavailable");
+            if (playerPortfolio == null)
+                LogUnwiredAuthorityOncePerWeek("playerPortfolio", "automatic cash transfers and owner distributions are unavailable");
+            if (logisticsRuntime == null)
+                LogUnwiredAuthorityOncePerWeek("logisticsRuntime", "business-to-business transfers and shipments are unavailable");
+            if (EmploymentRegistry == null)
+                LogUnwiredAuthorityOncePerWeek("EmploymentRegistry", "workplace assignment reconciliation and employment wiring are unavailable");
         }
 
         private Func<LocalRecurringOrderFulfillmentRequest, int, int, int, int> BuildRecurringOrderShipmentScheduler(

@@ -3726,6 +3726,10 @@ namespace LandLedgers.Orchestration.Systems
             // the registration log. Empty when the shipment already existed
             // or the exit point could not be resolved (non-gating — see below).
             string resolvedExitSummary = string.Empty;
+            // Slice S8: grid-exit route summary for the registration log.
+            // Empty when the shipment already existed or the route could not
+            // be planned (non-gating — see below).
+            string resolvedExitRouteSummary = string.Empty;
             string registrationRefusal = book.TryRegisterShipment(agreement.AgreementId,
                 (FreightServiceAgreement accepted, out string shipmentId, out string reason) =>
                 {
@@ -3795,10 +3799,15 @@ namespace LandLedgers.Orchestration.Systems
                     // failure — nothing consumes the exit point yet, so
                     // refusing a shipment over an unconsumed diagnostic
                     // would block flour delivery for a log line.
+                    // Slice S8: the exit point is kept for the route planning
+                    // below — the S7 resolver leaves HasGridExit false, and
+                    // the S8 call fills that slot.
+                    RegionalExitPoint exitPoint = null;
                     if (RegionalExitPointResolver.TryResolve(
                             Journeys ?? hub.Journeys, "town-center", siteLocationId,
-                            out RegionalExitPoint exitPoint, out string exitReason))
+                            out RegionalExitPoint resolvedExitPoint, out string exitReason))
                     {
+                        exitPoint = resolvedExitPoint;
                         resolvedExitSummary = $"exit={exitPoint.GatewayLocationId} {exitPoint.GatewayRouteMiles:F1} mi " +
                             $"{exitPoint.GatewayTravelDays}d + {exitPoint.OffMapLegDays}d off-map, due-back +{exitPoint.DueReturnDayOffset}d";
                     }
@@ -3818,6 +3827,35 @@ namespace LandLedgers.Orchestration.Systems
                         diagnostics, out reason, accepted.AgreementId, lot.LotId, lot.SkuId,
                         holdForDispatchAuthorization: true, transitDurationGameSeconds: transitSeconds);
                     if (created == null || created.IsPreLoadBlocked) return false;
+                    // Slice S8: plan the staging-to-edge exit route for the
+                    // registration log and for the Objective 23 movement
+                    // controller. NON-GATING by design, like the S7 exit
+                    // resolution: the route is not consumed by anything in
+                    // S8, so a planning failure must never block flour
+                    // delivery. Guarded on exitPoint != null — the S7
+                    // resolution may have refused, in which case there is no
+                    // bearing to select on; a missing exit point is a missing
+                    // input, not a reason to invent one.
+                    if (exitPoint != null)
+                    {
+                        LogisticsRuntimeManager logisticsRuntime = FindAnyObjectByType<LogisticsRuntimeManager>();
+                        if (logisticsRuntime == null)
+                        {
+                            Debug.LogWarning($"[FreightAgreement] Exit route unplanned for shipment '{stableShipmentId}': logistics runtime unavailable.", this);
+                        }
+                        else if (logisticsRuntime.TryPlanFreightExitRoute(carrier, exitPoint, out LogisticsRoutePlan exitPlan, out string exitRouteReason))
+                        {
+                            created.routePlan = exitPlan;
+                            exitPoint.GridExitCoord = exitPlan.VisibleEnd;
+                            exitPoint.HasGridExit = true;
+                            resolvedExitRouteSummary = $", grid-exit=({exitPlan.VisibleEnd.x}, {exitPlan.VisibleEnd.z}) " +
+                                $"{exitPlan.VisiblePath?.Count ?? 0} cells {exitPlan.VisibleTravelGameSeconds:F0}s";
+                        }
+                        else
+                        {
+                            Debug.LogWarning($"[FreightAgreement] Exit route unplanned for shipment '{stableShipmentId}': {exitRouteReason}", this);
+                        }
+                    }
                     shipmentId = created.ShipmentId;
                     if (diagnostics.Count > 0)
                         Debug.Log("[FreightAgreement] Shipment authority: " + string.Join(" | ", diagnostics), this);
@@ -3844,8 +3882,10 @@ namespace LandLedgers.Orchestration.Systems
                 : $"transit={shipment.transitDurationGameSeconds:F0}s";
             // Slice S7: name the exit when this call resolved it; for a
             // recovered shipment the exit was resolved at its creation and
-            // is not re-derived here.
-            string exitSummary = !string.IsNullOrWhiteSpace(resolvedExitSummary) ? ", " + resolvedExitSummary : string.Empty;
+            // is not re-derived here. Slice S8 appends the grid-exit route
+            // (exit cell, visible cell count, grid-leg seconds) when this
+            // call planned it.
+            string exitSummary = !string.IsNullOrWhiteSpace(resolvedExitSummary) ? ", " + resolvedExitSummary + resolvedExitRouteSummary : string.Empty;
             Debug.Log($"[FreightAgreement] {(alreadyRegistered ? "Recovered existing" : "Registered")} shipment '{shipment.ShipmentId}' " +
                 $"for accepted agreement '{linked.AgreementId}' ({quoteSummary}); lot='{shipment.CargoLotId}', " +
                 $"status={shipment.Status}, dispatch hold={shipment.requiresDispatchAuthorization}, {transitSummary}{exitSummary}, " +

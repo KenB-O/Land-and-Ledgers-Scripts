@@ -11,6 +11,7 @@ using LandLedgers.Persistence;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Time;
 using LandLedgers.World;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 
 namespace LandLedgers.Economy
@@ -1480,6 +1481,83 @@ namespace LandLedgers.Economy
             }
 
             return plan;
+        }
+
+        /// <summary>
+        /// Slice S8 (Objective 25, grid-exit half): plan the staging-to-edge
+        /// grid route for a detailed freight shipment. Staging is the source
+        /// business's LRM road-access cell (TryResolveBusinessRoadAccess —
+        /// the plot roadAccessCell, no home-building fallback); the exit cell
+        /// is the bearing-side edge road selected by GridExitSelector from
+        /// the exit point's gateway bearing; the route is a pure in-grid
+        /// GridCoord-to-GridCoord plan (ExtraOffMapCells = 0 — the off-map
+        /// leg is journey-scale, owned by the exit record and the Objective
+        /// 26 departure, not by grid cells). The grid-leg seconds on the
+        /// returned plan are informational for the Objective 23 movement
+        /// controller; this method never writes them into the shipment's
+        /// transit duration. SOURCE-REVIEWED ONLY:
+        /// LogisticsRuntimeManager.cs is harness-excluded, so this method is
+        /// verified by reading against GridExitSelector /
+        /// LogisticsRoutePlanner / LogisticsRouteTypes, not by harness tests.
+        /// </summary>
+        public bool TryPlanFreightExitRoute(BusinessInstanceState source, RegionalExitPoint exitPoint, out LogisticsRoutePlan plan, out string reason)
+        {
+            plan = null;
+            reason = string.Empty;
+            AutoWire();
+
+            if (source == null)
+            {
+                reason = "TryPlanFreightExitRoute: no source business supplied — cannot resolve staging.";
+                return false;
+            }
+
+            if (exitPoint == null)
+            {
+                reason = "TryPlanFreightExitRoute: no regional exit point supplied — no gateway bearing to select on.";
+                return false;
+            }
+
+            // NOTE: no !exitPoint.HasGridExit guard — the exit point arrives
+            // from S7 with HasGridExit == false by construction, and this
+            // method is what fills the grid slot.
+            if (!TryResolveBusinessRoadAccess(source, out GridCoord staging))
+            {
+                // TryResolveBusinessRoadAccess returns no reason of its own,
+                // so the refusal names the business whose staging is missing.
+                reason = $"TryPlanFreightExitRoute: road access could not be resolved for business '{source.InstanceId}' — no placed building or plot road-access cell, so the freight exit route has no staging cell.";
+                return false;
+            }
+
+            if (townWorld == null || townWorld.Grid == null)
+            {
+                reason = "TryPlanFreightExitRoute: no town grid available — cannot select an exit road.";
+                return false;
+            }
+
+            if (!GridExitSelector.TrySelectEdgeRoad(townWorld.Grid, staging, exitPoint.GatewayEastMiles, exitPoint.GatewayNorthMiles, out GridCoord exitCell, out string selectReason))
+            {
+                reason = selectReason;
+                return false;
+            }
+
+            LogisticsRoutePlan planned = PlanRoute(new LogisticsRouteRequest(staging, exitCell, LogisticsPathEndpointKind.GridCoord, LogisticsPathEndpointKind.GridCoord, 0, "freight exit " + exitPoint.GatewayLocationId), out string planReason);
+            if (planned == null)
+            {
+                reason = planReason;
+                return false;
+            }
+
+            // The request label carries the haul name (CreatePlanShell copies
+            // request.Label into plan.label); only fill it if the planner
+            // did not already — never overwrite a set label.
+            if (string.IsNullOrWhiteSpace(planned.Label))
+            {
+                planned.label = "freight exit " + exitPoint.GatewayLocationId;
+            }
+
+            plan = planned;
+            return true;
         }
 
         private void ResolveCarrierAssignment(

@@ -241,6 +241,105 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void WeeklyPass_CollectsDemandBeforeProcurement()
+        {
+            // M2 (Plan 04, D-S5): the demand signal the weekly pass
+            // reads. The COLLECTION ORDER itself — CollectRealDemand once
+            // at the top of ResolveWeeklySharedOperations, before the
+            // converter — is MonoBehaviour-level and source-reviewed in
+            // SBRM; this test pins the seam it feeds: the covered-vs-
+            // formula desired-units selection in
+            // SharedBusinessWeeklyProcurement.ResolveDesiredUnits.
+            var intents = new List<PurchaseIntent>
+            {
+                new PurchaseIntent { BuyerKind = "business", BuyerId = "bakery-1", GoodsOrServiceId = "flour", QuantityUnits = 10, AgreedPriceCents = 2000 },
+                new PurchaseIntent { BuyerKind = "business", BuyerId = "bakery-1", GoodsOrServiceId = "flour", QuantityUnits = 5, AgreedPriceCents = 1000 },
+                new PurchaseIntent { BuyerKind = "business", BuyerId = "bakery-1", GoodsOrServiceId = "notions", QuantityUnits = 5, AgreedPriceCents = 50 },
+                // A household intent for the same category string must
+                // NEVER read as a business need.
+                new PurchaseIntent { BuyerKind = "household", BuyerId = "7", GoodsOrServiceId = "flour", QuantityUnits = 12, AgreedPriceCents = 1440 },
+            };
+
+            Assert.IsTrue(SharedBusinessWeeklyProcurement.TryGetDemandUnits(intents, "bakery-1", "flour", out int flourUnits),
+                "the bakery's flour need is covered");
+            Assert.AreEqual(15, flourUnits, "duplicate registrations sum: 10 + 5 (the M0 hazard — M4 must clear + re-register weekly)");
+            Assert.IsTrue(SharedBusinessWeeklyProcurement.TryGetDemandUnits(intents, "bakery-1", "notions", out int notionsUnits));
+            Assert.AreEqual(5, notionsUnits);
+            Assert.IsTrue(!SharedBusinessWeeklyProcurement.TryGetDemandUnits(intents, "bakery-1", "fuel", out _),
+                "fuel is uncovered — no intent, no demand signal");
+            Assert.IsTrue(!SharedBusinessWeeklyProcurement.TryGetDemandUnits(intents, "mill-2", "flour", out _),
+                "another buyer's flour need does not cover the bakery");
+            Assert.IsTrue(!SharedBusinessWeeklyProcurement.TryGetDemandUnits(
+                new List<PurchaseIntent> { intents[3] }, "bakery-1", "flour", out _),
+                "a household-only flour intent does not cover the bakery");
+
+            // Covered: the intent quantity REPLACES the formula (which
+            // would give shortfall 10 + pending 0 = 10 for stock 2/12).
+            Assert.AreEqual(15, SharedBusinessWeeklyProcurement.ResolveDesiredUnits(2, 0, 12, intents, "bakery-1", "flour"));
+            // Uncovered: the existing computation is unchanged.
+            Assert.AreEqual(10, SharedBusinessWeeklyProcurement.ResolveDesiredUnits(2, 0, 12, intents, "bakery-1", "fuel"),
+                "shortfall 12-2 = 10, no pending buffer");
+            Assert.AreEqual(12, SharedBusinessWeeklyProcurement.ResolveDesiredUnits(2, 2, 12, intents, "bakery-1", "fuel"),
+                "shortfall 10 + min(pending 2, planned 12) = 12");
+            Assert.AreEqual(10, SharedBusinessWeeklyProcurement.ResolveDesiredUnits(2, 0, 12, null, "bakery-1", "flour"),
+                "a null intent list is uncovered — the formula applies");
+        }
+
+        [Test]
+        public void WeeklyPass_RecurringTradeSuppliesConverterInput()
+        {
+            // M2 (Plan 04, D-S1 sequencing): the RESOLVER ORDER itself —
+            // recurring orders + transfer agreements + crop transfers
+            // before the converter — is MonoBehaviour-level and
+            // source-reviewed in ResolveWeeklySharedOperations; this test
+            // pins the seam that order enables: once a recurring-order
+            // delivery has landed, the converter's desired units drop to
+            // what the delivery did not cover, so nothing is procured a
+            // second time.
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity("bakery-1");
+            runtime.SetCurrentCashCents(5000);
+            runtime.EnsureCategoryStock("flour", 2, 100);
+
+            // Before the delivery: shortfall 12 - 2 = 10, the converter
+            // would procure 10.
+            Assert.AreEqual(10, SharedBusinessWeeklyProcurement.ResolveDesiredUnits(
+                runtime.GetCategoryStock("flour").CurrentStockUnits, 0, 12, null, "bakery-1", "flour"));
+
+            // The recurring-order delivery lands (10 units into the pool).
+            Assert.AreEqual(10, runtime.AddCategoryStockUnits("flour", 10), "the delivery lands before the converter runs");
+            Assert.AreEqual(12, runtime.GetCategoryStock("flour").CurrentStockUnits);
+
+            // After the delivery: desired 0 — the converter procures
+            // nothing new (Apply with desired 0 receives 0, spends 0).
+            Assert.AreEqual(0, SharedBusinessWeeklyProcurement.ResolveDesiredUnits(
+                runtime.GetCategoryStock("flour").CurrentStockUnits, 0, 12, null, "bakery-1", "flour"));
+            int received = SharedBusinessWeeklyProcurement.ApplyWeeklyInputProcurement(
+                runtime, "flour", 0, 0, 100,
+                "no recurring local supplier: flour",
+                "cash-limited input procurement: flour (reserve $0.00)",
+                new List<string>());
+            Assert.AreEqual(0, received, "nothing double-procured");
+            Assert.AreEqual(5000, runtime.CurrentCashCents, "no cash spent on units trade already supplied");
+            Assert.AreEqual(12, runtime.GetCategoryStock("flour").CurrentStockUnits);
+
+            // Pending still receipts (a reservation, not a new purchase):
+            // post-trade stock is full but 4 pending units remain.
+            runtime.GetCategoryStock("flour").SetPendingReorderUnits(4);
+            Assert.AreEqual(4, SharedBusinessWeeklyProcurement.ResolveDesiredUnits(
+                runtime.GetCategoryStock("flour").CurrentStockUnits, 4, 12, null, "bakery-1", "flour"),
+                "shortfall 0 + min(pending 4, planned 12) = 4");
+            int pendingReceived = SharedBusinessWeeklyProcurement.ApplyWeeklyInputProcurement(
+                runtime, "flour", 4, 10, 100,
+                "no recurring local supplier: flour",
+                "cash-limited input procurement: flour (reserve $0.00)",
+                new List<string>());
+            Assert.AreEqual(4, pendingReceived, "the pending reservation is received");
+            Assert.AreEqual(16, runtime.GetCategoryStock("flour").CurrentStockUnits, "12 + 4 pending, nothing conjured");
+            Assert.AreEqual(4600, runtime.CurrentCashCents, "exactly the pending cost: 4 x 100");
+        }
+
+        [Test]
         public void DuplicateRegistration_CollectsTwice_WeeklyPassMustNotDoubleRegister()
         {
             // Characterization of a hazard, not a fix: registering the

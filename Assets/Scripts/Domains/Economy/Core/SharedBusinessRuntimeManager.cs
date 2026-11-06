@@ -597,6 +597,23 @@ namespace LandLedgers.Economy
         private SupplierDirectory realDemandSuppliers;
 
         /// <summary>
+        /// M2 (Plan 04, D-S5): the real-demand intents collected once at
+        /// the top of ResolveWeeklySharedOperations for the current weekly
+        /// pass. Read by ProcureInputsForWeeklyOperation as the demand
+        /// signal (via SharedBusinessWeeklyProcurement.ResolveDesiredUnits);
+        /// null outside a weekly pass, when the survival formula applies.
+        /// Cleared at the end of the pass so a stale list is never read.
+        /// </summary>
+        private List<PurchaseIntent> weeklyDemandIntents;
+
+        /// <summary>
+        /// M2: the week key the unregistered-HouseholdNeedRegistry warning
+        /// was last logged for, so the loud once-per-week log fires once
+        /// even if the weekly pass is invoked twice in one week.
+        /// </summary>
+        private int lastUnregisteredHouseholdNeedsWeekKey = -1;
+
+        /// <summary>
         /// Pass VII Workstream A: collects real demand from live state. This is
         /// the replacement for the retired town-pulse revenue path: it returns
         /// <see cref="PurchaseIntent"/>s from actual household needs and
@@ -1047,6 +1064,20 @@ namespace LandLedgers.Economy
             BusinessType.Lawyer,
         };
 
+        /// <summary>
+        /// Weekly pass order (M2, Plan 04): (1) real-demand collection
+        /// (business needs + household needs where registered); (2) weekly
+        /// settlement reset; (3) automatic cash transfers (LowerOnly);
+        /// (4) payroll; (5) REAL TRADE before formula — crop-farm output
+        /// transfers, recurring local orders, owned transfer agreements;
+        /// (6) the archetype converter (sees post-trade stock and the
+        /// demand signal); (7) lumber fallbacks; (8) local-market sales;
+        /// (9) automatic cash transfers (UpperOnly); (10) baseline
+        /// throughput for unrouted types; (11) owner distributions.
+        /// Real trade runs before the converter so M1's refusals are rare
+        /// and honest: the converter consumes what trade supplied instead
+        /// of procuring the same units a second time.
+        /// </summary>
         public void ResolveWeeklySharedOperations()
         {
             // Weekly resolution can be invoked directly by a scenario/test driver
@@ -1062,6 +1093,30 @@ namespace LandLedgers.Economy
             int operationCount = 0;
             int transferCount = 0;
             int cashTransferCount = 0;
+
+            // M2 (Plan 04, D-S5): collect real demand ONCE at the top of
+            // the weekly pass, before any resolver runs. The intents are
+            // the demand signal for the procurement path (they replace the
+            // survival-formula desired-units computation only where a
+            // registered intent covers the category). Collection never
+            // moves money or goods.
+            List<string> demandDiagnostics = new();
+            weeklyDemandIntents = CollectRealDemand(CurrentDayIndex, demandDiagnostics);
+            AppendSummarySegment(builder, $"real demand: {weeklyDemandIntents.Count} intents");
+            foreach (string demandLine in demandDiagnostics)
+            {
+                AppendSummarySegment(builder, demandLine);
+            }
+
+            if (HouseholdNeedRegistry == null)
+            {
+                int weekKey = GetCurrentWeekKey();
+                if (weekKey != lastUnregisteredHouseholdNeedsWeekKey)
+                {
+                    lastUnregisteredHouseholdNeedsWeekKey = weekKey;
+                    AppendSummarySegment(builder, "WARNING: HouseholdNeedRegistry is unregistered — household needs are not collected; business needs only");
+                }
+            }
 
             // P1: weekly settlement + payroll now cover every BusinessType except
             // GeneralStore (its payroll/settlement runs through
@@ -1080,8 +1135,12 @@ namespace LandLedgers.Economy
                 ResolvePayrollForType(payrollType);
             }
 
-            operationCount += ResolveArchetypeRoutedWeeklyOperations(builder);
-
+            // M2 (Plan 04, D-S1 sequencing): REAL TRADE BEFORE FORMULA.
+            // Crop transfers, recurring orders, and transfer agreements
+            // run before the converter, so the converter sees post-trade
+            // stock and consumes what trade supplied instead of
+            // procuring the same units a second time. No resolver's
+            // internals change here — only the order.
             // Farm output is physical inventory first. Move it through the shared
             // logistics authority before local-market sales consume any remainder;
             // otherwise the crop-to-store route exists only as dead code and the
@@ -1089,6 +1148,9 @@ namespace LandLedgers.Economy
             transferCount += TransferCropFarmOutputs(builder);
             transferCount += ResolveRecurringLocalOrders(builder);
             transferCount += ResolveOwnedBusinessTransferAgreements(builder);
+
+            operationCount += ResolveArchetypeRoutedWeeklyOperations(builder);
+
             transferCount += ResolveLumberIndustryOffMapFallback(builder);
             transferCount += ResolveLumberYardLocalBuilderDemand(builder);
 
@@ -1126,6 +1188,9 @@ namespace LandLedgers.Economy
 
             ResolveOwnerDistributionsForSharedBusinesses(builder);
             status = builder.ToString();
+
+            // M2: the weekly demand signal lives only for this pass.
+            weeklyDemandIntents = null;
         }
 
         private int ResolveAutomaticBusinessCashTransfers(BusinessCashAutoTransferMode mode, StringBuilder builder)
@@ -5384,8 +5449,18 @@ namespace LandLedgers.Economy
             }
 
             int plannedInputUnits = Mathf.CeilToInt(plannedUnits / (float)inputYield);
-            int productionShortfall = Mathf.Max(0, plannedInputUnits - stock.CurrentStockUnits);
-            int desiredUnits = CalculateSurvivalInputProcurementUnits(stock, plannedInputUnits, productionShortfall);
+            // M2 (Plan 04, D-S5): where a registered intent covers this
+            // (business, category) the intent quantity REPLACES the
+            // survival-formula desired-units computation; uncovered
+            // categories keep the existing computation, unchanged
+            // (shortfall + min(pending, planned), inside the helper).
+            int desiredUnits = SharedBusinessWeeklyProcurement.ResolveDesiredUnits(
+                stock.CurrentStockUnits,
+                stock.PendingReorderUnits,
+                plannedInputUnits,
+                weeklyDemandIntents,
+                business.InstanceId,
+                inputCategoryId);
             if (desiredUnits <= 0)
             {
                 return 0;

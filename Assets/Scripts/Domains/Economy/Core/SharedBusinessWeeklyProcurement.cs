@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
 using UnityEngine;
@@ -28,13 +29,85 @@ namespace LandLedgers.Economy.Core
     /// or keeps it as its procurement delegate.
     ///
     /// Contract: desiredUnits / affordableUnits / unitCost are computed
-    /// by the caller (SBRM still owns CalculateSurvivalInputProcurement
-    /// Units, the landed-cost lookup, the reserve/budget math). The
-    /// caller passes both reason strings preformatted. blockedReasons
-    /// is appended to, never pruned by this method.
+    /// by the caller (SBRM still owns the landed-cost lookup and the
+    /// reserve/budget math; ResolveDesiredUnits owns the covered-vs-
+    /// formula selection, with the survival formula transcribed from
+    /// CalculateSurvivalInputProcurementUnits). The caller passes both
+    /// reason strings preformatted. blockedReasons is appended to,
+    /// never pruned by this method.
     /// </summary>
     public static class SharedBusinessWeeklyProcurement
     {
+        /// <summary>
+        /// M2 (Plan 04, D-S5): sums the quantities of the registered
+        /// BUSINESS input intents covering one buyer + category. Only
+        /// BuyerKind "business" counts — a household intent for the same
+        /// category string is a different buyer and must never be read
+        /// as a business need. Returns false when no business intent
+        /// covers the pair (the caller keeps the survival formula).
+        /// Duplicate registrations sum (the M0 hazard): producers must
+        /// clear + re-register weekly (M4), or the weekly pass will
+        /// double-count demand.
+        /// </summary>
+        public static bool TryGetDemandUnits(
+            List<PurchaseIntent> intents,
+            string buyerBusinessInstanceId,
+            string categoryId,
+            out int units)
+        {
+            units = 0;
+            if (intents == null
+                || string.IsNullOrWhiteSpace(buyerBusinessInstanceId)
+                || string.IsNullOrWhiteSpace(categoryId))
+            {
+                return false;
+            }
+
+            bool covered = false;
+            for (int i = 0; i < intents.Count; i++)
+            {
+                PurchaseIntent intent = intents[i];
+                if (intent == null
+                    || !string.Equals(intent.BuyerKind, "business", StringComparison.Ordinal)
+                    || !string.Equals(intent.BuyerId, buyerBusinessInstanceId, StringComparison.Ordinal)
+                    || !string.Equals(intent.GoodsOrServiceId, categoryId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                covered = true;
+                units += Mathf.Max(0, intent.QuantityUnits);
+            }
+
+            return covered;
+        }
+
+        /// <summary>
+        /// M2: the desired-units selection the weekly procurement path
+        /// reads. Where a registered intent covers (buyer, category)
+        /// the intent quantity REPLACES the survival-formula computation
+        /// entirely; uncovered categories keep the existing computation
+        /// (shortfall + min(pending, planned)) unchanged. A null intent
+        /// list is uncovered.
+        /// </summary>
+        public static int ResolveDesiredUnits(
+            int currentStockUnits,
+            int pendingUnits,
+            int plannedInputUnits,
+            List<PurchaseIntent> intents,
+            string buyerBusinessInstanceId,
+            string categoryId)
+        {
+            if (TryGetDemandUnits(intents, buyerBusinessInstanceId, categoryId, out int demandUnits))
+            {
+                return demandUnits;
+            }
+
+            int shortfall = Mathf.Max(0, plannedInputUnits - currentStockUnits);
+            int pendingBuffer = Mathf.Min(Mathf.Max(0, pendingUnits), Mathf.Max(0, plannedInputUnits));
+            return shortfall + pendingBuffer;
+        }
+
         public static int ApplyWeeklyInputProcurement(
             BusinessRuntimeState runtime,
             string categoryId,

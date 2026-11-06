@@ -4612,10 +4612,13 @@ namespace LandLedgers.Orchestration.Systems
         /// the duplicate guard and the cancellation monitor's handle: a
         /// cancelled or failed travel task resets the whole preparation
         /// through MonitorOpeningHitchCancellation, so a fresh attempt can
-        /// be queued again. When Ethan's journey location is already
-        /// staging but his visual agent has not arrived at the door, no
-        /// travel task is created — the ShortTick starter starts the
-        /// hitch task once the visual arrival lands.
+        /// be queued again. W3 (H1/Note-4): there is NO early return when
+        /// the journey location already says staging — the location can
+        /// read as staging while the visual agent is idle elsewhere, and
+        /// then no travel task would ever be created and the hitch would
+        /// never start. A travel task is still created in that case
+        /// (TryStartExplicitRoute is a no-op success when already arrived,
+        /// per the S5 precedent in EnsureFreightDispatchStagingTravel).
         /// </summary>
         private void EnsureOpeningHitchTravel(int dayIndex, BusinessInstanceState freight, EquipmentAsset wagon, string shipmentId)
         {
@@ -4625,17 +4628,22 @@ namespace LandLedgers.Orchestration.Systems
             PersonState ethan = populationManager.State.GetPerson(freight.Owner.PersonId);
             if (ethan == null || ethan.homeBuildingId < 0) return;
             if (IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            bool hasOpenTravelTask = false;
             if (!string.IsNullOrWhiteSpace(wagon.HitchPreparationTravelTaskId))
             {
                 WorkTask existingTravel = hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTravelTaskId);
-                if (existingTravel != null && existingTravel.IsOpen) return;
-                wagon.HitchPreparationTravelTaskId = string.Empty;
+                if (existingTravel != null && existingTravel.IsOpen) hasOpenTravelTask = true;
+                else wagon.HitchPreparationTravelTaskId = string.Empty;
             }
 
             string staging = TownJourneyNetworkBuilder.LocationIdForBuilding(ethan.homeBuildingId);
             string origin = ResolvePersonJourneyLocation(ethan.id);
             if (string.IsNullOrWhiteSpace(staging) || hub.Journeys.GetLocation(staging) == null) return;
-            if (string.Equals(origin, staging, StringComparison.Ordinal)) return;
+            // W3: the journey location reading as staging does not mean
+            // Ethan is visually there — the decision is the shared staging
+            // decision (visual + open-travel only). The visual early-return
+            // above already established isVisuallyAtStaging=false.
+            if (!FreightDispatchStaging.NeedsHitchStagingTravel(false, hasOpenTravelTask, origin, staging)) return;
             JourneyRoute route = string.IsNullOrWhiteSpace(origin)
                 ? null : hub.Journeys.FindRoute(origin, staging, TravelMode.Foot);
             if (route == null || !route.Found)

@@ -37,6 +37,21 @@ namespace LandLedgers.EditorTests.World
         }
 
         [Test]
+        public void FindRoute_SameLocation_ReturnsFoundZeroMinuteRoute()
+        {
+            JourneyModel model = TownWithFarm();
+            JourneyRoute route = model.FindRoute("town-center", "town-center", TravelMode.Foot);
+
+            // W3 premise: the zero-distance trip is a FOUND route, so a
+            // staging travel task can be created for it (1-minute task after
+            // the Math.Max(1, ...) floor) and TryStartExplicitRoute is a
+            // no-op success when already arrived.
+            Assert.IsTrue(route.Found);
+            Assert.AreEqual(0f, route.TotalMiles);
+            Assert.AreEqual(0, route.TotalMinutes);
+        }
+
+        [Test]
         public void FindRoute_ReturnsShortestPathInMinutes()
         {
             JourneyModel model = TownWithFarm();

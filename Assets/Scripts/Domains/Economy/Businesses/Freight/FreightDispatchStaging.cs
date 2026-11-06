@@ -121,5 +121,28 @@ namespace LandLedgers.Economy.Freight
         {
             return homeBuildingId >= 0;
         }
+
+        /// <summary>
+        /// W3 (H1/Note-4) — the HITCH staging-travel decision. The journey
+        /// location is deliberately NOT an input to this decision: it can
+        /// read as staging while the visual agent is idle elsewhere
+        /// (restored state, ambient routing), and in that case no travel
+        /// task would ever be created and the hitch would never start. The
+        /// origin/staging ids are still passed so the call site's facts are
+        /// explicit, but the decision is NeedsStagingTravel — travel is
+        /// needed whenever Ethan is not visually at staging and no travel
+        /// task is already open. The created task is harmless when he is
+        /// already arrived (TryStartExplicitRoute is a no-op success then,
+        /// per the S5 precedent in EnsureFreightDispatchStagingTravel),
+        /// and the open-travel guard is the only duplicate protection
+        /// needed: the wagon's HitchPreparationTravelTaskId is checked
+        /// before this call. This is the REMOVAL branch: the reproduction
+        /// showed removal creates no duplicate-travel-task path.
+        /// </summary>
+        public static bool NeedsHitchStagingTravel(bool isVisuallyAtStaging, bool hasOpenTravelTask,
+            string originLocationId, string stagingLocationId)
+        {
+            return NeedsStagingTravel(isVisuallyAtStaging, hasOpenTravelTask);
+        }
     }
 }

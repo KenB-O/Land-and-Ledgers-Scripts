@@ -79,6 +79,51 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(FreightDispatchStaging.NeedsStagingTravel(false, false));
         }
 
+        /// <summary>
+        /// W3 REPRODUCTION (H1/Note-4), now asserting the FIXED behaviour:
+        /// Ethan's journey location reads as staging ("building:7") while
+        /// his visual agent is idle elsewhere — no travel task is open. The
+        /// fixed decision is TRUE: a travel task must still be created
+        /// (TryStartExplicitRoute is a no-op success when already arrived,
+        /// per the S5 precedent), and the duplicate guard (open travel
+        /// task) is the only thing that may suppress it. Fail-first history:
+        /// this test FAILED against the pre-W3 transcription (origin ==
+        /// staging returned false) and passes once the early return is
+        /// removed — the reproduction confirmed the trap before the fix.
+        /// </summary>
+        [Test]
+        public void HitchTravel_OriginEqualsStaging_StillNeedsTravelTask()
+        {
+            Assert.IsTrue(
+                FreightDispatchStaging.NeedsHitchStagingTravel(false, false, "building:7", "building:7"),
+                "W3: journey location == staging with the visual agent away and no open travel task must still create a travel task — otherwise the hitch never starts.");
+            Assert.IsTrue(
+                FreightDispatchStaging.NeedsHitchStagingTravel(false, false, "farmstead-f1", "building:7"),
+                "the ordinary away case still needs travel");
+        }
+
+        /// <summary>
+        /// W3: after the fix the hitch decision is the dispatch decision —
+        /// the origin is not an input to it. All four (visual, open-travel)
+        /// combinations agree with NeedsStagingTravel whether the origin
+        /// equals staging or not.
+        /// </summary>
+        [Test]
+        public void HitchTravel_DecisionMatchesDispatchDecision_RegardlessOfOrigin()
+        {
+            foreach (string origin in new[] { "building:7", "farmstead-f1" })
+            {
+                Assert.AreEqual(FreightDispatchStaging.NeedsStagingTravel(true, false),
+                    FreightDispatchStaging.NeedsHitchStagingTravel(true, false, origin, "building:7"));
+                Assert.AreEqual(FreightDispatchStaging.NeedsStagingTravel(true, true),
+                    FreightDispatchStaging.NeedsHitchStagingTravel(true, true, origin, "building:7"));
+                Assert.AreEqual(FreightDispatchStaging.NeedsStagingTravel(false, true),
+                    FreightDispatchStaging.NeedsHitchStagingTravel(false, true, origin, "building:7"));
+                Assert.AreEqual(FreightDispatchStaging.NeedsStagingTravel(false, false),
+                    FreightDispatchStaging.NeedsHitchStagingTravel(false, false, origin, "building:7"));
+            }
+        }
+
         [Test]
         public void CanCreateTravel_RequiresHomeBuilding()
         {

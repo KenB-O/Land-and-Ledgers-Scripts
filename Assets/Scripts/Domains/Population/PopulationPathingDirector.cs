@@ -715,41 +715,11 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
-        /// Slice F4 (2026-11-06, Objective 23): cell-targeted thin API.
-        /// Mirrors TryStartExplicitRoute's agent lookup, but sends the
-        /// person to a grid cell instead of a building. Its only
-        /// production caller was the F4 coupled-transport escort, which
-        /// R1 (Objective 22) deleted — Ethan rides the wagon instead of
-        /// walking it. R4 deletes this method if it is still callerless;
-        /// until then it stays, guarded by the riding flag. Returns
-        /// false (no-op, no log spam) when the person has no managed
-        /// agent or no mover. Never touches schedule state: the mover
-        /// owns locomotion and arrival, so the S5 arrival gates keep
-        /// working.
-        /// </summary>
-        public bool TrySendPersonToCell(int personId, GridCoord targetCell, bool hideWhenArrived)
-        {
-            if (personId < 0) return false;
-            for (int i = 0; i < agents.Count; i++)
-            {
-                ManagedPersonAgent managed = agents[i];
-                if (managed?.person == null || managed.person.id != personId) continue;
-                if (managed.mover == null) return false;
-                // Slice R1 (Objective 22): refuse silently while the
-                // rider is aboard — same no-log-spam contract as the
-                // no-agent / no-mover returns above.
-                if (managed.isRiding) return false;
-                return managed.mover.MoveFromCurrentCellTo(targetCell, hideWhenArrived);
-            }
-            return false;
-        }
-
-        /// <summary>
         /// Slice F5 (2026-11-06, Objective 25): hide a person via the
         /// mover's hide path (AgentMover.HideImmediately — the F5 coder
         /// verification point confirmed the exact call; the root
         /// GameObject is never deactivated). Same lookup as
-        /// TrySendPersonToCell; false (no-op, no log spam) when the person
+        /// TryStartExplicitRoute; false (no-op, no log spam) when the person
         /// has no managed agent or no mover.
         /// </summary>
         public bool TryHidePerson(int personId)

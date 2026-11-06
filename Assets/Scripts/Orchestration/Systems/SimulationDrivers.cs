@@ -1983,6 +1983,91 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Slice S11 (Objective 27): daily supplier-pickup drive. While the
+        /// wagon is beyond the gateway on the Millbrook haul (day D+1), the
+        /// paid lot's custody moves from Millbrook into the wagon through
+        /// the same adapter hooks WorkLoading uses on the return day, and
+        /// the journey record keeps a purchase-manifest receipt. No task is
+        /// created: the pickup is a ledger operation by the driver's own
+        /// hands at the supplier (Verify-6 — no off-map person-time exists
+        /// to book). The shipment stays Planned; the load-skip branch in
+        /// FreightProductionDriver.AdvanceTick dispatches it on the return
+        /// day. Source-reviewed only — SimulationDrivers is
+        /// harness-excluded (call shapes verified against the adapter, the
+        /// authority, and the shipment by reading, as S1–S10 did).
+        /// </summary>
+        private void ProcessFreightSupplierPickups(int absoluteDayIndex, LandLedgers.Economy.Logistics.FreightShipmentHooks hooks)
+        {
+            if (FreightProduction?.ServiceAgreements?.Agreements == null || millbrookAidRuntime == null) return;
+            foreach (FreightServiceAgreement agreement in FreightProduction.ServiceAgreements.Agreements.ToList())
+            {
+                if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted) continue;
+                LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
+                // (a) Only an authorized, Planned, unloaded, lot-custody
+                // shipment with a bound lot can be picked up at the supplier.
+                if (shipment == null || shipment.requiresDispatchAuthorization
+                    || shipment.Status != LogisticsShipmentStatus.Planned || shipment.loadApplied
+                    || !shipment.requiresSourceLotCustody
+                    || string.IsNullOrWhiteSpace(shipment.CargoLotId)) continue;
+                // (b) The wagon's active journey; none means the wagon is
+                // home or never departed — skip silently.
+                OffMapJourneyRecord record = OffMapJourneys.FindActiveByVehicle(shipment.physicalWagonAssetId);
+                if (record == null) continue;
+                // (c) The agreement must be on the journey; a journey for a
+                // different order must never pick up this lot.
+                if (record.ObligationIds == null || !record.ObligationIds.Contains(agreement.AgreementId)) continue;
+                // (d) Beyond the gateway only: D+1 for Millbrook, derived
+                // from the record's own gateway days, never a literal.
+                if (absoluteDayIndex < record.DepartureDayIndex + record.GatewayTravelDays) continue;
+                // (e) The lot must exist; a missing lot is an integrity
+                // failure, never papered over with a fresh lot.
+                OffMapAidCargoLot lot = millbrookAidRuntime.Lots.FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.LotId, shipment.CargoLotId, StringComparison.Ordinal));
+                if (lot == null)
+                {
+                    LogFreightAgreementBlockerOnce("supplier-pickup:" + shipment.ShipmentId,
+                        $"[FreightPickup] Supplier pickup refused for shipment '{shipment.ShipmentId}': paid lot '{shipment.CargoLotId}' is absent from Millbrook's lots.");
+                    return;
+                }
+                // (f) Already picked up: idempotent re-entry after a save/load.
+                if (lot.SourceCommitted && string.Equals(lot.ShipmentId, shipment.ShipmentId, StringComparison.Ordinal)) continue;
+                // (g) No adapter wired today: the D+2 fallback owns the
+                // consequence (the return-day load re-commits in town).
+                if (hooks == null || hooks.CommitSourceLot == null)
+                {
+                    Debug.LogWarning($"[FreightPickup] Supplier pickup skipped for shipment '{shipment.ShipmentId}': no source-lot debit authority is wired today; the return-day load owns the consequence.", this);
+                    return;
+                }
+                // (h) Commit through the same adapter WorkLoading uses.
+                if (!hooks.CommitSourceLot(shipment, shipment.PlannedQuantityUnits, out string reason))
+                {
+                    LogFreightAgreementBlockerOnce("supplier-pickup:" + shipment.ShipmentId,
+                        $"[FreightPickup] Supplier pickup refused for shipment '{shipment.ShipmentId}': {reason}");
+                    return;
+                }
+                // (i) Manifest receipt, persisted through the S9 seam.
+                // Package units (the shipment's unit), not pounds: the
+                // pounds stay on the lot.
+                record.PurchaseManifestUnits[MillbrookFlourFreightCustodyAdapter.FlourSkuId] = shipment.PlannedQuantityUnits;
+                SyncOffMapJourneysToSaveState();
+                // (j) Exactly WorkLoading's post-commit writes, without a
+                // task. The status stays Planned until AdvanceTick
+                // dispatches it; state is never set here.
+                shipment.sourceLotDebitApplied = true;
+                shipment.loadApplied = true;
+                shipment.sourceCommittedAtSchedule = true;
+                shipment.remainingQuantityUnits = shipment.PlannedQuantityUnits;
+                shipment.physicalLocationId = "wagon:" + shipment.physicalWagonAssetId;
+                // (k) One greppable pickup line: sack count and pounds both
+                // named, so the two unit systems are never confused.
+                Debug.Log($"[FreightPickup] Picked up lot '{lot.LotId}' at Millbrook on day {absoluteDayIndex}: " +
+                    $"{shipment.PlannedQuantityUnits} sack(s), {lot.InventoryUnits} {lot.InventoryUnit}, " +
+                    $"wagon '{shipment.physicalWagonAssetId}', journey '{record.JourneyId}'.", this);
+            }
+        }
+
+        /// <summary>
         /// Slice S10: the Millbrook site location id, by the same
         /// RegionalTownRegistry.All scan TryRegisterAcceptedFreightShipment
         /// uses. Factored out so the departure re-resolves it from the live
@@ -2719,6 +2804,11 @@ namespace LandLedgers.Orchestration.Systems
             // Slice S9: complete journeys due today before the tick, so a
             // wagon that returns today is home for the same day's tick.
             ProcessFreightJourneyReturns(absoluteDayIndex, diag);
+            // Slice S11: pick up the paid lot at the supplier on the
+            // beyond-gateway day (D+1), before the departure retry scan
+            // and the tick, so the pickup's flag writes are visible to the
+            // same day's tick.
+            ProcessFreightSupplierPickups(absoluteDayIndex, hooks);
             // Slice S10: retry refused departures (after returns, before the
             // tick, so a departure attempted today holds the shipment for
             // today's tick). The scan's guards make it a no-op for departed

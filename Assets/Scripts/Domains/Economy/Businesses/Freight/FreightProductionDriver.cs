@@ -386,7 +386,17 @@ namespace LandLedgers.Economy.Freight
                 {
                     case LogisticsShipmentStatus.Planned:
                         if (handlerId.IsValid)
-                            service.BeginLoading(shipment, handlerId, hooks, out reason);
+                        {
+                            // Slice S11 (Objective 27): a shipment already
+                            // loaded at the supplier dispatches on the return
+                            // day instead of loading in town; loadApplied on
+                            // a Planned shipment only ever comes from the
+                            // supplier pickup drive.
+                            if (shipment.loadApplied)
+                                TryDispatch(shipment, hooks, diagnostics);
+                            else
+                                service.BeginLoading(shipment, handlerId, hooks, out reason);
+                        }
                         break;
                     case LogisticsShipmentStatus.Loading:
                         if (shipment.loadApplied)

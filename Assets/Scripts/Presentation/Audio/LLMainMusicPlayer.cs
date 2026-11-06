@@ -231,32 +231,6 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         PrepareQueuedTrack(next, startTime, fade, true);
     }
 
-    public void PauseMusic()
-    {
-        if (sourceA != null && sourceA.isPlaying)
-        {
-            sourceA.Pause();
-        }
-
-        if (sourceB != null && sourceB.isPlaying)
-        {
-            sourceB.Pause();
-        }
-    }
-
-    public void ResumeMusic()
-    {
-        if (sourceA != null && sourceA.clip != null)
-        {
-            sourceA.UnPause();
-        }
-
-        if (sourceB != null && sourceB.clip != null)
-        {
-            sourceB.UnPause();
-        }
-    }
-
     public void StopMusic()
     {
         StopAllInternalPlayback();
@@ -269,24 +243,6 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         nextTrackName = string.Empty;
         currentClip = null;
         queuedClip = null;
-    }
-
-    public void SetMasterVolume(float value)
-    {
-        masterVolume = Mathf.Clamp01(value);
-
-        if (!swapPending && !startupFadeActive)
-        {
-            if (activeSource != null)
-            {
-                activeSource.volume = masterVolume;
-            }
-
-            if (standbySource != null)
-            {
-                standbySource.volume = 0f;
-            }
-        }
     }
 
     [ContextMenu("Refresh Playlist")]

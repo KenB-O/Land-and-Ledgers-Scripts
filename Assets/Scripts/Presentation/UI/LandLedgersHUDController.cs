@@ -279,16 +279,6 @@ namespace LandLedgers.UI
             HandlePauseToggleShortcut();
         }
 
-        public void SetCashDollars(long cashDollars)
-        {
-            currentCashDollars = cashDollars;
-            currentNetWorthDollars = cashDollars;
-            currentLiquidCashDollars = cashDollars;
-            wealthDiagnosticText = string.Empty;
-            wealthMode = false;
-            RefreshCash();
-        }
-
         public void SetWealthCents(int netWorthCents, int liquidCashCents)
         {
             SetWealthCents(netWorthCents, liquidCashCents, null);

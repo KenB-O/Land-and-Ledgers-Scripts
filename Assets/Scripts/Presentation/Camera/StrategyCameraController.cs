@@ -86,11 +86,6 @@ namespace LandLedgers.CameraSystem
             InitializeFromSettings(true);
         }
 
-        public void SetBoundsSource(StrategyCameraBounds newBoundsSource)
-        {
-            boundsSource = newBoundsSource;
-        }
-
         public void SetFocus(Vector3 worldPosition)
         {
             targetFocusPosition = worldPosition;
@@ -114,30 +109,6 @@ namespace LandLedgers.CameraSystem
             targetPitchDegrees = settings != null ? settings.ClampPitch(pitchDegrees) : pitchDegrees;
             RefreshManualPitchOffset();
             ApplyRigImmediate();
-        }
-
-        public void SetManualPitchOffset(float manualPitchOffset)
-        {
-            if (settings == null)
-            {
-                targetManualPitchOffset = manualPitchOffset;
-                return;
-            }
-
-            targetManualPitchOffset = settings.ClampManualPitchOffset(manualPitchOffset, targetZoomDistance);
-            targetPitchDegrees = settings.EvaluatePitch(targetZoomDistance, targetManualPitchOffset);
-        }
-
-        public void SetPitchDegrees(float pitchDegrees)
-        {
-            if (settings == null)
-            {
-                targetPitchDegrees = pitchDegrees;
-                return;
-            }
-
-            targetPitchDegrees = settings.ClampPitch(pitchDegrees);
-            RefreshManualPitchOffset();
         }
 
         [ContextMenu("Find Rig References")]

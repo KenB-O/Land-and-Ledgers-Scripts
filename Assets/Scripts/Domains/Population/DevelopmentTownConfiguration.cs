@@ -162,6 +162,18 @@ namespace LandLedgers.Population
         [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
         [SerializeField] private BakeryWholesaleAccountDefinition[] wholesaleAccounts = Array.Empty<BakeryWholesaleAccountDefinition>();
         [SerializeField] private string freightBusinessKey = "freight-company";
+        /// <summary>
+        /// Plan 10 E4 (Obj 8; D-2): the owner-supplied fuel-dealer
+        /// conversion factor — intake units per bakery fuel unit
+        /// (IntakeUnitsPerBakeryUnit for Series2DealerBakeryFuelSource).
+        /// Zero/unset by default: unset means "no dealer conversion —
+        /// fuel cannot be supplied from the dealer". The value itself is
+        /// Kennedy's (D-2); no asset edit by Muse, and the asset entry
+        /// naming it is Codex's when he supplies it. A factor of 1 would
+        /// be an invented conversion — never default to 1, and a factor
+        /// of 0 is treated as unset everywhere it is read.
+        /// </summary>
+        [SerializeField, Min(0)] private int fuelDealerIntakeUnitsPerBakeryUnit;
         [SerializeField] private string openingHorseId = "A0";
         [SerializeField] private string openingWagonId = "opening-freight-wagon";
         [SerializeField, Tooltip("Overnight 2026-11-04: development-town mortality switch. FALSE by default, so the current development town runs with population turnover removed as a testing variable. A prevented death is logged once per person as a suppressed death (see MortalityDriver) and leaves the person, their employment, and their ownership intact. This is a development-town setting only: scenarios that do not use this configuration keep normal mortality.")]
@@ -181,6 +193,8 @@ namespace LandLedgers.Population
         public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
         public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => wholesaleAccounts ?? Array.Empty<BakeryWholesaleAccountDefinition>();
         public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
+        /// <summary>Plan 10 E4: the D-2 fuel-dealer conversion factor; 0 = unset (no dealer conversion).</summary>
+        public int FuelDealerIntakeUnitsPerBakeryUnit => fuelDealerIntakeUnitsPerBakeryUnit;
         public string OpeningHorseId => openingHorseId ?? string.Empty;
         public string OpeningWagonId => openingWagonId ?? string.Empty;
         public bool EnableMortality => enableMortality;

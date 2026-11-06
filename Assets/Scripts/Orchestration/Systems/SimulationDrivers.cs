@@ -6726,6 +6726,37 @@ namespace LandLedgers.Orchestration.Systems
                 diagnostics.Add("DriveBakeryWholesalePlanning: SharedBusinessRuntimeManager is unwired — the bakery's unmet flour/notions needs were not registered for weekly demand collection.");
             }
 
+            // Plan 10 E4 (Obj 8): the daily fuel-blocker line, built once
+            // per planned day from observed state — fuel need (batches x
+            // FuelUnitsPerFiring), fuel on hand in the bakery store, the
+            // authored D-2 factor from the town configuration (0 = unset),
+            // and the dealer/intake state. No live FuelYardByproductIntake
+            // exists in the First Ledger daily flow: the only production
+            // construction is the scripted ThreeBusinessSlice (grep-verified
+            // E4), so the intake state is observed as absent, not assumed.
+            // The attached source is the in-stock stand-in unless a dealer
+            // source was constructed (B1's work, not this slice's). This
+            // line diagnoses only — no fuel moves, no source is attached
+            // or replaced.
+            if (result.BatchesPlanned > 0)
+            {
+                LandLedgers.Economy.FreightFuel.Series2DealerBakeryFuelSource dealerSource =
+                    state.FuelSource as LandLedgers.Economy.FreightFuel.Series2DealerBakeryFuelSource;
+                int authoredFactor = developmentTownConfiguration != null
+                    ? developmentTownConfiguration.FuelDealerIntakeUnitsPerBakeryUnit : 0;
+                diagnostics.Add(LandLedgers.Economy.BreadDrivers.BakeryFuelBlockerDiagnostics.BuildFuelLine(
+                    new LandLedgers.Economy.BreadDrivers.BakeryFuelBlockerInputs
+                    {
+                        BatchesPlanned = result.BatchesPlanned,
+                        FuelUnitsOnHand = bakery.FuelStock.UnitsOnHand(
+                            LandLedgers.Economy.Businesses.Bakery.BakeryBreadCatalog.FuelItemId),
+                        AuthoredFactor = authoredFactor > 0 ? (int?)authoredFactor : null,
+                        YardIntakeExistsInDailyFlow = false,
+                        DealerSourceAttached = dealerSource != null,
+                        DealerFuelUnitsOnHand = dealerSource != null ? dealerSource.FuelUnitsOnHand() : 0,
+                    }));
+            }
+
             if (!string.IsNullOrWhiteSpace(result.Refusal))
                 Debug.Log($"[BakeryProduction] Day {dayIndex}: {result.Refusal}", this);
             else

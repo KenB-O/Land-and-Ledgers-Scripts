@@ -704,6 +704,29 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
+        /// <summary>
+        /// Slice F4 (2026-11-06, Objective 23): cell-targeted thin API for
+        /// the coupled-transport escort. Mirrors TryStartExplicitRoute's
+        /// agent lookup, but sends the person to a grid cell instead of a
+        /// building — the escort walks Ethan waypoint-by-waypoint with the
+        /// wagon. Returns false (no-op, no log spam) when the person has no
+        /// managed agent or no mover. Never touches schedule state: the
+        /// mover owns locomotion and arrival, so the S5 arrival gates keep
+        /// working.
+        /// </summary>
+        public bool TrySendPersonToCell(int personId, GridCoord targetCell, bool hideWhenArrived)
+        {
+            if (personId < 0) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.mover == null) return false;
+                return managed.mover.MoveFromCurrentCellTo(targetCell, hideWhenArrived);
+            }
+            return false;
+        }
+
         public bool IsAtExplicitBuilding(int personId, int targetBuildingId)
         {
             return TryGetExplicitArrival(personId, targetBuildingId, out _, out _, out _);

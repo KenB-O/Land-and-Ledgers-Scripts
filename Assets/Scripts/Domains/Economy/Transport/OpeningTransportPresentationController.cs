@@ -242,6 +242,12 @@ namespace LandLedgers.Economy.Transport
                     activeHorseView.transform.SetParent(transportGroup, true);
                 if (activeWagonView.transform.parent != transportGroup)
                     activeWagonView.transform.SetParent(transportGroup, true);
+                // Slice F4: attach the coupled-movement controller to the
+                // group at runtime (never by scene/prefab). It is dormant
+                // until F5's BeginCoupledDeparture/BeginCoupledReturn hands
+                // it a leg; attachment alone never moves the pair.
+                if (transportGroup.GetComponent<CoupledTransportMovementController>() == null)
+                    transportGroup.gameObject.AddComponent<CoupledTransportMovementController>();
                 // Attachment is not movement. Keep the horse at rest until a
                 // transport movement authority actually advances the coupled
                 // pair; dispatch preparation alone must not play a walking loop.

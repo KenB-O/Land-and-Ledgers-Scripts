@@ -101,9 +101,19 @@ namespace LandLedgers.Economy.Transport
                 return;
             }
 
-            Vector3 lateral = facing * Vector3.right;
-            if (!TrySampleGround(townWorld, accessPoint - lateral * 1.8f, out Vector3 horsePosition)
-                || !TrySampleGround(townWorld, horsePosition + facing * Vector3.forward * 2.8f, out Vector3 wagonPosition))
+            // Slice S6: the pair is placed in-line from the authored
+            // geometry. pairLateral runs toward/away from the building
+            // (the axis the horse is offset from the road cell along);
+            // travelAxis runs along the road (the pair's facing direction
+            // — the wagon's length axis, +X in its root frame). The horse
+            // stands beside the road cell and the wagon 2.3736 m behind
+            // it, matching the combined `Horse and Wagon.prefab`.
+            Vector3 pairLateral = facing * Vector3.forward;
+            Vector3 travelAxis = facing * Vector3.right;
+            TransportPairPlacement.Resolve(accessPoint, pairLateral, travelAxis,
+                out Vector3 horsePosition, out Vector3 wagonPosition, out Vector3 postQuery);
+            if (!TrySampleGround(townWorld, horsePosition, out horsePosition)
+                || !TrySampleGround(townWorld, wagonPosition, out wagonPosition))
             {
                 Debug.LogError($"[OpeningTransportPresentation] Refused to place opening transport: the horse staging point or adjacent wagon position near building {freightBusiness.AssignedBuildingId} has no valid dry in-world surface.", this);
                 return;
@@ -111,10 +121,17 @@ namespace LandLedgers.Economy.Transport
 
             EnsurePhysicalContainers(townWorld.transform);
 
+            // Slice S6: Instantiate(prefab, position, rotation, parent)
+            // overwrites the prefab root's rotation, discarding the
+            // baked Y90 on Horse.prefab's root — so the yaw is composed
+            // here. The wagon root rotation is identity, so it loses
+            // nothing and keeps `facing`.
+            Quaternion horseFacing = facing * Quaternion.Euler(0f, 90f, 0f);
+
             if (!TryFindUniqueHorseView(horse.AnimalId.ToString(), out HorseWorldView horseView)) return;
             if (horseView == null)
             {
-                GameObject horseRoot = Instantiate(assets.HorsePrefab, horsePosition, facing, horseContainer);
+                GameObject horseRoot = Instantiate(assets.HorsePrefab, horsePosition, horseFacing, horseContainer);
                 horseView = horseRoot.GetComponent<HorseWorldView>();
                 if (horseView == null) Destroy(horseRoot);
             }
@@ -126,7 +143,7 @@ namespace LandLedgers.Economy.Transport
                 return;
             }
             horseView.BindAnimal(horse.AnimalId.ToString());
-            horseView.transform.SetPositionAndRotation(horsePosition, facing);
+            horseView.transform.SetPositionAndRotation(horsePosition, horseFacing);
             horseView.gameObject.name = $"Opening Freight Horse {horse.AnimalId}";
             horseView.gameObject.SetActive(true);
             Animator horseRigAnimator = FindHorseRigAnimator(horseView);
@@ -169,7 +186,9 @@ namespace LandLedgers.Economy.Transport
             if (hitchingPost == null) hitchingPost = Instantiate(postPrefab, fixtureContainer);
             else if (hitchingPost.transform.parent != fixtureContainer) hitchingPost.transform.SetParent(fixtureContainer, true);
             hitchingPost.name = "Freight Hitching Post";
-            Vector3 postQuery = horsePosition - lateral * 1.1f;
+            // Slice S6: postQuery comes from TransportPairPlacement —
+            // same 1.1 m magnitude as before, now on the pair-lateral
+            // axis instead of the travel axis.
             if (TrySampleGround(townWorld, postQuery, out Vector3 postPosition))
                 hitchingPost.transform.SetPositionAndRotation(postPosition, facing);
             hitchingPost.SetActive(true);
@@ -236,7 +255,11 @@ namespace LandLedgers.Economy.Transport
                 if (wagonContainer != null && activeWagonView.transform.parent != wagonContainer)
                     activeWagonView.transform.SetParent(wagonContainer, true);
                 if (hitchingPost != null && horse.TransportState == HorseTransportState.SecuredAtHitchingPost)
-                    activeHorseView.transform.position = hitchingPost.transform.position + Vector3.right * 0.35f;
+                    // Slice S6: the horse's own right is the pair
+                    // lateral (its world rotation is facing * Y90, so its
+                    // local +X maps to -pairLateral) — not world +X.
+                    // The 0.35 m magnitude is kept.
+                    activeHorseView.transform.position = hitchingPost.transform.position + activeHorseView.transform.right * 0.35f;
                 activeHorseView.gameObject.GetComponent<TransportAnimatorState>()?.SetState(TransportVisualState.Idle);
             }
         }

@@ -165,6 +165,71 @@ namespace LandLedgers.EditorTests.Economy
             Assert.That(animator.runtimeAnimatorController.name, Is.EqualTo("Transport Anim Controller"));
         }
 
+        // Slice S6 (2026-11-06, Objective 20): pins the rotation half of
+        // the alignment repair. The controller used to instantiate horse
+        // and wagon with the SAME `facing` rotation, but the horse's
+        // native forward is +Z while the wagon's length runs along its
+        // local +X — so with a shared rotation the pair stood 90 degrees
+        // apart. The controller now composes the horse's baked Y90 onto
+        // `facing`; this test pins that the two rotations agree on one
+        // travel axis. Unity Test Runner only (this file is
+        // harness-excluded): the harness Quaternion shim stubs Euler /
+        // composition to identity, so it cannot evaluate this.
+        [Test]
+        public void HorseRotation_ComposesFacingWithBakedYaw()
+        {
+            Quaternion facing = Quaternion.Euler(0f, 90f, 0f);
+            Quaternion horseFacing = facing * Quaternion.Euler(0f, 90f, 0f);
+
+            // The horse's forward (native +Z, rotated by the composed
+            // yaw) must equal the travel axis — the wagon's length axis.
+            Vector3 horseForward = horseFacing * Vector3.forward;
+            Vector3 travelAxis = facing * Vector3.right;
+            Assert.That(horseForward.x, Is.EqualTo(travelAxis.x).Within(0.001f));
+            Assert.That(horseForward.y, Is.EqualTo(travelAxis.y).Within(0.001f));
+            Assert.That(horseForward.z, Is.EqualTo(travelAxis.z).Within(0.001f));
+
+            // And the wagon's length axis is the same vector.
+            Vector3 wagonLengthAxis = facing * Vector3.right;
+            Assert.That(wagonLengthAxis.x, Is.EqualTo(horseForward.x).Within(0.001f));
+            Assert.That(wagonLengthAxis.y, Is.EqualTo(horseForward.y).Within(0.001f));
+            Assert.That(wagonLengthAxis.z, Is.EqualTo(horseForward.z).Within(0.001f));
+        }
+
+        // Slice S6 (2026-11-06, Objective 20): documents the trap that
+        // made the rotation repair necessary (Note-5). Instantiate with
+        // an explicit rotation OVERWRITES the prefab root's baked
+        // rotation — Horse.prefab's root Y90 never reaches the live game
+        // through the controller's Instantiate call, which is why the
+        // controller must compose the yaw at the call site instead of
+        // relying on the prefab. Unity Test Runner only (this file is
+        // harness-excluded). CODER VERIFICATION POINT (plan 06 §4.4):
+        // if this behaves otherwise in the project's Unity version,
+        // report it — do NOT weaken the rotation composition to make
+        // any test pass.
+        [Test]
+        public void InstantiateWithRotation_DiscardsPrefabRootYaw()
+        {
+            GameObject horsePrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Characters/Horse.prefab");
+            Assert.That(horsePrefab, Is.Not.Null);
+            // The prefab really does bake a Y90 on its root.
+            Assert.That(Quaternion.Angle(horsePrefab.transform.rotation, Quaternion.Euler(0f, 90f, 0f)),
+                Is.LessThan(0.01f), "Horse.prefab is expected to bake a Y90 root rotation.");
+
+            var host = new GameObject(nameof(InstantiateWithRotation_DiscardsPrefabRootYaw));
+            try
+            {
+                GameObject instance = Object.Instantiate(horsePrefab, Vector3.zero, Quaternion.identity, host.transform);
+                Assert.That(Quaternion.Angle(instance.transform.rotation, Quaternion.identity),
+                    Is.LessThan(0.01f),
+                    "Instantiate with an explicit rotation must yield the given rotation, not the prefab's baked root yaw.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
         [Test]
         public void AttachedStationaryHorseRemainsIdleUnderNeutralTransportRoot()
         {

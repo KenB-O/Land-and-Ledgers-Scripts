@@ -218,6 +218,16 @@ MonoBehaviour:
     - itemId: salt
       minimumUnits: 4
       maximumUnits: 8
+  openingEquipment:
+  - businessKey: bakery
+    ovens:
+    - componentAssetIds:
+      - oven-chamber-1
+      - kneading-table-1
+      - proofing-rack-1
+      - bake-peels-1
+    kitIds:
+    - baker-hand-kit
   freightBusinessKey: freight-company
   openingHorseId: A0
   openingWagonId: opening-freight-wagon

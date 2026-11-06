@@ -32,6 +32,7 @@ using LandLedgers.Time;
 using LandLedgers.World.Journeys;
 using LandLedgers.World.Regional;
 using LandLedgers.World;
+using LandLedgers.Pathing;
 using LandLedgers.World.Property;
 using UnityEngine;
 
@@ -6247,7 +6248,7 @@ namespace LandLedgers.Orchestration.Systems
                     if (!string.IsNullOrWhiteSpace(componentId)) installedOvenComponents.Add(componentId);
                 }
             }
-            Func<string, LandLedgers.Economy.Equipment.Workstations.WorkstationComponentView?> findComponent = assetId =>
+            Func<string, LandLedgers.Economy.Equipment.WorkstationComponentView?> findComponent = assetId =>
             {
                 if (string.IsNullOrWhiteSpace(assetId) || !installedOvenComponents.Contains(assetId)) return null;
                 LandLedgers.Economy.Blacksmith.EquipmentAsset asset = null;
@@ -6259,7 +6260,7 @@ namespace LandLedgers.Orchestration.Systems
                             break;
                         }
                 if (asset == null) return null;
-                return new LandLedgers.Economy.Equipment.Workstations.WorkstationComponentView
+                return new LandLedgers.Economy.Equipment.WorkstationComponentView
                 {
                     AssetId = asset.AssetId,
                     Kind = asset.Kind,

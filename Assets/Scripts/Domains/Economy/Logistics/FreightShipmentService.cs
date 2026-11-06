@@ -76,6 +76,13 @@ namespace LandLedgers.Economy.Logistics
         /// </summary>
         public IUnifiedReservationAuthority Reservations;
 
+        /// <summary>
+        /// Slice S10: when set, AdvanceTick skips shipments whose wagon is
+        /// off-map (the journey record is the hold — no new serialized field).
+        /// Null means no hold: the pre-S10 behaviour.
+        /// </summary>
+        public Func<string, bool> IsVehicleOffMap;
+
         /// <summary>Absolute game seconds for reservation windows (TimeManager timeline).</summary>
         public float NowGameSeconds;
     }

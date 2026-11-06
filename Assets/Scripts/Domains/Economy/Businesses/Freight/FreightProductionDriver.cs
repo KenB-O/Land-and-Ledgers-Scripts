@@ -373,6 +373,13 @@ namespace LandLedgers.Economy.Freight
                     continue;
                 if (shipment.requiresDispatchAuthorization)
                     continue;
+                // Slice S10: a shipment whose wagon is off-map waits — the
+                // team is away on the Millbrook haul, so the lot must not
+                // load in town while the journey record says it is out on
+                // Millbrook Road. The hold lifts automatically when the
+                // journey returns (the predicate then answers false).
+                if (hooks.IsVehicleOffMap != null && hooks.IsVehicleOffMap(shipment.physicalWagonAssetId))
+                    continue;
                 LogisticsShipmentStatus before = shipment.Status;
                 string reason;
                 switch (shipment.Status)

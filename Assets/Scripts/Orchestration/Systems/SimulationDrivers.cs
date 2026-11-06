@@ -1983,6 +1983,167 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Slice S10: the Millbrook site location id, by the same
+        /// RegionalTownRegistry.All scan TryRegisterAcceptedFreightShipment
+        /// uses. Factored out so the departure re-resolves it from the live
+        /// model instead of trusting a stored id; the registration call site
+        /// is unchanged.
+        /// </summary>
+        private string TryResolveMillbrookSiteLocationId()
+        {
+            if (millbrookAidRuntime == null) return null;
+            foreach (RegionalTownRegistry.RegionalTownDefinition town in RegionalTownRegistry.All)
+            {
+                if (town?.Sites == null) continue;
+                foreach (RegionalTownRegistry.RegionalBusinessSite site in town.Sites)
+                {
+                    if (site != null && string.Equals(site.BusinessId, millbrookAidRuntime.BusinessId, StringComparison.Ordinal))
+                        return RegionalTownRegistry.SiteLocationId(town, site);
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Slice S10: depart the opening wagon + Ethan for the Millbrook
+        /// haul. Wagon first, person second, cancel-on-person-failure (never
+        /// a driverless wagon off-map). A false return never un-authorizes
+        /// anything: the shipment stays authorized and the daily scan
+        /// retries. Source-reviewed only — SimulationDrivers is
+        /// harness-excluded.
+        /// </summary>
+        private bool TryDepartMillbrookShipment(FreightServiceAgreement agreement, LogisticsShipmentState shipment, int dayIndex)
+        {
+            if (agreement == null || shipment == null) return false;
+            string wagonId = shipment.physicalWagonAssetId;
+            int operatorId = agreement.AcceptingOperatorPersonId;
+
+            // (1) Millbrook site, re-resolved from the live model.
+            string siteLocationId = TryResolveMillbrookSiteLocationId();
+            if (string.IsNullOrWhiteSpace(siteLocationId))
+            {
+                LogFreightAgreementBlockerOnce("departure-gateway:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': Millbrook supplier has no registered regional site.");
+                return false;
+            }
+
+            // (2) Re-resolve the exit point for the live model.
+            if (!RegionalExitPointResolver.TryResolve(Journeys ?? hub.Journeys, "town-center", siteLocationId,
+                    out RegionalExitPoint exitPoint, out string exitReason))
+            {
+                LogFreightAgreementBlockerOnce("departure-exit:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': exit point unresolved: {exitReason}");
+                return false;
+            }
+
+            // (3) Gateway re-check (Verify-5): the authority's gateway must
+            // agree with the re-resolved S7 exit, or the team never drives
+            // toward a stale edge cell.
+            if (!OffMapJourneys.TryResolveDepartureGateway("town-center", out string authorityGateway, out string gatewayReason))
+            {
+                LogFreightAgreementBlockerOnce("departure-gateway-check:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': departure gateway unresolved: {gatewayReason}");
+                return false;
+            }
+            if (!string.Equals(authorityGateway, exitPoint.GatewayLocationId, StringComparison.Ordinal))
+            {
+                LogFreightAgreementBlockerOnce("departure-gateway-check:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': S7 exit names {exitPoint.GatewayLocationId}, authority names {authorityGateway} — departure refused, edge cell is stale.");
+                return false;
+            }
+
+            // (4) Duplicate guard: already away — the authority would refuse
+            // anyway; the check avoids log spam on the daily retry.
+            if (OffMapJourneys.IsOffMapVehicle(wagonId)) return false;
+
+            // (5) Already-departed guard: this shipment departed once already
+            // (per-agreement, so a future second order can still depart). A
+            // Cancelled record does not count, so a rolled-back attempt stays
+            // retryable the next day. Without this the scan would re-depart
+            // the wagon on the return day instead of letting the tick load it.
+            foreach (OffMapJourneyRecord record in OffMapJourneys.AllJourneys())
+            {
+                if (record == null || record.State == OffMapJourneyState.Cancelled) continue;
+                if (record.ObligationIds != null && record.ObligationIds.Contains(agreement.AgreementId)) return false;
+            }
+
+            // (6) Depart the wagon, empty: the flour is picked up at the
+            // supplier (Objective 27), so no cargo and no callbacks.
+            var diag = new List<string>();
+            OffMapJourneyRecord wagonRecord = OffMapJourneys.DepartVehicle(
+                wagonId, "town-center", exitPoint.DestinationLabel, exitPoint.OffMapLegDays,
+                "Millbrook flour pickup", null, new List<string> { agreement.AgreementId },
+                dayIndex, null, null, diag);
+            if (wagonRecord == null)
+            {
+                LogFreightAgreementBlockerOnce("departure-vehicle:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Wagon '{wagonId}' departure refused for shipment '{shipment.ShipmentId}': {string.Join(" | ", diag)}");
+                return false;
+            }
+
+            // (7) Depart Ethan with the wagon. Person failure cancels the
+            // wagon journey (never a driverless wagon off-map) and refuses
+            // the departure as a whole; the daily scan retries the next day.
+            int expectedReturnDays = Math.Max(1, wagonRecord.DueReturnDayIndex - dayIndex);
+            var personDiag = new List<string>();
+            OffMapJourneyRecord personRecord = OffMapJourneys.DepartPerson(
+                operatorId, "town-center", exitPoint.DestinationLabel, exitPoint.OffMapLegDays,
+                expectedReturnDays, "drive the flour wagon", null, null, dayIndex,
+                item => 0, null, personDiag);
+            if (personRecord == null)
+            {
+                OffMapJourneys.CancelJourney(wagonRecord.JourneyId, "driver departure refused", returnCargo: null, diag);
+                SyncOffMapJourneysToSaveState();
+                LogFreightAgreementBlockerOnce("departure-driver:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Wagon '{wagonId}' departed but Ethan P{operatorId} refused departure for shipment '{shipment.ShipmentId}'; wagon journey cancelled. {string.Join(" | ", personDiag)}");
+                return false;
+            }
+
+            // (8) Success: the shipment's location string names the journey
+            // (coder verification point, plan 09 §1.7 — no reader treats a
+            // non-business-id value as an error: ResolvePhysicalLocation
+            // itself returns "off-map-destination" / "off-map-origin" /
+            // "shipment:<id>:quarantine" / "shipment:<id>:in-transit", the
+            // save DTO copies the string verbatim, and the LRM transport
+            // projection only runs over its own shipment list).
+            shipment.physicalLocationId = wagonRecord.OffMapLocationLabel;
+            SyncOffMapJourneysToSaveState();
+            Debug.Log($"[OffMapJourney] Wagon '{wagonId}' + Ethan P{operatorId} departed town-center for '{exitPoint.DestinationLabel}' via {wagonRecord.GatewayLocationId}, due back day {wagonRecord.DueReturnDayIndex}.", this);
+            return true;
+        }
+
+        /// <summary>
+        /// Slice S10: daily retry scan for refused departures. For each
+        /// accepted agreement with a linked shipment that is authorized,
+        /// Planned and unloaded, where the wagon, the horse and the operator
+        /// all resolve and Ethan is visually at the team (the S5 gate,
+        /// re-checked on the retry path because a day may have passed since
+        /// authorization), attempt the departure. Silent skips: the scan is
+        /// a retry loop, and TryDepartMillbrookShipment logs its own
+        /// refusals once.
+        /// </summary>
+        private void TryDepartAuthorizedFreightShipments(int absoluteDayIndex)
+        {
+            if (FreightProduction?.ServiceAgreements?.Agreements == null) return;
+            foreach (FreightServiceAgreement agreement in FreightProduction.ServiceAgreements.Agreements.ToList())
+            {
+                if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted) continue;
+                LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
+                if (shipment == null || shipment.requiresDispatchAuthorization
+                    || shipment.Status != LogisticsShipmentStatus.Planned || shipment.loadApplied) continue;
+                EquipmentAsset wagon = string.IsNullOrWhiteSpace(shipment.physicalWagonAssetId)
+                    ? null : hub?.TransportAssets?.Get(shipment.physicalWagonAssetId);
+                AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
+                int operatorId = agreement.AcceptingOperatorPersonId;
+                PersonState operatorPerson = operatorId >= 0 ? populationManager?.State?.GetPerson(operatorId) : null;
+                if (wagon == null || horse == null || operatorPerson == null) continue;
+                if (!IsPersonVisuallyAtBuilding(operatorId, operatorPerson.homeBuildingId)) continue;
+                TryDepartMillbrookShipment(agreement, shipment, absoluteDayIndex);
+            }
+        }
+
+        /// <summary>
         /// Pass VIII Worker 2: daily absent-occupant sweep. Absent means
         /// dead (deathDayIndex >= 0) or departed from the town roster
         /// (settlement arrangement Departed, or no longer a known person).
@@ -2540,6 +2701,10 @@ namespace LandLedgers.Orchestration.Systems
                 Reservations = hub.Reservations,
                 NowGameSeconds = AbsoluteNowGameSeconds(),
                 ReceiveShipment = ReceiveFreightIntoDestinationStock,
+                // Slice S10: the off-map hold — AdvanceTick skips shipments
+                // whose wagon is off-map. Method-group assignment; the
+                // authority method takes a vehicle id and returns bool.
+                IsVehicleOffMap = OffMapJourneys.IsOffMapVehicle,
             };
             if (millbrookCustody != null)
             {
@@ -2554,6 +2719,11 @@ namespace LandLedgers.Orchestration.Systems
             // Slice S9: complete journeys due today before the tick, so a
             // wagon that returns today is home for the same day's tick.
             ProcessFreightJourneyReturns(absoluteDayIndex, diag);
+            // Slice S10: retry refused departures (after returns, before the
+            // tick, so a departure attempted today holds the shipment for
+            // today's tick). The scan's guards make it a no-op for departed
+            // and returned shipments.
+            TryDepartAuthorizedFreightShipments(absoluteDayIndex);
             FreightProduction.AdvanceTick(86400f, hooks, handler, diag);
             ReleaseTerminalFreightDraftTeams();
             if (diag.Count > 0)
@@ -6096,6 +6266,12 @@ namespace LandLedgers.Orchestration.Systems
                     $"[FreightDispatch] Completed task '{task.TaskId}' could not release shipment '{shipment.ShipmentId}' from dispatch hold: {authorizationRefusal}");
                 return;
             }
+
+            // Slice S10: depart the wagon + Ethan for Millbrook on the same
+            // ShortTick (Ethan is provably at staging here — the S5 gate
+            // above). A false return does not un-authorize anything: the
+            // shipment stays authorized and the daily scan retries.
+            TryDepartMillbrookShipment(agreement, shipment, timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0);
 
             Debug.Log($"[FreightDispatch] Task '{task.TaskId}' completed and authorized dispatch for agreement '{agreement.AgreementId}', " +
                 $"shipment '{shipment.ShipmentId}', operator P{operatorId} at absolute simulation time {AbsoluteNowGameSeconds():0}s. " +

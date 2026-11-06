@@ -540,9 +540,24 @@ namespace LandLedgers.World.Journeys
                     }
                 }
                 completed.Add(record);
-                diag.Add($"OffMapJourneyAuthority: {DescribeTraveler(record)} returned from " +
-                    $"'{record.DestinationLabel}' on day {dayIndex} (due day {record.DueReturnDayIndex}); " +
-                    $"cargo and purchase manifest delivered once, same entity.");
+                // Slice S12 (G3): the delivery clause is only true when a
+                // cargo callback was supplied. Production always passes
+                // null (Note-12: the manifest is a receipt, never a
+                // delivery mechanism), so the null case must not claim a
+                // delivery — it says the manifest receipt stays on the
+                // record instead.
+                if (deliverCargo != null)
+                {
+                    diag.Add($"OffMapJourneyAuthority: {DescribeTraveler(record)} returned from " +
+                        $"'{record.DestinationLabel}' on day {dayIndex} (due day {record.DueReturnDayIndex}); " +
+                        $"cargo and purchase manifest delivered once, same entity.");
+                }
+                else
+                {
+                    diag.Add($"OffMapJourneyAuthority: {DescribeTraveler(record)} returned from " +
+                        $"'{record.DestinationLabel}' on day {dayIndex} (due day {record.DueReturnDayIndex}); " +
+                        $"no cargo callback supplied, purchase manifest receipt remains on the record.");
+                }
             }
             return completed;
         }

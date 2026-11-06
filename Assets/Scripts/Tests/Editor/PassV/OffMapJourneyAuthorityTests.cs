@@ -299,5 +299,62 @@ namespace LandLedgers.EditorTests.PassV
             Assert.IsTrue(string.Join("; ", diag).Contains(record.JourneyId),
                 "refusal must name the existing journey id: " + string.Join("; ", diag));
         }
+
+        // ---- Slice S12 (Objective 28): honest return log + return snapshot ----
+
+        [Test]
+        public void ReturnDiag_WithNullCallback_DoesNotClaimDelivery()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            OffMapJourneyRecord record = DepartMillbrookWagon(millbrookAuthority, 10);
+            Assert.AreEqual(12, record.DueReturnDayIndex);
+
+            List<OffMapJourneyRecord> returned = millbrookAuthority.CompleteDueJourneys(12, null, diag);
+            Assert.AreEqual(1, returned.Count);
+            Assert.AreEqual(OffMapJourneyState.Returned, record.State);
+            foreach (string entry in diag)
+            {
+                Assert.IsTrue(!entry.Contains("delivered"),
+                    "the production path passes no cargo callback, so no return diag entry may claim a delivery: " + entry);
+            }
+        }
+
+        [Test]
+        public void ReturnDiag_WithCallback_DeliversManifestOnce()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            OffMapJourneyRecord record = DepartMillbrookWagon(millbrookAuthority, 10);
+            record.PurchaseManifestUnits["bakery_flour_sack"] = 1;
+
+            var delivered = new List<KeyValuePair<string, int>>();
+            List<OffMapJourneyRecord> returned = millbrookAuthority.CompleteDueJourneys(
+                12, (sku, units) => delivered.Add(new KeyValuePair<string, int>(sku, units)), diag);
+            Assert.AreEqual(1, returned.Count);
+            Assert.AreEqual(1, delivered.Count, "the manifest is delivered exactly once");
+            Assert.AreEqual("bakery_flour_sack", delivered[0].Key);
+            Assert.AreEqual(1, delivered[0].Value);
+            Assert.IsTrue(string.Join("; ", diag).Contains("cargo and purchase manifest delivered once, same entity."),
+                "with a callback the delivery claim is true: " + string.Join("; ", diag));
+        }
+
+        [Test]
+        public void ReturnSnapshot_PreservesReturnedStateAndManifest()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            OffMapJourneyRecord record = DepartMillbrookWagon(millbrookAuthority, 10);
+            record.PurchaseManifestUnits["bakery_flour_sack"] = 1;
+
+            List<OffMapJourneyRecord> returned = millbrookAuthority.CompleteDueJourneys(12, null, diag);
+            Assert.AreEqual(1, returned.Count);
+
+            OffMapJourneyAuthoritySaveDto dto = millbrookAuthority.CaptureSaveDto();
+            Assert.AreEqual(1, dto.journeys.Count);
+            OffMapJourneyRecord saved = dto.journeys[0];
+            Assert.AreEqual(OffMapJourneyState.Returned, saved.State);
+            Assert.AreEqual(12, saved.ActualReturnDayIndex);
+            Assert.AreEqual(12, saved.DueReturnDayIndex);
+            Assert.AreEqual(1, saved.PurchaseManifestUnits.Count, "the manifest is retained on return, not cleared");
+            Assert.AreEqual(1, saved.PurchaseManifestUnits["bakery_flour_sack"]);
+        }
     }
 }

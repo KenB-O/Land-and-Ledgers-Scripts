@@ -168,5 +168,43 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(!AbsenceArrangementPolicies.ActiveReturnJourney(authority, 7, 13),
                 "past the due day the arrangement no longer holds");
         }
+
+        // ---- Slice S12 (Objective 28): bound on the pre-fix stale-snapshot failure ----
+
+        [Test]
+        public void SaveSeam_StaleDepartedSnapshot_SelfHealsInOneDay()
+        {
+            OffMapJourneyRecord record = DepartMillbrookWagon(10);
+            Assert.AreEqual(12, record.DueReturnDayIndex);
+
+            // Capture BEFORE the return: the snapshot still says Departed.
+            OffMapJourneyAuthoritySaveDto staleDto = authority.CaptureSaveDto();
+            Assert.AreEqual(1, staleDto.journeys.Count);
+            Assert.AreEqual(OffMapJourneyState.Departed, staleDto.journeys[0].State);
+
+            // The return happens live on day 12.
+            List<OffMapJourneyRecord> done = authority.CompleteDueJourneys(12, null, diag);
+            Assert.AreEqual(1, done.Count);
+            Assert.AreEqual(OffMapJourneyState.Returned, record.State);
+
+            // A fresh authority loading the stale snapshot resurrects
+            // the journey as Departed — the pre-fix failure mode.
+            var fresh = new OffMapJourneyAuthority(model);
+            fresh.LoadFromSaveDto(staleDto);
+            Assert.AreEqual(1, fresh.ActiveJourneyCount);
+            Assert.IsTrue(fresh.IsOffMapVehicle("opening-freight-wagon"));
+            OffMapJourneyRecord back = fresh.FindActiveByVehicle("opening-freight-wagon");
+            Assert.IsNotNull(back);
+            Assert.AreEqual(OffMapJourneyState.Departed, back.State);
+            Assert.AreEqual(12, back.DueReturnDayIndex);
+
+            // ...and re-completes it exactly once on the due day, never again.
+            List<OffMapJourneyRecord> recompleted = fresh.CompleteDueJourneys(12, null, diag);
+            Assert.AreEqual(1, recompleted.Count);
+            Assert.AreEqual(OffMapJourneyState.Returned, back.State);
+            List<OffMapJourneyRecord> rerun = fresh.CompleteDueJourneys(12, null, diag);
+            Assert.AreEqual(0, rerun.Count, "the resurrection heals in one day, not forever");
+            Assert.IsTrue(!fresh.IsOffMapVehicle("opening-freight-wagon"));
+        }
     }
 }

@@ -1956,11 +1956,20 @@ namespace LandLedgers.Orchestration.Systems
         /// <summary>
         /// Slice S9: daily return drive. Completes journeys due today
         /// exactly once (the authority is idempotent per day); with no
-        /// journeys this is a no-op. Vehicle returns need no shipment
-        /// update here — no shipment linkage exists yet (S10 owns it).
+        /// journeys this is a no-op. Slice S12: a return is a journey
+        /// mutation, so a non-empty return syncs to the Pass 9 save
+        /// state (the S9 contract syncs on every mutation; without this
+        /// a post-return save resurrects the journey as Departed).
         /// Person returns restore the traveler's journey location to
         /// their home building (the S5 travel-completion pattern); when
         /// the home is unknown the set is skipped, never invented.
+        /// Slice S12: a vehicle return resets the linked live shipment's
+        /// location to the carrier business id — but only when the
+        /// shipment still carries the stale "off-map:" label (fallback
+        /// path, pickup missed); a "wagon:" location written by the
+        /// pickup is never overwritten, and any other value is left
+        /// untouched. When no live shipment matches the wagon, nothing
+        /// is written and no location is invented.
         /// </summary>
         private void ProcessFreightJourneyReturns(int absoluteDayIndex, List<string> diag)
         {
@@ -1969,17 +1978,46 @@ namespace LandLedgers.Orchestration.Systems
             {
                 if (record == null) continue;
                 Debug.Log($"[OffMapJourney] Journey '{record.JourneyId}' returned from '{record.DestinationLabel}' on day {absoluteDayIndex} (due day {record.DueReturnDayIndex}).");
-                if (record.TravelerKind != OffMapTravelerKind.Person) continue;
-                PersonState person = populationManager?.State?.GetPerson(record.PersonId);
-                if (person != null && person.homeBuildingId >= 0)
+                if (record.TravelerKind == OffMapTravelerKind.Person)
                 {
-                    SetPersonJourneyLocation(record.PersonId, "building:" + person.homeBuildingId);
+                    PersonState person = populationManager?.State?.GetPerson(record.PersonId);
+                    if (person != null && person.homeBuildingId >= 0)
+                    {
+                        SetPersonJourneyLocation(record.PersonId, "building:" + person.homeBuildingId);
+                    }
+                    else
+                    {
+                        Debug.Log($"[OffMapJourney] Journey '{record.JourneyId}': P{record.PersonId} returned but home building is unknown; journey location left unchanged.");
+                    }
                 }
-                else
+                else if (record.TravelerKind == OffMapTravelerKind.Vehicle && FreightProduction != null)
                 {
-                    Debug.Log($"[OffMapJourney] Journey '{record.JourneyId}': P{record.PersonId} returned but home building is unknown; journey location left unchanged.");
+                    // Slice S12 (G2, coordinator clarification on the plan's
+                    // §4.1 ordering note): the return-day reset runs only
+                    // for a journey that completed today in this call (the
+                    // `returned` list) — never hoisted into a daily scan —
+                    // and only when the shipment still carries the stale
+                    // "off-map:<journeyId>" label from departure. On the
+                    // normal path the S11 pickup already wrote
+                    // "wagon:<wagonId>" on D+1 and that value must stand;
+                    // any other value is left untouched as well.
+                    foreach (LogisticsShipmentState shipment in FreightProduction.AllShipments())
+                    {
+                        if (shipment != null
+                            && LandLedgers.Economy.Logistics.FreightShipmentService.IsLiveShipment(shipment)
+                            && string.Equals(shipment.physicalWagonAssetId, record.VehicleId, StringComparison.Ordinal)
+                            && (shipment.physicalLocationId ?? string.Empty).StartsWith("off-map:", StringComparison.Ordinal))
+                        {
+                            shipment.physicalLocationId = shipment.CarrierBusinessInstanceId;
+                            break;
+                        }
+                    }
                 }
             }
+            // Slice S12 (G1): a return is a journey mutation, and the S9
+            // contract syncs on every mutation; without this a post-return
+            // save resurrects the journey as Departed.
+            if (returned.Count > 0) SyncOffMapJourneysToSaveState();
         }
 
         /// <summary>

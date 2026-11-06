@@ -67,13 +67,6 @@ namespace LandLedgers.Economy
         private const int BoardingHouseWeeklyBoardCents = 275;
         private const int BoardingHouseFixedUpkeepCents = 275;
         private const int BoardingHouseVariableUpkeepCents = 45;
-        private const int CropFarmOutputUnitsPerInput = 8;
-        private const int RanchOutputUnitsPerInput = 2;
-        private const int ButcherOutputUnitsPerInput = 8;
-        private const int BlacksmithOutputUnitsPerInput = 4;
-        private const int FuelDealerOutputUnitsPerInput = 5;
-        private const int GrainMillOutputUnitsPerInput = 4;
-        private const int BakeryOutputUnitsPerInput = 3;
         private const int CropFarmLocalOutletMaxUnits = 110;
         private const int RanchLocalOutletMaxUnits = 4;
         private const int ButcherLocalOutletMaxUnits = 68;
@@ -4882,7 +4875,7 @@ namespace LandLedgers.Economy
 
             BusinessRuntimeState runtime = business.RuntimeState;
             float operatingEfficiency01 = GetHealthAdjustedOperatingEfficiency01(business);
-            int plannedUnits = Mathf.RoundToInt(Mathf.Max(0, profile.BaselineWeeklyThroughputUnits) * operatingEfficiency01);
+            int plannedUnits = SharedBusinessWeeklyConverter.ComputePlannedUnits(profile.BaselineWeeklyThroughputUnits, operatingEfficiency01);
             int consumedUnits = 0;
             int producedUnits = 0;
             string inputCategoryId = GetFirstCategoryId(profile.InputCategoryIds);
@@ -4971,10 +4964,13 @@ namespace LandLedgers.Economy
             // would change weekly procurement (a binding decision,
             // not made here); leaving the list empty is correct now
             // that this guard refuses to mint from it.
-            if (string.IsNullOrWhiteSpace(inputCategoryId) && !string.IsNullOrWhiteSpace(outputCategoryId))
+            // M6 (Plan 04, Obj 43): the guard lives on the helper now
+            // (single source of truth — CheckNoMintGuard); this record
+            // path is unchanged.
+            string noMintRefusal = SharedBusinessWeeklyConverter.CheckNoMintGuard(inputCategoryId, outputCategoryId);
+            if (noMintRefusal != null)
             {
-                const string noInputReason = "no input category: weekly conversion cannot mint output from nothing";
-                blockedReasons.Add(noInputReason);
+                blockedReasons.Add(noMintRefusal);
                 business.ApplyWeeklyOperationResult(0);
                 runtime.RecordWeeklyOperation(0, 0, "No production completed", BuildBlockedReason(blockedReasons));
                 RecordOperationSummary(business, BuildBlockedReason(blockedReasons));
@@ -4982,70 +4978,26 @@ namespace LandLedgers.Economy
                 return;
             }
 
-            int outputUnitsPerInput = GetOutputUnitsPerInput(business.BusinessType);
+            // M6 (Plan 04, Obj 43): the goods path lives on the pure
+            // helper SharedBusinessWeeklyConverter; SBRM keeps the
+            // procurement call (it owns the demand signal + budget) and
+            // the record/summary below. Procurement runs first so the
+            // conversion reads post-procurement stock, exactly as before.
+            int outputUnitsPerInput = SharedBusinessWeeklyConverter.GetOutputUnitsPerInput(business.BusinessType);
             int procuredUnits = ProcureInputsForWeeklyOperation(business, profile, inputCategoryId, plannedUnits, outputUnitsPerInput, blockedReasons);
-            int outputRoom = GetAvailableCategoryCapacity(runtime, outputCategoryId);
-            int availableInputs = string.IsNullOrWhiteSpace(inputCategoryId)
-                ? plannedUnits
-                : GetCategoryStockUnits(runtime, inputCategoryId);
-            int inputLimitedOutput = string.IsNullOrWhiteSpace(inputCategoryId)
-                ? plannedUnits
-                : availableInputs * outputUnitsPerInput;
-
-            if (plannedUnits <= 0)
+            SharedBusinessWeeklyConverter.GoodsConversionResult conversion = SharedBusinessWeeklyConverter.ConvertGoods(
+                business.BusinessType,
+                runtime,
+                plannedUnits,
+                inputCategoryId,
+                outputCategoryId,
+                profile.InputCategoryIds,
+                blockedReasons);
+            consumedUnits = conversion.ConsumedUnits;
+            producedUnits = conversion.ProducedUnits;
+            if (conversion.TaskBackedOutputRefusal != null)
             {
-                blockedReasons.Add("no staffed weekly capacity");
-            }
-
-            if (!string.IsNullOrWhiteSpace(outputCategoryId) && outputRoom <= 0)
-            {
-                blockedReasons.Add($"output storage full: {outputCategoryId}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(inputCategoryId) && availableInputs <= 0)
-            {
-                blockedReasons.Add($"input shortage: {inputCategoryId}");
-            }
-
-            // M3 cross-check (Plan 04, D-S3/D-S4): if the converter ever
-            // reaches the credit site for a Bakery/FuelDealer pool, refuse
-            // loudly instead of crediting. Unreachable while the seam
-            // early return above stands; the guard is the second line of
-            // defence, checked BEFORE any input is consumed or output
-            // credited so a trip never destroys inputs.
-            string taskBackedOutputRefusal = SharedBusinessWeeklyConverter.CheckTaskBackedOutputCredit(business.BusinessType, outputCategoryId, plannedUnits);
-            if (taskBackedOutputRefusal != null)
-            {
-                blockedReasons.Add(taskBackedOutputRefusal);
-                AppendSummarySegment(summary, taskBackedOutputRefusal);
-            }
-
-            if (taskBackedOutputRefusal == null && plannedUnits > 0 && !string.IsNullOrWhiteSpace(outputCategoryId) && outputRoom > 0)
-            {
-                int operableUnits = Mathf.Min(plannedUnits, outputRoom);
-                if (!string.IsNullOrWhiteSpace(inputCategoryId))
-                {
-                    operableUnits = Mathf.Min(operableUnits, inputLimitedOutput);
-                    int inputUnitsNeeded = Mathf.CeilToInt(operableUnits / (float)outputUnitsPerInput);
-                    if (operableUnits > 0 && runtime.TryConsumeCategoryStockUnits(inputCategoryId, inputUnitsNeeded, out int consumed))
-                    {
-                        consumedUnits = consumed;
-                        operableUnits = Mathf.Min(operableUnits, consumed * outputUnitsPerInput);
-                    }
-                    else
-                    {
-                        operableUnits = 0;
-                    }
-                }
-
-                operableUnits = ConsumeSecondaryInputsForOutput(business, profile, inputCategoryId, operableUnits, blockedReasons);
-                producedUnits = runtime.AddCategoryStockUnits(outputCategoryId, operableUnits);
-                if (operableUnits > 0 && producedUnits < operableUnits)
-                {
-                    // PASS7-007: storage accepted less than planned — record the
-                    // shortfall instead of over-counting production.
-                    blockedReasons.Add($"output storage shortfall: stored {producedUnits}/{operableUnits} {outputCategoryId}");
-                }
+                AppendSummarySegment(summary, conversion.TaskBackedOutputRefusal);
             }
 
             business.ApplyWeeklyOperationResult(producedUnits);
@@ -5279,76 +5231,6 @@ namespace LandLedgers.Economy
             return 6;
         }
 
-        private int ConsumeSecondaryInputsForOutput(
-            BusinessInstanceState business,
-            BusinessProfileDefinition profile,
-            string primaryInputCategoryId,
-            int outputUnits,
-            List<string> blockedReasons)
-        {
-            if (business == null || business.RuntimeState == null || profile == null || outputUnits <= 0)
-            {
-                return Mathf.Max(0, outputUnits);
-            }
-
-            int limitedOutputUnits = outputUnits;
-            ReadOnlySpan<string> inputCategoryIds = profile.InputCategoryIds;
-            for (int i = 0; i < inputCategoryIds.Length; i++)
-            {
-                string categoryId = inputCategoryIds[i];
-                if (string.IsNullOrWhiteSpace(categoryId)
-                    || string.Equals(categoryId, primaryInputCategoryId, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                CategoryStockState stock = business.RuntimeState.GetCategoryStock(categoryId);
-                if (stock == null)
-                {
-                    continue;
-                }
-
-                int outputPerInput = GetSecondaryOutputUnitsPerInputUnit(business.BusinessType, categoryId);
-                int desiredInputUnits = Mathf.CeilToInt(limitedOutputUnits / (float)outputPerInput);
-                if (desiredInputUnits <= 0)
-                {
-                    continue;
-                }
-
-                int supportedOutput = stock.CurrentStockUnits * outputPerInput;
-                if (supportedOutput <= 0)
-                {
-                    AddBlockedReason(blockedReasons, $"input shortage: {categoryId}");
-                    limitedOutputUnits = 0;
-                    continue;
-                }
-
-                if (supportedOutput < limitedOutputUnits)
-                {
-                    AddBlockedReason(blockedReasons, $"short input: {categoryId}");
-                    limitedOutputUnits = supportedOutput;
-                }
-
-                int consumeUnits = Mathf.CeilToInt(limitedOutputUnits / (float)outputPerInput);
-                if (consumeUnits > 0)
-                {
-                    business.RuntimeState.TryConsumeCategoryStockUnits(categoryId, consumeUnits, out _);
-                }
-            }
-
-            return Mathf.Max(0, limitedOutputUnits);
-        }
-
-        private static int GetSecondaryOutputUnitsPerInputUnit(BusinessType businessType, string categoryId)
-        {
-            if (businessType == BusinessType.Bakery && string.Equals(categoryId, CategoryFuelWood, StringComparison.OrdinalIgnoreCase))
-            {
-                return 8;
-            }
-
-            return 4;
-        }
-
         private int ProcureInputsForWeeklyOperation(
             BusinessInstanceState business,
             BusinessProfileDefinition profile,
@@ -5484,23 +5366,6 @@ namespace LandLedgers.Economy
                     return;
                 }
             }
-        }
-
-        private static int GetOutputUnitsPerInput(BusinessType businessType)
-        {
-            return businessType switch
-            {
-                BusinessType.CropFarm => CropFarmOutputUnitsPerInput,
-                BusinessType.Ranch => RanchOutputUnitsPerInput,
-                BusinessType.Butcher => ButcherOutputUnitsPerInput,
-                BusinessType.Blacksmith => BlacksmithOutputUnitsPerInput,
-                BusinessType.FuelDealer => FuelDealerOutputUnitsPerInput,
-                BusinessType.GrainMill => GrainMillOutputUnitsPerInput,
-                BusinessType.Bakery => BakeryOutputUnitsPerInput,
-                BusinessType.Tailor => 2,
-                BusinessType.Wheelwright => 2,
-                _ => 1
-            };
         }
 
         private static int GetSharedOperatingCashBufferCents(BusinessRuntimeState runtime)

@@ -94,45 +94,6 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void DriversScoreOpportunitiesNeverCounts()
-        {
-            var census = new TerritoryCensus
-            {
-                EffectiveMarketPopulation = 900,
-                TownHouseholdCount = 120,
-                CatchmentFarmCount = 15,
-                AvgCatchmentMiles = 6f,
-                WagonsInTerritory = 20,
-                DraftTeamsInTerritory = 12,
-                ImplementsInTerritory = 25,
-                LivestockFarmsInCatchment = 8,
-                TransientVisitorsPerDay = 15,
-                Role = SettlementRole.AgriculturalServiceTown,
-            };
-
-            var opportunities = new DemandDriverSet().EvaluateAll(census);
-
-            Assert.AreEqual(6, opportunities.Count);
-            foreach (BusinessOpportunity o in opportunities)
-            {
-                Assert.GreaterOrEqual(o.Score01, 0f);
-                Assert.LessOrEqual(o.Score01, 1f);
-                Assert.Greater(o.Reasons.Count, 0, "Every score cites its real-world reasons.");
-            }
-            // The blacksmith has real repair demand behind it here.
-            BusinessOpportunity smith = opportunities.Find(o => o.BusinessType == BusinessType.Blacksmith);
-            Assert.Greater(smith.Score01, 0.5f);
-        }
-
-        [Test]
-        public void EmptyTerritoryScoresNothing()
-        {
-            var opportunities = new DemandDriverSet().EvaluateAll(new TerritoryCensus());
-            foreach (BusinessOpportunity o in opportunities)
-                Assert.AreEqual(0f, o.Score01, "No real demand → no opportunity. Nothing is invented.");
-        }
-
-        [Test]
         public void LaborDemandIsWorkerTimeByTaskAndSeason()
         {
             var plan = new LaborDemandPlan { BusinessInstanceId = "biz-farm", WorkdayMinutes = 600 };

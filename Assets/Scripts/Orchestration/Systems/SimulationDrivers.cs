@@ -422,25 +422,12 @@ namespace LandLedgers.Orchestration.Systems
         private IConstructionParcelAuthority npcConstructionParcelAuthority;
         private INpcConstructionProcurementPort npcConstructionProcurement;
 
-        /// <summary>
-        /// Binds the NPC construction ports the production driver needs.
-        /// Any argument may be null; an unbound port makes the driver wait
-        /// loudly on the step that needs it instead of inventing input.
-        /// Safe to call twice: the latest binding wins.
-        /// </summary>
-        public void BindNpcConstructionPorts(
-            BuildingDesignCatalog catalog,
-            IConstructionMaterialPricePort pricePort,
-            IConstructionMaterialSource materialSource,
-            IConstructionParcelAuthority parcelAuthority,
-            INpcConstructionProcurementPort procurement)
-        {
-            npcConstructionCatalog = catalog;
-            npcConstructionPricePort = pricePort;
-            npcConstructionMaterialSource = materialSource;
-            npcConstructionParcelAuthority = parcelAuthority;
-            npcConstructionProcurement = procurement;
-        }
+        // W7 (2026-11-06): BindNpcConstructionPorts removed — it had zero
+        // callers, so no production path ever bound these ports. The
+        // fields above stay (DriveNpcConstruction reads them and waits
+        // loudly while they are unbound); the drive can never commission
+        // until a binding point is re-wired by a design decision — see the
+        // session checkpoint.
 
         /// <summary>
         /// Pass XI WS2 (A-06): binds a player-owned bank's deposit ledger
@@ -456,18 +443,11 @@ namespace LandLedgers.Orchestration.Systems
             return hub.BankLedgerBindings.BindBankLedger(businessInstanceId, ledger, diag);
         }
 
-        /// <summary>
-        /// Queues one explicit NPC construction commission for the driver.
-        /// The driver commissions only queued requests, never on its own;
-        /// which households commission, on what evidence, is a design
-        /// decision owned outside this driver, so no automatic trigger
-        /// queues here.
-        /// </summary>
-        public void QueueNpcConstructionRequest(NpcConstructionRequest request)
-        {
-            if (request != null) npcConstructionRequests.Add(request);
-        }
-
+        // W7 (2026-11-06): QueueNpcConstructionRequest removed — it had
+        // zero callers, so no production path ever queued a request. The
+        // npcConstructionRequests list stays (DriveNpcConstruction drains
+        // it); it can never be filled until a queue entry point is re-wired
+        // by a design decision — see the session checkpoint.
         private readonly List<NpcConstructionRequest> npcConstructionRequests = new List<NpcConstructionRequest>();
 
         /// <summary>
@@ -6138,26 +6118,11 @@ namespace LandLedgers.Orchestration.Systems
             return effort.EffortId;
         }
 
-        /// <summary>
-        /// Pass IV (Worker 1): later workers (production, household) register handlers
-        /// for their due-event kinds here. The driver owns TaskCompletionDue,
-        /// PassiveProcessComplete and ResourceReleaseDue; unhandled kinds are logged
-        /// loudly — never silently skipped.
-        /// </summary>
-        public void RegisterDueEventHandler(DueEventKind kind, Action<DueEvent> handler)
-        {
-            if (handler == null)
-            {
-                dueEventHandlers.Remove(kind);
-            }
-            else
-            {
-                dueEventHandlers[kind] = handler;
-            }
-        }
-
-        private readonly Dictionary<DueEventKind, Action<DueEvent>> dueEventHandlers =
-            new Dictionary<DueEventKind, Action<DueEvent>>();
+        // W7 (2026-11-06): the dead due-event registry is gone —
+        // RegisterDueEventHandler and the dueEventHandlers dictionary had
+        // zero callers, so no worker ever registered a handler. Dispatch
+        // is the built-in switch below, unchanged; an unhandled kind is
+        // logged loudly, never silently skipped.
 
         /// <summary>
         /// Pass IV (Worker 1): pops all due events up to the current clock time in due
@@ -6202,13 +6167,6 @@ namespace LandLedgers.Orchestration.Systems
 
         private void DispatchDueEvent(DueEvent dueEvent, int dayIndex, List<string> diag)
         {
-            Action<DueEvent> handler;
-            if (dueEventHandlers.TryGetValue(dueEvent.Kind, out handler) && handler != null)
-            {
-                handler(dueEvent);
-                return;
-            }
-
             switch (dueEvent.Kind)
             {
                 case DueEventKind.TaskCompletionDue:
@@ -6240,7 +6198,7 @@ namespace LandLedgers.Orchestration.Systems
                     break;
                 default:
                     diag.Add("due event " + dueEvent.EventId + " (" + dueEvent.Kind +
-                        ", payload '" + dueEvent.PayloadRef + "') has no registered handler — consumed without effect");
+                        ", payload '" + dueEvent.PayloadRef + "') has no built-in handler — consumed without effect");
                     break;
             }
         }

@@ -141,6 +141,24 @@ namespace LandLedgers.Orchestration.Systems
             public string WagonId = string.Empty;
         }
 
+        /// <summary>
+        /// Slice S5: terms for the dispatch staging travel task — the
+        /// arrival-driven TravelTaskId task that brings Ethan to staging
+        /// (his home building) before the dispatch work task may start.
+        /// Mirrors DevelopmentHitchTaskData; the horse is not carried here
+        /// because the hitch already attached it.
+        /// </summary>
+        [Serializable]
+        private sealed class FreightDispatchTravelTaskData
+        {
+            public string AgreementId = string.Empty;
+            public string ShipmentId = string.Empty;
+            public int OperatorPersonId = -1;
+            public int StagingBuildingId = -1;
+            public string StagingLocationId = string.Empty;
+            public int DurationMinutes;
+        }
+
         [SerializeField, Min(1), Tooltip("Provisional development-only duration for the one-time opening wagon hitch task; not economic canon.")]
         private int developmentHitchMinutes = 10;
         [SerializeField, Min(1), Tooltip("Provisional development-only time spent in a direct freight-service meeting; not economic canon.")]
@@ -4207,6 +4225,130 @@ namespace LandLedgers.Orchestration.Systems
             return false;
         }
 
+        /// <summary>
+        /// Slice S5: ensures one arrival-driven travel task exists to bring
+        /// Ethan to staging (his home building, the code's existing staging
+        /// definition) for an already-queued dispatch task. The duplicate
+        /// guard is a scan of open tasks for the helper's travel ref — no
+        /// new serialized field, so the EquipmentAsset save seam is
+        /// untouched. Unlike EnsureOpeningHitchTravel, there is NO early
+        /// return when the journey location already says staging (Note-4):
+        /// if the journey location says staging but the visual agent never
+        /// routed there, a travel task is still created — TryStartExplicitRoute
+        /// is a no-op success when he is already arrived
+        /// (PopulationPathingDirector.cs:697-701), so the extra task is
+        /// harmless and the stuck case is closed.
+        /// </summary>
+        private void EnsureFreightDispatchStagingTravel(int dayIndex, FreightServiceAgreement agreement,
+            LogisticsShipmentState shipment, BusinessInstanceState freight, EquipmentAsset wagon)
+        {
+            if (hub?.Tasks == null || populationManager?.State == null || agreement == null || shipment == null
+                || freight?.Owner == null || freight.Owner.PersonId < 0 || wagon == null) return;
+            PersonState ethan = populationManager.State.GetPerson(freight.Owner.PersonId);
+            if (ethan == null || !FreightDispatchStaging.CanCreateTravel(ethan.homeBuildingId)) return;
+            if (IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            string travelRef = FreightDispatchStaging.TravelCustomerRef(agreement.AgreementId, shipment.ShipmentId);
+            foreach (WorkTask open in hub.Tasks.GetAllOpenTasks())
+            {
+                if (open != null && string.Equals(open.CustomerRef, travelRef, StringComparison.Ordinal)) return;
+            }
+
+            string staging = TownJourneyNetworkBuilder.LocationIdForBuilding(ethan.homeBuildingId);
+            string origin = ResolvePersonJourneyLocation(ethan.id);
+            if (string.IsNullOrWhiteSpace(staging) || hub.Journeys.GetLocation(staging) == null) return;
+            JourneyRoute route = string.IsNullOrWhiteSpace(origin)
+                ? null : hub.Journeys.FindRoute(origin, staging, TravelMode.Foot);
+            if (route == null || !route.Found)
+            {
+                LogFreightAgreementBlockerOnce("dispatch-travel-route:" + shipment.ShipmentId,
+                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' cannot send Ethan to staging: no route from '{origin}' to '{staging}'.");
+                return;
+            }
+
+            var trip = new FreightDispatchTravelTaskData
+            {
+                AgreementId = agreement.AgreementId,
+                ShipmentId = shipment.ShipmentId,
+                OperatorPersonId = ethan.id,
+                StagingBuildingId = ethan.homeBuildingId,
+                StagingLocationId = staging,
+                DurationMinutes = Math.Max(1, route.TotalMinutes),
+            };
+            WorkTask travel = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(freight.InstanceId)), dayIndex,
+                Math.Max(1, route.TotalMinutes),
+                customerRef: travelRef,
+                termsRef: JsonUtility.ToJson(trip));
+            if (!TryStartBusinessPersonTask(travel, ethan, dayIndex, PersonActivityKind.Travel, ethan.homeBuildingId, out string refusal))
+            {
+                if (taskStartRefusalAlreadyLogged.Add("dispatch-travel:" + travel.TaskId))
+                    Debug.LogWarning($"[FreightDispatch] Ethan's staging travel for shipment '{shipment.ShipmentId}' could not reserve time: {refusal}", this);
+                return;
+            }
+            Debug.Log($"[FreightDispatch] Ethan P{ethan.id} assigned staging travel task '{travel.TaskId}' to building {ethan.homeBuildingId} " +
+                $"for shipment '{shipment.ShipmentId}'; the dispatch task starts only after visible arrival.", this);
+        }
+
+        /// <summary>
+        /// Slice S5: ShortTick driver for the staging travel task created by
+        /// EnsureFreightDispatchStagingTravel. Returns true when a travel
+        /// task for this dispatch is the current phase (handled this tick,
+        /// whether it started, is waiting on its window, or was refused),
+        /// so the caller leaves the dispatch work task alone until arrival.
+        /// Returns false when no travel task applies — including when Ethan
+        /// is already visually at staging, so a stale travel record can
+        /// never block the dispatch start. Mirrors
+        /// TryStartQueuedOpeningHitchTravel exactly.
+        /// </summary>
+        private bool TryStartQueuedFreightDispatchTravel(int dayIndex, int tickStartMinute, int tickEndMinute,
+            FreightServiceAgreement agreement, LogisticsShipmentState shipment, PersonState ethan)
+        {
+            if (hub?.Tasks == null || agreement == null || shipment == null || ethan == null
+                || IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return false;
+            string travelRef = FreightDispatchStaging.TravelCustomerRef(agreement.AgreementId, shipment.ShipmentId);
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task == null || (task.Status != TaskStatus.Queued && task.Status != TaskStatus.Assigned)
+                    || !string.Equals(task.CustomerRef, travelRef, StringComparison.Ordinal)) continue;
+                FreightDispatchTravelTaskData trip = JsonUtility.FromJson<FreightDispatchTravelTaskData>(task.TermsRef);
+                if (trip == null || !string.Equals(trip.AgreementId, agreement.AgreementId, StringComparison.Ordinal)
+                    || !string.Equals(trip.ShipmentId, shipment.ShipmentId, StringComparison.Ordinal)) continue;
+                if (!TryStartBusinessPersonTask(task, ethan, dayIndex, PersonActivityKind.Travel, trip.StagingBuildingId, out string prepareRefusal))
+                {
+                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                        Debug.LogWarning($"[FreightDispatch] Ethan's staging travel task '{task.TaskId}' could not reserve time: {prepareRefusal}", this);
+                    return true;
+                }
+                if (!BeginScheduledBusinessPersonTask(task, ethan, dayIndex, tickStartMinute, tickEndMinute, trip.StagingBuildingId, out string startRefusal))
+                {
+                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
+                        Debug.LogWarning($"[FreightDispatch] Ethan's staging travel task '{task.TaskId}' could not start: {startRefusal}", this);
+                    return true;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Slice S5: completion handler for the dispatch staging travel
+        /// task. Mirrors the hitch travel branch of
+        /// HandleCompletedOpeningHitchTask without touching the horse — the
+        /// horse stays attached from the hitch. Only sets Ethan's journey
+        /// location to staging and logs the arrival. No-ops for every other
+        /// task ref.
+        /// </summary>
+        private void HandleCompletedFreightDispatchTravelTask(WorkTask task, int dayIndex)
+        {
+            if (task == null || !FreightDispatchStaging.IsDispatchTravelRef(task.CustomerRef)) return;
+            FreightDispatchTravelTaskData trip = JsonUtility.FromJson<FreightDispatchTravelTaskData>(task.TermsRef);
+            PersonState ethan = trip != null ? populationManager?.State?.GetPerson(trip.OperatorPersonId) : null;
+            if (trip == null || ethan == null || string.IsNullOrWhiteSpace(trip.StagingLocationId)) return;
+            SetPersonJourneyLocation(ethan.id, trip.StagingLocationId);
+            Debug.Log($"[FreightDispatch] Ethan P{ethan.id} reached staging after task '{task.TaskId}' " +
+                $"at game minute {Mathf.FloorToInt(AbsoluteNowGameSeconds() / 60f)}; dispatch may start on arrival.", this);
+        }
+
         private void HandleCompletedOpeningHitchTask(WorkTask task, int dayIndex)
         {
             if (task == null || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)) return;
@@ -4457,6 +4599,20 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     LogFreightAgreementBlockerOnce("dispatch-start-prerequisite:" + task.TaskId,
                         $"[FreightDispatch] Queued task '{task.TaskId}' retained; start refused: {refusal}");
+                    continue;
+                }
+
+                // Slice S5: the dispatch work task starts only with Ethan
+                // visually at staging (his home building). While he is
+                // elsewhere, drive the arrival-driven travel task — created
+                // below on first need — and leave the dispatch task queued.
+                // The travel task is the current phase, so the work task is
+                // left alone until arrival lands.
+                if (TryStartQueuedFreightDispatchTravel(dayIndex, tickStartMinute, tickEndMinute,
+                        agreement, shipment, operatorPerson)) continue;
+                if (!IsPersonVisuallyAtBuilding(operatorId, operatorPerson.homeBuildingId))
+                {
+                    EnsureFreightDispatchStagingTravel(dayIndex, agreement, shipment, freight, wagon);
                     continue;
                 }
 
@@ -5711,6 +5867,7 @@ namespace LandLedgers.Orchestration.Systems
             string expectedRef = FreightDispatchTaskPrefix + agreement.AgreementId + ":" + agreement.ShipmentId;
             BusinessInstanceState carrier = FindBusiness(agreement.CarrierBusinessId);
             int operatorId = carrier?.Owner?.PersonId ?? -1;
+            PersonState operatorPerson = operatorId >= 0 ? populationManager?.State?.GetPerson(operatorId) : null;
             AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
             EquipmentAsset wagon = hub?.TransportAssets?.Get(taskData.WagonId);
             string refusal = agreement.Status != FreightServiceAgreementStatus.Accepted
@@ -5736,6 +5893,19 @@ namespace LandLedgers.Orchestration.Systems
             {
                 LogFreightAgreementBlockerOnce("dispatch-completion:" + task.TaskId,
                     $"[FreightDispatch] Completed task '{task.TaskId}' did not authorize shipment '{shipment.ShipmentId}': {refusal}");
+                return;
+            }
+
+            // Slice S5 (defense in depth, own once-key so an earlier
+            // identity refusal can never suppress it): a dispatch task
+            // completed while Ethan was away must not authorize. The
+            // shipment stays held; ReconcileCompletedFreightDispatchTasks
+            // retries every ShortTick, so it authorizes the moment he
+            // arrives — never a dead end.
+            if (operatorPerson != null && !IsPersonVisuallyAtBuilding(operatorId, operatorPerson.homeBuildingId))
+            {
+                LogFreightAgreementBlockerOnce("dispatch-completion-location:" + task.TaskId,
+                    $"[FreightDispatch] Completed task '{task.TaskId}' did not authorize shipment '{shipment.ShipmentId}': completed dispatch operator is not visually at staging; authorization waits for arrival.");
                 return;
             }
 
@@ -5915,7 +6085,8 @@ namespace LandLedgers.Orchestration.Systems
             return task != null && task.DefinitionId == JourneyTravel.TravelTaskId
                 && (task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal)
                     || task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal)
-                    || task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal));
+                    || task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal)
+                    || FreightDispatchStaging.IsDispatchTravelRef(task.CustomerRef));
         }
 
         private void ResolveArrivalDrivenTravelTasks(int dayIndex)
@@ -5941,6 +6112,7 @@ namespace LandLedgers.Orchestration.Systems
                 HandleCompletedBusinessFeedTask(task, dayIndex);
                 HandleCompletedOpeningHitchTask(task, dayIndex);
                 HandleCompletedFreightMeetingTravelTask(task, dayIndex);
+                HandleCompletedFreightDispatchTravelTask(task, dayIndex);
             }
         }
 
@@ -5968,6 +6140,13 @@ namespace LandLedgers.Orchestration.Systems
                 FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
                 if (trip == null) return false;
                 targetBuildingId = trip.MeetingBuildingId;
+                return targetBuildingId >= 0;
+            }
+            if (FreightDispatchStaging.IsDispatchTravelRef(task.CustomerRef))
+            {
+                FreightDispatchTravelTaskData trip = JsonUtility.FromJson<FreightDispatchTravelTaskData>(task.TermsRef);
+                if (trip == null) return false;
+                targetBuildingId = trip.StagingBuildingId;
                 return targetBuildingId >= 0;
             }
             return false;

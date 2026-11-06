@@ -391,6 +391,17 @@ namespace LandLedgers.Population
     }
 
     /// <summary>
+    /// W5: a supplier that sells an item in whole packages bigger than the
+    /// household unit (flour: 1 sack = 10 lb). The loop plans in store units
+    /// (sacks) and multiplies at receipt. Suppliers that do not implement
+    /// this sell one household unit per store unit.
+    /// </summary>
+    public interface IPackageUnitSupplier
+    {
+        int HouseholdUnitsPerStoreUnit(string itemId);
+    }
+
+    /// <summary>
     /// Phase C: a storefront that can arrange delivery of purchased goods.
     /// Freight is real (journey minutes, real fee) and unaffordable freight
     /// fails the candidate — never silently absorbed.

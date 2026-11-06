@@ -431,7 +431,7 @@ namespace LandLedgers.FirstLedger
                     if (string.IsNullOrWhiteSpace(itemId)
                         || !string.Equals(itemId, singleItemId, StringComparison.OrdinalIgnoreCase)
                         || !category.ContainsItem(itemId)
-                        || !TryResolveStoreUnitsPerHouseholdUnit(storeDefinition, itemId, out int singleFactor, out string _))
+                        || !TryResolveStoreUnitsPerHouseholdUnit(storeDefinition, itemId, out int singleFactor, out int singlePackageSize, out string _))
                     {
                         continue;
                     }
@@ -441,6 +441,7 @@ namespace LandLedgers.FirstLedger
                         CategoryId = category.CategoryId,
                         OfferedItemIds = new List<string> { itemId },
                         StoreUnitsPerItemUnit = singleFactor,
+                        HouseholdUnitsPerStoreUnit = singlePackageSize,
                     });
                     continue;
                 }
@@ -465,7 +466,7 @@ namespace LandLedgers.FirstLedger
                 {
                     if (candidate?.OfferedItemIds == null || candidate.OfferedItemIds.Count != 1) continue;
                     string itemId = candidate.OfferedItemIds[0];
-                    if (!TryResolveStoreUnitsPerHouseholdUnit(storeDefinition, itemId, out int candidateFactor, out string candidateReason))
+                    if (!TryResolveStoreUnitsPerHouseholdUnit(storeDefinition, itemId, out int candidateFactor, out int candidatePackageSize, out string candidateReason))
                     {
                         droppedReasons.Add(
                             $"Series2TradingPort: '{itemId}' in '{category.CategoryId}' is not offered from the fallback port: {candidateReason}");
@@ -473,6 +474,7 @@ namespace LandLedgers.FirstLedger
                     }
 
                     candidate.StoreUnitsPerItemUnit = candidateFactor;
+                    candidate.HouseholdUnitsPerStoreUnit = candidatePackageSize;
                     offers.Add(candidate);
                 }
             }
@@ -527,8 +529,10 @@ namespace LandLedgers.FirstLedger
                 // Slice 10: exact offers group by conversion factor, because
                 // the factor lives on the offer and one category can hold
                 // items with different factors (lamp oil at 4, the rest at 1).
-                // The port finds offers by item id, so separate offers in the
-                // same category are safe.
+                // W5: the group key is (factor, package size) — flour sacks
+                // at 10 must not merge with factor-1 items in the same
+                // category. The port finds offers by item id, so separate
+                // offers in the same category are safe.
                 var exactOffersByFactor = new List<GeneralStoreCategoryOffer>();
                 foreach (GeneralStoreCategoryOffer candidate in validatedItems)
                 {
@@ -538,9 +542,10 @@ namespace LandLedgers.FirstLedger
                     HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(itemId);
                     string dropReason = null;
                     int factor = 1;
+                    int packageSize = 1;
                     if (item == null || householdItem == null)
                         dropReason = "no authored store item or household item definition";
-                    else if (!RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(itemId, item.Unit, householdItem.UnitLabel, out factor, out string conversionReason))
+                    else if (!TryResolveStoreUnitsPerHouseholdUnit(storeDefinition, itemId, out factor, out packageSize, out string conversionReason))
                         dropReason = conversionReason.TrimEnd('.');
                     else if (GetItemSellingPriceCents(itemId) <= 0)
                         dropReason = "the owner has not set a positive selling price";
@@ -555,15 +560,20 @@ namespace LandLedgers.FirstLedger
                         continue;
                     }
 
+                    // W5: offers group by (factor, package size) — one
+                    // category can hold items with different factors (lamp
+                    // oil at 4, the rest at 1) and now also different
+                    // package sizes (flour sacks at 10, the rest at 1).
                     GeneralStoreCategoryOffer exactOffer = null;
                     foreach (GeneralStoreCategoryOffer existing in exactOffersByFactor)
-                        if (existing.StoreUnitsPerItemUnit == factor) { exactOffer = existing; break; }
+                        if (existing.StoreUnitsPerItemUnit == factor && existing.HouseholdUnitsPerStoreUnit == packageSize) { exactOffer = existing; break; }
                     if (exactOffer == null)
                     {
                         exactOffer = new GeneralStoreCategoryOffer
                         {
                             CategoryId = category.CategoryId,
                             StoreUnitsPerItemUnit = factor,
+                            HouseholdUnitsPerStoreUnit = packageSize,
                             UsesItemLevelInventory = true,
                         };
                         exactOffersByFactor.Add(exactOffer);
@@ -659,10 +669,18 @@ namespace LandLedgers.FirstLedger
         /// resolve to 1; a declared package conversion resolves to its
         /// factor; anything else fails with the reason naming the missing
         /// package definition. Replaces the old exact-equality gate.
+        /// W5: when the store unit is a whole package bigger than the
+        /// household unit, the package shape resolves instead — the factor
+        /// stays 1 (the offer is priced and stocked in store units) and
+        /// <paramref name="householdUnitsPerStoreUnit"/> carries the package
+        /// size (flour: 10). Potatoes/salt fail here with the reason naming
+        /// the missing D-5 weight.
         /// </summary>
-        private bool TryResolveStoreUnitsPerHouseholdUnit(GeneralStoreBusinessDefinition definition, string itemId, out int storeUnitsPerHouseholdUnit, out string reason)
+        private bool TryResolveStoreUnitsPerHouseholdUnit(GeneralStoreBusinessDefinition definition, string itemId,
+            out int storeUnitsPerHouseholdUnit, out int householdUnitsPerStoreUnit, out string reason)
         {
             storeUnitsPerHouseholdUnit = 1;
+            householdUnitsPerStoreUnit = 1;
             reason = string.Empty;
             HouseholdItemDefinition householdItem = HouseholdItemCatalog.Get(itemId);
             if (definition == null || householdItem == null)
@@ -676,7 +694,14 @@ namespace LandLedgers.FirstLedger
                 reason = $"no authored store item for '{itemId}'.";
                 return false;
             }
-            return RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(itemId, item.Unit, householdItem.UnitLabel, out storeUnitsPerHouseholdUnit, out reason);
+            if (RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(itemId, item.Unit, householdItem.UnitLabel, out storeUnitsPerHouseholdUnit, out string _))
+                return true;
+            if (RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(itemId, item.Unit, householdItem.UnitLabel, out householdUnitsPerStoreUnit, out reason))
+            {
+                storeUnitsPerHouseholdUnit = 1;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>Uses the authored item's cost-plus retail policy and category markup.</summary>
@@ -736,6 +761,7 @@ namespace LandLedgers.FirstLedger
             {
                 case "staple_food": return HouseholdItemCatalog.FlourId;
                 case "crop_food": return HouseholdItemCatalog.PotatoesId;
+                case "household_goods": return HouseholdItemCatalog.SaltId;
                 case "meat": return HouseholdItemCatalog.PreservedMeatId;
                 case "fuel_wood": return HouseholdItemCatalog.FuelWoodId;
                 case "clothing": return HouseholdItemCatalog.ClothingTextilesId;

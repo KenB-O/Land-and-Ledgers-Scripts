@@ -14,13 +14,15 @@
 // StoreUnitsPerItemUnit (int, >= 1) expresses exactly that shape, and the
 // category and item-level port math already applies it.
 //
-// The PACKAGE shape (store unit bigger than the household unit: flour in
-// 10 lb sacks, potatoes in sacks) is NOT convertible by a factor: buying
+// The PACKAGE shape (store unit bigger than the household unit) is
+// convertible only through TryGetHouseholdUnitsPerStoreUnit below: buying
 // needs whole packages, and the receipt must multiply packages into
-// household units, which the shopping loop does not model yet. Those items
-// stay dropped with the reason naming the missing mechanism. Nothing here
-// invents a sack weight: the potato sack weight and the salt small-bag
-// weight are unauthored anywhere, so they have no entry either.
+// household units. Flour converts that way (1 sack bought = 10 lb
+// received, W5); potatoes and salt have no authored package weight
+// anywhere (D-5 open), so they stay dropped with the reason naming the
+// missing D-5 weight. Nothing here invents a sack weight: the potato sack
+// weight and the salt small-bag weight are unauthored anywhere, so they
+// have no entry either.
 using System;
 
 namespace LandLedgers.Economy
@@ -77,22 +79,90 @@ namespace LandLedgers.Economy
             if (id == "flour")
             {
                 reason = "flour is sold as 10 lb sacks, a package bigger than the household lb: " +
-                    "buying needs whole-package purchase with receipt multiplication (1 sack bought = 10 lb received), " +
-                    "which the shopping loop does not model yet, so no conversion is invented and the offer stays dropped.";
+                    "the subdivision factor does not apply — use TryGetHouseholdUnitsPerStoreUnit for whole-package purchase " +
+                    "(1 sack bought = 10 lb received).";
                 return false;
             }
 
             if (id == "potatoes")
             {
-                reason = "potatoes are sold by the sack and no sack weight is authored anywhere, " +
+                reason = "potatoes are sold by the sack and no D-5 sack weight is authored anywhere, " +
                     "so no conversion is invented and the offer stays dropped.";
                 return false;
             }
 
             if (id == "salt")
             {
-                reason = "salt is sold in small bags and no bag weight is authored anywhere, " +
+                reason = "salt is sold in small bags and no D-5 bag weight is authored anywhere, " +
                     "so no conversion is invented and the offer stays dropped.";
+                return false;
+            }
+
+            reason = $"no package definition for '{itemId.Trim()}' sold as '{store}' against household '{household}': " +
+                "the package size is not authored, so no conversion is invented and the offer stays dropped.";
+            return false;
+        }
+
+        /// <summary>
+        /// W5 — the PACKAGE direction: returns true when one store unit of
+        /// this item is a whole package holding a whole number of household
+        /// units, and sets <paramref name="householdUnitsPerStoreUnit"/> to
+        /// that count (flour: 1 sack = 10 lb). The shopping loop buys whole
+        /// packages (ceil(need / package size)) and multiplies the receipt
+        /// (packages sold × package size). Returns false with
+        /// <paramref name="reason"/> naming the missing D-5 weight when the
+        /// package size is unauthored (potatoes, salt) — loud, not silent.
+        /// Identical units resolve to 1: one store unit is one household unit.
+        /// </summary>
+        public static bool TryGetHouseholdUnitsPerStoreUnit(
+            string itemId, string storeUnit, string householdUnit,
+            out int householdUnitsPerStoreUnit, out string reason)
+        {
+            householdUnitsPerStoreUnit = 1;
+            reason = string.Empty;
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                reason = "no item id was supplied, so no package definition can apply.";
+                return false;
+            }
+
+            string store = (storeUnit ?? string.Empty).Trim();
+            string household = (householdUnit ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(store) || string.IsNullOrWhiteSpace(household))
+            {
+                reason = $"'{itemId.Trim()}' has no authored store unit or no household unit, so no package definition can apply.";
+                return false;
+            }
+
+            if (string.Equals(store, household, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            string id = itemId.Trim().ToLowerInvariant();
+            string storeLower = store.ToLowerInvariant();
+            string householdLower = household.ToLowerInvariant();
+
+            // Flour: the store sells 10 lb sacks, households request lb.
+            // Basis: the authored store unit "10 lb sack" per
+            // GeneralStoreBusinessDefinition.asset; the number 10 lives
+            // here, visibly, as the package size — the label is display
+            // text and is never parsed for its number.
+            if (id == "flour" && storeLower == "10 lb sack" && householdLower == "lb")
+            {
+                householdUnitsPerStoreUnit = 10;
+                return true;
+            }
+
+            if (id == "potatoes")
+            {
+                reason = "potatoes are sold by the sack and no D-5 sack weight is authored anywhere, " +
+                    "so no whole-package purchase is possible and the offer stays dropped.";
+                return false;
+            }
+
+            if (id == "salt")
+            {
+                reason = "salt is sold in small bags and no D-5 bag weight is authored anywhere, " +
+                    "so no whole-package purchase is possible and the offer stays dropped.";
                 return false;
             }
 

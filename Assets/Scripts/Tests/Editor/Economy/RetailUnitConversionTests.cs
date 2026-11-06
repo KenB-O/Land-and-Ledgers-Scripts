@@ -47,8 +47,8 @@ namespace LandLedgers.EditorTests.Economy
         {
             Assert.IsFalse(RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(
                 "potatoes", "sack", "lb", out int _, out string reason));
-            Assert.IsTrue(reason.Contains("no sack weight is authored"),
-                $"reason should name the missing definition, was: {reason}");
+            Assert.IsTrue(reason.Contains("D-5 sack weight"),
+                $"reason should name the missing D-5 weight, was: {reason}");
         }
 
         [Test]
@@ -56,8 +56,8 @@ namespace LandLedgers.EditorTests.Economy
         {
             Assert.IsFalse(RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(
                 "salt", "small bag", "lb", out int _, out string reason));
-            Assert.IsTrue(reason.Contains("no bag weight is authored"),
-                $"reason should name the missing definition, was: {reason}");
+            Assert.IsTrue(reason.Contains("D-5 bag weight"),
+                $"reason should name the missing D-5 weight, was: {reason}");
         }
 
         [Test]
@@ -67,6 +67,54 @@ namespace LandLedgers.EditorTests.Economy
                 "nails", "box", "lb", out int _, out string reason));
             Assert.IsTrue(reason.Contains("no package definition"),
                 $"reason should name the missing definition, was: {reason}");
+        }
+
+        // ---- W5: the package direction (whole-package purchase) ----
+
+        [Test]
+        public void Flour_PackagePurchase_IsTenPoundsPerSack()
+        {
+            Assert.IsTrue(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "flour", "10 lb sack", "lb", out int packageSize, out string _));
+            Assert.AreEqual(10, packageSize);
+        }
+
+        [Test]
+        public void Flour_PackagePurchase_BareSackLabel_DoesNotMatchTheAuthoredUnit()
+        {
+            // The authored store unit is "10 lb sack"; a bare "sack" is a
+            // different unit string, so the package conversion does not
+            // silently apply to it.
+            Assert.IsFalse(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "flour", "sack", "lb", out int _, out string reason));
+            Assert.IsTrue(reason.Contains("no package definition"),
+                $"reason should name the missing definition, was: {reason}");
+        }
+
+        [Test]
+        public void Potatoes_PackagePurchase_RefusesWithD5WeightNamed()
+        {
+            Assert.IsFalse(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "potatoes", "sack", "lb", out int _, out string reason));
+            Assert.IsTrue(reason.Contains("D-5 sack weight"),
+                $"reason should name the missing D-5 weight, was: {reason}");
+        }
+
+        [Test]
+        public void Salt_PackagePurchase_RefusesWithD5WeightNamed()
+        {
+            Assert.IsFalse(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "salt", "small bag", "lb", out int _, out string reason));
+            Assert.IsTrue(reason.Contains("D-5 bag weight"),
+                $"reason should name the missing D-5 weight, was: {reason}");
+        }
+
+        [Test]
+        public void IdenticalUnits_PackagePurchase_IsOne()
+        {
+            Assert.IsTrue(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "bread", "loaf", "loaf", out int packageSize, out string _));
+            Assert.AreEqual(1, packageSize);
         }
 
         // ---- The adapter over a converted offer ----
@@ -245,6 +293,47 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(2, adapter.SellItem("bread", 2, 0, null, new List<string>()));
             Assert.AreEqual(20, port.CashBalance);
             Assert.AreEqual(2, port.LastCashSettlementUnits);
+        }
+
+        // ---- W5: the adapter's package surface for flour ----
+
+        private static GeneralStoreSupplierAdapter FlourSackAdapter(out StubItemPort port)
+        {
+            port = new StubItemPort();
+            port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { "flour" },
+                StoreUnitsPerItemUnit = 1,
+                HouseholdUnitsPerStoreUnit = 10,
+                UsesItemLevelInventory = true,
+            });
+            port.StockStoreUnits["flour"] = 48;
+            port.PricePerStoreUnitCents["flour"] = 35;
+            return new GeneralStoreSupplierAdapter(port);
+        }
+
+        [Test]
+        public void Flour_PackageOffer_IsStockedAndPricedPerSack()
+        {
+            GeneralStoreSupplierAdapter adapter = FlourSackAdapter(out StubItemPort _);
+            Assert.AreEqual(48, adapter.ItemStockUnits("flour"));
+            Assert.AreEqual(35, adapter.ItemPricePerUnitCents("flour"));
+            Assert.AreEqual(10, adapter.HouseholdUnitsPerStoreUnit("flour"));
+            Assert.AreEqual(1, adapter.HouseholdUnitsPerStoreUnit("bread"),
+                "An item with no package offer sells one household unit per store unit.");
+        }
+
+        [Test]
+        public void Flour_SaleOfThreeSacks_ConsumesThreeSacksAndPostsSackRevenue()
+        {
+            GeneralStoreSupplierAdapter adapter = FlourSackAdapter(out StubItemPort port);
+            var diag = new List<string>();
+            Assert.AreEqual(3, adapter.SellItem("flour", 3, 0, null, diag));
+            Assert.AreEqual(45, adapter.ItemStockUnits("flour"));
+            Assert.AreEqual(105, port.CashBalance);
+            Assert.AreEqual(3, port.LastCashSettlementUnits);
+            Assert.AreEqual(105, port.LastCashSettlementRevenue);
         }
     }
 }

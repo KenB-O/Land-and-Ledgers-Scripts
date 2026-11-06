@@ -18,6 +18,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public List<string> OfferedItemIds = new List<string>();
         /// <summary>Store category units consumed per item unit sold (≥1).</summary>
         public int StoreUnitsPerItemUnit = 1;
+        /// <summary>
+        /// W5: household units credited per store unit sold. 1 for ordinary
+        /// items (one household unit per store unit); 10 for a flour sack
+        /// (1 sack bought = 10 lb received). The port stocks and prices
+        /// package offers in store units (sacks); the shopping loop plans
+        /// in store units and multiplies at receipt.
+        /// </summary>
+        public int HouseholdUnitsPerStoreUnit = 1;
         /// <summary>When true, SKU stock is backed by identified Business inventory lots.</summary>
         public bool UsesItemLevelInventory;
         /// <summary>Optional owner-entered price for runtime-registered SKU offers.</summary>
@@ -77,7 +85,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// Item resolution is store-declared (CategoryOffers): the store knows
     /// what its categories represent. No global category→item guesswork.
     /// </summary>
-    public sealed class GeneralStoreSupplierAdapter : IItemResolvingSupplier, IItemCatalogSupplier, IDeliveryOfferingSupplier, IOffersTradeCredit
+    public sealed class GeneralStoreSupplierAdapter : IItemResolvingSupplier, IItemCatalogSupplier, IDeliveryOfferingSupplier, IOffersTradeCredit, IPackageUnitSupplier
     {
         private readonly IGeneralStoreTradingPort port;
         private readonly List<string> log = new List<string>();
@@ -353,6 +361,28 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         {
             GeneralStoreCategoryOffer offer = FindOffer(categoryId);
             return offer != null ? Math.Max(1, offer.StoreUnitsPerItemUnit) : 1;
+        }
+
+        /// <summary>
+        /// W5: the package size for one ITEM, found by item id (same shape
+        /// as ItemStoreUnitsPerUnit above). The offer's
+        /// HouseholdUnitsPerStoreUnit is 1 for ordinary items and 10 for a
+        /// flour sack; the loop plans in store units and multiplies at
+        /// receipt. The port already stocks and prices package offers in
+        /// store units (their subdivision factor is 1).
+        /// </summary>
+        public int HouseholdUnitsPerStoreUnit(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || port.CategoryOffers == null) return 1;
+            for (int i = 0; i < port.CategoryOffers.Count; i++)
+            {
+                GeneralStoreCategoryOffer offer = port.CategoryOffers[i];
+                if (offer?.OfferedItemIds == null) continue;
+                for (int j = 0; j < offer.OfferedItemIds.Count; j++)
+                    if (string.Equals(offer.OfferedItemIds[j], itemId, StringComparison.OrdinalIgnoreCase))
+                        return Math.Max(1, offer.HouseholdUnitsPerStoreUnit);
+            }
+            return 1;
         }
 
         /// <summary>

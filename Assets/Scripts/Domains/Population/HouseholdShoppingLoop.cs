@@ -336,7 +336,7 @@ namespace LandLedgers.Population
 
             // ---- Step 16: physical receipt ONLY — household inventory grows here. ----
             string receiptProblem = ReceiveSettledGoods(
-                result, need, batch, sold, chosen.UseDelivery, chosen.Supplier.SupplierName,
+                result, need, batch, sold, chosen.HouseholdUnitsPerStoreUnit, chosen.UseDelivery, chosen.Supplier.SupplierName,
                 shopperId, dayIndex, diag, options);
             if (receiptProblem != null)
             {
@@ -347,7 +347,10 @@ namespace LandLedgers.Population
 
             SetScheduleState(shopper, PopulationScheduleState.AtHome);
             scheduleTracker.Release(reservationId);
-            diag.Add($"Day {dayIndex}: shopping trip complete — P{shopperId} bought {sold}u {need.ItemId} from '{chosen.Supplier.SupplierName}'.");
+            string boughtText = chosen.HouseholdUnitsPerStoreUnit > 1
+                ? $"{sold} package(s) ({sold * chosen.HouseholdUnitsPerStoreUnit}u {need.ItemId})"
+                : $"{sold}u {need.ItemId}";
+            diag.Add($"Day {dayIndex}: shopping trip complete — P{shopperId} bought {boughtText} from '{chosen.Supplier.SupplierName}'.");
             tripHistory.Add(result);
             return result;
         }
@@ -358,12 +361,17 @@ namespace LandLedgers.Population
         /// Updates the need (fulfilled when nothing remains) and the per-need
         /// result. Returns null on success, else a loud inconsistency reason.
         /// Shared by the single-need path and the batched multi-need trip.
+        /// W5: <paramref name="unitsSold"/> is in STORE units (sacks for a
+        /// package item); the household is credited
+        /// <paramref name="unitsSold"/> ×
+        /// <paramref name="householdUnitsPerStoreUnit"/> household units.
         /// </summary>
         private string ReceiveSettledGoods(
             ShoppingTripResult result,
             HouseholdPurchasingNeed need,
             CarriedGoodsBatch batch,
             int unitsSold,
+            int householdUnitsPerStoreUnit,
             bool useDelivery,
             string supplierName,
             int shopperId,
@@ -371,9 +379,10 @@ namespace LandLedgers.Population
             List<string> diag,
             ShoppingLoopOptions options)
         {
+            int unitsReceived = unitsSold * Math.Max(1, householdUnitsPerStoreUnit);
             HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
             string lotRejection = inventory.AddLot(
-                need.ItemId, unitsSold, dayIndex,
+                need.ItemId, unitsReceived, dayIndex,
                 batch.Provenance + (useDelivery ? " → delivered" : " → carried home"));
             if (lotRejection != null)
             {
@@ -382,7 +391,7 @@ namespace LandLedgers.Population
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
-            need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsSold);
+            need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
             need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
             if (need.UnitsNeeded <= 0)
             {
@@ -390,10 +399,10 @@ namespace LandLedgers.Population
             }
 
             result.Success = true;
-            result.UnitsAcquired = unitsSold;
+            result.UnitsAcquired = unitsReceived;
             result.UnitsStillNeeded = need.UnitsNeeded;
             AddEvent(result, dayIndex, ShoppingEventKind.Receipt, shopperId, need,
-                $"H{need.HouseholdId} received {unitsSold}u {need.ItemId} into real lots (physical receipt).",
+                $"H{need.HouseholdId} received {unitsReceived}u {need.ItemId} into real lots (physical receipt).",
                 batch.Provenance + (need.Status == PurchasingNeedStatus.Fulfilled ? " Need fulfilled." : $" {need.UnitsNeeded}u still needed."));
             PersonState buyer = population.GetPerson(shopperId);
             string buyerName = buyer != null ? buyer.DisplayName : "P" + shopperId;
@@ -777,7 +786,7 @@ namespace LandLedgers.Population
             {
                 ShoppingTripResult result = FindBatchNeedResult(batch, entry.need);
                 string receiptProblem = ReceiveSettledGoods(
-                    result, entry.need, entry.batch, entry.units, entry.candidate.UseDelivery,
+                    result, entry.need, entry.batch, entry.units, entry.candidate.HouseholdUnitsPerStoreUnit, entry.candidate.UseDelivery,
                     winner.SupplierName, shopperId, dayIndex, diag, options);
                 if (receiptProblem != null)
                 {
@@ -786,7 +795,7 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                batch.UnitsAcquiredTotal += entry.units;
+                batch.UnitsAcquiredTotal += entry.units * Math.Max(1, entry.candidate.HouseholdUnitsPerStoreUnit);
             }
 
             SetScheduleState(shopper, PopulationScheduleState.AtHome);
@@ -1564,9 +1573,13 @@ namespace LandLedgers.Population
 
             if (batch != null && batch.Custody == GoodsCustodyState.InHand)
             {
+                // W5: custody holds STORE units (sacks for a package item);
+                // the household is credited packages × package size.
+                int packageSize = Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1);
+                int unitsReceived = batch.Units * packageSize;
                 HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
                 string provenance = batch.Provenance + " → carried home";
-                string lotRejection = inventory.AddLot(need.ItemId, batch.Units, dayIndex, provenance);
+                string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, provenance);
                 if (lotRejection != null)
                 {
                     return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
@@ -1574,7 +1587,7 @@ namespace LandLedgers.Population
 
                 batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
                 custodyBatches.Remove(batch);
-                need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - batch.Units);
+                need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
                 need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
                 if (need.UnitsNeeded <= 0)
                 {
@@ -1582,10 +1595,10 @@ namespace LandLedgers.Population
                 }
 
                 result.Success = true;
-                result.UnitsAcquired = batch.Units;
+                result.UnitsAcquired = unitsReceived;
                 result.UnitsStillNeeded = need.UnitsNeeded;
                 AddEvent(result, dayIndex, ShoppingEventKind.Receipt, trip.ShopperPersonId, need,
-                    $"H{need.HouseholdId} received {batch.Units}u {need.ItemId} into real lots (physical receipt).",
+                    $"H{need.HouseholdId} received {unitsReceived}u {need.ItemId} into real lots (physical receipt).",
                     batch.Provenance + (need.Status == PurchasingNeedStatus.Fulfilled ? " Need fulfilled." : $" {need.UnitsNeeded}u still needed."));
             }
             else if (batch != null)
@@ -1626,8 +1639,12 @@ namespace LandLedgers.Population
             }
 
             var need = trip.Need;
+            // W5: custody holds STORE units (sacks for a package item);
+            // the household is credited packages × package size.
+            int packageSize = Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1);
+            int unitsReceived = batch.Units * packageSize;
             HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
-            string lotRejection = inventory.AddLot(need.ItemId, batch.Units, dayIndex, batch.Provenance + " → delivered");
+            string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, batch.Provenance + " → delivered");
             if (lotRejection != null)
             {
                 return $"INCONSISTENCY: delivery {batch.BatchId} arrived but the household lot was rejected: {lotRejection}";
@@ -1635,7 +1652,7 @@ namespace LandLedgers.Population
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
-            need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - batch.Units);
+            need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
             need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
             if (need.UnitsNeeded <= 0)
             {
@@ -1643,9 +1660,9 @@ namespace LandLedgers.Population
             }
 
             AddEvent(trip.Result, dayIndex, ShoppingEventKind.Delivery, trip.ShopperPersonId, need,
-                $"Delivery arrived: {batch.Units}u {need.ItemId} received at the household door ({batch.BatchId}).",
+                $"Delivery arrived: {unitsReceived}u {need.ItemId} received at the household door ({batch.BatchId}).",
                 "freight ran its real minutes; custody transferred at the door.");
-            diag.Add($"Day {dayIndex}: delivery {batch.BatchId} received ({batch.Units}u {need.ItemId}).");
+            diag.Add($"Day {dayIndex}: delivery {batch.BatchId} received ({unitsReceived}u {need.ItemId}).");
             return null;
         }
 
@@ -1888,7 +1905,20 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                int units = Math.Min(need.UnitsNeeded, stock);
+                // W5: whole-package purchase. When the supplier sells this
+                // item in packages bigger than the household unit (flour:
+                // 1 sack = 10 lb), stock and price are in STORE units
+                // (sacks), so the plan buys whole packages — ceil(need /
+                // package size), capped by sacks in stock — and the receipt
+                // multiplies packages back into household units. The
+                // affordability downsizing below already divides the ledger
+                // by the per-package price, so it stays in store units.
+                int packageSize = 1;
+                if (itemSupplier is IPackageUnitSupplier packageSupplier)
+                    packageSize = Math.Max(1, packageSupplier.HouseholdUnitsPerStoreUnit(need.ItemId));
+                int units = packageSize > 1
+                    ? Math.Min((need.UnitsNeeded + packageSize - 1) / packageSize, stock)
+                    : Math.Min(need.UnitsNeeded, stock);
                 if (units <= 0)
                 {
                     Reject(result, need, supplier, dayIndex, "no stock to sell", price, stock, route.TotalMinutes, diag);
@@ -1945,8 +1975,12 @@ namespace LandLedgers.Population
 
                     // Set after the carry cap, so the quoted unit count
                     // is the final planned count, not a pre-cap count.
+                    // W5: for a package item the planned count is packages,
+                    // so the message names packages and household units.
                     partialCause = $"affordability-downsized: affordable budget is {ledgerBalance}c, not the {fullPlannedTotal}c full planned cost; " +
-                        $"buying {units}u instead of {need.UnitsNeeded}u, never debt.";
+                        (packageSize > 1
+                            ? $"buying {units} package(s) ({units * packageSize}u) instead of {need.UnitsNeeded}u, never debt."
+                            : $"buying {units}u instead of {need.UnitsNeeded}u, never debt.");
                     goodsCost = units * price;
                     total = goodsCost;
                     if (units <= 0 || total > ledgerBalance)
@@ -1977,6 +2011,7 @@ namespace LandLedgers.Population
                     Supplier = supplier,
                     ItemSupplier = itemSupplier,
                     UnitsPlanned = units,
+                    HouseholdUnitsPerStoreUnit = packageSize,
                     UnitPriceCents = price,
                     TravelMinutesOneWay = Math.Max(1, route.TotalMinutes),
                     TravelMilesOneWay = route.TotalMiles,
@@ -1986,10 +2021,15 @@ namespace LandLedgers.Population
                     SettlementMode = mode,
                     // Stock binds only when affordability did not
                     // already downsize: units was capped at stock
-                    // before the affordability chain ran.
+                    // before the affordability chain ran. W5: the
+                    // comparison is in household units — a planned
+                    // package count is smaller than the need in lb
+                    // even when it covers it.
                     PartialFillReason = partialCause ??
-                        (units < need.UnitsNeeded
-                            ? $"stock-limited: seller holds {stock}u, need is {need.UnitsNeeded}u."
+                        (units * packageSize < need.UnitsNeeded
+                            ? (packageSize > 1
+                                ? $"stock-limited: seller holds {stock} package(s) ({stock * packageSize}u {need.ItemId}), need is {need.UnitsNeeded}u."
+                                : $"stock-limited: seller holds {stock}u, need is {need.UnitsNeeded}u.")
                             : string.Empty),
                 };
 
@@ -2015,8 +2055,14 @@ namespace LandLedgers.Population
             // partial reason only ever survives on a trip that
             // actually bought something.
             result.PartialFillReason = best.PartialFillReason ?? string.Empty;
+            // W5: the planned count is in store units; name packages and
+            // household units when they differ so the log never silently
+            // changes what "u" means.
+            string chosenUnitsText = best.HouseholdUnitsPerStoreUnit > 1
+                ? $"{best.UnitsPlanned} package(s) ({best.UnitsPlanned * best.HouseholdUnitsPerStoreUnit}u {need.ItemId})"
+                : $"{best.UnitsPlanned}u {need.ItemId}";
             AddEvent(result, dayIndex, ShoppingEventKind.Decision, shopperId, need,
-                $"Chose '{best.Supplier.SupplierName}': {best.UnitsPlanned}u {need.ItemId} @ {best.UnitPriceCents}c " +
+                $"Chose '{best.Supplier.SupplierName}': {chosenUnitsText} @ {best.UnitPriceCents}c " +
                 $"({best.TotalCostCents}c total{(best.UseDelivery ? $" incl {best.DeliveryFeeCents}c freight" : string.Empty)}, " +
                 $"{best.TravelMinutesOneWay} min each way, {best.SettlementMode}).",
                 $"{result.RejectedAlternatives.Count} alternatives rejected with reasons.");
@@ -2255,6 +2301,13 @@ namespace LandLedgers.Population
             public IGoodsSupplier Supplier;
             public IItemResolvingSupplier ItemSupplier;
             public int UnitsPlanned;
+            /// <summary>
+            /// W5: household units credited per store unit bought (1 for
+            /// ordinary items; 10 for a flour sack). UnitsPlanned, the
+            /// counter settlement and custody are all in STORE units; the
+            /// receipt multiplies by this to credit household units.
+            /// </summary>
+            public int HouseholdUnitsPerStoreUnit = 1;
             public string PartialFillReason = string.Empty;
             public int UnitPriceCents;
             public int TravelMinutesOneWay;

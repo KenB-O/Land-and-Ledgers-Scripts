@@ -6187,31 +6187,12 @@ namespace LandLedgers.Orchestration.Systems
                 state.BakeryDriver.AttachFuelSource(source);
             }
 
-            if (bakery.WholesaleAccounts == null || bakery.WholesaleAccounts.Count == 0) return;
+            // Plan 01 (2026-11-06, slice 1B): this method is a thin
+            // forwarder over BakeryWholesaleDailyDriver. The old silent
+            // return on an empty wholesale book is deleted: the driver
+            // names the no-account blocker and it is logged below under
+            // [BakeryProduction], like every other refusal.
             var diagnostics = new List<string>();
-            List<string> planned = bakery.PlanWholesaleBatches(dayIndex, diagnostics);
-            if (planned == null || planned.Count == 0)
-            {
-                if (diagnostics.Count > 0)
-                    Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
-                return;
-            }
-
-            // Slice S1 (2026-11-05, food-economy trace §4.2): execution
-            // wiring. The runtime-level plan is adopted into the driver
-            // (no re-planning, no duplicate batches) and the planned day
-            // is run through the driver's existing guards. Until a
-            // wholesale account exists this block is unreachable; until
-            // flour/fuel/kit/oven exist the run refuses loudly and bakes
-            // nothing — the daily log then names the exact first refusal.
-            var driver = state.BakeryDriver;
-            if (driver == null)
-            {
-                if (diagnostics.Count > 0)
-                    Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
-                return;
-            }
-            driver.AdoptPlannedBatches(dayIndex, planned, diagnostics);
 
             // Slice S2 (2026-11-05, plan 02 §4): baker's hand kit via the
             // existing equipment authority — the EquipmentTaskGate
@@ -6269,14 +6250,66 @@ namespace LandLedgers.Orchestration.Systems
                 };
             };
 
-            int baked = driver.RunScheduledDay(
-                dayIndex, bakerKitUsable,
-                LandLedgers.Economy.Equipment.Workstations.WorkstationCatalog.BakeOven,
-                findComponent, null, diagnostics, hub != null ? hub.Ids : null);
-            if (baked >= 0)
-                Debug.Log($"[BakeryProduction] Day {dayIndex}: baked {baked} of {planned.Count} planned batch(es).", this);
+            // Plan 01 (2026-11-06, slice 1B): the store seam for the
+            // daily driver. The catalog and intake are created once
+            // here — both already save-round-trip on Series2Pass9SaveState;
+            // creating them here is the missing production assignment.
+            // The store is resolved per account via FindBusiness; the
+            // live port comes from the store manager. If the store
+            // manager or business is missing, the transfer step refuses
+            // loudly inside the driver and bread stays on the bakery
+            // shelf — never lost, never teleported.
+            if (state.Catalog == null) state.Catalog = new LandLedgers.Economy.Ordering.Pass3StoreCatalog();
+            if (state.WholesaleIntake == null) state.WholesaleIntake = new LandLedgers.Economy.Ordering.Pass3WholesaleIntake();
+
+            BusinessInstanceState storeBusiness = null;
+            string storeBusinessId = string.Empty;
+            foreach (var account in bakery.WholesaleAccounts)
+            {
+                if (account == null || !account.IsActive) continue;
+                BusinessInstanceState candidate = FindBusiness(account.BuyerBusinessId);
+                if (candidate == null || candidate.BusinessType != BusinessType.GeneralStore) continue;
+                storeBusiness = candidate;
+                storeBusinessId = account.BuyerBusinessId;
+                break;
+            }
+            if (storeBusiness == null)
+                diagnostics.Add("DriveBakeryWholesalePlanning: no General Store business resolves for any wholesale account — transfer skipped, bread stays on the bakery shelf, accounts stay due.");
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager storeManager =
+                FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            if (storeManager == null)
+                diagnostics.Add("DriveBakeryWholesalePlanning: no GeneralStoreRuntimeManager — transfer skipped, bread stays on the bakery shelf, accounts stay due.");
+            IGeneralStoreTradingPort storePort = null;
+            if (storeManager != null && storeBusiness != null)
+                storePort = storeManager.BuildHouseholdTradingPort(storeBusiness);
+            BusinessInstanceState bakeryBusiness = FindBusiness(bakery.BusinessInstanceId);
+
+            var inputs = new BakeryWholesaleDailyInputs
+            {
+                Bakery = bakery,
+                ProductionDriver = state.BakeryDriver,
+                DayIndex = dayIndex,
+                BakerKitUsable = bakerKitUsable,
+                OvenDefinition = LandLedgers.Economy.Equipment.Workstations.WorkstationCatalog.BakeOven,
+                FindOvenComponent = findComponent,
+                IdRegistry = hub != null ? hub.Ids : null,
+                StorePort = storePort,
+                StoreCashPort = storeBusiness?.RuntimeState != null
+                    ? new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState) : null,
+                BakeryCashPort = bakeryBusiness?.RuntimeState != null
+                    ? new Series2BusinessRuntimeCashPort(bakeryBusiness.RuntimeState) : null,
+                StoreBusinessId = storeBusinessId,
+                BakeryBusinessId = bakery.BusinessInstanceId,
+                Intake = state.WholesaleIntake,
+                StoreCatalog = state.Catalog,
+            };
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, diagnostics);
+            if (!string.IsNullOrWhiteSpace(result.Refusal))
+                Debug.Log($"[BakeryProduction] Day {dayIndex}: {result.Refusal}", this);
             else
-                Debug.Log($"[BakeryProduction] Day {dayIndex}: planned {planned.Count} batch(es); baked nothing — first refusal is in the [BakeryProduction] diagnostics.", this);
+                Debug.Log($"[BakeryProduction] Day {dayIndex}: {result.AccountsOnBooks} wholesale account(s), " +
+                    $"{result.BatchesPlanned} batch(es) planned, {result.BatchesBaked} baked, " +
+                    $"{result.TransfersCompleted} transfer(s), {result.UnitsStocked}u stocked.", this);
             if (diagnostics.Count > 0)
                 Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
         }

@@ -1101,6 +1101,70 @@ namespace LandLedgers.Economy.Businesses.Bakery
         }
 
         /// <summary>
+        /// Plan 01 (2026-11-06, slice 1B): records a completed wholesale
+        /// transfer against an account WITHOUT touching the shelf — the
+        /// single schedule-advance authority for the store path. The
+        /// transfer driver (Review2BakeryToStoreWholesaleDriver) already
+        /// moved the goods and settled the cash exactly once, so this
+        /// method moves neither: it appends the delivery record (with the
+        /// provenance lines the caller captured before the transfer, so
+        /// the record keeps the full upstream chain) and advances the
+        /// account to its next delivery day. It must NOT be called for a
+        /// transfer FulfillWholesale already took (double-take): the
+        /// store account's schedule advances here and only here.
+        /// Returns a refusal string, or null on success. A partial
+        /// quantity refuses with no advance — the transfer driver never
+        /// partials, so a partial here means a caller bug.
+        /// </summary>
+        public string RecordWholesaleTransfer(
+            string accountId, string sellerLotId, int units, int pricePerUnitCents,
+            int dayIndex, List<string> provenanceLines, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            BakeryWholesaleAccount account = null;
+            foreach (var candidate in wholesaleAccounts)
+            {
+                if (candidate != null && string.Equals(candidate.AccountId, accountId, StringComparison.Ordinal))
+                {
+                    account = candidate;
+                    break;
+                }
+            }
+            if (account == null || !account.IsActive)
+            {
+                diag.Add($"BakeryShopRuntime: wholesale transfer record refused — no active account '{accountId}'.");
+                return $"BakeryShopRuntime: wholesale transfer record refused — no active account '{accountId}'.";
+            }
+            if (units != account.UnitsPerDelivery)
+            {
+                diag.Add($"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' takes {account.UnitsPerDelivery} units per delivery, not {units}; no advance, nothing recorded.");
+                return $"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' takes {account.UnitsPerDelivery} units per delivery, not {units}; no advance, nothing recorded.";
+            }
+
+            var record = new BakeryWholesaleDeliveryRecord
+            {
+                DeliveryId = $"{businessInstanceId}-wholesale-delivery-{deliverySeq++}",
+                AccountId = account.AccountId,
+                BuyerBusinessId = account.BuyerBusinessId,
+                BuyerType = account.BuyerType,
+                ProductId = account.ProductId,
+                Units = units,
+                PricePerUnitCents = Math.Max(0, pricePerUnitCents),
+                DayIndex = dayIndex,
+                FullyCovered = true,
+            };
+            record.SellerLotIds.Add(sellerLotId ?? string.Empty);
+            record.UnitsByLot.Add(units);
+            if (provenanceLines != null) record.ProvenanceLines.AddRange(provenanceLines);
+            wholesaleDeliveries.Add(record);
+            account.NextDeliveryDayIndex += Math.Max(1, account.DeliveryCadenceDays);
+
+            diag.Add($"BakeryShopRuntime: wholesale transfer recorded {record.DeliveryId} — {units} {account.ProductId} " +
+                $"to {account.BuyerBusinessId} (lot {sellerLotId}, day {dayIndex}); next delivery day {account.NextDeliveryDayIndex}.");
+            return null;
+        }
+
+        /// <summary>
         /// D1D: units of a product currently committed to due wholesale
         /// accounts (active, delivery day reached). The scarcity policy reads
         /// this to protect contracts against the retail counter.

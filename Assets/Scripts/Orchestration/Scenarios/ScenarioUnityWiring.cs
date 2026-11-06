@@ -32,42 +32,6 @@ using UnityEngine;
 namespace LandLedgers.Orchestration.Scenarios
 {
     /// <summary>
-    /// Converts an authored ScenarioAsset into a versioned ScenarioPreset for
-    /// the coordinator. The asset remains the authoring authority; the preset
-    /// is a deep copy used at generation time.
-    /// </summary>
-    public static class ScenarioAssetPresetBridge
-    {
-        public static ScenarioPreset ToPreset(ScenarioAsset asset, string presetId, string presetName, string presetVersion)
-        {
-            if (asset == null)
-            {
-                throw new ArgumentNullException(nameof(asset));
-            }
-
-            List<string> problems = asset.Validate();
-            if (problems.Count > 0)
-            {
-                throw new InvalidOperationException(
-                    $"ScenarioAsset '{asset.ScenarioId}' is invalid and cannot become a preset: {string.Join("; ", problems)}");
-            }
-
-            ScenarioPreset preset = asset.ToPreset(presetId, presetName, presetVersion);
-
-            // Keep the scenario id consistent: the preset's starting world
-            // carries the asset's scenario id.
-            var diagnostics = new List<string>();
-            if (!ScenarioPresetLibrary.Validate(preset, diagnostics))
-            {
-                throw new InvalidOperationException(
-                    $"ScenarioAsset '{asset.ScenarioId}' converted to an invalid preset: {string.Join("; ", diagnostics)}");
-            }
-
-            return preset;
-        }
-    }
-
-    /// <summary>
     /// Production generation port: runs the existing PopulationGenerator against
     /// the town shell, adapts the resulting PopulationState into a seed draft
     /// (read-only adaptation), then seeds the starting economy through the

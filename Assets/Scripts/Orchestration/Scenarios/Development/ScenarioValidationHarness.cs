@@ -329,66 +329,6 @@ namespace LandLedgers.Orchestration.Scenarios.Development
             return count;
         }
 
-        /// <summary>
-        /// Read-only side-by-side evidence for normal-versus-probe validation.
-        /// This intentionally exposes the valuation authority's inputs and result
-        /// without offering any mutation operation.
-        /// </summary>
-        public IReadOnlyList<BusinessValuationDiagnostic> GetBusinessValuationDiagnostics()
-        {
-            ResolveAuthorities();
-            var result = new List<BusinessValuationDiagnostic>();
-            if (businesses == null || systemsHub == null)
-            {
-                return result;
-            }
-
-            foreach (BusinessInstanceState business in businesses.Businesses)
-            {
-                if (business == null || string.IsNullOrWhiteSpace(business.InstanceId))
-                {
-                    continue;
-                }
-
-                ValuationEvidence evidence = systemsHub.Valuation.GetEvidence(business.InstanceId);
-                EnterpriseValuationResult valuation = systemsHub.Valuation.GetValuation(business.InstanceId);
-                List<EmploymentRelationship> employment = systemsHub.Employments.GetByEmployer(business.InstanceId);
-                int activeEmployment = 0;
-                var employmentStates = new List<string>();
-                foreach (EmploymentRelationship relationship in employment)
-                {
-                    if (relationship != null && relationship.IsActive)
-                    {
-                        activeEmployment++;
-                    }
-
-                    if (relationship != null)
-                    {
-                        employmentStates.Add($"{relationship.EmployeePersonId}:{relationship.LifecycleState}");
-                    }
-                }
-                result.Add(new BusinessValuationDiagnostic
-                {
-                    BusinessInstanceId = business.InstanceId,
-                    DisplayName = business.RuntimeDisplayName,
-                    BusinessCashCents = business.RuntimeState != null ? business.RuntimeState.CurrentCashCents : 0,
-                    AllTimeNetCents = business.RuntimeState != null ? business.RuntimeState.AllTimeNetCents : 0,
-                    RecordedWeekCount = evidence != null ? evidence.RecordedWeekCount : 0,
-                    TransferableAssetValueCents = evidence != null ? evidence.TransferableAssetValueCents : 0,
-                    LiabilitiesCents = evidence != null ? evidence.BusinessSpecificLiabilitiesCents : 0,
-                    CapitalReplacementNeedCents = evidence != null ? evidence.CapitalReplacementNeedCents : 0,
-                    GrossGoingConcernValueCents = valuation != null ? valuation.GrossGoingConcernValueCents : 0,
-                    OwnerEquityValueCents = valuation != null ? valuation.OwnerEquityValueCents : 0,
-                    EmploymentRecordCount = employment.Count,
-                    ActiveEmploymentRecordCount = activeEmployment,
-                    EmploymentStateSummary = string.Join(", ", employmentStates),
-                    DerivationNotes = valuation != null ? valuation.DerivationNotes : "No valuation result."
-                });
-            }
-
-            return result;
-        }
-
         public void SetTimeSpeed(SimulationSpeed speed)
         {
             ResolveAuthorities();

@@ -92,32 +92,6 @@ namespace LandLedgers.Orchestration.Scenarios.SaloonCircuit
         }
 
         /// <summary>
-        /// Pass XI WS1: restores evaluator state from a save. Historical
-        /// goals restore unconditionally (milestones persist); final-state
-        /// goals restore only the holding set, and the next evaluation
-        /// re-derives them from live state. Unknown ids are ignored.
-        /// </summary>
-        public void RestoreState(IEnumerable<string> historicalGoalIds, IEnumerable<string> holdingGoalIds)
-        {
-            if (historicalGoalIds != null)
-            {
-                foreach (string goalId in historicalGoalIds)
-                {
-                    if (!string.IsNullOrWhiteSpace(goalId) && HistoricalGoals.Contains(goalId))
-                        historicalCompleted.Add(goalId);
-                }
-            }
-            if (holdingGoalIds != null)
-            {
-                foreach (string goalId in holdingGoalIds)
-                {
-                    if (!string.IsNullOrWhiteSpace(goalId) && !HistoricalGoals.Contains(goalId))
-                        predicateHolding.Add(goalId);
-                }
-            }
-        }
-
-        /// <summary>
         /// Pass XI WS6 first-gate (M4): restores ONLY historical goals
         /// from a reconciled or saved list. Final-state goals are never
         /// written into predicateHolding from a stored list: a

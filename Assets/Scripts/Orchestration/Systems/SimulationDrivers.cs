@@ -1914,18 +1914,6 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
-        /// Slice S9: capture the live off-map journeys for the Pass 9
-        /// save seam. Forces the lazy OffMapJourneys property; an empty
-        /// authority captures an empty DTO. Uncalled until S10 — the seam
-        /// must exist before the first departure, and the departure slice
-        /// must not also be the seam slice.
-        /// </summary>
-        public OffMapJourneyAuthoritySaveDto CaptureOffMapJourneys()
-        {
-            return OffMapJourneys.CaptureSaveDto();
-        }
-
-        /// <summary>
         /// Slice S9: restore off-map journeys into the live authority
         /// after a load. Null-safe by the authority's own contract: a
         /// null DTO clears to empty. Called by the bootstrapper's

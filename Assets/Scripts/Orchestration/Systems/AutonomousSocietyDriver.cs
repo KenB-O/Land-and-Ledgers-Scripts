@@ -199,7 +199,6 @@ namespace LandLedgers.Orchestration.Systems
                 ? rel.LifecycleState
                 : EmploymentLifecycleState.Ended;
         }
-        public int GetBizCash(string bizId) => businesses.ContainsKey(bizId) ? businesses[bizId].CurrentCashCents : -999;
         public int GetHouseholdLedgerEntryCount(int householdId)
             => ledgers.ContainsKey(householdId) ? ledgers[householdId].Entries.Count : -1;
 
@@ -2042,27 +2041,6 @@ namespace LandLedgers.Orchestration.Systems
             report.CashCents = cashNow;
             report.DayIndex = absoluteDayIndex;
             return report;
-        }
-
-        /// <summary>Debug helper: per-holder cash breakdown.</summary>
-        public string CashDetail()
-        {
-            var parts = new List<string>();
-            var bizIds = new List<string>(businesses.Keys);
-            bizIds.Sort(StringComparer.Ordinal);
-            foreach (string bizId in bizIds)
-            {
-                parts.Add(bizId + "=" + businesses[bizId].CurrentCashCents);
-            }
-            var hhIds = new List<int>(ledgers.Keys);
-            hhIds.Sort();
-            foreach (int hhId in hhIds)
-            {
-                parts.Add("H" + hhId + "=" + ledgers[hhId].GetBalanceCents());
-            }
-            parts.Add("extIn=" + externalCashInflowsCents);
-            parts.Add("extOut=" + externalCashOutflowsCents);
-            return string.Join(",", parts.ToArray());
         }
 
         /// <summary>

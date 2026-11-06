@@ -90,18 +90,6 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
             };
         }
 
-        public static PlayerHouseholdDeclaration BuildPlayerHousehold()
-        {
-            // Serialized fields are private; the declaration is data Kennedy edits on
-            // the asset. This builder documents the intended content.
-            return new PlayerHouseholdDeclaration();
-        }
-
-        public static PopulationInclusionRules BuildInclusionRules()
-        {
-            return new PopulationInclusionRules();
-        }
-
         public static List<TunableValue> BuildTunables()
         {
             return new List<TunableValue>

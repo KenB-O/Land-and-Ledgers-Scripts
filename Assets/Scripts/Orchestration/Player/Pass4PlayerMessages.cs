@@ -87,18 +87,6 @@ namespace LandLedgers.Orchestration.Player
             };
         }
 
-        /// <summary>One message when auto-eat or auto-sleep fails, with the failure reason and the player's known location.</summary>
-        public static Pass4PlayerMessage BuildAutoCareFailedMessage(string system, string failureReason, string currentLocationId)
-        {
-            return new Pass4PlayerMessage
-            {
-                Kind = Pass4MessageKind.AutoCareFailed,
-                FromDescription = system ?? string.Empty,
-                TaskDefinitionId = string.Empty,
-                Text = (system ?? "Auto-care") + " failed: " + (failureReason ?? "Unknown reason.") + " Player is at " + (currentLocationId ?? string.Empty) + ".",
-            };
-        }
-
         /// <summary>Console-first rendering of a message list. No UI dependency.</summary>
         public static string RenderConsoleLines(List<Pass4PlayerMessage> messages, string header)
         {

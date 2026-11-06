@@ -38,7 +38,7 @@
 //    themselves move NO business cash, and the port is NEVER
 //    used for household meals or nights — household cash is
 //    HouseholdLedger only (see the auto-care binding). A null
-//    port is allowed and diagnosed by ValidateCashPort; it does
+//    port is allowed; it does
 //    not block duty work, because duty work is person-time,
 //    not a payment.
 //
@@ -229,21 +229,6 @@ namespace LandLedgers.Orchestration.Player
         }
 
         public Pass4PlayerDuty Duty => duty;
-
-        /// <summary>
-        /// Cash-port acceptance, stated plainly: returns null
-        /// when a port is supplied and readable, or a diagnostic
-        /// when no port is supplied. Duty work itself needs no
-        /// port; this exists so a caller that settles business
-        /// payments through the same driver can prove the port
-        /// is wired before it moves business cash.
-        /// </summary>
-        public string ValidateCashPort()
-        {
-            if (businessCashPort == null)
-                return "Series2PlayerDutyBinding: no business cash port supplied; duty work proceeds (person-time, not payment), but no business cash may be settled through this binding until a port is wired.";
-            return null;
-        }
 
         private Pass4DutyTask FindRosterTask(string taskDefinitionId)
         {

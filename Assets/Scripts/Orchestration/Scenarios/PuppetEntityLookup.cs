@@ -54,11 +54,6 @@ namespace LandLedgers.Orchestration.Scenarios
             return false;
         }
 
-        public List<EntityId> ListIds()
-        {
-            return new List<EntityId>(entries.Keys);
-        }
-
         /// <summary>
         /// Global instance for the runtime panel. Edit-mode tooling should prefer passing
         /// instances explicitly; this exists so scattered runtime spawners can register

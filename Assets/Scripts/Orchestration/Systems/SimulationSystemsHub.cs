@@ -759,11 +759,6 @@ namespace LandLedgers.Orchestration.Systems
             boardingHouseRuntimes.Add(runtime);
         }
 
-        public void UnregisterBoardingHouseRuntime(BoardingHouseShopRuntime runtime)
-        {
-            if (runtime != null) boardingHouseRuntimes.Remove(runtime);
-        }
-
         /// <summary>
         /// Autonomous Labor: owner lookup hook for the offer authority predicate.
         /// Game wiring (Codex) sets this from the business registry. When unset,
@@ -854,14 +849,6 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
-        public void RegisterHotelMealSource(IHotelMealDaySource source)
-        {
-            if (source != null && !hotelMealSources.Contains(source))
-            {
-                hotelMealSources.Add(source);
-            }
-        }
-
         /// <summary>
         /// P2: builds the per-day meal-source composites the daily-needs
         /// service consumes. Empty registries yield empty composites (which
@@ -879,23 +866,6 @@ namespace LandLedgers.Orchestration.Systems
             restaurants = new CompositeRestaurantMealSource(restaurantSources);
             boardingHouses = new CompositeBoardingHouseMealSource(boardingSources);
             hotels = new CompositeHotelMealSource(hotelSources);
-        }
-
-        /// <summary>Registers a butcher runtime for save tracking (one per butcher business).</summary>
-        public ButcherRuntime GetOrCreateButcherRuntime(string businessInstanceId, string productionSiteId, string retailSiteId)
-        {
-            butcherRuntimes ??= new List<ButcherRuntime>();
-            foreach (ButcherRuntime existing in butcherRuntimes)
-            {
-                if (existing != null && string.Equals(existing.BusinessInstanceId, businessInstanceId, StringComparison.Ordinal))
-                {
-                    return existing;
-                }
-            }
-
-            var runtime = new ButcherRuntime(businessInstanceId, productionSiteId, retailSiteId);
-            butcherRuntimes.Add(runtime);
-            return runtime;
         }
 
         private void Awake()

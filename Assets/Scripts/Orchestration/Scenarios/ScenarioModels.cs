@@ -67,10 +67,6 @@ namespace LandLedgers.Orchestration.Scenarios
             this.linkedGoalId = linkedGoalId ?? string.Empty;
         }
 
-        public void RetargetText(string newText)
-        {
-            text = newText ?? string.Empty;
-        }
     }
 
     /// <summary>

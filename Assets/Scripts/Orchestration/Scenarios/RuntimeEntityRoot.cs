@@ -179,18 +179,5 @@ namespace LandLedgers.Orchestration.Scenarios
             return true;
         }
 
-        /// <summary>
-        /// Warns (once per call site per session is the caller's job) when a runtime object
-        /// carries hidden flags. Prefer DevSpawn/RegisterSpawned, which enforce this.
-        /// </summary>
-        public static void WarnIfHidden(GameObject gameObject, string caller)
-        {
-            if (gameObject != null && RuntimeEntityRoot.HasHiddenFlags(gameObject.hideFlags))
-            {
-                Debug.LogWarning($"[DevGuards] {caller}: '{gameObject.name}' has hidden flags " +
-                                 $"({gameObject.hideFlags}). It will be invisible in the hierarchy — " +
-                                 "route it through DevSpawn instead.");
-            }
-        }
     }
 }

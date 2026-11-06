@@ -6635,6 +6635,31 @@ namespace LandLedgers.Orchestration.Systems
                 NotionsRegistration = notionsRegistration,
             };
             BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, diagnostics);
+
+            // M4 (Plan 04, D-S5 — wire branch): register the bakery's
+            // unmet input needs so the weekly real-demand collection sees
+            // them. The needs are the driver's own computation
+            // (BuildInputNeeds maps the result fields); nothing new is
+            // invented. Fuel is NOT registered: the driver computes no
+            // fuel need (NB-3/D-2/D-7). If SBRM is unwired, the needs are
+            // logged and dropped — never conjured, never a second supply
+            // path. The weekly pass clears the registered needs after
+            // collecting them, so daily registrations sum to one week of
+            // unmet need and never accumulate across weeks.
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime != null)
+            {
+                foreach (var need in BakeryWholesaleDailyDriver.BuildInputNeeds(result, bakery.BusinessInstanceId))
+                {
+                    sharedBusinessRuntime.RegisterBusinessInputNeed(need);
+                    diagnostics.Add($"DriveBakeryWholesalePlanning: registered bakery input need {need.InputCategoryId} x{need.UnitsNeeded} for weekly demand collection.");
+                }
+            }
+            else
+            {
+                diagnostics.Add("DriveBakeryWholesalePlanning: SharedBusinessRuntimeManager is unwired — the bakery's unmet flour/notions needs were not registered for weekly demand collection.");
+            }
+
             if (!string.IsNullOrWhiteSpace(result.Refusal))
                 Debug.Log($"[BakeryProduction] Day {dayIndex}: {result.Refusal}", this);
             else

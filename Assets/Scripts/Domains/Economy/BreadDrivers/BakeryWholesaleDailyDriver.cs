@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Ordering;
@@ -109,6 +110,12 @@ namespace LandLedgers.Economy.BreadDrivers
         public int NotionsOrdered;
         /// <summary>Arrival day of today's notions order, or 0 when none was placed (Plan 04 N-slice).</summary>
         public int NotionsArrivalDayIndex;
+        /// <summary>Plan 04 M4: remaining flour shortfall after today's local purchase, in pounds (0 when covered).</summary>
+        public int FlourNeedPoundsRemaining;
+        /// <summary>Plan 04 M4: remaining flour shortfall in whole sacks (ceil(lb/10)) — the registerable need.</summary>
+        public int FlourNeedSacks;
+        /// <summary>Plan 04 M4: remaining notions shortfall after today's feed (batches minus fed, 0 when covered).</summary>
+        public int NotionsNeedUnits;
     }
 
     /// <summary>
@@ -143,6 +150,53 @@ namespace LandLedgers.Economy.BreadDrivers
     {
         /// <summary>Live store category bread stocks into (staple_food in the store definition).</summary>
         public const string StoreCategoryId = "staple_food";
+
+        /// <summary>
+        /// Plan 04 M4 (Obj 42/43, D-S5 — wire branch): maps the driver's
+        /// unmet needs to registered business input needs, in the shape
+        /// the SimulationDrivers forwarder registers with SBRM after
+        /// RunDay. Only needs with units &gt; 0 are returned. Flour is the
+        /// remaining shortfall in whole sacks; notions are the remaining
+        /// shortfall in units. Fuel is NOT mapped: the driver computes no
+        /// fuel need (NB-3/D-2/D-7 — no fuel supply route, no
+        /// IntakeUnitsPerBakeryUnit). MaxPrice is unset (0): the driver
+        /// ranks sources by cost but states no max price — inventing a
+        /// cap would be a new policy. Buyer is the bakery business id.
+        /// </summary>
+        public static List<BusinessInputNeed> BuildInputNeeds(BakeryWholesaleDailyResult result, string bakeryBusinessId)
+        {
+            var needs = new List<BusinessInputNeed>();
+            if (string.IsNullOrWhiteSpace(bakeryBusinessId))
+            {
+                return needs;
+            }
+
+            if (result.FlourNeedSacks > 0)
+            {
+                needs.Add(new BusinessInputNeed
+                {
+                    BuyerBusinessInstanceId = bakeryBusinessId,
+                    InputCategoryId = BakeryFlourLocalPurchase.FlourItemId,
+                    UnitsNeeded = result.FlourNeedSacks,
+                    MaxPriceCentsPerUnit = 0,
+                    ReasonSummary = $"bakery wholesale flour for {result.BatchesPlanned} batch(es), short {result.FlourNeedPoundsRemaining} lb",
+                });
+            }
+
+            if (result.NotionsNeedUnits > 0)
+            {
+                needs.Add(new BusinessInputNeed
+                {
+                    BuyerBusinessInstanceId = bakeryBusinessId,
+                    InputCategoryId = BakeryFlourSupply.NotionsMaterialId,
+                    UnitsNeeded = result.NotionsNeedUnits,
+                    MaxPriceCentsPerUnit = 0,
+                    ReasonSummary = $"bakery wholesale notions for {result.BatchesPlanned} batch(es), short {result.NotionsNeedUnits} unit(s)",
+                });
+            }
+
+            return needs;
+        }
 
         public static BakeryWholesaleDailyResult RunDay(BakeryWholesaleDailyInputs inputs, List<string> diag)
         {
@@ -280,6 +334,12 @@ namespace LandLedgers.Economy.BreadDrivers
                     flourCostPerBatchCents = BakeryFlourSupplierComparison.SacksPerBatch * inputs.StoreFlourUnitPriceCents;
             }
 
+            // M4 (Plan 04, D-S5): the remaining flour shortfall is the
+            // registerable need — the driver's own computation, in whole
+            // sacks. Zero when the bin + today's purchase cover the plan.
+            result.FlourNeedPoundsRemaining = Math.Max(0, needLb);
+            result.FlourNeedSacks = (result.FlourNeedPoundsRemaining + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
+
             // (b¾) Notions procurement + feed — Plan 04 N-slice: buy only
             // today's need (1 notion/batch), receive due arrivals first,
             // feed the bin, then order the remaining shortfall for the
@@ -308,6 +368,12 @@ namespace LandLedgers.Economy.BreadDrivers
                 result.NotionsOrdered += notionsResult.NotionsOrdered;
                 result.NotionsArrivalDayIndex = notionsResult.NotionsArrivalDayIndex;
             }
+
+            // M4 (Plan 04, D-S5): the remaining notions shortfall is the
+            // registerable need — the day's batches minus what the bin
+            // was fed. Zero when the bin covers the plan. (The pipeline
+            // order above is the supply response, not a second need.)
+            result.NotionsNeedUnits = Math.Max(0, batchesToday - result.NotionsUnitsFed);
 
             // Per-batch economics, logged whenever a batch is planned today:
             // flour cost vs wholesale revenue, margin visible, never hidden.

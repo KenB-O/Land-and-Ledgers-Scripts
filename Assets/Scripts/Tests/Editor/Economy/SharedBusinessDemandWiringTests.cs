@@ -1,7 +1,11 @@
 using System.Collections.Generic;
 using NUnit.Framework;
 using LandLedgers.Economy;
+using LandLedgers.Economy.BreadDrivers;
+using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Core;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 
@@ -340,6 +344,59 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void BakeryDriverNeed_AppearsInCollectedDemand()
+        {
+            // M4 (Plan 04, D-S5 — WIRE branch): the bakery driver computes
+            // its unmet flour + notions needs; those needs register and the
+            // weekly collection returns them as intents naming a real buyer,
+            // a real stocked supplier, and a valid price. The FORWARDER hop
+            // (SimulationDrivers -> SBRM.RegisterBusinessInputNeed) is
+            // source-reviewed (SimulationDrivers is harness-excluded); this
+            // test runs the driver -> need -> collect chain at the harness
+            // seams, using the forwarder's exact mapping
+            // (BakeryWholesaleDailyDriver.BuildInputNeeds). Fuel is NOT
+            // registered: the driver computes no fuel need (NB-3/D-2/D-7).
+            var s = new BakerySlice();
+            s.InstallOven();
+            s.BookAccount(24, 1, 2, 2);
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(s.InputsFor(2), s.Diag);
+            Assert.AreEqual(1, result.BatchesPlanned, "one batch planned from the due account");
+            Assert.AreEqual(12, result.FlourNeedPoundsRemaining, "1 batch needs 12 lb, 0 on hand, 0 bought (store has no sacks)");
+            Assert.AreEqual(2, result.FlourNeedSacks, "ceil(12/10)");
+            Assert.AreEqual(1, result.NotionsNeedUnits, "1 batch, 0 notions fed (supply unwired)");
+            Assert.AreEqual(0, result.BatchesBaked, "the bake refuses (no flour/notions/fuel) — the need is the unmet remainder");
+
+            List<BusinessInputNeed> needs = BakeryWholesaleDailyDriver.BuildInputNeeds(result, "bakery-1");
+            Assert.AreEqual(2, needs.Count, "flour + notions; fuel is NOT registered (no fuel need is computed)");
+            Assert.AreEqual("bakery-1", needs[0].BuyerBusinessInstanceId);
+            Assert.AreEqual("flour", needs[0].InputCategoryId);
+            Assert.AreEqual(2, needs[0].UnitsNeeded);
+            Assert.AreEqual("bakery-notions", needs[1].InputCategoryId);
+            Assert.AreEqual(1, needs[1].UnitsNeeded);
+
+            var f = new Fixture();
+            f.AddSupplier("mill-2", "flour", 50, 200);
+            f.AddSupplier("store-1", "bakery-notions", 30, 10);
+            RealDemandSource source = f.NewSource(f.Needs, null);
+            foreach (BusinessInputNeed need in needs)
+                source.RegisterBusinessInputNeed(need);
+
+            List<PurchaseIntent> intents = source.CollectDemand(2, f.Diag);
+            Assert.AreEqual(2, intents.Count, "both registered needs collect as intents");
+            Assert.AreEqual("flour", intents[0].GoodsOrServiceId);
+            Assert.AreEqual("bakery-1", intents[0].BuyerId);
+            Assert.AreEqual("mill-2", intents[0].SellerBusinessInstanceId);
+            Assert.AreEqual(2, intents[0].QuantityUnits);
+            Assert.AreEqual(400, intents[0].AgreedPriceCents);
+            Assert.AreEqual("bakery-notions", intents[1].GoodsOrServiceId);
+            Assert.AreEqual("bakery-1", intents[1].BuyerId);
+            Assert.AreEqual("store-1", intents[1].SellerBusinessInstanceId);
+            Assert.AreEqual(1, intents[1].QuantityUnits);
+            Assert.AreEqual(10, intents[1].AgreedPriceCents);
+        }
+
+        [Test]
         public void DuplicateRegistration_CollectsTwice_WeeklyPassMustNotDoubleRegister()
         {
             // Characterization of a hazard, not a fix: registering the
@@ -363,6 +420,115 @@ namespace LandLedgers.Editor.Economy
             List<PurchaseIntent> intents = source.CollectDemand(3, f.Diag);
             Assert.AreEqual(2, intents.Count, "the same need registered twice collects twice — M2 must clear + re-register weekly");
             Assert.AreEqual(intents[0].AgreedPriceCents, intents[1].AgreedPriceCents, "the duplicate is identical");
+        }
+
+        /// <summary>
+        /// M4: trimmed copy of the BakeryWholesaleDailyDriverTests Slice —
+        /// only what the driver needs to compute its unmet needs (accounts,
+        /// oven, runtimes, cash ports, id registry). The store seam is
+        /// deliberately absent (StorePort/Catalog/Intake null): the driver
+        /// returns after the bake attempt, and the need fields are already
+        /// set. Notions supply is unwired (null), so the notions need is
+        /// the full day's shortfall.
+        /// </summary>
+        private sealed class BakerySlice
+        {
+            public List<string> Diag = new List<string>();
+            public BakeryShopRuntime Bakery = new BakeryShopRuntime("bakery-1");
+            public BusinessRuntimeState BakeryRuntime = new BusinessRuntimeState();
+            public BusinessRuntimeState StoreRuntime = new BusinessRuntimeState();
+            public EntityIdRegistry Ids = new EntityIdRegistry();
+            public Series2BakeryProductionDriver ProductionDriver;
+
+            public BakerySlice()
+            {
+                StoreRuntime.BindBusinessIdentity("store-1");
+                StoreRuntime.AddCashCents(5000);
+                BakeryRuntime.BindBusinessIdentity("bakery-1");
+                BakeryRuntime.AddCashCents(2000);
+                ProductionDriver = new Series2BakeryProductionDriver(
+                    Bakery, new Series2InStockBakeryFuelSource(Bakery));
+            }
+
+            public void InstallOven()
+            {
+                var componentIds = new List<string>
+                {
+                    "oven-chamber-1", "kneading-table-1", "proofing-rack-1", "bake-peels-1",
+                };
+                Assert.IsNull(Bakery.AddOven("bakehouse", componentIds, Diag), "oven installation should succeed");
+            }
+
+            public void BookAccount(int units, int cadence, int price, int dueDay)
+            {
+                var account = new BakeryWholesaleAccount
+                {
+                    BuyerBusinessId = "store-1",
+                    BuyerType = BusinessType.GeneralStore,
+                    ProductId = BakeryBreadCatalog.BreadLoafId,
+                    UnitsPerDelivery = units,
+                    DeliveryCadenceDays = cadence,
+                    PricePerUnitCents = price,
+                    Freshness = BakeryWholesaleFreshness.FreshOrDayOld,
+                    NextDeliveryDayIndex = dueDay,
+                };
+                Assert.IsNull(Bakery.AddWholesaleAccount(account, Diag), "account booking should succeed");
+            }
+
+            public BakeryWholesaleDailyInputs InputsFor(int dayIndex) =>
+                new BakeryWholesaleDailyInputs
+                {
+                    Bakery = Bakery,
+                    ProductionDriver = ProductionDriver,
+                    DayIndex = dayIndex,
+                    BakerKitUsable = true,
+                    OvenDefinition = WorkstationCatalog.BakeOven,
+                    FindOvenComponent = assetId =>
+                    {
+                        var kinds = new Dictionary<string, string>(System.StringComparer.Ordinal)
+                        {
+                            { "oven-chamber-1", "oven-chamber" },
+                            { "kneading-table-1", "kneading-table" },
+                            { "proofing-rack-1", "proofing-rack" },
+                            { "bake-peels-1", "bake-peels" },
+                        };
+                        return kinds.TryGetValue(assetId, out string kind)
+                            ? (WorkstationComponentView?)new WorkstationComponentView
+                            {
+                                AssetId = assetId,
+                                Kind = kind,
+                                Condition01 = 0.9f,
+                                IsUsable = true,
+                            }
+                            : null;
+                    },
+                    IdRegistry = Ids,
+                    StorePort = null,
+                    StoreCashPort = new Series2BusinessRuntimeCashPort(StoreRuntime),
+                    BakeryCashPort = new Series2BusinessRuntimeCashPort(BakeryRuntime),
+                    StoreBusinessId = "store-1",
+                    BakeryBusinessId = "bakery-1",
+                    Intake = null,
+                    StoreCatalog = null,
+                    StoreRuntimeState = StoreRuntime,
+                    BakeryRuntimeState = BakeryRuntime,
+                    StoreFlourUnitPriceCents = 29,
+                    MillbrookQuote = new MillbrookFlourQuote
+                    {
+                        SacksAvailable = 0,
+                        GoodsPricePerSackCents = null,
+                        OneWayMiles = 50f,
+                        FreightQuoteCents = 125,
+                        FreightAvailable = false,
+                        FreightUnavailableReason = "freight blocked: no Millbrook shipment has departed",
+                    },
+                    MillbrookSupplier = null,
+                    ImportFlourPricePerLbCents = 3,
+                    ImportTransitDays = 14,
+                    ImportOrderPathExists = false,
+                    NotionsSupply = null,
+                    NotionsRegistration = null,
+                };
         }
     }
 }

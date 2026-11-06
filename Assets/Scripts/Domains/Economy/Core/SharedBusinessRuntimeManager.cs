@@ -647,7 +647,17 @@ namespace LandLedgers.Economy
                 businessCashCents: id => FindBusiness(id)?.RuntimeState?.CurrentCashCents ?? 0,
                 generalStoreSupplierId: FindGeneralStoreSupplierId());
 
-            return realDemandSource.CollectDemand(dayIndex, diagnostics);
+            // M4 (Plan 04, D-S5): clear-after-collect — the weekly pass
+            // collects once per week, so the registered needs are consumed
+            // by the collection and each week starts fresh. Without this,
+            // the bakery driver's daily registrations would accumulate
+            // unboundedly and the demand signal would sum the whole
+            // history. (The no-population early return above does NOT
+            // clear: nothing was collected, so the needs wait for the
+            // next collection.)
+            List<PurchaseIntent> collected = realDemandSource.CollectDemand(dayIndex, diagnostics);
+            realDemandSource.ClearBusinessInputNeeds();
+            return collected;
         }
 
         /// <summary>

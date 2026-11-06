@@ -120,24 +120,6 @@ namespace LandLedgers.Economy.Market
     }
 
     /// <summary>
-    /// T2E: the market territory aggregate for one settlement — its role, its
-    /// derived catchment, and its population views. Works with Kennedy's
-    /// hand-authored scenarios: the caller supplies the world state; nothing
-    /// here generates anything.
-    /// </summary>
-    public sealed class MarketTerritory
-    {
-        public string SettlementLocationId = string.Empty;
-        public SettlementRole Role = SettlementRole.Unspecified;
-        public List<RuralUnit> CatchmentUnits = new List<RuralUnit>();
-        public int BuiltUpPopulation;
-        public int RuralServicePopulation;
-        public int TransientVisitorsPerDay;
-        public int EffectiveMarketPopulation =>
-            Math.Max(0, BuiltUpPopulation) + Math.Max(0, RuralServicePopulation) + Math.Max(0, TransientVisitorsPerDay);
-    }
-
-    /// <summary>
     /// T2E: where the demand-driven town generator plugs in. HELD for
     /// Kennedy's generator-vs-authored decision — DO NOT implement the
     /// generator here. The causal order is: physical rural settlement →

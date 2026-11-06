@@ -424,29 +424,6 @@ namespace LandLedgers.Economy.Financing
             return payment;
         }
 
-        /// <summary>Executes the contractually due amount when the borrower can pay.</summary>
-        public FinancialPaymentRecord CollectScheduledPayment(string obligationId,
-            int dayIndex, FinancialObligationAuthority authority,
-            CreditCashAccount borrowerCash, CreditCashAccount creditorCash,
-            out string message)
-        {
-            message = string.Empty;
-            FinancialObligation obligation = authority?.Find(obligationId);
-            if (obligation == null)
-            {
-                message = "Unknown financial obligation.";
-                return null;
-            }
-            int due = authority.CalculateDueAmountCents(obligationId, dayIndex);
-            if (due <= 0)
-            {
-                message = "No contractual payment is due on this day.";
-                return null;
-            }
-            return CollectPayment(obligationId, due, dayIndex, authority,
-                borrowerCash, creditorCash, out message);
-        }
-
         public CreditOfferWorkflowSaveDto CaptureSaveDto()
         {
             var dto = new CreditOfferWorkflowSaveDto();

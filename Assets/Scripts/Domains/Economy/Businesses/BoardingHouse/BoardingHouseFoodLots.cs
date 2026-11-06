@@ -287,18 +287,6 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
         public const string ProduceMaterialId = "boardinghouse-produce";
         public const string DairyMaterialId = "boardinghouse-dairy";
 
-        /// <summary>
-        /// Registers the boarding house's ingredients as importable materials
-        /// (EQU-1 extension path). Prices/transit are calibration (Canon Part XV).
-        /// </summary>
-        public static void EnsureBoardingHouseImportables(List<string> diag)
-        {
-            Register(MeatMaterialId, "Meat (by the pound), boarding house", 250, 14, 12, diag);
-            Register(BreadMaterialId, "Bread loaves, boarding house", 250, 14, 8, diag);
-            Register(ProduceMaterialId, "Farm produce, boarding house", 250, 14, 5, diag);
-            Register(DairyMaterialId, "Dairy (milk/butter), boarding house", 250, 14, 10, diag);
-        }
-
         private static void Register(string materialId, string displayName, int distanceMiles, int transitDays, int pricePerUnitCents, List<string> diag)
         {
             string problem = ImportCatalog.RegisterMaterial(new ImportMaterial(

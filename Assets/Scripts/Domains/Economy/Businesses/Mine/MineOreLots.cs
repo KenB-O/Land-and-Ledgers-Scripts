@@ -383,17 +383,6 @@ namespace LandLedgers.Economy.Businesses.Mine
                 assayResults.Add(assay);
         }
 
-        /// <summary>Finds an assay by id.</summary>
-        public MineAssayResult FindAssay(string assayId)
-        {
-            foreach (MineAssayResult assay in assayResults)
-            {
-                if (string.Equals(assay.AssayId, assayId, StringComparison.Ordinal))
-                    return assay;
-            }
-            return null;
-        }
-
         /// <summary>
         /// Receives a broken ore lot. Refuses orphan lots (no shaft/level
         /// provenance), zero tons, or invalid lot ids. Never conjures stock.

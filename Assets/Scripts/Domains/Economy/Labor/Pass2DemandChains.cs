@@ -74,21 +74,6 @@ namespace LandLedgers.Economy.Labor
         }
 
         /// <summary>
-        /// Bank: idle until a customer arrives, plus routine work with
-        /// downtimes. Serving a customer is demand; balancing the books
-        /// is a day-boundary routine (trigger: the day's window closes),
-        /// not a task invented to fill the day.
-        /// </summary>
-        public static List<DemandStep> BankCustomerChain()
-        {
-            return new List<DemandStep>
-            {
-                new DemandStep("bk.serve-customer", "A customer arrives while the window is open."),
-                new DemandStep("bk.balance-books", "The day's window closes; the day's transactions exist to balance."),
-            };
-        }
-
-        /// <summary>
         /// Routine-trigger gaps found in the Pass 2 audit: trigger states
         /// that must exist before the matching routine task may be created.
         /// A driver must NOT create these tasks until the state exists;
@@ -124,28 +109,4 @@ namespace LandLedgers.Economy.Labor
         }
     }
 
-    /// <summary>
-    /// Pass 2: attended vs unattended, using the EXISTING model only.
-    /// A task in WaitingOnPassiveProcess releases its worker while
-    /// equipment, workspace, and materials stay reserved (TaskLifecycle
-    /// contracts, Pass IV). The baker's oven is the canonical example:
-    /// 1 minute to load, about 30 minutes baking unattended while the
-    /// worker cleans or preps the next batch, then unload. This class
-    /// states that pattern for drivers; it does NOT invent a second
-    /// passive-process system, and it does not change any stage timing.
-    /// Stage timings themselves remain the ProductionStageMachine /
-    /// staged-chain values (load, bake, unload), not Kennedy's rounded
-    /// example, until a driver wires a specific product's stages.
-    /// </summary>
-    public static class Pass2AttendedUnattended
-    {
-        public const string LoadOvenStep = "Load oven (attended, worker present).";
-        public const string BakeStep = "Bake (passive: worker released, oven/materials reserved, due event resumes the task).";
-        public const string UnloadOvenStep = "Unload oven (attended, worker resumes on the due event).";
-
-        public static List<string> BakerOvenPattern()
-        {
-            return new List<string> { LoadOvenStep, BakeStep, UnloadOvenStep };
-        }
-    }
 }

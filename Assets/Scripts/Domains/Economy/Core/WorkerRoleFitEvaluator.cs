@@ -76,12 +76,6 @@ namespace LandLedgers.Economy
             return BuildResult(score, profile.roleDisplayName, reason);
         }
 
-        public static string BuildCandidateHint(PersonState person, BusinessType businessType, WorkerSlotState slot)
-        {
-            WorkerRoleFitResult fit = Evaluate(person, businessType, slot);
-            return $"Role fit: {fit.Label} - suited for {fit.RoleDisplayName}";
-        }
-
         public static int CompareCandidates(PersonState left, PersonState right, BusinessType businessType, WorkerSlotState slot)
         {
             float leftScore = NewcomerSettlementEvaluator.BuildLaborSortScore(left, Evaluate(left, businessType, slot).Score01);

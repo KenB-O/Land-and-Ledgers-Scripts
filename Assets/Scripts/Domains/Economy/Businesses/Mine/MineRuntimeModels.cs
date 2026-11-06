@@ -389,13 +389,6 @@ namespace LandLedgers.Economy
                 confidencePressure * 0.45f));
         }
 
-        public string BuildMineReadinessSummary(BusinessInstanceState owningBusiness = null)
-        {
-            float pressure = CalculateMineSupportPressure01(owningBusiness);
-            string owner = owningBusiness != null ? owningBusiness.RuntimeDisplayName : GetMineralDisplayName(MineralKind);
-            return $"{owner}: {GetDevelopmentStageDisplayName(DevelopmentStage)}, output {LastWeeklyOutputUnits} {StockpileCategoryId}, support pressure {Mathf.RoundToInt(pressure * 100f)}%.";
-        }
-
         public string BuildMinePressureDetail(BusinessInstanceState owningBusiness = null)
         {
             float efficiency = owningBusiness != null ? Mathf.Clamp01(owningBusiness.OperatingEfficiency01) : 1f;

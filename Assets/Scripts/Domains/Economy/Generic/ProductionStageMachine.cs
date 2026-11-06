@@ -45,38 +45,6 @@ namespace LandLedgers.Economy.Generic
         public List<ProductionStageDefinition> Stages = new List<ProductionStageDefinition>();
 
         /// <summary>
-        /// Default mapping: one stage per phase. RequiresPerson -> ActiveLabor,
-        /// otherwise PassiveProcess. Reservation keys follow the unified key-space
-        /// (asset:{id}, workspace:{id}).
-        /// </summary>
-        public static ProductionStagePlan FromPhases(ProductionMethodDefinition method)
-        {
-            var plan = new ProductionStagePlan();
-            if (method == null || method.Phases == null) return plan;
-            foreach (ProductionPhaseDefinition phase in method.Phases)
-            {
-                var kind = phase != null && phase.RequiresPerson
-                    ? ProductionStageKind.ActiveLabor
-                    : ProductionStageKind.PassiveProcess;
-                float seconds = (phase != null ? Math.Max(1, phase.ElapsedMinutes) : 1) * 60f;
-                var def = new ProductionStageDefinition(kind, seconds);
-                if (phase != null)
-                {
-                    if (phase.ReservedEquipmentIds != null)
-                        foreach (string id in phase.ReservedEquipmentIds)
-                            if (!string.IsNullOrWhiteSpace(id))
-                                def.StageReservationKeys.Add(ReservationKeyConventions.Asset(id));
-                    if (phase.ReservedWorkspaceIds != null)
-                        foreach (string id in phase.ReservedWorkspaceIds)
-                            if (!string.IsNullOrWhiteSpace(id))
-                                def.StageReservationKeys.Add(ReservationKeyConventions.Workspace(id));
-                }
-                plan.Stages.Add(def);
-            }
-            return plan;
-        }
-
-        /// <summary>
         /// Whether entering this passive/tending stage requires the previous labor task
         /// to wait (worker released, recalled for tending/unload) instead of completing.
         /// </summary>
@@ -1043,25 +1011,6 @@ namespace LandLedgers.Economy.Generic
                 Note("rework task " + rework.TaskId + " queued (" + FailedReason + ").");
             }
             return true;
-        }
-
-        /// <summary>
-        /// Notifies a BlockingDependency stage that its external dependency resolved.
-        /// Completes the stage and advances. Refuses loudly when the current stage is
-        /// not a blocking dependency.
-        /// </summary>
-        public bool NotifyDependencyResolved(StagedProcessHooks hooks, EntityId workerId, out string reason)
-        {
-            reason = string.Empty;
-            ProductionStageDefinition def = CurrentStageDefinition;
-            if (def == null || def.Kind != ProductionStageKind.BlockingDependency)
-            {
-                reason = "Current stage is not a BlockingDependency.";
-                return false;
-            }
-            Note("stage " + CurrentStageIndex + ": blocking dependency resolved.");
-            CurrentStageState.MarkTendingDone();
-            return CompleteStage(CurrentStageIndex, hooks, workerId, out reason);
         }
 
         /// <summary>

@@ -106,22 +106,6 @@ namespace LandLedgers.Economy.Financing
             return $"PrivateLenderFunds.ReleaseCommitment: no open commitment funds '{instrumentId}'.";
         }
 
-        /// <summary>
-        /// The lender injects more of their own capital (inheritance, profits
-        /// moved in, sale proceeds) — always from a named source, never
-        /// conjured. The caller moves the actual money; this records it.
-        /// </summary>
-        public string AddCapital(int amountCents, string sourceNote, List<string> diag = null)
-        {
-            diag = diag ?? diagnostics;
-            if (amountCents <= 0) return "PrivateLenderFunds.AddCapital: the amount must be positive.";
-            if (string.IsNullOrWhiteSpace(sourceNote))
-                return "PrivateLenderFunds.AddCapital: the capital source must be named — capital is never conjured.";
-            CapitalCents += amountCents;
-            diag.Add($"PrivateLenderFunds [{LenderName}]: +{amountCents}c capital ({sourceNote}) — capital now {CapitalCents}c.");
-            return null;
-        }
-
         #region Save / Load
         [Serializable]
         public sealed class PrivateLenderFundsSaveDto

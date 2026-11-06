@@ -311,23 +311,6 @@ namespace LandLedgers.Economy.AnimalServices
         public const string VetMedicineMaterialId = "veterinary-remedies";
 
         /// <summary>
-        /// Registers veterinary remedies as an importable material (EQU-1 extension
-        /// path). Historical: 1870s frontier vets ordered prepared remedies from
-        /// eastern wholesale drug houses shipped by rail — a named origin, real
-        /// transit, real cost. Prices/transit are calibration (Canon Part XV).
-        /// </summary>
-        public static void EnsureVetMedicineImportable(List<string> diag)
-        {
-            string problem = ImportCatalog.RegisterMaterial(new ImportMaterial(
-                VetMedicineMaterialId, "Veterinary remedies (doses)",
-                "Off-map wholesale drug house, via railhead", 250, 14, 20));
-            if (problem != null && diag != null)
-            {
-                diag.Add($"VetMedicineSupply: vet medicine import registration: {problem}");
-            }
-        }
-
-        /// <summary>
         /// Receives an import order's arrival into the chest as a named lot.
         /// The caller moves real lots; this only records custody with provenance.
         /// </summary>

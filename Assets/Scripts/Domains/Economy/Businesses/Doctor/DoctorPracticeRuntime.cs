@@ -74,11 +74,6 @@ namespace LandLedgers.Economy.Businesses.Doctor
             }
         }
 
-        public void SetReorderPolicy(DoctorMedicineReorderPolicy policy)
-        {
-            reorderPolicy = policy ?? new DoctorMedicineReorderPolicy();
-        }
-
         public DoctorPracticeRuntime(string businessInstanceId)
         {
             this.businessInstanceId = businessInstanceId ?? string.Empty;
@@ -196,26 +191,6 @@ namespace LandLedgers.Economy.Businesses.Doctor
             }
 
             return agedOut;
-        }
-
-        /// <summary>
-        /// D1A: evaluates what the practice can do today from its inputs.
-        /// The caller reports equipment truth (bag, surgical set); stock,
-        /// practitioner and transport come from this runtime.
-        /// </summary>
-        public DoctorPracticeCapability EvaluateCapability(bool hasDoctorBag, bool hasSurgicalSet, List<string> diag)
-        {
-            var input = new DoctorPracticeCapabilityInput
-            {
-                PractitionerAvailable = practitioner == null || practitioner.IsAvailable,
-                PractitionerSkill = practitioner != null ? practitioner.Skill : DoctorPractitionerSkill.Competent,
-                HasDoctorBag = hasDoctorBag,
-                HasSurgicalSet = hasSurgicalSet,
-                DressingsOnHand = medicineStock.DosesOnHand(DoctorTreatmentCatalog.DressingItemId),
-                MedicinesOnHand = medicineStock.DosesOnHand(DoctorTreatmentCatalog.MedicineDoseItemId),
-                TransportReady = TransportReadyForHouseCalls,
-            };
-            return DoctorPracticeCapability.Evaluate(input, diag ?? diagnostics);
         }
 
         /// <summary>D1A: medicine reorder signals — data for the caller's real import orders.</summary>

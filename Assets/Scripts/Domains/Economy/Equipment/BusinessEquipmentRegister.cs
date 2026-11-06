@@ -38,11 +38,6 @@ namespace LandLedgers.Economy.Equipment
             Kits.Add(kit);
         }
 
-        public void RemoveAsset(string assetId)
-        {
-            Assets.RemoveAll(a => a.AssetId == assetId);
-        }
-
         /// <summary>
         /// Canon §11.6: condition-weighted transferable value. Assets at or below
         /// the usable threshold contribute nothing — a wrecked plow is not a

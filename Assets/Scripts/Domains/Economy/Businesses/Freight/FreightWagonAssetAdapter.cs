@@ -71,33 +71,5 @@ namespace LandLedgers.Economy.Freight
             return asset;
         }
 
-        /// <summary>
-        /// Builds a legacy-view FreightWagon over a registry asset (read model
-        /// for pre-reconciliation readers). Condition comes from the asset.
-        /// </summary>
-        public static FreightWagon ViewFromAsset(EquipmentAsset asset)
-        {
-            if (asset == null) return null;
-            var wagon = new FreightWagon(
-                asset.AssetId,
-                string.IsNullOrWhiteSpace(asset.DisplayName) ? asset.AssetId : asset.DisplayName,
-                Math.Max(1, (int)asset.PayloadMassCapacityKg));
-            wagon.AttachAsset(asset);
-            return wagon;
-        }
-
-        /// <summary>
-        /// Derives pool workflow status from asset truth: a held/assigned wagon
-        /// is OnRoute; an unusable one needs repair; otherwise Available.
-        /// Retired has no asset equivalent and stays pool-side.
-        /// </summary>
-        public static FreightWagonStatus DeriveStatus(EquipmentAsset asset, FreightWagonStatus current)
-        {
-            if (current == FreightWagonStatus.Retired) return FreightWagonStatus.Retired;
-            if (asset == null) return current;
-            if (asset.IsReserved || asset.IsTransportAssigned) return FreightWagonStatus.OnRoute;
-            if (!asset.IsUsable) return FreightWagonStatus.InRepair;
-            return FreightWagonStatus.Available;
-        }
     }
 }

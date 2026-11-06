@@ -502,41 +502,6 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         }
 
         /// <summary>
-        /// Takes butter units from a dairy churn batch into the pantry. The
-        /// churn batch id and its input milk lots are the provenance.
-        /// </summary>
-        public static string ReceiveButterBatch(
-            RestaurantFoodStock stock,
-            DairyProcessingBatch butterBatch,
-            int units,
-            string dairyBusinessId,
-            int dayIndex,
-            EntityIdRegistry idRegistry,
-            List<string> diag)
-        {
-            diag = diag ?? new List<string>();
-            if (stock == null) return "RestaurantFoodSupply.ReceiveButterBatch: no pantry.";
-            if (butterBatch == null || units <= 0)
-                return "RestaurantFoodSupply.ReceiveButterBatch: no butter batch offered — butter is not conjured.";
-            if (string.IsNullOrWhiteSpace(dairyBusinessId))
-                return "RestaurantFoodSupply.ReceiveButterBatch: the dairy business must be named — no orphan stock.";
-            if (idRegistry == null) return "RestaurantFoodSupply.ReceiveButterBatch: no id registry.";
-
-            return stock.ReceiveLot(new RestaurantFoodLot
-            {
-                LotId = idRegistry.Allocate(EntityKind.Lot),
-                FoodName = DairyMaterialId,
-                Units = units,
-                AcquiredDayIndex = dayIndex,
-                SupplierBusinessId = dairyBusinessId,
-                SourceLotId = butterBatch.BatchId.ToString(),
-                SupplierNote = $"churned butter (batch of {butterBatch.ProcessType}, worker {butterBatch.WorkerId}, " +
-                    $"day {butterBatch.StartDayIndex}); milk lots: {string.Join(", ", butterBatch.InputLotIds ?? new List<EntityId>())}",
-                IsBootstrapEndowment = false,
-            }, diag);
-        }
-
-        /// <summary>
         /// Receives an import order's arrival into the pantry as a named lot.
         /// The caller moves real lots; this only records custody with provenance.
         /// </summary>

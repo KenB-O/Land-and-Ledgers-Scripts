@@ -233,21 +233,6 @@ namespace LandLedgers.Economy.Creation
             return null;
         }
 
-        public int CountForBusiness(string businessInstanceId)
-        {
-            // R-01: the register is global (hub-owned), so counting is
-            // owner-scoped: only assets whose OwnerBusinessId matches.
-            if (assets == null || string.IsNullOrWhiteSpace(businessInstanceId)) return 0;
-            int count = 0;
-            foreach (NpcFormationAsset asset in assets)
-            {
-                if (asset != null && string.Equals(asset.OwnerBusinessId, businessInstanceId, StringComparison.Ordinal))
-                    count++;
-            }
-
-            return count;
-        }
-
         public NpcFormationAssetRegisterSaveDto CaptureSaveDto()
         {
             var dto = new NpcFormationAssetRegisterSaveDto();

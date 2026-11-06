@@ -143,15 +143,6 @@ namespace LandLedgers.Economy.Storage
         }
 
         /// <summary>
-        /// Rebinds the read-only inventory identity lookup after restore. The
-        /// delegate is a runtime dependency and is intentionally not serialized.
-        /// </summary>
-        public void BindInventoryLotLookup(Func<string, string, bool> lookup)
-        {
-            existingLotLookup = lookup;
-        }
-
-        /// <summary>
         /// Adds a physical location reference. When a capacity axis is bounded,
         /// every existing and incoming lot must have a measurement for that axis;
         /// otherwise placement is refused rather than assuming a size.

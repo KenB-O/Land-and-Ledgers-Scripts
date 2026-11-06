@@ -244,14 +244,6 @@ namespace LandLedgers.Economy.Businesses.Barber
             return null;
         }
 
-        /// <summary>D1B: removes the hot-water capability (the source is gone or cold).</summary>
-        public void ClearHotWaterSource(List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            hotWaterSource = null;
-            diag.Add("BarberShopRuntime: hot-water capability cleared — tubs are not ready without hot water.");
-        }
-
         /// <summary>
         /// D1B: true when the tub's station evaluates ready AND the shop has
         /// hot water. A tub with a sound basin but no hot water is not a bath.
@@ -308,13 +300,6 @@ namespace LandLedgers.Economy.Businesses.Barber
             }
 
             return ready;
-        }
-
-        /// <summary>D1B: throughput readout for the bath facilities.</summary>
-        public string BathFacilitiesSummary()
-        {
-            return $"Barber shop {businessInstanceId}: {tubs.Count} tub(s) installed, " +
-                (HasHotWater ? $"hot water: '{hotWaterSource}'." : "no hot-water source declared.");
         }
 
         /// <summary>

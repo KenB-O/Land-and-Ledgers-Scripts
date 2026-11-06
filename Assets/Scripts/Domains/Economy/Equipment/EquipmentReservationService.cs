@@ -53,7 +53,6 @@ namespace LandLedgers.Economy.Equipment
         private int reservationSequence;
 
         public static string AssetKey(string assetId) => "asset:" + assetId;
-        public static string KitKey(string kitInstanceId) => "kit:" + kitInstanceId;
         public static string WorkstationKey(string workstationInstanceId) => "workstation:" + workstationInstanceId;
 
         // ---------- legacy key-based API (unchanged semantics) ----------

@@ -190,11 +190,6 @@ namespace LandLedgers.Economy
             lastDailyCategoryResults.Clear();
         }
 
-        public void ResetDailyResults(int requestedUnits)
-        {
-            ResetDailyResultsForDay(lastResolvedDayIndex, requestedUnits);
-        }
-
         public void RecalculateDailyTotals()
         {
             lastDailyRequestedUnits = Mathf.Max(0, lastDailyRequestedUnits);

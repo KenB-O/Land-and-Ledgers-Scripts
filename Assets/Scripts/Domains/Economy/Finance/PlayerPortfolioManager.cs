@@ -994,16 +994,6 @@ namespace LandLedgers.Economy
             return builder.ToString().TrimEnd();
         }
 
-        public string BuildPortfolioFinanceText()
-        {
-            PlayerWealthSnapshot wealth = BuildWealthSnapshot();
-            string goal = wealth.WinReached
-                ? $"Net worth goal reached: {FormatMoney(wealth.WinTargetCents)}."
-                : $"Net worth goal: {FormatMoney(wealth.WinTargetCents)}.";
-            int totalLiabilities = CombineLiabilitiesCents(wealth);
-            return $"Liquid Cash: {FormatMoney(wealth.LiquidCashCents)}\nNet Worth: {FormatMoney(wealth.NetWorthCents)} (business equity {FormatMoney(wealth.BusinessEquityCents)}, business cash {FormatMoney(wealth.BusinessCashCents)}, assets {FormatMoney(wealth.AssetValueCents)}, liabilities {FormatMoney(totalLiabilities)})\nBusiness cash stays inside each business until transferred or paid as owner draw.\nLast owner distributions: {FormatMoney(LastWeeklyDistributionCents)} | {LastWeeklyDistributionSummary}\n{goal}";
-        }
-
 
 
         public string BuildWealthHeadline()
@@ -1043,24 +1033,6 @@ namespace LandLedgers.Economy
             int bankableSupport = BuildBankableSupportCents();
             int totalLiabilities = CombineLiabilitiesCents(wealth);
             return $"Wealth Read — Net Worth {FormatMoney(wealth.NetWorthCents)} | Liquid {FormatMoney(wealth.LiquidCashCents)} | Business Equity {FormatMoney(wealth.BusinessEquityCents)} | Business Cash {FormatMoney(wealth.BusinessCashCents)} | Bankable Support {FormatMoney(bankableSupport)} | Liabilities {FormatMoney(totalLiabilities)}";
-        }
-
-        public string BuildWealthComponentAuditText()
-        {
-            BuildWealthSnapshot();
-            return LastWealthComponentAuditSummary;
-        }
-
-        public string BuildMonthlyWealthReviewText()
-        {
-            BuildWealthSnapshot();
-            return LastMonthlyWealthReviewSummary;
-        }
-
-        public void ResetMonthlyWealthReviewWindow()
-        {
-            PlayerWealthSnapshot snapshot = BuildWealthSnapshot();
-            ResetMonthlyWealthReviewFromSnapshot(snapshot);
         }
 
         public int BuildBankableSupportCents()
@@ -1321,25 +1293,6 @@ namespace LandLedgers.Economy
             return $"{commitmentClimate} | {executionLoad}";
         }
 
-        public string BuildCommitmentReadinessSummary(int requiredCashCents, int projectedWeeklyBurdenCents)
-        {
-            PlayerWealthSnapshot wealth = BuildWealthSnapshot();
-            int required = Mathf.Max(0, requiredCashCents);
-            int weeklyBurden = Mathf.Max(0, projectedWeeklyBurdenCents);
-
-            if (required <= wealth.LiquidCashCents && weeklyBurden <= Mathf.Max(0, LastWeeklyDistributionCents))
-            {
-                return $"Commitment Read — Liquid cash can cover {FormatMoney(required)} and recent owner cashflow can likely absorb about {FormatMoney(weeklyBurden)} weekly.";
-            }
-
-            if (required <= wealth.NetWorthCents)
-            {
-                return $"Commitment Read — Wealth is strong enough for {FormatMoney(required)}, but liquid cashflow may need transfers, retained earnings, or financing support.";
-            }
-
-            return $"Commitment Read — This move likely needs tighter staging, asset sales, or financing. Required {FormatMoney(required)} | Weekly burden {FormatMoney(weeklyBurden)}.";
-        }
-
         public void PushOwnerCashToHud()
         {
             if (hudController != null)
@@ -1425,20 +1378,6 @@ namespace LandLedgers.Economy
                 + Mathf.Max(0, weeklyOperatingReserveCents)
                 + Mathf.Max(0, localIntakeAllowanceCents);
             return ClampToNonNegativeIntCents(reserve);
-        }
-
-        public static int CalculateOwnedBusinessCashCents(
-            GeneralStoreRuntimeManager storeRuntime,
-            SharedBusinessRuntimeManager sharedRuntime)
-        {
-            IReadOnlyList<BusinessPortfolioSummary> summaries = CalculateOwnedBusinessPortfolioSummaries(storeRuntime, sharedRuntime);
-            long total = 0;
-            for (int i = 0; i < summaries.Count; i++)
-            {
-                total += Mathf.Max(0, summaries[i].BusinessCashCents);
-            }
-
-            return ClampToNonNegativeIntCents(total);
         }
 
         public static PlayerWealthSnapshot CalculateWealthSnapshot(

@@ -96,18 +96,6 @@ namespace LandLedgers.Economy.Businesses.Hotel
             housekeeping.ApplyOpeningLinenEndowment(dayIndex, diag ?? diagnostics);
         }
 
-        /// <summary>Registers the hotel's importables (bed linen, soap) — EQU-1 declared trade link.</summary>
-        public void EnsureImportables(List<string> diag)
-        {
-            HotelConsumableSupply.EnsureHotelImportables(diag ?? diagnostics);
-        }
-
-        /// <summary>W3B: registers the dining room's food ingredients as importables — EQU-1 declared trade link.</summary>
-        public void EnsureFoodImportables(List<string> diag)
-        {
-            HotelFoodSupply.EnsureHotelFoodImportables(diag ?? diagnostics);
-        }
-
         /// <summary>W3B: one-time opening pantry endowment — explicit, flagged, never auto-replenished.</summary>
         public void ApplyOpeningPantryEndowment(int dayIndex, List<string> diag)
         {

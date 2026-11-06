@@ -429,19 +429,6 @@ namespace LandLedgers.Economy.Financing
             return true;
         }
 
-        public bool SetLegalRegimeContext(string obligationId, string legalRegimeId)
-        {
-            FinancialObligation obligation = Find(obligationId);
-            if (obligation == null) return false;
-            obligation.LegalRegimeId = legalRegimeId ?? string.Empty;
-            for (int i = 0; i < obligation.SecurityInterestIds.Count; i++)
-            {
-                if (securities.TryGetValue(obligation.SecurityInterestIds[i], out SecurityInterestRecord security))
-                    security.LegalRegimeId = obligation.LegalRegimeId;
-            }
-            return true;
-        }
-
         public ObligationAssumptionRecord RecordAssumption(EntityIdRegistry ids, string obligationId,
             string incomingDebtor, bool releaseOriginal, bool novation, bool creditorConsented, int dayIndex)
         {

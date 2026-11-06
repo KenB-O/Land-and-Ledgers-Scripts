@@ -129,8 +129,6 @@ namespace LandLedgers.Economy.Farming.Crops
 
         public int SeedStockUnits(CropKind crop) => stock.TryGetValue(crop, out int s) ? s : 0;
         public int PricePerUnitCents(CropKind crop) => prices.TryGetValue(crop, out int p) ? p : 0;
-        public string UpstreamSource(CropKind crop) => upstreamByCrop.TryGetValue(crop, out string u) ? u : string.Empty;
-
         public string RestockSeed(CropKind crop, int units, string upstreamSource, int dayIndex)
         {
             if (units <= 0) return "GeneralStoreSeedSupplier: no units to stock.";
@@ -221,13 +219,5 @@ namespace LandLedgers.Economy.Farming.Crops
             };
         }
 
-        /// <summary>
-        /// The seed-source string a planting records when sowing saved seed.
-        /// </summary>
-        public static string SavedSeedSourceDescription(SeedLot seedLot)
-        {
-            if (seedLot == null) return string.Empty;
-            return $"saved seed, lot {seedLot.LotId}: {seedLot.SourceDescription}";
-        }
     }
 }

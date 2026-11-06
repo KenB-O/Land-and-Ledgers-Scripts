@@ -418,17 +418,6 @@ namespace LandLedgers.Economy.FreightFuel
         }
 
         /// <summary>
-        /// Series 2 Pass 9, additive only (SettleOnAcceptance is
-        /// untouched): snapshot of the per-instance settled set,
-        /// for diagnostics and tests. This set is NOT persisted as
-        /// a second source of truth — see RestoreFromShipments.
-        /// </summary>
-        public List<string> CaptureSettledIds()
-        {
-            return new List<string>(settledShipmentIds);
-        }
-
-        /// <summary>
         /// Series 2 Pass 9, additive only: rebuild the per-instance
         /// settled set from restored shipments, clear-then-load.
         /// DECISION (Pass 9, stated plainly): the shipment's own

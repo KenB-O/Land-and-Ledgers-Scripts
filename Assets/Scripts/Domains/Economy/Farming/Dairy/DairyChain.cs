@@ -108,19 +108,6 @@ namespace LandLedgers.Economy.Farming.Dairy
     /// uses rather than converted straight to revenue (Canon §9.1 LOCK).
     /// </summary>
     [Serializable]
-    public sealed class MilkAllocation
-    {
-        public int NursingUnits;      // calf share (already accounted at milking)
-        public int HouseholdUseUnits; // household/employee consumption
-        public int FreshSaleUnits;    // sold as fluid milk
-        public int ProcessingUnits;   // to butter/cheese
-        public int FeedUseUnits;      // byproduct/animal feed
-        public int LossUnits;         // spillage/spoilage
-
-        public int Total => NursingUnits + HouseholdUseUnits + FreshSaleUnits
-            + ProcessingUnits + FeedUseUnits + LossUnits;
-    }
-
     /// <summary>
     /// FVS-2: the dairy production authority. Lactation gating, yield math,
     /// milking/churning tasks, lot provenance, and spoilage. Butter is never

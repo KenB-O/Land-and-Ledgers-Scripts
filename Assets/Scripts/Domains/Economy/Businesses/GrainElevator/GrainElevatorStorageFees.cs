@@ -197,28 +197,6 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             return UnpaidBalanceCents(customerId) > 0;
         }
 
-        public int TotalUnpaidCents()
-        {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var charge in charges) seen.Add(charge.CustomerId);
-            foreach (var payment in payments) seen.Add(payment.CustomerId);
-            int total = 0;
-            foreach (var id in seen) total += UnpaidBalanceCents(id);
-            return total;
-        }
-
-        public List<GrainElevatorFeeCharge> ChargesForCustomer(string customerId)
-        {
-            var result = new List<GrainElevatorFeeCharge>();
-            if (string.IsNullOrWhiteSpace(customerId)) return result;
-            string id = customerId.Trim();
-            foreach (var charge in charges)
-            {
-                if (string.Equals(charge.CustomerId, id, StringComparison.Ordinal)) result.Add(charge);
-            }
-            return result;
-        }
-
         /// <summary>D2F save contract: lives inside the owning ledger class.</summary>
         [Serializable]
         public sealed class GrainElevatorFeeLedgerSaveDto

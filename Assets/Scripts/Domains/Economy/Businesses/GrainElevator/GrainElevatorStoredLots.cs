@@ -428,21 +428,6 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
         }
 
         /// <summary>
-        /// Storage fee owed on one custody lot at the given day: units x
-        /// fee-per-unit-per-30-days x 30-day periods (minimum one period).
-        /// Aging runs from RECEIPT day — the bailment obligation starts at
-        /// delivery, not harvest. Dealer stock accrues no fee (the elevator
-        /// charges itself nothing).
-        /// </summary>
-        public int AccruedFeeCents(GrainElevatorStoredLot lot, int dayIndex)
-        {
-            if (lot == null || lot.Kind != GrainElevatorLotKind.Custody) return 0;
-            int days = Math.Max(0, dayIndex - lot.ReceivedDayIndex);
-            int periods = Math.Max(1, days / 30);
-            return Math.Max(0, lot.GrainUnits) * policy.CustodyFeeCentsPerUnitPer30Days * periods;
-        }
-
-        /// <summary>
         /// D2F: completed, unbilled 30-day periods on one custody lot at the
         /// given day. Storage is sold in 30-day blocks from the received
         /// day; the watermark LastBilledDayIndex marks what is paid up.

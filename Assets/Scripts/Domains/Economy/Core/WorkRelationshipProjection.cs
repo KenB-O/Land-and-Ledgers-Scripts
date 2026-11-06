@@ -75,50 +75,6 @@ namespace LandLedgers.Economy
             };
         }
 
-        /// <summary>
-        /// Records a proprietor/operator relationship. Compensation is profit/equity draw, never payroll.
-        /// (3A-D29: synthetic owner workers must not become fake Persons.)
-        /// </summary>
-        public static WorkRelationship ForOperator(
-            int personId,
-            string businessId,
-            string roleDisplayName,
-            int startDayIndex)
-        {
-            return new WorkRelationship
-            {
-                Kind = WorkRelationshipKind.FarmOrBusinessOperator,
-                PersonId = personId,
-                Counterparty = WorkRelationshipCounterparty.ForBusiness(businessId),
-                RoleDisplayName = roleDisplayName ?? string.Empty,
-                StartDayIndex = startDayIndex,
-                EndDayIndex = -1,
-                Notes = "Operator relationship: profit/equity draw, not wage payroll (TECH §4.1).",
-            };
-        }
-
-        /// <summary>
-        /// Records contract/service work. Compensation lives on the agreement terms, not payroll.
-        /// </summary>
-        public static WorkRelationship ForContractWork(
-            int personId,
-            string businessId,
-            string roleDisplayName,
-            int startDayIndex,
-            string agreementTerms)
-        {
-            return new WorkRelationship
-            {
-                Kind = WorkRelationshipKind.ContractOrServiceWork,
-                PersonId = personId,
-                Counterparty = WorkRelationshipCounterparty.ForBusiness(businessId),
-                RoleDisplayName = roleDisplayName ?? string.Empty,
-                StartDayIndex = startDayIndex,
-                EndDayIndex = -1,
-                Notes = $"Contract/service work; compensation per agreement: {agreementTerms ?? string.Empty}",
-            };
-        }
-
         private static int TryParsePersonId(string assignedWorkerId)
         {
             if (int.TryParse(assignedWorkerId, out int personId))

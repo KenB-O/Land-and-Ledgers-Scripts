@@ -224,18 +224,6 @@ namespace LandLedgers.Economy.Businesses.Hotel
             return balance;
         }
 
-        /// <summary>All folios over tolerance right now — the proprietor's settlement watch-list.</summary>
-        public List<HotelGuestFolio> FoliosOverTolerance()
-        {
-            var over = new List<HotelGuestFolio>();
-            foreach (HotelGuestFolio folio in folios)
-            {
-                if (folio == null) continue;
-                if (!folio.WithinTolerance) over.Add(folio);
-            }
-            return over;
-        }
-
         #region Save / Load
         [Serializable]
         public sealed class HotelGuestFoliosSaveDto

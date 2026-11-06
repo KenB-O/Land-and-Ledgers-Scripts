@@ -87,15 +87,6 @@ namespace LandLedgers.Economy.Financing
             return evt;
         }
 
-        public List<CreditEvent> FindByObligation(string obligationId)
-        {
-            var result = new List<CreditEvent>();
-            foreach (CreditEvent evt in events)
-                if (evt != null && string.Equals(evt.ObligationId, obligationId, StringComparison.Ordinal))
-                    result.Add(evt);
-            return result;
-        }
-
         public List<CreditEvent> FindByKind(CreditEventKind kind)
         {
             var result = new List<CreditEvent>();

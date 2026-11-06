@@ -741,16 +741,6 @@ namespace LandLedgers.Economy.Recruitment
             return inquiry;
         }
 
-        public string CloseEffort(string effortId, List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            if (!efforts.TryGetValue(effortId, out RecruitmentEffort effort))
-                return $"RecruitmentService.CloseEffort: unknown effort '{effortId}'.";
-            effort.Closed = true;
-            diag.Add($"RecruitmentService: effort {effortId} closed.");
-            return null;
-        }
-
         /// <summary>
         /// Pass VIII Worker 7: open (not closed) hiring efforts for one
         /// business, oldest first. Read-only: the opportunity-pursuit path

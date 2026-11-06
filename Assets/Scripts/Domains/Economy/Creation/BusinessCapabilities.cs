@@ -206,27 +206,6 @@ namespace LandLedgers.Economy.Creation
     }
 
     /// <summary>
-    /// BIZ-2: the two expansion paths (GHOST-DES-033, Canon §3.4).
-    /// AddOperation: the SAME business/ledger/ownership does more.
-    /// AddSeparateBusiness: a DISTINCT entity with its own cash, staff, agreements and
-    /// ownership — it may share the property under a real space assignment.
-    ///
-    /// Future composition note: keep three concepts distinct as the enterprise layer
-    /// grows. Multiple operations are capabilities on one Business identity and one
-    /// ledger; an operating group is a management relationship across separate
-    /// businesses; consolidation/amalgamation is a legal/economic transaction that
-    /// creates one surviving business and preserves the predecessor history. None of
-    /// these concepts implies an arbitrary synergy bonus or a second money/inventory
-    /// authority.
-    /// </summary>
-    public enum BusinessExpansionKind
-    {
-        Unspecified = 0,
-        AddOperation = 1,
-        AddSeparateBusiness = 2,
-    }
-
-    /// <summary>
     /// BIZ-2: executes the two expansion paths against a business instance.
     /// </summary>
     public static class BusinessExpansion
@@ -305,37 +284,6 @@ namespace LandLedgers.Economy.Creation
 
             diagnostics.Add($"Added {toAdd.Count} operation(s) to '{business.RuntimeDisplayName}' " +
                 "(same ledger, same ownership — GHOST-DES-033).");
-            return true;
-        }
-
-        /// <summary>
-        /// Add Separate Business Here (GHOST-DES-033): creates a DISTINCT business via
-        /// the canonical workflow, preselecting the current property with an explicit
-        /// functional space assignment. Own cash, staff, agreements, ownership, HF-1 id.
-        /// </summary>
-        public static bool TryAddSeparateBusiness(
-            BusinessInstanceState existingBusiness,
-            CreateBusinessIntent intent,
-            BusinessCreationAuthority authority,
-            IBusinessCreationContext context,
-            string sharedPropertyId,
-            string functionalSpaceAssignment,
-            out BusinessCreationResult result)
-        {
-            result = null;
-            if (existingBusiness == null || intent == null || authority == null || context == null)
-            {
-                return false;
-            }
-
-            // The shared property + space assignment is what makes "here" real
-            // (Canon §3.3): the new business does not block the parcel; it occupies
-            // assigned functional space within it.
-            if (!authority.TryCreate(intent, context, out result) || result == null || !result.Success)
-            {
-                return false;
-            }
-
             return true;
         }
 

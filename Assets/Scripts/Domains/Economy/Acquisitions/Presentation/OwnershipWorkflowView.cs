@@ -105,14 +105,6 @@ namespace LandLedgers.UI
             }
         }
 
-        public void SetActionMode(bool loanMode, bool leadActionsVisible)
-        {
-            EnsureRuntimeState();
-            actionModeLoanActive = loanMode;
-            leadActionsRequestedVisible = leadActionsVisible;
-            ApplyActionModeVisibility();
-        }
-
         public void SetLoanMode(bool loanMode)
         {
             EnsureRuntimeState();

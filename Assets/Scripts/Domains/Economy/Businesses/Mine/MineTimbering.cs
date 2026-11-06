@@ -97,12 +97,6 @@ namespace LandLedgers.Economy.Businesses.Mine
             return untimberedFeet * MineShaftTaskCatalog.TimberSetsPerSunkFoot;
         }
 
-        /// <summary>Timber sets needed to drive planned feet of level/drive.</summary>
-        public static int TimberSetsNeededForDrive(int feet)
-        {
-            return Math.Max(0, feet) * MineShaftTaskCatalog.TimberSetsPerDrivenFoot;
-        }
-
         /// <summary>
         /// Books timber consumption against a shaft. The lumber must already
         /// have been withdrawn from a real lumber stock by the caller; its

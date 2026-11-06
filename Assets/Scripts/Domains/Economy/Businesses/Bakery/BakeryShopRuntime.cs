@@ -1423,22 +1423,6 @@ namespace LandLedgers.Economy.Businesses.Bakery
             return $"BakeryShopRuntime: no delivery run '{runId}'.";
         }
 
-        /// <summary>
-        /// D1D: finds a bread lot on the shelf by its string lot id (for
-        /// orchestrators resolving transfer records).
-        /// </summary>
-        public BakeryBreadLot FindBreadLot(string lotIdString)
-        {
-            if (string.IsNullOrEmpty(lotIdString)) return null;
-            foreach (var lot in breadShelf)
-            {
-                if (lot != null && string.Equals(lot.LotId.ToString(), lotIdString, StringComparison.Ordinal))
-                    return lot;
-            }
-
-            return null;
-        }
-
         #endregion
 
         private bool SpendLabor(ref int laborRemaining, int minutes, List<string> diag, BakeryDoughBatch batch, string stageName)

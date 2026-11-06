@@ -62,11 +62,6 @@ namespace LandLedgers.Economy.Equipment
             grants.Add(grant);
         }
 
-        public void RemoveGrant(string grantId)
-        {
-            grants.RemoveAll(g => string.Equals(g.GrantId, grantId, StringComparison.Ordinal));
-        }
-
         /// <param name="ownedKindsFor">
         /// (holderKind, holderId) → equipment kinds the holder owns and can field.
         /// </param>

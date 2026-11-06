@@ -144,23 +144,6 @@ namespace LandLedgers.Economy.Financing
         }
 
         /// <summary>
-        /// The borrower cures the default during the notice period — case
-        /// closed, no sale. The caller moves the actual money; this records it.
-        /// </summary>
-        public string RecordCure(ForeclosureCase kase, int amountPaidCents, int dayIndex, List<string> diag = null)
-        {
-            diag = diag ?? diagnostics;
-            if (kase == null) return "ForeclosureService.RecordCure: a case is required.";
-            if (kase.Stage != ForeclosureStage.NoticeIssued)
-                return $"ForeclosureService.RecordCure: case {kase.CaseId} is {kase.Stage}, not in notice.";
-            if (amountPaidCents < kase.DebtOwedCents)
-                return $"ForeclosureService.RecordCure: {amountPaidCents}c does not cure {kase.DebtOwedCents}c owed.";
-            kase.Stage = ForeclosureStage.Closed;
-            diag.Add($"ForeclosureService: case {kase.CaseId} cured day {dayIndex} — {amountPaidCents}c paid, no sale.");
-            return null;
-        }
-
-        /// <summary>
         /// Conducts the auction after the notice period. Bidders are named;
         /// the highest bid wins. Proceeds waterfall: sale costs → foreclosing
         /// mortgage → junior liens in the caller's priority order → surplus to
@@ -332,20 +315,6 @@ namespace LandLedgers.Economy.Financing
             }
             kase.Stage = ForeclosureStage.Redeemed;
             diag.Add($"ForeclosureService: '{kase.BorrowerName}' redeemed '{kase.PropertyId}' day {dayIndex} for {amountPaidCents}c — title restored.");
-            return null;
-        }
-
-        /// <summary>Closes the case once redemption has expired and proceeds are settled.</summary>
-        public string CloseCase(ForeclosureCase kase, int dayIndex, List<string> diag = null)
-        {
-            diag = diag ?? diagnostics;
-            if (kase == null) return "ForeclosureService.CloseCase: a case is required.";
-            if (kase.Stage == ForeclosureStage.Sold && dayIndex <= kase.RedemptionDeadlineDayIndex)
-                return $"ForeclosureService.CloseCase: redemption still open to day {kase.RedemptionDeadlineDayIndex}.";
-            if (kase.Stage != ForeclosureStage.Sold && kase.Stage != ForeclosureStage.Redeemed && kase.Stage != ForeclosureStage.Closed)
-                return $"ForeclosureService.CloseCase: case {kase.CaseId} is {kase.Stage} — nothing to close.";
-            kase.Stage = ForeclosureStage.Closed;
-            diag.Add($"ForeclosureService: case {kase.CaseId} closed day {dayIndex}.");
             return null;
         }
 

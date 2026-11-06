@@ -397,35 +397,6 @@ namespace LandLedgers.Economy.Businesses.Restaurant
         }
 
         /// <summary>
-        /// Counts kitchens whose workstation instance evaluates ready against
-        /// the catalog definition. Loud per-kitchen diagnostics — an unready
-        /// kitchen is named, never silently skipped.
-        /// </summary>
-        public int CountReadyKitchens(
-            WorkstationDefinition kitchenDefinition,
-            Func<string, WorkstationComponentView?> findComponent,
-            List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            int ready = 0;
-            foreach (var kitchen in kitchens)
-            {
-                var reasons = new List<string>();
-                string notReady = kitchen.Station.EvaluateReady(kitchenDefinition, findComponent, reasons);
-                if (notReady == null)
-                {
-                    ready++;
-                }
-                else
-                {
-                    diag.Add($"RestaurantShopRuntime: kitchen {kitchen.KitchenIndex} not ready — {notReady}");
-                }
-            }
-
-            return ready;
-        }
-
-        /// <summary>
         /// Plans meal batches of a menu item. Returns the batch ids, or null
         /// with a LOUD diagnostic — callers tell them apart (ids never contain
         /// the "RestaurantShopRuntime:" prefix). One batch = one pot's worth

@@ -216,31 +216,6 @@ namespace LandLedgers.Economy
             };
         }
 
-        public bool TryCalculateSchedulableUnits(int availableSourceUnits, out int units, out string reason)
-        {
-            units = CalculateSchedulableUnits(availableSourceUnits);
-            if (!Active)
-            {
-                reason = "agreement inactive";
-                return false;
-            }
-
-            if (availableSourceUnits <= SourceReserveUnits)
-            {
-                reason = $"source reserve protected {SourceReserveUnits} units";
-                return false;
-            }
-
-            if (units <= 0)
-            {
-                reason = "allocation resolves to zero units";
-                return false;
-            }
-
-            reason = string.Empty;
-            return true;
-        }
-
         public string BuildStandingTermsSummary()
         {
             string allocation = AllocationMode == BusinessTransferAllocationMode.PercentOfAvailable

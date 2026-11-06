@@ -45,14 +45,6 @@ namespace LandLedgers.Economy
             }
         }
 
-        public static bool AddMerchantProductLine(BusinessInstanceState business, string productId,
-            float target, float maximum, float reorderPoint, int priceCents, string poolId = "storage")
-        {
-            return business != null && business.TryConfigureGenericRetailLine(
-                new GenericRetailProductLine(productId, poolId, target, maximum, reorderPoint, priceCents),
-                maximum);
-        }
-
         private static (float target, float maximum) GetPrairieForkPolicy(string productId)
         {
             switch (productId)

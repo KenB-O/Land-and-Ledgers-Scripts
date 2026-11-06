@@ -443,22 +443,6 @@ namespace LandLedgers.Economy.Businesses.Mine
             return dtos;
         }
 
-        public void RestoreFromSaveDtos(List<MineOreShipmentOrderSaveDto> dtos)
-        {
-            orders.Clear();
-            if (dtos == null)
-            {
-                nextOrderNumber = 1;
-                return;
-            }
-            foreach (MineOreShipmentOrderSaveDto dto in dtos)
-            {
-                MineOreShipmentOrder order = MineOreShipmentOrder.FromSaveDto(dto);
-                if (order != null)
-                    orders.Add(order);
-            }
-            nextOrderNumber = orders.Count + 1;
-        }
     }
 
     /// <summary>W8D: save DTOs for ore shipments. Owned by the mine runtime (standing rule).</summary>

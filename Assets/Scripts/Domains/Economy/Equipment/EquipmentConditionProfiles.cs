@@ -136,26 +136,6 @@ namespace LandLedgers.Economy.Equipment
             return Math.Max(0f, activeHours) * profile.WearPerActiveHour01;
         }
 
-        /// <summary>Profile-driven wear for passive-process hours. 0 when the kind is unknown.</summary>
-        public static float WearForPassiveHours(string kind, float passiveHours)
-        {
-            var profile = GetProfile(kind);
-            if (profile == null) return 0f;
-            return Math.Max(0f, passiveHours) * profile.WearPerPassiveHour01;
-        }
-
-        /// <summary>
-        /// Profile-driven wear for transport miles. The per-trip load term from
-        /// WagonAuthority (loadRatio × 0.01) is added by the caller — it is a
-        /// trip property, not a per-mile rate.
-        /// </summary>
-        public static float WearForMiles(string kind, float miles)
-        {
-            var profile = GetProfile(kind);
-            if (profile == null) return 0f;
-            return Math.Max(0f, miles) * profile.WearPerMile01;
-        }
-
         /// <summary>
         /// Seeds an IEquipmentCapacityService with every authored kind profile.
         /// Keys are kind-level ("kind:plow"); instance lookups fall back through

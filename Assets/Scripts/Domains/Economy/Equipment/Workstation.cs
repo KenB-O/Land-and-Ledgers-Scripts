@@ -136,9 +136,5 @@ namespace LandLedgers.Economy.Equipment
                 ComponentAssetIds.Add(assetId);
         }
 
-        public void RemoveComponent(string assetId)
-        {
-            ComponentAssetIds.Remove(assetId);
-        }
     }
 }

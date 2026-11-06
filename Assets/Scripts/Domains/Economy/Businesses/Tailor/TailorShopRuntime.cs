@@ -186,11 +186,6 @@ namespace LandLedgers.Economy.Businesses.Tailor
             diag.Add($"TailorShopRuntime: ready-made mode → {mode} (D1C bespoke/ready-made fork — Disabled preserves W1C behavior).");
         }
 
-        public void SetReadyMadePolicy(TailorReadyMadePolicy policy)
-        {
-            readyMadePolicy = policy ?? new TailorReadyMadePolicy();
-        }
-
         public void SetClothGradePolicy(TailorClothGradePolicy policy)
         {
             clothGradePolicy = policy ?? new TailorClothGradePolicy();

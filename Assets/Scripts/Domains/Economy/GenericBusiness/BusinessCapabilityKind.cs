@@ -30,40 +30,4 @@ namespace LandLedgers.Economy.GenericBusiness
         PerformConstruction = 6,
     }
 
-    public static class BusinessCapabilityKindLabels
-    {
-        public static string DisplayName(BusinessCapabilityKind kind)
-        {
-            switch (kind)
-            {
-                case BusinessCapabilityKind.SellGoods: return "Sell Goods";
-                case BusinessCapabilityKind.MakeProducts: return "Make Products";
-                case BusinessCapabilityKind.OfferServices: return "Offer Services";
-                case BusinessCapabilityKind.TransportGoodsOrPeople: return "Transport Goods or People";
-                case BusinessCapabilityKind.ProvideLodging: return "Provide Lodging";
-                case BusinessCapabilityKind.PerformConstruction: return "Perform Construction";
-                default: return "Unspecified";
-            }
-        }
-
-        /// <summary>
-        /// Stable capability ids used by the existing capability registry
-        /// (BusinessCapabilityRegistry) where a matching id already exists.
-        /// New ids introduced here are descriptive only; registration never
-        /// grants permission to act.
-        /// </summary>
-        public static string SuggestedCapabilityId(BusinessCapabilityKind kind)
-        {
-            switch (kind)
-            {
-                case BusinessCapabilityKind.SellGoods: return "retail";
-                case BusinessCapabilityKind.MakeProducts: return "production";
-                case BusinessCapabilityKind.OfferServices: return "services";
-                case BusinessCapabilityKind.TransportGoodsOrPeople: return "freight";
-                case BusinessCapabilityKind.ProvideLodging: return "lodging";
-                case BusinessCapabilityKind.PerformConstruction: return "construction";
-                default: return string.Empty;
-            }
-        }
-    }
 }

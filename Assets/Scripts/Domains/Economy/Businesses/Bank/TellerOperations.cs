@@ -182,16 +182,6 @@ namespace LandLedgers.Economy.Bank
             return null;
         }
 
-        public string CloseWindow(string windowId, List<string> diagnostics)
-        {
-            diagnostics = diagnostics ?? new List<string>();
-            if (!windows.TryGetValue(windowId, out TellerWindow window) || !window.IsOpen)
-                return $"TellerOperations.CloseWindow: window '{windowId}' is not open.";
-            window.IsOpen = false;
-            diagnostics.Add($"TellerOperations: window '{windowId}' closed — served {window.ServedToday}, +{window.ReceivedTodayCents}c in, -{window.PaidTodayCents}c out.");
-            return null;
-        }
-
         private TellerWindow RequireServingWindow(string windowId, List<string> diagnostics)
         {
             if (!windows.TryGetValue(windowId, out TellerWindow window) || !window.IsOpen)

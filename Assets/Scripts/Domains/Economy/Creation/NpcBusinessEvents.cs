@@ -136,21 +136,6 @@ namespace LandLedgers.Economy.Creation
             return count;
         }
 
-        public bool HasKindForBusiness(NpcBusinessEventKind kind, string businessRef)
-        {
-            if (events == null) return false;
-            foreach (NpcBusinessEvent e in events)
-            {
-                if (e != null && e.Kind == kind
-                    && string.Equals(e.BusinessRef, businessRef, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         /// <summary>CLN-1: captures the event log for the save pipeline.</summary>
         public NpcBusinessEventLogSaveDto CaptureSaveDto()
         {

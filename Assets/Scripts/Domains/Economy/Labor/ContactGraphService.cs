@@ -181,12 +181,6 @@ namespace LandLedgers.Economy.Labor
             AddLink(referredPersonId, referrerPersonId, ContactLinkKind.EmployeeReferral, provenance);
         }
 
-        /// <summary>Seeds a witnessed link: the person was observed in a documented context.</summary>
-        public void SeedWitnessedLink(int personId, int witnessedPersonId, string contextNote)
-        {
-            AddLink(personId, witnessedPersonId, ContactLinkKind.Witnessed, contextNote);
-        }
-
         /// <summary>
         /// Returns ONLY persons with a documented link from the caller's known set
         /// (one hop — friend-of-a-friend is not a documented contact). Sorted,

@@ -284,11 +284,6 @@ namespace LandLedgers.FirstLedger
             RefreshDynamicTooltips();
         }
 
-        public void OpenManagementPanel()
-        {
-            SetVisible(true);
-        }
-
         public void CloseManagementPanel()
         {
             SetVisible(false);

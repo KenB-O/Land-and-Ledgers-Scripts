@@ -435,13 +435,6 @@ namespace LandLedgers.Economy.Farming.Crops
             return lot;
         }
 
-        public CropLot GetLot(string lotId)
-        {
-            if (string.IsNullOrWhiteSpace(lotId)) return null;
-            CropLot lot;
-            return lots.TryGetValue(lotId, out lot) ? lot : null;
-        }
-
         /// <summary>Save support (CLN-1 pattern).</summary>
         public CropChainSaveDto CaptureSaveDto()
         {

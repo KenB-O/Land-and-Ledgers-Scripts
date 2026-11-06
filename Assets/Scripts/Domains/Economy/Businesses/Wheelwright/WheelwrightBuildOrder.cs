@@ -74,8 +74,6 @@ namespace LandLedgers.Economy.Wheelwright
         public IReadOnlyList<WheelwrightBuildOrder> Orders => orders;
         public int NextOrderNumber => nextNumber;
 
-        public void SetNextOrderNumber(int value) { nextNumber = Math.Max(1, value); }
-
         public WheelwrightBuildOrder Find(string orderId)
         {
             if (string.IsNullOrWhiteSpace(orderId)) return null;

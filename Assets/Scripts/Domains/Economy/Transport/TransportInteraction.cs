@@ -107,31 +107,5 @@ namespace LandLedgers.Economy.Transport
             return null;
         }
 
-        public static string FinishDriving(
-            EquipmentAsset wagon, IList<AnimalState> draftHorses, TransportActivity activity,
-            float distanceMiles, float loadRatio, IAnimalAvailabilityAuthority availability)
-        {
-            if (activity == null || activity.Kind != TransportActivityKind.DrivingWagon)
-                return "TransportInteraction.FinishDriving: no driving activity supplied.";
-            if (wagon == null || wagon.AssetId != activity.WagonAssetId)
-                return "TransportInteraction.FinishDriving: activity does not reference this Wagon.";
-            // Real horse cost for the trip: intensity from miles and load, state
-            // from each horse — no flat wear, no zero-cost hauling.
-            float intensity = Math.Max(0f, distanceMiles) * 0.01f * (0.5f + Math.Max(0f, Math.Min(1f, loadRatio)));
-            if (draftHorses != null)
-            {
-                foreach (AnimalState horse in draftHorses)
-                {
-                    if (horse == null) continue;
-                    HorseAuthority.ComputeWorkCost(horse, intensity,
-                        out float fatigue01, out float nutritionCost01, out float conditionCost01);
-                    HorseAuthority.ApplyWork(horse, fatigue01, nutritionCost01, conditionCost01);
-                }
-            }
-            WagonAuthority.ReleaseDraftTeam(wagon, draftHorses, availability);
-            WagonAuthority.ApplyTripWear(wagon, distanceMiles, loadRatio);
-            activity.IsActive = false;
-            return null;
-        }
     }
 }

@@ -256,18 +256,6 @@ namespace LandLedgers.Economy
 
         public bool IsLive => Status == ConstructionBidStatus.Submitted;
 
-        public int EstimateLinesTotalCents()
-        {
-            int total = 0;
-            if (EstimateLines != null)
-            {
-                foreach (ConstructionBidEstimateLine line in EstimateLines)
-                {
-                    if (line != null) total += Math.Max(0, line.AmountCents);
-                }
-            }
-            return total;
-        }
     }
 
     /// <summary>D4G: bid-request lifecycle. No automatic expiry — the book's

@@ -103,19 +103,6 @@ namespace LandLedgers.Economy.Farming.Risk
         }
 
         /// <summary>
-        /// Advances the tracked regional drought one day. Convenience over
-        /// GetOrCreateDrought + AdvanceDrought for the game loop.
-        /// </summary>
-        public DroughtState AdvanceRegionDrought(
-            string regionId, float rainfall01, CropFieldAuthority crops,
-            int dayIndex, List<string> diag)
-        {
-            DroughtState state = GetOrCreateDrought(regionId);
-            AdvanceDrought(state, rainfall01, crops, dayIndex, diag);
-            return state;
-        }
-
-        /// <summary>
         /// Records a real plowed fireguard around a field. Built as field work
         /// (the caller schedules the plowing task); the guard only exists once
         /// recorded here. Reduces — never eliminates — fire spread to the field.

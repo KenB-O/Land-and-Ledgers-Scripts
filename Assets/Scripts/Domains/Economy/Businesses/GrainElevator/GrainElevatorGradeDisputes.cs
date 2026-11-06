@@ -100,16 +100,6 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             return null;
         }
 
-        public List<GrainElevatorGradeDispute> OpenDisputes()
-        {
-            var open = new List<GrainElevatorGradeDispute>();
-            foreach (var dispute in disputes)
-            {
-                if (dispute.IsOpen) open.Add(dispute);
-            }
-            return open;
-        }
-
         public GrainElevatorGradeDispute OpenDisputeForLot(EntityId elevatorLotId)
         {
             foreach (var dispute in disputes)

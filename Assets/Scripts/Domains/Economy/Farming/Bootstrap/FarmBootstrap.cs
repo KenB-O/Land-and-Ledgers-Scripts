@@ -26,20 +26,6 @@ namespace LandLedgers.Economy.Farming.Bootstrap
         public int BootstrapDayIndex;
         public int RandomSeedUsed;
 
-        public int CountSpecies(AnimalRegistry registry, AnimalSpecies species)
-        {
-            if (registry == null) return 0;
-            int count = 0;
-            foreach (var id in AnimalIds)
-            {
-                var animal = registry.GetAnimal(id);
-                if (animal != null && animal.IsActive && animal.Species == species)
-                {
-                    count++;
-                }
-            }
-            return count;
-        }
     }
 
     /// <summary>

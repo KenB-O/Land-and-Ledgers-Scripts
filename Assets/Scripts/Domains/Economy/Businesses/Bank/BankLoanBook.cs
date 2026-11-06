@@ -106,7 +106,6 @@ namespace LandLedgers.Economy.Bank
         /// <summary>Canon §18.8/§18.9: can the bank meet demand claims from cash it holds?</summary>
         public int DemandClaimsCents() => DepositsOwedCents + NotesOutstandingCents;
 
-        public int LiquidityGapCents() => VaultCashCents - DemandClaimsCents();
     }
 
     /// <summary>

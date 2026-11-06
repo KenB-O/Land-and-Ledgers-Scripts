@@ -179,25 +179,6 @@ namespace LandLedgers.Economy.Businesses.Lawyer
         }
 
         /// <summary>
-        /// Records completion as reported by the systems that actually saw the
-        /// performance. The lawyer records; the world decides.
-        /// </summary>
-        public string RecordCompletion(string contractId, string note, int dayIndex, List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            if (!contracts.TryGetValue(contractId, out LawyerDraftedContract contract))
-                return $"RecordCompletion: unknown contract '{contractId}'.";
-            if (contract.Status != DraftedContractStatus.Executed)
-                return $"RecordCompletion: contract '{contractId}' is {contract.Status} — only executed contracts complete.";
-
-            contract.Status = DraftedContractStatus.Completed;
-            contract.ClosedDayIndex = dayIndex;
-            contract.CloseNote = note ?? string.Empty;
-            diag.Add($"LawyerContractService: contract {contractId} recorded COMPLETE (day {dayIndex}): {contract.CloseNote}");
-            return null;
-        }
-
-        /// <summary>
         /// Records termination as reported by the dispute/agreement mechanics
         /// (breach, settlement, repudiation — Canon §6.3). Never by decree here.
         /// </summary>

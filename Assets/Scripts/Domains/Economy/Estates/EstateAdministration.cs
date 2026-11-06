@@ -834,21 +834,6 @@ namespace LandLedgers.Economy.Estates
         }
 
         /// <summary>
-        /// Records a preferred tax obligation (rank PreferredTaxes). Canon
-        /// 17.10: inheritance taxation arrives in 1905, outside the normal
-        /// campaign — this rank covers the decedent's recorded tax
-        /// obligations, not an estate tax.
-        /// </summary>
-        public EstateCreditorClaim RecordTaxObligation(
-            Estate estate, EstateService estateService, int amountCents, string description,
-            int appointmentPersonId, int dayIndex, List<string> diag = null)
-        {
-            return RecordEstateObligation(estate, estateService, EstateClaimRank.PreferredTaxes,
-                $"tax-{estate.EstateId}-{dayIndex}", amountCents, description,
-                appointmentPersonId, dayIndex, diag);
-        }
-
-        /// <summary>
         /// The lowest claim rank with an unsettled claim — the rank that must
         /// be paid next. Returns null when every claim is settled.
         /// </summary>

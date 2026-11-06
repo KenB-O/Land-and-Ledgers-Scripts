@@ -2880,12 +2880,6 @@ namespace LandLedgers.Economy
             }
         }
 
-        public void BeginMonthlySummaryCadence(float reliability01, float competitionPressure01)
-        {
-            this.reliability01 = Mathf.Clamp01(reliability01);
-            this.competitionPressure01 = Mathf.Clamp01(competitionPressure01);
-        }
-
         /// <summary>
         /// Pass IX WS5 (A3-13): the weekly-settlement feed for competition
         /// pressure, derived from the existing market-capture computation
@@ -3447,11 +3441,6 @@ namespace LandLedgers.Economy
             lastWeeklyTransferSummary += summarySegment.Trim();
         }
 
-        public void SetWeeklyBlockedReason(string blockedReason)
-        {
-            lastWeeklyBlockedReason = blockedReason ?? string.Empty;
-        }
-
         public void AppendWeeklyBlockedReason(string blockedReason)
         {
             if (string.IsNullOrWhiteSpace(blockedReason))
@@ -3521,16 +3510,6 @@ namespace LandLedgers.Economy
                 : $"owner:{owner.DisplayName}";
             slot.Assign(ownerId, owner.DisplayName, slot.WeeklyWageCents);
             return true;
-        }
-
-        public void ReceivePendingReorders()
-        {
-            for (int i = 0; i < categoryStock.Count; i++)
-            {
-                categoryStock[i].ReceivePendingReorder();
-            }
-
-            RefreshStockHealth();
         }
 
         public int ReceivePendingReorderUnits(string categoryId, int units)

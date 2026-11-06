@@ -103,16 +103,6 @@ namespace LandLedgers.Economy.Farming.Crops
 
         public static IReadOnlyCollection<CropVariety> All => varieties.Values;
 
-        public static List<CropVariety> VarietiesForCrop(CropKind crop)
-        {
-            var result = new List<CropVariety>();
-            foreach (var variety in varieties.Values)
-            {
-                if (variety.Crop == crop) result.Add(variety);
-            }
-            return result;
-        }
-
         /// <summary>Display name for a variety id, or "variety unrecorded" for the sentinel/unknown ids.</summary>
         public static string DisplayNameOf(string varietyId)
         {

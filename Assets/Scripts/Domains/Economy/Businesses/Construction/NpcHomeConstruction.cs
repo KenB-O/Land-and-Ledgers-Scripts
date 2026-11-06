@@ -962,43 +962,6 @@ namespace LandLedgers.Economy
             return null;
         }
 
-        /// <summary>
-        /// Phase D: ties completed work to the contract's acceptance stages
-        /// and the progress-billing milestones — the billing draws that the
-        /// D4H service releases run on REAL accepted stages, never ahead of
-        /// work.
-        /// </summary>
-        public string LinkCompletedPackagesToStages(
-            ConstructionProject project,
-            ConstructionContract contract,
-            ConstructionProgressBillingService billing,
-            int dayIndex,
-            List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            if (project == null || contract == null || billing == null)
-                return "ConstructionProjectExecutor.LinkCompletedPackagesToStages: project, contract and billing service required.";
-            if (string.IsNullOrWhiteSpace(project.ContractId) || !string.Equals(project.ContractId, contract.ContractId, StringComparison.Ordinal))
-                return $"ConstructionProjectExecutor.LinkCompletedPackagesToStages: project '{project.ProjectId}' is not bound to contract '{contract.ContractId}' — bind first.";
-
-            var ordered = new List<WorkPackage>(project.WorkPackages);
-            ordered.Sort((a, b) => a.Sequence.CompareTo(b.Sequence));
-            for (int i = 0; i < ordered.Count; i++)
-            {
-                WorkPackage package = ordered[i];
-                if (package == null || package.Status != WorkPackageStatus.Complete) continue;
-                if (contract.AcceptanceStages == null || i >= contract.AcceptanceStages.Count) continue;
-                if (contract.PaymentTerms == null || contract.PaymentTerms.Milestones == null || i >= contract.PaymentTerms.Milestones.Count) continue;
-                string stageId = contract.AcceptanceStages[i].StageId;
-                string milestoneId = contract.PaymentTerms.Milestones[i].MilestoneId;
-                string refusal = billing.RecordMilestoneStageLink(contract, milestoneId, stageId, dayIndex, diag);
-                if (refusal != null)
-                    return $"ConstructionProjectExecutor.LinkCompletedPackagesToStages: {refusal}";
-                diag.Add($"ConstructionProjectExecutor: package '{package.PackageId}' ('{package.PhaseName}') linked to stage '{stageId}' / milestone '{milestoneId}'.");
-            }
-            return null;
-        }
-
         /// <summary>Phase D: binds a written contract to the project (contract → project link).</summary>
         public string BindContract(ConstructionProject project, ConstructionContract contract, List<string> diag)
         {

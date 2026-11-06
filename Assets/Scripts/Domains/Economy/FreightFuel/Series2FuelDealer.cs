@@ -101,58 +101,5 @@ namespace LandLedgers.Economy.FreightFuel
             return lines;
         }
 
-        /// <summary>
-        /// Moves dispensed fuel into a bakery's fuel store, one bakery
-        /// lot per dispense line, preserving each line's provenance
-        /// (dealer business + dealer lot id). Pre-validates the
-        /// bakery, the dealer name, and positive units before any
-        /// dispense, so the post-dispense receipt path has no
-        /// realistic failure left. Returns null on success, or a
-        /// refusal; on a post-dispense receipt failure the diagnostic
-        /// names every affected lot id and unit count for reconciliation
-        /// instead of pretending the transfer did not happen.
-        /// Cash is NOT settled here (see the class header).
-        /// </summary>
-        public string SupplyFuelToBakery(
-            BakeryShopRuntime bakery, int units, int dayIndex,
-            EntityIdRegistry idRegistry, List<string> diag)
-        {
-            diag = diag ?? new List<string>();
-            if (bakery == null || bakery.FuelStock == null)
-                return "Series2FuelDealer: no bakery fuel store to supply.";
-            if (string.IsNullOrWhiteSpace(DealerBusinessId))
-                return "Series2FuelDealer: no dealer business named; no orphan fuel.";
-            if (units <= 0)
-                return "Series2FuelDealer: a positive fuel quantity is required; nothing supplied.";
-            if (idRegistry == null)
-                return "Series2FuelDealer: no id registry; bakery lots need real ids.";
-            List<FuelYardByproductIntake.FuelYardDispenseLine> lines = DispenseUnits(units, dayIndex, diag);
-            if (lines == null)
-                return $"Series2FuelDealer: bakery supply of {units}u refused — intake short; nothing dispensed, nothing baked from this supply.";
-            foreach (FuelYardByproductIntake.FuelYardDispenseLine line in lines)
-            {
-                if (line == null || line.UnitsTaken <= 0) continue;
-                string rejection = bakery.FuelStock.ReceiveLot(new BakeryFuelLot
-                {
-                    LotId = idRegistry.Allocate(EntityKind.Lot),
-                    FuelName = BakeryBreadCatalog.FuelItemId,
-                    Units = line.UnitsTaken,
-                    AcquiredDayIndex = dayIndex,
-                    FuelDealerBusinessId = DealerBusinessId,
-                    SourceFuelLotId = line.LotId ?? string.Empty,
-                    OriginName = $"FuelDealer {DealerBusinessId} (town fuel yard)",
-                    SupplierNote = line.ProvenanceChain ?? string.Empty,
-                    IsBootstrapEndowment = false,
-                }, diag);
-                if (rejection != null)
-                {
-                    return $"Series2FuelDealer: bakery receipt failed after dispense ({rejection}) — " +
-                        $"dispense lines already moved for dealer '{DealerBusinessId}' (first failing line: dealer lot '{line.LotId}', {line.UnitsTaken}u); " +
-                        "reconcile from diagnostics, do not re-dispense.";
-                }
-            }
-            diag.Add($"Series2FuelDealer: supplied {units}u fuel to the bakery fuel store from dealer '{DealerBusinessId}' ({lines.Count} lot(s), provenance preserved per line).");
-            return null;
-        }
     }
 }

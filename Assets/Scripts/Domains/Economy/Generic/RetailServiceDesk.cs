@@ -371,19 +371,6 @@ namespace LandLedgers.Economy.Generic
             return true;
         }
 
-        /// <summary>Queues shelf-restock labor for a product. Real work, real worker.</summary>
-        public bool RequestRestock(string productId, int quantity, RetailServiceHooks hooks, out string reason)
-        {
-            reason = string.Empty;
-            if (string.IsNullOrWhiteSpace(productId) || quantity <= 0)
-            {
-                reason = "RetailServiceDesk: restock needs a product and quantity.";
-                return false;
-            }
-            EnsureRestockJob(productId, quantity, hooks);
-            return true;
-        }
-
         /// <summary>
         /// Notes a real inbound delivery (a shipment that actually arrived). The goods
         /// enter inventory ONLY when the accept-delivery task completes — never on note.

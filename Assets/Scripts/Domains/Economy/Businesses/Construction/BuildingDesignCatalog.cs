@@ -69,13 +69,6 @@ namespace LandLedgers.Economy
 
         public BuildingDesign() { }
 
-        public int TotalLaborMinutes()
-        {
-            int total = 0;
-            foreach (BuildingDesignPhase phase in Phases)
-                if (phase != null) total += Math.Max(0, phase.LaborMinutes);
-            return total;
-        }
     }
 
     /// <summary>Phase D: prefab handoff lifecycle. Append-only.</summary>
@@ -155,15 +148,6 @@ namespace LandLedgers.Economy
         public List<BuildingDesign> AllDesigns()
         {
             return new List<BuildingDesign>(designs.Values);
-        }
-
-        /// <summary>Phase D: Codex registers prefab ids that exist in the Unity project.</summary>
-        public void RegisterAvailablePrefab(string prefabId, List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            if (string.IsNullOrWhiteSpace(prefabId)) return;
-            availablePrefabs.Add(prefabId);
-            diag.Add($"BuildingDesignCatalog: prefab '{prefabId}' registered as available.");
         }
 
         public bool IsPrefabAvailable(string prefabId)

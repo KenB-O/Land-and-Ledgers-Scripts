@@ -39,27 +39,11 @@ namespace LandLedgers.Economy.Farming
             }
         }
 
-        public void RecordProduceSale(FarmProduceSale sale)
-        {
-            if (sale != null)
-            {
-                produceSales.Add(sale);
-            }
-        }
-
         public void RecordLivestockSale(FarmLivestockSale sale)
         {
             if (sale != null)
             {
                 livestockSales.Add(sale);
-            }
-        }
-
-        public void RecordWholesalePurchase(WholesaleCutPurchase purchase)
-        {
-            if (purchase != null)
-            {
-                wholesalePurchases.Add(purchase);
             }
         }
 

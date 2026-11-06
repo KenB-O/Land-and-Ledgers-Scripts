@@ -441,11 +441,6 @@ namespace LandLedgers.Economy.Businesses.Lawyer
             return matters.TryGetValue(matterId, out LegalMatter m) ? m : null;
         }
 
-        public LegalFeeInvoice GetInvoice(string invoiceId)
-        {
-            return invoices.TryGetValue(invoiceId, out LegalFeeInvoice i) ? i : null;
-        }
-
         public IReadOnlyList<LegalMatter> Matters
         {
             get

@@ -211,11 +211,6 @@ namespace LandLedgers.Economy.Financing
             return Mathf.Max(0, expectedFeeCents - GetEmbeddedOriginationFeeCents(term, schedule));
         }
 
-        public static bool ScheduleAlreadyIncludesOriginationFee(LoanTermStructure term, LoanPaymentSchedule schedule)
-        {
-            return GetUnembeddedOriginationFeeCents(term, schedule) <= 0;
-        }
-
         private static int GetPaymentCount(LoanTermStructure term)
         {
             return term.repaymentFrequency == RepaymentFrequency.Weekly

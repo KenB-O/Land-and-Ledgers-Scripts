@@ -241,12 +241,6 @@ namespace LandLedgers.Economy.Businesses.GrainElevator
             return disputeBook.SettleDispute(disputeId, settledGradeId, decidedBy, dayIndex, grainStock, diag ?? diagnostics);
         }
 
-        /// <summary>D2F: the filer withdraws their claim — recorded, not erased.</summary>
-        public string WithdrawGradeDispute(EntityId disputeId, int dayIndex, List<string> diag)
-        {
-            return disputeBook.WithdrawDispute(disputeId, dayIndex, diag ?? diagnostics);
-        }
-
         /// <summary>
         /// D2F: escalates a dispute to a formal proceeding. Recorded loudly
         /// and NOT resolved — the outcome arrives later as data via

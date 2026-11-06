@@ -139,14 +139,6 @@ namespace LandLedgers.Economy.Businesses.Mine
             return null;
         }
 
-        public string Suspend()
-        {
-            if (status == MineShaftStatus.Abandoned)
-                return "MineShaft.Suspend: already abandoned.";
-            status = MineShaftStatus.Suspended;
-            return null;
-        }
-
         public string Abandon()
         {
             status = MineShaftStatus.Abandoned;

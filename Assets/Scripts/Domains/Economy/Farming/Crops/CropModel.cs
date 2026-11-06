@@ -163,12 +163,6 @@ namespace LandLedgers.Economy.Farming.Crops
             calibrations[CropKind.Hay] = new CropCalibration(CropKind.Hay, 40, 1, 60, 30, isHay: true);
         }
 
-        public void SetCalibration(CropCalibration calibration)
-        {
-            if (calibration == null || calibration.Kind == CropKind.Unspecified) return;
-            calibrations[calibration.Kind] = calibration;
-        }
-
         public CropCalibration GetCalibration(CropKind kind)
         {
             CropCalibration calibration;
@@ -260,16 +254,6 @@ namespace LandLedgers.Economy.Farming.Crops
                 }
             }
             return changed;
-        }
-
-        /// <summary>Legal transitions driven by completed work tasks (CRP-2).</summary>
-        public string BeginOperation(string fieldId, string operation)
-        {
-            CropFieldState field = GetField(fieldId);
-            if (field == null) return $"CropFieldAuthority: unknown field '{fieldId}'.";
-            field.CurrentOperation = operation ?? string.Empty;
-            field.WorkProgress01 = 0f;
-            return null;
         }
 
         public string CompleteOperation(string fieldId, CropGrowthState newState, List<string> diagnostics)

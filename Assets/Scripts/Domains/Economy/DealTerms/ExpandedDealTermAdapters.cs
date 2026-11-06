@@ -52,35 +52,6 @@ namespace LandLedgers.Economy.DealTerms
             }.Sanitized(purchasePriceCents);
         }
 
-        public static ExpandedDealTermEvaluationContext BuildValuationContext(
-            AcquisitionOfferTerms offerTerms,
-            SellerProfile seller,
-            SellerPressureResult sellerPressure,
-            BuyerOfferProfile buyer,
-            int estimatedAssetValueCents)
-        {
-            int offerPriceCents = Mathf.Max(0, offerTerms.offerPriceCents);
-            ExpandedDealTerms effectiveTerms = GetEffectiveDealTerms(offerTerms);
-            int buyerAvailableCashCents = EstimateBuyerAvailableCashForEvaluation(
-                offerPriceCents,
-                estimatedAssetValueCents,
-                effectiveTerms,
-                buyer.cashCertainty01);
-
-            return new ExpandedDealTermEvaluationContext
-            {
-                purchasePriceCents = offerPriceCents,
-                estimatedAssetValueCents = estimatedAssetValueCents,
-                buyerAvailableCashCents = buyerAvailableCashCents,
-                sellerPressure01 = sellerPressure.Pressure01,
-                sellerCashNeed01 = seller.cashNeed01,
-                sellerAttachment01 = seller.attachment01,
-                sellerRelationshipSensitivity01 = sellerPressure.RelationshipSensitivity01,
-                buyerReputation01 = buyer.reputation01,
-                buyerCashCertainty01 = buyer.cashCertainty01
-            }.Sanitized();
-        }
-
         public static bool TryBuildSellerFinancingLoanTerm(
             ExpandedDealTerms expandedTerms,
             int purchasePriceCents,

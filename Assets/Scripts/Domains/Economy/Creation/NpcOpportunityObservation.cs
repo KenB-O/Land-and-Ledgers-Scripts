@@ -339,23 +339,6 @@ namespace LandLedgers.Economy.Creation
             return null;
         }
 
-        /// <summary>Marks an opportunity dismissed with its reason — recorded, never silent.</summary>
-        public string DismissOpportunity(string opportunityId, string reason, int dayIndex, NpcBusinessEventLog events)
-        {
-            NpcOpportunity opp = FindOpportunity(opportunityId);
-            if (opp == null) return $"Cannot dismiss: no opportunity '{opportunityId}' on P{personId}'s log.";
-            if (opp.Status == NpcOpportunityStatus.ActedOn)
-            {
-                return $"Cannot dismiss '{opportunityId}': already acted on.";
-            }
-
-            opp.Status = NpcOpportunityStatus.Dismissed;
-            opp.StatusReason = reason ?? string.Empty;
-            events?.Record(dayIndex, NpcBusinessEventKind.OpportunityDismissed, personId, string.Empty,
-                $"P{personId} dismissed opportunity '{opportunityId}' for '{opp.ItemOrServiceId}': {opp.StatusReason}");
-            return null;
-        }
-
         /// <summary>CLN-1: captures the observation log for the save pipeline.</summary>
         public NpcOpportunityObservationLogSaveDto CaptureSaveDto()
         {

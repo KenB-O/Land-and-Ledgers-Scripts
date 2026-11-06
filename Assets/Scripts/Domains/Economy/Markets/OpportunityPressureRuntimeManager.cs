@@ -180,19 +180,6 @@ namespace LandLedgers.Economy
         public IReadOnlyList<OpportunityNotice> Notices => notices ??= new List<OpportunityNotice>();
         public bool HasNotices => Notices.Count > 0;
 
-        public float GetPressure01(OpportunityPressureType type)
-        {
-            return type switch
-            {
-                OpportunityPressureType.Retail => RetailPressure01,
-                OpportunityPressureType.Housing => HousingPressure01,
-                OpportunityPressureType.Labor => LaborPressure01,
-                OpportunityPressureType.Service => ServicePressure01,
-                OpportunityPressureType.Expansion => ExpansionPressure01,
-                _ => 0f
-            };
-        }
-
         public void Replace(
             float retailPressure,
             float housingPressure,

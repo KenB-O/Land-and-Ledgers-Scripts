@@ -254,22 +254,6 @@ namespace LandLedgers.Economy.Businesses.Lawyer
             return null;
         }
 
-        /// <summary>Replaces an unrecorded draft with a fresh one (the old draft is kept, marked superseded).</summary>
-        public string SupersedeDeed(string deedId, List<string> diag)
-        {
-            diag = diag ?? diagnostics;
-            if (!deeds.TryGetValue(deedId, out DraftedDeed deed))
-                return $"SupersedeDeed: unknown deed '{deedId}'.";
-            if (deed.Status == DeedStatus.Recorded)
-                return $"SupersedeDeed: deed '{deedId}' is already recorded — the chain keeps it; draft a corrective deed instead.";
-            if (deed.Status == DeedStatus.Superseded)
-                return $"SupersedeDeed: deed '{deedId}' is already superseded.";
-
-            deed.Status = DeedStatus.Superseded;
-            diag.Add($"LawyerDeedService: deed {deedId} superseded before recording — it never conveyed anything.");
-            return null;
-        }
-
         public DraftedDeed GetDeed(string deedId)
         {
             return deeds.TryGetValue(deedId, out DraftedDeed d) ? d : null;

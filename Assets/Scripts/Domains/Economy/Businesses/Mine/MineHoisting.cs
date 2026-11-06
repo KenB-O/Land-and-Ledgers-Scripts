@@ -138,11 +138,6 @@ namespace LandLedgers.Economy.Businesses.Mine
                 inService = true;
         }
 
-        public void SetOutOfService()
-        {
-            inService = false;
-        }
-
         public MineHoistSaveDto CaptureSaveDto()
         {
             return new MineHoistSaveDto
@@ -217,16 +212,6 @@ namespace LandLedgers.Economy.Businesses.Mine
             var hoist = new MineHoist($"hoist-{nextHoistNumber++}", kind, shaftId, dayIndex);
             hoists.Add(hoist);
             return hoist;
-        }
-
-        public MineHoist FindHoist(string hoistId)
-        {
-            foreach (MineHoist hoist in hoists)
-            {
-                if (string.Equals(hoist.HoistId, hoistId, StringComparison.Ordinal))
-                    return hoist;
-            }
-            return null;
         }
 
         public MineHoist HoistOnShaft(string shaftId)

@@ -148,21 +148,6 @@ namespace LandLedgers.Economy.Farming.Livestock
             return record != null && (dayIndex - record.BirthDayIndex) >= PigMarketReadyDays;
         }
 
-        /// <summary>
-        /// Tending swine: real care labor that maintains condition. Condition
-        /// scales the market price — neglected pigs are worth less, honestly.
-        /// The caller assigns the tend-swine task through TaskAuthority.
-        /// </summary>
-        public string TendSwine(EntityId animalId, EntityId workerId, int dayIndex, List<string> diagnostics)
-        {
-            diagnostics ??= new List<string>();
-            PigRecord record = GetPig(animalId);
-            if (record == null) return $"PigSheepChain.TendSwine: pig {animalId} not registered.";
-            record.Condition01 = Mathf.Clamp01(record.Condition01 + 0.2f);
-            diagnostics.Add($"PigSheepChain: tended pig {animalId} (condition now {record.Condition01:P0}).");
-            return null;
-        }
-
         /// <summary>Degrades all pig/sheep condition (feed shortfalls call this).</summary>
         public void DegradeCondition(float amount)
         {
@@ -276,13 +261,6 @@ namespace LandLedgers.Economy.Farming.Livestock
 
             diagnostics.Add($"PigSheepChain: sold {lot.Lbs} lbs wool to {buyerName} for {proceedsCents}c.");
             return null;
-        }
-
-        public WoolLot GetWoolLot(string lotId)
-        {
-            if (string.IsNullOrWhiteSpace(lotId)) return null;
-            WoolLot lot;
-            return woolLots.TryGetValue(lotId, out lot) ? lot : null;
         }
 
         /// <summary>Save support (CLN-1 pattern).</summary>

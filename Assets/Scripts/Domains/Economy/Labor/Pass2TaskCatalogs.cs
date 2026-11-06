@@ -280,12 +280,6 @@ namespace LandLedgers.Economy.Labor
     /// </summary>
     public static class Pass2IdleActivity
     {
-        /// <summary>True only for the schedule-activity idle kind; always false for task ids.</summary>
-        public static bool IsIdleScheduleActivity(string activityKindName)
-        {
-            return string.Equals(activityKindName, "Idle", StringComparison.Ordinal);
-        }
-
         /// <summary>
         /// Hiring-pressure inputs must exclude idle time. A caller that
         /// passes idle minutes here gets them back as zero: idle is

@@ -154,20 +154,6 @@ namespace LandLedgers.Economy.Businesses.Newspaper
         public IReadOnlyList<AdPlacement> Placements => placements;
         public int PaperUnits => paperUnits;
 
-        /// <summary>
-        /// Registers newsprint as an importable material (EQU-1 extension path).
-        /// Historical: frontier papers bought newsprint in reams from eastern
-        /// mills via rail jobbers — a named origin, real transit, real cost.
-        /// </summary>
-        public static void EnsureNewsprintImportable(List<string> diag)
-        {
-            string problem = Trade.ImportCatalog.RegisterMaterial(new Trade.ImportMaterial(
-                NewsprintMaterialId, "Newsprint (reams)",
-                "Eastern paper mill, via railhead", 400, 16, 30));
-            if (problem != null && diag != null)
-                diag.Add($"NewspaperRuntime: newsprint import registration: {problem}");
-        }
-
         /// <summary>Receives paper stock — the caller moves real lots; this only records custody.</summary>
         public string ReceivePaper(int units, string sourceNote, List<string> diag)
         {

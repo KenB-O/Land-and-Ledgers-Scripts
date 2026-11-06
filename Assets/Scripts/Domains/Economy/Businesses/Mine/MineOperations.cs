@@ -169,11 +169,6 @@ namespace LandLedgers.Economy.Businesses.Mine
             return null;
         }
 
-        public void ClearAllocation(string levelId)
-        {
-            shares.RemoveAll(s => string.Equals(s.levelId, levelId, StringComparison.Ordinal));
-        }
-
         public float ShareFor(string levelId)
         {
             foreach (FrontShare share in shares)

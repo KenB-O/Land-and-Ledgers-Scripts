@@ -514,73 +514,6 @@ namespace LandLedgers.Economy
             return shipment;
         }
 
-        public int ScheduleRecurringLocalOrderShipment(
-            LocalRecurringOrderFulfillmentRequest request,
-            int units,
-            int sellerUnitRevenueCents,
-            int buyerUnitCostCents)
-        {
-            if (request.Template == null || request.Seller == null || request.Buyer == null || units <= 0)
-            {
-                return 0;
-            }
-
-            LogisticsShipmentDeliveryMode deliveryMode = UsesGenericEconomicState(request.Buyer)
-                ? LogisticsShipmentDeliveryMode.ReceiveGenericInventory
-                : request.Buyer.BusinessType == BusinessType.GeneralStore
-                ? LogisticsShipmentDeliveryMode.GeneralStoreLocalSupply
-                : LogisticsShipmentDeliveryMode.AddCategoryStock;
-            ShipmentHaulingMode haulingMode = ResolveRecurringOrderHaulingMode(request.Template.HaulingResponsibility);
-            string freightPayer = ResolveRecurringOrderFreightPayer(request);
-            LogisticsShipmentState shipment = CreateLocalBusinessShipment(
-                request.Seller,
-                request.Template.SellerCategoryId,
-                request.Buyer,
-                request.Template.BuyerCategoryId,
-                units,
-                sellerUnitRevenueCents,
-                buyerUnitCostCents,
-                true,
-                deliveryMode,
-                BuildRecurringOrderShipmentLabel(request),
-                haulingMode,
-                freightPayer);
-
-            return IsAcceptedScheduledShipment(shipment) ? Mathf.Max(0, units) : 0;
-        }
-
-        /// <summary>
-        /// Generic merchant receiving path. The shipment remains the physical
-        /// custody transition; destination GenericInventory is written only by
-        /// the receiving stage after arrival.
-        /// </summary>
-        public LogisticsShipmentState ScheduleGenericInventoryShipment(
-            BusinessInstanceState source,
-            BusinessInstanceState destination,
-            string productId,
-            int units,
-            int sellerUnitRevenueCents,
-            int buyerUnitCostCents,
-            ShipmentHaulingMode haulingMode = ShipmentHaulingMode.SourceDelivers,
-            string freightPayerBusinessInstanceId = null)
-        {
-            if (source == null || destination == null || !UsesGenericEconomicState(destination)
-                || string.IsNullOrWhiteSpace(productId) || units <= 0) return null;
-            return CreateLocalBusinessShipment(
-                source,
-                productId,
-                destination,
-                productId,
-                units,
-                sellerUnitRevenueCents,
-                buyerUnitCostCents,
-                false,
-                LogisticsShipmentDeliveryMode.ReceiveGenericInventory,
-                $"{source.RuntimeDisplayName}->{destination.RuntimeDisplayName} generic receiving",
-                haulingMode,
-                freightPayerBusinessInstanceId);
-        }
-
         private static bool UsesGenericEconomicState(BusinessInstanceState business)
         {
             if (business == null) return false;
@@ -591,41 +524,6 @@ namespace LandLedgers.Economy
                 || configuration.Retail.ProductLines.Count > 0
                 || configuration.EquipmentProcurements.Count > 0
                 || configuration.Inventory.Count > 0;
-        }
-
-        public int ScheduleBusinessTransferAgreementShipment(
-            BusinessTransferAgreementState agreement,
-            BusinessInstanceState source,
-            BusinessInstanceState destination,
-            int units,
-            int sellerUnitRevenueCents,
-            int buyerUnitCostCents,
-            out string shipmentId,
-            bool sourceCommittedAtSchedule = false)
-        {
-            shipmentId = string.Empty;
-            if (agreement == null || source == null || destination == null || units <= 0)
-            {
-                return 0;
-            }
-
-            LogisticsShipmentState shipment = CreateLocalBusinessShipment(
-                source,
-                agreement.SourceCategoryId,
-                destination,
-                agreement.DestinationCategoryId,
-                units,
-                sellerUnitRevenueCents,
-                buyerUnitCostCents,
-                sourceCommittedAtSchedule,
-                LogisticsShipmentDeliveryMode.AddCategoryStock,
-                BuildBusinessTransferShipmentLabel(agreement, source, destination),
-                ResolveBusinessTransferHaulingMode(agreement.HaulingResponsibility),
-                ResolveBusinessTransferFreightPayer(agreement, source, destination),
-                agreement.AgreementId);
-
-            shipmentId = shipment != null ? shipment.ShipmentId : string.Empty;
-            return IsAcceptedScheduledShipment(shipment) ? Mathf.Max(0, units) : 0;
         }
 
         public LogisticsTownPressureSnapshot CaptureTownPressureSnapshot()
@@ -1531,6 +1429,9 @@ namespace LandLedgers.Economy
         /// LogisticsRuntimeManager.cs is harness-excluded, so this method is
         /// verified by reading against GridExitSelector /
         /// LogisticsRoutePlanner / LogisticsRouteTypes, not by harness tests.
+        /// Kept deliberately per Plan 05 §6 (the old contract; the F1
+        /// carrier variant does not replace it) — do not sweep it as dead:
+        /// it has no `Name(` callers by design.
         /// </summary>
         public bool TryPlanFreightExitRoute(BusinessInstanceState source, RegionalExitPoint exitPoint, out LogisticsRoutePlan plan, out string reason)
         {

@@ -639,9 +639,6 @@ namespace LandLedgers.Economy
         /// </summary>
         public void RegisterGenericEquipmentAsset(string assetId) => GenericConfiguration.AddEquipmentReference(assetId);
 
-        public void RegisterGenericEquipmentProcurement(EquipmentProcurementState procurement)
-            => GenericConfiguration.AddEquipmentProcurement(procurement);
-
         public void RegisterGenericWorkspace(string workspaceId) => GenericConfiguration.AddWorkspaceReference(workspaceId);
 
         public void RegisterGenericProductionMethod(ProductionMethodDefinition method) => GenericConfiguration.AddProductionMethod(method);
@@ -662,20 +659,6 @@ namespace LandLedgers.Economy
             if (!pool.SetAllocation(Mathf.Max(pool.Allocated, capacityAllocation))) return false;
             GenericConfiguration.Retail.AddOrReplaceLine(line);
             return true;
-        }
-
-        public GenericProductionPlan PlanGenericProduction(
-            string methodId,
-            float currentStock,
-            float requestedQuantity,
-            Func<ProductionInputRequirement, float> availableInput,
-            Func<ProductionInputRequirement, float> reservedInput)
-        {
-            ProductionMethodDefinition method = GenericConfiguration.ProductionMethods
-                .FirstOrDefault(candidate => candidate != null
-                    && string.Equals(candidate.MethodId, methodId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
-            GenericConfiguration.TryGetProductionPolicy(methodId, out GenericProductionPolicy policy);
-            return GenericProductionPlanner.Plan(policy, method, currentStock, requestedQuantity, availableInput, reservedInput);
         }
 
         /// <summary>
@@ -1155,16 +1138,6 @@ namespace LandLedgers.Economy
             return repairs;
         }
 
-
-        public string BuildCashReserveInspectionLine(int operatingReserveCents, int survivalReserveCents)
-        {
-            return BuildPortfolioSummary(operatingReserveCents, survivalReserveCents).BuildCashReserveLine();
-        }
-
-        public string BuildStockReadinessInspectionLine()
-        {
-            return runtimeState != null ? runtimeState.BuildStockReadinessLine() : "Stock readiness: runtime unavailable.";
-        }
 
         /// <summary>
         /// Pass VII P1-6: quick-diligence clue lines read REAL business state.

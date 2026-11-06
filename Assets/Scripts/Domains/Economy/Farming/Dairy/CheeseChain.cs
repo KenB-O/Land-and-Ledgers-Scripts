@@ -307,13 +307,6 @@ namespace LandLedgers.Economy.Farming.Dairy
             return null;
         }
 
-        public CheeseWheel GetWheel(string lotId)
-        {
-            if (string.IsNullOrWhiteSpace(lotId)) return null;
-            CheeseWheel wheel;
-            return wheels.TryGetValue(lotId, out wheel) ? wheel : null;
-        }
-
         /// <summary>Save support (CLN-1 pattern).</summary>
         public CheeseChainSaveDto CaptureSaveDto()
         {

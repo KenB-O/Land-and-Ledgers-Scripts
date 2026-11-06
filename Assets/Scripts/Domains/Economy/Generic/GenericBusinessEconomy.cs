@@ -123,8 +123,6 @@ namespace LandLedgers.Economy
             return true;
         }
 
-        public bool RegisterLegacyItem(ItemDefinition item) => Register(GenericProductDefinition.FromLegacyItem(item));
-
         public bool TryGet(string productId, out GenericProductDefinition product)
         {
             product = null;
@@ -335,11 +333,6 @@ namespace LandLedgers.Economy
         public bool SpecialOrderAllowed => specialOrderAllowed;
 
         public bool CanReorder(float availableStock) => EnabledForSale && availableStock <= ReorderPoint + 0.001f;
-        public bool CanAcceptStock(float availableStock, float incomingQuantity) =>
-            incomingQuantity >= 0f && availableStock + incomingQuantity <= MaximumStock + 0.001f;
-
-        public GenericRetailProductLine() { }
-
         public GenericRetailProductLine(string productId, string poolId, float target, float maximum, float reorder, int priceCents)
         {
             this.productId = productId ?? string.Empty;
@@ -351,13 +344,6 @@ namespace LandLedgers.Economy
         }
 
         public void SetEnabledForSale(bool enabled) => enabledForSale = enabled;
-
-        public void ConfigureStockPolicy(float target, float maximum, float reorder)
-        {
-            targetStock = Mathf.Max(0f, target);
-            maximumStock = Mathf.Max(targetStock, maximum);
-            reorderPoint = Mathf.Clamp(reorder, 0f, maximumStock);
-        }
 
         public void SetSellingPriceCents(int priceCents) => sellingPriceCents = Mathf.Max(0, priceCents);
 
@@ -1426,14 +1412,6 @@ namespace LandLedgers.Economy
             GenericInventoryPosition position = inventory.FirstOrDefault(existing => existing != null
                 && string.Equals(existing.ProductId, productId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
             return position != null && position.TryConsumeReserved(quantity, out consumed);
-        }
-
-        public bool ReleaseInventoryReservation(string productId, float quantity)
-        {
-            inventory ??= new List<GenericInventoryPosition>();
-            GenericInventoryPosition position = inventory.FirstOrDefault(existing => existing != null
-                && string.Equals(existing.ProductId, productId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
-            return position != null && position.ReleaseReservation(quantity);
         }
 
         public void AddProductionMethod(ProductionMethodDefinition method)

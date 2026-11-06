@@ -43,15 +43,5 @@ namespace LandLedgers.Economy.Labor
             return Math.Max(1, (int)Math.Ceiling(adjusted));
         }
 
-        /// <summary>
-        /// Worked example in code, so a reviewer can see the curve without
-        /// trusting prose: a 90-minute solo fell becomes 53 with two hands
-        /// (90 / 1.7 = 52.9, ceiling 53) and 30 with four (90 / 3.1 = 29.1, ceiling 30).
-        /// </summary>
-        public static string DescribeCrewEffect(int baseMinutes, int crewSize)
-        {
-            return $"Base {baseMinutes}m, crew {Math.Max(1, crewSize)}: {CrewAdjustedMinutes(baseMinutes, crewSize)}m "
-                + $"(effective workers {EffectiveWorkers(crewSize):0.0}). Solo work is never refused; it is just slow.";
-        }
     }
 }

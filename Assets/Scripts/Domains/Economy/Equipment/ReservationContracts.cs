@@ -69,20 +69,6 @@ namespace LandLedgers.Economy.Equipment
         public static string Animal(string animalId) { return AnimalPrefix + animalId; }
         public static string MotivePower(string sourceId) { return MotivePowerPrefix + sourceId; }
 
-        /// <summary>Parses the domain from a key prefix; Unspecified when unrecognized.</summary>
-        public static ReservationDomain DomainOf(string resourceKey)
-        {
-            if (string.IsNullOrEmpty(resourceKey)) return ReservationDomain.Unspecified;
-            if (resourceKey.StartsWith(AssetPrefix, StringComparison.Ordinal)) return ReservationDomain.EquipmentAsset;
-            if (resourceKey.StartsWith(KitPrefix, StringComparison.Ordinal)) return ReservationDomain.ToolKit;
-            if (resourceKey.StartsWith(WorkstationPrefix, StringComparison.Ordinal)) return ReservationDomain.Workstation;
-            if (resourceKey.StartsWith(PersonPrefix, StringComparison.Ordinal)) return ReservationDomain.PersonTime;
-            if (resourceKey.StartsWith(LotPrefix, StringComparison.Ordinal)) return ReservationDomain.InventoryLot;
-            if (resourceKey.StartsWith(WorkspacePrefix, StringComparison.Ordinal)) return ReservationDomain.Workspace;
-            if (resourceKey.StartsWith(AnimalPrefix, StringComparison.Ordinal)) return ReservationDomain.Animal;
-            if (resourceKey.StartsWith(MotivePowerPrefix, StringComparison.Ordinal)) return ReservationDomain.MotivePower;
-            return ReservationDomain.Unspecified;
-        }
     }
 
     /// <summary>Pass IV: one item in an atomic reservation request. Plain data.</summary>

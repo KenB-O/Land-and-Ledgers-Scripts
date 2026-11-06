@@ -58,11 +58,6 @@ namespace LandLedgers.Economy
             return runtime;
         }
 
-        public void ClearRuntime(string businessInstanceId)
-        {
-            if (!string.IsNullOrWhiteSpace(businessInstanceId)) runtimes.Remove(businessInstanceId);
-        }
-
         public void AdvanceBusinessProcesses(BusinessInstanceState business, EntityId businessId, int dayIndex, int elapsedMinutes)
         {
             if (business == null || elapsedMinutes <= 0) return;

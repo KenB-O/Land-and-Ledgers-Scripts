@@ -6630,6 +6630,46 @@ namespace LandLedgers.Orchestration.Systems
                     new LandLedgers.Economy.BreadDrivers.Series2FlourProcurementDriver(notionsService));
             }
 
+            // Plan 10 E3 (Obj 9; W6 design): Glen's person budget for the
+            // day. OwnerPersonId is bound at bootstrap (BindOwnerPerson);
+            // -1 means unbound. Capacity comes from
+            // DailyNeedsService.WorkCapacityFactor for Glen's live
+            // PersonState (nutrition x health, E2-verified math), and the
+            // minutes come from BakeryPersonTimeBudget.PersonMinutesPerDay
+            // (600 x capacity). The hub WorkTimeBudget must resolve — it
+            // is the budget the gate guards. Any missing piece logs the
+            // exact gap under [BakeryProduction] and passes null: the gate
+            // is inactive, never defaulted, and the bake proceeds on the
+            // runtime rules exactly as before.
+            int? callerDailyBudgetMinutes = null;
+            {
+                int ownerPersonId = bakery.OwnerPersonId;
+                if (ownerPersonId < 0)
+                {
+                    diagnostics.Add("DriveBakeryWholesalePlanning: baker owner-person link is unbound (OwnerPersonId -1) — the person-budget gate is inactive; the bake proceeds on runtime rules (Obj 9 seam, B2 booking still owed).");
+                }
+                else
+                {
+                    PersonState owner = populationManager?.State?.GetPerson(ownerPersonId);
+                    LandLedgers.Time.WorkTimeBudget ownerBudget = hub?.WorkTimeBudgets?.GetOrCreate(
+                        LandLedgers.Primitives.EntityId.For(LandLedgers.Primitives.EntityKind.Person, ownerPersonId));
+                    if (owner == null)
+                    {
+                        diagnostics.Add($"DriveBakeryWholesalePlanning: baker owner person P{ownerPersonId} does not resolve — the person-budget gate is inactive; the bake proceeds on runtime rules.");
+                    }
+                    else if (ownerBudget == null)
+                    {
+                        diagnostics.Add($"DriveBakeryWholesalePlanning: no WorkTimeBudget resolves for baker P{ownerPersonId} — the person-budget gate is inactive; the bake proceeds on runtime rules.");
+                    }
+                    else
+                    {
+                        float capacity = DailyNeedsService.WorkCapacityFactor(owner);
+                        callerDailyBudgetMinutes = LandLedgers.Economy.Businesses.Bakery.BakeryPersonTimeBudget.PersonMinutesPerDay(capacity);
+                        diagnostics.Add($"DriveBakeryWholesalePlanning: baker P{ownerPersonId} person budget {callerDailyBudgetMinutes.Value}m at capacity {capacity:0.00} — Precheck refuses a batch that cannot fit it.");
+                    }
+                }
+            }
+
             var inputs = new BakeryWholesaleDailyInputs
             {
                 Bakery = bakery,
@@ -6658,6 +6698,7 @@ namespace LandLedgers.Orchestration.Systems
                 ImportOrderPathExists = false,
                 NotionsSupply = notionsSupply,
                 NotionsRegistration = notionsRegistration,
+                CallerDailyBudgetMinutes = callerDailyBudgetMinutes,
             };
             BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, diagnostics);
 

@@ -51,6 +51,13 @@ namespace LandLedgers.Economy.BreadDrivers
         public int ImportTransitDays;
         public bool ImportOrderPathExists;
 
+        /// <summary>Plan 10 E3 (Obj 9): Glen's person budget for the day
+        /// in minutes (600 x capacity, resolved by the forwarder from the
+        /// bound OwnerPersonId). Null = the gate is inactive (unbound
+        /// owner or unresolvable budget) and Precheck runs on the runtime
+        /// rules exactly as before — never defaulted.</summary>
+        public int? CallerDailyBudgetMinutes;
+
         /// <summary>Plan 04 N-slice: notions procurement seam. The live
         /// notions supply (store procurement service wrapped by
         /// Series2NotionsSupply) and the caller-supplied counterparty
@@ -443,7 +450,7 @@ namespace LandLedgers.Economy.BreadDrivers
             int diagnosticsBeforeRun = diag.Count;
             int baked = inputs.ProductionDriver.RunScheduledDay(
                 dayIndex, inputs.BakerKitUsable, inputs.OvenDefinition,
-                inputs.FindOvenComponent, null, diag, inputs.IdRegistry);
+                inputs.FindOvenComponent, inputs.CallerDailyBudgetMinutes, diag, inputs.IdRegistry);
             result.BatchesBaked = Math.Max(0, baked);
             if (baked < 0)
                 result.Refusal = FirstRefusal(diag, diagnosticsBeforeRun, dayIndex);

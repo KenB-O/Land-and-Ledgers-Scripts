@@ -231,9 +231,22 @@ namespace LandLedgers.Economy.BreadDrivers
                 return "Series2BakeryProductionDriver pre-check refused: no ready bake oven; bake nothing, batches stay planned.";
 
             int plannedMinutes = batches * (spec.PrepMinutes + spec.BakeMinutes);
-            diag.Add($"Series2BakeryProductionDriver pre-check passed for day {dayIndex}: {batches} batch(es), flour {flourOnHand}/{flourNeeded} lb, notions {notionsOnHand}/{notionsNeeded}u, fuel {fuelOnHand}/{fuelNeeded}u, ready ovens {readyOvens}, planned labour {plannedMinutes}m vs shop day {BakeryShopRuntime.BakerMinutesPerDay}m (code value, not canon).");
+            // Plan 10 E3 (W6 design; Obj 9): the caller-supplied PERSON
+            // budget is a refusal, not a note. Only minutes are available
+            // here (the driver passes CallerDailyBudgetMinutes), so the
+            // gate compares batches x (prep + bake) against the supplied
+            // minutes directly; capacity is re-derived as minutes / 600
+            // for the message (the person budget is 600 x capacity, so
+            // this is exact to the flooring). Proof minutes are not baker
+            // labour and are never counted. A batch that does not fit is
+            // refused, never partially booked (splitting is B2's ruling).
+            // The runtime budget (840m) stays a report only.
             if (callerDailyBudgetMinutes.HasValue && plannedMinutes > callerDailyBudgetMinutes.Value)
-                diag.Add($"Series2BakeryProductionDriver labour note: planned {plannedMinutes}m exceeds caller daily budget {callerDailyBudgetMinutes.Value}m by {plannedMinutes - callerDailyBudgetMinutes.Value}m; reported only, roster NOT truncated, cap NOT changed (WorkTimeBudget decision still open).");
+            {
+                float capacity01 = callerDailyBudgetMinutes.Value / (float)LandLedgers.Time.WorkTimeBudget.DefaultDailyWorkMinutes;
+                return $"Series2BakeryProductionDriver pre-check refused: person budget {callerDailyBudgetMinutes.Value}m (capacity {capacity01:0.00}) cannot fit {batches} batch(es) at {spec.PrepMinutes + spec.BakeMinutes}m each ({plannedMinutes}m needed); bake nothing, batches stay planned. Runtime budget is {BakeryShopRuntime.BakerMinutesPerDay}m.";
+            }
+            diag.Add($"Series2BakeryProductionDriver pre-check passed for day {dayIndex}: {batches} batch(es), flour {flourOnHand}/{flourNeeded} lb, notions {notionsOnHand}/{notionsNeeded}u, fuel {fuelOnHand}/{fuelNeeded}u, ready ovens {readyOvens}, planned labour {plannedMinutes}m vs shop day {BakeryShopRuntime.BakerMinutesPerDay}m (code value, not canon).");
             return null;
         }
 

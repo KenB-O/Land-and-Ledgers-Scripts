@@ -714,6 +714,36 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void PersonBudgetGate_DriverLevel_BudgetSuppliedRefuses_BudgetAbsentBakes()
+        {
+            // Plan 10 E3 driver-level gate test: same fixture, seeded
+            // inputs, account due day 2. With a 150m person budget the
+            // bake refuses on the person budget (flour/notions/fuel are
+            // all in hand); with no budget the same day bakes.
+            Slice refused = NewSlice();
+            InstallOven(refused);
+            SeedInputs(refused, 24, 2, 2);
+            BookAccount(refused, 24, 1, 2, 2);
+            BakeryWholesaleDailyInputs refusedInputs = InputsFor(refused, 2);
+            refusedInputs.CallerDailyBudgetMinutes = 150;
+
+            BakeryWholesaleDailyResult refusedResult = BakeryWholesaleDailyDriver.RunDay(refusedInputs, refused.Diag);
+            Assert.AreEqual(1, refusedResult.BatchesPlanned);
+            Assert.AreEqual(0, refusedResult.BatchesBaked);
+            Assert.IsTrue(refusedResult.Refusal != null && refusedResult.Refusal.Contains("person budget"),
+                "driver refusal names the person budget; refusal: " + refusedResult.Refusal);
+            Assert.AreEqual(24, refused.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "nothing dispensed on a person-budget refusal");
+
+            Slice baked = NewSlice();
+            InstallOven(baked);
+            SeedInputs(baked, 24, 2, 2);
+            BookAccount(baked, 24, 1, 2, 2);
+            BakeryWholesaleDailyResult bakedResult = BakeryWholesaleDailyDriver.RunDay(InputsFor(baked, 2), baked.Diag);
+            Assert.AreEqual(1, bakedResult.BatchesBaked, "no budget supplied — the gate is inactive, bake proceeds");
+        }
+
+        [Test]
         public void NoDoublePurchaseOnRepeatedSameDayCall()
         {
             // Plan 02 §7 test 14, fixture-adjusted (see class note below):

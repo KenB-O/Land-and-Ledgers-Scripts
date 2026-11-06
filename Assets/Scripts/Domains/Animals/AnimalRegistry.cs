@@ -488,11 +488,6 @@ namespace LandLedgers.Animals
             return cohort;
         }
 
-        public LivestockCohort GetCohort(EntityId cohortId)
-        {
-            return cohorts.TryGetValue(cohortId, out LivestockCohort cohort) ? cohort : null;
-        }
-
         /// <summary>
         /// Promotes one head from a cohort to individual representation (Tech X §3.4): the
         /// cohort count decrements and the new individual links back to the cohort. No

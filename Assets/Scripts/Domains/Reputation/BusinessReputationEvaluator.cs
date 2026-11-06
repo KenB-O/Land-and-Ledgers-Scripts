@@ -274,13 +274,6 @@ namespace LandLedgers.Reputation
                 - stockoutPressure * 0.34f);
         }
 
-        public BusinessReputationState BuildInitialState(float stockHealth01, float runtimeReliability01, float operatingEfficiency01)
-        {
-            BusinessReputationState state = new BusinessReputationState();
-            state.ApplyRuntimeBaseline(stockHealth01, runtimeReliability01, operatingEfficiency01);
-            return state;
-        }
-
         public void ApplyObservation(BusinessReputationState state, BusinessReputationObservation observation)
         {
             ApplyObservationWithResult(state, observation);

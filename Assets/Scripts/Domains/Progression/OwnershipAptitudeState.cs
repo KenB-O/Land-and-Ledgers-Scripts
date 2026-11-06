@@ -109,11 +109,6 @@ namespace LandLedgers.Progression
             return OwnershipMilestoneThresholds[index];
         }
 
-        public static int GetMaxOwnershipMilestoneThreshold()
-        {
-            return OwnershipMilestoneThresholds.Length == 0 ? 0 : OwnershipMilestoneThresholds[OwnershipMilestoneThresholds.Length - 1];
-        }
-
         public int GetReachedOwnershipMilestoneCount()
         {
             Sanitize();
@@ -170,11 +165,6 @@ namespace LandLedgers.Progression
             }
 
             return pending;
-        }
-
-        public bool HasPendingOwnershipMilestoneAward(int ownedLandCount, int ownedBusinessCount)
-        {
-            return GetPendingOwnershipMilestoneAwardCount(ownedLandCount, ownedBusinessCount) > 0;
         }
 
         public void RecordSource(OwnershipAptitudeSource source)

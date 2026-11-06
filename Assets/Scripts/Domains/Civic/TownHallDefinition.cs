@@ -69,11 +69,6 @@ namespace LandLedgers.Civic
                 CivicStatusLabel);
         }
 
-        public bool MatchesPhysicalDefinition(BuildingDefinition definition)
-        {
-            return physicalBuildingDefinition != null && physicalBuildingDefinition == definition;
-        }
-
         public TownHallDiagnosticFlags GetConfigurationDiagnosticFlags()
         {
             if (!HasPhysicalBuildingDefinition)
@@ -89,11 +84,6 @@ namespace LandLedgers.Civic
         public CivicGrowthMilestone[] GetGrowthRoadmap()
         {
             return CivicGrowthPlanUtility.SanitizePlan(civicGrowthMilestones);
-        }
-
-        public bool TryGetNextGrowthMilestone(int currentPopulation, out CivicGrowthMilestone milestone)
-        {
-            return CivicGrowthPlanUtility.TryGetNextMilestone(civicGrowthMilestones, currentPopulation, out milestone);
         }
 
         public CivicGrowthSnapshot CaptureGrowthSnapshot(int currentPopulation)
@@ -235,20 +225,6 @@ namespace LandLedgers.Civic
                 ? $"Planning pop hint: {PlanningPopulationHint}"
                 : "Planning pop hint: none";
             return $"{BuildIdentitySummary()} | {BuildConfigurationSummary()} | {planningSummary} | Roadmap: {growthSummary}";
-        }
-
-        public string BuildAuthoringNoticeText()
-        {
-            return $"{BuildIdentitySummary()} | {BuildConfigurationNoticeText()} | Next action: {BuildAuthoringActionText()}";
-        }
-
-        public string BuildAuthoringDetailText()
-        {
-            string planningLine = BuildPlanningProgressLine();
-            string actionLine = BuildAuthoringActionText();
-            return string.IsNullOrWhiteSpace(planningLine)
-                ? $"{BuildAuthoringSummary()} | Next action: {actionLine}"
-                : $"{BuildAuthoringSummary()} | {planningLine} | Next action: {actionLine}";
         }
 
         public string BuildReadoutSummary()

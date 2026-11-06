@@ -98,11 +98,6 @@ namespace LandLedgers.Reputation
                 reputation.operationalReliability01);
         }
 
-        public int EvaluateEmploymentTrust100(PlayerReputationState state)
-        {
-            return Mathf.RoundToInt(EvaluateEmploymentTrust01(state) * 100f);
-        }
-
         public ReputationChangeResult ApplyBusinessReputationPropagation(
             PlayerReputationState ownerState,
             BusinessReputationState businessState,

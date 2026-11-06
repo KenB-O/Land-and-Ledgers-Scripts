@@ -211,11 +211,6 @@ namespace LandLedgers.Civic
             return Schoolhouse.CaptureRuntimeSnapshot(GetPopulationState(), schoolhouseThresholds, schoolhouseWeights);
         }
 
-        public string BuildHealthLine()
-        {
-            return TownHallPresentationUtility.BuildManagementHealthLine(EnsureRuntimeSnapshotCurrent());
-        }
-
         public string BuildCivicContributionText()
         {
             return CurrentCivicFoundationContribution.BuildSummaryLine();
@@ -372,35 +367,6 @@ namespace LandLedgers.Civic
             return BuildSchoolhouseActionTextCore(
                 schoolhouseSnapshot,
                 CaptureSchoolhouseDiagnosticFlags(schoolhouseSnapshot));
-        }
-
-        public string BuildNoticeText()
-        {
-            TownHallReadoutSnapshot readout = CaptureReadoutSnapshot();
-            SchoolhouseRuntimeSnapshot schoolhouseSnapshot = CaptureSchoolhouseRuntimeSnapshot();
-            string townHallNotice = readout.HasNoticeLine
-                ? readout.NoticeLine
-                : readout.StatusLine;
-            string schoolhouseNotice = BuildSchoolhouseNoticeTextCore(
-                schoolhouseSnapshot,
-                CaptureSchoolhouseDiagnosticFlags(schoolhouseSnapshot));
-
-            if (string.IsNullOrWhiteSpace(schoolhouseNotice))
-            {
-                return townHallNotice;
-            }
-
-            return string.IsNullOrWhiteSpace(townHallNotice)
-                ? schoolhouseNotice
-                : $"{townHallNotice} | {schoolhouseNotice}";
-        }
-
-        public string BuildUpcomingNeedText()
-        {
-            TownHallReadoutSnapshot readout = CaptureReadoutSnapshot();
-            return readout.HasUpcomingNeedLine
-                ? readout.UpcomingNeedLine
-                : string.Empty;
         }
 
         private int GetPlanningPopulationHint()

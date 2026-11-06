@@ -78,12 +78,6 @@ namespace LandLedgers.Civic
                 || flags.HasFlag(SchoolhouseDiagnosticFlags.SavedReferenceNotTagged);
         }
 
-        public static bool HasOperationalIssues(SchoolhouseDiagnosticFlags flags)
-        {
-            return flags.HasFlag(SchoolhouseDiagnosticFlags.TeacherVacant)
-                || flags.HasFlag(SchoolhouseDiagnosticFlags.NoTeacherCandidate)
-                || flags.HasFlag(SchoolhouseDiagnosticFlags.CapacityStrained);
-        }
     }
 
     [Serializable]

@@ -2020,6 +2020,19 @@ namespace LandLedgers.Orchestration.Systems
                             break;
                         }
                     }
+                    // Slice F5: visible return — the trio reactivates at
+                    // the exit cell and walks back to staging. Only for a
+                    // returned vehicle record with a linked LIVE shipment;
+                    // a journey with no live shipment starts no leg. This
+                    // is independent of the S12 reset above: on the normal
+                    // path the S11 pickup already wrote "wagon:<id>" on
+                    // D+1, so the reset does not fire — but the team still
+                    // comes home visibly.
+                    LogisticsShipmentState liveShipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                        && LandLedgers.Economy.Logistics.FreightShipmentService.IsLiveShipment(candidate)
+                        && string.Equals(candidate.physicalWagonAssetId, record.VehicleId, StringComparison.Ordinal));
+                    if (liveShipment != null)
+                        FindAnyObjectByType<OpeningTransportPresentationController>()?.BeginCoupledReturn(liveShipment);
                 }
             }
             // Slice S12 (G1): a return is a journey mutation, and the S9
@@ -2240,6 +2253,11 @@ namespace LandLedgers.Orchestration.Systems
             shipment.physicalLocationId = wagonRecord.OffMapLocationLabel;
             SyncOffMapJourneysToSaveState();
             Debug.Log($"[OffMapJourney] Wagon '{wagonId}' + Ethan P{operatorId} departed town-center for '{exitPoint.DestinationLabel}' via {wagonRecord.GatewayLocationId}, due back day {wagonRecord.DueReturnDayIndex}.", this);
+            // Slice F5: visible departure — only on a real departure
+            // (journey record created, save synced). Never from
+            // dispatch-task start, authorization alone, or the daily retry
+            // scan without a record: this is the only call site.
+            FindAnyObjectByType<OpeningTransportPresentationController>()?.BeginCoupledDeparture(shipment);
             return true;
         }
 

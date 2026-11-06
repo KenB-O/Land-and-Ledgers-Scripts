@@ -727,6 +727,47 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
+        /// <summary>
+        /// Slice F5 (2026-11-06, Objective 25): hide a person via the
+        /// mover's hide path (AgentMover.HideImmediately — the F5 coder
+        /// verification point confirmed the exact call; the root
+        /// GameObject is never deactivated). Same lookup as
+        /// TrySendPersonToCell; false (no-op, no log spam) when the person
+        /// has no managed agent or no mover.
+        /// </summary>
+        public bool TryHidePerson(int personId)
+        {
+            if (personId < 0) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.mover == null) return false;
+                managed.mover.HideImmediately();
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Slice F5: show a person again at their current location
+        /// (AgentMover.ShowAtCurrentLocation — the matching unhide call).
+        /// Same lookup and contract as TryHidePerson.
+        /// </summary>
+        public bool TryShowPersonAtCurrentLocation(int personId)
+        {
+            if (personId < 0) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.mover == null) return false;
+                managed.mover.ShowAtCurrentLocation();
+                return true;
+            }
+            return false;
+        }
+
         public bool IsAtExplicitBuilding(int personId, int targetBuildingId)
         {
             return TryGetExplicitArrival(personId, targetBuildingId, out _, out _, out _);

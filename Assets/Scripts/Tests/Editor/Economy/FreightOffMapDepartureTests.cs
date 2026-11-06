@@ -33,6 +33,8 @@ using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
+using LandLedgers.World.Regional;
 using NUnit.Framework;
 using UnityEngine;
 using EntityId = LandLedgers.Primitives.EntityId;
@@ -348,6 +350,89 @@ namespace LandLedgers.EditorTests.Economy
                 "no second debit on a later tick");
             Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
                 "no second credit on a later tick");
+        }
+
+        // ---------- Slice F5 (2026-11-06, Obj 25): visible departure/return gates ----------
+        //
+        // SCOPE NOTE (harness adaptation, F2/F3 precedent): the controller
+        // (CoupledTransportMovementController) and the Begin methods on
+        // OpeningTransportPresentationController are harness-excluded
+        // MonoBehaviours, and the SimulationDrivers call sites
+        // (TryDepartMillbrookShipment, ProcessFreightJourneyReturns) are
+        // source-reviewed only. What IS harness-tested here are the exact
+        // gating predicates those call sites and Begin methods read:
+        // the outbound leg starts only when IsOffMapVehicle is true for a
+        // live vehicle journey record — never on dispatch-task start or
+        // authorization alone (no record exists then, so the gate is
+        // closed) — and the return leg starts only once the journey
+        // record is Returned.
+
+        private static (JourneyModel model, OffMapJourneyAuthority authority, List<string> diag) NewJourneyAuthority()
+        {
+            var model = new JourneyModel();
+            model.RegisterLocation(new JourneyLocation("farmstead-f1", JourneyLocationKind.Farmstead, "Home Farm", 0f, 6f));
+            model.RegisterLocation(new JourneyLocation("town-depot", JourneyLocationKind.OffMapGateway, "Rail Depot", 0f, 0f));
+            model.RegisterLocation(new JourneyLocation("mill", JourneyLocationKind.Mill, "Grist Mill", 2f, 3f));
+            model.AddEdge("farmstead-f1", "mill", 4f, "river road");
+            model.AddEdge("mill", "town-depot", 3f, "depot road");
+            return (model, new OffMapJourneyAuthority(model), new List<string>());
+        }
+
+        [Test]
+        public void Departure_DoesNotStartMovementWithoutJourneyRecord()
+        {
+            (_, OffMapJourneyAuthority authority, List<string> diag) = NewJourneyAuthority();
+
+            Assert.IsFalse(authority.IsOffMapVehicle(WagonId),
+                "with no journey record, the outbound gate is closed — a dispatch start or authorization alone must not start movement");
+
+            // Ethan departing on foot does not move the wagon.
+            OffMapJourneyRecord personRecord = authority.DepartPerson(
+                EthanId, "farmstead-f1", "Millbrook", 1, 2, "drive the flour wagon",
+                new Dictionary<string, int>(), new List<string>(), Day,
+                _ => 0, (_, _) => null, diag);
+            Assert.IsNotNull(personRecord, "person departure must succeed: " + string.Join("; ", diag));
+            Assert.IsTrue(authority.IsOffMapPerson(EthanId));
+            Assert.IsFalse(authority.IsOffMapVehicle(WagonId),
+                "a person journey must not open the wagon's outbound gate");
+
+            // Only the vehicle journey record opens it — the S10 departure.
+            OffMapJourneyRecord wagonRecord = authority.DepartVehicle(
+                WagonId, "farmstead-f1", "Millbrook", 1, "Millbrook flour pickup",
+                new Dictionary<string, int>(), new List<string>(), Day,
+                _ => 0, (_, _) => null, diag);
+            Assert.IsNotNull(wagonRecord, "vehicle departure must succeed: " + string.Join("; ", diag));
+            Assert.IsTrue(authority.IsOffMapVehicle(WagonId),
+                "with a live vehicle journey record, the outbound leg may start");
+        }
+
+        [Test]
+        public void Return_StartsReturnLegOnlyForReturnedJourney()
+        {
+            (_, OffMapJourneyAuthority authority, List<string> diag) = NewJourneyAuthority();
+
+            OffMapJourneyRecord wagonRecord = authority.DepartVehicle(
+                WagonId, "farmstead-f1", "Millbrook", 1, "Millbrook flour pickup",
+                new Dictionary<string, int>(), new List<string>(), Day,
+                _ => 0, (_, _) => null, diag);
+            Assert.IsNotNull(wagonRecord, "vehicle departure must succeed: " + string.Join("; ", diag));
+            int dueDay = wagonRecord.DueReturnDayIndex;
+            Assert.IsTrue(dueDay > Day, "a vehicle journey is a round trip with a future due day");
+
+            // Before the due day the journey is still Departed: no return leg.
+            List<OffMapJourneyRecord> early = authority.CompleteDueJourneys(dueDay - 1, null, diag);
+            Assert.AreEqual(0, early.Count, "nothing completes before the due day");
+            Assert.AreEqual(OffMapJourneyState.Departed, wagonRecord.State,
+                "while Departed, the return-leg gate is closed");
+            Assert.IsTrue(authority.IsOffMapVehicle(WagonId));
+
+            // On the due day the journey returns: only now may the return leg start.
+            List<OffMapJourneyRecord> done = authority.CompleteDueJourneys(dueDay, null, diag);
+            Assert.AreEqual(1, done.Count, string.Join("; ", diag));
+            Assert.AreEqual(OffMapJourneyState.Returned, wagonRecord.State,
+                "only a Returned journey opens the return leg");
+            Assert.IsFalse(authority.IsOffMapVehicle(WagonId),
+                "after the return, the wagon is home — the return leg has run, and no second leg starts");
         }
     }
 }

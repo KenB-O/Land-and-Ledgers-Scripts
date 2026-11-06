@@ -34,10 +34,13 @@
 // today and it will glide idle-posed; that is the asset gap, not a
 // controller failure.
 //
-// F5 note: arrival ends the leg with Idle + a [CoupledTransport] log.
-// The exit-arrival hide (views inactive, Ethan via his mover's hide path)
-// is F5's work — the coder verification point there confirms the exact
-// hide call before writing it; this controller does not hide anything.
+// F5: on the outbound leg the controller hides the trio at the exit
+// cell (views inactive, Ethan via AgentMover.HideImmediately through the
+// director — the mover's hide path, confirmed by the F5 verification
+// point; Ethan's root GameObject is never deactivated) and logs the exit
+// line. The return leg reactivates the trio at the exit cell (the
+// presentation controller's BeginCoupledReturn) and walks the reversed
+// path back to staging.
 using System.Collections.Generic;
 using LandLedgers.Population;
 using LandLedgers.World;
@@ -56,6 +59,7 @@ namespace LandLedgers.Economy.Transport
         private PopulationPathingDirector director;
         private int ethanPersonId = -1;
         private string legLabel = string.Empty;
+        private bool hideOnArrival;
         private float distanceTravelledMetres;
         private int lastEscortedWagonSegment = -1;
         private bool legActive;
@@ -76,6 +80,11 @@ namespace LandLedgers.Economy.Transport
         /// once) — the pair still moves; the escort is presentation, not
         /// the trip itself.
         /// </summary>
+        /// <param name="hideOnArrival">Slice F5: true on the outbound leg —
+        /// on arrival at the exit cell the trio leaves the map visually
+        /// (horse/wagon views inactive, Ethan hidden via his mover's hide
+        /// path) and the exit line is logged. False on the return leg,
+        /// which ends with the team idle at staging.</param>
         public bool StartLeg(
             IReadOnlyList<GridCoord> path,
             float cellSizeMetres,
@@ -85,7 +94,8 @@ namespace LandLedgers.Economy.Transport
             float turnSpeedDegreesPerSecond,
             PopulationPathingDirector director,
             int ethanPersonId,
-            string legLabel)
+            string legLabel,
+            bool hideOnArrival)
         {
             if (path == null || path.Count < 2)
             {
@@ -115,6 +125,7 @@ namespace LandLedgers.Economy.Transport
             this.director = director;
             this.ethanPersonId = ethanPersonId;
             this.legLabel = string.IsNullOrWhiteSpace(legLabel) ? "coupled leg" : legLabel;
+            this.hideOnArrival = hideOnArrival;
             distanceTravelledMetres = 0f;
             lastEscortedWagonSegment = -1;
             legActive = true;
@@ -189,7 +200,25 @@ namespace LandLedgers.Economy.Transport
                 GridCoord arrival = path[path.Count - 1];
                 legActive = false;
                 SetDriving(false);
-                Debug.Log($"[CoupledTransport] {legLabel} arrived at {arrival}; team idle.", this);
+                if (hideOnArrival)
+                {
+                    // Slice F5: the team leaves the map VISUALLY at the
+                    // exit cell. The journey record already says off-map
+                    // in state (from departure, day D); the visual exit
+                    // lands the same day. Ethan is hidden via his mover's
+                    // hide path (AgentMover.HideImmediately, through the
+                    // director) — his root GameObject is never deactivated,
+                    // so his mover state stays truthful and the return leg
+                    // can show him again at his current location.
+                    if (horseView != null) horseView.gameObject.SetActive(false);
+                    if (wagonView != null) wagonView.gameObject.SetActive(false);
+                    if (director != null && ethanPersonId >= 0) director.TryHidePerson(ethanPersonId);
+                    Debug.Log($"[CoupledTransport] team reached the map exit, {legLabel} continues.", this);
+                }
+                else
+                {
+                    Debug.Log($"[CoupledTransport] {legLabel} arrived at {arrival}; team idle.", this);
+                }
             }
         }
 

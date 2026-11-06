@@ -1,9 +1,12 @@
 using System.Collections.Generic;
 using LandLedgers.Animals;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Core;
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Pathing;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.World;
 using UnityEngine;
 
@@ -268,6 +271,164 @@ namespace LandLedgers.Economy.Transport
                     activeHorseView.transform.position = hitchingPost.transform.position + activeHorseView.transform.right * 0.35f;
                 activeHorseView.gameObject.GetComponent<TransportAnimatorState>()?.SetState(TransportVisualState.Idle);
             }
+        }
+
+        // Slice F5 (2026-11-06, Objective 25): visible departure + return.
+        //
+        // BeginCoupledDeparture starts the outbound leg ONLY on a real
+        // departure: SimulationDrivers calls it from
+        // TryDepartMillbrookShipment after the journey record is created
+        // and the save is synced — never from dispatch-task start,
+        // authorization alone, or the daily retry scan without a record.
+        // The gate is therefore the call site; this method additionally
+        // refuses a shipment with no usable route (the controller refuses
+        // a degenerate path as well), so a departure with an empty
+        // visiblePath moves nothing instead of teleporting.
+        //
+        // BeginCoupledReturn starts the return leg for a journey that
+        // completed today: SimulationDrivers calls it from
+        // ProcessFreightJourneyReturns for a returned vehicle record with
+        // a linked live shipment. The trio reactivates at the exit cell
+        // and walks the reversed path back to staging.
+        //
+        // Both methods read shipment/route state only and write nothing
+        // beyond the log lines and the presentation (transforms, animator
+        // states, view active flags, Ethan's mover visibility). No cash,
+        // lot, task, reservation, or shipment field is touched.
+        public bool BeginCoupledDeparture(LogisticsShipmentState shipment)
+        {
+            if (shipment?.RoutePlan?.VisiblePath == null || shipment.RoutePlan.VisiblePath.Count < 2)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to start the outbound leg for shipment '{shipment?.ShipmentId}': no usable visible path.", this);
+                return false;
+            }
+            CoupledTransportMovementController controller = ResolveMovementController();
+            if (controller == null) return false;
+            if (!ResolveMovementInputs(shipment, out float cellSize, out Vector3 origin,
+                    out float wagonSpeed, out float turnSpeed, out PopulationPathingDirector director, out int ethanId))
+            {
+                return false;
+            }
+
+            // The journey id rides on the shipment's location label
+            // ("off-map:<journeyId>", written at departure in step 8) —
+            // it names the journey in the exit log.
+            string journeyId = ParseOffMapJourneyId(shipment.physicalLocationId);
+            string legLabel = string.IsNullOrWhiteSpace(journeyId)
+                ? $"off-map journey for shipment '{shipment.ShipmentId}'"
+                : $"off-map journey '{journeyId}'";
+            return controller.StartLeg(shipment.RoutePlan.VisiblePath, cellSize, origin,
+                wagonSpeed, TransportPairPlacement.PairSeparationMetres, turnSpeed,
+                director, ethanId, legLabel, hideOnArrival: true);
+        }
+
+        public bool BeginCoupledReturn(LogisticsShipmentState shipment)
+        {
+            if (shipment?.RoutePlan?.VisiblePath == null || shipment.RoutePlan.VisiblePath.Count < 2)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to start the return leg for shipment '{shipment?.ShipmentId}': no usable visible path.", this);
+                return false;
+            }
+            CoupledTransportMovementController controller = ResolveMovementController();
+            if (controller == null) return false;
+            if (!ResolveMovementInputs(shipment, out float cellSize, out Vector3 origin,
+                    out float wagonSpeed, out float turnSpeed, out PopulationPathingDirector director, out int ethanId))
+            {
+                return false;
+            }
+
+            // Reactivate the trio where the outbound leg left them: the
+            // exit cell (first cell of the reversed path). Ethan comes back
+            // via his mover's show path, at his current location — the
+            // last escort waypoint, by the exit.
+            var reversed = new List<GridCoord>(shipment.RoutePlan.VisiblePath);
+            reversed.Reverse();
+            if (activeHorseView != null) activeHorseView.gameObject.SetActive(true);
+            if (activeWagonView != null) activeWagonView.gameObject.SetActive(true);
+            if (director != null && ethanId >= 0) director.TryShowPersonAtCurrentLocation(ethanId);
+            Debug.Log($"[CoupledTransport] team re-entered at {reversed[0]}, returning to staging.", this);
+            return controller.StartLeg(reversed, cellSize, origin,
+                wagonSpeed, TransportPairPlacement.PairSeparationMetres, turnSpeed,
+                director, ethanId, $"return leg for shipment '{shipment.ShipmentId}'", hideOnArrival: false);
+        }
+
+        private CoupledTransportMovementController ResolveMovementController()
+        {
+            if (transportGroup == null)
+            {
+                Debug.LogWarning("[CoupledTransport] Refused to start a leg: no transport group exists.", this);
+                return null;
+            }
+            CoupledTransportMovementController controller =
+                transportGroup.GetComponent<CoupledTransportMovementController>();
+            if (controller == null)
+                controller = transportGroup.gameObject.AddComponent<CoupledTransportMovementController>();
+            return controller;
+        }
+
+        private bool ResolveMovementInputs(LogisticsShipmentState shipment,
+            out float cellSizeMetres, out Vector3 gridOrigin,
+            out float wagonSpeedMetresPerSecond, out float turnSpeedDegreesPerSecond,
+            out PopulationPathingDirector director, out int ethanPersonId)
+        {
+            cellSizeMetres = 0f;
+            gridOrigin = Vector3.zero;
+            wagonSpeedMetresPerSecond = 0f;
+            turnSpeedDegreesPerSecond = 0f;
+            director = null;
+            ethanPersonId = -1;
+
+            TownWorldController townWorld = FindAnyObjectByType<TownWorldController>();
+            if (townWorld == null || townWorld.Grid == null)
+            {
+                Debug.LogWarning("[CoupledTransport] Refused to start a leg: no town world grid.", this);
+                return false;
+            }
+            cellSizeMetres = townWorld.Grid.CellSizeMeters;
+            // Flat presentation height, matching the LRM sampler
+            // (TrySampleVisibleShipment passes 0.08 m).
+            gridOrigin = new Vector3(townWorld.Grid.Origin.x, 0.08f, townWorld.Grid.Origin.z);
+
+            // Authored speeds from the live PathingSettings when present;
+            // a fresh instance carries the same authored defaults (2.2 m/s,
+            // 720 deg/s), so the fallback invents nothing.
+            PathingSettings settings = FindAnyObjectByType<PathingManager>()?.Settings ?? new PathingSettings();
+            wagonSpeedMetresPerSecond = settings.logisticsLoadedWagonSpeedMetersPerSecond;
+            turnSpeedDegreesPerSecond = settings.turnSpeedDegreesPerSecond;
+
+            director = FindAnyObjectByType<PopulationPathingDirector>();
+            ethanPersonId = ParsePersonId(shipment?.physicalDriverPersonId);
+            if (director == null || ethanPersonId < 0)
+            {
+                Debug.LogWarning("[CoupledTransport] No director or driver person resolved for the escort; the pair moves without Ethan.", this);
+                director = null;
+                ethanPersonId = -1;
+            }
+            return true;
+        }
+
+        private static string ParseOffMapJourneyId(string physicalLocationId)
+        {
+            const string prefix = "off-map:";
+            if (string.IsNullOrWhiteSpace(physicalLocationId)
+                || !physicalLocationId.StartsWith(prefix, System.StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+            return physicalLocationId.Substring(prefix.Length);
+        }
+
+        private static int ParsePersonId(string driverPersonId)
+        {
+            if (string.IsNullOrWhiteSpace(driverPersonId)) return -1;
+            // EntityId.ToString is "<kind prefix><id>" (e.g. "P7") — the
+            // same shape FreightProductionDriver.TryParseWithKind reads.
+            if (!EntityKindCatalog.TryGetPrefix(EntityKind.Person, out string prefix)
+                || !driverPersonId.StartsWith(prefix, System.StringComparison.Ordinal))
+            {
+                return -1;
+            }
+            return int.TryParse(driverPersonId.Substring(prefix.Length), out int id) ? id : -1;
         }
 
         private bool IsAttachedToWagon(AnimalState horse)

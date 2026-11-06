@@ -434,16 +434,38 @@ namespace LandLedgers.Economy.BreadDrivers
             result.NotionsNeedUnits = Math.Max(0, batchesToday - result.NotionsUnitsFed);
 
             // Per-batch economics, logged whenever a batch is planned today:
-            // flour cost vs wholesale revenue, margin visible, never hidden.
-            // The missing B2B flour price term is recorded in Plan 02 §5.
+            // the TRUE cost — flour + notions — vs wholesale revenue, margin
+            // visible, never hidden. Plan 10 E5 (reporting only): the old
+            // flour-only line understated the loss by the notions cost (58c
+            // vs 48c = -10c); the true cost is 68c vs 48c = -20c/batch. No
+            // price, cost, quantity, or decision changes here — the margin
+            // investigation itself (B4) stays separate work. When the
+            // notions registration is absent (unwired notions) the line
+            // states the notions cost as unknown rather than 0, labels the
+            // flour-only figure as such, and prints no margin; a
+            // zero/negative notions price is treated as unknown, never as
+            // free notions. The missing B2B flour price term is recorded
+            // in Plan 02 §5.
             if (batchesToday > 0 && flourCostPerBatchCents.HasValue)
             {
                 int accountPrice = AccountPricePerUnit(bakery, inputs.StoreBusinessId);
                 if (accountPrice > 0)
                 {
                     int revenuePerBatch = BakeryBreadCatalog.BreadYieldPerBatch * accountPrice;
-                    int margin = revenuePerBatch - flourCostPerBatchCents.Value;
-                    diag.Add($"BakeryWholesaleDailyDriver: per-batch economics — flour {flourCostPerBatchCents.Value}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), margin {margin}c/batch; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
+                    int? notionsCostPerBatchCents = inputs.NotionsRegistration != null
+                        && inputs.NotionsRegistration.UnitGoodsCostCents > 0
+                        ? (int?)(BakeryBreadCatalog.StandardNotionsPerBatch * inputs.NotionsRegistration.UnitGoodsCostCents)
+                        : null;
+                    if (notionsCostPerBatchCents.HasValue)
+                    {
+                        int trueCostPerBatch = flourCostPerBatchCents.Value + notionsCostPerBatchCents.Value;
+                        int margin = revenuePerBatch - trueCostPerBatch;
+                        diag.Add($"BakeryWholesaleDailyDriver: per-batch economics — flour {flourCostPerBatchCents.Value}c + notions {notionsCostPerBatchCents.Value}c = {trueCostPerBatch}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), margin {margin}c/batch; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
+                    }
+                    else
+                    {
+                        diag.Add($"BakeryWholesaleDailyDriver: per-batch economics (flour only — notions cost unknown, no notions registration) — flour {flourCostPerBatchCents.Value}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), no margin stated; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
+                    }
                 }
             }
 

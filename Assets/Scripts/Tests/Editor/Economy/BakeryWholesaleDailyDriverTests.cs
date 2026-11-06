@@ -616,8 +616,10 @@ namespace LandLedgers.Editor.Economy
             string diag = string.Join(" | ", s.Diag);
             Assert.IsTrue(diag.Contains("BakeryFlourLocalPurchase: 2 sack(s) of flour (20 lb)"),
                 "diagnostics name the flour purchase; diag: " + diag);
-            Assert.IsTrue(diag.Contains("per-batch economics") && diag.Contains("margin -10c/batch"),
-                "diagnostics name the per-batch margin line (58c flour vs 48c revenue); diag: " + diag);
+            Assert.IsTrue(diag.Contains("per-batch economics") && diag.Contains("notions cost unknown"),
+                "diagnostics name the per-batch economics line with the notions cost unknown (no registration — Plan 10 E5); diag: " + diag);
+            Assert.IsFalse(diag.Contains("margin -10c/batch"),
+                "the flour-only margin must no longer be printed when the notions cost is unknown; diag: " + diag);
         }
 
         [Test]
@@ -741,6 +743,66 @@ namespace LandLedgers.Editor.Economy
             BookAccount(baked, 24, 1, 2, 2);
             BakeryWholesaleDailyResult bakedResult = BakeryWholesaleDailyDriver.RunDay(InputsFor(baked, 2), baked.Diag);
             Assert.AreEqual(1, bakedResult.BatchesBaked, "no budget supplied — the gate is inactive, bake proceeds");
+        }
+
+        [Test]
+        public void EconomicsLine_WithNotionsRegistration_StatesTrueMargin()
+        {
+            // Plan 10 E5: registration present (10c/unit from the catalog)
+            // — the line carries the true cost: flour 58c + notions 10c =
+            // 68c vs 48c revenue, margin -20c/batch (not the flour-only
+            // -10c). Reporting only: no price, cost, or decision changes.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.NotionsRegistration = new Series2CounterpartyRegistration
+            {
+                SupplierId = "notions-supplier",
+                SupplierName = "Notions Supplier",
+                SkuId = BakeryFlourSupply.NotionsMaterialId,
+                UnitGoodsCostCents = 10,
+                TransitDays = 14,
+            };
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+            Assert.AreEqual(1, result.BatchesBaked);
+            string diag = string.Join(" | ", s.Diag);
+            Assert.IsTrue(diag.Contains("flour 58c + notions 10c = 68c/batch"),
+                "line states the true per-batch cost; diag: " + diag);
+            Assert.IsTrue(diag.Contains("margin -20c/batch"),
+                "line states the true margin; diag: " + diag);
+        }
+
+        [Test]
+        public void EconomicsLine_NotionsPriceZero_TreatedAsUnknown()
+        {
+            // Plan 10 E5: a zero notions price is treated as unknown —
+            // never as free notions — so no margin is printed.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.NotionsRegistration = new Series2CounterpartyRegistration
+            {
+                SupplierId = "notions-supplier",
+                SupplierName = "Notions Supplier",
+                SkuId = BakeryFlourSupply.NotionsMaterialId,
+                UnitGoodsCostCents = 0,
+                TransitDays = 14,
+            };
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+            Assert.AreEqual(1, result.BatchesBaked);
+            string diag = string.Join(" | ", s.Diag);
+            Assert.IsTrue(diag.Contains("notions cost unknown"),
+                "a zero notions price is unknown, never free; diag: " + diag);
+            Assert.IsFalse(diag.Contains("margin -20c/batch") || diag.Contains("margin -10c/batch"),
+                "no margin is printed when the notions cost is unknown; diag: " + diag);
         }
 
         [Test]

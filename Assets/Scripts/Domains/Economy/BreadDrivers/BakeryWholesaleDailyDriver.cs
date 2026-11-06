@@ -104,6 +104,10 @@ namespace LandLedgers.Economy.BreadDrivers
         public int FlourPoundsPurchased;
         /// <summary>Millbrook reorder lot id placed today, if any (Plan 02 slice 2B).</summary>
         public string MillbrookReorderLotId;
+        /// <summary>Whole sacks the Millbrook reorder placed today covers (Plan 02 slice 2B / Plan 10 E1).
+        /// The forwarder's M4 registration subtracts these from FlourNeedSacks, so flour already covered by
+        /// a placed reorder is never registered a second time as an unmet need.</summary>
+        public int MillbrookReorderSacks;
         /// <summary>Notion units fed to the bin from arrived store lots today (Plan 04 N-slice).</summary>
         public int NotionsUnitsFed;
         /// <summary>Notion units ordered today for the pipeline (Plan 04 N-slice).</summary>
@@ -156,7 +160,10 @@ namespace LandLedgers.Economy.BreadDrivers
         /// unmet needs to registered business input needs, in the shape
         /// the SimulationDrivers forwarder registers with SBRM after
         /// RunDay. Only needs with units &gt; 0 are returned. Flour is the
-        /// remaining shortfall in whole sacks; notions are the remaining
+        /// remaining shortfall in whole sacks, minus any sacks already
+        /// covered by a Millbrook reorder placed today (E1: the order is
+        /// placed, the lot waits on freight — registering it again would
+        /// double-count the demand); notions are the remaining
         /// shortfall in units. Fuel is NOT mapped: the driver computes no
         /// fuel need (NB-3/D-2/D-7 — no fuel supply route, no
         /// IntakeUnitsPerBakeryUnit). MaxPrice is unset (0): the driver
@@ -173,14 +180,22 @@ namespace LandLedgers.Economy.BreadDrivers
 
             if (result.FlourNeedSacks > 0)
             {
-                needs.Add(new BusinessInputNeed
+                // Plan 10 E1 (M4): sacks already covered by a Millbrook
+                // reorder placed today are not an unmet need — the order
+                // is placed, the lot waits on the freight pipeline, and
+                // registering it again would double-count the demand.
+                int uncoveredSacks = Math.Max(0, result.FlourNeedSacks - result.MillbrookReorderSacks);
+                if (uncoveredSacks > 0)
                 {
-                    BuyerBusinessInstanceId = bakeryBusinessId,
-                    InputCategoryId = BakeryFlourLocalPurchase.FlourItemId,
-                    UnitsNeeded = result.FlourNeedSacks,
-                    MaxPriceCentsPerUnit = 0,
-                    ReasonSummary = $"bakery wholesale flour for {result.BatchesPlanned} batch(es), short {result.FlourNeedPoundsRemaining} lb",
-                });
+                    needs.Add(new BusinessInputNeed
+                    {
+                        BuyerBusinessInstanceId = bakeryBusinessId,
+                        InputCategoryId = BakeryFlourLocalPurchase.FlourItemId,
+                        UnitsNeeded = uncoveredSacks,
+                        MaxPriceCentsPerUnit = 0,
+                        ReasonSummary = $"bakery wholesale flour for {result.BatchesPlanned} batch(es), short {result.FlourNeedPoundsRemaining} lb",
+                    });
+                }
             }
 
             if (result.NotionsNeedUnits > 0)
@@ -322,9 +337,45 @@ namespace LandLedgers.Economy.BreadDrivers
                     diag.Add($"BakeryWholesaleDailyDriver: recommended source {comparison.Recommended.DisplayName} is not a local counter purchase — no flour bought locally today.");
                 }
 
+                // Plan 10 E1 (slice 2B remainder): the store could not
+                // cover the need — order the remaining sacks from
+                // Millbrook through the same paid-lot authority the
+                // opening order uses. The lot enters the existing freight
+                // pipeline (negotiation finds it via FindShippableLot);
+                // the bake today proceeds on whatever flour arrived, and
+                // any remaining shortfall is the loud Precheck refusal.
+                // The driver has no owner name; the buyer business id is
+                // the honest identifier on the cash transaction.
+                if (needLb > 0 && inputs.MillbrookSupplier != null && inputs.BakeryCashPort != null)
+                {
+                    int sacksRemaining = (needLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
+                    string reorderRefusal = MillbrookFlourReorder.PlaceReorder(
+                        inputs.MillbrookSupplier, inputs.BakeryCashPort, inputs.BakeryBusinessId,
+                        inputs.BakeryBusinessId, sacksRemaining, dayIndex, diag, out OffMapAidCargoLot reorderLot);
+                    if (reorderRefusal == null && reorderLot != null)
+                    {
+                        result.MillbrookReorderLotId = reorderLot.LotId;
+                        result.MillbrookReorderSacks = reorderLot.PackageUnits;
+                        // needLb is deliberately NOT decremented: the
+                        // result keeps the raw shortfall after the local
+                        // purchase, and BuildInputNeeds subtracts the
+                        // covered sacks when registering the M4 need.
+                        diag.Add($"BakeryWholesaleDailyDriver: Millbrook reorder placed — lot '{reorderLot.LotId}' " +
+                            $"({reorderLot.PackageUnits} sack(s), {reorderLot.InventoryUnits} lb) enters the freight pipeline; " +
+                            $"flour arrives after pickup + return, not today.");
+                    }
+                    else
+                    {
+                        diag.Add($"BakeryWholesaleDailyDriver: Millbrook reorder refused — {reorderRefusal}");
+                    }
+                }
+
                 if (needLb > 0)
                 {
-                    diag.Add($"BakeryWholesaleDailyDriver: flour still short {needLb} lb for today's {batchesToday} batch(es) after local purchase — the bake will refuse at Precheck unless a Millbrook reorder covers it (slice 2B).");
+                    diag.Add($"BakeryWholesaleDailyDriver: flour still short {needLb} lb for today's {batchesToday} batch(es) after local purchase" +
+                        (string.IsNullOrWhiteSpace(result.MillbrookReorderLotId)
+                            ? " — the bake will refuse at Precheck unless flour arrives."
+                            : $" — Millbrook reorder '{result.MillbrookReorderLotId}' is outstanding and will cover it once the freight pipeline delivers; the bake will refuse at Precheck today."));
                 }
             }
             else if (batchesToday > 0)

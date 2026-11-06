@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
@@ -617,6 +618,99 @@ namespace LandLedgers.Editor.Economy
                 "diagnostics name the flour purchase; diag: " + diag);
             Assert.IsTrue(diag.Contains("per-batch economics") && diag.Contains("margin -10c/batch"),
                 "diagnostics name the per-batch margin line (58c flour vs 48c revenue); diag: " + diag);
+        }
+
+        [Test]
+        public void MillbrookReorder_CoversRemainder_BakeRefusesOnFlour_M4SkipsCoveredSacks()
+        {
+            // Plan 10 E1 (Plan 02 §7 driver remainder): account booked
+            // (24/daily/2c, due day 2), bin empty, store holds 1 sack @
+            // 29c, Millbrook holds 23 sacks @ 48c with freight
+            // unavailable (no shipment has departed — the reorder is a
+            // paid lot waiting on the freight pipeline, not a dispatch).
+            // The driver buys the 1 store sack (10 lb), places a
+            // Millbrook reorder for the remaining 1 sack, and the bake
+            // refuses at Precheck naming flour 10 lb vs 12 lb. The M4
+            // registration must NOT re-register the covered sack.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 1);
+            BookAccount(s, 24, 1, 2, 2);
+
+            // Millbrook supplier built in code (the harness has no
+            // Resources shim): values copied from
+            // MillbrookGrainCo.asset (230 lb starting, 48c/sack, 10 lb
+            // per sack, 18 bakery units per sack).
+            var millbrookDefinition = new OffMapAidBusinessDefinition
+            {
+                BusinessId = "millbrook_grain_co",
+                DisplayName = "Millbrook Grain Co.",
+                PickupRouteMilesFromTown = 50f,
+                Inventory = new List<OffMapAidInventoryRow>
+                {
+                    new OffMapAidInventoryRow
+                    {
+                        ItemId = "bakery_flour_sack",
+                        DisplayName = "Flour",
+                        InventoryUnit = "lb",
+                        StartingUnits = 230,
+                        OrderUnit = "10 lb sack",
+                        InventoryUnitsPerOrderUnit = 10,
+                        BakeryUnitsPerOrderUnit = 18,
+                        OrderPriceCents = 48,
+                    },
+                },
+            };
+            var supplier = new OffMapAidBusinessRuntime(millbrookDefinition);
+
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.MillbrookSupplier = supplier;
+            inputs.MillbrookQuote = new MillbrookFlourQuote
+            {
+                SacksAvailable = 23,
+                GoodsPricePerSackCents = 48,
+                OneWayMiles = 50f,
+                FreightQuoteCents = 125,
+                FreightAvailable = false,
+                FreightUnavailableReason = "freight blocked: no Millbrook shipment has departed",
+            };
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+
+            Assert.AreEqual(1, result.BatchesPlanned);
+            Assert.AreEqual(1, result.FlourSacksPurchased, "1 store sack bought locally");
+            Assert.AreEqual(10, result.FlourPoundsPurchased);
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(result.MillbrookReorderLotId),
+                "the reorder lot id is recorded on the result");
+            Assert.IsTrue(result.MillbrookReorderLotId.Contains("flour-reorder-d2-n1"),
+                "lot id names the reorder; lot id: " + result.MillbrookReorderLotId);
+            Assert.AreEqual(1, result.MillbrookReorderSacks);
+            Assert.AreEqual(0, result.BatchesBaked, "10 lb cannot bake a 12 lb batch");
+            Assert.IsTrue(result.Refusal != null && result.Refusal.Contains("flour 10 lb on hand, need 12 lb"),
+                "Precheck refuses naming flour 10 vs 12 lb; refusal: " + result.Refusal);
+            Assert.AreEqual(1, supplier.Lots.Count, "exactly one reorder lot");
+            Assert.AreEqual(220, supplier.GetInventoryUnits("bakery_flour_sack"), "Millbrook 230 - 10 lb");
+            Assert.AreEqual(1923, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 29c local - 48c reorder");
+            Assert.AreEqual(5029, s.StoreRuntime.CurrentCashCents, "store 5,000 + 29c local flour");
+            Assert.AreEqual(2, result.FlourNeedPoundsRemaining, "raw shortfall kept: 12 - 10 lb");
+            Assert.AreEqual(1, result.FlourNeedSacks);
+
+            List<BusinessInputNeed> needs = BakeryWholesaleDailyDriver.BuildInputNeeds(result, BakeryInstanceId);
+            foreach (var need in needs)
+                Assert.AreNotEqual(BakeryFlourLocalPurchase.FlourItemId, need.InputCategoryId,
+                    "the covered flour sack is not re-registered as an unmet need");
+
+            // Repeated same-day call: the outstanding reorder covers the
+            // lead batch's remaining need, so no second reorder is placed
+            // and no cash moves twice.
+            BakeryWholesaleDailyResult second = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+            // NOTE: the second call uses the base inputs (MillbrookSupplier
+            // null) — the no-second-reorder guard is pinned at the
+            // MillbrookFlourReorder level by
+            // PlaceReorder_OutstandingLotBlocksDuplicate_RefusalNamesTheLot.
+            Assert.AreEqual(1, supplier.Lots.Count, "still exactly one reorder lot");
+            Assert.AreEqual(1923, s.BakeryRuntime.CurrentCashCents, "cash unchanged by the second call");
         }
 
         [Test]

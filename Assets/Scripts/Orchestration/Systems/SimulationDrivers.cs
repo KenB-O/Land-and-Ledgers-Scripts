@@ -2986,9 +2986,13 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            OffMapAidCargoLot lot = millbrookAidRuntime.Lots.FirstOrDefault(candidate => candidate != null
-                && string.Equals(candidate.LotId, "aidlot-millbrook_grain_co:opening-flour-b1", StringComparison.Ordinal)
-                && string.Equals(candidate.BuyerBusinessId, bakery.InstanceId, StringComparison.Ordinal));
+            // Plan 10 E1 (slice 2B): the negotiation ships the oldest
+            // uncommitted, unreceived paid lot for this bakery — the
+            // opening lot while it is still uncommitted, a reorder lot
+            // after it. The request id derives from the lot, never from
+            // the opening-order constant, so a second haul opens a
+            // second request.
+            OffMapAidCargoLot lot = MillbrookFlourReorder.FindShippableLot(millbrookAidRuntime, bakery.InstanceId);
             if (lot == null || lot.SourceCommitted || lot.Received)
             {
                 string lotState = lot == null
@@ -2999,7 +3003,7 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             FreightServiceAgreementBook book = FreightProduction.ServiceAgreements;
-            const string requestId = "freight-request:opening-flour-b1";
+            string requestId = "freight-request:" + lot.OrderId;
             FreightServiceRequest request = book.FindRequest(requestId);
             if (request == null)
             {
@@ -3019,7 +3023,7 @@ namespace LandLedgers.Orchestration.Systems
                     CargoSkuId = lot.SkuId,
                     Quantity = lot.PackageUnits,
                     QuantityUnit = lot.OrderUnit,
-                    RequestedService = "One-time collection of the paid Millbrook flour lot and delivery to Bakery B1",
+                    RequestedService = "Collection of the paid Millbrook flour lot " + lot.LotId + " and delivery to Bakery B1",
                     IsRecurring = false
                 };
                 string createRefusal = book.CreateRequest(request, out FreightServiceRequest duplicate);

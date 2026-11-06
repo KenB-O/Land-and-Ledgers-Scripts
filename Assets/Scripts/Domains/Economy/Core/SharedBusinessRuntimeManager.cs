@@ -5412,30 +5412,21 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
-            int pendingUnits = stock.PendingReorderUnits;
-            int receivedFromPending = pendingUnits > 0
-                ? business.RuntimeState.ReceivePendingReorderUnits(inputCategoryId, Mathf.Min(affordableUnits, pendingUnits))
-                : 0;
-            int directUnits = affordableUnits - receivedFromPending;
-            int receivedDirect = directUnits > 0 ? business.RuntimeState.AddCategoryStockUnits(inputCategoryId, directUnits) : 0;
-            int receivedUnits = receivedFromPending + receivedDirect;
-            int spend = receivedUnits * unitCost;
-            if (spend > 0)
-            {
-                business.RuntimeState.SpendCents(spend);
-                business.RuntimeState.RecordWeeklyInputProcurement(receivedUnits, spend);
-            }
-
-            if (receivedUnits > 0)
-            {
-                RemoveBlockedReason(blockedReasons, $"no recurring local supplier: {inputCategoryId}");
-                RemoveBlockedReason(blockedReasons, $"failed recurring local order: {inputCategoryId}");
-            }
-
-            if (receivedUnits < desiredUnits)
-            {
-                blockedReasons?.Add($"cash-limited input procurement: {inputCategoryId} (reserve {FormatMoney(reserve)})");
-            }
+            // M1 (Plan 04, D-S1; Note-24): procurement without a named
+            // supplier refuses loudly and never conjures. The pure helper
+            // receives from pending only and spends exactly the pending
+            // cost; any shortfall keeps the missing-supplier reason.
+            // (SBRM is harness-excluded; the helper is the executable
+            // seam — see SharedBusinessWeeklyConverterTests M1 tests.)
+            int receivedUnits = SharedBusinessWeeklyProcurement.ApplyWeeklyInputProcurement(
+                business.RuntimeState,
+                inputCategoryId,
+                desiredUnits,
+                affordableUnits,
+                unitCost,
+                $"no recurring local supplier: {inputCategoryId}",
+                $"cash-limited input procurement: {inputCategoryId} (reserve {FormatMoney(reserve)})",
+                blockedReasons);
 
             return receivedUnits;
         }

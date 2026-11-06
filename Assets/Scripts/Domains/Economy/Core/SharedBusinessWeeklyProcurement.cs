@@ -1,0 +1,99 @@
+using System.Collections.Generic;
+using LandLedgers.Economy;
+using UnityEngine;
+
+namespace LandLedgers.Economy.Core
+{
+    /// <summary>
+    /// Plan 04 (2026-11-06) slice M1 (Obj 43, D-S1): the weekly
+    /// input-procurement decision, extracted from
+    /// SharedBusinessRuntimeManager.ProcureInputsForWeeklyOperation so
+    /// the M1 assertions are executable in the Roslyn harness (SBRM is
+    /// harness-excluded; this helper is the executable seam, and the
+    /// converter tests run against it). SBRM delegates to
+    /// ApplyWeeklyInputProcurement and applies nothing else.
+    ///
+    /// M1 RULE (Note-24): procurement without a named supplier refuses
+    /// loudly and never conjures. Only units covered by a pending
+    /// reorder reservation are received, and exactly the pending cost
+    /// is spent (pending receipt is costed — the M0 trace: pending is
+    /// set only by the weekly cadence refresh with no cash movement,
+    /// and ProcureInputsForWeeklyOperation's spend line is the single
+    /// payment). Any shortfall the pending could not cover keeps the
+    /// missing-supplier blocked reason; this method NEVER removes it —
+    /// a pending receipt proves a reorder reservation existed, not
+    /// that a supplier exists. When cash (not pending) is the binding
+    /// constraint, the cash-limited reason names it instead (or as
+    /// well). M6 folds this helper into SharedBusinessWeeklyConverter
+    /// or keeps it as its procurement delegate.
+    ///
+    /// Contract: desiredUnits / affordableUnits / unitCost are computed
+    /// by the caller (SBRM still owns CalculateSurvivalInputProcurement
+    /// Units, the landed-cost lookup, the reserve/budget math). The
+    /// caller passes both reason strings preformatted. blockedReasons
+    /// is appended to, never pruned by this method.
+    /// </summary>
+    public static class SharedBusinessWeeklyProcurement
+    {
+        public static int ApplyWeeklyInputProcurement(
+            BusinessRuntimeState runtime,
+            string categoryId,
+            int desiredUnits,
+            int affordableUnits,
+            int unitCost,
+            string missingSupplierReason,
+            string cashLimitedReason,
+            List<string> blockedReasons)
+        {
+            if (runtime == null
+                || string.IsNullOrWhiteSpace(categoryId)
+                || desiredUnits <= 0
+                || affordableUnits <= 0
+                || unitCost <= 0)
+            {
+                return 0;
+            }
+
+            CategoryStockState stock = runtime.GetCategoryStock(categoryId);
+            if (stock == null)
+            {
+                return 0;
+            }
+
+            // STEP B (M1 fix): receive from pending ONLY. There is no
+            // direct-conjure branch: units no pending reservation covers
+            // are refused, not created. (Note-24.)
+            int receivedUnits = stock.PendingReorderUnits > 0
+                ? runtime.ReceivePendingReorderUnits(categoryId, Mathf.Min(affordableUnits, stock.PendingReorderUnits))
+                : 0;
+            int spend = receivedUnits * unitCost;
+            if (spend > 0)
+            {
+                runtime.SpendCents(spend);
+                runtime.RecordWeeklyInputProcurement(receivedUnits, spend);
+            }
+
+            // The missing-supplier reason is NEVER removed by this
+            // method: a pending receipt proves a reorder reservation
+            // existed, not that a supplier exists. A shortfall is
+            // diagnosed honestly — when pending (not cash) is the
+            // binding constraint the missing-supplier reason is kept;
+            // when cash binds, the cash-limited reason names it
+            // instead (or as well, when both bind).
+            if (receivedUnits < desiredUnits)
+            {
+                if (receivedUnits < Mathf.Min(desiredUnits, affordableUnits))
+                {
+                    blockedReasons?.Add(missingSupplierReason);
+                }
+
+                if (affordableUnits < desiredUnits)
+                {
+                    blockedReasons?.Add(cashLimitedReason);
+                }
+            }
+
+            return receivedUnits;
+        }
+    }
+}

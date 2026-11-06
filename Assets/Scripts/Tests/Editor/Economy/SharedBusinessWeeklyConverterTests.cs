@@ -27,12 +27,14 @@ namespace LandLedgers.Editor.Economy
     /// RecordedSeamStrings — they do NOT execute SBRM; M3 makes the seam
     /// executable and M6 the converter.
     ///
-    /// M1-OWNED ASSERTIONS ARE NOT IN THIS FILE (coordinator amendment):
-    /// the conjure tests (Procurement_NoPendingNoSupplier_RefusesWith
-    /// StockAndCashUnchanged, Procurement_PendingCovered_ReceivesPending
-    /// Only, Procurement_NeverRemovesMissingSupplierReason) land in M1,
-    /// written fail-first in the working tree and flipped by the fix
-    /// (the F2 precedent). M0 commits only passing characterization.
+    /// M1-OWNED ASSERTIONS (landed in M1, 2026-11-06): the three
+    /// Procurement_* tests below run against the extracted pure helper
+    /// SharedBusinessWeeklyProcurement (SBRM is harness-excluded, so
+    /// the helper is the executable seam — the F2 precedent). Written
+    /// fail-first in the working tree against a Step A transcription
+    /// of the pre-M1 conjuring behaviour (all three failed), then
+    /// flipped by the Step B fix. M0 committed only passing
+    /// characterization tests, per the coordinator amendment.
     /// Unity compilation, Test Runner, PlayMode, and SBRM itself are NOT
     /// claimed; SBRM edits are source-reviewed only.
     /// </summary>
@@ -276,6 +278,88 @@ namespace LandLedgers.Editor.Economy
                 "the spend the converter's summary line reads is recorded");
             runtime.RecordWeeklyInputProcurement(4, 80);
             Assert.AreEqual(200, runtime.LastWeeklyInputProcurementSpendCents, "spend accumulates within the week");
+        }
+
+        [Test]
+        public void Procurement_NoPendingNoSupplier_RefusesWithStockAndCashUnchanged()
+        {
+            // M1 (Obj 43, D-S1; Note-24): procurement without a named
+            // supplier refuses loudly and never conjures. Fail-first:
+            // this test FAILED against the Step A transcription (the
+            // helper conjured 10 units, stock 20, cash 4000) and passes
+            // once Step B deletes the direct-conjure branch.
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity("farm-1");
+            runtime.SetCurrentCashCents(5000);
+            runtime.EnsureCategoryStock("crop_food", 10, 100);
+            var blocked = new List<string>();
+
+            int received = SharedBusinessWeeklyProcurement.ApplyWeeklyInputProcurement(
+                runtime, "crop_food", 10, 10, 100,
+                "no recurring local supplier: crop_food",
+                "cash-limited input procurement: crop_food (reserve $0.00)",
+                blocked);
+
+            Assert.AreEqual(0, received, "no pending and no supplier: nothing is procured");
+            Assert.AreEqual(10, runtime.GetCategoryStock("crop_food").CurrentStockUnits, "stock unchanged — nothing conjured");
+            Assert.AreEqual(5000, runtime.CurrentCashCents, "cash unchanged — nothing spent on conjured stock");
+            Assert.AreEqual(0, runtime.LastWeeklyInputProcurementSpendCents, "no procurement spend recorded");
+            Assert.IsTrue(blocked.Contains("no recurring local supplier: crop_food"), "the missing-supplier reason is present");
+        }
+
+        [Test]
+        public void Procurement_PendingCovered_ReceivesPendingOnly()
+        {
+            // M1: pending receipt still works and is costed exactly once
+            // (6 x 100 = 600); the 4-unit shortfall stays blocked.
+            // Fail-first: the Step A body conjured the remaining 4
+            // (received 10, stock 20, cash 4000).
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity("farm-1");
+            runtime.SetCurrentCashCents(5000);
+            runtime.EnsureCategoryStock("crop_food", 10, 100);
+            runtime.GetCategoryStock("crop_food").SetPendingReorderUnits(6);
+            var blocked = new List<string>();
+
+            int received = SharedBusinessWeeklyProcurement.ApplyWeeklyInputProcurement(
+                runtime, "crop_food", 10, 10, 100,
+                "no recurring local supplier: crop_food",
+                "cash-limited input procurement: crop_food (reserve $0.00)",
+                blocked);
+
+            Assert.AreEqual(6, received, "receives exactly the pending units");
+            Assert.AreEqual(16, runtime.GetCategoryStock("crop_food").CurrentStockUnits, "10 + 6 pending, nothing conjured beyond");
+            Assert.AreEqual(0, runtime.GetCategoryStock("crop_food").PendingReorderUnits, "the pending reservation is consumed");
+            Assert.AreEqual(4400, runtime.CurrentCashCents, "spends exactly the pending cost: 6 x 100");
+            Assert.AreEqual(600, runtime.LastWeeklyInputProcurementSpendCents, "the pending spend is recorded once");
+            Assert.IsTrue(blocked.Contains("no recurring local supplier: crop_food"), "the 4-unit shortfall is still blocked");
+        }
+
+        [Test]
+        public void Procurement_NeverRemovesMissingSupplierReason()
+        {
+            // M1: this method NEVER removes the missing-supplier reason.
+            // A pending receipt proves a reorder reservation existed, not
+            // that a supplier exists — so even a fully-covered desire
+            // leaves the reason standing for the recurring-orders path
+            // to clear when a supplier is actually found. Fail-first:
+            // the Step A body removed the reason on any receipt.
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity("farm-1");
+            runtime.SetCurrentCashCents(5000);
+            runtime.EnsureCategoryStock("crop_food", 10, 100);
+            runtime.GetCategoryStock("crop_food").SetPendingReorderUnits(6);
+            var blocked = new List<string> { "no recurring local supplier: crop_food" };
+
+            int received = SharedBusinessWeeklyProcurement.ApplyWeeklyInputProcurement(
+                runtime, "crop_food", 6, 10, 100,
+                "no recurring local supplier: crop_food",
+                "cash-limited input procurement: crop_food (reserve $0.00)",
+                blocked);
+
+            Assert.AreEqual(6, received, "pending covers the whole desire");
+            Assert.IsTrue(blocked.Contains("no recurring local supplier: crop_food"),
+                "the reason is still present after a successful pending receipt");
         }
 
         [Test]

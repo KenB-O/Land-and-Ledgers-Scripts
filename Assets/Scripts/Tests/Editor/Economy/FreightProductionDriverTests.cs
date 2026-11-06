@@ -1,14 +1,16 @@
 using System;
 using System.Collections.Generic;
-using NUnit.Framework;
+using LandLedgers.Animals;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Logistics;
+using LandLedgers.Economy.Transport;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using NUnit.Framework;
 using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Editor.Economy
@@ -344,6 +346,163 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(LogisticsShipmentStatus.Completed, r.Status, string.Join("; ", diag));
             Assert.AreEqual(50, recipientStock["store-1"], "restored cargo delivered exactly once");
             Assert.IsTrue(service2.VerifyConservation(r, 50, out string cons), cons);
+        }
+
+        // ---------- Slice F3 (2026-11-06, Obj 19/20): dispatch exactly-once ----------
+        //
+        // SCOPE NOTE (harness adaptation, F2 precedent): the plan names
+        // FreightDispatchStagingTests.cs for these two tests, but the
+        // driver fixture they need already lives in THIS file, so they are
+        // placed here instead — recorded as a deviation in the checkpoint.
+        // The handler itself (SimulationDrivers.HandleCompletedFreightDispatchTask)
+        // is harness-excluded, so a literal double invocation of the handler
+        // is SOURCE-REVIEWED ONLY: on re-run it must take its alreadyBound
+        // branch (the team is already bound) and call the idempotent
+        // AuthorizeShipmentDispatch. What IS harness-tested here is both
+        // halves of that property at their real seams: (a) the second bind
+        // is REFUSED once the team is bound (WagonAuthority.TryAssignDraftTeam
+        // refuses when wagon.IsTransportAssigned), so a re-run cannot
+        // double-bind; (b) AuthorizeShipmentDispatch releases a held
+        // Planned shipment and is a no-op the second time.
+
+        private sealed class FakeAnimalAvailability : IAnimalAvailabilityAuthority
+        {
+            private readonly HashSet<string> reserved = new HashSet<string>(StringComparer.Ordinal);
+            private readonly Dictionary<string, string> byReservation = new Dictionary<string, string>(StringComparer.Ordinal);
+            private int sequence;
+
+            public string TryReserve(string animalId, string useKind, string assignmentId,
+                float fromGameSeconds, float toGameSeconds, out string reservationId)
+            {
+                reservationId = null;
+                if (reserved.Contains(animalId)) return $"animal {animalId} is already reserved";
+                reserved.Add(animalId);
+                reservationId = "fake-" + sequence++;
+                byReservation[reservationId] = animalId;
+                return null;
+            }
+
+            public void Release(string reservationId)
+            {
+                if (reservationId != null && byReservation.TryGetValue(reservationId, out string animalId))
+                {
+                    reserved.Remove(animalId);
+                    byReservation.Remove(reservationId);
+                }
+            }
+
+            public bool IsAvailable(string animalId, float atGameSeconds) => !reserved.Contains(animalId);
+        }
+
+        private static AnimalState WorkReadyHorse(int animalEntityId) => new AnimalState
+        {
+            AnimalId = EntityId.For(EntityKind.Animal, animalEntityId),
+            Species = AnimalSpecies.Horse,
+            IsActive = true,
+            HorseCapabilities = HorseUseCapabilities.Draft,
+            Health01 = 1f,
+            Nutrition01 = 1f,
+            Hydration01 = 1f,
+            Fatigue01 = 0f,
+            HousingId = "stable-1",
+        };
+
+        private LogisticsShipmentState CreateHeldShipment(FreightProductionDriver driver, string id, string wagonId)
+        {
+            LogisticsShipmentState shipment = driver.CreateShipment(
+                "biz-freight-1", id, "mill-1", "store-1", 50, GrainSpec(), wagonId, hooks,
+                driverA, teamA, 500, "biz-store-1", new List<string>(), out string reason,
+                holdForDispatchAuthorization: true);
+            Assert.IsNotNull(shipment, reason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status);
+            Assert.IsTrue(shipment.requiresDispatchAuthorization,
+                "a held shipment must carry the dispatch-authorization hold");
+            return shipment;
+        }
+
+        private static (EquipmentAsset wagon, AnimalState horse1, AnimalState horse2, FakeAnimalAvailability availability)
+            BindTeam(string wagonId, string driverPersonId, string shipmentId)
+        {
+            var wagon = Wagon(wagonId);
+            AnimalState horse1 = WorkReadyHorse(11);
+            AnimalState horse2 = WorkReadyHorse(12);
+            var availability = new FakeAnimalAvailability();
+            string refusal = WagonAuthority.TryAssignDraftTeam(
+                wagon, new List<AnimalState> { horse1, horse2 },
+                driverPersonId, shipmentId, availability, 0f, float.MaxValue);
+            Assert.IsNull(refusal, "the first bind must succeed: " + refusal);
+            return (wagon, horse1, horse2, availability);
+        }
+
+        [Test]
+        public void Dispatch_AuthorizesExactlyOnce_AcrossDoubleHandlerInvocation()
+        {
+            FreightProductionDriver driver = NewDriverWithCarrier(out _);
+            LogisticsShipmentState shipment = CreateHeldShipment(driver, "ship-1", "wagon-1");
+
+            // The handler's first run binds the real team (driver P7, horses A11/A12).
+            (EquipmentAsset wagon, AnimalState horse1, _, _) = BindTeam("wagon-1", "7", "ship-1");
+
+            // The already-bound state the handler's re-run branch reads.
+            Assert.AreEqual(HorseUseKind.Draft, horse1.CurrentUse);
+            Assert.AreEqual("ship-1", horse1.CurrentAssignmentId);
+            Assert.AreEqual("ship-1", wagon.CurrentShipmentId);
+            Assert.AreEqual("7", wagon.CurrentDriverPersonId);
+            Assert.IsTrue(wagon.IsTransportAssigned);
+
+            // A second bind attempt is REFUSED — the team cannot be bound
+            // twice, so a second handler invocation must take its alreadyBound
+            // branch (source-reviewed) instead of re-binding.
+            string secondBind = WagonAuthority.TryAssignDraftTeam(
+                wagon, new List<AnimalState> { horse1, WorkReadyHorse(12) },
+                "7", "ship-1", new FakeAnimalAvailability(), 0f, float.MaxValue);
+            Assert.IsNotNull(secondBind, "re-binding an assigned wagon must refuse");
+
+            // Authorization releases the hold exactly once and is a no-op after.
+            Assert.IsTrue(driver.AuthorizeShipmentDispatch("ship-1", out string reason1), reason1);
+            Assert.IsFalse(shipment.requiresDispatchAuthorization);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status);
+            Assert.IsTrue(driver.AuthorizeShipmentDispatch("ship-1", out string reason2), reason2);
+            Assert.IsFalse(shipment.requiresDispatchAuthorization,
+                "the second authorization must be a no-op, not a second release");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status,
+                "authorization alone must not advance the shipment");
+        }
+
+        [Test]
+        public void Dispatch_SaveBoundary_CompletedTaskAuthorizesAfterRestore()
+        {
+            FreightProductionDriver driver = NewDriverWithCarrier(out _);
+            var diag = new List<string>();
+            LogisticsShipmentState shipment = CreateHeldShipment(driver, "ship-1", "wagon-1");
+            BindTeam("wagon-1", "7", "ship-1");
+
+            // The dispatch task is Complete in TaskAuthority state (out of
+            // the driver DTO; the handler-level reconcile that reads it is
+            // source-reviewed). What the save boundary must preserve is the
+            // hold on the shipment itself.
+            FreightShipmentService.FreightServiceSaveDto dto = driver.CaptureSaveDto();
+
+            var service2 = new FreightShipmentService();
+            service2.RegisterWagon(Wagon("wagon-1"));
+            service2.RegisterWagon(Wagon("wagon-2"));
+            var driver2 = new FreightProductionDriver(service2);
+            List<LogisticsShipmentState> restored = driver2.RestoreSaveDto(dto, hooks, diag);
+            Assert.AreEqual(1, restored.Count, string.Join("; ", diag));
+            LogisticsShipmentState r = restored[0];
+            Assert.AreEqual("ship-1", r.ShipmentId);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, r.Status,
+                "the restored shipment must still be Planned");
+            Assert.IsTrue(r.requiresDispatchAuthorization,
+                "the dispatch hold must survive the save/load boundary — otherwise a post-restore "
+                + "reconcile would never authorize the shipment");
+
+            // A post-restore reconcile authorizes exactly once.
+            Assert.IsTrue(driver2.AuthorizeShipmentDispatch("ship-1", out string reason1), reason1);
+            Assert.IsFalse(r.requiresDispatchAuthorization);
+            Assert.IsTrue(driver2.AuthorizeShipmentDispatch("ship-1", out string reason2), reason2);
+            Assert.IsFalse(r.requiresDispatchAuthorization, "the second post-restore authorization must be a no-op");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, r.Status);
         }
     }
 }

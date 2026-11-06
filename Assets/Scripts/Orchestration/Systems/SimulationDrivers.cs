@@ -92,12 +92,12 @@ namespace LandLedgers.Orchestration.Systems
         private readonly Dictionary<string, string> businessFeedLastStockRefusal = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly HashSet<string> horseCareRiskAlreadyLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> taskStartRefusalAlreadyLogged = new HashSet<string>(StringComparer.Ordinal);
-        // Slice F2: day-keyed hitch refusal log. The once-only set above
+        // Slice F2/F3: day-keyed refusal log. The once-only set above
         // hides a stall that persists for days (the Nov 6 console: T44
         // sat Assigned for 10 days with nothing in the log after day 6).
-        // Hitch-path refusals log once per day per key instead, plus a
-        // daily hitch-state line, so a future stall stays visible.
-        private readonly Dictionary<string, int> hitchRefusalLoggedDay = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Hitch-path and off-map-guard refusals log once per day per key
+        // instead, so a persistent stall stays visible.
+        private readonly Dictionary<string, int> refusalLoggedDay = new Dictionary<string, int>(StringComparer.Ordinal);
         private int hitchStateLogDayIndex = -1;
         private readonly HashSet<string> freightAgreementBlockersLogged = new HashSet<string>(StringComparer.Ordinal);
 
@@ -3078,15 +3078,15 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
-        /// Slice F2: hitch-path refusal logging, once per day per key.
-        /// Unlike the once-only set, a refusal that repeats for days stays
-        /// visible (one line per day), so a persistent stall can be read
-        /// from the log instead of going silent after day 1.
+        /// Slices F2/F3: day-keyed refusal logging. Unlike the once-only
+        /// set, a refusal that repeats for days stays visible (one line per
+        /// day), so a persistent stall can be read from the log instead of
+        /// going silent after day 1.
         /// </summary>
-        private void LogHitchRefusalDayKeyed(string key, int dayIndex, string message)
+        private void LogRefusalDayKeyed(string key, int dayIndex, string message)
         {
-            if (hitchRefusalLoggedDay.TryGetValue(key, out int loggedDay) && loggedDay == dayIndex) return;
-            hitchRefusalLoggedDay[key] = dayIndex;
+            if (refusalLoggedDay.TryGetValue(key, out int loggedDay) && loggedDay == dayIndex) return;
+            refusalLoggedDay[key] = dayIndex;
             Debug.LogWarning(message, this);
         }
 
@@ -3560,6 +3560,27 @@ namespace LandLedgers.Orchestration.Systems
             if (task == null || ethan == null || hub?.Tasks == null || hub.PersonSchedules == null)
             {
                 refusal = "task, person, TaskAuthority, or PersonScheduleTracker is unavailable.";
+                return false;
+            }
+
+            // Slice F3: off-map person-time guard (Verify-6). While the
+            // journey record says this person is off-map (day D through
+            // D+2 for the freight trip), no town task may start for them —
+            // person-time stays exclusive. The guard refuses rather than
+            // interrupts: no task is ever started off-map, so nothing needs
+            // cancelling. Placed before the already-scheduled scan, so a
+            // reservation made before departure cannot start the task
+            // mid-trip either. Every Begin call in the business starters is
+            // gated by this method, so the guard covers all business-task
+            // starts (hitch, dispatch, feed, meeting, staging travel). The
+            // domestic driver does NOT funnel through here — that gap is
+            // probed by FreightOffMapPersonGuardTests and is an Obj 45
+            // follow-up, not a slice failure.
+            if (OffMapJourneys.IsOffMapPerson(ethan.id))
+            {
+                refusal = $"P{ethan.id} is off-map; no town task may start.";
+                LogRefusalDayKeyed("offmap-person:" + ethan.id, dayIndex,
+                    $"[BusinessTask] Task '{task.TaskId}' refused for P{ethan.id}: person is off-map on day {dayIndex}; no town task may start.");
                 return false;
             }
 
@@ -4619,7 +4640,7 @@ namespace LandLedgers.Orchestration.Systems
             wagon.HitchPreparationTravelTaskId = travel.TaskId.ToString();
             if (!TryStartBusinessPersonTask(travel, ethan, dayIndex, PersonActivityKind.Travel, ethan.homeBuildingId, out string refusal))
             {
-                LogHitchRefusalDayKeyed("hitch-travel:" + travel.TaskId, dayIndex,
+                LogRefusalDayKeyed("hitch-travel:" + travel.TaskId, dayIndex,
                     $"[Hitching] Ethan's staging travel for shipment '{shipmentId}' could not reserve time: {refusal}");
                 return;
             }
@@ -4666,7 +4687,7 @@ namespace LandLedgers.Orchestration.Systems
                 // signature — journey location says staging (so no travel
                 // task is created) while the visual agent is elsewhere —
                 // so it must stay visible while it persists.
-                LogHitchRefusalDayKeyed("away:" + hitch.TaskId, dayIndex,
+                LogRefusalDayKeyed("away:" + hitch.TaskId, dayIndex,
                     $"[Hitching] Task '{hitch.TaskId}' waits: Ethan P{ethan.id} is not visually at staging " +
                     $"(home building {ethan.homeBuildingId}); journey location is '{ResolvePersonJourneyLocation(ethan.id)}'.");
                 return;
@@ -4685,7 +4706,7 @@ namespace LandLedgers.Orchestration.Systems
                 // silently.
                 float capacityFactor = DailyNeedsService.WorkCapacityFactor(ethan);
                 WorkTimeBudget budget = hub.WorkTimeBudgets?.GetOrCreate(EntityId.For(EntityKind.Person, ethan.id));
-                LogHitchRefusalDayKeyed("no-window:" + hitch.TaskId, dayIndex,
+                LogRefusalDayKeyed("no-window:" + hitch.TaskId, dayIndex,
                     $"[Hitching] Task '{hitch.TaskId}' has no free work window on day {dayIndex} " +
                     $"(needs {Math.Max(1, hitch.MinutesRemaining)}min); Ethan P{ethan.id} capacity={capacityFactor:0.00}, " +
                     $"budget remaining={budget?.MinutesRemaining ?? -1} of {budget?.EffectiveBudgetMinutes ?? -1}min.");
@@ -4699,7 +4720,7 @@ namespace LandLedgers.Orchestration.Systems
                 // Slice F2 (H2): no threshold change — log the exact
                 // failing metric, day-keyed, so an unfit horse stays
                 // visible as the blocker.
-                LogHitchRefusalDayKeyed("horse-unfit:" + hitch.TaskId, dayIndex,
+                LogRefusalDayKeyed("horse-unfit:" + hitch.TaskId, dayIndex,
                     horse == null
                         ? $"[Hitching] Task '{hitch.TaskId}' waits: no B3 horse resolves for the hitch."
                         : $"[Hitching] Task '{hitch.TaskId}' waits: A0 is not work-ready " +
@@ -4719,7 +4740,7 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     // Slice F2 (H4): day-keyed, naming the competing holder
                     // (the refusal itself does not name it).
-                    LogHitchRefusalDayKeyed("horse:" + hitch.TaskId, dayIndex,
+                    LogRefusalDayKeyed("horse:" + hitch.TaskId, dayIndex,
                         $"[Hitching] Task '{hitch.TaskId}' remains queued; A0 reservation refused: {horseRefusal} " +
                         $"(holder: use={horse.CurrentUse}, assignment='{horse.CurrentAssignmentId}').");
                     return;
@@ -4733,7 +4754,7 @@ namespace LandLedgers.Orchestration.Systems
                 if (wagonRefusal != null)
                 {
                     HorseAuthority.ReleaseUse(horse, availability);
-                    LogHitchRefusalDayKeyed("wagon:" + hitch.TaskId, dayIndex,
+                    LogRefusalDayKeyed("wagon:" + hitch.TaskId, dayIndex,
                         $"[Hitching] Task '{hitch.TaskId}' remains queued; wagon reservation refused: {wagonRefusal}.");
                     return;
                 }
@@ -4744,7 +4765,7 @@ namespace LandLedgers.Orchestration.Systems
             if (!TryStartBusinessPersonTask(hitch, ethan, dayIndex, PersonActivityKind.Work, -1, out string prepareRefusal))
             {
                 ReleaseOpeningHitchReservations(horse, wagon);
-                LogHitchRefusalDayKeyed("schedule:" + hitch.TaskId, dayIndex,
+                LogRefusalDayKeyed("schedule:" + hitch.TaskId, dayIndex,
                     $"[Hitching] Task '{hitch.TaskId}' retained queued until Ethan has a valid work opening: {prepareRefusal}");
                 return;
             }
@@ -4755,7 +4776,7 @@ namespace LandLedgers.Orchestration.Systems
                     tickEndMinute, -1, out string startRefusal))
             {
                 ReleaseOpeningHitchReservations(horse, wagon);
-                LogHitchRefusalDayKeyed("start:" + hitch.TaskId, dayIndex,
+                LogRefusalDayKeyed("start:" + hitch.TaskId, dayIndex,
                     $"[Hitching] Task '{hitch.TaskId}' remains pending; start refused: {startRefusal}");
             }
         }
@@ -4785,13 +4806,13 @@ namespace LandLedgers.Orchestration.Systems
                 if (trip == null || !string.Equals(trip.HitchTaskId, wagon.HitchPreparationTaskId, StringComparison.Ordinal)) continue;
                 if (!TryStartBusinessPersonTask(task, ethan, dayIndex, PersonActivityKind.Travel, trip.StagingBuildingId, out string prepareRefusal))
                 {
-                    LogHitchRefusalDayKeyed("travel:" + task.TaskId, dayIndex,
+                    LogRefusalDayKeyed("travel:" + task.TaskId, dayIndex,
                         $"[Hitching] Ethan's staging travel task '{task.TaskId}' could not reserve time: {prepareRefusal}");
                     return true;
                 }
                 if (!BeginScheduledBusinessPersonTask(task, ethan, dayIndex, tickStartMinute, tickEndMinute, trip.StagingBuildingId, out string startRefusal))
                 {
-                    LogHitchRefusalDayKeyed("travel:" + task.TaskId, dayIndex,
+                    LogRefusalDayKeyed("travel:" + task.TaskId, dayIndex,
                         $"[Hitching] Ethan's staging travel task '{task.TaskId}' could not start: {startRefusal}");
                     return true;
                 }

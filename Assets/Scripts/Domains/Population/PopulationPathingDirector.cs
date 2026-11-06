@@ -846,26 +846,63 @@ namespace LandLedgers.FirstLedger
                     managed.mover.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
                 }
                 managed.isRiding = true;
-                // Sitting application is step 5 (R2 wires it for real;
-                // the R1 sequencing stub logs and returns false).
-                TrySetPersonSitting(personId, seated: true);
-                Debug.Log($"[CoupledTransport] rider boarded: P{personId} seated at DriverSeat for {legLabel}.", this);
+                // Sitting application, step 5 (R2): cross-fade to the
+                // DrivingWagon state; a false return means the degrade
+                // path ran (no Animator / no state) and the rider rides
+                // in his current pose — boarding still succeeds.
+                bool poseApplied = TrySetPersonSitting(personId, seated: true);
+                Debug.Log($"[CoupledTransport] rider boarded: P{personId} seated at DriverSeat for {legLabel} (pose={(poseApplied ? "sitting" : "degraded (no DrivingWagon state)")}).", this);
                 return true;
             }
             return false;
         }
 
         /// <summary>
-        /// Slice R2 (2026-11-06, Objective 22): apply (or clear) the
-        /// rider's sitting pose. R1 SEQUENCING STUB — the body is
-        /// implemented in R2; until then this logs and returns false so
-        /// the R1 commit builds, and boarding still succeeds (the rider
-        /// rides parented to the seat in whatever pose his Animator
-        /// holds).
+        /// Slice R2 (2026-11-06, Objective 22): apply the rider's
+        /// sitting pose — cross-fade Ethan's Animator to the
+        /// DrivingWagon state, the same HasState-guarded CrossFade
+        /// TransportAnimatorState.SetState uses for the horse/wagon
+        /// views. Ethan's agent carries no TransportAnimatorState (that
+        /// component lives on the horse/wagon view roots), so this
+        /// drives his own Animator directly. Degrades, never crashes:
+        /// a missing Animator (generated-agent fallback) or an absent
+        /// state (a different controller assigned in the scene — VP-R2)
+        /// logs the missing piece and returns false, and boarding still
+        /// succeeds with the rider in whatever pose his Animator holds.
+        /// Only `seated: true` does anything: there is no separate
+        /// clear call — dismount clears the pose via
+        /// ShowAtCurrentLocation (Note-R2), which restores Locomotion.
+        /// Returns false (no-op, no log spam) when the person has no
+        /// managed agent or no mover.
         /// </summary>
         public bool TrySetPersonSitting(int personId, bool seated)
         {
-            Debug.Log($"[CoupledTransport] sitting trigger not yet wired for P{personId} (seated={seated}); riding without the sitting pose.", this);
+            if (!seated) return false;
+            if (personId < 0) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId) continue;
+                if (managed.mover == null) return false;
+                Animator animator = managed.mover.GetComponentInChildren<Animator>(includeInactive: true);
+                if (animator == null)
+                {
+                    Debug.LogWarning($"[CoupledTransport] rider P{personId} has no Animator; riding without the sitting pose.", this);
+                    return false;
+                }
+                int hash = Animator.StringToHash("DrivingWagon");
+                if (!animator.HasState(0, hash))
+                {
+                    string controllerName = animator.runtimeAnimatorController != null
+                        ? animator.runtimeAnimatorController.name
+                        : "<none>";
+                    Debug.LogWarning($"[CoupledTransport] rider P{personId} Animator '{controllerName}' has no DrivingWagon state; riding without the sitting pose.", this);
+                    return false;
+                }
+                animator.applyRootMotion = false;
+                animator.CrossFadeInFixedTime(hash, 0.1f);
+                return true;
+            }
             return false;
         }
 

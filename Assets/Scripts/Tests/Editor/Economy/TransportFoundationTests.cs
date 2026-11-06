@@ -277,6 +277,43 @@ namespace LandLedgers.EditorTests.Economy
             }
         }
 
+        // Slice R2 (2026-11-06, Objective 22): pins that the Man rig's
+        // animator controller carries the seated DrivingWagon state the
+        // director's TrySetPersonSitting cross-fades to, driven by the
+        // clip imported from X Bot@Driving.fbx — and that the Locomotion
+        // Blend Tree (the dismount restore target) still exists. Unity
+        // Test Runner only (this file is harness-excluded in the main
+        // harness): it loads the .controller asset, which Roslyn cannot.
+        // No Roslyn test count rises in R2; this test is Codex's to run.
+        [Test]
+        public void ManAnimController_HasDrivingWagonSeatedState()
+        {
+            var controller = AssetDatabase.LoadAssetAtPath<UnityEditor.Animations.AnimatorController>(
+                "Assets/Characters/Animations/Man Anim Controller.controller");
+            Assert.That(controller, Is.Not.Null, "Man Anim Controller.controller must load.");
+            Assert.That(controller.layers.Length, Is.GreaterThan(0), "The controller must have at least one layer.");
+            UnityEditor.Animations.ChildAnimatorState[] states = controller.layers[0].stateMachine.states;
+
+            AnimatorState driving = null;
+            AnimatorState locomotion = null;
+            foreach (UnityEditor.Animations.ChildAnimatorState child in states)
+            {
+                if (child.state == null) continue;
+                if (child.state.name == "DrivingWagon") driving = child.state;
+                if (child.state.name == "Locomotion") locomotion = child.state;
+            }
+
+            Assert.That(driving, Is.Not.Null, "The Man controller must have a DrivingWagon state.");
+            Assert.That(driving.motion, Is.Not.Null, "The DrivingWagon state must have a motion.");
+            Assert.That(AssetDatabase.GetAssetPath(driving.motion),
+                Is.EqualTo("Assets/Characters/Animations/X Bot@Driving.fbx"),
+                "The DrivingWagon motion must be the clip imported from X Bot@Driving.fbx.");
+
+            Assert.That(locomotion, Is.Not.Null, "The Man controller must keep its Locomotion state (the dismount restore target).");
+            Assert.That(locomotion.motion, Is.InstanceOf<BlendTree>(),
+                "The Locomotion state must still be the Idle/Walking Blend Tree.");
+        }
+
         private static void SetPrivateField<T>(object target, string fieldName, T value)
         {
             FieldInfo field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);

@@ -262,6 +262,50 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId ?? string.Empty;
+
+        /// <summary>
+        /// W6 (W-5, Obj 9 design): the owner-person link — the SEAM for
+        /// baker person-time booking. Resolved from the business owner, the
+        /// same pattern as the freight owner resolution in SimulationDrivers
+        /// (bakery.Owner.PersonId). -1 = unbound: no owner was bound, or the
+        /// bound owner has no person (e.g. the Player). Nothing reads this
+        /// yet: booking is NOT implemented until the hunger→capacity ruling
+        /// lands (Obj 45). The link is re-bound at bootstrap, not saved —
+        /// the save DTO does not carry it, so a restored runtime re-binds
+        /// from the live business owner.
+        /// </summary>
+        public int OwnerPersonId { get; private set; } = -1;
+
+        /// <summary>
+        /// W6: binds the runtime to its owner person. Returns null on
+        /// success, else a loud refusal (null owner, or an owner with no
+        /// person id) — the link stays unbound (-1) and the caller must not
+        /// book person-time against it. No crash, no silent default person.
+        /// Re-binding to a different owner person replaces the link (the
+        /// bootstrap re-bind after a restore); binding the same person
+        /// again is a no-op success.
+        /// </summary>
+        public string BindOwnerPerson(BusinessOwnerIdentity owner, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (owner == null)
+            {
+                string message = $"BakeryShopRuntime '{businessInstanceId}': no business owner supplied — owner-person link stays unbound; person-time booking is refused until the owner is bound.";
+                diag.Add(message);
+                return message;
+            }
+            if (owner.PersonId < 0)
+            {
+                string message = $"BakeryShopRuntime '{businessInstanceId}': owner '{owner.DisplayName}' ({owner.OwnerKind}) has no person id — owner-person link stays unbound; person-time booking is refused until an NPC owner is bound.";
+                diag.Add(message);
+                return message;
+            }
+            if (OwnerPersonId == owner.PersonId) return null;
+            OwnerPersonId = owner.PersonId;
+            diag.Add($"BakeryShopRuntime '{businessInstanceId}': owner-person link bound to P{owner.PersonId} ({owner.DisplayName}).");
+            return null;
+        }
+
         public BakeryFlourStock FlourStock => flourStock;
 
         /// <summary>D1D: the oven-firebox fuel store.</summary>

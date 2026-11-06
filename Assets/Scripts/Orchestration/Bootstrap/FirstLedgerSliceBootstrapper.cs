@@ -1784,6 +1784,15 @@ namespace LandLedgers.FirstLedger
             }
 
             pass9.BakeryRuntime = liveBakeryRuntime;
+            // W6 (W-5, Obj 9 design): bind the runtime to its owner person
+            // (Glen) — the seam for baker person-time booking. No behaviour
+            // change: nothing reads OwnerPersonId yet, and a refused bind
+            // only warns (the runtime stays unbound until the owner is
+            // bound). Bound here for both the fresh and the restored
+            // runtime: the link is re-bound at bootstrap, not saved.
+            string bakeryOwnerBindRefusal = liveBakeryRuntime.BindOwnerPerson(bakeryBusiness.Owner, null);
+            if (bakeryOwnerBindRefusal != null)
+                Debug.LogWarning($"[BakeryRuntime] {bakeryOwnerBindRefusal}", this);
             LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource liveFuelSource = pass9.FuelSource
                 ?? (LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource)
                     new LandLedgers.Economy.BreadDrivers.Series2InStockBakeryFuelSource(liveBakeryRuntime);

@@ -49,6 +49,7 @@
 // arrival cell centre, standing idle) before logging arrival; on
 // dismount failure he stays aboard rather than being placed wrong.
 using System.Collections.Generic;
+using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using LandLedgers.World;
 using UnityEngine;
@@ -157,7 +158,7 @@ namespace LandLedgers.Economy.Transport
             // without one) behaves as 1x.
             float timeScale = MovementTimeScale();
             if (timeScale <= 0f) return;
-            float simulationDeltaSeconds = Time.unscaledDeltaTime * timeScale;
+            float simulationDeltaSeconds = UnityEngine.Time.unscaledDeltaTime * timeScale;
             if (simulationDeltaSeconds <= 0f) return;
 
             distanceTravelledMetres += wagonSpeedMetresPerSecond * simulationDeltaSeconds;

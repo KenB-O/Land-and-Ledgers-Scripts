@@ -4734,10 +4734,13 @@ namespace LandLedgers.Orchestration.Systems
                 PersonActivityReservation stateReservation = hub.PersonSchedules.ActiveFor(ethan.id, dayIndex)
                     .FirstOrDefault(reservation => reservation != null
                         && string.Equals(reservation.Label, TaskReservationLabel(hitch), StringComparison.Ordinal));
+                string reservationWindow = stateReservation != null
+                    ? $"[{stateReservation.StartMinuteOfDay}-{stateReservation.EndMinuteOfDay}]"
+                    : "none";
+                bool visuallyAtStaging = IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId);
                 Debug.Log($"[Hitching] day {dayIndex} state: task='{hitch.TaskId}' status={hitch.Status} " +
-                    $"remaining={hitch.MinutesRemaining}min reservation={(stateReservation != null
-                        ? $"[{stateReservation.StartMinuteOfDay}-{stateReservation.EndMinuteOfDay}]"
-                        : "none")} visually-at-staging={IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)}.", this);
+                    $"remaining={hitch.MinutesRemaining}min reservation={reservationWindow} " +
+                    $"visually-at-staging={visuallyAtStaging}.", this);
             }
 
             // Overnight 2026-11-04: while staging travel is the current

@@ -385,8 +385,32 @@ namespace LandLedgers.World.Journeys
             return record;
         }
 
-        private JourneyLocation FindNearestGateway(string originLocationId)
+        /// <summary>
+        /// Slice S9: side-effect-free departure-gateway query. Runs the
+        /// exact FindNearestGateway scan shape (route each OffMapGateway
+        /// candidate, keep the shortest by TotalMiles) and returns only
+        /// the gateway id plus a refusal reason — Depart remains the only
+        /// way to create a journey. No logging here (callers log).
+        /// </summary>
+        public bool TryResolveDepartureGateway(string originLocationId, out string gatewayLocationId, out string reason)
         {
+            gatewayLocationId = null;
+            reason = null;
+            if (string.IsNullOrWhiteSpace(originLocationId))
+            {
+                reason = "OffMapJourneyAuthority: a departure gateway needs an origin location id.";
+                return false;
+            }
+            if (journeyModel == null)
+            {
+                reason = "OffMapJourneyAuthority: a journey model is required for routing.";
+                return false;
+            }
+            if (journeyModel.GetLocation(originLocationId) == null)
+            {
+                reason = $"OffMapJourneyAuthority: unknown origin location '{originLocationId}'.";
+                return false;
+            }
             JourneyLocation best = null;
             float bestMiles = float.PositiveInfinity;
             foreach (var location in journeyModel.AllLocations())
@@ -400,7 +424,25 @@ namespace LandLedgers.World.Journeys
                     best = location;
                 }
             }
-            return best;
+            if (best == null)
+            {
+                reason = $"OffMapJourneyAuthority: no off-map gateway reachable from '{originLocationId}'.";
+                return false;
+            }
+            gatewayLocationId = best.LocationId;
+            return true;
+        }
+
+        private JourneyLocation FindNearestGateway(string originLocationId)
+        {
+            // Slice S9: one scan serves both callers — the query and
+            // Depart cannot drift. Map the returned id back to the
+            // location; a refusal means no gateway.
+            if (!TryResolveDepartureGateway(originLocationId, out string gatewayLocationId, out string _))
+            {
+                return null;
+            }
+            return journeyModel.GetLocation(gatewayLocationId);
         }
 
         private static string DescribeTraveler(OffMapJourneyRecord record)

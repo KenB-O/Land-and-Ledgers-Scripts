@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.World.Journeys;
+using LandLedgers.World.Regional;
 using NUnit.Framework;
 
 namespace LandLedgers.EditorTests.PassV
@@ -192,6 +193,111 @@ namespace LandLedgers.EditorTests.PassV
                 "wagon-x", "island", "Kingston markets", 2,
                 "impossible run", null, null, 10, UnitsOf, TakeCargo, diag);
             Assert.IsNull(record, "no gateway, no departure: travel is never assumed free");
+        }
+
+        // ---- Slice S9: departure-gateway query + Millbrook call shape ----
+
+        private OffMapJourneyAuthority MillbrookAuthority()
+        {
+            var millbrookModel = new JourneyModel();
+            string problem = millbrookModel.RegisterLocation(new JourneyLocation("town-center", JourneyLocationKind.Waypoint, "Town Centre", 0f, 0f));
+            Assert.IsNull(problem);
+            RegionalTownRegistry.ApplyAll(millbrookModel, new List<string>());
+            return new OffMapJourneyAuthority(millbrookModel);
+        }
+
+        private OffMapJourneyRecord DepartMillbrookWagon(OffMapJourneyAuthority millbrookAuthority, int dayIndex)
+        {
+            OffMapJourneyRecord record = millbrookAuthority.DepartVehicle(
+                "opening-freight-wagon", "town-center", "Millbrook Grain Co.", 0,
+                "Millbrook flour pickup", null,
+                new List<string> { "freight-agreement:request-1" },
+                dayIndex, null, null, diag);
+            Assert.IsNotNull(record, "Millbrook departure should succeed: " + string.Join("; ", diag));
+            return record;
+        }
+
+        [Test]
+        public void TryResolveDepartureGateway_Millbrook_ReturnsAshfordGateway()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            Assert.IsTrue(millbrookAuthority.TryResolveDepartureGateway("town-center", out string gateway, out string reason), reason);
+            Assert.AreEqual("ashford-gateway", gateway);
+        }
+
+        [Test]
+        public void TryResolveDepartureGateway_AgreesWithDepartRecord()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            Assert.IsTrue(millbrookAuthority.TryResolveDepartureGateway("town-center", out string gateway, out string reason), reason);
+            OffMapJourneyRecord record = DepartMillbrookWagon(millbrookAuthority, 10);
+            Assert.AreEqual("ashford-gateway", record.GatewayLocationId);
+            Assert.AreEqual(gateway, record.GatewayLocationId,
+                "the query and Depart must select the same gateway");
+        }
+
+        [Test]
+        public void TryResolveDepartureGateway_UnknownOrigin_Refuses()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            Assert.IsTrue(!millbrookAuthority.TryResolveDepartureGateway("no-such-place", out string gateway, out string reason));
+            Assert.IsNull(gateway);
+            Assert.IsTrue(reason.Contains("no-such-place"), "refusal must name the unknown origin: " + reason);
+        }
+
+        [Test]
+        public void TryResolveDepartureGateway_NoGateway_Refuses()
+        {
+            var modelWithoutGateway = new JourneyModel();
+            string problem = modelWithoutGateway.RegisterLocation(new JourneyLocation("town-center", JourneyLocationKind.Waypoint, "Town Centre", 0f, 0f));
+            Assert.IsNull(problem);
+            modelWithoutGateway.RegisterLocation(new JourneyLocation("mill", JourneyLocationKind.Mill, "Grist Mill", 2f, 3f));
+            var noGatewayAuthority = new OffMapJourneyAuthority(modelWithoutGateway);
+
+            Assert.IsTrue(!noGatewayAuthority.TryResolveDepartureGateway("town-center", out string gateway, out string reason));
+            Assert.IsNull(gateway);
+            Assert.IsTrue(reason.Contains("no off-map gateway reachable from 'town-center'"), "refusal must name no reachable gateway: " + reason);
+        }
+
+        [Test]
+        public void DepartVehicle_EmptyCargo_DepartsWithoutCallbacks()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            OffMapJourneyRecord record = millbrookAuthority.DepartVehicle(
+                "opening-freight-wagon", "town-center", "Millbrook Grain Co.", 0,
+                "Millbrook flour pickup", null, null, 10, null, null, diag);
+            Assert.IsNotNull(record, "empty outbound departure must succeed: " + string.Join("; ", diag));
+            Assert.AreEqual(12, record.DueReturnDayIndex);
+            Assert.AreEqual(0, record.CargoUnits.Count, "no cargo was supplied, none taken");
+        }
+
+        [Test]
+        public void DepartVehicle_DuplicateSameDay_Refuses()
+        {
+            OffMapJourneyAuthority millbrookAuthority = MillbrookAuthority();
+            OffMapJourneyRecord record = DepartMillbrookWagon(millbrookAuthority, 10);
+
+            // While the wagon is still away, the already-off-map guard
+            // refuses (it names the vehicle, not the journey id).
+            diag.Clear();
+            OffMapJourneyRecord duplicate = millbrookAuthority.DepartVehicle(
+                "opening-freight-wagon", "town-center", "Millbrook Grain Co.", 0,
+                "Millbrook flour pickup", null, null, 10, null, null, diag);
+            Assert.IsNull(duplicate, "the same wagon cannot depart twice");
+            Assert.IsTrue(string.Join("; ", diag).Contains("already off-map"), string.Join("; ", diag));
+
+            // Note-10: even AFTER the first journey returns, a same-day
+            // re-departure is refused by journey-id uniqueness — and this
+            // refusal names the existing journey id.
+            List<OffMapJourneyRecord> returned = millbrookAuthority.CompleteDueJourneys(12, null, diag);
+            Assert.AreEqual(1, returned.Count);
+            diag.Clear();
+            OffMapJourneyRecord sameDayRetry = millbrookAuthority.DepartVehicle(
+                "opening-freight-wagon", "town-center", "Millbrook Grain Co.", 0,
+                "Millbrook flour pickup", null, null, 10, null, null, diag);
+            Assert.IsNull(sameDayRetry, "day-granular journey ids refuse a same-day re-departure");
+            Assert.IsTrue(string.Join("; ", diag).Contains(record.JourneyId),
+                "refusal must name the existing journey id: " + string.Join("; ", diag));
         }
     }
 }

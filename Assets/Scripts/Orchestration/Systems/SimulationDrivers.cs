@@ -1910,6 +1910,79 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Slice S9: capture the live off-map journeys for the Pass 9
+        /// save seam. Forces the lazy OffMapJourneys property; an empty
+        /// authority captures an empty DTO. Uncalled until S10 — the seam
+        /// must exist before the first departure, and the departure slice
+        /// must not also be the seam slice.
+        /// </summary>
+        public OffMapJourneyAuthoritySaveDto CaptureOffMapJourneys()
+        {
+            return OffMapJourneys.CaptureSaveDto();
+        }
+
+        /// <summary>
+        /// Slice S9: restore off-map journeys into the live authority
+        /// after a load. Null-safe by the authority's own contract: a
+        /// null DTO clears to empty. Called by the bootstrapper's
+        /// MarkRestoredFromSave; uncalled until a save carries the
+        /// section (S10 departs the first journey).
+        /// </summary>
+        public void RestoreOffMapJourneys(OffMapJourneyAuthoritySaveDto dto)
+        {
+            OffMapJourneys.LoadFromSaveDto(dto);
+        }
+
+        /// <summary>
+        /// Slice S9: push the latest journey snapshot into the Pass 9
+        /// state so any later save carries it. Called by S10 on every
+        /// journey mutation (depart, return, cancel). A missing Pass 9
+        /// wiring warns loudly when a journey is active instead of
+        /// silently dropping it; with no active journey it is a no-op.
+        /// </summary>
+        private void SyncOffMapJourneysToSaveState()
+        {
+            SaveLoadManager save = FindAnyObjectByType<SaveLoadManager>();
+            if (save?.Series2Pass9State != null)
+            {
+                save.Series2Pass9State.OffMapJourneys = OffMapJourneys.CaptureSaveDto();
+            }
+            else if (OffMapJourneys.ActiveJourneyCount > 0)
+            {
+                Debug.LogWarning("[OffMapJourney] Active off-map journeys exist but no Pass 9 state is assigned; the journeys will not persist.");
+            }
+        }
+
+        /// <summary>
+        /// Slice S9: daily return drive. Completes journeys due today
+        /// exactly once (the authority is idempotent per day); with no
+        /// journeys this is a no-op. Vehicle returns need no shipment
+        /// update here — no shipment linkage exists yet (S10 owns it).
+        /// Person returns restore the traveler's journey location to
+        /// their home building (the S5 travel-completion pattern); when
+        /// the home is unknown the set is skipped, never invented.
+        /// </summary>
+        private void ProcessFreightJourneyReturns(int absoluteDayIndex, List<string> diag)
+        {
+            List<OffMapJourneyRecord> returned = OffMapJourneys.CompleteDueJourneys(absoluteDayIndex, deliverCargo: null, diag);
+            foreach (OffMapJourneyRecord record in returned)
+            {
+                if (record == null) continue;
+                Debug.Log($"[OffMapJourney] Journey '{record.JourneyId}' returned from '{record.DestinationLabel}' on day {absoluteDayIndex} (due day {record.DueReturnDayIndex}).");
+                if (record.TravelerKind != OffMapTravelerKind.Person) continue;
+                PersonState person = populationManager?.State?.GetPerson(record.PersonId);
+                if (person != null && person.homeBuildingId >= 0)
+                {
+                    SetPersonJourneyLocation(record.PersonId, "building:" + person.homeBuildingId);
+                }
+                else
+                {
+                    Debug.Log($"[OffMapJourney] Journey '{record.JourneyId}': P{record.PersonId} returned but home building is unknown; journey location left unchanged.");
+                }
+            }
+        }
+
+        /// <summary>
         /// Pass VIII Worker 2: daily absent-occupant sweep. Absent means
         /// dead (deathDayIndex >= 0) or departed from the town roster
         /// (settlement arrangement Departed, or no longer a known person).
@@ -2478,6 +2551,9 @@ namespace LandLedgers.Orchestration.Systems
                     millbrookCustody.ReceiveCargoLot(shipment, quantityUnits, absoluteDayIndex, out reason);
             }
             RetryPendingFreightShipmentRegistrations(absoluteDayIndex);
+            // Slice S9: complete journeys due today before the tick, so a
+            // wagon that returns today is home for the same day's tick.
+            ProcessFreightJourneyReturns(absoluteDayIndex, diag);
             FreightProduction.AdvanceTick(86400f, hooks, handler, diag);
             ReleaseTerminalFreightDraftTeams();
             if (diag.Count > 0)

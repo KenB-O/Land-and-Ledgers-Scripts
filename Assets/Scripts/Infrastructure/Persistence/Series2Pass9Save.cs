@@ -93,6 +93,7 @@ using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Ordering;
 using LandLedgers.Orchestration.Player;
+using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Persistence
 {
@@ -321,6 +322,13 @@ namespace LandLedgers.Persistence
         /// honestly until the scenario endowment runs on a NewGame.
         /// </summary>
         public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
+
+        /// <summary>
+        /// Slice S9: off-map journeys recorded by the production
+        /// OffMapJourneyAuthority. Additive; old saves leave this null
+        /// and load with no journeys — the honest old-save default.
+        /// </summary>
+        public OffMapJourneyAuthoritySaveDto OffMapJourneys;
     }
 
     /// <summary>
@@ -368,6 +376,14 @@ namespace LandLedgers.Persistence
         /// on NewGame seeding and re-registers restored ones after a load.
         /// </summary>
         public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
+
+        /// <summary>
+        /// Slice S9: live snapshot holder for the off-map journeys,
+        /// filled by SimulationDrivers on every journey mutation and
+        /// restored into the authority by the bootstrapper after a load.
+        /// Null on old saves (no journeys — the old-save default).
+        /// </summary>
+        public OffMapJourneyAuthoritySaveDto OffMapJourneys;
 
         /// <summary>
         /// Fuel-source parameters recovered by the last Restore,
@@ -587,6 +603,17 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no business equipment registers supplied; equipment section saved empty.");
+            }
+
+            // Slice S9: off-map journeys. No deep copy here — the DTO is
+            // already a deep snapshot from OffMapJourneyAuthority.CaptureSaveDto.
+            if (OffMapJourneys != null)
+            {
+                dto.OffMapJourneys = OffMapJourneys;
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no off-map journeys supplied; off-map section saved empty.");
             }
 
             if (FreightDriver != null)
@@ -832,6 +859,11 @@ namespace LandLedgers.Persistence
                 if (saved == null || string.IsNullOrWhiteSpace(saved.BusinessInstanceId)) continue;
                 EquipmentRegisters.Add(CopyEquipmentRegister(saved));
             }
+
+            // Slice S9: off-map journeys. Assignment IS the clear-then-load
+            // form for a single DTO; a null section restores as null
+            // (no journeys — the old-save default).
+            OffMapJourneys = dto.OffMapJourneys;
 
             // Pass 8 freight: shipments round-trip in the DTO
             // (including deliveryApplied and

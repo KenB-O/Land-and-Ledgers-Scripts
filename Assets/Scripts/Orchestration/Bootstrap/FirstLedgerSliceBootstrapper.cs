@@ -684,6 +684,11 @@ namespace LandLedgers.FirstLedger
             if (systemsHub != null && saveLoadManager?.Series2Pass9State?.EquipmentRegisters != null)
                 foreach (BusinessEquipmentRegister restored in saveLoadManager.Series2Pass9State.EquipmentRegisters)
                     systemsHub.RegisterBusinessEquipment(restored);
+            // Slice S9: restore the Pass 9 off-map journeys into the live
+            // authority after a load. Null-safe end to end: a null DTO
+            // restores empty (old saves carry no section).
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            drivers?.RestoreOffMapJourneys(saveLoadManager?.Series2Pass9State?.OffMapJourneys);
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)
             {

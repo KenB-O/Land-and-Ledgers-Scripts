@@ -83,36 +83,6 @@ namespace LandLedgers.Persistence
             return false;
         }
 
-        public bool TryResolveBusinessProfile(string profileId, out BusinessProfileDefinition profile)
-        {
-            string normalizedId = NormalizeId(profileId);
-            if (string.IsNullOrWhiteSpace(normalizedId))
-            {
-                profile = null;
-                return false;
-            }
-
-            businessProfileLookupCount++;
-            if (businessProfiles.TryGetValue(normalizedId, out profile))
-            {
-                return true;
-            }
-
-            string looseId = NormalizeLooseId(normalizedId);
-            if (!string.IsNullOrWhiteSpace(looseId)
-            && !ambiguousLooseBusinessProfileAliases.Contains(looseId)
-            && looseBusinessProfileAliases.TryGetValue(looseId, out string exactId)
-            && businessProfiles.TryGetValue(exactId, out profile))
-            {
-                looseBusinessProfileAliasHitCount++;
-                return true;
-            }
-
-            businessProfileMissCount++;
-            TrackMissingId(missingBusinessProfileIds, normalizedId);
-            return false;
-        }
-
         public string BuildDiagnosticsSummary()
         {
             string buildingMisses = missingBuildingDefinitionIds.Count > 0

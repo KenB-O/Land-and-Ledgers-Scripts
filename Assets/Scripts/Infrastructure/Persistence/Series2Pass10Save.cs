@@ -73,21 +73,6 @@ namespace LandLedgers.Persistence
             };
         }
 
-        public Pass5TownEvaluation ToEvaluation()
-        {
-            return new Pass5TownEvaluation
-            {
-                ReputationScore01 = ReputationScore01,
-                SnapshotStale = SnapshotStale,
-                WorkPasses = WorkPasses,
-                HousingPasses = HousingPasses,
-                ReputationPasses = ReputationPasses,
-                ArrivalsAllowed = ArrivalsAllowed,
-                LegacyRollStillLive = LegacyRollStillLive,
-                DepartureGateState = DepartureGateState ?? string.Empty,
-                Reasons = new List<string>(Reasons ?? new List<string>()),
-            };
-        }
     }
 
     /// <summary>Series 2 Pass 10 save section.</summary>

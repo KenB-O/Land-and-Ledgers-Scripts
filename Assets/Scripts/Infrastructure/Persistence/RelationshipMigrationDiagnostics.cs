@@ -76,8 +76,7 @@ namespace LandLedgers.Persistence
     }
 
     /// <summary>
-    /// Minimal legacy person evidence for the audit. Built from PersonState by
-    /// <see cref="RelationshipMigrationAuditAdapter"/>, or constructed directly in tests.
+    /// Minimal legacy person evidence for the audit. Constructed directly in tests.
     /// </summary>
     [Serializable]
     public struct LegacyPersonClaim
@@ -895,107 +894,4 @@ namespace LandLedgers.Persistence
         #endregion
     }
 
-    /// <summary>
-    /// Builds legacy claim sets from live runtime state so the auditor can run against a real
-    /// save (v5 or v6). Thin adapter only - all decision logic lives in
-    /// <see cref="RelationshipMigrationAuditor"/>.
-    /// </summary>
-    public static class RelationshipMigrationAuditAdapter
-    {
-        public static void FromRuntimeState(
-            PopulationState populationState,
-            IReadOnlyList<BusinessInstanceState> businesses,
-            out List<LegacyPersonClaim> personClaims,
-            out List<LegacyHouseholdClaim> householdClaims,
-            out List<LegacySlotClaim> slotClaims)
-        {
-            personClaims = new List<LegacyPersonClaim>();
-            householdClaims = new List<LegacyHouseholdClaim>();
-            slotClaims = new List<LegacySlotClaim>();
-
-            if (populationState != null)
-            {
-                if (populationState.people != null)
-                {
-                    for (int i = 0; i < populationState.people.Count; i++)
-                    {
-                        PersonState person = populationState.people[i];
-                        if (person == null)
-                        {
-                            continue;
-                        }
-
-                        personClaims.Add(new LegacyPersonClaim
-                        {
-                            PersonId = person.id,
-                            DisplayName = person.DisplayName,
-                            HouseholdId = person.householdId,
-                            PersonWageCents = person.wage.weeklyWage,
-                            WorkplaceBuildingId = person.workplaceBuildingId,
-                        });
-                    }
-                }
-
-                if (populationState.households != null)
-                {
-                    for (int i = 0; i < populationState.households.Count; i++)
-                    {
-                        HouseholdState household = populationState.households[i];
-                        if (household == null)
-                        {
-                            continue;
-                        }
-
-                        householdClaims.Add(new LegacyHouseholdClaim
-                        {
-                            HouseholdId = household.id,
-                            MemberIds = household.memberIds != null
-                                ? new List<int>(household.memberIds)
-                                : new List<int>(),
-                        });
-                    }
-                }
-            }
-
-            if (businesses != null)
-            {
-                for (int b = 0; b < businesses.Count; b++)
-                {
-                    BusinessInstanceState business = businesses[b];
-                    if (business == null || business.RuntimeState == null)
-                    {
-                        continue;
-                    }
-
-                    IReadOnlyList<WorkerSlotState> slots = business.RuntimeState.WorkerSlots;
-                    if (slots == null)
-                    {
-                        continue;
-                    }
-
-                    for (int s = 0; s < slots.Count; s++)
-                    {
-                        WorkerSlotState slot = slots[s];
-                        if (slot == null)
-                        {
-                            continue;
-                        }
-
-                        slotClaims.Add(new LegacySlotClaim
-                        {
-                            BusinessId = business.InstanceId,
-                            BusinessBuildingId = business.AssignedBuildingId,
-                            SlotId = slot.SlotId,
-                            AssignedWorkerId = slot.AssignedWorkerId,
-                            AssignedWorkerDisplayName = slot.AssignedWorkerDisplayName,
-                            WeeklyWageCents = slot.WeeklyWageCents,
-                            PaidActive = slot.IsPaidActive,
-                            SuspendedForMissedPayroll = slot.SuspendedForMissedPayroll,
-                            RequiredForOpening = slot.RequiredForOpening,
-                        });
-                    }
-                }
-            }
-        }
-    }
 }

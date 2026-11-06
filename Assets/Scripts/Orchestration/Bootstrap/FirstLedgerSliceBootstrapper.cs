@@ -2012,6 +2012,64 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            // Plan 04 N-slice (2026-11-06): notions counterparty for the
+            // bakery, same market, same finite-external-order shape as the
+            // feed precedent above. Terms are read from the catalog's
+            // authored registration (BakeryFlourSupply
+            // .EnsureBakeryImportables: "Off-map provision wholesaler,
+            // via railhead", 250 mi, 14 transit days, 10c/unit) — never
+            // hardcoded here. Supply is a finite external order of
+            // BakeryNotionsDailySupply.FiniteExternalOrderUnits units —
+            // the authored bootstrap endowment size, NOT canon; when it
+            // is exhausted the driver refuses loudly and a standing
+            // wholesale supply term is owed (D-1-adjacent). No freight
+            // surcharge: no freight rate is authored for the railhead
+            // route (Kennedy must approve a production freight rate
+            // before one is wired). No order is placed here — the daily
+            // driver orders the day's shortfall, so the pipeline primes
+            // from the first planned bake.
+            var notionsImportDiag = new List<string>();
+            LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.EnsureBakeryImportables(notionsImportDiag);
+            LandLedgers.Economy.Trade.ImportMaterial notionsMaterial =
+                LandLedgers.Economy.Trade.ImportCatalog.Get(
+                    LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId);
+            if (notionsMaterial == null)
+            {
+                // Notions failure must not kill the feed order below:
+                // log it and continue without a notions counterparty —
+                // the daily driver will name the missing counterparty
+                // loudly when it tries to order.
+                Debug.LogError("[NotionsSupply] notions import material is not registered; no notions counterparty registered.", this);
+            }
+            else
+            {
+                var notionsCounterparty = new ExternalCounterparty
+                {
+                    CounterpartyId = LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.NotionsSupplierId,
+                    DisplayName = LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.NotionsSupplierName,
+                    TransitDays = notionsMaterial.TransitDays,
+                    InitialBudgetCents = 0,
+                    SupplyUnits = new Dictionary<string, int>
+                    {
+                        [LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId] =
+                            LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.FiniteExternalOrderUnits,
+                    },
+                };
+                string notionsRefusal = market.RegisterCounterparty(notionsCounterparty);
+                if (notionsRefusal != null)
+                {
+                    Debug.LogError($"[NotionsSupply] external supplier registration refused: {notionsRefusal}", this);
+                }
+                else
+                {
+                    Debug.Log($"[NotionsSupply] '{notionsCounterparty.DisplayName}' registered for SKU " +
+                        $"'{LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId}' at {notionsMaterial.PricePerUnitCents}c/unit, " +
+                        $"transit {notionsCounterparty.TransitDays} days, finite supply " +
+                        $"{LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.FiniteExternalOrderUnits}u; " +
+                        "the daily driver orders the day's shortfall (BakeryNotionsDailySupply).", this);
+                }
+            }
+
             var procurement = new OffMapNamedSkuProcurementService(
                 storeBusiness.InstanceId, market,
                 new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState));

@@ -6538,6 +6538,8 @@ namespace LandLedgers.Orchestration.Systems
             }
             int importFlourPricePerLbCents = 0;
             int importFlourTransitDays = 0;
+            int importNotionsPricePerUnitCents = 0;
+            int importNotionsTransitDays = 0;
             {
                 var importDiag = new List<string>();
                 LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.EnsureBakeryImportables(importDiag);
@@ -6550,6 +6552,57 @@ namespace LandLedgers.Orchestration.Systems
                     importFlourPricePerLbCents = importFlour.PricePerUnitCents;
                     importFlourTransitDays = importFlour.TransitDays;
                 }
+                LandLedgers.Economy.Trade.ImportMaterial importNotions =
+                    LandLedgers.Economy.Trade.ImportCatalog.Get(
+                        LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId);
+                if (importNotions != null)
+                {
+                    importNotionsPricePerUnitCents = importNotions.PricePerUnitCents;
+                    importNotionsTransitDays = importNotions.TransitDays;
+                }
+            }
+
+            // Plan 04 N-slice (2026-11-06): the notions seam, in the same
+            // place the flour seam above is built. The live procurement
+            // service is the save slot first (SaveLoadManager
+            // .PassXlProcurementService — F19, assigned by the
+            // bootstrapper's feed registration in editor/development
+            // builds), falling back to the attached store feed
+            // procurement (same instance at NewGame). If neither exists
+            // the driver logs the blocker and buys nothing — the bake
+            // then refuses at Precheck on notions, honestly. The
+            // registration is built from the catalog figures above
+            // (10c/unit, 14 transit days, railhead origin) — never
+            // hardcoded; no freight surcharge, because no freight rate
+            // is authored for the railhead route (Kennedy must approve
+            // a production freight rate before one is wired).
+            LandLedgers.Economy.Businesses.GeneralStore.OffMapNamedSkuProcurementService notionsService =
+                save != null ? save.PassXlProcurementService : null;
+            if (notionsService == null) notionsService = storeFeedProcurement;
+            LandLedgers.Economy.BreadDrivers.Series2NotionsSupply notionsSupply = null;
+            LandLedgers.Economy.BreadDrivers.Series2CounterpartyRegistration notionsRegistration = null;
+            if (notionsService == null)
+            {
+                diagnostics.Add("DriveBakeryWholesalePlanning: no live procurement service (save slot PassXlProcurementService and attached store feed procurement are both null) — notions cannot be ordered or fed; the bake will refuse at Precheck on notions (F19).");
+            }
+            else if (importNotionsPricePerUnitCents <= 0)
+            {
+                diagnostics.Add("DriveBakeryWholesalePlanning: notions import price is not registered — notions cannot be ordered or fed; the bake will refuse at Precheck on notions.");
+            }
+            else
+            {
+                notionsRegistration = new LandLedgers.Economy.BreadDrivers.Series2CounterpartyRegistration
+                {
+                    SupplierId = LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.NotionsSupplierId,
+                    SupplierName = LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.NotionsSupplierName,
+                    SkuId = LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId,
+                    UnitGoodsCostCents = importNotionsPricePerUnitCents,
+                    FreightSurchargeCents = 0,
+                    InitialBudgetCents = 0,
+                    TransitDays = importNotionsTransitDays,
+                };
+                notionsSupply = new LandLedgers.Economy.BreadDrivers.Series2NotionsSupply(
+                    new LandLedgers.Economy.BreadDrivers.Series2FlourProcurementDriver(notionsService));
             }
 
             var inputs = new BakeryWholesaleDailyInputs
@@ -6578,6 +6631,8 @@ namespace LandLedgers.Orchestration.Systems
                 ImportFlourPricePerLbCents = importFlourPricePerLbCents,
                 ImportTransitDays = importFlourTransitDays,
                 ImportOrderPathExists = false,
+                NotionsSupply = notionsSupply,
+                NotionsRegistration = notionsRegistration,
             };
             BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, diagnostics);
             if (!string.IsNullOrWhiteSpace(result.Refusal))

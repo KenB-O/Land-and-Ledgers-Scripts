@@ -49,6 +49,16 @@ namespace LandLedgers.Economy.BreadDrivers
         public int ImportFlourPricePerLbCents;
         public int ImportTransitDays;
         public bool ImportOrderPathExists;
+
+        /// <summary>Plan 04 N-slice: notions procurement seam. The live
+        /// notions supply (store procurement service wrapped by
+        /// Series2NotionsSupply) and the caller-supplied counterparty
+        /// registration (vendor/SKU/price from the catalog, via the
+        /// forwarder). Null on either side means unwired: the driver
+        /// step logs the blocker and buys nothing — never a second
+        /// supply path, never conjured notions.</summary>
+        public Series2NotionsSupply NotionsSupply;
+        public Series2CounterpartyRegistration NotionsRegistration;
     }
 
     /// <summary>Millbrook flour quote as filled by the forwarder: sacks and
@@ -93,6 +103,12 @@ namespace LandLedgers.Economy.BreadDrivers
         public int FlourPoundsPurchased;
         /// <summary>Millbrook reorder lot id placed today, if any (Plan 02 slice 2B).</summary>
         public string MillbrookReorderLotId;
+        /// <summary>Notion units fed to the bin from arrived store lots today (Plan 04 N-slice).</summary>
+        public int NotionsUnitsFed;
+        /// <summary>Notion units ordered today for the pipeline (Plan 04 N-slice).</summary>
+        public int NotionsOrdered;
+        /// <summary>Arrival day of today's notions order, or 0 when none was placed (Plan 04 N-slice).</summary>
+        public int NotionsArrivalDayIndex;
     }
 
     /// <summary>
@@ -262,6 +278,35 @@ namespace LandLedgers.Economy.BreadDrivers
                 diag.Add($"BakeryWholesaleDailyDriver: flour sufficient — {flourOnHandLb} lb on hand for {batchesToday} batch(es); no purchase, no comparison.");
                 if (inputs.StoreFlourUnitPriceCents > 0)
                     flourCostPerBatchCents = BakeryFlourSupplierComparison.SacksPerBatch * inputs.StoreFlourUnitPriceCents;
+            }
+
+            // (b¾) Notions procurement + feed — Plan 04 N-slice: buy only
+            // today's need (1 notion/batch), receive due arrivals first,
+            // feed the bin, then order the remaining shortfall for the
+            // 14-day pipeline. This runs before RunScheduledDay, so a fed
+            // bin passes Precheck on notions; an unfed bin refuses there
+            // loudly, and the pipeline order is the honest path to the
+            // next bake — never a bootstrap seed, never conjured stock.
+            if (batchesToday > 0)
+            {
+                var notionsInputs = new BakeryNotionsDailySupplyInputs
+                {
+                    NotionsSupply = inputs.NotionsSupply,
+                    StoreRuntime = inputs.StoreRuntimeState,
+                    BakeryRuntime = inputs.BakeryRuntimeState,
+                    Bakery = bakery,
+                    IdRegistry = inputs.IdRegistry,
+                    Registration = inputs.NotionsRegistration,
+                    StoreBusinessId = inputs.StoreBusinessId,
+                    BakeryBusinessId = inputs.BakeryBusinessId,
+                    BatchesToday = batchesToday,
+                    DayIndex = dayIndex,
+                };
+                BakeryNotionsDailySupplyResult notionsResult =
+                    BakeryNotionsDailySupply.RunDay(notionsInputs, diag);
+                result.NotionsUnitsFed += notionsResult.NotionsFed;
+                result.NotionsOrdered += notionsResult.NotionsOrdered;
+                result.NotionsArrivalDayIndex = notionsResult.NotionsArrivalDayIndex;
             }
 
             // Per-batch economics, logged whenever a batch is planned today:

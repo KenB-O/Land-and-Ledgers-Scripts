@@ -92,6 +92,13 @@ namespace LandLedgers.Orchestration.Systems
         private readonly Dictionary<string, string> businessFeedLastStockRefusal = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly HashSet<string> horseCareRiskAlreadyLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> taskStartRefusalAlreadyLogged = new HashSet<string>(StringComparer.Ordinal);
+        // Slice F2: day-keyed hitch refusal log. The once-only set above
+        // hides a stall that persists for days (the Nov 6 console: T44
+        // sat Assigned for 10 days with nothing in the log after day 6).
+        // Hitch-path refusals log once per day per key instead, plus a
+        // daily hitch-state line, so a future stall stays visible.
+        private readonly Dictionary<string, int> hitchRefusalLoggedDay = new Dictionary<string, int>(StringComparer.Ordinal);
+        private int hitchStateLogDayIndex = -1;
         private readonly HashSet<string> freightAgreementBlockersLogged = new HashSet<string>(StringComparer.Ordinal);
 
         [Serializable]
@@ -3070,6 +3077,19 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.LogWarning(message, this);
         }
 
+        /// <summary>
+        /// Slice F2: hitch-path refusal logging, once per day per key.
+        /// Unlike the once-only set, a refusal that repeats for days stays
+        /// visible (one line per day), so a persistent stall can be read
+        /// from the log instead of going silent after day 1.
+        /// </summary>
+        private void LogHitchRefusalDayKeyed(string key, int dayIndex, string message)
+        {
+            if (hitchRefusalLoggedDay.TryGetValue(key, out int loggedDay) && loggedDay == dayIndex) return;
+            hitchRefusalLoggedDay[key] = dayIndex;
+            Debug.LogWarning(message, this);
+        }
+
         private EntityId ResolveFreightHandler(BusinessInstanceState carrier)
         {
             if (carrier?.Owner != null && carrier.Owner.PersonId >= 0)
@@ -3638,8 +3658,56 @@ namespace LandLedgers.Orchestration.Systems
                     break;
                 }
             }
-            if (active == null || tickEndMinute <= active.StartMinuteOfDay || tickStartMinute >= active.EndMinuteOfDay)
-                return true;
+            if (active == null) return true;
+            // Slice F2: the start-window decision lives in the pure helper
+            // (BusinessTaskStartWindow.Resolve) so the harness can pin it.
+            BusinessTaskStartDecision decision = BusinessTaskStartWindow.Resolve(
+                active.StartMinuteOfDay, active.EndMinuteOfDay, tickStartMinute, tickEndMinute);
+            if (decision == BusinessTaskStartDecision.Wait) return true;
+            if (decision == BusinessTaskStartDecision.CatchUp)
+            {
+                // Slice F2: missed-window catch-up. At high speed the
+                // 15-minute tick windows jump clean over a short reservation
+                // window (the Nov 6 console: T44 assigned day 6, started
+                // day 16; T168 created day 16, started day 19), and the
+                // day-scoped reservation then pins the start minute in the
+                // past for the rest of the day. Start late from now rather
+                // than never: release the stale window and re-reserve
+                // [nowMinute, nowMinute + remaining] if it is free and fits
+                // today. The fresh window keeps AdvanceAutonomousWork
+                // accruing progress (it only advances inside the
+                // reservation window) and keeps person time exclusive
+                // (TryReserve refuses on collision). The budget was already
+                // committed at assignment; nothing is bypassed, shortened,
+                // or re-timed. If the fresh window cannot be reserved, the
+                // task stays Assigned with no reservation, so the next tick
+                // re-derives a fresh window instead of pinning the stale
+                // one. If it cannot fit today, it waits for tomorrow's
+                // fresh derivation.
+                int nowMinute = tickEndMinute;
+                int remaining = Math.Max(1, task.MinutesRemaining);
+                if (nowMinute + remaining > 1440) return true;
+                int catchUpMinutes = IsArrivalDrivenTravelTask(task)
+                    ? FindTravelReservationWindowMinutes(ethan.id, dayIndex, nowMinute)
+                    : remaining;
+                if (nowMinute + catchUpMinutes > 1440) return true;
+                hub.PersonSchedules.Release(active.ReservationId);
+                string catchUpRefusal = hub.PersonSchedules.TryReserve(ethan.id, active.Activity, dayIndex,
+                    nowMinute, catchUpMinutes, TaskReservationLabel(task));
+                if (catchUpRefusal != null) return true;
+                active = null;
+                foreach (PersonActivityReservation reservation in hub.PersonSchedules.ActiveFor(ethan.id, dayIndex))
+                {
+                    if (reservation != null && string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal))
+                    {
+                        active = reservation;
+                        break;
+                    }
+                }
+                if (active == null) return true;
+                Debug.Log($"[BusinessTask] P{ethan.id} task '{task.TaskId}' missed its scheduled window; " +
+                    $"starting late at game minute {nowMinute} with a re-reserved window.", this);
+            }
 
             if (!hub.Tasks.StartTask(task.TaskId, dayIndex, out refusal)) return false;
             if (task.DefinitionId == JourneyTravel.TravelTaskId && destinationBuildingId >= 0)
@@ -4551,8 +4619,8 @@ namespace LandLedgers.Orchestration.Systems
             wagon.HitchPreparationTravelTaskId = travel.TaskId.ToString();
             if (!TryStartBusinessPersonTask(travel, ethan, dayIndex, PersonActivityKind.Travel, ethan.homeBuildingId, out string refusal))
             {
-                if (taskStartRefusalAlreadyLogged.Add("hitch-travel:" + travel.TaskId))
-                    Debug.LogWarning($"[Hitching] Ethan's staging travel for shipment '{shipmentId}' could not reserve time: {refusal}", this);
+                LogHitchRefusalDayKeyed("hitch-travel:" + travel.TaskId, dayIndex,
+                    $"[Hitching] Ethan's staging travel for shipment '{shipmentId}' could not reserve time: {refusal}");
                 return;
             }
             Debug.Log($"[Hitching] Ethan P{ethan.id} assigned staging travel task '{travel.TaskId}' to building {ethan.homeBuildingId} " +
@@ -4569,23 +4637,77 @@ namespace LandLedgers.Orchestration.Systems
             PersonState ethan = freight.Owner != null ? populationManager.State.GetPerson(freight.Owner.PersonId) : null;
             if (hitch == null || ethan == null) return;
 
+            // Slice F2: daily hitch-state line while the hitch is open and
+            // uncompleted — task status, remaining minutes, reservation
+            // state — so a stall that persists for days stays visible
+            // instead of going silent after day 1.
+            if (hitchStateLogDayIndex != dayIndex
+                && (hitch.Status == TaskStatus.Queued || hitch.Status == TaskStatus.Assigned))
+            {
+                hitchStateLogDayIndex = dayIndex;
+                PersonActivityReservation stateReservation = hub.PersonSchedules.ActiveFor(ethan.id, dayIndex)
+                    .FirstOrDefault(reservation => reservation != null
+                        && string.Equals(reservation.Label, TaskReservationLabel(hitch), StringComparison.Ordinal));
+                Debug.Log($"[Hitching] day {dayIndex} state: task='{hitch.TaskId}' status={hitch.Status} " +
+                    $"remaining={hitch.MinutesRemaining}min reservation={(stateReservation != null
+                        ? $"[{stateReservation.StartMinuteOfDay}-{stateReservation.EndMinuteOfDay}]"
+                        : "none")} visually-at-staging={IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)}.", this);
+            }
+
             // Overnight 2026-11-04: while staging travel is the current
             // phase, drive it (mirroring the freight-meeting travel
             // starter) and leave the hitch task alone until arrival.
             if (TryStartQueuedOpeningHitchTravel(dayIndex, tickStartMinute, tickEndMinute, wagon, ethan)) return;
 
             if (hitch.Status != TaskStatus.Queued && hitch.Status != TaskStatus.Assigned) return;
-            if (!IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            if (!IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId))
+            {
+                // Slice F2: day-keyed, not silent. This is the Note-4 trap
+                // signature — journey location says staging (so no travel
+                // task is created) while the visual agent is elsewhere —
+                // so it must stay visible while it persists.
+                LogHitchRefusalDayKeyed("away:" + hitch.TaskId, dayIndex,
+                    $"[Hitching] Task '{hitch.TaskId}' waits: Ethan P{ethan.id} is not visually at staging " +
+                    $"(home building {ethan.homeBuildingId}); journey location is '{ResolvePersonJourneyLocation(ethan.id)}'.");
+                return;
+            }
             int nowMinute = timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : tickStartMinute;
             PersonActivityReservation scheduled = hub.PersonSchedules.ActiveFor(ethan.id, dayIndex)
                 .FirstOrDefault(reservation => reservation != null
                     && string.Equals(reservation.Label, TaskReservationLabel(hitch), StringComparison.Ordinal));
             int startMinute = scheduled != null ? scheduled.StartMinuteOfDay
                 : FindAvailablePersonStartMinute(ethan.id, dayIndex, nowMinute, Math.Max(1, hitch.MinutesRemaining));
-            if (startMinute < 0 || startMinute > tickEndMinute) return;
+            if (startMinute < 0)
+            {
+                // Slice F2: day-keyed, with the §6 probe numbers — Ethan's
+                // capacity factor and remaining budget minutes — so a
+                // no-window stall names its cause instead of returning
+                // silently.
+                float capacityFactor = DailyNeedsService.WorkCapacityFactor(ethan);
+                WorkTimeBudget budget = hub.WorkTimeBudgets?.GetOrCreate(EntityId.For(EntityKind.Person, ethan.id));
+                LogHitchRefusalDayKeyed("no-window:" + hitch.TaskId, dayIndex,
+                    $"[Hitching] Task '{hitch.TaskId}' has no free work window on day {dayIndex} " +
+                    $"(needs {Math.Max(1, hitch.MinutesRemaining)}min); Ethan P{ethan.id} capacity={capacityFactor:0.00}, " +
+                    $"budget remaining={budget?.MinutesRemaining ?? -1} of {budget?.EffectiveBudgetMinutes ?? -1}min.");
+                return;
+            }
+            if (startMinute > tickEndMinute) return;
 
             AnimalState horse = FindOpeningFreightHorse(freight.InstanceId);
-            if (horse == null || !HorseAuthority.IsWorkReady(horse)) return;
+            if (horse == null || !HorseAuthority.IsWorkReady(horse))
+            {
+                // Slice F2 (H2): no threshold change — log the exact
+                // failing metric, day-keyed, so an unfit horse stays
+                // visible as the blocker.
+                LogHitchRefusalDayKeyed("horse-unfit:" + hitch.TaskId, dayIndex,
+                    horse == null
+                        ? $"[Hitching] Task '{hitch.TaskId}' waits: no B3 horse resolves for the hitch."
+                        : $"[Hitching] Task '{hitch.TaskId}' waits: A0 is not work-ready " +
+                            $"(health={horse.Health01:0.00}, nutrition={horse.Nutrition01:0.00}, " +
+                            $"hydration={horse.Hydration01:0.00}, fatigue={horse.Fatigue01:0.00}, " +
+                            $"housing='{horse.HousingId}').");
+                return;
+            }
             float startSeconds = AbsoluteNowGameSeconds() + Math.Max(0, startMinute - nowMinute) * 60f;
             float endSeconds = startSeconds + Math.Max(1, hitch.MinutesRemaining) * 60f;
             var availability = new AnimalAvailabilityAuthority(hub.ReservationAuthority);
@@ -4595,8 +4717,11 @@ namespace LandLedgers.Orchestration.Systems
                     hitch.TaskId.ToString(), availability, startSeconds, endSeconds, out _);
                 if (horseRefusal != null)
                 {
-                    if (taskStartRefusalAlreadyLogged.Add("horse:" + hitch.TaskId))
-                        Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' remains queued; A0 reservation refused: {horseRefusal}", this);
+                    // Slice F2 (H4): day-keyed, naming the competing holder
+                    // (the refusal itself does not name it).
+                    LogHitchRefusalDayKeyed("horse:" + hitch.TaskId, dayIndex,
+                        $"[Hitching] Task '{hitch.TaskId}' remains queued; A0 reservation refused: {horseRefusal} " +
+                        $"(holder: use={horse.CurrentUse}, assignment='{horse.CurrentAssignmentId}').");
                     return;
                 }
             }
@@ -4608,8 +4733,8 @@ namespace LandLedgers.Orchestration.Systems
                 if (wagonRefusal != null)
                 {
                     HorseAuthority.ReleaseUse(horse, availability);
-                    if (taskStartRefusalAlreadyLogged.Add("wagon:" + hitch.TaskId))
-                        Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' remains queued; wagon reservation refused: {wagonRefusal}", this);
+                    LogHitchRefusalDayKeyed("wagon:" + hitch.TaskId, dayIndex,
+                        $"[Hitching] Task '{hitch.TaskId}' remains queued; wagon reservation refused: {wagonRefusal}.");
                     return;
                 }
                 wagon.HitchPreparationReservationId = wagonHold?.ReservationId ?? string.Empty;
@@ -4619,19 +4744,19 @@ namespace LandLedgers.Orchestration.Systems
             if (!TryStartBusinessPersonTask(hitch, ethan, dayIndex, PersonActivityKind.Work, -1, out string prepareRefusal))
             {
                 ReleaseOpeningHitchReservations(horse, wagon);
-                if (taskStartRefusalAlreadyLogged.Add("schedule:" + hitch.TaskId))
-                    Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' retained queued until Ethan has a valid work opening: {prepareRefusal}", this);
+                LogHitchRefusalDayKeyed("schedule:" + hitch.TaskId, dayIndex,
+                    $"[Hitching] Task '{hitch.TaskId}' retained queued until Ethan has a valid work opening: {prepareRefusal}");
                 return;
             }
             if (wasQueued && hitch.Status == TaskStatus.Assigned)
                 Debug.Log($"[Hitching] Ethan P{ethan.id} assigned hitch task '{hitch.TaskId}' at minute {startMinute}; " +
                     $"HorseAuthority reserved A0 and ReservationAuthority reserved wagon '{wagon.AssetId}'.", this);
             if (!BeginScheduledBusinessPersonTask(hitch, ethan, dayIndex, tickStartMinute,
-                    tickEndMinute, -1, out string startRefusal)
-                && taskStartRefusalAlreadyLogged.Add("start:" + hitch.TaskId))
+                    tickEndMinute, -1, out string startRefusal))
             {
                 ReleaseOpeningHitchReservations(horse, wagon);
-                Debug.LogWarning($"[Hitching] Task '{hitch.TaskId}' remains pending; start refused: {startRefusal}", this);
+                LogHitchRefusalDayKeyed("start:" + hitch.TaskId, dayIndex,
+                    $"[Hitching] Task '{hitch.TaskId}' remains pending; start refused: {startRefusal}");
             }
         }
 
@@ -4660,14 +4785,14 @@ namespace LandLedgers.Orchestration.Systems
                 if (trip == null || !string.Equals(trip.HitchTaskId, wagon.HitchPreparationTaskId, StringComparison.Ordinal)) continue;
                 if (!TryStartBusinessPersonTask(task, ethan, dayIndex, PersonActivityKind.Travel, trip.StagingBuildingId, out string prepareRefusal))
                 {
-                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
-                        Debug.LogWarning($"[Hitching] Ethan's staging travel task '{task.TaskId}' could not reserve time: {prepareRefusal}", this);
+                    LogHitchRefusalDayKeyed("travel:" + task.TaskId, dayIndex,
+                        $"[Hitching] Ethan's staging travel task '{task.TaskId}' could not reserve time: {prepareRefusal}");
                     return true;
                 }
                 if (!BeginScheduledBusinessPersonTask(task, ethan, dayIndex, tickStartMinute, tickEndMinute, trip.StagingBuildingId, out string startRefusal))
                 {
-                    if (taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
-                        Debug.LogWarning($"[Hitching] Ethan's staging travel task '{task.TaskId}' could not start: {startRefusal}", this);
+                    LogHitchRefusalDayKeyed("travel:" + task.TaskId, dayIndex,
+                        $"[Hitching] Ethan's staging travel task '{task.TaskId}' could not start: {startRefusal}");
                     return true;
                 }
                 return true;

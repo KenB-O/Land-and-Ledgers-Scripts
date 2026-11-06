@@ -620,6 +620,16 @@ namespace LandLedgers.Editor.Economy
                 "diagnostics name the per-batch economics line with the notions cost unknown (no registration — Plan 10 E5); diag: " + diag);
             Assert.IsFalse(diag.Contains("margin -10c/batch"),
                 "the flour-only margin must no longer be printed when the notions cost is unknown; diag: " + diag);
+            // Plan 11 M1: the standard cost is labelled standalone-batch,
+            // and the line appends the day's actual purchase from the
+            // result fields (2 sacks, 20 lb, 58c spent; bin 0 + 20 = 20 lb
+            // on hand after the purchase, before the bake consumes 12 lb).
+            Assert.IsTrue(diag.Contains("standalone-batch"),
+                "the standard cost is labelled standalone-batch; diag: " + diag);
+            Assert.IsTrue(diag.Contains("actual flour purchase today: 2 sack(s), 20 lb, 58c spent"),
+                "the line names the actual purchase; diag: " + diag);
+            Assert.IsTrue(diag.Contains("flour on hand after purchase: 20 lb"),
+                "the line states the carryover position; diag: " + diag);
         }
 
         [Test]
@@ -803,6 +813,131 @@ namespace LandLedgers.Editor.Economy
                 "a zero notions price is unknown, never free; diag: " + diag);
             Assert.IsFalse(diag.Contains("margin -20c/batch") || diag.Contains("margin -10c/batch"),
                 "no margin is printed when the notions cost is unknown; diag: " + diag);
+        }
+
+        // ---- Plan 11 M1: the economics line labels the standard cost
+        // as standalone-batch and appends the day's actual flour
+        // purchase (sacks bought, pounds received, cash spent at the
+        // live store price) plus the bin position after the purchase.
+        // Reporting only: no price, cost, or margin change is asserted
+        // anywhere here — the -20c standard margin is pinned as the
+        // reporting behaviour, not as cash spent. ----------------------
+
+        private static BakeryWholesaleDailyInputs InputsWithNotionsRegistration(Slice s, int dayIndex)
+        {
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, dayIndex);
+            inputs.NotionsRegistration = new Series2CounterpartyRegistration
+            {
+                SupplierId = "notions-supplier",
+                SupplierName = "Notions Supplier",
+                SkuId = BakeryFlourSupply.NotionsMaterialId,
+                UnitGoodsCostCents = 10,
+                TransitDays = 14,
+            };
+            return inputs;
+        }
+
+        private static string EconomicsLine(List<string> diag)
+        {
+            foreach (string line in diag)
+                if (line != null && line.Contains("per-batch economics"))
+                    return line;
+            return string.Empty;
+        }
+
+        [Test]
+        public void EconomicsLine_M1_TwoSackDay_StandaloneLabel_AndActualPurchase()
+        {
+            // 2-sack day (empty bin, store 4 sacks @ 29c): the standard
+            // cost and the actual purchase agree (2 sacks, 58c), and the
+            // line says so — the label is what distinguishes them on
+            // carryover days, not the numbers on this day.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsWithNotionsRegistration(s, 2), s.Diag);
+
+            Assert.AreEqual(1, result.BatchesBaked);
+            Assert.AreEqual(2, result.FlourSacksPurchased);
+            Assert.AreEqual(20, result.FlourPoundsPurchased);
+            string line = EconomicsLine(s.Diag);
+            Assert.IsTrue(line.Contains("standalone-batch"),
+                "the standard cost is labelled standalone-batch; line: " + line);
+            Assert.IsTrue(line.Contains("flour 58c + notions 10c = 68c/batch"),
+                "the standalone-batch standard cost is unchanged; line: " + line);
+            Assert.IsTrue(line.Contains("margin -20c/batch"),
+                "the standalone-batch margin is unchanged; line: " + line);
+            Assert.IsTrue(line.Contains("actual flour purchase today: 2 sack(s), 20 lb, 58c spent"),
+                "the line names the actual purchase; line: " + line);
+            Assert.IsTrue(line.Contains("flour on hand after purchase: 20 lb"),
+                "the line states the carryover position (bin 0 + 20 lb bought); line: " + line);
+        }
+
+        [Test]
+        public void EconomicsLine_M1_OneSackCarryoverDay_StandardCostUnchanged_ActualPurchaseOneSack()
+        {
+            // 1-sack carryover day: the bin already holds 8 lb, so the
+            // driver buys 1 sack (10 lb, 29c) and the bin holds 18 lb
+            // after the purchase — while the line still reports the
+            // standalone-batch standard cost of 58c. The 29c gap between
+            // the standard cost and the cash spent is the carryover.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 8, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsWithNotionsRegistration(s, 2), s.Diag);
+
+            Assert.AreEqual(1, result.BatchesBaked);
+            Assert.AreEqual(1, result.FlourSacksPurchased, "one sack covers the 4 lb shortfall");
+            Assert.AreEqual(10, result.FlourPoundsPurchased);
+            string line = EconomicsLine(s.Diag);
+            Assert.IsTrue(line.Contains("standalone-batch"),
+                "the standard cost is labelled standalone-batch; line: " + line);
+            Assert.IsTrue(line.Contains("flour 58c + notions 10c = 68c/batch"),
+                "the standard cost still charges two full sacks on a carryover day; line: " + line);
+            Assert.IsTrue(line.Contains("margin -20c/batch"),
+                "the standalone-batch margin is unchanged on a carryover day; line: " + line);
+            Assert.IsTrue(line.Contains("actual flour purchase today: 1 sack(s), 10 lb, 29c spent"),
+                "the line names the actual one-sack purchase; line: " + line);
+            Assert.IsTrue(line.Contains("flour on hand after purchase: 18 lb"),
+                "the line states the carryover position (bin 8 + 10 lb bought); line: " + line);
+            Assert.AreEqual(6, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin 18 lb after purchase, 12 lb consumed by the bake");
+        }
+
+        [Test]
+        public void EconomicsLine_M1_ZeroSackSufficientStockDay_ActualPurchaseZero()
+        {
+            // 0-sack day: the bin already holds the full 12 lb, so
+            // nothing is bought and nothing is spent — while the line
+            // still reports the standalone-batch standard cost of 58c.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 12, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsWithNotionsRegistration(s, 2), s.Diag);
+
+            Assert.AreEqual(1, result.BatchesBaked, "the bake proceeds on bin stock; diag: " + string.Join(" | ", s.Diag));
+            Assert.AreEqual(0, result.FlourSacksPurchased, "no purchase when the bin covers the batch");
+            Assert.AreEqual(0, result.FlourPoundsPurchased);
+            Assert.AreEqual(4, s.StoreRuntime.GetRetailItemStockUnits("flour", "staple_food"),
+                "the store keeps all 4 sacks");
+            string line = EconomicsLine(s.Diag);
+            Assert.IsTrue(line.Contains("standalone-batch"),
+                "the standard cost is labelled standalone-batch; line: " + line);
+            Assert.IsTrue(line.Contains("flour 58c + notions 10c = 68c/batch"),
+                "the standard cost still charges two full sacks on a no-purchase day; line: " + line);
+            Assert.IsTrue(line.Contains("actual flour purchase today: 0 sack(s), 0 lb, 0c spent"),
+                "the line names the zero purchase; line: " + line);
+            Assert.IsTrue(line.Contains("flour on hand after purchase: 12 lb"),
+                "the line states the carryover position (bin 12 + 0 lb bought); line: " + line);
         }
 
         [Test]

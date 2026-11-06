@@ -446,6 +446,16 @@ namespace LandLedgers.Economy.BreadDrivers
             // zero/negative notions price is treated as unknown, never as
             // free notions. The missing B2B flour price term is recorded
             // in Plan 02 §5.
+            //
+            // Plan 11 M1 (reporting only): the cost above is a
+            // STANDALONE-BATCH standard cost — it charges two full sacks
+            // of flour to every batch and never credits carryover — so
+            // the line labels it as such and appends the day's actual
+            // flour purchase from fields the result already carries
+            // (sacks bought, pounds received, cash spent at the live
+            // store price) plus the bin position after the purchase.
+            // No new state, price, cost, or decision: procurement,
+            // bake, transfer, and settlement are untouched.
             if (batchesToday > 0 && flourCostPerBatchCents.HasValue)
             {
                 int accountPrice = AccountPricePerUnit(bakery, inputs.StoreBusinessId);
@@ -456,15 +466,18 @@ namespace LandLedgers.Economy.BreadDrivers
                         && inputs.NotionsRegistration.UnitGoodsCostCents > 0
                         ? (int?)(BakeryBreadCatalog.StandardNotionsPerBatch * inputs.NotionsRegistration.UnitGoodsCostCents)
                         : null;
+                    int actualFlourCashSpentCents = result.FlourSacksPurchased * inputs.StoreFlourUnitPriceCents;
+                    int flourOnHandAfterPurchaseLb = flourOnHandLb + result.FlourPoundsPurchased;
+                    string actualPurchaseClause = $"actual flour purchase today: {result.FlourSacksPurchased} sack(s), {result.FlourPoundsPurchased} lb, {actualFlourCashSpentCents}c spent; flour on hand after purchase: {flourOnHandAfterPurchaseLb} lb";
                     if (notionsCostPerBatchCents.HasValue)
                     {
                         int trueCostPerBatch = flourCostPerBatchCents.Value + notionsCostPerBatchCents.Value;
                         int margin = revenuePerBatch - trueCostPerBatch;
-                        diag.Add($"BakeryWholesaleDailyDriver: per-batch economics — flour {flourCostPerBatchCents.Value}c + notions {notionsCostPerBatchCents.Value}c = {trueCostPerBatch}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), margin {margin}c/batch; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
+                        diag.Add($"BakeryWholesaleDailyDriver: per-batch economics (standalone-batch standard cost) — flour {flourCostPerBatchCents.Value}c + notions {notionsCostPerBatchCents.Value}c = {trueCostPerBatch}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), margin {margin}c/batch; {actualPurchaseClause}; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
                     }
                     else
                     {
-                        diag.Add($"BakeryWholesaleDailyDriver: per-batch economics (flour only — notions cost unknown, no notions registration) — flour {flourCostPerBatchCents.Value}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), no margin stated; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
+                        diag.Add($"BakeryWholesaleDailyDriver: per-batch economics (standalone-batch standard cost; flour only — notions cost unknown, no notions registration) — flour {flourCostPerBatchCents.Value}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), no margin stated; {actualPurchaseClause}; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
                     }
                 }
             }

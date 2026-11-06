@@ -4218,12 +4218,22 @@ namespace LandLedgers.Orchestration.Systems
                         {
                             Debug.LogWarning($"[FreightAgreement] Exit route unplanned for shipment '{stableShipmentId}': logistics runtime unavailable.", this);
                         }
-                        else if (logisticsRuntime.TryPlanFreightExitRoute(carrier, exitPoint, out LogisticsRoutePlan exitPlan, out string exitRouteReason))
+                        // Slice F1: plan via the carrier method, which
+                        // resolves staging with presentation parity (B3
+                        // anchor -> B3 plot -> operator home anchor ->
+                        // operator home plot, each in-bounds and a road
+                        // cell). NON-GATING, as in S8: a planning failure
+                        // is warned, never a registration failure.
+                        else if (logisticsRuntime.TryPlanFreightExitRouteForCarrier(
+                            carrier,
+                            populationManager?.State?.GetPerson(accepted.AcceptingOperatorPersonId)?.homeBuildingId ?? -1,
+                            exitPoint, out LogisticsRoutePlan exitPlan, out string exitRouteReason,
+                            out GridCoord stagingCell, out string stagingSource))
                         {
                             created.routePlan = exitPlan;
                             exitPoint.GridExitCoord = exitPlan.VisibleEnd;
                             exitPoint.HasGridExit = true;
-                            resolvedExitRouteSummary = $", grid-exit=({exitPlan.VisibleEnd.x}, {exitPlan.VisibleEnd.z}) " +
+                            resolvedExitRouteSummary = $", staging=({stagingCell.x}, {stagingCell.z}) via {stagingSource}, grid-exit=({exitPlan.VisibleEnd.x}, {exitPlan.VisibleEnd.z}) " +
                                 $"{exitPlan.VisiblePath?.Count ?? 0} cells {exitPlan.VisibleTravelGameSeconds:F0}s";
                         }
                         else

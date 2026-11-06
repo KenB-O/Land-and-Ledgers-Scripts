@@ -1521,13 +1521,115 @@ namespace LandLedgers.Economy
             // NOTE: no !exitPoint.HasGridExit guard — the exit point arrives
             // from S7 with HasGridExit == false by construction, and this
             // method is what fills the grid slot.
-            if (!TryResolveBusinessRoadAccess(source, out GridCoord staging))
+            // Slice F1: the refusal now names the exact branch that failed
+            // (townWorld / building / plot / cell), via the detailed
+            // resolver — the old collapsed message could not diagnose
+            // itself. A staging cell that is in-bounds but not a road cell
+            // now refuses here instead of failing later in planning with a
+            // less clear reason.
+            if (!TryResolveBusinessRoadAccessDetailed(source, out GridCoord staging, out string branchReason))
             {
-                // TryResolveBusinessRoadAccess returns no reason of its own,
-                // so the refusal names the business whose staging is missing.
-                reason = $"TryPlanFreightExitRoute: road access could not be resolved for business '{source.InstanceId}' — no placed building or plot road-access cell, so the freight exit route has no staging cell.";
+                reason = $"TryPlanFreightExitRoute: road access could not be resolved for business '{source.InstanceId}' — {branchReason}, so the freight exit route has no staging cell.";
                 return false;
             }
+
+            return TryPlanExitRouteFromStaging(staging, exitPoint, out plan, out reason);
+        }
+
+        /// <summary>
+        /// Slice F1 (Objectives 16-17): plan the staging-to-edge grid route
+        /// for a detailed freight shipment with presentation-parity staging
+        /// resolution. Staging is resolved in this order, each candidate
+        /// validated in-bounds AND a road cell by
+        /// FreightStagingCellSelector: (1) the carrier building's anchor
+        /// road-access coord, (2) the carrier building plot's
+        /// roadAccessCell, (3) the operator home building's anchor
+        /// road-access coord, (4) the operator home building plot's
+        /// roadAccessCell. Every candidate comes from authored building /
+        /// plot data; no world position is invented. On success the staging
+        /// cell and its source ("business-anchor" / "business-plot" /
+        /// "operator-home-anchor" / "operator-home-plot") are returned so
+        /// the caller can log them. Planning itself is identical to
+        /// TryPlanFreightExitRoute (same GridExitSelector, same
+        /// GridCoord-to-GridCoord request, ExtraOffMapCells = 0).
+        /// SOURCE-REVIEWED ONLY: LogisticsRuntimeManager.cs is
+        /// harness-excluded.
+        /// </summary>
+        public bool TryPlanFreightExitRouteForCarrier(
+            BusinessInstanceState carrier,
+            int operatorHomeBuildingId,
+            RegionalExitPoint exitPoint,
+            out LogisticsRoutePlan plan,
+            out string reason,
+            out GridCoord stagingCell,
+            out string stagingSource)
+        {
+            plan = null;
+            reason = string.Empty;
+            stagingCell = default;
+            stagingSource = string.Empty;
+            AutoWire();
+
+            if (carrier == null)
+            {
+                reason = "TryPlanFreightExitRouteForCarrier: no carrier business supplied — cannot resolve staging.";
+                return false;
+            }
+
+            if (exitPoint == null)
+            {
+                reason = "TryPlanFreightExitRouteForCarrier: no regional exit point supplied — no gateway bearing to select on.";
+                return false;
+            }
+
+            if (townWorld == null || townWorld.Grid == null)
+            {
+                reason = "TryPlanFreightExitRouteForCarrier: no town grid available — cannot validate a staging road cell.";
+                return false;
+            }
+
+            GridCoord? carrierAnchor = TryGetBuildingAnchorCoord(carrier.AssignedBuildingId);
+            GridCoord? carrierPlot = TryGetBuildingPlotCell(carrier.AssignedBuildingId);
+            if (FreightStagingCellSelector.TrySelectStagingCell(
+                    carrierAnchor, carrierPlot, IsUsableRoadCell,
+                    out GridCoord cell, out string source, out string carrierReason))
+            {
+                stagingCell = cell;
+                stagingSource = "business-" + source;
+            }
+            else
+            {
+                GridCoord? homeAnchor = TryGetBuildingAnchorCoord(operatorHomeBuildingId);
+                GridCoord? homePlot = TryGetBuildingPlotCell(operatorHomeBuildingId);
+                if (!FreightStagingCellSelector.TrySelectStagingCell(
+                        homeAnchor, homePlot, IsUsableRoadCell,
+                        out cell, out source, out string homeReason))
+                {
+                    reason = $"TryPlanFreightExitRouteForCarrier: no staging road cell for carrier '{carrier.InstanceId}' — " +
+                        $"business candidates: {carrierReason}; " +
+                        $"operator-home candidates (homeBuildingId={operatorHomeBuildingId}): {homeReason}.";
+                    return false;
+                }
+
+                stagingCell = cell;
+                stagingSource = "operator-home-" + source;
+            }
+
+            Debug.Log($"[FreightExit] staging=({stagingCell.x}, {stagingCell.z}) via {stagingSource} for carrier '{carrier.InstanceId}'.", this);
+            return TryPlanExitRouteFromStaging(stagingCell, exitPoint, out plan, out reason);
+        }
+
+        /// <summary>
+        /// Shared staging-to-edge planning tail for
+        /// TryPlanFreightExitRoute and TryPlanFreightExitRouteForCarrier:
+        /// bearing-side edge road selection plus the GridCoord-to-GridCoord
+        /// plan (ExtraOffMapCells = 0). Staging is already resolved by the
+        /// caller.
+        /// </summary>
+        private bool TryPlanExitRouteFromStaging(GridCoord staging, RegionalExitPoint exitPoint, out LogisticsRoutePlan plan, out string reason)
+        {
+            plan = null;
+            reason = string.Empty;
 
             if (townWorld == null || townWorld.Grid == null)
             {
@@ -1558,6 +1660,28 @@ namespace LandLedgers.Economy
 
             plan = planned;
             return true;
+        }
+
+        private GridCoord? TryGetBuildingAnchorCoord(int buildingId)
+        {
+            if (buildingId < 0 || townWorld == null) return null;
+            if (!townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building) || building == null) return null;
+            return building.TryGetRoadAccessCoord(out GridCoord coord) ? coord : (GridCoord?)null;
+        }
+
+        private GridCoord? TryGetBuildingPlotCell(int buildingId)
+        {
+            if (buildingId < 0 || townWorld == null) return null;
+            if (!townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building) || building == null) return null;
+            TownPlot plot = FindPlot(building.plotId);
+            return plot != null ? plot.roadAccessCell : (GridCoord?)null;
+        }
+
+        private bool IsUsableRoadCell(GridCoord coord)
+        {
+            return townWorld != null && townWorld.Grid != null
+                && townWorld.Grid.IsInBounds(coord)
+                && townWorld.Grid.GetCell(coord).IsRoad;
         }
 
         private void ResolveCarrierAssignment(
@@ -1717,6 +1841,90 @@ namespace LandLedgers.Economy
 
             coord = plot.roadAccessCell;
             return townWorld.Grid.IsInBounds(coord);
+        }
+
+        /// <summary>
+        /// Slice F1 (Objectives 16-17): branch-split variant of
+        /// TryResolveBusinessRoadAccess. Same resolution shape (including
+        /// the General Store special path), but the refusal names the exact
+        /// branch that failed — townWorld-null / building-unplaced /
+        /// plot-missing / cell-out-of-bounds / cell-not-road — with the
+        /// actual values, so a staging refusal can be diagnosed from the
+        /// log. Unlike the original, a staging cell that is in-bounds but
+        /// not a road cell refuses here (cell-not-road) instead of flowing
+        /// into planning with a non-road staging cell. The original method
+        /// above is unchanged, so its existing callers keep their
+        /// bounds-only behaviour.
+        /// </summary>
+        private bool TryResolveBusinessRoadAccessDetailed(BusinessInstanceState business, out GridCoord coord, out string branchReason)
+        {
+            coord = default;
+            branchReason = string.Empty;
+
+            if (business == null)
+            {
+                branchReason = "business-null (no business supplied)";
+                return false;
+            }
+
+            if (townWorld == null || townWorld.Grid == null)
+            {
+                branchReason = $"townWorld-null (townWorld={(townWorld == null ? "null" : "set")}, grid={(townWorld == null || townWorld.Grid == null ? "null" : "set")})";
+                return false;
+            }
+
+            if (generalStoreRuntime != null
+                && generalStoreRuntime.CurrentBusiness != null
+                && string.Equals(generalStoreRuntime.CurrentBusiness.InstanceId, business.InstanceId, StringComparison.OrdinalIgnoreCase)
+                && townWorld.TryGetBuildingById(generalStoreRuntime.StoreBuildingId, out PlacedBuilding storeBuilding))
+            {
+                TownPlot storePlot = FindPlot(storeBuilding.plotId);
+                if (storePlot != null)
+                {
+                    coord = storePlot.roadAccessCell;
+                    if (!townWorld.Grid.IsInBounds(coord))
+                    {
+                        branchReason = $"cell-out-of-bounds (cell=({coord.x}, {coord.z}), general-store plot {storeBuilding.plotId})";
+                        return false;
+                    }
+
+                    if (!townWorld.Grid.GetCell(coord).IsRoad)
+                    {
+                        branchReason = $"cell-not-road (cell=({coord.x}, {coord.z}), general-store plot {storeBuilding.plotId})";
+                        return false;
+                    }
+
+                    return true;
+                }
+            }
+
+            if (business.AssignedBuildingId < 0 || !townWorld.TryGetBuildingById(business.AssignedBuildingId, out PlacedBuilding building))
+            {
+                branchReason = $"building-unplaced (AssignedBuildingId={business.AssignedBuildingId})";
+                return false;
+            }
+
+            TownPlot plot = FindPlot(building.plotId);
+            if (plot == null)
+            {
+                branchReason = $"plot-missing (plotId={building.plotId}, building {business.AssignedBuildingId})";
+                return false;
+            }
+
+            coord = plot.roadAccessCell;
+            if (!townWorld.Grid.IsInBounds(coord))
+            {
+                branchReason = $"cell-out-of-bounds (cell=({coord.x}, {coord.z}), plot {building.plotId})";
+                return false;
+            }
+
+            if (!townWorld.Grid.GetCell(coord).IsRoad)
+            {
+                branchReason = $"cell-not-road (cell=({coord.x}, {coord.z}), plot {building.plotId})";
+                return false;
+            }
+
+            return true;
         }
 
         private TownPlot FindPlot(int plotId)

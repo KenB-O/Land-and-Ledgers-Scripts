@@ -6164,6 +6164,32 @@ namespace LandLedgers.Orchestration.Systems
         /// Actual production remains gated by configured equipment, fuel,
         /// ingredients, and the existing scheduled production authority.
         /// </summary>
+        /// <summary>
+        /// Plan 02 slice 2A: whether Millbrook freight can run, pinned to
+        /// observable state — a shipment carrying a Millbrook lot has
+        /// departed (InTransit or further). Until any such shipment has
+        /// departed, freight is blocked (staging/T49 — Obj 16–18) and the
+        /// comparison must rank Millbrook unavailable, never guess it
+        /// deliverable. Source-reviewed only — SimulationDrivers is
+        /// harness-excluded.
+        /// </summary>
+        private bool MillbrookFreightHasDeparted()
+        {
+            if (FreightProduction == null || millbrookAidRuntime == null) return false;
+            string lotPrefix = "aidlot-" + millbrookAidRuntime.BusinessId + ":";
+            foreach (LogisticsShipmentState shipment in FreightProduction.AllShipments())
+            {
+                if (shipment == null || string.IsNullOrWhiteSpace(shipment.CargoLotId)) continue;
+                if (!shipment.CargoLotId.StartsWith(lotPrefix, StringComparison.Ordinal)) continue;
+                if (shipment.Status == LogisticsShipmentStatus.InTransit
+                    || shipment.Status == LogisticsShipmentStatus.Arrived
+                    || shipment.Status == LogisticsShipmentStatus.Unloading
+                    || shipment.Status == LogisticsShipmentStatus.Completed)
+                    return true;
+            }
+            return false;
+        }
+
         private void DriveBakeryWholesalePlanning(int dayIndex)
         {
             LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
@@ -6284,6 +6310,74 @@ namespace LandLedgers.Orchestration.Systems
                 storePort = storeManager.BuildHouseholdTradingPort(storeBusiness);
             BusinessInstanceState bakeryBusiness = FindBusiness(bakery.BusinessInstanceId);
 
+            // Plan 02 (2026-11-06, slice 2A): the flour seam, in the same
+            // place the store seam above is built. Live store flour price
+            // from the store manager (never hardcoded); store sacks reach
+            // the driver through the store runtime state; Millbrook inputs
+            // from the already-attached aid runtime with the freight quote
+            // from the same rate card the negotiation uses; freight
+            // availability is observable state (a Millbrook shipment has
+            // departed — see MillbrookFreightHasDeparted), never a guess;
+            // import figures from ImportCatalog after registration, with no
+            // live order path in this slice.
+            int storeFlourPriceCents = 0;
+            if (storeManager != null)
+                storeFlourPriceCents = storeManager.GetItemSellingPriceCents("flour");
+            var millbrookQuote = new MillbrookFlourQuote();
+            if (millbrookAidRuntime != null)
+            {
+                millbrookQuote.SacksAvailable =
+                    millbrookAidRuntime.GetInventoryUnits("bakery_flour_sack") / 10;
+                int millbrookPriceCents = millbrookAidRuntime.GetOrderPriceCents("bakery_flour_sack");
+                millbrookQuote.GoodsPricePerSackCents =
+                    millbrookPriceCents > 0 ? (int?)millbrookPriceCents : null;
+                millbrookQuote.OneWayMiles = millbrookAidRuntime.PickupRouteMilesFromTown;
+                DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
+                if (developmentTownConfiguration != null
+                    && developmentTownConfiguration.TryGetBusiness(
+                        developmentTownConfiguration.FreightBusinessKey, out carrierDefinition)
+                    && carrierDefinition?.freightRateCard != null
+                    && FreightServiceQuoteCalculator.TryCalculate(
+                        millbrookAidRuntime.PickupRouteMilesFromTown,
+                        carrierDefinition.freightRateCard.baseServiceFeeCents,
+                        carrierDefinition.freightRateCard.ratePerMileCents,
+                        carrierDefinition.freightRateCard.chargeRoundTrip,
+                        out FreightServiceQuote freightQuote, out string quoteRefusal))
+                {
+                    millbrookQuote.FreightQuoteCents = freightQuote.TotalPriceCents;
+                }
+                else
+                {
+                    millbrookQuote.FreightUnavailableReason =
+                        "freight quote unavailable for the Millbrook route" +
+                        (developmentTownConfiguration == null ? " (no town rate configuration)" : "");
+                }
+                if (millbrookQuote.FreightQuoteCents.HasValue && MillbrookFreightHasDeparted())
+                {
+                    millbrookQuote.FreightAvailable = true;
+                }
+                else if (string.IsNullOrWhiteSpace(millbrookQuote.FreightUnavailableReason))
+                {
+                    millbrookQuote.FreightUnavailableReason =
+                        "freight blocked: no Millbrook shipment has departed (staging/T49 — Obj 16–18)";
+                }
+            }
+            int importFlourPricePerLbCents = 0;
+            int importFlourTransitDays = 0;
+            {
+                var importDiag = new List<string>();
+                LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.EnsureBakeryImportables(importDiag);
+                diagnostics.AddRange(importDiag);
+                LandLedgers.Economy.Trade.ImportMaterial importFlour =
+                    LandLedgers.Economy.Trade.ImportCatalog.Get(
+                        LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.FlourMaterialId);
+                if (importFlour != null)
+                {
+                    importFlourPricePerLbCents = importFlour.PricePerUnitCents;
+                    importFlourTransitDays = importFlour.TransitDays;
+                }
+            }
+
             var inputs = new BakeryWholesaleDailyInputs
             {
                 Bakery = bakery,
@@ -6302,6 +6396,14 @@ namespace LandLedgers.Orchestration.Systems
                 BakeryBusinessId = bakery.BusinessInstanceId,
                 Intake = state.WholesaleIntake,
                 StoreCatalog = state.Catalog,
+                StoreRuntimeState = storeBusiness?.RuntimeState,
+                BakeryRuntimeState = bakeryBusiness?.RuntimeState,
+                StoreFlourUnitPriceCents = storeFlourPriceCents,
+                MillbrookQuote = millbrookQuote,
+                MillbrookSupplier = millbrookAidRuntime,
+                ImportFlourPricePerLbCents = importFlourPricePerLbCents,
+                ImportTransitDays = importFlourTransitDays,
+                ImportOrderPathExists = false,
             };
             BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, diagnostics);
             if (!string.IsNullOrWhiteSpace(result.Refusal))

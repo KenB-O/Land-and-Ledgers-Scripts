@@ -251,6 +251,16 @@ namespace LandLedgers.Editor.Economy
             return account;
         }
 
+        private static void SeedStoreFlour(Slice s, int sacks)
+        {
+            if (sacks <= 0) return;
+            Assert.IsNull(s.StoreRuntime.TryAddRetailItemLot(
+                "opening-endowment:dev:general-store:seed:flour", "flour", "staple_food", "10 lb sack",
+                sacks, StoreInstanceId, StoreInstanceId,
+                "DevelopmentTownConfiguration opening inventory, general-store flour", 0),
+                "store flour lot seeding should succeed");
+        }
+
         private static BakeryWholesaleDailyInputs InputsFor(Slice s, int dayIndex, bool kitUsable = true,
             Func<string, WorkstationComponentView?> finder = null) =>
             new BakeryWholesaleDailyInputs
@@ -269,6 +279,26 @@ namespace LandLedgers.Editor.Economy
                 BakeryBusinessId = BakeryInstanceId,
                 Intake = s.Intake,
                 StoreCatalog = s.Catalog,
+                // Plan 02 slice 2A flour seam: live store price 29c (pinned by
+                // derivation in BakeryFlourSupplierComparisonTests), import
+                // figures from the catalog, no live import order path, and no
+                // Millbrook freight (blocked until a shipment departs).
+                StoreRuntimeState = s.StoreRuntime,
+                BakeryRuntimeState = s.BakeryRuntime,
+                StoreFlourUnitPriceCents = 29,
+                MillbrookQuote = new MillbrookFlourQuote
+                {
+                    SacksAvailable = 0,
+                    GoodsPricePerSackCents = null,
+                    OneWayMiles = 50f,
+                    FreightQuoteCents = 125,
+                    FreightAvailable = false,
+                    FreightUnavailableReason = "freight blocked: no Millbrook shipment has departed (staging/T49 — Obj 16–18)",
+                },
+                MillbrookSupplier = null,
+                ImportFlourPricePerLbCents = 3,
+                ImportTransitDays = 14,
+                ImportOrderPathExists = false,
             };
 
         [Test]
@@ -552,6 +582,79 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(s.ProductionDriver.Precheck(
                 2, true, WorkstationCatalog.BakeOven, finder, null, s.Diag),
                 "Precheck passes the kit and oven gates on the configured equipment; diag: " + string.Join(" | ", s.Diag));
+        }
+
+        [Test]
+        public void FlourProcuredThenBaked_EndToEnd()
+        {
+            // Plan 02 §7 test 12: account booked (24/daily/2c, due day 2),
+            // bin empty, store holds 4 sacks @ 29c. Notions/fuel are test
+            // fixture inputs via SeedInputs (Plan 01 pattern) — the plan's
+            // "notions seeded via BakeryFlourBootstrap" would also seed 120
+            // lb flour and defeat the test's premise, so the bootstrap is
+            // not used here; it stays test-only and is never a production seed.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+
+            Assert.AreEqual(1, result.BatchesPlanned);
+            Assert.AreEqual(2, result.FlourSacksPurchased, "2 sacks bought for the day's need");
+            Assert.AreEqual(20, result.FlourPoundsPurchased);
+            Assert.AreEqual(1, result.BatchesBaked);
+            Assert.AreEqual(1, result.TransfersCompleted);
+            Assert.AreEqual(24, result.UnitsStocked);
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin flour 20 -> 8 lb");
+            Assert.AreEqual(2, s.StoreRuntime.GetRetailItemStockUnits("flour", "staple_food"), "store flour 4 -> 2 sacks");
+            Assert.AreEqual(1990, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 58c flour + 48c wholesale");
+            Assert.AreEqual(5010, s.StoreRuntime.CurrentCashCents, "store 5,000 + 58c flour - 48c wholesale");
+            Assert.AreEqual(1, s.Bakery.FlourStock.Lots.Count, "exactly one bin lot for the purchase");
+            string diag = string.Join(" | ", s.Diag);
+            Assert.IsTrue(diag.Contains("BakeryFlourLocalPurchase: 2 sack(s) of flour (20 lb)"),
+                "diagnostics name the flour purchase; diag: " + diag);
+            Assert.IsTrue(diag.Contains("per-batch economics") && diag.Contains("margin -10c/batch"),
+                "diagnostics name the per-batch margin line (58c flour vs 48c revenue); diag: " + diag);
+        }
+
+        [Test]
+        public void NoDoublePurchaseOnRepeatedSameDayCall()
+        {
+            // Plan 02 §7 test 14, fixture-adjusted (see class note below):
+            // the store holds exactly the 2 sacks the first call needs, so
+            // the repeated same-day call cannot re-buy — the store is empty,
+            // no other source is executable — and the duplicate-transaction
+            // idempotency itself is pinned by
+            // BakeryFlourLocalPurchaseTests.DuplicateTransactionId_IsIdempotent.
+            // The plan's parenthetical ("bin already sufficient") does not
+            // hold for a 1-batch/day fixture: the second call plans the
+            // day-3 lead batch, which needs 12 lb against 8 lb on hand.
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 2);
+            BookAccount(s, 24, 1, 2, 2);
+
+            BakeryWholesaleDailyResult first = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+            Assert.AreEqual(2, first.FlourSacksPurchased);
+            Assert.AreEqual(1, first.TransfersCompleted);
+            Assert.AreEqual(1990, s.BakeryRuntime.CurrentCashCents);
+            Assert.AreEqual(5010, s.StoreRuntime.CurrentCashCents);
+            Assert.AreEqual(1, s.Bakery.FlourStock.Lots.Count);
+
+            BakeryWholesaleDailyResult second = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+            Assert.AreEqual(0, second.FlourSacksPurchased, "second call buys 0 sacks");
+            Assert.AreEqual(0, second.BatchesBaked, "no flour left for the lead batch");
+            Assert.AreEqual(0, second.TransfersCompleted);
+            Assert.IsTrue(second.Refusal != null && second.Refusal.Contains("flour"),
+                "second call refuses on flour; refusal: " + second.Refusal);
+            Assert.AreEqual(1990, s.BakeryRuntime.CurrentCashCents, "cash unchanged by the second call");
+            Assert.AreEqual(5010, s.StoreRuntime.CurrentCashCents, "cash unchanged by the second call");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "still exactly one delivery record");
+            Assert.AreEqual(1, s.Bakery.FlourStock.Lots.Count, "still exactly one bin lot for the purchase");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin still holds the 8 lb remainder");
         }
     }
 }

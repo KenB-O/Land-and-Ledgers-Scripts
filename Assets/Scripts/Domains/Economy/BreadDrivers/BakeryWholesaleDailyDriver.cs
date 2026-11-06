@@ -33,6 +33,37 @@ namespace LandLedgers.Economy.BreadDrivers
         public string BakeryBusinessId = string.Empty;
         public Pass3WholesaleIntake Intake;
         public Pass3StoreCatalog StoreCatalog;
+
+        /// <summary>Plan 02 slice 2A: flour procurement seam. The store and
+        /// bakery runtime states prove stock and identity; the live store
+        /// flour price comes from the forwarder (never hardcoded); the
+        /// Millbrook quote carries the forwarder's observed freight state;
+        /// the import figures come from ImportCatalog with
+        /// ImportOrderPathExists = false in this slice (no live order path).
+        /// MillbrookSupplier is the reorder authority (slice 2B).</summary>
+        public BusinessRuntimeState StoreRuntimeState;
+        public BusinessRuntimeState BakeryRuntimeState;
+        public int StoreFlourUnitPriceCents;
+        public MillbrookFlourQuote MillbrookQuote;
+        public OffMapAidBusinessRuntime MillbrookSupplier;
+        public int ImportFlourPricePerLbCents;
+        public int ImportTransitDays;
+        public bool ImportOrderPathExists;
+    }
+
+    /// <summary>Millbrook flour quote as filled by the forwarder: sacks and
+    /// goods price from the supplier runtime, miles from the definition, and
+    /// the freight quote (or the observed unavailability reason) from the
+    /// configured rate card. FreightAvailable is observable state — a
+    /// Millbrook shipment has departed — never a guess.</summary>
+    public sealed class MillbrookFlourQuote
+    {
+        public int SacksAvailable;
+        public int? GoodsPricePerSackCents;
+        public float OneWayMiles;
+        public int? FreightQuoteCents;
+        public bool FreightAvailable;
+        public string FreightUnavailableReason = string.Empty;
     }
 
     /// <summary>Outcome of one bakery wholesale day.</summary>
@@ -56,6 +87,12 @@ namespace LandLedgers.Economy.BreadDrivers
         /// diagnostics, not here.
         /// </summary>
         public string Refusal;
+        /// <summary>Whole flour sacks bought locally from the General Store today (Plan 02).</summary>
+        public int FlourSacksPurchased;
+        /// <summary>Pounds of flour bought locally today (sacks × 10 lb).</summary>
+        public int FlourPoundsPurchased;
+        /// <summary>Millbrook reorder lot id placed today, if any (Plan 02 slice 2B).</summary>
+        public string MillbrookReorderLotId;
     }
 
     /// <summary>
@@ -120,6 +157,127 @@ namespace LandLedgers.Economy.BreadDrivers
             List<string> planned = bakery.PlanWholesaleBatches(dayIndex, diag);
             result.BatchesPlanned = planned != null ? planned.Count : 0;
             inputs.ProductionDriver.AdoptPlannedBatches(dayIndex, planned, diag);
+
+            // (b½) Flour procurement — Plan 02 slice 2A: buy only today's
+            // need, from the recommended executable source, then bake through
+            // the existing calls. batchesToday is exactly the adopted set
+            // Precheck will see. Slice 2A buys locally only; a remainder the
+            // store cannot cover is named here and covered by the Millbrook
+            // reorder in slice 2B — the bake proceeds on whatever flour
+            // arrived, and a remaining shortfall is the loud Precheck refusal.
+            int batchesToday = result.BatchesPlanned;
+            int flourOnHandLb = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
+            int needLb = batchesToday * BakeryBreadCatalog.BreadFlourPerBatch - flourOnHandLb;
+            int? flourCostPerBatchCents = null;
+            if (batchesToday > 0 && needLb > 0)
+            {
+                int sacksNeeded = (needLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
+                int storeSacks = inputs.StoreRuntimeState != null
+                    ? inputs.StoreRuntimeState.GetRetailItemStockUnits(
+                        BakeryFlourLocalPurchase.FlourItemId, BakeryFlourLocalPurchase.FlourCategoryId)
+                    : 0;
+                var comparisonInputs = new BakeryFlourSupplierInputs
+                {
+                    SacksNeeded = sacksNeeded,
+                    StoreSacksAvailable = storeSacks,
+                    StorePricePerSackCents = inputs.StoreFlourUnitPriceCents > 0
+                        ? (int?)inputs.StoreFlourUnitPriceCents : null,
+                    MillbrookSacksAvailable = inputs.MillbrookQuote != null ? inputs.MillbrookQuote.SacksAvailable : 0,
+                    MillbrookPricePerSackCents = inputs.MillbrookQuote != null ? inputs.MillbrookQuote.GoodsPricePerSackCents : null,
+                    MillbrookOneWayMiles = inputs.MillbrookQuote != null ? inputs.MillbrookQuote.OneWayMiles : 0f,
+                    MillbrookFreightQuoteCents = inputs.MillbrookQuote != null ? inputs.MillbrookQuote.FreightQuoteCents : null,
+                    MillbrookFreightAvailable = inputs.MillbrookQuote != null && inputs.MillbrookQuote.FreightAvailable,
+                    MillbrookFreightUnavailableReason = inputs.MillbrookQuote != null ? inputs.MillbrookQuote.FreightUnavailableReason : string.Empty,
+                    ImportPricePerLbCents = inputs.ImportFlourPricePerLbCents > 0
+                        ? (int?)inputs.ImportFlourPricePerLbCents : null,
+                    ImportTransitDays = inputs.ImportTransitDays,
+                    ImportOrderPathExists = inputs.ImportOrderPathExists,
+                };
+                BakeryFlourSupplierComparisonResult comparison =
+                    BakeryFlourSupplierComparison.Compare(comparisonInputs, diag);
+                if (comparison.Recommended != null)
+                    flourCostPerBatchCents = comparison.Recommended.CostPerBatchCents;
+
+                if (comparison.Recommended != null
+                    && string.Equals(comparison.Recommended.SupplierId, "general-store", StringComparison.Ordinal))
+                {
+                    if (inputs.StoreRuntimeState == null || inputs.BakeryRuntimeState == null
+                        || inputs.BakeryCashPort == null || inputs.StoreCashPort == null || inputs.IdRegistry == null)
+                    {
+                        diag.Add("BakeryWholesaleDailyDriver: flour purchase skipped — the store seam (store/bakery runtimes, cash ports, id registry) is incomplete; nothing bought.");
+                    }
+                    else
+                    {
+                        int sacksToBuy = Math.Min(sacksNeeded, storeSacks);
+                        if (sacksToBuy > 0)
+                        {
+                            string transactionId = BakeryFlourLocalPurchase.BuildTransactionId(
+                                inputs.BakeryBusinessId, dayIndex,
+                                BakeryFlourLocalPurchase.NextSequenceForDay(bakery, inputs.BakeryBusinessId, dayIndex));
+                            var purchaseInputs = new BakeryFlourLocalPurchaseInputs
+                            {
+                                StoreRuntime = inputs.StoreRuntimeState,
+                                BakeryRuntime = inputs.BakeryRuntimeState,
+                                Bakery = bakery,
+                                BakeryCashPort = inputs.BakeryCashPort,
+                                StoreCashPort = inputs.StoreCashPort,
+                                IdRegistry = inputs.IdRegistry,
+                                BakeryBusinessId = inputs.BakeryBusinessId,
+                                UnitPriceCents = inputs.StoreFlourUnitPriceCents,
+                                SacksRequested = sacksToBuy,
+                                DayIndex = dayIndex,
+                                TransactionId = transactionId,
+                            };
+                            BakeryFlourLocalPurchaseResult purchase =
+                                BakeryFlourLocalPurchase.PurchaseSacks(purchaseInputs, diag);
+                            if (purchase.Succeeded && !purchase.Duplicate)
+                            {
+                                result.FlourSacksPurchased += purchase.SacksPurchased;
+                                result.FlourPoundsPurchased += purchase.PoundsReceived;
+                                needLb -= purchase.PoundsReceived;
+                            }
+                            else if (!purchase.Succeeded)
+                            {
+                                diag.Add($"BakeryWholesaleDailyDriver: flour purchase refused — {purchase.Refusal}");
+                            }
+                        }
+                    }
+                }
+                else if (comparison.Recommended == null)
+                {
+                    diag.Add($"BakeryWholesaleDailyDriver: no flour purchase today — {comparison.Refusal}");
+                }
+                else
+                {
+                    diag.Add($"BakeryWholesaleDailyDriver: recommended source {comparison.Recommended.DisplayName} is not a local counter purchase — no flour bought locally today.");
+                }
+
+                if (needLb > 0)
+                {
+                    diag.Add($"BakeryWholesaleDailyDriver: flour still short {needLb} lb for today's {batchesToday} batch(es) after local purchase — the bake will refuse at Precheck unless a Millbrook reorder covers it (slice 2B).");
+                }
+            }
+            else if (batchesToday > 0)
+            {
+                diag.Add($"BakeryWholesaleDailyDriver: flour sufficient — {flourOnHandLb} lb on hand for {batchesToday} batch(es); no purchase, no comparison.");
+                if (inputs.StoreFlourUnitPriceCents > 0)
+                    flourCostPerBatchCents = BakeryFlourSupplierComparison.SacksPerBatch * inputs.StoreFlourUnitPriceCents;
+            }
+
+            // Per-batch economics, logged whenever a batch is planned today:
+            // flour cost vs wholesale revenue, margin visible, never hidden.
+            // The missing B2B flour price term is recorded in Plan 02 §5.
+            if (batchesToday > 0 && flourCostPerBatchCents.HasValue)
+            {
+                int accountPrice = AccountPricePerUnit(bakery, inputs.StoreBusinessId);
+                if (accountPrice > 0)
+                {
+                    int revenuePerBatch = BakeryBreadCatalog.BreadYieldPerBatch * accountPrice;
+                    int margin = revenuePerBatch - flourCostPerBatchCents.Value;
+                    diag.Add($"BakeryWholesaleDailyDriver: per-batch economics — flour {flourCostPerBatchCents.Value}c/batch vs wholesale revenue {revenuePerBatch}c/batch (24 loaves x {accountPrice}c), margin {margin}c/batch; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price.");
+                }
+            }
+
             int diagnosticsBeforeRun = diag.Count;
             int baked = inputs.ProductionDriver.RunScheduledDay(
                 dayIndex, inputs.BakerKitUsable, inputs.OvenDefinition,
@@ -233,6 +391,23 @@ namespace LandLedgers.Economy.BreadDrivers
                 return null;
             }
             return translation.ToId;
+        }
+
+        private static int AccountPricePerUnit(BakeryShopRuntime bakery, string storeBusinessId)
+        {
+            if (bakery?.WholesaleAccounts == null) return 0;
+            foreach (var account in bakery.WholesaleAccounts)
+            {
+                if (account != null && account.IsActive
+                    && string.Equals(account.BuyerBusinessId, storeBusinessId, StringComparison.Ordinal)
+                    && string.Equals(account.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal))
+                    return account.PricePerUnitCents;
+            }
+            foreach (var account in bakery.WholesaleAccounts)
+            {
+                if (account != null && account.IsActive) return account.PricePerUnitCents;
+            }
+            return 0;
         }
 
         private static BakeryBreadLot OldestSellableLot(BakeryShopRuntime bakery, string productId)

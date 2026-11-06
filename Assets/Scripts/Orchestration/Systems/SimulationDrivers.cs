@@ -88,6 +88,18 @@ namespace LandLedgers.Orchestration.Systems
         private const string FreightDispatchTaskPrefix = "freight-dispatch:";
         private const string FreightDispatchTaskId = "freight-dispatch-assignment";
         private readonly HashSet<string> businessFeedNeedsOpen = new HashSet<string>(StringComparer.Ordinal);
+        // W4 (F-1): refused return-leg feed receipts, keyed by TransactionId
+        // in the pure BusinessFeedCustodyLedger. The batch's cash already
+        // moved at purchase and the store's stock was already consumed, so a
+        // refused receipt must not drop the batch: it is held here and
+        // retried by DriveBusinessHorseFeedProcurement before any new
+        // purchase for the same need. Runtime-side only, like
+        // businessFeedNeedsOpen: the durable seam for trip data is the
+        // WorkTask TermsRef, and a refused receipt has no live task left to
+        // ride on, so persisting it durably would need a save-format change.
+        // A save/load between refusal and retry drops the held batch; the
+        // need stays open, so the next drive buys fresh feed.
+        private readonly BusinessFeedCustodyLedger pendingFeedReceipts = new BusinessFeedCustodyLedger();
         private readonly HashSet<int> businessFeedWaitingForHomeLogged = new HashSet<int>();
         private readonly Dictionary<string, string> businessFeedLastStockRefusal = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly HashSet<string> horseCareRiskAlreadyLogged = new HashSet<string>(StringComparer.Ordinal);
@@ -3388,6 +3400,33 @@ namespace LandLedgers.Orchestration.Systems
             if (!sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)
                 || freight?.RuntimeState == null || freight.Owner == null || freight.Owner.PersonId < 0) return;
 
+            // W4 (F-1): a refused return-leg receipt is retried here, on the
+            // next feed-drive day, BEFORE any new purchase is placed for the
+            // same need. The held batch's cash already moved at purchase;
+            // buying fresh feed first would double-pay for the same need.
+            // A still-refused batch stays held and this drive places no new
+            // purchase. After a successful retry the drive falls through and
+            // recomputes the need from the restocked shelves, so a remaining
+            // shortfall can still start a fresh trip the same day.
+            if (pendingFeedReceipts.HasPendingForBuyer(freight.InstanceId))
+            {
+                bool attempted = pendingFeedReceipts.TryRetryForBuyer(
+                    freight.InstanceId, freight.RuntimeState, out BusinessFeedPurchase.Result retry);
+                if (attempted && retry.Succeeded)
+                {
+                    Debug.Log($"[BusinessFeed] B3 '{freight.InstanceId}' pending receipt '{retry.Batch.TransactionId}' succeeded on retry " +
+                        $"(duplicate={retry.Duplicate}); custody ledger cleared, no new purchase placed for the retried batch.", this);
+                    businessFeedNeedsOpen.Remove(freight.InstanceId);
+                }
+                else
+                {
+                    Debug.LogWarning($"[BusinessFeed] B3 '{freight.InstanceId}' pending receipt retry " +
+                        (attempted ? $"refused: {retry.Refusal}; custody batch stays held and no new purchase is placed."
+                            : "could not be attempted: no batch is held; no new purchase is placed."), this);
+                    return;
+                }
+            }
+
             var ownedHorses = new List<AnimalState>();
             int dailyFeedUnits = 0;
             int carriedFeedUnits = 0;
@@ -4497,7 +4536,15 @@ namespace LandLedgers.Orchestration.Systems
                 BusinessFeedPurchase.Result receipt = BusinessFeedPurchase.ReceiveAtBusiness(trip.Batch, buyer.RuntimeState);
                 if (!receipt.Succeeded)
                 {
-                    Debug.LogWarning($"[BusinessFeed] B3 receipt refused after Ethan returned; custody batch '{trip.TransactionId}' retained: " +
+                    // W4 (F-1): the batch is genuinely retained now — held in
+                    // the pending-receipt custody ledger keyed by its
+                    // TransactionId, for retry on the next feed-drive day.
+                    // Before W4 this log line claimed retention while the
+                    // batch died with the completed return task.
+                    bool held = pendingFeedReceipts.TryHold(trip.Batch);
+                    Debug.LogWarning($"[BusinessFeed] B3 receipt refused after Ethan returned; custody batch '{trip.TransactionId}' " +
+                        (held ? "retained in the pending-receipt custody ledger for retry on the next feed drive: "
+                            : "could NOT be retained in the pending-receipt custody ledger (duplicate or missing transaction id): ") +
                         receipt.Refusal, this);
                     return;
                 }

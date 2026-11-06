@@ -169,11 +169,40 @@ namespace LandLedgers.Economy.Farming.Integration
         public static Result ReceiveAtBusiness(Batch batch, BusinessRuntimeState destination)
         {
             var result = new Result { Batch = batch };
-            if (batch == null || destination == null || string.IsNullOrWhiteSpace(batch.TransactionId)
-                || destination.BusinessId != batch.BuyerBusinessId || batch.Units <= 0
-                || batch.SourceLots == null || batch.SourceLots.Count == 0)
+            // W4 (F-1): each refusal cause is named separately. The old
+            // single catch-all ("no valid batch or matching destination
+            // business") hid which of the six custody facts was wrong, so
+            // a refused receipt could not be diagnosed — or retried
+            // knowingly — from its log line.
+            if (batch == null)
             {
-                result.Refusal = "Purchased feed receipt has no valid batch or matching destination business.";
+                result.Refusal = "Purchased feed receipt refused: no custody batch (batch is null).";
+                return result;
+            }
+            if (destination == null)
+            {
+                result.Refusal = "Purchased feed receipt refused: no destination business (destination is null).";
+                return result;
+            }
+            if (string.IsNullOrWhiteSpace(batch.TransactionId))
+            {
+                result.Refusal = "Purchased feed receipt refused: custody batch has no transaction id.";
+                return result;
+            }
+            if (destination.BusinessId != batch.BuyerBusinessId)
+            {
+                result.Refusal = $"Purchased feed receipt refused: destination '{destination.BusinessId}' does not match " +
+                    $"buyer '{batch.BuyerBusinessId}' (transaction '{batch.TransactionId}').";
+                return result;
+            }
+            if (batch.Units <= 0)
+            {
+                result.Refusal = $"Purchased feed receipt refused: custody batch '{batch.TransactionId}' has no units (Units={batch.Units}).";
+                return result;
+            }
+            if (batch.SourceLots == null || batch.SourceLots.Count == 0)
+            {
+                result.Refusal = $"Purchased feed receipt refused: custody batch '{batch.TransactionId}' names no source lots.";
                 return result;
             }
 

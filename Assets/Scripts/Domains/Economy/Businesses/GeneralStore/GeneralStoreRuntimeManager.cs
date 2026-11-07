@@ -2081,7 +2081,7 @@ namespace LandLedgers.FirstLedger
                 builder.AppendLine($"Storage: {capacity.CurrentStoredUnits}/{capacity.StorageCapacityUnits} | Health {capacity.StorageHealth01:P0}");
             }
 
-            builder.AppendLine($"Reserve Shopping: bought here {lastDailyReserveLocalUnits}u / {FormatMoney(lastDailyReserveLocalSpendCents)} | lost off-map {lastDailyReserveOffMapUnits}u / {FormatMoney(lastDailyReserveOffMapLostDemandCents)}");
+            builder.AppendLine($"Reserve Shopping: bought here {lastDailyReserveLocalUnits}u / {FormatMoney(lastDailyReserveLocalSpendCents)} | bought off-map {lastDailyReserveOffMapUnits}u | lost demand {FormatMoney(lastDailyReserveOffMapLostDemandCents)}");
             builder.AppendLine($"Local Intake: {lastWeeklyLocalSupplyUnitsReceived} units this week | {FormatMoney(lastWeeklyLocalSupplySpendCents)}");
             builder.AppendLine();
             builder.AppendLine("Supply & Freight");
@@ -2950,20 +2950,65 @@ namespace LandLedgers.FirstLedger
                     RecordGeneralStoreHouseholdReserveMiss(household.id, need.CategoryId, requestedUnits, remainingUnits);
                     RecordGeneralStoreMissedDemand(need.CategoryId, need.PurchaseUnits, remainingUnits);
                     int offMapUnitValue = GetOffMapReserveUnitValueCents(need.CategoryId);
-                    int affordableOffMapUnits = offMapUnitValue > 0
-                        ? Mathf.Min(remainingUnits, remainingBudget / offMapUnitValue)
-                        : 0;
-                    if (affordableOffMapUnits > 0)
+                    // Plan 06 Slice 1 (AUD-328): the off-map leg no longer
+                    // conjures units at the average category price. It buys
+                    // only from a NAMED regional supplier through a real
+                    // Ship() decrement, priced once at the supplier's
+                    // delivered cost, or refuses loudly with no charge and
+                    // no goods. Same-step ship-and-receive (the daily-chain
+                    // shape, StoreProcurementChain.cs:477): this is a
+                    // same-day household need, so no shipment is created
+                    // and no LeadTimeDays wait applies. Seller credit
+                    // follows the weekly-receipt precedent
+                    // (StoreWeeklyReorderPlanner.ReceiveNamedSupplierShipment
+                    // / LogisticsRuntimeManager named branch): a regional
+                    // supplier has no town cash account, so no town till is
+                    // credited; the seller revenue is the goods cost,
+                    // recorded as off-map in the log line below, and the
+                    // seller-side conservation is the Ship() stock
+                    // decrement, pinned numerically by the reserve tests.
+                    // PRICING (plan clarification, recorded in the commit):
+                    // the delivered-cost delegate already returns goods +
+                    // solo freight per unit, so the household is charged
+                    // the delegate's delivered price ONCE per shipped unit
+                    // (total = delivered(n) x n), split as goods revenue
+                    // (shipped x goods quote) + freight (total - goods).
+                    // Charging quote + delegate value would charge the
+                    // goods twice and break the plan's own conservation
+                    // equation (debit = goods revenue + delivered cost).
+                    // remainingUnits is deliberately NOT reduced by the
+                    // supplier purchase here: the RecordShoppingOutcome and
+                    // CategoryDemandDebug calls below receive exactly the
+                    // post-local remainder, as before the fix.
+                    bool boughtFromSupplier = TryBuyReserveCategoryFromNamedRegionalSupplier(
+                        need.CategoryId,
+                        remainingUnits,
+                        ref remainingBudget,
+                        absoluteDay,
+                        out int shippedUnits,
+                        out int supplierGoodsCostCents,
+                        out int supplierTotalCostCents,
+                        out int supplierDeliveredUnitCostCents,
+                        out string supplierId,
+                        out string supplierName);
+                    int unfilledUnits = Mathf.Max(0, remainingUnits - shippedUnits);
+                    if (boughtFromSupplier)
                     {
-                        int offMapValue = affordableOffMapUnits * offMapUnitValue;
-                        ApplyReservePurchase(household, reserve, affordableOffMapUnits, "off-map purchase");
-                        remainingBudget -= offMapValue;
-                        reserve.lastOffMapPurchaseUnits += affordableOffMapUnits;
-                        result.OffMapUnits += affordableOffMapUnits;
-                        result.OffMapWalletSpendCents += offMapValue;
+                        ApplyReservePurchase(household, reserve, shippedUnits, $"regional supplier {supplierId} ({supplierName})");
+                        remainingBudget -= supplierTotalCostCents;
+                        reserve.lastOffMapPurchaseUnits += shippedUnits;
+                        result.OffMapUnits += shippedUnits;
+                        result.OffMapWalletSpendCents += supplierTotalCostCents;
+                        Debug.Log($"[General Store][Reserve] household {household.id} bought {shippedUnits}u {need.CategoryId} from regional supplier '{supplierName}' ({supplierId}): goods {FormatMoney(supplierGoodsCostCents)} + freight {FormatMoney(supplierTotalCostCents - supplierGoodsCostCents)} = {FormatMoney(supplierTotalCostCents)}; supplier stock fell by {shippedUnits}u.", this);
                     }
 
-                    result.OffMapLostDemandCents += Mathf.Max(0, remainingUnits - affordableOffMapUnits) * offMapUnitValue;
+                    if (unfilledUnits > 0)
+                    {
+                        int lostUnitValue = supplierDeliveredUnitCostCents > 0
+                            ? supplierDeliveredUnitCostCents
+                            : offMapUnitValue;
+                        result.OffMapLostDemandCents += unfilledUnits * lostUnitValue;
+                    }
                 }
 
                 reserve.lastLocalPurchaseUnits += storeSale.UnitsSold + otherLocalSale.UnitsSold;
@@ -2984,6 +3029,138 @@ namespace LandLedgers.FirstLedger
             household.lastDailyReserveOffMapPurchaseUnits = result.OffMapUnits;
             household.SyncLegacyFoodReserveFromReserves();
             return result;
+        }
+
+        /// <summary>
+        /// Plan 06 Slice 1 (AUD-328): buys one reserve category's local
+        /// remainder from a NAMED regional supplier, or refuses loudly.
+        /// One, chooses the cheapest-delivered registered supplier with
+        /// TryChooseNamedSupplier against the already-registered adapters.
+        /// Two, when none covers the category, logs the refusal loudly
+        /// (category + supplier gap), charges nothing, credits nothing,
+        /// and returns false with shippedUnits 0. Three, when a supplier
+        /// is chosen, ships at most the affordable count (largest count
+        /// whose delivered total fits the remaining budget) and caps the
+        /// receipt at shipped units, never at requested units. Four,
+        /// prices the shipped units once at the pre-ship delivered price
+        /// (goods + solo freight per unit, via the already-wired
+        /// delegate) — the caller charges exactly totalCostCents through
+        /// the existing ChargeHouseholdCents call in ResolveDailySales;
+        /// no second charge site is added. Five, the caller credits the
+        /// reserve and mirrors lots with the supplier id as provenance.
+        /// Six, the seller revenue is the goods cost, recorded as off-map
+        /// (see the call-site comment for the precedent). Same-step
+        /// ship-and-receive: no shipment is created and no LeadTimeDays
+        /// wait applies.
+        /// </summary>
+        private bool TryBuyReserveCategoryFromNamedRegionalSupplier(
+            string categoryId,
+            int remainingUnits,
+            ref int remainingBudgetCents,
+            int dayIndex,
+            out int shippedUnits,
+            out int goodsCostCents,
+            out int totalCostCents,
+            out int deliveredUnitCostCents,
+            out string supplierId,
+            out string supplierName)
+        {
+            shippedUnits = 0;
+            goodsCostCents = 0;
+            totalCostCents = 0;
+            deliveredUnitCostCents = 0;
+            supplierId = string.Empty;
+            supplierName = string.Empty;
+            if (string.IsNullOrWhiteSpace(categoryId) || remainingUnits <= 0 || remainingBudgetCents <= 0)
+            {
+                return false;
+            }
+
+            EnsureRegionalSuppliersExist();
+            if (restockDriver.Suppliers == null || restockDriver.Suppliers.Count == 0)
+            {
+                Debug.LogWarning($"[General Store][Reserve] no registered supplier can ship '{categoryId}' (0 suppliers registered) — household reserve purchase refused for '{categoryId}'; no anonymous off-map purchase was made.", this);
+                return false;
+            }
+
+            if (!StoreWeeklyReorderPlanner.TryChooseNamedSupplier(
+                    restockDriver.Suppliers, categoryId, remainingUnits,
+                    restockDriver.DeliveredCostPerUnitCents,
+                    out IUpstreamGoodsSupplier supplier, out int goodsUnitCostCents,
+                    out int chosenDeliveredUnitCostCents))
+            {
+                Debug.LogWarning($"[General Store][Reserve] no registered supplier can ship '{categoryId}' ({restockDriver.Suppliers.Count} suppliers registered) — household reserve purchase refused for '{categoryId}'; no charge, no goods, no anonymous off-map purchase was made.", this);
+                return false;
+            }
+
+            deliveredUnitCostCents = chosenDeliveredUnitCostCents;
+            supplierId = supplier.SupplierId ?? string.Empty;
+            supplierName = supplier.SupplierName ?? string.Empty;
+            if (goodsUnitCostCents <= 0 || deliveredUnitCostCents <= 0)
+            {
+                return false;
+            }
+
+            int availableUnits = Mathf.Max(0, supplier.AvailableUnits(categoryId));
+            if (availableUnits <= 0)
+            {
+                return false;
+            }
+
+            // Affordability at the delivered price. The chooser priced
+            // the order at orderSize = min(remaining, available); fewer
+            // units carry the same solo freight over a smaller count, so
+            // re-price at the candidate count through the delegate and
+            // step down while the delivered total exceeds the budget.
+            // Each step strictly decreases the count, so this terminates;
+            // the delivered total can wobble by a few cents of ceiling
+            // rounding, so the loop may settle one unit below the true
+            // maximum in a pathological case — a conservative under-fill,
+            // never an overcharge: the household is charged exactly
+            // delivered(shipped) x shipped, and the shortfall is recorded
+            // as lost demand and re-attempted on the next gated day.
+            int affordableUnits = Mathf.Min(remainingUnits, availableUnits, remainingBudgetCents / deliveredUnitCostCents);
+            while (affordableUnits > 0)
+            {
+                int priceAtCount = restockDriver.DeliveredCostPerUnitCents != null
+                    ? Mathf.Max(0, restockDriver.DeliveredCostPerUnitCents(supplier, categoryId, string.Empty, affordableUnits))
+                    : deliveredUnitCostCents;
+                if (priceAtCount <= 0)
+                {
+                    return false;
+                }
+
+                if (priceAtCount * affordableUnits <= remainingBudgetCents)
+                {
+                    deliveredUnitCostCents = priceAtCount;
+                    break;
+                }
+
+                affordableUnits--;
+            }
+
+            if (affordableUnits <= 0)
+            {
+                Debug.Log($"[General Store][Reserve] household reserve purchase of '{categoryId}' from '{supplierName}' refused: the remaining budget cannot afford even one delivered unit ({FormatMoney(deliveredUnitCostCents)}/u). No charge, no goods.", this);
+                return false;
+            }
+
+            var diagnostics = new List<string>();
+            int shipped = Mathf.Max(0, supplier.Ship(categoryId, affordableUnits, Mathf.Max(0, dayIndex), diagnostics));
+            if (shipped <= 0)
+            {
+                return false;
+            }
+
+            if (shipped != affordableUnits)
+            {
+                Debug.LogWarning($"[General Store][Reserve] '{supplierName}' shipped {shipped}u '{categoryId}' of {affordableUnits}u requested; charging only for the shipped units.", this);
+            }
+
+            shippedUnits = shipped;
+            goodsCostCents = shipped * goodsUnitCostCents;
+            totalCostCents = shipped * deliveredUnitCostCents;
+            return true;
         }
 
         private void EnsureWeeklySalesBucket()

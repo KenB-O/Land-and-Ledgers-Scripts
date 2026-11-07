@@ -984,6 +984,13 @@ namespace LandLedgers.FirstLedger
                 // symptom (generation on one instance, daily drivers
                 // reading the other), so it must be audited like the rest.
                 BuildAuthorityCensus<PopulationManager>("PopulationManager"),
+                // Plan 03 Slice 0 (P0-2): TownWorldController is the
+                // journey-location authority the drivers resolve by type;
+                // a duplicate in the scene is the leading hypothesis for
+                // the 285-day empty journey model (generation on one
+                // instance, daily drivers reading an ungenerated other),
+                // so it must be audited like the rest.
+                BuildAuthorityCensus<TownWorldController>("TownWorldController"),
                 BuildAuthorityCensus<CivicFoundationManager>("CivicFoundation"),
                 BuildAuthorityCensus<ScenarioDirector>("ScenarioDirector"),
                 BuildAuthorityCensus<FirstLedgerSliceBootstrapper>("FirstLedgerSliceBootstrapper"),
@@ -991,6 +998,22 @@ namespace LandLedgers.FirstLedger
             foreach (string error in BootstrapAuthorityAudit.DescribeDuplicates(censuses))
             {
                 Debug.LogError($"[WorldStartup] {error}", this);
+            }
+            // Plan 03 Slice 0 (P0-2): name the town-world instance the
+            // bootstrapper holds (GameObject name + instance id + Grid
+            // state) at startup, so Codex can compare it with the drivers'
+            // held instance logged by SimulationDrivers and tell a
+            // duplicate/wrong instance from a roadless grid.
+            if (townWorld != null)
+            {
+                Debug.Log($"[WorldStartup] TownWorldController instance (bootstrapper): '{townWorld.gameObject.name}' " +
+                    $"(instance {townWorld.GetInstanceID()}), GenerationPassCount={townWorld.GenerationPassCount}, " +
+                    $"Grid={(townWorld.Grid != null ? "present" : "null")}.", this);
+            }
+            else
+            {
+                Debug.Log("[WorldStartup] TownWorldController instance (bootstrapper): none held " +
+                    "(no serialized instance; FindAnyObjectByType found none).", this);
             }
         }
 

@@ -311,6 +311,18 @@ namespace LandLedgers.Orchestration.Systems
         private bool subscribedToTimeManager;
         private int lastTownJourneyWorldSignature = int.MinValue;
         private string lastRegionalJourneyRegistrationFailure = string.Empty;
+        // Plan 03 Slice 0 (P0-2): once-per-distinct-failure-state log for the
+        // journey-network gate, following the regional-registration pattern
+        // above. Every silent return in EnsureTownJourneyNetwork names its
+        // state here so the 285-day empty-model symptom can be discriminated
+        // (townWorld null / Grid null / zero road components) instead of
+        // re-occurring silently.
+        private string lastTownJourneyNetworkFailure = string.Empty;
+        // Plan 03 Slice 0 (P0-2): the instance id of the TownWorldController
+        // whose identity was last logged, so the drivers' held instance is
+        // named once per instance (including the null -> instance
+        // transition) and can be compared with the bootstrapper's.
+        private int lastLoggedTownWorldInstanceId = int.MinValue;
 
         /// <summary>
         /// Pass XII Worker A (LL-PLAY-002/003): true while this instance
@@ -7589,11 +7601,43 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        /// <summary>
+        /// Plan 03 Slice 0 (P0-2): the single lazy gate between a generated
+        /// town and a populated journey model. Every failure exit used to be
+        /// silent; each now logs once per distinct failure state — hub null,
+        /// townWorld null (with whether the field was serialized or
+        /// FindAnyObjectByType-resolved), Grid null (with GenerationPassCount),
+        /// or zero road components (with the builder diagnostic, the grid's
+        /// road-cell count, and the computed signature). The drivers' held
+        /// townWorld instance identity is logged once per instance so it can
+        /// be compared with the bootstrapper's at startup. No behavior change
+        /// except logging: a failed day still retries the next day, and the
+        /// signature still advances only on a successful sync.
+        /// </summary>
         private void EnsureTownJourneyNetwork()
         {
-            if (hub == null) return;
+            if (hub == null)
+            {
+                LogTownJourneyNetworkFailureOnce("hub is null; no journey model is available.");
+                return;
+            }
+            bool townWorldWasSerialized = townWorld != null;
             townWorld ??= FindAnyObjectByType<TownWorldController>();
-            if (townWorld == null || townWorld.Grid == null) return;
+            LogTownWorldInstanceIdentity(townWorldWasSerialized);
+            if (townWorld == null)
+            {
+                LogTownJourneyNetworkFailureOnce(
+                    "townWorld is null (no serialized instance; FindAnyObjectByType<TownWorldController> found none).");
+                return;
+            }
+            if (townWorld.Grid == null)
+            {
+                LogTownJourneyNetworkFailureOnce(
+                    $"townWorld '{townWorld.gameObject.name}' (instance {townWorld.GetInstanceID()}, " +
+                    $"{(townWorldWasSerialized ? "serialized" : "FindAnyObjectByType-resolved")}) " +
+                    $"has no Grid (GenerationPassCount={townWorld.GenerationPassCount}).");
+                return;
+            }
 
             IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime != null
                 ? sharedBusinessRuntime.Businesses
@@ -7609,7 +7653,14 @@ namespace LandLedgers.Orchestration.Systems
                         townWorld.Grid.Depth * townWorld.Grid.CellSizeMeters * 0.5f);
                 TownJourneyNetworkBuilder.BuildResult result = TownJourneyNetworkBuilder.Synchronize(
                     hub.Journeys, townWorld.Grid, townCenter, townWorld.Plots, townWorld.Buildings, businesses);
-                if (result.RoadComponents <= 0) return;
+                if (result.RoadComponents <= 0)
+                {
+                    LogTownJourneyNetworkFailureOnce(
+                        $"townWorld '{townWorld.gameObject.name}' (instance {townWorld.GetInstanceID()}) " +
+                        $"Grid has {CountRoadCells(townWorld.Grid)} road cells; signature={signature}; " +
+                        $"builder refused: {result.Diagnostic}");
+                    return;
+                }
 
                 Journeys = hub.Journeys;
                 lastTownJourneyWorldSignature = signature;
@@ -7619,7 +7670,61 @@ namespace LandLedgers.Orchestration.Systems
                     Debug.Log("[SimulationDrivers] " + result.Diagnostic, this);
             }
 
+            lastTownJourneyNetworkFailure = string.Empty;
             EnsureRegionalJourneyRoutes();
+        }
+
+        /// <summary>
+        /// Plan 03 Slice 0 (P0-2): logs a journey-network failure state once
+        /// until it changes, so a persistent precondition failure is named in
+        /// the log without spamming it on every daily pass. Follows the
+        /// regional-registration failure pattern in
+        /// EnsureRegionalJourneyRoutes.
+        /// </summary>
+        private void LogTownJourneyNetworkFailureOnce(string failure)
+        {
+            if (string.Equals(lastTownJourneyNetworkFailure, failure, StringComparison.Ordinal)) return;
+            lastTownJourneyNetworkFailure = failure;
+            Debug.LogWarning("[SimulationDrivers] Journey network registration blocked: " + failure, this);
+        }
+
+        /// <summary>
+        /// Plan 03 Slice 0 (P0-2): names the TownWorldController instance the
+        /// drivers hold (GameObject name + instance id + how it was obtained)
+        /// once per instance, so Codex can compare it with the bootstrapper's
+        /// held instance at startup and tell a duplicate/wrong instance from
+        /// a roadless grid.
+        /// </summary>
+        private void LogTownWorldInstanceIdentity(bool townWorldWasSerialized)
+        {
+            int instanceId = townWorld != null ? townWorld.GetInstanceID() : 0;
+            if (instanceId == lastLoggedTownWorldInstanceId) return;
+            lastLoggedTownWorldInstanceId = instanceId;
+            if (townWorld == null)
+            {
+                Debug.Log("[SimulationDrivers] Journey network identity: drivers hold no TownWorldController " +
+                    "(none serialized; FindAnyObjectByType found none).", this);
+                return;
+            }
+            Debug.Log($"[SimulationDrivers] Journey network identity: drivers hold TownWorldController " +
+                $"'{townWorld.gameObject.name}' (instance {instanceId}, " +
+                $"{(townWorldWasSerialized ? "serialized" : "FindAnyObjectByType-resolved")}), " +
+                $"Grid={(townWorld.Grid != null ? "present" : "null")}, " +
+                $"GenerationPassCount={townWorld.GenerationPassCount}.", this);
+        }
+
+        /// <summary>Plan 03 Slice 0 (P0-2): road cells on the grid the drivers read.</summary>
+        private static int CountRoadCells(TownGrid grid)
+        {
+            int count = 0;
+            for (int z = 0; z < grid.Depth; z++)
+            {
+                for (int x = 0; x < grid.Width; x++)
+                {
+                    if (grid.GetCell(new GridCoord(x, z)).IsRoad) count++;
+                }
+            }
+            return count;
         }
 
         /// <summary>

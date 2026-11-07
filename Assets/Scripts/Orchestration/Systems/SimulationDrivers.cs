@@ -8041,7 +8041,14 @@ namespace LandLedgers.Orchestration.Systems
                     supplyAccess,
                     upcomingObligationCents: 0,
                     expectedIncomeCents: 0,
-                    dayIndex: absoluteDayIndex);
+                    dayIndex: absoluteDayIndex,
+                    // Plan 02 Slice 2: suppress needs no legitimately known
+                    // seller recognizes (recognition only — never stock).
+                    // Evaluated daily, so a seller learned or registered
+                    // later lets the need open the next day.
+                    isRecognizedByKnownSeller: HouseholdShortageMonitor.KnownSellerRecognitionPredicate(
+                        supplierDirectory, sellerKnowledge,
+                        householdMemberships?.GetActiveMembers(household.id)));
             }
 
             foreach (string monitorDiagnostic in monitor.Diagnostics)

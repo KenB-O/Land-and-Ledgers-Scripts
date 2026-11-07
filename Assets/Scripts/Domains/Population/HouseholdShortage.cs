@@ -75,6 +75,13 @@ namespace LandLedgers.Population
         /// item id → expected units per day (from members, season, obligations).
         /// isColdSeason flags winter fuel pressure. upcomingObligationCents and
         /// expectedIncomeCents inform the suggested responses, never invent money.
+        /// Plan 02 Slice 2: <paramref name="isRecognizedByKnownSeller"/>, when
+        /// supplied, suppresses need creation for an item no legitimately
+        /// known seller recognizes — never on current stock, so a
+        /// recognized-but-out-of-stock item still raises a need. A null
+        /// predicate keeps the old behaviour (no filtering) for callers with
+        /// no seller knowledge to consult. Suppression is logged loudly once
+        /// per household per day per item, so the hunger signal stays visible.
         /// </summary>
         public void Evaluate(
             HouseholdState household,
@@ -84,7 +91,8 @@ namespace LandLedgers.Population
             HouseholdSupplyAccess supplyAccess,
             int upcomingObligationCents,
             int expectedIncomeCents,
-            int dayIndex)
+            int dayIndex,
+            Func<string, bool> isRecognizedByKnownSeller = null)
         {
             if (household == null || inventory == null)
             {
@@ -98,7 +106,8 @@ namespace LandLedgers.Population
                 foreach (KeyValuePair<string, int> use in expectedDailyUseByItem)
                 {
                     EvaluateItem(household, inventory, use.Key, Mathf.Max(0, use.Value),
-                        isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day);
+                        isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
+                        isRecognizedByKnownSeller);
                 }
             }
 
@@ -107,8 +116,69 @@ namespace LandLedgers.Population
             if (isColdSeason)
             {
                 EvaluateItem(household, inventory, HouseholdItemCatalog.FuelWoodId, 1,
-                    true, supplyAccess, upcomingObligationCents, expectedIncomeCents, day);
+                    true, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
+                    isRecognizedByKnownSeller);
             }
+        }
+
+        /// <summary>
+        /// Plan 02 Slice 2: builds the recognition predicate the shortage
+        /// drive passes into Evaluate — the same rule the shopping loop uses
+        /// to find a known seller (FindKnownItemSuppliers): a supplier in
+        /// the directory that a household member legitimately knows AND that
+        /// recognizes the item (RecognizesItem / CategoryForItem non-empty).
+        /// Current stock is never consulted: a recognized-but-out-of-stock
+        /// item is real demand. With no directory, no knowledge, or no
+        /// members, nothing is recognized and every need is suppressed until
+        /// a seller is learned or registered.
+        /// </summary>
+        public static Func<string, bool> KnownSellerRecognitionPredicate(
+            SupplierDirectory suppliers,
+            ShopperSellerKnowledge knowledge,
+            IEnumerable<int> memberIds)
+        {
+            var members = new HashSet<int>();
+            if (memberIds != null)
+            {
+                foreach (int memberId in memberIds)
+                {
+                    members.Add(memberId);
+                }
+            }
+
+            return itemId =>
+            {
+                if (string.IsNullOrWhiteSpace(itemId) || suppliers == null || knowledge == null || members.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (IGoodsSupplier supplier in suppliers.All)
+                {
+                    if (supplier == null || !(supplier is IItemResolvingSupplier resolving))
+                    {
+                        continue;
+                    }
+
+                    bool recognized = supplier is IItemCatalogSupplier catalog
+                        ? catalog.RecognizesItem(itemId)
+                        : !string.IsNullOrWhiteSpace(resolving.CategoryForItem(itemId));
+                    if (!recognized)
+                    {
+                        continue;
+                    }
+
+                    foreach (int memberId in members)
+                    {
+                        if (knowledge.Knows(memberId, supplier.SupplierBusinessId))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            };
         }
 
         private void EvaluateItem(
@@ -120,7 +190,8 @@ namespace LandLedgers.Population
             HouseholdSupplyAccess supplyAccess,
             int upcomingObligationCents,
             int expectedIncomeCents,
-            int dayIndex)
+            int dayIndex,
+            Func<string, bool> isRecognizedByKnownSeller = null)
         {
             if (string.IsNullOrWhiteSpace(itemId) || HouseholdItemCatalog.Get(itemId) == null)
             {
@@ -160,6 +231,21 @@ namespace LandLedgers.Population
 
             float shortfallDays = Mathf.Max(0f, LowDaysThreshold - daysCovered);
             int unitsNeeded = Mathf.CeilToInt(shortfallDays * Mathf.Max(1, dailyUseUnits));
+
+            // Plan 02 Slice 2: no known seller recognizes this item, so no
+            // purchasing need may open for it — an unservable need would sit
+            // open forever and masquerade as a shopping failure. This is a
+            // recognition filter only, never a stock filter: a recognized
+            // item raises its need even in a stockout. The hunger signal is
+            // preserved by the loud diagnostic (once per household per day
+            // per item) and by the needs the household raises for servable
+            // items from their own stock levels. No substitution is invented
+            // here: GetSubstitute stays response text only.
+            if (isRecognizedByKnownSeller != null && !isRecognizedByKnownSeller(itemId))
+            {
+                diagnostics.Add($"H{household.id} will not raise a '{itemId}' need: no known seller offers it");
+                return;
+            }
             float urgency = Mathf.Clamp01(1f - daysCovered / Mathf.Max(0.01f, LowDaysThreshold));
             if (isColdSeason && string.Equals(itemId, HouseholdItemCatalog.FuelWoodId, StringComparison.OrdinalIgnoreCase))
             {

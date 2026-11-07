@@ -7641,6 +7641,39 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Plan 02 Slice 3: when the store holds zero identified lots for
+            // every meal-priority item, say so once per day (this drive runs
+            // once per day) instead of letting every household surface a
+            // bare seller failure. No stock is created here — the line only
+            // names the condition; needs stay open until a reorder or bakery
+            // delivery lands.
+            bool anyMealItemStocked = false;
+            if (supplierDirectory != null)
+            {
+                foreach (string itemId in MealSchedulingPolicy.Default.MealItemPriority)
+                {
+                    foreach (IGoodsSupplier supplier in supplierDirectory.All)
+                    {
+                        if (supplier is IItemResolvingSupplier itemSupplier
+                            && itemSupplier.ItemStockUnits(itemId) > 0)
+                        {
+                            anyMealItemStocked = true;
+                            break;
+                        }
+                    }
+
+                    if (anyMealItemStocked)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (!anyMealItemStocked)
+            {
+                diagnostics.Add("General Store holds no identified lots for any meal item; needs stay open until a reorder or bakery delivery lands");
+            }
+
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null)

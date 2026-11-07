@@ -35,10 +35,25 @@ namespace LandLedgers.EditorTests.Population
         private sealed class CapturingExecutor : IEmbodiedPurchaseExecutor
         {
             public readonly List<int> ActingPersonIds = new List<int>();
+            private readonly IEmbodiedPurchaseExecutor inner;
+
+            public CapturingExecutor()
+            {
+            }
+
+            public CapturingExecutor(IEmbodiedPurchaseExecutor inner)
+            {
+                this.inner = inner;
+            }
 
             public PurchaseExecutionResult Execute(ProcurementNeed need, int actingPersonId, int dayIndex)
             {
                 ActingPersonIds.Add(actingPersonId);
+                if (inner != null)
+                {
+                    return inner.Execute(need, actingPersonId, dayIndex);
+                }
+
                 return new PurchaseExecutionResult
                 {
                     NeedSequence = need.NeedSequence,
@@ -183,15 +198,14 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void FindActingAdult_ReturnsOffMapFirstAdult()
+        public void OffMapFirstAdultSkipped_FallsBackToSecondAdult()
         {
-            // Plan 08 Slice 0 (AUD-266 discriminator): FindActingAdult
-            // picks the first Adult18Plus member with labor access and
-            // never consults the OffMapJourneyAuthority, so the off-map
-            // first adult P1 is handed real person-time shopping. The
-            // capturing executor records the acting adult it receives.
-            // Expected to change in Slice 2: the authority is threaded
-            // through, P1 is skipped, and the recorded adult is P2.
+            // Plan 08 Slice 2 (Q03, AUD-266): REWRITE of the Slice 0
+            // FindActingAdult_ReturnsOffMapFirstAdult. With the authority
+            // threaded through ExecuteDay, the off-map first adult P1 is
+            // skipped with a W-2 skip log and the on-map second adult P2
+            // serves — the capturing executor delegates to the real
+            // executor, so the shopped meals are really eaten.
             journeys.RegisterLocation(new JourneyLocation("gateway", JourneyLocationKind.OffMapGateway, "Depot", 4f, 0f));
             journeys.AddEdge("home", "gateway", 4.0f, "depot road");
             var authority = new OffMapJourneyAuthority(journeys);
@@ -201,13 +215,75 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsNotNull(record, "DepartPerson must create the journey record: " + string.Join("; ", diag));
             Assert.IsTrue(authority.IsOffMapPerson(1), "P1 must read off-map while the journey is active.");
 
-            var capturing = new CapturingExecutor();
-            DailyNeedsService.DayReport report = service.ExecuteDay(population, planner, capturing, 0, diag);
+            var capturing = new CapturingExecutor(executor);
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                population, planner, capturing, 0, diag, offMapJourneys: authority);
 
-            Assert.AreEqual(1, report.HouseholdsServed, "A household with an acting adult is served.");
+            Assert.AreEqual(1, report.HouseholdsServed, "A household with an on-map acting adult is served.");
             Assert.Greater(capturing.ActingPersonIds.Count, 0, "The executor must have been called at least once.");
-            Assert.IsTrue(capturing.ActingPersonIds.TrueForAll(id => id == 1),
-                "AUD-266: every executor call names P1, the off-map first adult: " + string.Join(",", capturing.ActingPersonIds));
+            Assert.IsTrue(capturing.ActingPersonIds.TrueForAll(id => id == 2),
+                "Every executor call must name P2, the on-map second adult: " + string.Join(",", capturing.ActingPersonIds));
+            Assert.AreEqual(4, report.MealsEaten, "Two members x two meals, all shopped for by P2.");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.IsTrue(diag.Exists(m => m.Contains("P1 is off-map, needs stay open for return.")),
+                "The skip must be logged in the W-2 wording.");
+            Assert.IsTrue(diag.TrueForAll(m => !m.Contains("WITHOUT the off-map guard")),
+                "With the authority installed, the unavailable-authority line must not fire.");
+        }
+
+        [Test]
+        public void AllAdultsOffMap_NoActingAdult_NeedsUnmet()
+        {
+            // Plan 08 Slice 2 (Q03, AUD-266): when every adult is
+            // off-map, no acting adult is found, nothing is faked, and
+            // the "no acting adult" diagnostic is present.
+            journeys.RegisterLocation(new JourneyLocation("gateway", JourneyLocationKind.OffMapGateway, "Depot", 4f, 0f));
+            journeys.AddEdge("home", "gateway", 4.0f, "depot road");
+            var authority = new OffMapJourneyAuthority(journeys);
+            foreach (int personId in new[] { 1, 2 })
+            {
+                OffMapJourneyRecord record = authority.DepartPerson(
+                    personId, "home", "Millbrook", 1, 2, "freight",
+                    null, null, 0, _ => 0, null, diag);
+                Assert.IsNotNull(record, $"DepartPerson must create the journey record for P{personId}: " + string.Join("; ", diag));
+                Assert.IsTrue(authority.IsOffMapPerson(personId), $"P{personId} must read off-map while the journey is active.");
+            }
+
+            var capturing = new CapturingExecutor(executor);
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                population, planner, capturing, 0, diag, offMapJourneys: authority);
+
+            Assert.AreEqual(0, report.HouseholdsServed, "No household is served without an on-map acting adult.");
+            Assert.AreEqual(0, report.MealsEaten);
+            Assert.AreEqual(0, capturing.ActingPersonIds.Count, "The executor must never be called without an acting adult.");
+            Assert.IsTrue(diag.Exists(m => m.Contains("no acting adult")),
+                "The unmet needs must be logged honestly, not faked.");
+            Assert.IsTrue(diag.Exists(m => m.Contains("P1 is off-map, needs stay open for return.")),
+                "The P1 skip must be logged.");
+            Assert.IsTrue(diag.Exists(m => m.Contains("P2 is off-map, needs stay open for return.")),
+                "The P2 skip must be logged.");
+        }
+
+        [Test]
+        public void NullAuthority_FailOpen_FirstAdultServesWithLoudLog()
+        {
+            // Plan 08 Slice 2 (Q03, AUD-266): with no authority passed,
+            // the guard fails open — P1 serves as before — but exactly
+            // one loud unavailable-authority line is logged for the day.
+            DailyNeedsService.DayReport report = service.ExecuteDay(population, planner, executor, 0, diag);
+
+            Assert.AreEqual(1, report.HouseholdsServed);
+            Assert.AreEqual(4, report.MealsEaten, "Two members x two meals, shopped for by P1.");
+            Assert.AreEqual(0, report.MealsMissed);
+            int loudLines = 0;
+            foreach (string message in diag)
+            {
+                if (message.Contains("off-map journey authority unavailable, proceeding WITHOUT the off-map guard"))
+                {
+                    loudLines++;
+                }
+            }
+            Assert.AreEqual(1, loudLines, "Exactly one loud unavailable-authority line per day.");
         }
 
         [Test]

@@ -57,6 +57,19 @@ namespace LandLedgers.Population
         private readonly EntityIdRegistry entityIds;
         private readonly Func<int, EntityId> personEntityId;
         private readonly Func<int, HouseholdSpendingPolicy> spendingPolicyProvider;
+        private OffMapJourneyAuthority offMapJourneys;
+
+        /// <summary>
+        /// Plan 08 Slice 2 (Q03, AUD-266): the off-map journey authority
+        /// handed in by the driver, mirroring
+        /// DomesticLaborDriver.OffMapJourneys. Null = fail open (no
+        /// off-map guard) until the driver wires it.
+        /// </summary>
+        public OffMapJourneyAuthority OffMapJourneys
+        {
+            get => offMapJourneys;
+            set => offMapJourneys = value;
+        }
 
         private int nextEventSequence;
         private int nextBatchSequence;
@@ -93,7 +106,8 @@ namespace LandLedgers.Population
             FinancialObligationAuthority obligations = null,
             EntityIdRegistry entityIds = null,
             Func<int, EntityId> personEntityId = null,
-            Func<int, HouseholdSpendingPolicy> spendingPolicyProvider = null)
+            Func<int, HouseholdSpendingPolicy> spendingPolicyProvider = null,
+            OffMapJourneyAuthority offMapJourneys = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.membership = membership ?? throw new ArgumentNullException(nameof(membership));
@@ -110,6 +124,7 @@ namespace LandLedgers.Population
             this.entityIds = entityIds;
             this.personEntityId = personEntityId ?? (pid => EntityId.For(EntityKind.Person, pid));
             this.spendingPolicyProvider = spendingPolicyProvider;
+            this.offMapJourneys = offMapJourneys;
         }
 
         /// <summary>
@@ -196,7 +211,7 @@ namespace LandLedgers.Population
                 ? options.ShopperPersonIdOverride
                 : ShopperAssignmentPolicy.ChooseShopper(
                     population, memberIds, dayIndex, options.DepartureMinuteOfDay, estimateMinutes,
-                    scheduleTracker, budgets, personEntityId, out shopperReason);
+                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
 
             if (shopperId < 0)
             {
@@ -629,7 +644,7 @@ namespace LandLedgers.Population
                 ? options.ShopperPersonIdOverride
                 : ShopperAssignmentPolicy.ChooseShopper(
                     population, memberIds, dayIndex, options.DepartureMinuteOfDay, estimateMinutes,
-                    scheduleTracker, budgets, personEntityId, out shopperReason);
+                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
             if (shopperId < 0)
             {
                 batch.FailureReason = $"Unavailable shopper: {shopperReason ?? "nobody can shop today."} Needs stay open.";
@@ -1198,7 +1213,7 @@ namespace LandLedgers.Population
                 ? options.ShopperPersonIdOverride
                 : ShopperAssignmentPolicy.ChooseShopper(
                     population, memberIds, dayIndex, options.DepartureMinuteOfDay, estimateMinutes,
-                    scheduleTracker, budgets, personEntityId, out shopperReason);
+                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
             if (shopperId < 0)
             {
                 return FailPlan(trip, need, -1,
@@ -1706,7 +1721,7 @@ namespace LandLedgers.Population
         // ---------- steps, factored ----------
 
         /// <summary>Even an explicit shopper override must be a real, living, old-enough member.</summary>
-        private static string ValidateShopper(PersonState shopper)
+        private string ValidateShopper(PersonState shopper)
         {
             if (shopper.deathDayIndex >= 0)
             {
@@ -1716,6 +1731,15 @@ namespace LandLedgers.Population
             if (shopper.ageBand < AgeBand.YoungWorker16To17)
             {
                 return $"P{shopper.id} ({shopper.ageBand}) is too young to shop alone.";
+            }
+
+            // Plan 08 Slice 2 (Q03, AUD-266): an explicit override naming
+            // an off-map person is refused — the override path bypasses
+            // ChooseShopper, so this is its only guard. Null authority
+            // fails open.
+            if (offMapJourneys != null && offMapJourneys.IsOffMapPerson(shopper.id))
+            {
+                return $"P{shopper.id} is off-map.";
             }
 
             return null;

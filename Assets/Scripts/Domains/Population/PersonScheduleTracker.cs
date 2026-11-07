@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Population
 {
@@ -414,7 +415,8 @@ namespace LandLedgers.Population
             PersonScheduleTracker scheduleTracker,
             WorkTimeBudgetStore budgets,
             Func<int, LandLedgers.Primitives.EntityId> personEntityId,
-            out string reason)
+            out string reason,
+            OffMapJourneyAuthority offMapJourneys = null)
         {
             reason = null;
             if (population == null || memberIds == null || memberIds.Count == 0)
@@ -441,6 +443,16 @@ namespace LandLedgers.Population
                 if (person.deathDayIndex >= 0)
                 {
                     rejections.Add($"P{personId}: deceased.");
+                    continue;
+                }
+
+                // Plan 08 Slice 2 (Q03, AUD-266): an off-map member is
+                // never picked to shop — fall back through the existing
+                // preference order. Null authority fails open with no
+                // check, matching the W-2 precedent.
+                if (offMapJourneys != null && offMapJourneys.IsOffMapPerson(personId))
+                {
+                    rejections.Add($"P{personId}: off-map (freight journey).");
                     continue;
                 }
 
@@ -508,6 +520,10 @@ namespace LandLedgers.Population
             }
 
             reason = "No available shopper: " + string.Join(" ", rejections);
+            if (offMapJourneys == null)
+            {
+                reason += " (Off-map guard not installed: no OffMapJourneyAuthority was provided.)";
+            }
             return -1;
         }
     }

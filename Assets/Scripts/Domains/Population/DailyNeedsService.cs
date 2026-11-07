@@ -4,6 +4,7 @@ using LandLedgers.Population;
 using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -101,7 +102,8 @@ namespace LandLedgers.Population
             HouseholdMealLogRegistry mealLog = null,
             MealSchedulingPolicy mealPolicy = null,
             HouseholdMembershipRegistry memberships = null,
-            bool conditionDebuffsSuppressed = false)
+            bool conditionDebuffsSuppressed = false,
+            OffMapJourneyAuthority offMapJourneys = null)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -112,10 +114,19 @@ namespace LandLedgers.Population
                 return report;
             }
 
+            // Plan 08 Slice 2 (Q03, AUD-266): fail open with one loud log
+            // line per day when no off-map authority was handed in,
+            // exactly as DomesticLaborDriver.IsOffMapPerson does — the
+            // guard is off, never silently on, until the driver wires it.
+            if (offMapJourneys == null)
+            {
+                diag.Add("DailyNeedsService: off-map journey authority unavailable, proceeding WITHOUT the off-map guard");
+            }
+
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy, memberships, conditionDebuffsSuppressed);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy, memberships, conditionDebuffsSuppressed, offMapJourneys);
             }
             return report;
         }
@@ -132,9 +143,10 @@ namespace LandLedgers.Population
             HouseholdMealLogRegistry mealLog,
             MealSchedulingPolicy mealPolicy,
             HouseholdMembershipRegistry memberships,
-            bool conditionDebuffsSuppressed)
+            bool conditionDebuffsSuppressed,
+            OffMapJourneyAuthority offMapJourneys = null)
         {
-            int actingPersonId = FindActingAdult(population, household, memberships);
+            int actingPersonId = FindActingAdult(population, household, memberships, offMapJourneys, diag);
             if (actingPersonId < 0)
             {
                 diag.Add($"DailyNeedsService: H{household.id} has no acting adult — needs unmet, nothing faked.");
@@ -427,7 +439,9 @@ namespace LandLedgers.Population
         private int FindActingAdult(
             PopulationState population,
             HouseholdState household,
-            HouseholdMembershipRegistry memberships)
+            HouseholdMembershipRegistry memberships,
+            OffMapJourneyAuthority offMapJourneys,
+            List<string> diag)
         {
             List<int> memberIds = memberships != null
                 ? memberships.GetActiveMembers(household.id)
@@ -437,7 +451,20 @@ namespace LandLedgers.Population
             {
                 PersonState p = population.GetPerson(memberId);
                 if (p != null && p.ageBand == AgeBand.Adult18Plus && p.laborAccessLevel != LaborAccessLevel.None)
+                {
+                    // Plan 08 Slice 2 (Q03, AUD-266): an off-map adult is
+                    // never the acting adult — fall back to the next adult.
+                    // Never PersonState.isOffMap: no freight journey sets
+                    // it; only the authority's active-record check observes
+                    // a freight traveler. Null authority fails open.
+                    if (offMapJourneys != null && offMapJourneys.IsOffMapPerson(p.id))
+                    {
+                        diag.Add($"DailyNeedsService: P{p.id} is off-map, needs stay open for return.");
+                        continue;
+                    }
+
                     return p.id;
+                }
             }
             return -1;
         }

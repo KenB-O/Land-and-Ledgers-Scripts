@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 
 using EntityId = LandLedgers.Primitives.EntityId;
@@ -42,6 +43,8 @@ namespace LandLedgers.Population
             public TaskAuthority Tasks;
             public WorkTimeBudgetStore Budgets;
             public Func<int, EntityId> PersonEntityId;
+            /// <summary>Plan 08 Slice 2 (Q03, AUD-266): the off-map journey authority handed in by the driver. Null = fail open (no off-map guard) until the driver wires it.</summary>
+            public OffMapJourneyAuthority OffMapJourneys;
         }
 
         private readonly HouseholdErrandPlanRegistry plans = new HouseholdErrandPlanRegistry();
@@ -312,7 +315,7 @@ namespace LandLedgers.Population
                 ctx.Population, members, dayIndex, departure, estimate,
                 ctx.Schedules, ctx.Budgets,
                 ctx.PersonEntityId ?? (pid => EntityId.For(EntityKind.Person, pid)),
-                out string shopperReason);
+                out string shopperReason, ctx.OffMapJourneys);
             if (shopperId < 0)
             {
                 plan.MarkFailed();
@@ -357,6 +360,14 @@ namespace LandLedgers.Population
             if (person.deathDayIndex >= 0)
             {
                 return $"P{personId} is deceased";
+            }
+
+            // Plan 08 Slice 2 (Q03, AUD-266): a plan whose executor has
+            // gone off-map reassigns instead of waiting on an absent
+            // shopper. Null authority fails open.
+            if (ctx.OffMapJourneys != null && ctx.OffMapJourneys.IsOffMapPerson(personId))
+            {
+                return $"P{personId} is off-map";
             }
 
             if (ctx.Schedules == null)

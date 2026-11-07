@@ -531,7 +531,11 @@ namespace LandLedgers.Population
                 var rejected = new List<string>();
                 if (knownOffering.Count == 0)
                 {
-                    rejected.Add("no legitimately known seller offers this item");
+                    // Plan 02 Slice 5: the per-need reason must name the
+                    // distinction — no seller offers the item at all
+                    // (unrecognized), as opposed to a recognized item that
+                    // is merely out of stock or closed.
+                    rejected.Add("unrecognized item (no seller offers it)");
                 }
 
                 bool anyViable = false;
@@ -548,7 +552,9 @@ namespace LandLedgers.Population
                     int stock = itemSupplier.ItemStockUnits(need.ItemId);
                     if (stock <= 0)
                     {
-                        rejected.Add($"{supplier.SupplierName}: out of stock");
+                        // Plan 02 Slice 5: recognized but out of stock is
+                        // real demand, not an unrecognized item — name it.
+                        rejected.Add($"{supplier.SupplierName}: recognized but out of stock");
                         continue;
                     }
 
@@ -570,7 +576,9 @@ namespace LandLedgers.Population
                     string sellerTradeBlock = itemSupplier.CheckTradingCapability(dayIndex, arrivalMinute);
                     if (sellerTradeBlock != null)
                     {
-                        rejected.Add($"{supplier.SupplierName}: cannot trade at arrival ({sellerTradeBlock})");
+                        // Plan 02 Slice 5: closed at arrival, with the
+                        // capability's own reason kept in parentheses.
+                        rejected.Add($"{supplier.SupplierName}: closed at arrival ({sellerTradeBlock})");
                         continue;
                     }
 
@@ -678,6 +686,14 @@ namespace LandLedgers.Population
             {
                 batch.FailureReason = $"Unavailable shopper: {shopperReason ?? "nobody can shop today."} Needs stay open.";
                 diag.Add($"Day {dayIndex}: batch {batch.PlanId} — {batch.FailureReason}");
+                // Plan 02 Slice 5: the viable needs must carry the
+                // no-shopper reason on their own per-need results, not
+                // only on the batch — the daily summary reports the first
+                // failure reason per open need. Needs already failed by
+                // the pre-check keep their own specific reasons (they are
+                // not in batchNeeds), so only the viable group is failed
+                // here.
+                FailBatchNeeds(batch, batchNeeds, shopperId, dayIndex, batch.FailureReason, diag, options);
                 return batch;
             }
 
@@ -790,7 +806,7 @@ namespace LandLedgers.Population
                 SetScheduleState(shopper, PopulationScheduleState.AtHome);
                 scheduleTracker.Release(reservationId);
                 batch.ReservationId = string.Empty;
-                batch.FailureReason = $"'{winner.SupplierName}' cannot trade at arrival: {tradingProblem}. Shopper returned empty-handed.";
+                batch.FailureReason = $"'{winner.SupplierName}' closed at arrival: {tradingProblem}. Shopper returned empty-handed.";
                 diag.Add($"Day {dayIndex}: batch {batch.PlanId} — {batch.FailureReason}");
                 FailBatchNeeds(batch, candidates.Keys, shopperId, dayIndex, batch.FailureReason, diag, options);
                 return batch;
@@ -2143,7 +2159,26 @@ namespace LandLedgers.Population
                 AddEvent(result, dayIndex, ShoppingEventKind.Failure, shopperId, need,
                     $"No viable seller for '{need.ItemId}' x{need.UnitsNeeded} — {result.RejectedAlternatives.Count} alternatives rejected. Need stays open.",
                     "unfulfilled demand stays observable for §26 diagnostics and NPC opportunity detection.");
-                result.FailureReason = $"No viable seller for '{need.ItemId}': all {result.RejectedAlternatives.Count} candidates rejected (see RejectedAlternatives).";
+                // Plan 02 Slice 5: when every candidate was rejected on
+                // money, the per-need reason must name the budget, not
+                // hide behind the generic "all candidates rejected" — the
+                // daily summary reports the first failure reason per open
+                // need. Mixed rejections keep the generic reason (the
+                // detail stays in RejectedAlternatives).
+                bool allUnaffordable = result.RejectedAlternatives.Count > 0;
+                foreach (RejectedShoppingAlternative alternative in result.RejectedAlternatives)
+                {
+                    if (alternative == null || string.IsNullOrEmpty(alternative.Reason)
+                        || !alternative.Reason.StartsWith("unaffordable", StringComparison.Ordinal))
+                    {
+                        allUnaffordable = false;
+                        break;
+                    }
+                }
+
+                result.FailureReason = allUnaffordable
+                    ? $"No viable seller for '{need.ItemId}': budget short — {result.RejectedAlternatives[0].Reason}. Need stays open."
+                    : $"No viable seller for '{need.ItemId}': all {result.RejectedAlternatives.Count} candidates rejected (see RejectedAlternatives).";
                 return null;
             }
 

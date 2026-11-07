@@ -1,7 +1,9 @@
+using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Labor;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -786,6 +788,323 @@ namespace LandLedgers.EditorTests.Population
                 "the shopper's [480,510] rest was released for the trip");
             Assert.IsTrue(f.HasReservation(shopper, PersonActivityKind.Resting, 420, 450, released: false),
                 "the shopper's other rest was untouched");
+        }
+
+        // ---------- Plan 02 Slice 5: per-need failure reasons must
+        // distinguish the five ways a batch need can fail. ----------
+
+        [Test]
+        public void FailureReason_UnrecognizedItem_NamesNoSeller()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            HouseholdPurchasingNeed bread = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+            HouseholdPurchasingNeed meat = f.OpenNeed(HouseholdItemCatalog.PreservedMeatId, 5);
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { bread, meat }, f.Day, f.Options(), "slice5-unrecognized");
+
+            Assert.IsTrue(batch.TripExecuted, "the servable bread need must still be served: " + batch.FailureReason);
+            ShoppingTripResult meatResult = null;
+            foreach (ShoppingTripResult r in batch.NeedResults)
+            {
+                if (r != null && r.ItemId == HouseholdItemCatalog.PreservedMeatId)
+                {
+                    meatResult = r;
+                }
+            }
+
+            Assert.IsNotNull(meatResult, "the meat need must have its own per-need result");
+            Assert.IsTrue(meatResult.FailureReason.Contains("unrecognized item (no seller offers it)"),
+                "the meat failure must name the unrecognized item, got: " + meatResult.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, meat.Status);
+        }
+
+        [Test]
+        public void FailureReason_RecognizedOutOfStock_NamesStock()
+        {
+            Fixture f = Fixture.Create();
+            f.Port.ItemStock[HouseholdItemCatalog.BreadId] = 0;
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "slice5-out-of-stock");
+
+            Assert.IsFalse(batch.TripExecuted, "an empty store must sell nothing");
+            ShoppingTripResult breadResult = null;
+            foreach (ShoppingTripResult r in batch.NeedResults)
+            {
+                if (r != null && r.ItemId == HouseholdItemCatalog.BreadId)
+                {
+                    breadResult = r;
+                }
+            }
+
+            Assert.IsNotNull(breadResult, "the bread need must have its own per-need result");
+            Assert.IsTrue(breadResult.FailureReason.Contains("recognized but out of stock"),
+                "the stockout failure must name the recognized-but-out-of-stock item, got: " + breadResult.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(10000, f.Balance());
+        }
+
+        [Test]
+        public void FailureReason_ClosedAtArrival_NamesClosure()
+        {
+            Fixture f = Fixture.Create();
+            f.Day = 6; // Sunday (day-of-week index 6)
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+
+            HouseholdShoppingLoop.BatchShoppingResult sunday = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, 6, f.Options(), "slice5-sunday-closed");
+
+            Assert.IsFalse(sunday.TripExecuted, "Sunday trading is closed by Canon 13.4");
+            ShoppingTripResult breadResult = null;
+            foreach (ShoppingTripResult r in sunday.NeedResults)
+            {
+                if (r != null && r.ItemId == HouseholdItemCatalog.BreadId)
+                {
+                    breadResult = r;
+                }
+            }
+
+            Assert.IsNotNull(breadResult, "the bread need must have its own per-need result");
+            Assert.IsTrue(breadResult.FailureReason.Contains("closed at arrival"),
+                "the Sunday failure must name the closure at arrival, got: " + breadResult.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(10000, f.Balance());
+        }
+
+        [Test]
+        public void FailureReason_NoShopper_NamesSearchedWindow()
+        {
+            // Same setup as WindowSearch_NeverPreemptsSleep: long route,
+            // early close, P1 at work, P2 job-seeking — no departure works.
+            // The batch reason already named the searched window; Slice 5
+            // closes the gap that the PER-NEED result carried no reason at
+            // all on this early return.
+            Fixture f = Fixture.Create(routeMiles: 2.5);
+            f.SetStoreCloseMinute(540);
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+
+            Assert.IsNull(f.Tracker.TryReserve(1, PersonActivityKind.Work, f.Day, 480, 600, "test work"));
+            f.PlanDay(pid =>
+            {
+                DailyActivityPlanner.PersonDayPlanInputs inputs = f.DefaultInputs(pid);
+                if (pid == 2)
+                {
+                    inputs.IsJobSeeker = true;
+                }
+
+                return inputs;
+            });
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "slice5-no-window");
+
+            Assert.IsFalse(batch.TripExecuted, "no window fits, so no trip may execute");
+            Assert.IsTrue(batch.FailureReason.Contains("No shopper in any searched window"),
+                "the batch failure must name the searched window, got: " + batch.FailureReason);
+            ShoppingTripResult breadResult = null;
+            foreach (ShoppingTripResult r in batch.NeedResults)
+            {
+                if (r != null && r.ItemId == HouseholdItemCatalog.BreadId)
+                {
+                    breadResult = r;
+                }
+            }
+
+            Assert.IsNotNull(breadResult, "the bread need must have its own per-need result");
+            Assert.IsTrue(breadResult.FailureReason.Contains("No shopper in any searched window"),
+                "the per-need failure must name the searched window, got: " + breadResult.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(10000, f.Balance(), "no money moves on a refused trip");
+        }
+
+        [Test]
+        public void FailureReason_BudgetShort_NamesBudget()
+        {
+            // 4c cannot cover even one 5c loaf: every candidate is
+            // rejected on money, so the per-need reason must name the
+            // budget instead of hiding behind "all candidates rejected".
+            Fixture f = Fixture.Create();
+            f.Fund(4);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "slice5-budget-short");
+
+            Assert.IsFalse(batch.TripExecuted, "no purchase may happen on 4c");
+            ShoppingTripResult breadResult = null;
+            foreach (ShoppingTripResult r in batch.NeedResults)
+            {
+                if (r != null && r.ItemId == HouseholdItemCatalog.BreadId)
+                {
+                    breadResult = r;
+                }
+            }
+
+            Assert.IsNotNull(breadResult, "the bread need must have its own per-need result");
+            Assert.IsTrue(breadResult.FailureReason.Contains("budget short"),
+                "the money failure must name the budget shortfall, got: " + breadResult.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(4, f.Balance(), "no money moves on a refused trip");
+            Assert.AreEqual(16, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId));
+        }
+
+        [Test]
+        public void DriveOrder_ShoppingReservationSurvivesLaterDrives()
+        {
+            // Plan 02 Slice 5 guard test: run the OnDayChanged drive order
+            // in the harness (activity plans → needs/shopping → domestic
+            // labor → labor market → social) for one day and assert the
+            // shopping reservation survives the rest of the day's drives.
+            //
+            // "Still held" reading (pinned by NoDoubleBooking): ExecuteBatch
+            // releases the shopping reservation when the trip completes, by
+            // design — so the guard asserts the reservation RECORD is still
+            // present in the tracker at end of day with its original window
+            // intact (released on completion, never deleted or mutated by a
+            // later drive), and no person holds overlapping ACTIVE
+            // reservations. If a later drive double-booked over the shopping
+            // window, that is a defect in the later drive — record it, stop
+            // the slice, file it as a follow-up (do not rework the
+            // labor/social/domestic drivers inside this plan).
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            f.Budgets.EnsureDay(0);
+
+            // 1. Activity plans (production drive order: budgets roll, then
+            //    the planner reserves sleep/meals/rest).
+            f.PlanDay();
+
+            // 2. Needs/shopping: the shortage monitor raises the bread need
+            //    from zero stock (2 members x 1 loaf x 3 meals/day = 6),
+            //    the coordinator plans it, the trip executes.
+            var monitor = new HouseholdShortageMonitor(f.Needs) { LowDaysThreshold = 1f };
+            int dailyBreadUse = 2 * MealSchedulingPolicy.Default.GetServingUnits(HouseholdItemCatalog.BreadId)
+                * MealSchedulingPolicy.Default.ExpectedMealsPerDay;
+            monitor.Evaluate(
+                f.Population.GetHousehold(7),
+                f.Inventories.GetOrCreate(7),
+                new Dictionary<string, int> { { HouseholdItemCatalog.BreadId, dailyBreadUse } },
+                isColdSeason: false,
+                supplyAccess: new HouseholdSupplyAccess(),
+                upcomingObligationCents: 0,
+                expectedIncomeCents: 0,
+                dayIndex: 0,
+                isRecognizedByKnownSeller: HouseholdShortageMonitor.KnownSellerRecognitionPredicate(
+                    f.Directory, f.Knowledge, new List<int> { 1, 2 }));
+            HouseholdPurchasingNeed need = f.Needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId);
+            Assert.IsNotNull(need, "the monitor must raise the bread need");
+            Assert.AreEqual(6, need.UnitsNeeded);
+
+            List<HouseholdErrandPlan> plans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
+            Assert.AreEqual(1, plans.Count, "one plan batches the open bread need");
+            HouseholdShoppingLoop.BatchShoppingResult batch =
+                f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, f.Options(), f.Diagnostics);
+            Assert.IsTrue(batch.TripExecuted, "the shopping trip must execute: " + batch.FailureReason);
+            Assert.AreEqual(2, batch.ShopperPersonId, "the preferred shopper is the adult woman first");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+
+            // The shopping reservation exists now: exactly one, [480,575],
+            // released on completion.
+            int shoppingCount = 0;
+            PersonActivityReservation shopping = null;
+            foreach (PersonActivityReservation r in f.Tracker.Reservations)
+            {
+                if (r != null && r.PersonId == 2 && r.DayIndex == 0 && r.Activity == PersonActivityKind.Shopping)
+                {
+                    shoppingCount++;
+                    shopping = r;
+                }
+            }
+
+            Assert.AreEqual(1, shoppingCount, "exactly one shopping reservation may be created for the trip");
+            Assert.IsNotNull(shopping);
+            Assert.AreEqual(480, shopping.StartMinuteOfDay);
+            Assert.AreEqual(575, shopping.EndMinuteOfDay);
+            Assert.IsTrue(shopping.Released, "the shopping reservation is released once the trip completes");
+
+            // 3. Domestic labor (production: DriveDomesticLaborDay) — plans
+            //    meal prep (990) and chores (660) on real person time.
+            DomesticTaskCatalog.RegisterAll(f.Tasks, f.Diagnostics);
+            var domesticDriver = new DomesticLaborDriver();
+            var domestic = new DomesticLaborService();
+            var dueEvents = new SimpleDueEventScheduler();
+            domesticDriver.DriveDay(
+                new DomesticLaborDriver.DomesticDayInputs
+                {
+                    HouseholdId = 7,
+                    MemberIds = new List<int> { 1, 2 },
+                    AgeBandFor = _ => AgeBand.Adult18Plus,
+                    MealsAtHomeCount = 2,
+                    ColdSeason = false,
+                    HasAnimals = false,
+                },
+                0, f.Tasks, f.Budgets, f.Tracker, domestic, dueEvents, f.Diagnostics);
+            Assert.IsTrue(string.Join(" | ", f.Diagnostics).Contains("DomesticLaborDriver: planned"),
+                "the domestic drive must have run and planned work, diagnostics: " + string.Join(" | ", f.Diagnostics));
+
+            // 4. Labor market (production: DriveLaborMarketDay) — offer
+            //    aging over an empty registry; no person-time is touched.
+            var negotiation = new EmploymentNegotiationService();
+            negotiation.AdvanceDay(0, new EmploymentRelationshipRegistry(), f.Diagnostics);
+
+            // 5. Social (production: DriveSocialDay) — evening visits at
+            //    1140 on real person time. Pick a deterministic seed where
+            //    at least one member draws a visit, so the drive genuinely
+            //    reserves person-time after shopping.
+            int visitSeed = -1;
+            for (int seed = 0; seed < 1000; seed++)
+            {
+                if (DemographicRng.Draw01(seed, 0, 1, "social-visit") < DailySocialDrive.DailyVisitProbability
+                    || DemographicRng.Draw01(seed, 0, 2, "social-visit") < DailySocialDrive.DailyVisitProbability)
+                {
+                    visitSeed = seed;
+                    break;
+                }
+            }
+
+            Assert.GreaterOrEqual(visitSeed, 0, "a seed must exist where a member plans a social visit");
+            DailySocialDayReport socialReport = DailySocialDrive.DriveDay(
+                new DailySocialDriveContext
+                {
+                    Population = f.Population,
+                    Schedules = f.Tracker,
+                    Employments = new EmploymentRelationshipRegistry(),
+                    Knowledge = new KnowledgeTransmissionStore(),
+                    Recruiting = null,
+                    BusinessById = _ => null,
+                    VenueBusinessIds = new List<string> { "saloon-1" },
+                    DayIndex = 0,
+                    WorldSeed = visitSeed,
+                },
+                f.Diagnostics);
+            Assert.GreaterOrEqual(socialReport.VisitsPlanned, 1,
+                "the social drive must have planned at least one evening visit on real person time");
+
+            // End-of-day invariants: the shopping reservation record is
+            // still present with its original window, and no person holds
+            // overlapping ACTIVE reservations.
+            Assert.IsTrue(f.HasReservation(2, PersonActivityKind.Shopping, 480, 575, released: true),
+                "the shopping reservation must still be held (as the completed record) at end of day");
+            Assert.IsFalse(f.ActiveReservationsOverlap(1), "P1 must hold no overlapping reservations at end of day");
+            Assert.IsFalse(f.ActiveReservationsOverlap(2), "P2 must hold no overlapping reservations at end of day");
+            bool socialReservationHeld = false;
+            foreach (PersonActivityReservation r in f.Tracker.Reservations)
+            {
+                if (r != null && r.DayIndex == 0 && r.Activity == PersonActivityKind.Socializing
+                    && r.StartMinuteOfDay == 1140 && r.EndMinuteOfDay == 1200 && !r.Released)
+                {
+                    socialReservationHeld = true;
+                }
+            }
+
+            Assert.IsTrue(socialReservationHeld,
+                "the social drive's evening visit reservation must be held after shopping");
         }
     }
 }

@@ -7674,6 +7674,13 @@ namespace LandLedgers.Orchestration.Systems
                 diagnostics.Add("General Store holds no identified lots for any meal item; needs stay open until a reorder or bakery delivery lands");
             }
 
+            // Plan 02 Slice 5: accumulate the day's shopping totals for the
+            // single summary line below — purchases made, cents spent, and
+            // the first failure reason recorded per need that stays open.
+            int shoppingPurchasesMade = 0;
+            int shoppingCentsSpent = 0;
+            var shoppingFailureByNeed = new Dictionary<string, string>(StringComparer.Ordinal);
+
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null)
@@ -7721,8 +7728,64 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         diagnostics.Add($"[SimulationDrivers] household errands H{household.id}: {batch.FailureReason}");
                     }
+
+                    if (batch != null)
+                    {
+                        shoppingPurchasesMade += batch.ServedNeedCount;
+                        if (batch.NeedResults != null)
+                        {
+                            foreach (ShoppingTripResult needResult in batch.NeedResults)
+                            {
+                                if (needResult == null) continue;
+                                shoppingCentsSpent += Math.Max(0, needResult.BuyerOutflowCents);
+                                if (!needResult.Success && !string.IsNullOrWhiteSpace(needResult.FailureReason))
+                                {
+                                    string failureKey = household.id + ":" + needResult.ItemId;
+                                    if (!shoppingFailureByNeed.ContainsKey(failureKey))
+                                    {
+                                        shoppingFailureByNeed[failureKey] = needResult.FailureReason;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
+
+            // Plan 02 Slice 5: one daily shopping summary line (not one line
+            // per trip): purchases made, cents spent, and the needs still
+            // open with their first failure reason each. A single
+            // diagnostics entry, so the 12-per-day cap in DriveDailyNeeds
+            // still bounds the day's log; the open-need list is capped at 8
+            // entries with an "and N more" tail. Needs with no failure
+            // recorded today were never attempted (no attempt today).
+            var stillOpenParts = new List<string>();
+            int stillOpenTotal = 0;
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null || hub.PurchasingNeeds == null) continue;
+                List<HouseholdPurchasingNeed> openNeeds = hub.PurchasingNeeds.GetOpenNeeds(household.id);
+                if (openNeeds == null) continue;
+                foreach (HouseholdPurchasingNeed openNeed in openNeeds)
+                {
+                    if (openNeed == null) continue;
+                    stillOpenTotal++;
+                    if (stillOpenParts.Count < 8)
+                    {
+                        string failureKey = household.id + ":" + openNeed.ItemId;
+                        string reason = shoppingFailureByNeed.TryGetValue(failureKey, out string recorded)
+                            ? recorded
+                            : "no attempt today";
+                        stillOpenParts.Add($"H{household.id} {openNeed.ItemId} ({reason})");
+                    }
+                }
+            }
+
+            string stillOpenText = stillOpenTotal == 0
+                ? "none"
+                : string.Join("; ", stillOpenParts)
+                    + (stillOpenTotal > stillOpenParts.Count ? $"; and {stillOpenTotal - stillOpenParts.Count} more" : string.Empty);
+            diagnostics.Add($"[FoodEconomy] shopping summary day {absoluteDayIndex}: {shoppingPurchasesMade} purchase(s), {shoppingCentsSpent}c spent; still open: {stillOpenText}");
         }
 
         /// <summary>

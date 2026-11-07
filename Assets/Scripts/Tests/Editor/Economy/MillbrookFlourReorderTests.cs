@@ -68,6 +68,39 @@ public sealed class MillbrookFlourReorderTests
     }
 
     [Test]
+    public void RefusedRequestLotBlocksAllLaterReorders()
+    {
+        // Plan 07 Slice 0 discriminator, reorder half (AUD-334): the
+        // bricked lot is uncommitted and unreceived forever, so the
+        // single-outstanding rule refuses every later reorder naming it.
+        // The lot itself is fine; the request for it is the bricked part.
+        var supplier = NewSupplier();
+        var bakeryCash = new FakeBusinessCashPort(20000);
+        var diag = new List<string>();
+
+        Assert.IsNull(MillbrookFlourReorder.PlaceReorder(
+            supplier, bakeryCash, BuyerBusinessId, BuyerName, 1, 0, diag, out OffMapAidCargoLot firstLot));
+        Assert.IsNotNull(firstLot);
+        Assert.AreEqual("aidlot-millbrook_grain_co:flour-reorder-d0-n1", firstLot.LotId);
+        Assert.AreEqual(48, firstLot.TotalCostCents, "1 sack x 48c paid");
+        Assert.AreEqual(19952, bakeryCash.BalanceCents, "buyer debited exactly 48c");
+        Assert.AreEqual(220, supplier.GetInventoryUnits("bakery_flour_sack"), "230 lb - 10 lb");
+        Assert.AreSame(firstLot, MillbrookFlourReorder.FindShippableLot(supplier, BuyerBusinessId),
+            "the lot is shippable; only its freight request is bricked");
+
+        string refusal = MillbrookFlourReorder.PlaceReorder(
+            supplier, bakeryCash, BuyerBusinessId, BuyerName, 1, 0, diag, out OffMapAidCargoLot duplicateLot);
+
+        Assert.IsNotNull(refusal, "a second reorder for a covered need must refuse");
+        Assert.IsTrue(refusal.Contains(firstLot.LotId),
+            "refusal names the outstanding lot; refusal: " + refusal);
+        Assert.IsNull(duplicateLot);
+        Assert.AreEqual(1, supplier.Lots.Count, "no second lot placed");
+        Assert.AreEqual(19952, bakeryCash.BalanceCents, "refused attempt moves no buyer cash");
+        Assert.AreEqual(220, supplier.GetInventoryUnits("bakery_flour_sack"), "refused attempt moves no stock");
+    }
+
+    [Test]
     public void PlaceReorder_PlacesUniqueLot_BuyerDebitedOnce_SupplierStockDebited()
     {
         var supplier = NewSupplier();

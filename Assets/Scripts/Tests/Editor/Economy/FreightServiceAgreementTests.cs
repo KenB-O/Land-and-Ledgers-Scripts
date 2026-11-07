@@ -121,6 +121,139 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void MeetingRefusalIsTerminalAndBricksThePaidLot()
+        {
+            // Plan 07 Slice 0 discriminator (AUD-334): a meeting refused for
+            // a transient cause (bakery till below the 125c quote) leaves a
+            // Refused request no driver path can ever reopen, and the paid
+            // lot behind it can never ship.
+            const string requestId = "freight-request:millbrook_grain_co:flour-reorder-d0-n1";
+            const string lotId = "aidlot-millbrook_grain_co:flour-reorder-d0-n1";
+            var book = new FreightServiceAgreementBook();
+            var request = NewMillbrookRequest(requestId, lotId);
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.IsNull(book.SetQuote(requestId, New125Quote("quote-d0-n1")));
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.MeetingScheduled));
+
+            // Exactly as the drivers do at SimulationDrivers.cs:4468.
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.Refused,
+                "Bakery B1 has 40c available for a 125c agreed charge."));
+            Assert.AreEqual(FreightServiceRequestStatus.Refused, request.Status);
+
+            // Observation 2: SetStatus cannot move a Refused request back.
+            string reopenRefusal = book.SetStatus(requestId, FreightServiceRequestStatus.Open);
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(reopenRefusal), "SetStatus must refuse a terminal request.");
+            Assert.IsTrue(reopenRefusal.Contains("already terminal"), "refusal: " + reopenRefusal);
+            Assert.AreEqual(FreightServiceRequestStatus.Refused, request.Status);
+
+            // Observation 3: the deterministic request id cannot be recreated.
+            Assert.That(book.CreateRequest(NewMillbrookRequest(requestId, "aidlot-other"), out _),
+                Does.Contain("already exists"));
+
+            // Observation 4: no agreement exists to advance.
+            Assert.IsNull(book.FindAgreementForRequest(requestId));
+        }
+
+        [Test]
+        public void DeferTemporarilyMechanicallyReopensARefusedRequest()
+        {
+            // Plan 07 Slice 0 seam proof: the book transition exists and
+            // reopens a Refused request with no agreement; the defect is
+            // that no driver ever calls it on one. This test must pass
+            // before the repair starts.
+            const string requestId = "freight-request:millbrook_grain_co:flour-reorder-d0-n1";
+            const string lotId = "aidlot-millbrook_grain_co:flour-reorder-d0-n1";
+            var book = new FreightServiceAgreementBook();
+            var request = NewMillbrookRequest(requestId, lotId);
+            request.MeetingTaskId = "T40";
+            request.ContactTravelTaskId = "T39";
+            request.MeetingOperatorReservationId = "reservation-ethan-40";
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.MeetingScheduled));
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.Refused,
+                "Bakery B1 has 40c available for a 125c agreed charge."));
+
+            Assert.IsNull(book.DeferTemporarily(requestId,
+                "Bakery till recovered; retry the meeting for the same lot."));
+            Assert.AreEqual(FreightServiceRequestStatus.Open, request.Status);
+            Assert.IsEmpty(request.MeetingTaskId);
+            Assert.IsEmpty(request.ContactTravelTaskId);
+            Assert.IsEmpty(request.MeetingOperatorReservationId);
+            Assert.IsNull(book.FindAgreementForRequest(requestId));
+        }
+
+        [Test]
+        public void CompletedAgreementNeverLeavesAccepted()
+        {
+            // Plan 07 Slice 0 discriminator (AUD-338): a completed,
+            // delivered, collected agreement still carries Accepted status
+            // because no production code ever assigns Fulfilled or
+            // Cancelled (repo-wide grep: zero assignments in production,
+            // no Cancel method on the book).
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.IsNull(book.LinkShipment(agreement.AgreementId, "freight-shipment:request-1"));
+            Assert.IsNull(book.MarkPreparedForDispatch(agreement.AgreementId, agreement.ShipmentId, 3600f));
+            Assert.IsNull(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T20"));
+
+            var completedShipment = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Completed);
+            completedShipment.deliveryApplied = true;
+            completedShipment.freightRevenueCollected = true;
+
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status,
+                "A completed, delivered, collected agreement must still be Accepted until Slice 2 closes it.");
+            Assert.IsNull(book.FindNextAwaitingPreparation(new[] { completedShipment }),
+                "a completed agreement must not be selected for preparation again");
+        }
+
+        [Test]
+        public void TemporaryMeetingCausesAlreadyDefer()
+        {
+            // Plan 07 Slice 0 control cases: the three classifier
+            // substrings in IsTemporaryFreightCapacityRefusal already
+            // defer through DeferTemporarily, so the repair is not
+            // credited with fixing them.
+            string[] temporaryReasons =
+            {
+                "Wagon is already bound to live shipment.",
+                "Wagon 'opening-freight-wagon' is held by another equipment reservation.",
+                "Ethan has an incompatible assigned or in-progress task at acceptance time."
+            };
+            foreach (string reason in temporaryReasons)
+            {
+                var book = new FreightServiceAgreementBook();
+                var request = NewMillbrookRequest("request-control", "lot-control");
+                Assert.IsNull(book.CreateRequest(request, out _));
+                Assert.IsNull(book.SetStatus(request.RequestId, FreightServiceRequestStatus.MeetingScheduled));
+                Assert.IsNull(book.DeferTemporarily(request.RequestId, reason),
+                    "reason must defer: " + reason);
+                Assert.AreEqual(FreightServiceRequestStatus.Open, request.Status);
+            }
+        }
+
+        private static FreightServiceRequest NewMillbrookRequest(string requestId, string lotId)
+        {
+            return new FreightServiceRequest
+            {
+                RequestId = requestId, RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = lotId, Quantity = 1,
+                RequestingPersonId = 4, CarrierOperatorPersonId = 7,
+                PickupLocationId = "millbrook-pickup", DestinationLocationId = "bakery-door"
+            };
+        }
+
+        private static FreightServiceQuote New125Quote(string quoteId)
+        {
+            return new FreightServiceQuote
+            {
+                QuoteId = quoteId, OneWayDistanceMiles = 50, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = 125, PayerBusinessId = "bakery-1"
+            };
+        }
+
+        [Test]
         public void AgreementBook_RefusesShipmentRelinkingAndCapturesPendingPaymentTerms()
         {
             var book = new FreightServiceAgreementBook();

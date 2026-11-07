@@ -207,6 +207,74 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void ReopenRefusedRequestRestoresOpenOnlyWhenShippable()
+        {
+            // Plan 07 Slice 1b (Q02, AUD-334): a Refused request with no
+            // agreement reopens to Open with its stable id, lot, and quote
+            // intact; every other state refuses.
+            const string requestId = "freight-request:millbrook_grain_co:flour-reorder-d0-n1";
+            const string lotId = "aidlot-millbrook_grain_co:flour-reorder-d0-n1";
+            var book = new FreightServiceAgreementBook();
+            var request = NewMillbrookRequest(requestId, lotId);
+            request.MeetingTaskId = "T40";
+            request.ContactTravelTaskId = "T39";
+            request.MeetingOperatorReservationId = "reservation-ethan-40";
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.MeetingScheduled));
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.Refused,
+                "Bakery B1 has 40c available for a 125c agreed charge."));
+
+            Assert.That(book.ReopenRefusedRequest(requestId, string.Empty),
+                Does.Contain("requires its cause"));
+            Assert.AreEqual(FreightServiceRequestStatus.Refused, request.Status,
+                "an empty reason must not reopen the request");
+
+            Assert.IsNull(book.ReopenRefusedRequest(requestId,
+                "Lot '" + lotId + "' is still shippable; reopening the refused request for a retried meeting."));
+            Assert.AreEqual(FreightServiceRequestStatus.Open, request.Status);
+            Assert.IsEmpty(request.MeetingTaskId);
+            Assert.IsEmpty(request.ContactTravelTaskId);
+            Assert.IsEmpty(request.MeetingOperatorReservationId);
+
+            Assert.IsNull(book.SetQuote(requestId, New125Quote("quote-d0-n1")));
+            Assert.IsNull(book.Accept(requestId, 7, 3, 7200f, out FreightServiceAgreement agreement));
+            Assert.AreEqual("freight-agreement:" + requestId, agreement.AgreementId);
+            Assert.AreEqual(lotId, agreement.CargoLotId);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+            Assert.AreEqual(1, book.Requests.Count);
+            Assert.AreEqual(1, book.Agreements.Count);
+        }
+
+        [Test]
+        public void ReopenRefusedRequestRefusesWhenAnAgreementExists()
+        {
+            // A Refused request that already has an agreement (reachable
+            // through a save made mid-repair) must never reopen: the haul
+            // already has an agreement to advance.
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            FreightServiceAgreementBookSaveDto dto = book.CaptureSaveDto();
+            dto.Requests[0].Status = FreightServiceRequestStatus.Refused;
+            var restored = new FreightServiceAgreementBook();
+            restored.RestoreSaveDto(dto);
+            Assert.IsNotNull(restored.FindAgreementForRequest("request-1"));
+
+            Assert.That(restored.ReopenRefusedRequest("request-1", "lot still shippable"),
+                Does.Contain("agreement"));
+            Assert.AreEqual(FreightServiceRequestStatus.Refused,
+                restored.FindRequest("request-1").Status);
+        }
+
+        [Test]
+        public void ReopenRefusedRequestRefusesAcceptedRequests()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out _);
+            Assert.That(book.ReopenRefusedRequest("request-1", "lot still shippable"),
+                Does.Contain("Only a refused"));
+            Assert.AreEqual(FreightServiceRequestStatus.Accepted,
+                book.FindRequest("request-1").Status);
+        }
+
+        [Test]
         public void TemporaryMeetingCausesAlreadyDefer()
         {
             // Plan 07 Slice 0 control cases: the three classifier

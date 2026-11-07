@@ -3269,6 +3269,21 @@ namespace LandLedgers.Orchestration.Systems
                     $"quantity={lot.PackageUnits} {lot.OrderUnit}; status=Open. No freight payment or pickup occurred.", this);
             }
 
+            // Plan 07 Slice 1b (Q02, AUD-334): a request refused before the
+            // meeting-retry repair is reopened when its paid lot is still
+            // shippable, so the next daily drive retries the same request
+            // instead of returning early on it forever. FindShippableLot
+            // already returned this lot above; if it had not, the request
+            // stays Refused and the drive returns as before.
+            if (request.Status == FreightServiceRequestStatus.Refused
+                && string.Equals(lot.LotId, request.CargoLotId, StringComparison.Ordinal))
+            {
+                string reopenRefusal = book.ReopenRefusedRequest(request.RequestId,
+                    $"Lot '{lot.LotId}' is still shippable; reopening the refused request for a retried meeting.");
+                if (reopenRefusal == null)
+                    Debug.Log($"[FreightAgreement] Reopened refused request '{request.RequestId}' for lot '{lot.LotId}': the lot is still shippable, so the meeting will be retried.", this);
+            }
+
             if (request.Status == FreightServiceRequestStatus.Accepted || request.Status == FreightServiceRequestStatus.Refused
                 || request.Status == FreightServiceRequestStatus.MeetingScheduled) return;
             EquipmentAsset assignedWagon = hub?.TransportAssets?.Get("opening-freight-wagon");
@@ -4417,27 +4432,56 @@ namespace LandLedgers.Orchestration.Systems
             EquipmentAsset wagon = hub?.TransportAssets?.Get("opening-freight-wagon");
             AnimalState horse = FindOpeningFreightHorse(request.CarrierBusinessId);
 
+            // Plan 07 Slice 1a (Q02, AUD-334): each refusal branch decides
+            // for itself whether its cause is transient while the lot is
+            // still shippable. Transient branches defer through
+            // DeferTemporarily and are retried; only the lot branch stays
+            // terminal, because a lot that is absent, committed, received,
+            // or inconsistent is no longer shippable. The capacity-conflict
+            // and wagon-reservation refusals built below still defer through
+            // the IsTemporaryFreightCapacityRefusal classifier.
             string refusal = null;
+            bool refusalIsTransient = false;
             if (glen == null || ethan == null || bakery?.RuntimeState == null || carrier?.RuntimeState == null)
+            {
                 refusal = "Glen, Ethan, or a participant's business cash authority is unavailable at meeting completion.";
+                refusalIsTransient = true;
+            }
             else if (!IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId)
                 || !IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId))
+            {
                 refusal = "Both participants are not physically present at the Freight Company meeting location.";
+                refusalIsTransient = true;
+            }
             else if (HasOpenAssignedTask(ethan.id))
+            {
                 refusal = "Ethan has an incompatible assigned or in-progress task at acceptance time.";
+                refusalIsTransient = true;
+            }
             else if (request.Quote == null || bakery.RuntimeState.CurrentCashCents < request.Quote.TotalPriceCents)
+            {
                 refusal = $"Bakery B1 has {bakery?.RuntimeState?.CurrentCashCents ?? 0}c available for a {request.Quote?.TotalPriceCents ?? 0}c agreed charge.";
+                refusalIsTransient = true;
+            }
             else if (lot == null || lot.SourceCommitted || lot.Received || lot.PackageUnits != request.Quantity
                 || !string.Equals(lot.SkuId, request.CargoSkuId, StringComparison.Ordinal)
                 || !string.Equals(lot.BuyerBusinessId, bakery.InstanceId, StringComparison.Ordinal))
+            {
                 refusal = "The exact paid Millbrook lot is absent, committed, received, or inconsistent with the request.";
+            }
             else if (horse == null || horse.OwnerKind != AnimalOwnerKind.Business
                 || !string.Equals(horse.OwnerId, carrier.InstanceId, StringComparison.Ordinal)
                 || !HorseAuthority.IsWorkReady(horse))
+            {
                 refusal = "A0 is unavailable or not work-ready for Freight Company B3.";
+                refusalIsTransient = true;
+            }
             else if (wagon == null || !wagon.IsWagon || wagon.OwnerKind != "business"
                 || !string.Equals(wagon.OwnerId, carrier.InstanceId, StringComparison.Ordinal))
+            {
                 refusal = "The existing opening wagon is unavailable or is not owned by Freight Company B3.";
+                refusalIsTransient = true;
+            }
 
             if (refusal == null)
             {
@@ -4453,7 +4497,7 @@ namespace LandLedgers.Orchestration.Systems
 
             if (refusal != null)
             {
-                if (IsTemporaryFreightCapacityRefusal(refusal))
+                if (refusalIsTransient || IsTemporaryFreightCapacityRefusal(refusal))
                 {
                     string priorReason = request.RefusalReason;
                     string deferRefusal = book.DeferTemporarily(request.RequestId, refusal);
@@ -4470,10 +4514,34 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Plan 07 Slice 1c (Q02, AUD-334): the only reachable Accept
+            // failure once the quote is known and the operator is Ethan is
+            // a duplicate agreement — the haul already has an agreement, so
+            // the request joins it instead of bricking it. Any other Accept
+            // failure with no agreement present is a bookkeeping refusal,
+            // not a dead lot, so the request defers and the meeting retries.
             if (book.Accept(request.RequestId, trip.CarrierOperatorPersonId, dayIndex,
                     AbsoluteNowGameSeconds(), out FreightServiceAgreement agreement) != null)
             {
-                refusal = "The request could not be accepted by the service-agreement authority.";
+                FreightServiceAgreement existingAgreement = book.FindAgreementForRequest(request.RequestId);
+                if (existingAgreement != null)
+                {
+                    request.AgreementId = existingAgreement.AgreementId;
+                    book.SetStatus(request.RequestId, FreightServiceRequestStatus.Accepted);
+                    Debug.Log($"[FreightAgreement] Ethan's acceptance for '{request.RequestId}' found the existing agreement '{existingAgreement.AgreementId}'; the request joins it instead of refusing.", this);
+                    TryRegisterAcceptedFreightShipment(existingAgreement, dayIndex);
+                    return;
+                }
+
+                string deferRefusal = book.DeferTemporarily(request.RequestId,
+                    "The request could not be accepted by the service-agreement authority; retry the meeting.");
+                if (deferRefusal == null)
+                {
+                    Debug.Log($"[FreightAgreement] Ethan's acceptance for '{request.RequestId}' was refused without an agreement; the request defers and the meeting will be retried.", this);
+                    return;
+                }
+
+                refusal = deferRefusal;
                 book.SetStatus(request.RequestId, FreightServiceRequestStatus.Refused, refusal);
                 Debug.LogWarning($"[FreightAgreement] Ethan's acceptance for '{request.RequestId}' was refused: {refusal}", this);
                 return;

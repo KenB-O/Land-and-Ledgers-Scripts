@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Freight;
 using NUnit.Framework;
 
 /// <summary>
@@ -98,6 +99,55 @@ public sealed class MillbrookFlourReorderTests
         Assert.AreEqual(1, supplier.Lots.Count, "no second lot placed");
         Assert.AreEqual(19952, bakeryCash.BalanceCents, "refused attempt moves no buyer cash");
         Assert.AreEqual(220, supplier.GetInventoryUnits("bakery_flour_sack"), "refused attempt moves no stock");
+    }
+
+    [Test]
+    public void ReopenedLotUnblocksThePipeline()
+    {
+        // Plan 07 Slice 1b (Q02, AUD-334): after the book-level reopen,
+        // the same lot is still the shippable lot and the
+        // single-outstanding rule still correctly refuses a duplicate
+        // reorder while it is outstanding; once the lot commits,
+        // FindShippableLot moves to the next lot.
+        var supplier = NewSupplier();
+        var bakeryCash = new FakeBusinessCashPort(20000);
+        var diag = new List<string>();
+
+        Assert.IsNull(MillbrookFlourReorder.PlaceReorder(
+            supplier, bakeryCash, BuyerBusinessId, BuyerName, 1, 0, diag, out OffMapAidCargoLot firstLot));
+        Assert.IsNull(MillbrookFlourReorder.PlaceReorder(
+            supplier, bakeryCash, BuyerBusinessId, BuyerName, 2, 0, diag, out OffMapAidCargoLot secondLot));
+        Assert.AreSame(firstLot, MillbrookFlourReorder.FindShippableLot(supplier, BuyerBusinessId));
+
+        var book = new FreightServiceAgreementBook();
+        string requestId = "freight-request:" + firstLot.OrderId;
+        var request = new FreightServiceRequest
+        {
+            RequestId = requestId, RequestingBusinessId = BuyerBusinessId,
+            CarrierBusinessId = "livery_freight_003", PickupBusinessId = "millbrook_grain_co",
+            DestinationBusinessId = BuyerBusinessId, CargoLotId = firstLot.LotId, Quantity = 1,
+            RequestingPersonId = 4, CarrierOperatorPersonId = 7
+        };
+        Assert.IsNull(book.CreateRequest(request, out _));
+        Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.MeetingScheduled));
+        Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.Refused,
+            "Bakery B1 has 40c available for a 125c agreed charge."));
+        Assert.IsNull(book.ReopenRefusedRequest(requestId,
+            "Lot '" + firstLot.LotId + "' is still shippable; reopening the refused request for a retried meeting."));
+        Assert.AreEqual(FreightServiceRequestStatus.Open, book.FindRequest(requestId).Status);
+
+        Assert.AreSame(firstLot, MillbrookFlourReorder.FindShippableLot(supplier, BuyerBusinessId),
+            "the reopened request still targets the same lot");
+        string refusal = MillbrookFlourReorder.PlaceReorder(
+            supplier, bakeryCash, BuyerBusinessId, BuyerName, 1, 0, diag, out OffMapAidCargoLot duplicateLot);
+        Assert.IsNotNull(refusal, "the outstanding lot still correctly blocks a duplicate reorder");
+        Assert.IsTrue(refusal.Contains(firstLot.LotId), "refusal: " + refusal);
+        Assert.IsNull(duplicateLot);
+
+        Assert.IsNull(supplier.CommitFreightPickup(firstLot.LotId, "shipment-1", 1),
+            "commit of the first lot should succeed");
+        Assert.AreSame(secondLot, MillbrookFlourReorder.FindShippableLot(supplier, BuyerBusinessId),
+            "after the first lot commits, the next lot is shippable");
     }
 
     [Test]

@@ -198,6 +198,34 @@ namespace LandLedgers.Economy.Freight
             return null;
         }
 
+        /// <summary>
+        /// Reopens a terminally refused request whose paid lot is still
+        /// shippable, so a request bricked before the meeting-retry repair
+        /// can be retried by the next daily drive. Distinct from
+        /// DeferTemporarily, which defers before terminal: this records a
+        /// reopening after terminal, with the same stable request id, lot,
+        /// and quote. The lot branch stays terminal; this method never
+        /// reopens a request whose lot is no longer shippable, because the
+        /// driver only calls it after FindShippableLot returns that lot.
+        /// </summary>
+        public string ReopenRefusedRequest(string requestId, string reason)
+        {
+            FreightServiceRequest request = FindRequest(requestId);
+            if (request == null) return "Unknown freight service request.";
+            if (request.Status != FreightServiceRequestStatus.Refused)
+                return "Only a refused freight request can be reopened.";
+            if (FindAgreementForRequest(requestId) != null)
+                return "A refused request with an agreement cannot be reopened.";
+            if (string.IsNullOrWhiteSpace(reason)) return "Reopening a refused request requires its cause.";
+
+            request.Status = FreightServiceRequestStatus.Open;
+            request.RefusalReason = reason.Trim();
+            request.ContactTravelTaskId = string.Empty;
+            request.MeetingTaskId = string.Empty;
+            request.MeetingOperatorReservationId = string.Empty;
+            return null;
+        }
+
         public string SetQuote(string requestId, FreightServiceQuote quote)
         {
             FreightServiceRequest request = FindRequest(requestId);

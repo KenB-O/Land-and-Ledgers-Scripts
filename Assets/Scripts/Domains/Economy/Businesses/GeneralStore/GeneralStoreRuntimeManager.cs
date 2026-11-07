@@ -4874,7 +4874,8 @@ namespace LandLedgers.FirstLedger
 
             PersonState person = FindPersonForWorkerSlot(slot);
             return person != null
-                ? PopulationHealthEvaluator.GetLaborAvailability01(person)
+                ? PopulationHealthEvaluator.GetLaborAvailability01(
+                    person, populationManager != null && populationManager.ConditionDebuffsSuppressed)
                 : 1f;
         }
 

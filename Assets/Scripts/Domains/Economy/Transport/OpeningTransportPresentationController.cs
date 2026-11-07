@@ -9,6 +9,7 @@ using LandLedgers.Pathing;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Transport
@@ -28,6 +29,8 @@ namespace LandLedgers.Economy.Transport
         private Transform horseContainer;
         private Transform wagonContainer;
         private Transform fixtureContainer;
+        private PopulationPathingDirector populationPathingDirector;
+        private PhysicalRegionalTownRuntime physicalRegionalTowns;
         // Overnight 2026-11-04: the neutral root a hitched pair shares.
         // The horse used to be parented under the wagon's hitch anchor,
         // which compounded the wagon's scale onto the horse and snapped
@@ -52,6 +55,13 @@ namespace LandLedgers.Economy.Transport
             {
                 Debug.LogError($"[OpeningTransportPresentation] Refused to present opening transport: Resources/{AssetsResourcePath} is missing a horse or wagon prefab reference.", this);
                 return;
+            }
+            physicalRegionalTowns = GetComponent<PhysicalRegionalTownRuntime>()
+                ?? gameObject.AddComponent<PhysicalRegionalTownRuntime>();
+            if (!physicalRegionalTowns.Initialize(assets.RegionalTownPrefab, townWorld))
+            {
+                Debug.LogError("[RegionalTowns] The authored physical regional-town prefab could not be installed; freight departure to regional suppliers will remain refused.", this);
+                physicalRegionalTowns = null;
             }
 
             BusinessInstanceState freightBusiness = FindFreightBusiness(businesses);
@@ -296,7 +306,7 @@ namespace LandLedgers.Economy.Transport
         // beyond the log lines and the presentation (transforms, animator
         // states, view active flags, Ethan's mover visibility). No cash,
         // lot, task, reservation, or shipment field is touched.
-        public bool BeginCoupledDeparture(LogisticsShipmentState shipment)
+        public bool BeginCoupledDeparture(LogisticsShipmentState shipment, string destinationLocationId)
         {
             if (shipment?.RoutePlan?.VisiblePath == null || shipment.RoutePlan.VisiblePath.Count < 2)
             {
@@ -305,6 +315,13 @@ namespace LandLedgers.Economy.Transport
             }
             CoupledTransportMovementController controller = ResolveMovementController();
             if (controller == null) return false;
+            if (physicalRegionalTowns == null
+                || !physicalRegionalTowns.TryGetDestination(destinationLocationId,
+                    out Transform regionalDestination, out string destinationBusinessId))
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to start the outbound leg for shipment '{shipment.ShipmentId}': physical destination '{destinationLocationId}' is not registered.", this);
+                return false;
+            }
             if (!ResolveMovementInputs(shipment, out float cellSize, out Vector3 origin,
                     out float wagonSpeed, out float turnSpeed, out PopulationPathingDirector director, out int ethanId))
             {
@@ -318,13 +335,48 @@ namespace LandLedgers.Economy.Transport
             string legLabel = string.IsNullOrWhiteSpace(journeyId)
                 ? $"off-map journey for shipment '{shipment.ShipmentId}'"
                 : $"off-map journey '{journeyId}'";
+            if (string.IsNullOrWhiteSpace(journeyId))
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to start the outbound leg for shipment '{shipment.ShipmentId}': its stable off-map journey identity is missing.", this);
+                return false;
+            }
             // Slice R1 (Objective 22): board Ethan onto the DriverSeat
             // before the leg starts. A refused board degrades to a
             // riderless leg; a missing seat refuses the leg.
             if (!TryBoardRiderForLeg(director, ethanId, legLabel)) return false;
+            EnsureArrivalSensor(controller);
             return controller.StartLeg(shipment.RoutePlan.VisiblePath, cellSize, origin,
                 wagonSpeed, TransportPairPlacement.PairSeparationMetres, turnSpeed,
-                director, ethanId, legLabel, hideOnArrival: true);
+                director, ethanId, legLabel, hideOnArrival: true,
+                regionalDestination, journeyId, destinationLocationId, destinationBusinessId,
+                shipment.physicalWagonAssetId);
+        }
+
+        public bool CanBeginCoupledDeparture(string destinationLocationId)
+        {
+            return physicalRegionalTowns != null
+                && physicalRegionalTowns.TryGetDestination(destinationLocationId, out _, out _)
+                && activeHorseView != null
+                && activeWagonView != null
+                && transportGroup != null;
+        }
+
+        private void EnsureArrivalSensor(CoupledTransportMovementController controller)
+        {
+            if (controller == null || activeHorseView == null) return;
+            Transform sensor = transportGroup.Find("Freight Arrival Sensor");
+            if (sensor == null)
+            {
+                var sensorObject = new GameObject("Freight Arrival Sensor");
+                sensor = sensorObject.transform;
+                sensor.SetParent(transportGroup, false);
+                sensorObject.AddComponent<SphereCollider>().radius = 1.5f;
+                Rigidbody body = sensorObject.AddComponent<Rigidbody>();
+                body.isKinematic = true;
+                body.useGravity = false;
+                body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+            }
+            sensor.position = activeHorseView.transform.position;
         }
 
         public bool BeginCoupledReturn(LogisticsShipmentState shipment)
@@ -349,9 +401,9 @@ namespace LandLedgers.Economy.Transport
             // the seat; his transform never moved while hidden).
             var reversed = new List<GridCoord>(shipment.RoutePlan.VisiblePath);
             reversed.Reverse();
-            if (activeHorseView != null) activeHorseView.gameObject.SetActive(true);
-            if (activeWagonView != null) activeWagonView.gameObject.SetActive(true);
-            if (director != null && ethanId >= 0) director.TryShowPersonAtCurrentLocation(ethanId);
+            // The outbound boundary now keeps the same active views and
+            // rider visible, so re-entry must not reset Ethan's mover or
+            // substitute another presentation.
             Debug.Log($"[CoupledTransport] team re-entered at {reversed[0]}, returning to staging.", this);
             // Slice R1 (Objective 22): board him again AFTER the show —
             // ShowAtCurrentLocation reverts his Animator to Locomotion,
@@ -366,15 +418,59 @@ namespace LandLedgers.Economy.Transport
         }
 
         /// <summary>
+        /// Begins the physical regional return after the shipment's source lot
+        /// has been committed into the wagon. The controller traverses back to
+        /// the real town-route boundary and then follows the existing reversed
+        /// route to staging; journey authority is confirmed only at that origin.
+        /// </summary>
+        public bool BeginCoupledPhysicalReturn(LogisticsShipmentState shipment, OffMapJourneyRecord journey, int operatorPersonId)
+        {
+            if (shipment == null || journey == null || !journey.IsActive
+                || !journey.RequiresPhysicalArrivalConfirmation
+                || !journey.PhysicalDestinationArrivalConfirmed
+                || journey.PhysicalOriginArrivalConfirmed
+                || !shipment.loadApplied
+                || !string.Equals(shipment.physicalWagonAssetId, journey.VehicleId, System.StringComparison.Ordinal)
+                || operatorPersonId < 0
+                || !string.Equals(shipment.physicalDriverPersonId, "P" + operatorPersonId, System.StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(journey.OriginLocationId)
+                || shipment.RoutePlan?.VisiblePath == null || shipment.RoutePlan.VisiblePath.Count < 2)
+            {
+                return false;
+            }
+
+            Transform destination = null;
+            bool destinationResolved = physicalRegionalTowns != null
+                && physicalRegionalTowns.TryGetDestination(journey.DestinationLocationId, out destination, out _);
+            if (!destinationResolved
+                || activeHorseView == null || activeWagonView == null || transportGroup == null
+                || Vector3.Distance(activeHorseView.transform.position, destination.position) > 8f)
+                return false;
+
+            CoupledTransportMovementController controller = ResolveMovementController();
+            if (controller == null) return false;
+            if (controller.IsLegActive)
+                return string.Equals(controller.PhysicalJourneyId, journey.JourneyId, System.StringComparison.Ordinal);
+            if (!ResolveMovementInputs(shipment, out float cellSize, out Vector3 origin,
+                    out float wagonSpeed, out float turnSpeed, out PopulationPathingDirector director, out int ethanId)
+                || ethanId != operatorPersonId)
+            {
+                return false;
+            }
+            if (!TryBoardRiderForLeg(director, ethanId, $"physical return journey '{journey.JourneyId}'")) return false;
+
+            var reversed = new List<GridCoord>(shipment.RoutePlan.VisiblePath);
+            reversed.Reverse();
+            return controller.StartRegionalReturn(reversed, cellSize, origin, wagonSpeed,
+                TransportPairPlacement.PairSeparationMetres, turnSpeed, director, ethanId,
+                journey.JourneyId, journey.OriginLocationId, journey.VehicleId);
+        }
+
+        /// <summary>
         /// Slice R1 (Objective 22): board the driver onto the wagon's
-        /// DriverSeat for a leg. Returns false ONLY when the wagon has
-        /// no DriverSeat — that refuses the leg start (same posture as
-        /// a missing controller). A refused board degrades to a
-        /// riderless leg: the refusal is logged loudly and the leg
-        /// still starts (a presentation failure must not strand a
-        /// shipment). When no director/driver resolved, there is no
-        /// rider to board and the leg starts as before
-        /// (ResolveMovementInputs already warned).
+        /// DriverSeat for a leg. A missing seat, unresolved driver, or
+        /// failed boarding refuses the leg; physical freight never starts
+        /// without its assigned operator.
         /// </summary>
         private bool TryBoardRiderForLeg(PopulationPathingDirector director, int ethanPersonId, string legLabel)
         {
@@ -384,10 +480,15 @@ namespace LandLedgers.Economy.Transport
                 Debug.LogWarning($"[CoupledTransport] Refused to start {legLabel}: the wagon has no DriverSeat.", this);
                 return false;
             }
-            if (director == null || ethanPersonId < 0) return true;
+            if (director == null || ethanPersonId < 0)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to start {legLabel}: assigned driver authority or person identity is unresolved.", this);
+                return false;
+            }
             if (!director.TryBoardRider(ethanPersonId, seat, legLabel))
             {
-                Debug.LogWarning($"[CoupledTransport] rider boarding refused for {legLabel}; team moves without a rider.", this);
+                Debug.LogWarning($"[CoupledTransport] Refused to start {legLabel}: assigned rider P{ethanPersonId} could not be boarded.", this);
+                return false;
             }
             return true;
         }
@@ -436,15 +537,25 @@ namespace LandLedgers.Economy.Transport
             wagonSpeedMetresPerSecond = settings.logisticsLoadedWagonSpeedMetersPerSecond;
             turnSpeedDegreesPerSecond = settings.turnSpeedDegreesPerSecond;
 
-            director = FindAnyObjectByType<PopulationPathingDirector>();
+            // Bootstrap owns the live population pathing authority. Prefer the
+            // direct runtime binding so a coupled freight presentation cannot
+            // silently become riderless when Unity's global object lookup runs
+            // before the bootstrap-created director is registered.
+            director = populationPathingDirector != null
+                ? populationPathingDirector
+                : FindAnyObjectByType<PopulationPathingDirector>();
             ethanPersonId = ParsePersonId(shipment?.physicalDriverPersonId);
             if (director == null || ethanPersonId < 0)
             {
-                Debug.LogWarning("[CoupledTransport] No director or driver person resolved for the rider; the pair moves without Ethan.", this);
-                director = null;
-                ethanPersonId = -1;
+                Debug.LogWarning($"[CoupledTransport] Rider resolution failed for shipment '{shipment?.ShipmentId}': director={(director != null ? director.name : "missing")}, serializedDriverId='{shipment?.physicalDriverPersonId ?? string.Empty}', parsedPersonId={ethanPersonId}.", this);
+                return false;
             }
             return true;
+        }
+
+        public void BindPopulationPathingDirector(PopulationPathingDirector director)
+        {
+            populationPathingDirector = director;
         }
 
         private static string ParseOffMapJourneyId(string physicalLocationId)

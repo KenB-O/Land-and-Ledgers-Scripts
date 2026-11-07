@@ -1,18 +1,21 @@
 using System;
+using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.Bakery;
+using LandLedgers.Primitives;
 using LandLedgers.Population;
 using LandLedgers.Time;
 using NUnit.Framework;
+using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
+using UnityObject = UnityEngine.Object;
 
 namespace LandLedgers.EditorTests.Population
 {
     /// <summary>
-    /// Plan 10 slice E2 (Obj 45; afternoon direction item 2): the
-    /// work-capacity investigation, landed as tests pinning the verified
-    /// math. VERDICT: NO behaviour change — the trace found no genuine
-    /// double-count and no misapplied penalty, so no production code is
-    /// changed by this slice. The findings, traced in source at HEAD
-    /// c421710 (all file/line references below are to that HEAD):
+    /// Work-capacity regression coverage. The original tests pin ordinary
+    /// condition penalties; the development-immortality cases below ensure
+    /// those measurements remain recorded while their performance effect is
+    /// suppressed through the live daily-needs budget path.
     ///
     /// 1. Nutrition bands (PersonNutritionState.WorkCapacityMultiplier):
     ///    nutrition01 &gt;= 0.70 → 1.00; &gt;= 0.40 → 0.75; &gt;= 0.15 → 0.50;
@@ -55,7 +58,13 @@ namespace LandLedgers.EditorTests.Population
     {
         private static PersonState HealthyPerson(float nutrition01)
         {
-            var person = new PersonState { id = 1, firstName = "Glen", lastName = "Test" };
+            var person = new PersonState
+            {
+                id = 1,
+                firstName = "Glen",
+                lastName = "Test",
+                wage = new WageSnapshot { weeklyWage = 42, stabilityPercent = 100, currencyId = "dollars" }
+            };
             person.nutrition.nutrition01 = nutrition01;
             person.health.EnsureInitialized();
             return person;
@@ -171,6 +180,114 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsNotNull(breadRefusal);
             Assert.IsTrue(breadRefusal.Contains("person budget"), "refusal names the person budget; refusal: " + breadRefusal);
             Assert.IsNull(BakeryPersonTimeBudget.TryFitBatches(1, BakeryPersonTimeBudget.RollsPieMinutesPerBatch, starvedFactor));
+        }
+
+        [Test]
+        public void ImmortalMode_SuppressesNutritionAndHealthCapacityDebuffsButKeepsConditionState()
+        {
+            PersonState healthy = HealthyPerson(1f);
+            PersonState starving = HealthyPerson(0f);
+            PersonState sick = PersonWithCondition(1f, HealthConditionKind.Illness, HealthConditionSeverity.Serious);
+            PersonState injured = PersonWithCondition(0f, HealthConditionKind.Injury, HealthConditionSeverity.Serious);
+
+            Assert.AreEqual(1f, DailyNeedsService.WorkCapacityFactor(healthy, conditionDebuffsSuppressed: true), 0.0001f);
+            Assert.AreEqual(1f, DailyNeedsService.WorkCapacityFactor(starving, conditionDebuffsSuppressed: true), 0.0001f);
+            Assert.AreEqual(1f, DailyNeedsService.WorkCapacityFactor(sick, conditionDebuffsSuppressed: true), 0.0001f);
+            Assert.AreEqual(1f, DailyNeedsService.WorkCapacityFactor(injured, conditionDebuffsSuppressed: true), 0.0001f);
+            Assert.AreEqual(600, BakeryPersonTimeBudget.PersonMinutesPerDay(
+                DailyNeedsService.WorkCapacityFactor(injured, conditionDebuffsSuppressed: true)));
+
+            Assert.AreEqual(0f, starving.nutrition.nutrition01, 0.0001f, "nutrition remains observable");
+            Assert.IsTrue(sick.health.HasActiveCondition, "illness remains observable");
+            Assert.AreEqual(35, sick.health.laborCapacityPercent, "the diagnosed condition is not erased");
+
+            Assert.AreEqual(0.25f, DailyNeedsService.WorkCapacityFactor(starving), 0.0001f,
+                "normal mode restores nutrition penalties");
+            Assert.AreEqual(0.35f, PopulationHealthEvaluator.GetLaborAvailability01(sick), 0.0001f,
+                "normal mode restores health penalties");
+            Assert.AreEqual(1f, PopulationHealthEvaluator.GetLaborAvailability01(sick, conditionDebuffsSuppressed: true), 0.0001f);
+            Assert.AreEqual(42,
+                PopulationHealthEvaluator.GetEffectiveWeeklyWageDollars(sick, conditionDebuffsSuppressed: true));
+            Assert.AreEqual(0,
+                PopulationHealthEvaluator.GetWeeklyLaborLossCents(sick, conditionDebuffsSuppressed: true));
+        }
+
+        [Test]
+        public void ImmortalMode_DoesNotStopNutritionFromRecordingMissedMeals()
+        {
+            PersonState starving = HealthyPerson(0.5f);
+            starving.nutrition.ApplyDay(0, DailyNeedsService.MealsPerPersonPerDay, 7);
+
+            Assert.AreEqual(0.14f, starving.nutrition.nutrition01, 0.0001f);
+            Assert.AreEqual(1f, DailyNeedsService.WorkCapacityFactor(starving, conditionDebuffsSuppressed: true), 0.0001f);
+            Assert.AreEqual(0.25f, DailyNeedsService.WorkCapacityFactor(starving, conditionDebuffsSuppressed: false), 0.0001f);
+        }
+
+        [Test]
+        public void ExecuteDay_ImmortalModeKeepsFullBudgetWhileMissedMealsRemainRecorded()
+        {
+            var population = new PopulationState();
+            PersonState worker = PersonWithCondition(1f, HealthConditionKind.Illness, HealthConditionSeverity.Serious);
+            worker.age = 30;
+            worker.ageBand = AgeBand.Adult18Plus;
+            worker.laborAccessLevel = LaborAccessLevel.FullLaborMarket;
+            worker.householdId = 7;
+            population.people.Add(worker);
+            var household = new HouseholdState { id = 7 };
+            household.memberIds.Add(worker.id);
+            population.households.Add(household);
+
+            var inventories = new HouseholdInventoryRegistry();
+            var mealLog = new HouseholdMealLogRegistry();
+            var budgets = new WorkTimeBudgetStore();
+            var diagnostics = new List<string>();
+            var service = new DailyNeedsService();
+
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                population, new HouseholdConsumptionPlanner(), null, 2, diagnostics,
+                budgetStore: budgets,
+                inventories: inventories,
+                mealLog: mealLog,
+                conditionDebuffsSuppressed: true);
+
+            WorkTimeBudget budget = budgets.GetOrCreate(EntityId.For(EntityKind.Person, worker.id));
+            Assert.AreEqual(2, report.MealsMissed, "the resident's starvation remains observable");
+            Assert.AreEqual(0.64f, worker.nutrition.nutrition01, 0.0001f, "nutrition still tracks missed meals");
+            Assert.IsTrue(worker.health.HasActiveCondition, "illness state remains intact");
+            Assert.AreEqual(1f, budget.CapacityMultiplier01, 0.0001f);
+            Assert.AreEqual(600, budget.EffectiveBudgetMinutes);
+
+            Assert.AreEqual(0.2625f, DailyNeedsService.WorkCapacityFactor(worker), 0.0001f,
+                "normal mode restores the combined nutrition and illness penalties");
+        }
+
+        [Test]
+        public void PopulationMode_DevelopmentConfigurationControlsDebuffSuppression()
+        {
+            var host = new GameObject("Population mode test");
+            DevelopmentTownConfiguration configuration = null;
+            try
+            {
+                PopulationManager manager = host.AddComponent<PopulationManager>();
+                Assert.IsFalse(manager.ConditionDebuffsSuppressed,
+                    "ordinary gameplay defaults to mortality enabled and keeps condition penalties");
+
+                configuration = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
+                manager.ApplyDevelopmentPopulationSettings(configuration);
+                Assert.IsFalse(manager.MortalityEnabled);
+                Assert.IsFalse(manager.FertilityEnabled);
+                Assert.IsTrue(manager.ConditionDebuffsSuppressed,
+                    "the development configuration's mortality-off mode enables condition-debuff suppression");
+
+                manager.MortalityEnabled = true;
+                Assert.IsFalse(manager.ConditionDebuffsSuppressed,
+                    "normal mortality mode restores ordinary condition penalties");
+            }
+            finally
+            {
+                if (configuration != null) UnityObject.DestroyImmediate(configuration);
+                UnityObject.DestroyImmediate(host);
+            }
         }
     }
 }

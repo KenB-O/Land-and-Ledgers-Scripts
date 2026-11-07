@@ -39,6 +39,9 @@ namespace LandLedgers.Economy.Farming.Integration
             public int TotalPriceCents;
             public int DayIndex;
             public List<SourceLotPart> SourceLots = new List<SourceLotPart>();
+
+            public bool HasValidCustodyIdentity => !string.IsNullOrWhiteSpace(TransactionId)
+                && Units > 0 && SourceLots != null && SourceLots.Count > 0;
         }
 
         [Serializable]

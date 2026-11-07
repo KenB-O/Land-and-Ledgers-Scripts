@@ -519,7 +519,8 @@ namespace LandLedgers.Economy.BreadDrivers
                 if (line != null && line.ShelfUnits > 0)
                 {
                     Review2StockingResult retry = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                        inputs.StoreCatalog, storeProductId, line.ShelfUnits, StoreCategoryId, inputs.StorePort, diag);
+                        inputs.StoreCatalog, storeProductId, line.ShelfUnits, StoreCategoryId, inputs.StorePort, diag,
+                        "loaf", null, dayIndex);
                     if (retry.Stocked) result.UnitsStocked += retry.Units;
                 }
             }
@@ -567,7 +568,8 @@ namespace LandLedgers.Economy.BreadDrivers
                 }
 
                 Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                    inputs.StoreCatalog, transfer.StoreProductId, transfer.Units, StoreCategoryId, inputs.StorePort, diag);
+                    inputs.StoreCatalog, transfer.StoreProductId, transfer.Units, StoreCategoryId, inputs.StorePort, diag,
+                    "loaf", transfer.BakeryLotId, dayIndex);
                 if (!stocked.Stocked)
                 {
                     // Stocking refusal leaves the units on the catalog

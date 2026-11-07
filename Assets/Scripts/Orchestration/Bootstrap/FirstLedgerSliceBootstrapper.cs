@@ -283,6 +283,22 @@ namespace LandLedgers.FirstLedger
                 // scenario/player authorities here as well so development tools and
                 // the authored scenario remain usable after a continue/reload.
                 ConfigureScenarioAuthorities();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                // Development simulation switches are authored in the active
+                // town configuration rather than the population save payload.
+                // Reapply and attach that same configuration before returning
+                // from Continue so immortality debuff suppression, mortality,
+                // and fertility stay consistent on the very first resumed day.
+                if (enableDevelopmentTownConfiguration)
+                {
+                    DevelopmentTownConfiguration continuedTownConfiguration = ResolveDevelopmentTownConfiguration();
+                    if (continuedTownConfiguration != null)
+                    {
+                        populationManager?.ApplyDevelopmentPopulationSettings(continuedTownConfiguration);
+                        FindAnyObjectByType<SimulationDrivers>()?.AttachDevelopmentTownConfiguration(continuedTownConfiguration);
+                    }
+                }
+#endif
                 // Phase 2: forward the playtest bool AFTER the save load,
                 // so SaveLoadManager's restored flag is the base and this
                 // bool can only turn NPC mode on (OR logic), never clear
@@ -516,6 +532,8 @@ namespace LandLedgers.FirstLedger
                 developmentNpcStore = FindDevelopmentNpcGeneralStore();
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedDevelopmentBusinessOpeningInventory();
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    SeedDevelopmentBakeryOpeningFuel();
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedDevelopmentBusinessOpeningEquipment();
                 if (startupIntent == WorldStartupIntent.NewGame)
@@ -1264,6 +1282,56 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
+        /// Applies the finite Bakery fuel endowment explicitly authored by
+        /// the development-town configuration. Continue restores the saved
+        /// Bakery fuel lots and never seeds this NewGame-only allocation.
+        /// </summary>
+        private void SeedDevelopmentBakeryOpeningFuel()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null || configuration.OpeningBakeryFuelUnits <= 0)
+                return;
+
+            string bakeryKey = null;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
+                if (slot != null && ToBusinessType(slot.operationId) == BusinessType.Bakery)
+                {
+                    bakeryKey = slot.key;
+                    break;
+                }
+            if (string.IsNullOrWhiteSpace(bakeryKey))
+            {
+                Debug.LogError("[WorldStartup] Opening Bakery fuel refused: no Bakery business is configured.", this);
+                return;
+            }
+
+            BusinessInstanceState bakeryBusiness = FindDevelopmentBusiness(BusinessType.Bakery);
+            Series2Pass9SaveState pass9 = saveLoadManager?.Series2Pass9State;
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (bakeryBusiness?.RuntimeState == null || pass9?.BakeryRuntime == null || systemsHub == null)
+            {
+                Debug.LogError($"[WorldStartup] Opening Bakery fuel for '{bakeryKey}' refused: business runtime, Pass 9 Bakery runtime, or lot-id authority is missing.", this);
+                return;
+            }
+
+            var diagnostics = new List<string>();
+            if (!LandLedgers.Economy.Businesses.Bakery.ScenarioOpeningBakeryFuelEndowment.TryApply(
+                    pass9.BakeryRuntime, bakeryBusiness.RuntimeState, systemsHub.Ids,
+                    configuration.ConfigurationId, bakeryKey,
+                    townWorld?.Settings != null ? townWorld.Settings.seed : configuration.SeedOffset,
+                    configuration.OpeningBakeryFuelUnits,
+                    timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                    diagnostics, out string report, out string error))
+            {
+                Debug.LogError($"[WorldStartup] {error}", this);
+                return;
+            }
+
+            Debug.Log($"[WorldStartup] {report}", this);
+            foreach (string line in diagnostics) Debug.Log($"[WorldStartup] {line}", this);
+        }
+
+        /// <summary>
         /// Slice S2 (2026-11-05, plan 02 §4): NewGame-only seeding of
         /// scenario-owned opening equipment for the Bakery, beside the
         /// opening-inventory seeding above. Finds the Bakery the same
@@ -1535,6 +1603,8 @@ namespace LandLedgers.FirstLedger
             }
 
             populationPathingDirector.Configure(townWorld, populationManager, pathingManager, timeManager, storeRuntime);
+            GetComponent<OpeningTransportPresentationController>()
+                ?.BindPopulationPathingDirector(populationPathingDirector);
         }
 
         private void ConfigurePlayerDebtManager()

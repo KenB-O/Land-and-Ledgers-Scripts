@@ -136,6 +136,27 @@ namespace LandLedgers.Population
         public bool FertilityEnabled { get; set; } = true;
 
         /// <summary>
+        /// The development immortality switch suppresses condition-derived
+        /// gameplay penalties while leaving health and nutrition state intact.
+        /// Normal scenarios keep mortality enabled and therefore retain the
+        /// ordinary condition effects.
+        /// </summary>
+        public bool ConditionDebuffsSuppressed => !MortalityEnabled;
+
+        /// <summary>
+        /// Applies the development-town simulation switches as one authored
+        /// mode. This is used on New Game and Continue so the condition-
+        /// debuff policy follows the same configuration as mortality and
+        /// fertility suppression.
+        /// </summary>
+        public void ApplyDevelopmentPopulationSettings(DevelopmentTownConfiguration configuration)
+        {
+            if (configuration == null) return;
+            MortalityEnabled = configuration.EnableMortality;
+            FertilityEnabled = configuration.EnableFertility;
+        }
+
+        /// <summary>
         /// Overnight 2026-11-04: person ids whose suppressed death has
         /// already been logged this session, and mother ids whose deferred
         /// birth has already been logged. Passed into each day's fresh
@@ -234,8 +255,15 @@ namespace LandLedgers.Population
             // false by default on the configuration, so the current
             // development town runs with turnover removed unless the
             // authored configuration explicitly opts back in.
-            MortalityEnabled = configuration == null || configuration.EnableMortality;
-            FertilityEnabled = configuration == null || configuration.EnableFertility;
+            if (configuration == null)
+            {
+                MortalityEnabled = true;
+                FertilityEnabled = true;
+            }
+            else
+            {
+                ApplyDevelopmentPopulationSettings(configuration);
+            }
             AutoWireReferences();
             sharedBusinessRuntime?.InitializeIfNeeded();
             EnsureDemographicStack(freshKinship: true);
@@ -2015,8 +2043,10 @@ namespace LandLedgers.Population
                     PersonState person = state.GetPerson(household.memberIds[memberIndex]);
                     if (person != null)
                     {
-                        weeklyIncome += PopulationHealthEvaluator.GetEffectiveWeeklyWageDollars(person, household, state);
-                        weeklyLaborLossCents += PopulationHealthEvaluator.GetWeeklyLaborLossCents(person, household, state);
+                        weeklyIncome += PopulationHealthEvaluator.GetEffectiveWeeklyWageDollars(
+                            person, household, state, ConditionDebuffsSuppressed);
+                        weeklyLaborLossCents += PopulationHealthEvaluator.GetWeeklyLaborLossCents(
+                            person, household, state, ConditionDebuffsSuppressed);
                     }
                 }
 
@@ -2493,7 +2523,8 @@ namespace LandLedgers.Population
                     }
 
                     HouseholdState household = state.GetHousehold(person.householdId);
-                    totalWeeklyWages += PopulationHealthEvaluator.GetEffectiveWeeklyWageDollars(person, household, state);
+                    totalWeeklyWages += PopulationHealthEvaluator.GetEffectiveWeeklyWageDollars(
+                        person, household, state, ConditionDebuffsSuppressed);
                 }
             }
 
@@ -2650,8 +2681,16 @@ namespace LandLedgers.Population
                 if (person.nutrition.nutrition01 < worstNutrition01)
                 {
                     worstNutrition01 = person.nutrition.nutrition01;
-                    worstCapacityMultiplier = person.nutrition.WorkCapacityMultiplier;
                 }
+
+                // Display the capacity this person can actually use under
+                // the active development policy. Immortal development runs
+                // retain hunger/health state for diagnosis, but those
+                // conditions do not reduce work capacity. The old readout
+                // showed the raw nutrition multiplier and contradicted the
+                // budget used by DailyNeedsService.
+                worstCapacityMultiplier = Mathf.Min(worstCapacityMultiplier,
+                    DailyNeedsService.WorkCapacityFactor(person, ConditionDebuffsSuppressed));
             }
 
             if (memberCount <= 0 || undernourished <= 0)

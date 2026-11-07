@@ -441,13 +441,13 @@ namespace LandLedgers.Editor.Economy
             LogisticsShipmentState shipment = CreateHeldShipment(driver, "ship-1", "wagon-1");
 
             // The handler's first run binds the real team (driver P7, horses A11/A12).
-            (EquipmentAsset wagon, AnimalState horse1, _, _) = BindTeam("wagon-1", "7", "ship-1");
+            (EquipmentAsset wagon, AnimalState horse1, _, _) = BindTeam("wagon-1", "P7", "ship-1");
 
             // The already-bound state the handler's re-run branch reads.
             Assert.AreEqual(HorseUseKind.Draft, horse1.CurrentUse);
             Assert.AreEqual("ship-1", horse1.CurrentAssignmentId);
             Assert.AreEqual("ship-1", wagon.CurrentShipmentId);
-            Assert.AreEqual("7", wagon.CurrentDriverPersonId);
+            Assert.AreEqual("P7", wagon.CurrentDriverPersonId);
             Assert.IsTrue(wagon.IsTransportAssigned);
 
             // A second bind attempt is REFUSED — the team cannot be bound
@@ -455,7 +455,7 @@ namespace LandLedgers.Editor.Economy
             // branch (source-reviewed) instead of re-binding.
             string secondBind = WagonAuthority.TryAssignDraftTeam(
                 wagon, new List<AnimalState> { horse1, WorkReadyHorse(12) },
-                "7", "ship-1", new FakeAnimalAvailability(), 0f, float.MaxValue);
+                "P7", "ship-1", new FakeAnimalAvailability(), 0f, float.MaxValue);
             Assert.IsNotNull(secondBind, "re-binding an assigned wagon must refuse");
 
             // Authorization releases the hold exactly once and is a no-op after.
@@ -475,7 +475,7 @@ namespace LandLedgers.Editor.Economy
             FreightProductionDriver driver = NewDriverWithCarrier(out _);
             var diag = new List<string>();
             LogisticsShipmentState shipment = CreateHeldShipment(driver, "ship-1", "wagon-1");
-            BindTeam("wagon-1", "7", "ship-1");
+            BindTeam("wagon-1", "P7", "ship-1");
 
             // The dispatch task is Complete in TaskAuthority state (out of
             // the driver DTO; the handler-level reconcile that reads it is

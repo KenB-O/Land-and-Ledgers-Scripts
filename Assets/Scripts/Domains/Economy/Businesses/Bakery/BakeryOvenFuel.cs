@@ -295,6 +295,83 @@ namespace LandLedgers.Economy.Businesses.Bakery
     }
 
     /// <summary>
+    /// Applies a finite, scenario-authored opening Bakery fuel allocation.
+    /// This is a one-time NewGame endowment, not a production or replenishment
+    /// path. The owning business runtime records the application so repeated
+    /// bootstrap calls cannot duplicate fuel.
+    /// </summary>
+    public static class ScenarioOpeningBakeryFuelEndowment
+    {
+        public static bool TryApply(
+            BakeryShopRuntime bakery,
+            LandLedgers.Economy.BusinessRuntimeState businessRuntime,
+            EntityIdRegistry ids,
+            string configurationId,
+            string businessKey,
+            int scenarioSeed,
+            int units,
+            int dayIndex,
+            List<string> diagnostics,
+            out string report,
+            out string error)
+        {
+            diagnostics ??= new List<string>();
+            report = string.Empty;
+            error = string.Empty;
+            if (bakery == null || businessRuntime == null || ids == null
+                || string.IsNullOrWhiteSpace(configurationId)
+                || string.IsNullOrWhiteSpace(businessKey)
+                || !string.Equals(bakery.BusinessInstanceId, businessRuntime.BusinessId, StringComparison.Ordinal))
+            {
+                error = "Development Bakery fuel endowment requires matching Bakery/business runtimes, configuration identity, and lot-id authority.";
+                return false;
+            }
+            if (units < 0)
+            {
+                error = "Development Bakery fuel endowment cannot be negative.";
+                return false;
+            }
+
+            string endowmentId = $"development-town-opening-bakery-fuel:{configurationId}:{businessKey}:{businessRuntime.BusinessId}:{scenarioSeed}";
+            if (businessRuntime.HasAppliedScenarioEndowment(endowmentId))
+            {
+                report = $"Opening Bakery fuel endowment already recorded for {businessRuntime.BusinessId}; no fuel recreated.";
+                return true;
+            }
+            if (units == 0)
+            {
+                report = $"No opening Bakery fuel configured for '{businessKey}'; no fuel seeded.";
+                return true;
+            }
+
+            string refusal = bakery.FuelStock.ReceiveLot(new BakeryFuelLot
+            {
+                LotId = ids.Allocate(EntityKind.Lot),
+                FuelName = BakeryBreadCatalog.FuelItemId,
+                Units = units,
+                AcquiredDayIndex = Math.Max(0, dayIndex),
+                IsBootstrapEndowment = true,
+                SupplierNote = $"Finite opening endowment authored in DevelopmentTownConfiguration '{configurationId}' for '{businessKey}' (seed {scenarioSeed}); no automatic replenishment.",
+            }, diagnostics);
+            if (!string.IsNullOrWhiteSpace(refusal))
+            {
+                error = $"Opening Bakery fuel endowment refused: {refusal}";
+                return false;
+            }
+            if (!businessRuntime.RecordAppliedScenarioEndowment(endowmentId))
+            {
+                // The normal bootstrap is single-threaded. If another caller
+                // recorded the marker, remove no stock by guesswork; surface
+                // the inconsistency for investigation.
+                error = $"Could not record opening Bakery fuel endowment '{endowmentId}' after its lot was received.";
+                return false;
+            }
+            report = $"Applied finite opening Bakery fuel endowment: {units} unit(s) to '{businessKey}' ({businessRuntime.BusinessId}) from DevelopmentTownConfiguration '{configurationId}'.";
+            return true;
+        }
+    }
+
+    /// <summary>
     /// D1D: the oven-fuel supply link. The honest paths are a named FuelDealer
     /// (the town fuel yard, supplied by sawmill slabs/offcuts and cordwood per
     /// the FuelDealer profile) or a DECLARED off-map trade link (EQU-1

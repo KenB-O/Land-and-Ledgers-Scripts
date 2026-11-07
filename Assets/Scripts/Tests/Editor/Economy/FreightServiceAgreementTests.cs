@@ -1,4 +1,7 @@
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy;
+using LogisticsShipmentState = global::LandLedgers.Economy.LogisticsShipmentState;
+using LogisticsShipmentStatus = global::LandLedgers.Economy.LogisticsShipmentStatus;
 using NUnit.Framework;
 
 namespace LandLedgers.EditorTests.Economy
@@ -73,6 +76,48 @@ namespace LandLedgers.EditorTests.Economy
                 CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
                 DestinationBusinessId = "bakery-1", CargoLotId = "lot-1", Quantity = 1
             }, out _), Does.Contain("already has request"));
+        }
+
+        [Test]
+        public void AgreementBook_TemporarilyDefersBusyCarrierWithoutLosingStableRequest()
+        {
+            var book = new FreightServiceAgreementBook();
+            var request = new FreightServiceRequest
+            {
+                RequestId = "request-repeat-1", RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = "lot-repeat-1", Quantity = 1,
+                RequestingPersonId = 4, CarrierOperatorPersonId = 7,
+                MeetingTaskId = "T40", ContactTravelTaskId = "T39",
+                MeetingOperatorReservationId = "reservation-ethan-40"
+            };
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.IsNull(book.SetStatus(request.RequestId, FreightServiceRequestStatus.MeetingScheduled));
+
+            Assert.IsNull(book.DeferTemporarily(request.RequestId,
+                "Wagon is already bound to an active shipment."));
+            Assert.AreEqual(FreightServiceRequestStatus.Open, request.Status);
+            Assert.AreEqual("Wagon is already bound to an active shipment.", request.RefusalReason);
+            Assert.IsEmpty(request.MeetingTaskId);
+            Assert.IsEmpty(request.MeetingOperatorReservationId);
+            Assert.IsEmpty(request.ContactTravelTaskId);
+            Assert.IsNull(book.FindAgreementForRequest(request.RequestId));
+
+            // A later meeting can present and accept the same stable request;
+            // the deferral creates neither a second request nor an agreement.
+            Assert.IsNull(book.SetQuote(request.RequestId, new FreightServiceQuote
+            {
+                QuoteId = "quote-repeat-1", OneWayDistanceMiles = 50f, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1,
+                MileageChargeCents = 100, TotalPriceCents = 125,
+                PayerBusinessId = "bakery-1"
+            }));
+            Assert.IsNull(book.Accept(request.RequestId, 7, 3, 7200f, out FreightServiceAgreement agreement));
+            Assert.AreEqual("freight-agreement:request-repeat-1", agreement.AgreementId);
+            Assert.AreEqual("lot-repeat-1", agreement.CargoLotId);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+            Assert.AreEqual(1, book.Requests.Count);
+            Assert.AreEqual(1, book.Agreements.Count);
         }
 
         [Test]
@@ -185,6 +230,62 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(3600f, restoredAgreement.PreparedGameSeconds);
             Assert.AreEqual("T20", restoredAgreement.DispatchTaskId);
             Assert.AreEqual("Dispatch assigned", restoredAgreement.FulfilmentStatus);
+        }
+
+        [Test]
+        public void AgreementBook_PreparationSelectionSkipsCompletedPriorAgreementAndFindsNextShipment()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement first);
+            Assert.IsNull(book.LinkShipment(first.AgreementId, "shipment-1"));
+            first.PreparedGameSeconds = 100f;
+            first.DispatchTaskId = "T10";
+            first.FulfilmentStatus = "Dispatch assigned";
+
+            FreightServiceAgreement second = CreateSecondAcceptedAgreement(book, "request-2", "lot-2", 200f);
+            Assert.IsNull(book.LinkShipment(second.AgreementId, "shipment-2"));
+
+            var firstShipment = NewPreparedShipment("shipment-1", first.AgreementId, LogisticsShipmentStatus.Completed);
+            var secondShipment = NewPreparedShipment("shipment-2", second.AgreementId, LogisticsShipmentStatus.Planned);
+            Assert.AreSame(second, book.FindNextAwaitingPreparation(new[] { firstShipment, secondShipment }));
+
+            second.PreparedGameSeconds = 300f;
+            second.FulfilmentStatus = "Prepared for dispatch";
+            Assert.IsNull(book.FindNextAwaitingPreparation(new[] { firstShipment, secondShipment }),
+                "already prepared agreements must not create another hitch task on a later daily pass");
+        }
+
+        private static FreightServiceAgreement CreateSecondAcceptedAgreement(
+            FreightServiceAgreementBook book, string requestId, string lotId, float acceptedAt)
+        {
+            var request = new FreightServiceRequest
+            {
+                RequestId = requestId, RequestingBusinessId = "bakery-1",
+                CarrierBusinessId = "freight-1", PickupBusinessId = "millbrook",
+                DestinationBusinessId = "bakery-1", CargoLotId = lotId, Quantity = 1,
+                RequestingPersonId = 4, CarrierOperatorPersonId = 7
+            };
+            Assert.IsNull(book.CreateRequest(request, out _));
+            Assert.IsNull(book.SetQuote(requestId, new FreightServiceQuote
+            {
+                QuoteId = "quote-" + requestId, OneWayDistanceMiles = 50, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = 125, PayerBusinessId = "bakery-1"
+            }));
+            Assert.IsNull(book.Accept(requestId, 7, 1, acceptedAt, out FreightServiceAgreement agreement));
+            return agreement;
+        }
+
+        private static LogisticsShipmentState NewPreparedShipment(
+            string shipmentId, string agreementId, LogisticsShipmentStatus status)
+        {
+            return new LogisticsShipmentState
+            {
+                shipmentId = shipmentId,
+                freightServiceAgreementId = agreementId,
+                state = status,
+                requiresDispatchAuthorization = true,
+                loadApplied = false
+            };
         }
 
         private static FreightServiceAgreementBook CreateAcceptedBook(out FreightServiceAgreement agreement)

@@ -72,6 +72,15 @@ namespace LandLedgers.FirstLedger
             Debug.Log($"[ScenarioHUD] Bound Canvas '{canvas.name}' (mode={canvas.renderMode}, order={canvas.sortingOrder}); activeScenario={scenarioDirector.HasActiveScenario}.", this);
             if (!scenarioDirector.HasActiveScenario)
             {
+                // A scene-configured boot scenario owns the startup choice.
+                // Do not pause the clock or show the campaign picker while
+                // ScenarioDirector waits for the later execution order that
+                // follows world initialization.
+                if (!string.IsNullOrWhiteSpace(scenarioDirector.BootScenarioId))
+                {
+                    return;
+                }
+
                 // The start panel promises that a fresh campaign clock begins
                 // only after scenario selection. Hold the authoritative clock
                 // while that choice is on screen; restored active runs keep
@@ -89,7 +98,14 @@ namespace LandLedgers.FirstLedger
             // controller starts. The previous implementation only created the
             // objective surface after the start button was clicked, leaving
             // already-active scenarios with no visible goals.
-            BuildObjectivePanel(parent);
+            if (HasScenarioObjectives())
+            {
+                BuildObjectivePanel(parent);
+            }
+            else
+            {
+                HideObjectivePanel();
+            }
         }
 
         private void BuildPanel(RectTransform parent)
@@ -201,7 +217,14 @@ namespace LandLedgers.FirstLedger
                     panel.SetActive(false);
                 }
 
-                BuildObjectivePanel(canvas != null ? canvas.transform as RectTransform : null);
+                if (HasScenarioObjectives())
+                {
+                    BuildObjectivePanel(canvas != null ? canvas.transform as RectTransform : null);
+                }
+                else
+                {
+                    HideObjectivePanel();
+                }
             }
             else if (clock != null && previousClock != null)
             {
@@ -238,10 +261,22 @@ namespace LandLedgers.FirstLedger
                 canvas = ResolveGameplayCanvas(null);
             }
 
-            if (scenarioDirector.HasActiveScenario && objectiveLabel == null && canvas != null)
+            if (scenarioDirector.HasActiveScenario && canvas != null && HasScenarioObjectives())
             {
-                if (panel != null) panel.SetActive(false);
-                BuildObjectivePanel(canvas.transform as RectTransform);
+                if (objectiveLabel == null)
+                {
+                    if (panel != null) panel.SetActive(false);
+                    BuildObjectivePanel(canvas.transform as RectTransform);
+                }
+                else
+                {
+                    if (panel != null) panel.SetActive(true);
+                    RenderObjectives();
+                }
+            }
+            else if (scenarioDirector.HasActiveScenario)
+            {
+                HideObjectivePanel();
             }
 
             if (objectiveLabel == null || !scenarioDirector.HasActiveScenario)
@@ -403,6 +438,22 @@ namespace LandLedgers.FirstLedger
             element.flexibleHeight = 0f;
             objectiveLabel.overflowMode = TextOverflowModes.Overflow;
             RenderObjectives();
+        }
+
+        private bool HasScenarioObjectives()
+        {
+            ScenarioRuntimeState active = scenarioDirector != null
+                ? scenarioDirector.Service?.ActiveState
+                : null;
+            return active?.Asset != null
+                && ((active.Asset.Goals?.Count ?? 0) > 0
+                    || (active.Asset.Objectives?.Count ?? 0) > 0);
+        }
+
+        private void HideObjectivePanel()
+        {
+            if (panel != null) panel.SetActive(false);
+            else if (authoredObjectivePanel != null) authoredObjectivePanel.SetActive(false);
         }
 
         private void ToggleObjectives()

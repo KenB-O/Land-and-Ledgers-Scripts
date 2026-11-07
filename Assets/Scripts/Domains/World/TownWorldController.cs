@@ -1275,7 +1275,10 @@ namespace LandLedgers.World
 
                 if (generationPassCount > 0 || grid != null)
                 {
-                    Debug.LogWarning("[TownWorld] Duplicate fresh generation request ignored; FirstLedgerSliceBootstrapper already created the opening town.", this);
+                    if (verboseStartupLogging)
+                    {
+                        Debug.Log("[TownWorld] Duplicate fresh generation request ignored; startup bootstrap already created the opening town.", this);
+                    }
                     return;
                 }
             }

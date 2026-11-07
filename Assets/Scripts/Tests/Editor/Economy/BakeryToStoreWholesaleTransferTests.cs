@@ -39,7 +39,7 @@ namespace LandLedgers.EditorTests.Economy
         // wholesale cash and retail cash reconcile in ONE runtime.
         // It is a test seam, not a second cash authority: every cash
         // move lands in the shared runtime.
-        private sealed class RuntimeStorePort : IGeneralStoreTradingPort
+        private sealed class RuntimeStorePort : IGeneralStoreTradingPort, IItemLevelGeneralStoreTradingPort, IIdentifiedRetailStockReceivingPort
         {
             public BusinessRuntimeState Runtime;
             public Dictionary<string, int> Prices = new Dictionary<string, int>();
@@ -69,6 +69,29 @@ namespace LandLedgers.EditorTests.Economy
             public int CategoryPricePerUnitCents(string categoryId)
             {
                 return Prices.TryGetValue(categoryId, out int p) ? p : 0;
+            }
+            public bool UsesItemLevelInventory(string itemId)
+            {
+                foreach (GeneralStoreCategoryOffer offer in OfferList)
+                    if (offer?.UsesItemLevelInventory == true && offer.OfferedItemIds.Contains(itemId)) return true;
+                return false;
+            }
+            public int ItemStockUnits(string itemId) => Runtime != null ? Runtime.GetRetailItemStockUnits(itemId) : 0;
+            public int ItemPricePerUnitCents(string itemId) => Prices.TryGetValue(itemId, out int p) ? p : 0;
+            public bool TryConsumeItemStockUnits(string itemId, int units, out int consumedUnits)
+            {
+                consumedUnits = 0;
+                return Runtime != null && Runtime.TryConsumeRetailItemStockUnits(itemId, null, units, out consumedUnits);
+            }
+            public void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents)
+            {
+                Runtime?.RecordRetailItemSettlement(categoryId, unitsSold, revenueCents);
+            }
+            public string ReceiveRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, string provenance, int dayIndex)
+            {
+                return Runtime == null ? "no runtime" : Runtime.TryAddRetailItemLot(lotId, itemId, categoryId,
+                    unitLabel, units, StoreBusinessId, StoreBusinessId, provenance, dayIndex);
             }
             public bool TryConsumeStoreUnits(string categoryId, int units, out int consumedUnits)
             {
@@ -254,12 +277,18 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(5, line.PriceCents, "the retail decision, not the wholesale cost, prices the shelf line");
             Assert.AreEqual(0, s.StorePort.CategoryStockUnits("staple_food"), "transfer alone does not touch the live pool");
 
+            s.StorePort.OfferList[0].UsesItemLevelInventory = true;
+
             Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                s.Catalog, "bread", 24, "staple_food", s.StorePort, s.Diag);
+                s.Catalog, "bread", 24, "staple_food", s.StorePort, s.Diag, "loaf", transfer.BakeryLotId, 2);
             Assert.IsTrue(stocked.Stocked, stocked.Refusal);
             Assert.AreEqual(0, line.ShelfUnits, "stocking consumes the Pass 3 shelf exactly once");
             Assert.AreEqual(24, stocked.LivePoolUnitsAfter, "the live pool gains exactly the stocked units");
             Assert.AreEqual(24, s.StorePort.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(24, s.StoreRuntime.GetRetailItemStockUnits("bread", "staple_food"),
+                "the exact bread retail offer must be backed by the identified wholesale receipt lot");
+            Assert.AreEqual(1, s.StoreRuntime.RetailItemLots.Count,
+                "one bakery lot creates one identified retail lot, not a second pooled copy");
             Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "stocking moves stock, never cash");
         }
 

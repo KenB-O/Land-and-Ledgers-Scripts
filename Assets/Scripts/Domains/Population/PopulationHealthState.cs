@@ -239,10 +239,10 @@ namespace LandLedgers.Population
             return health != null && health.HasActiveCondition;
         }
 
-        public static float GetLaborAvailability01(PersonState person)
+        public static float GetLaborAvailability01(PersonState person, bool conditionDebuffsSuppressed = false)
         {
             PersonHealthState health = EnsureHealthInitialized(person);
-            if (health == null || !health.HasActiveCondition)
+            if (conditionDebuffsSuppressed || health == null || !health.HasActiveCondition)
             {
                 return 1f;
             }
@@ -253,9 +253,10 @@ namespace LandLedgers.Population
         public static float GetLaborAvailability01(
             PersonState person,
             HouseholdState household,
-            PopulationState population)
+            PopulationState population,
+            bool conditionDebuffsSuppressed = false)
         {
-            int capacityPercent = GetEffectiveLaborCapacityPercent(person, household, population);
+            int capacityPercent = GetEffectiveLaborCapacityPercent(person, household, population, conditionDebuffsSuppressed);
             return Mathf.Clamp01(capacityPercent / 100f);
         }
 
@@ -292,7 +293,7 @@ namespace LandLedgers.Population
             return 0;
         }
 
-        public static int GetEffectiveWeeklyWageDollars(PersonState person)
+        public static int GetEffectiveWeeklyWageDollars(PersonState person, bool conditionDebuffsSuppressed = false)
         {
             if (person == null)
             {
@@ -300,13 +301,14 @@ namespace LandLedgers.Population
             }
 
             int baseWage = Mathf.Max(0, person.wage.weeklyWage);
-            return Mathf.RoundToInt(baseWage * GetLaborAvailability01(person));
+            return Mathf.RoundToInt(baseWage * GetLaborAvailability01(person, conditionDebuffsSuppressed));
         }
 
         public static int GetEffectiveWeeklyWageDollars(
             PersonState person,
             HouseholdState household,
-            PopulationState population)
+            PopulationState population,
+            bool conditionDebuffsSuppressed = false)
         {
             if (person == null)
             {
@@ -314,10 +316,10 @@ namespace LandLedgers.Population
             }
 
             int baseWage = Mathf.Max(0, person.wage.weeklyWage);
-            return Mathf.RoundToInt(baseWage * GetLaborAvailability01(person, household, population));
+            return Mathf.RoundToInt(baseWage * GetLaborAvailability01(person, household, population, conditionDebuffsSuppressed));
         }
 
-        public static int GetWeeklyLaborLossCents(PersonState person)
+        public static int GetWeeklyLaborLossCents(PersonState person, bool conditionDebuffsSuppressed = false)
         {
             if (person == null)
             {
@@ -325,14 +327,15 @@ namespace LandLedgers.Population
             }
 
             int baseWage = Mathf.Max(0, person.wage.weeklyWage);
-            int effectiveWage = GetEffectiveWeeklyWageDollars(person);
+            int effectiveWage = GetEffectiveWeeklyWageDollars(person, conditionDebuffsSuppressed);
             return Mathf.Max(0, baseWage - effectiveWage) * 100;
         }
 
         public static int GetWeeklyLaborLossCents(
             PersonState person,
             HouseholdState household,
-            PopulationState population)
+            PopulationState population,
+            bool conditionDebuffsSuppressed = false)
         {
             if (person == null)
             {
@@ -340,7 +343,7 @@ namespace LandLedgers.Population
             }
 
             int baseWage = Mathf.Max(0, person.wage.weeklyWage);
-            int effectiveWage = GetEffectiveWeeklyWageDollars(person, household, population);
+            int effectiveWage = GetEffectiveWeeklyWageDollars(person, household, population, conditionDebuffsSuppressed);
             return Mathf.Max(0, baseWage - effectiveWage) * 100;
         }
 
@@ -355,10 +358,11 @@ namespace LandLedgers.Population
         public static int GetEffectiveLaborCapacityPercent(
             PersonState person,
             HouseholdState household,
-            PopulationState population)
+            PopulationState population,
+            bool conditionDebuffsSuppressed = false)
         {
             PersonHealthState health = EnsureHealthInitialized(person);
-            int directCapacity = health != null && health.HasActiveCondition
+            int directCapacity = !conditionDebuffsSuppressed && health != null && health.HasActiveCondition
                 ? Mathf.Clamp(health.laborCapacityPercent, 0, 100)
                 : 100;
 
@@ -367,16 +371,18 @@ namespace LandLedgers.Population
                 return directCapacity;
             }
 
-            int continuityLossPercent = GetHouseholdContinuityLossPercent(household, population, person != null ? person.id : -1);
+            int continuityLossPercent = GetHouseholdContinuityLossPercent(
+                household, population, person != null ? person.id : -1, conditionDebuffsSuppressed);
             return Mathf.Clamp(Mathf.RoundToInt(directCapacity * (1f - continuityLossPercent / 100f)), 0, 100);
         }
 
         public static int GetHouseholdContinuityLossPercent(
             HouseholdState household,
             PopulationState population,
-            int excludingPersonId = -1)
+            int excludingPersonId = -1,
+            bool conditionDebuffsSuppressed = false)
         {
-            if (household == null || population == null || household.memberIds == null)
+            if (conditionDebuffsSuppressed || household == null || population == null || household.memberIds == null)
             {
                 return 0;
             }

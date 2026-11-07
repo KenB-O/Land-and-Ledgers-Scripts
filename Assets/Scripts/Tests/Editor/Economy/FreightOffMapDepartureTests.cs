@@ -229,7 +229,8 @@ namespace LandLedgers.EditorTests.Economy
         // (S3): same authority (the shared reservation authority), same
         // float.MaxValue window, same shipment assignment id.
         private string BindTeam() => WagonAuthority.TryAssignDraftTeam(wagon,
-            new List<AnimalState> { horse }, EthanId.ToString(), ShipmentId,
+            new List<AnimalState> { horse },
+            LandLedgers.Primitives.EntityId.For(LandLedgers.Primitives.EntityKind.Person, EthanId).ToString(), ShipmentId,
             new AnimalAvailabilityAuthority(reservations), NowGameSeconds(), float.MaxValue);
 
         private bool Authorize() => freight.AuthorizeShipmentDispatch(ShipmentId, out _);

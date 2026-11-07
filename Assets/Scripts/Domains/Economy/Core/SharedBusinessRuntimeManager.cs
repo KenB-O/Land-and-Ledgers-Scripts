@@ -8137,7 +8137,8 @@ namespace LandLedgers.Economy
                 PersonState person = populationManager.State.GetPerson(personId);
                 if (person != null)
                 {
-                    return PopulationHealthEvaluator.GetLaborAvailability01(person);
+                    return PopulationHealthEvaluator.GetLaborAvailability01(
+                        person, populationManager.ConditionDebuffsSuppressed);
                 }
             }
 

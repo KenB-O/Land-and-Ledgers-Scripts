@@ -31,6 +31,12 @@ namespace LandLedgers.Orchestration.Scenarios
     /// registry-only mode and says so loudly in the diagnostics.
     /// </summary>
     [DisallowMultipleComponent]
+    // The town bootstrapper runs at order 240 and the scenario start
+    // presentation at 260. A configured boot scenario must begin after
+    // both have prepared the world and injected lifecycle/objective
+    // authorities; starting at Unity's default order can otherwise create
+    // an active scenario before its declared household can be resolved.
+    [DefaultExecutionOrder(300)]
     public sealed class ScenarioDirector : MonoBehaviour
     {
         [Header("Scenario Registry")]
@@ -65,6 +71,7 @@ namespace LandLedgers.Orchestration.Scenarios
 
         public bool HasActiveScenario => Service.HasActiveScenario;
         public string ActiveScenarioId => Service.ActiveState?.Asset.ScenarioId;
+        public string BootScenarioId => bootScenarioId;
 
         /// <summary>
         /// Pass XI WS1: the hub-owned objective tracker for the active

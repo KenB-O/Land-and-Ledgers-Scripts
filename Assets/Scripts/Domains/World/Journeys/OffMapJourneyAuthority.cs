@@ -36,6 +36,7 @@ namespace LandLedgers.World.Journeys
         public string VehicleId = string.Empty;
         public string OriginLocationId = string.Empty;
         public string DestinationLabel = string.Empty; // off-map destination (authored)
+        public string DestinationLocationId = string.Empty;
         public string GatewayLocationId = string.Empty; // journey-model gateway used
         public List<string> RouteLegLocationIds = new List<string>();
         public float RouteMiles;
@@ -44,6 +45,12 @@ namespace LandLedgers.World.Journeys
         public int DepartureDayIndex;
         public int DueReturnDayIndex = -1; // -1 = one-way (migration); no return expected
         public int ActualReturnDayIndex = -1;
+        // Physical freight trips must be advanced by destination/origin arrival
+        // confirmation, never by elapsed calendar days alone. Defaults retain
+        // compatibility with legacy journeys that have no physical route.
+        public bool RequiresPhysicalArrivalConfirmation;
+        public bool PhysicalDestinationArrivalConfirmed;
+        public bool PhysicalOriginArrivalConfirmed;
         public Dictionary<string, int> CargoUnits = new Dictionary<string, int>();
         /// <summary>
         /// Goods bought off-map during the journey (the purchase manifest).
@@ -78,6 +85,7 @@ namespace LandLedgers.World.Journeys
                 VehicleId = VehicleId,
                 OriginLocationId = OriginLocationId,
                 DestinationLabel = DestinationLabel,
+                DestinationLocationId = DestinationLocationId,
                 GatewayLocationId = GatewayLocationId,
                 RouteLegLocationIds = RouteLegLocationIds != null
                     ? new List<string>(RouteLegLocationIds) : new List<string>(),
@@ -87,6 +95,9 @@ namespace LandLedgers.World.Journeys
                 DepartureDayIndex = DepartureDayIndex,
                 DueReturnDayIndex = DueReturnDayIndex,
                 ActualReturnDayIndex = ActualReturnDayIndex,
+                RequiresPhysicalArrivalConfirmation = RequiresPhysicalArrivalConfirmation,
+                PhysicalDestinationArrivalConfirmed = PhysicalDestinationArrivalConfirmed,
+                PhysicalOriginArrivalConfirmed = PhysicalOriginArrivalConfirmed,
                 CargoUnits = CargoUnits != null
                     ? new Dictionary<string, int>(CargoUnits, System.StringComparer.OrdinalIgnoreCase)
                     : new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase),
@@ -496,6 +507,97 @@ namespace LandLedgers.World.Journeys
         }
 
         /// <summary>
+        /// Requires real destination and origin arrival events for this journey.
+        /// Intended for physical freight trips; legacy calendar journeys remain
+        /// compatible unless explicitly opted in.
+        /// </summary>
+        public bool RequirePhysicalArrivalConfirmation(string journeyId, string destinationLocationId, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (string.IsNullOrWhiteSpace(journeyId) || !byId.TryGetValue(journeyId, out OffMapJourneyRecord record) || !record.IsActive)
+            {
+                diag.Add($"OffMapJourneyAuthority: cannot require physical arrival for inactive or unknown journey '{journeyId}'.");
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(destinationLocationId))
+            {
+                diag.Add($"OffMapJourneyAuthority: physical journey '{journeyId}' requires a destination location id.");
+                return false;
+            }
+            if (journeyModel.GetLocation(destinationLocationId) == null)
+            {
+                diag.Add($"OffMapJourneyAuthority: physical journey '{journeyId}' has unknown destination location '{destinationLocationId}'.");
+                return false;
+            }
+            record.DestinationLocationId = destinationLocationId;
+            record.RequiresPhysicalArrivalConfirmation = true;
+            return true;
+        }
+
+        /// <summary>Records an identity-matched physical arrival at the authored destination.</summary>
+        public bool ConfirmPhysicalDestinationArrival(string journeyId, string destinationLocationId, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!TryGetPhysicalArrivalRecord(journeyId, destinationLocationId, out OffMapJourneyRecord record, out string refusal))
+            {
+                diag.Add("OffMapJourneyAuthority: destination arrival refused: " + refusal);
+                return false;
+            }
+            if (!string.Equals(record.DestinationLocationId, destinationLocationId, StringComparison.Ordinal))
+            {
+                diag.Add($"OffMapJourneyAuthority: destination arrival refused for '{journeyId}': '{destinationLocationId}' is not its destination '{record.DestinationLocationId}'.");
+                return false;
+            }
+            record.PhysicalDestinationArrivalConfirmed = true;
+            return true;
+        }
+
+        /// <summary>Records the same journey's actual return to its authored origin.</summary>
+        public bool ConfirmPhysicalOriginArrival(string journeyId, string originLocationId, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!TryGetPhysicalArrivalRecord(journeyId, originLocationId, out OffMapJourneyRecord record, out string refusal))
+            {
+                diag.Add("OffMapJourneyAuthority: origin arrival refused: " + refusal);
+                return false;
+            }
+            if (!record.PhysicalDestinationArrivalConfirmed)
+            {
+                diag.Add($"OffMapJourneyAuthority: origin arrival refused for '{journeyId}': destination arrival has not been confirmed.");
+                return false;
+            }
+            if (!string.Equals(record.OriginLocationId, originLocationId, StringComparison.Ordinal))
+            {
+                diag.Add($"OffMapJourneyAuthority: origin arrival refused for '{journeyId}': '{originLocationId}' is not its origin '{record.OriginLocationId}'.");
+                return false;
+            }
+            record.PhysicalOriginArrivalConfirmed = true;
+            return true;
+        }
+
+        private bool TryGetPhysicalArrivalRecord(string journeyId, string locationId, out OffMapJourneyRecord record, out string refusal)
+        {
+            record = null;
+            refusal = string.Empty;
+            if (string.IsNullOrWhiteSpace(journeyId) || !byId.TryGetValue(journeyId, out record) || !record.IsActive)
+            {
+                refusal = $"journey '{journeyId}' is inactive or unknown.";
+                return false;
+            }
+            if (!record.RequiresPhysicalArrivalConfirmation)
+            {
+                refusal = $"journey '{journeyId}' is not configured for physical arrival confirmation.";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(locationId))
+            {
+                refusal = "no physical location id was supplied.";
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Authoritative location label for a traveler: the off-map label while
         /// departed, the origin while never departed. After return the caller
         /// owns the traveler's map location again.
@@ -524,7 +626,14 @@ namespace LandLedgers.World.Journeys
             foreach (var record in byId.Values)
             {
                 if (!record.IsActive || !record.IsRoundTrip) continue;
-                if (record.DueReturnDayIndex > dayIndex) continue; // not due: no teleporting
+                if (record.RequiresPhysicalArrivalConfirmation)
+                {
+                    // Physical journeys complete only after an identity-matched
+                    // trigger confirms the return. Calendar estimates may not
+                    // move the traveler, cargo, or contract state.
+                    if (!record.PhysicalOriginArrivalConfirmed) continue;
+                }
+                else if (record.DueReturnDayIndex > dayIndex) continue; // legacy calendar journey
 
                 record.State = OffMapJourneyState.Returned;
                 record.ActualReturnDayIndex = dayIndex;

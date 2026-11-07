@@ -13,7 +13,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// authorities (stock, cash, settlement). Scene wiring constructs this
     /// and registers the adapter in the SupplierDirectory (Codex integrates).
     /// </summary>
-    public sealed class GeneralStoreTradingPort : IItemLevelGeneralStoreTradingPort
+    public sealed class GeneralStoreTradingPort : IItemLevelGeneralStoreTradingPort, IIdentifiedRetailStockReceivingPort
     {
         private readonly GeneralStoreRuntimeManager manager;
         private readonly BusinessInstanceState business;
@@ -232,6 +232,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             }
 
             return null;
+        }
+
+        public string ReceiveRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+            int units, string provenance, int dayIndex)
+        {
+            BusinessRuntimeState state = ActiveState;
+            if (state == null) return "Store runtime unavailable.";
+            return state.TryAddRetailItemLot(lotId, itemId, categoryId, unitLabel, units,
+                StoreBusinessId, StoreBusinessId, provenance, dayIndex);
         }
 
         public int CategoryReceivableUnits(string categoryId)

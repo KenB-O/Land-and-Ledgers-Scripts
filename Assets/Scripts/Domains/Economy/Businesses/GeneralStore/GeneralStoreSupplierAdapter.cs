@@ -74,6 +74,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents);
     }
 
+    /// <summary>Optional receiving seam for wholesale receipts that must back an exact retail SKU offer.</summary>
+    public interface IIdentifiedRetailStockReceivingPort
+    {
+        string ReceiveRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+            int units, string provenance, int dayIndex);
+    }
+
     /// <summary>
     /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
     /// in the <see cref="SupplierDirectory"/> so the embodied shopping path is

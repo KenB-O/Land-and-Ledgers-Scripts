@@ -396,6 +396,19 @@ public sealed class PurchasedRetailLotReceiptTests
         Assert.IsFalse(ledger.TryHold(FeedBatch(string.Empty, destination.BusinessId, 2)));
     }
 
+    [Test]
+    public void CustodyLedger_RefusesEmptySerializedPlaceholderBatch()
+    {
+        BusinessRuntimeState destination = FeedDestination("livery_feed_w4_empty_placeholder");
+        var ledger = new BusinessFeedCustodyLedger();
+        var placeholder = new BusinessFeedPurchase.Batch();
+
+        Assert.IsFalse(placeholder.HasValidCustodyIdentity);
+        Assert.IsFalse(ledger.TryHold(placeholder),
+            "A refused checkout may deserialize null as an empty Batch; it is not purchased custody.");
+        Assert.AreEqual(0, ledger.PendingCount);
+    }
+
     /// <summary>
     /// W4: a batch already received by another path retries as a duplicate
     /// success — the ledger clears without stocking the goods twice.

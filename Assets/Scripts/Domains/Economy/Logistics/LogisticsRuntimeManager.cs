@@ -349,7 +349,8 @@ namespace LandLedgers.Economy
 
             BusinessInstanceState carrier = FindBusinessByInstanceId(shipment.carrierBusinessInstanceId);
             string driverId = carrier?.Owner != null && carrier.Owner.PersonId >= 0
-                ? carrier.Owner.PersonId.ToString()
+                ? LandLedgers.Primitives.EntityId.For(
+                    LandLedgers.Primitives.EntityKind.Person, carrier.Owner.PersonId).ToString()
                 : string.Empty;
             if (string.IsNullOrWhiteSpace(driverId)) return;
             BindPhysicalTransport(shipment, wagon, horses, driverId);

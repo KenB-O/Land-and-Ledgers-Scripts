@@ -134,5 +134,27 @@ namespace LandLedgers.EditorTests.Economy
                 "exact arrival lands on the final waypoint centre");
             Assert.IsTrue(Mathf.Abs(exactRemaining) < 1e-4f, "exact arrival has 0 remaining");
         }
+
+        [Test]
+        public void StartLeg_RefusesWhenAssignedRiderIsUnresolved()
+        {
+            var host = new GameObject(nameof(StartLeg_RefusesWhenAssignedRiderIsUnresolved));
+            try
+            {
+                CoupledTransportMovementController controller = host.AddComponent<CoupledTransportMovementController>();
+                bool started = controller.StartLeg(
+                    new List<GridCoord> { new GridCoord(2, 2), new GridCoord(3, 2) },
+                    1f, Vector3.zero, WagonSpeed, 1f, 720f,
+                    director: null, ethanPersonId: -1,
+                    legLabel: "test freight leg", hideOnArrival: true);
+
+                Assert.IsFalse(started, "A freight team must not start moving without the assigned driver authority and identity.");
+                Assert.IsFalse(controller.IsLegActive);
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
     }
 }

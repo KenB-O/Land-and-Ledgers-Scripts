@@ -35,9 +35,9 @@ namespace LandLedgers.Population
         /// real lost capacity, which flows through task assignment, attendance,
         /// wages, and household decisions. Returns 0..1.
         /// </summary>
-        public static float WorkCapacityFactor(PersonState person)
+        public static float WorkCapacityFactor(PersonState person, bool conditionDebuffsSuppressed = false)
         {
-            if (person == null)
+            if (person == null || conditionDebuffsSuppressed)
             {
                 return 1f;
             }
@@ -100,7 +100,8 @@ namespace LandLedgers.Population
             HouseholdInventoryRegistry inventories = null,
             HouseholdMealLogRegistry mealLog = null,
             MealSchedulingPolicy mealPolicy = null,
-            HouseholdMembershipRegistry memberships = null)
+            HouseholdMembershipRegistry memberships = null,
+            bool conditionDebuffsSuppressed = false)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -114,7 +115,7 @@ namespace LandLedgers.Population
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy, memberships);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy, memberships, conditionDebuffsSuppressed);
             }
             return report;
         }
@@ -130,7 +131,8 @@ namespace LandLedgers.Population
             HouseholdInventoryRegistry inventories,
             HouseholdMealLogRegistry mealLog,
             MealSchedulingPolicy mealPolicy,
-            HouseholdMembershipRegistry memberships)
+            HouseholdMembershipRegistry memberships,
+            bool conditionDebuffsSuppressed)
         {
             int actingPersonId = FindActingAdult(population, household, memberships);
             if (actingPersonId < 0)
@@ -160,14 +162,14 @@ namespace LandLedgers.Population
                 ExecuteLotBasedMeals(
                     household, members, actingPersonId, dayIndex, report, diag,
                     budgetStore, restaurantMeals, boardingMeals, hotelMeals,
-                    inventories, mealLog, mealPolicy);
+                    inventories, mealLog, mealPolicy, conditionDebuffsSuppressed);
             }
             else
             {
                 ExecuteReserveBasedMeals(
                     population, household, members, actingPersonId, planner, executor,
                     dayIndex, report, diag, budgetStore,
-                    restaurantMeals, boardingMeals, hotelMeals);
+                    restaurantMeals, boardingMeals, hotelMeals, conditionDebuffsSuppressed);
             }
 
             // 2. The planner's remaining needs, executed through the same
@@ -206,7 +208,8 @@ namespace LandLedgers.Population
             WorkTimeBudgetStore budgetStore,
             IRestaurantMealDaySource restaurantMeals,
             IBoardingHouseMealDaySource boardingMeals,
-            IHotelMealDaySource hotelMeals)
+            IHotelMealDaySource hotelMeals,
+            bool conditionDebuffsSuppressed)
         {
             // 1. Meals (GHOST-DEF-006): every member eats; each meal consumes
             //    one unit of staple_food from household reserves — EXCEPT
@@ -305,7 +308,7 @@ namespace LandLedgers.Population
                 {
                     WorkTimeBudget budget = budgetStore.GetOrCreate(
                         EntityId.For(EntityKind.Person, p.id));
-                    budget.SetCapacityMultiplier(WorkCapacityFactor(p));
+                    budget.SetCapacityMultiplier(WorkCapacityFactor(p, conditionDebuffsSuppressed));
                 }
             }
             int missed = totalDailyNeed - mealsEaten;
@@ -337,7 +340,8 @@ namespace LandLedgers.Population
             IHotelMealDaySource hotelMeals,
             HouseholdInventoryRegistry inventories,
             HouseholdMealLogRegistry mealLog,
-            MealSchedulingPolicy mealPolicy)
+            MealSchedulingPolicy mealPolicy,
+            bool conditionDebuffsSuppressed)
         {
             mealPolicy ??= MealSchedulingPolicy.Default;
             HouseholdInventory inventory = inventories.GetOrCreate(household.id);
@@ -407,7 +411,7 @@ namespace LandLedgers.Population
                 {
                     WorkTimeBudget budget = budgetStore.GetOrCreate(
                         EntityId.For(EntityKind.Person, p.id));
-                    budget.SetCapacityMultiplier(WorkCapacityFactor(p));
+                    budget.SetCapacityMultiplier(WorkCapacityFactor(p, conditionDebuffsSuppressed));
                 }
             }
 

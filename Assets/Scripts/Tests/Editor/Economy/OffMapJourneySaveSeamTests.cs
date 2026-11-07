@@ -155,6 +155,73 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void PhysicalFreightJourney_DoesNotPickUpOrReturnByCalendarAlone_AndPersistsArrivalProof()
+        {
+            OffMapJourneyRecord record = DepartMillbrookWagon(10);
+            RegionalTownRegistry.RegionalTownDefinition town = null;
+            RegionalTownRegistry.RegionalBusinessSite millbrook = null;
+            foreach (RegionalTownRegistry.RegionalTownDefinition candidateTown in RegionalTownRegistry.All)
+            {
+                if (candidateTown?.Sites == null) continue;
+                foreach (RegionalTownRegistry.RegionalBusinessSite candidateSite in candidateTown.Sites)
+                {
+                    if (candidateSite != null && candidateSite.BusinessId == "millbrook_grain_co")
+                    {
+                        town = candidateTown;
+                        millbrook = candidateSite;
+                        break;
+                    }
+                }
+                if (millbrook != null) break;
+            }
+            Assert.IsNotNull(millbrook, "the canonical Millbrook supplier site should be authored");
+            string destinationId = RegionalTownRegistry.SiteLocationId(town, millbrook);
+            Assert.IsTrue(authority.RequirePhysicalArrivalConfirmation(record.JourneyId, destinationId, diag), string.Join("; ", diag));
+
+            List<OffMapJourneyRecord> dueWithoutArrival = authority.CompleteDueJourneys(2000, null, diag);
+            Assert.AreEqual(0, dueWithoutArrival.Count, "calendar time cannot complete a physical freight journey");
+            Assert.IsTrue(record.IsActive);
+            Assert.IsFalse(record.PhysicalDestinationArrivalConfirmed);
+
+            OffMapJourneyAuthoritySaveDto midTrip = authority.CaptureSaveDto();
+            var restored = new OffMapJourneyAuthority(model);
+            restored.LoadFromSaveDto(midTrip);
+            OffMapJourneyRecord loaded = restored.FindActiveByVehicle("opening-freight-wagon");
+            Assert.IsNotNull(loaded);
+            Assert.IsTrue(loaded.RequiresPhysicalArrivalConfirmation);
+            Assert.AreEqual(destinationId, loaded.DestinationLocationId);
+            Assert.IsFalse(restored.ConfirmPhysicalDestinationArrival(loaded.JourneyId, "wrong-business-site", diag));
+            Assert.IsTrue(restored.ConfirmPhysicalDestinationArrival(loaded.JourneyId, destinationId, diag));
+            Assert.IsFalse(restored.ConfirmPhysicalOriginArrival(loaded.JourneyId, "not-town-center", diag));
+            Assert.IsTrue(restored.ConfirmPhysicalOriginArrival(loaded.JourneyId, loaded.OriginLocationId, diag));
+
+            List<OffMapJourneyRecord> returned = restored.CompleteDueJourneys(10, null, diag);
+            Assert.AreEqual(1, returned.Count, "a confirmed physical return completes even independently of the estimate");
+            Assert.AreEqual(OffMapJourneyState.Returned, loaded.State);
+            Assert.AreEqual(0, restored.CompleteDueJourneys(2000, null, diag).Count, "repeated processing cannot duplicate the return");
+        }
+
+        [Test]
+        public void FreightOperatorJourney_PreservesSharedAgreementIdentityAcrossRestore()
+        {
+            const string agreementId = "freight-agreement:test-linked-operator";
+            OffMapJourneyRecord person = authority.DepartPerson(
+                7, "town-center", "Millbrook Grain Co.", 0, 2,
+                "drive the flour wagon", null, new List<string> { agreementId },
+                10, item => 0, null, diag);
+            Assert.IsNotNull(person, string.Join("; ", diag));
+            CollectionAssert.Contains(person.ObligationIds, agreementId);
+
+            OffMapJourneyAuthoritySaveDto snapshot = authority.CaptureSaveDto();
+            var restored = new OffMapJourneyAuthority(model);
+            restored.LoadFromSaveDto(snapshot);
+            OffMapJourneyRecord restoredPerson = restored.FindActiveByPerson(7);
+            Assert.IsNotNull(restoredPerson);
+            CollectionAssert.Contains(restoredPerson.ObligationIds, agreementId,
+                "the operator record must retain the same stable freight agreement link used by the vehicle record");
+        }
+
+        [Test]
         public void ReturnDrive_PersonJourney_KeepsBedArrangement()
         {
             OffMapJourneyRecord record = authority.DepartPerson(

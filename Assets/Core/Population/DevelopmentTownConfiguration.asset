@@ -10,7 +10,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: fc972e2dd5e242a6b411008defae1771, type: 3}
-  m_Name: Development Town Configuration
+  m_Name: DevelopmentTownConfiguration
   m_EditorClassIdentifier: 
   configurationId: millbrook-development-town
   seedOffset: 9217
@@ -151,6 +151,10 @@ MonoBehaviour:
     premisesId: 
     premisesRequired: 1
     openingCashCents: 25000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
   - key: bakery
     operationId: bakery
     ownerPersonKey: base:2
@@ -158,6 +162,10 @@ MonoBehaviour:
     premisesId: 
     premisesRequired: 1
     openingCashCents: 17500
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
   - key: fuel-dealer
     operationId: fuel-dealer
     ownerPersonKey: base:4
@@ -165,6 +173,10 @@ MonoBehaviour:
     premisesId: 
     premisesRequired: 1
     openingCashCents: 20000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
   - key: freight-company
     operationId: livery-freight
     ownerPersonKey: ethan
@@ -228,6 +240,9 @@ MonoBehaviour:
       - bake-peels-1
     kitIds:
     - baker-hand-kit
+  openingBakeryFuelUnits: 40
   freightBusinessKey: freight-company
   openingHorseId: A0
   openingWagonId: opening-freight-wagon
+  enableMortality: 0
+  enableFertility: 0

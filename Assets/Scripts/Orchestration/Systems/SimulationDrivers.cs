@@ -1515,8 +1515,7 @@ namespace LandLedgers.Orchestration.Systems
             // untouched (normal behaviour for every other scenario).
             if (populationManager != null && developmentTownConfiguration != null)
             {
-                populationManager.MortalityEnabled = developmentTownConfiguration.EnableMortality;
-                populationManager.FertilityEnabled = developmentTownConfiguration.EnableFertility;
+                populationManager.ApplyDevelopmentPopulationSettings(developmentTownConfiguration);
             }
 
             populationManager?.DriveDemographicDay(absoluteDayIndex);
@@ -1942,6 +1941,104 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Confirms a real regional building-trigger arrival for the active
+        /// freight wagon and its assigned driver. Both persistent journey
+        /// records must agree on destination before either is advanced.
+        /// Repeated trigger callbacks are idempotent.
+        /// </summary>
+        public bool ConfirmPhysicalFreightDestinationArrival(
+            string vehicleId,
+            int operatorPersonId,
+            string vehicleJourneyId,
+            string destinationLocationId)
+        {
+            if (string.IsNullOrWhiteSpace(vehicleId) || operatorPersonId < 0
+                || string.IsNullOrWhiteSpace(vehicleJourneyId)
+                || string.IsNullOrWhiteSpace(destinationLocationId))
+                return false;
+
+            OffMapJourneyRecord vehicleJourney = OffMapJourneys.FindActiveByVehicle(vehicleId);
+            OffMapJourneyRecord personJourney = OffMapJourneys.FindActiveByPerson(operatorPersonId);
+            if (vehicleJourney == null || personJourney == null
+                || !string.Equals(vehicleJourney.JourneyId, vehicleJourneyId, StringComparison.Ordinal)
+                || vehicleJourney.TravelerKind != OffMapTravelerKind.Vehicle
+                || personJourney.TravelerKind != OffMapTravelerKind.Person
+                || personJourney.PersonId != operatorPersonId
+                || !vehicleJourney.RequiresPhysicalArrivalConfirmation
+                || !personJourney.RequiresPhysicalArrivalConfirmation
+                || !string.Equals(vehicleJourney.DestinationLocationId, destinationLocationId, StringComparison.Ordinal)
+                || !string.Equals(personJourney.DestinationLocationId, destinationLocationId, StringComparison.Ordinal)
+                || !string.Equals(vehicleJourney.GatewayLocationId, personJourney.GatewayLocationId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var diag = new List<string>();
+            bool vehicleConfirmed = vehicleJourney.PhysicalDestinationArrivalConfirmed
+                || OffMapJourneys.ConfirmPhysicalDestinationArrival(vehicleJourney.JourneyId, destinationLocationId, diag);
+            bool personConfirmed = personJourney.PhysicalDestinationArrivalConfirmed
+                || OffMapJourneys.ConfirmPhysicalDestinationArrival(personJourney.JourneyId, destinationLocationId, diag);
+            if (!vehicleConfirmed || !personConfirmed)
+            {
+                Debug.LogWarning("[OffMapJourney] Physical freight arrival confirmation refused: " + string.Join(" | ", diag), this);
+                return false;
+            }
+
+            SyncOffMapJourneysToSaveState();
+            Debug.Log($"[OffMapJourney] Physical freight arrival confirmed: vehicle journey '{vehicleJourney.JourneyId}', operator journey '{personJourney.JourneyId}', vehicle '{vehicleId}', Ethan P{operatorPersonId}, destination '{destinationLocationId}'.", this);
+            return true;
+        }
+
+        /// <summary>
+        /// Confirms that the already loaded freight team physically returned
+        /// to the authored town origin. Both person and vehicle journey records
+        /// must agree; calendar time alone cannot settle the trip.
+        /// </summary>
+        public bool ConfirmPhysicalFreightOriginArrival(
+            string vehicleId,
+            int operatorPersonId,
+            string vehicleJourneyId,
+            string originLocationId)
+        {
+            if (string.IsNullOrWhiteSpace(vehicleId) || operatorPersonId < 0
+                || string.IsNullOrWhiteSpace(vehicleJourneyId)
+                || string.IsNullOrWhiteSpace(originLocationId))
+                return false;
+
+            OffMapJourneyRecord vehicleJourney = OffMapJourneys.FindActiveByVehicle(vehicleId);
+            OffMapJourneyRecord personJourney = OffMapJourneys.FindActiveByPerson(operatorPersonId);
+            if (vehicleJourney == null || personJourney == null
+                || !string.Equals(vehicleJourney.JourneyId, vehicleJourneyId, StringComparison.Ordinal)
+                || vehicleJourney.TravelerKind != OffMapTravelerKind.Vehicle
+                || personJourney.TravelerKind != OffMapTravelerKind.Person
+                || personJourney.PersonId != operatorPersonId
+                || !vehicleJourney.RequiresPhysicalArrivalConfirmation
+                || !personJourney.RequiresPhysicalArrivalConfirmation
+                || !vehicleJourney.PhysicalDestinationArrivalConfirmed
+                || !personJourney.PhysicalDestinationArrivalConfirmed
+                || !string.Equals(vehicleJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
+                || !string.Equals(personJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
+                || !string.Equals(vehicleJourney.DestinationLocationId, personJourney.DestinationLocationId, StringComparison.Ordinal)
+                || !string.Equals(vehicleJourney.GatewayLocationId, personJourney.GatewayLocationId, StringComparison.Ordinal))
+                return false;
+
+            var diag = new List<string>();
+            bool vehicleConfirmed = vehicleJourney.PhysicalOriginArrivalConfirmed
+                || OffMapJourneys.ConfirmPhysicalOriginArrival(vehicleJourney.JourneyId, originLocationId, diag);
+            bool personConfirmed = personJourney.PhysicalOriginArrivalConfirmed
+                || OffMapJourneys.ConfirmPhysicalOriginArrival(personJourney.JourneyId, originLocationId, diag);
+            if (!vehicleConfirmed || !personConfirmed)
+            {
+                Debug.LogWarning("[OffMapJourney] Physical freight return confirmation refused: " + string.Join(" | ", diag), this);
+                return false;
+            }
+
+            SyncOffMapJourneysToSaveState();
+            Debug.Log($"[OffMapJourney] Physical freight return confirmed: vehicle journey '{vehicleJourney.JourneyId}', operator journey '{personJourney.JourneyId}', vehicle '{vehicleId}', Ethan P{operatorPersonId}, origin '{originLocationId}'.", this);
+            return true;
+        }
+
+        /// <summary>
         /// Slice S9: push the latest journey snapshot into the Pass 9
         /// state so any later save carries it. Called by S10 on every
         /// journey mutation (depart, return, cancel). A missing Pass 9
@@ -1981,6 +2078,13 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         private void ProcessFreightJourneyReturns(int absoluteDayIndex, List<string> diag)
         {
+            foreach (OffMapJourneyRecord active in OffMapJourneys.AllJourneys())
+            {
+                if (active == null || !active.IsActive || !active.RequiresPhysicalArrivalConfirmation
+                    || active.PhysicalOriginArrivalConfirmed || active.DueReturnDayIndex > absoluteDayIndex) continue;
+                LogFreightAgreementBlockerOnce("physical-return:" + active.JourneyId,
+                    $"[OffMapJourney] Journey '{active.JourneyId}' reached its estimated return day but remains active: no physical return-arrival event has been confirmed.");
+            }
             List<OffMapJourneyRecord> returned = OffMapJourneys.CompleteDueJourneys(absoluteDayIndex, deliverCargo: null, diag);
             foreach (OffMapJourneyRecord record in returned)
             {
@@ -2031,7 +2135,7 @@ namespace LandLedgers.Orchestration.Systems
                     LogisticsShipmentState liveShipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
                         && LandLedgers.Economy.Logistics.FreightShipmentService.IsLiveShipment(candidate)
                         && string.Equals(candidate.physicalWagonAssetId, record.VehicleId, StringComparison.Ordinal));
-                    if (liveShipment != null)
+                    if (liveShipment != null && !record.RequiresPhysicalArrivalConfirmation)
                         FindAnyObjectByType<OpeningTransportPresentationController>()?.BeginCoupledReturn(liveShipment);
                 }
             }
@@ -2076,9 +2180,17 @@ namespace LandLedgers.Orchestration.Systems
                 // (c) The agreement must be on the journey; a journey for a
                 // different order must never pick up this lot.
                 if (record.ObligationIds == null || !record.ObligationIds.Contains(agreement.AgreementId)) continue;
-                // (d) Beyond the gateway only: D+1 for Millbrook, derived
-                // from the record's own gateway days, never a literal.
-                if (absoluteDayIndex < record.DepartureDayIndex + record.GatewayTravelDays) continue;
+                // (d) Physical freight waits for the destination-specific
+                // regional building trigger. Calendar days remain a fallback
+                // only for legacy journeys without a physical route.
+                if (record.RequiresPhysicalArrivalConfirmation && !record.PhysicalDestinationArrivalConfirmed)
+                {
+                    LogFreightAgreementBlockerOnce("physical-pickup:" + shipment.ShipmentId,
+                        $"[FreightPickup] Shipment '{shipment.ShipmentId}' remains pending: no physical arrival at destination '{record.DestinationLocationId}' has been confirmed.");
+                    continue;
+                }
+                if (!record.RequiresPhysicalArrivalConfirmation
+                    && absoluteDayIndex < record.DepartureDayIndex + record.GatewayTravelDays) continue;
                 // (e) The lot must exist; a missing lot is an integrity
                 // failure, never papered over with a fresh lot.
                 OffMapAidCargoLot lot = millbrookAidRuntime.Lots.FirstOrDefault(candidate => candidate != null
@@ -2127,6 +2239,54 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Starts the same assigned team on its physical return only after the
+        /// source-lot custody adapter has committed cargo into its wagon. A
+        /// missing route/presentation binding leaves the active journey and
+        /// cargo untouched for a later daily retry.
+        /// </summary>
+        private void DrivePhysicalFreightReturns()
+        {
+            if (FreightProduction?.ServiceAgreements?.Agreements == null) return;
+            OpeningTransportPresentationController presentation =
+                FindAnyObjectByType<OpeningTransportPresentationController>();
+            if (presentation == null) return;
+
+            foreach (OffMapJourneyRecord journey in OffMapJourneys.AllJourneys())
+            {
+                if (journey == null || !journey.IsActive || !journey.RequiresPhysicalArrivalConfirmation
+                    || !journey.PhysicalDestinationArrivalConfirmed || journey.PhysicalOriginArrivalConfirmed
+                    || journey.TravelerKind != OffMapTravelerKind.Vehicle)
+                    continue;
+
+                FreightServiceAgreement agreement = FreightProduction.ServiceAgreements.Agreements.FirstOrDefault(candidate =>
+                    candidate != null && candidate.Status == FreightServiceAgreementStatus.Accepted
+                    && candidate.ShipmentId != null
+                    && journey.ObligationIds != null && journey.ObligationIds.Contains(candidate.AgreementId));
+                if (agreement == null) continue;
+                int operatorPersonId = agreement.AcceptingOperatorPersonId;
+                OffMapJourneyRecord operatorJourney = OffMapJourneys.FindActiveByPerson(operatorPersonId);
+                if (operatorJourney == null || !operatorJourney.RequiresPhysicalArrivalConfirmation
+                    || !operatorJourney.PhysicalDestinationArrivalConfirmed
+                    || !string.Equals(operatorJourney.DestinationLocationId, journey.DestinationLocationId, StringComparison.Ordinal)
+                    || !string.Equals(operatorJourney.GatewayLocationId, journey.GatewayLocationId, StringComparison.Ordinal)
+                    || operatorJourney.ObligationIds == null || !operatorJourney.ObligationIds.Contains(agreement.AgreementId))
+                    continue;
+                LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
+                    && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal)
+                    && string.Equals(candidate.physicalWagonAssetId, journey.VehicleId, StringComparison.Ordinal)
+                    && candidate.loadApplied
+                    && LandLedgers.Economy.Logistics.FreightShipmentService.IsLiveShipment(candidate));
+                if (shipment == null) continue;
+
+                if (!presentation.BeginCoupledPhysicalReturn(shipment, journey, operatorPersonId))
+                {
+                    LogFreightAgreementBlockerOnce("physical-return-start:" + journey.JourneyId,
+                        $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
+                }
+            }
+        }
+
+        /// <summary>
         /// Slice S10: the Millbrook site location id, by the same
         /// RegionalTownRegistry.All scan TryRegisterAcceptedFreightShipment
         /// uses. Factored out so the departure re-resolves it from the live
@@ -2168,6 +2328,15 @@ namespace LandLedgers.Orchestration.Systems
             {
                 LogFreightAgreementBlockerOnce("departure-gateway:" + shipment.ShipmentId,
                     $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': Millbrook supplier has no registered regional site.");
+                return false;
+            }
+
+            OpeningTransportPresentationController transportPresentation =
+                FindAnyObjectByType<OpeningTransportPresentationController>();
+            if (transportPresentation == null || !transportPresentation.CanBeginCoupledDeparture(siteLocationId))
+            {
+                LogFreightAgreementBlockerOnce("departure-physical-site:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': physical destination trigger '{siteLocationId}' or coupled transport presentation is unavailable.");
                 return false;
             }
 
@@ -2224,6 +2393,13 @@ namespace LandLedgers.Orchestration.Systems
                     $"[OffMapJourney] Wagon '{wagonId}' departure refused for shipment '{shipment.ShipmentId}': {string.Join(" | ", diag)}");
                 return false;
             }
+            if (!OffMapJourneys.RequirePhysicalArrivalConfirmation(wagonRecord.JourneyId, siteLocationId, diag))
+            {
+                OffMapJourneys.CancelJourney(wagonRecord.JourneyId, "physical destination could not be bound", returnCargo: null, diag);
+                LogFreightAgreementBlockerOnce("departure-destination:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': " + string.Join(" | ", diag));
+                return false;
+            }
 
             // (7) Depart Ethan with the wagon. Person failure cancels the
             // wagon journey (never a driverless wagon off-map) and refuses
@@ -2232,7 +2408,8 @@ namespace LandLedgers.Orchestration.Systems
             var personDiag = new List<string>();
             OffMapJourneyRecord personRecord = OffMapJourneys.DepartPerson(
                 operatorId, "town-center", exitPoint.DestinationLabel, exitPoint.OffMapLegDays,
-                expectedReturnDays, "drive the flour wagon", null, null, dayIndex,
+                expectedReturnDays, "drive the flour wagon", null,
+                new List<string> { agreement.AgreementId }, dayIndex,
                 item => 0, null, personDiag);
             if (personRecord == null)
             {
@@ -2240,6 +2417,15 @@ namespace LandLedgers.Orchestration.Systems
                 SyncOffMapJourneysToSaveState();
                 LogFreightAgreementBlockerOnce("departure-driver:" + shipment.ShipmentId,
                     $"[OffMapJourney] Wagon '{wagonId}' departed but Ethan P{operatorId} refused departure for shipment '{shipment.ShipmentId}'; wagon journey cancelled. {string.Join(" | ", personDiag)}");
+                return false;
+            }
+            if (!OffMapJourneys.RequirePhysicalArrivalConfirmation(personRecord.JourneyId, siteLocationId, personDiag))
+            {
+                OffMapJourneys.CancelJourney(personRecord.JourneyId, "physical destination could not be bound", returnCargo: null, personDiag);
+                OffMapJourneys.CancelJourney(wagonRecord.JourneyId, "driver destination binding failed", returnCargo: null, diag);
+                SyncOffMapJourneysToSaveState();
+                LogFreightAgreementBlockerOnce("departure-destination-driver:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': " + string.Join(" | ", personDiag));
                 return false;
             }
 
@@ -2252,12 +2438,25 @@ namespace LandLedgers.Orchestration.Systems
             // projection only runs over its own shipment list).
             shipment.physicalLocationId = wagonRecord.OffMapLocationLabel;
             SyncOffMapJourneysToSaveState();
+            // Slice F5: an abstract journey is insufficient by itself. Start
+            // the same coupled physical team before reporting departure; if
+            // that fails, cancel both empty journey records and leave the
+            // accepted shipment eligible for a later retry.
+            if (!transportPresentation.BeginCoupledDeparture(shipment, siteLocationId))
+            {
+                OffMapJourneys.CancelJourney(personRecord.JourneyId, "coupled physical departure could not start", returnCargo: null, personDiag);
+                OffMapJourneys.CancelJourney(wagonRecord.JourneyId, "coupled physical departure could not start", returnCargo: null, diag);
+                shipment.physicalLocationId = shipment.CarrierBusinessInstanceId;
+                SyncOffMapJourneysToSaveState();
+                LogFreightAgreementBlockerOnce("departure-physical-start:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': coupled physical movement did not start; both empty journey records were cancelled and remain retryable.");
+                return false;
+            }
             Debug.Log($"[OffMapJourney] Wagon '{wagonId}' + Ethan P{operatorId} departed town-center for '{exitPoint.DestinationLabel}' via {wagonRecord.GatewayLocationId}, due back day {wagonRecord.DueReturnDayIndex}.", this);
             // Slice F5: visible departure — only on a real departure
             // (journey record created, save synced). Never from
             // dispatch-task start, authorization alone, or the daily retry
             // scan without a record: this is the only call site.
-            FindAnyObjectByType<OpeningTransportPresentationController>()?.BeginCoupledDeparture(shipment);
             return true;
         }
 
@@ -2873,6 +3072,10 @@ namespace LandLedgers.Orchestration.Systems
             // and the tick, so the pickup's flag writes are visible to the
             // same day's tick.
             ProcessFreightSupplierPickups(absoluteDayIndex, hooks);
+            // A source lot becomes return cargo only after the pickup adapter
+            // committed it. Start the continuous physical return once that
+            // custody transition exists; retries are idempotent while moving.
+            DrivePhysicalFreightReturns();
             // Slice S10: retry refused departures (after returns, before the
             // tick, so a departure attempted today holds the shipment for
             // today's tick). The scan's guards make it a no-op for departed
@@ -3040,6 +3243,27 @@ namespace LandLedgers.Orchestration.Systems
 
             if (request.Status == FreightServiceRequestStatus.Accepted || request.Status == FreightServiceRequestStatus.Refused
                 || request.Status == FreightServiceRequestStatus.MeetingScheduled) return;
+            EquipmentAsset assignedWagon = hub?.TransportAssets?.Get("opening-freight-wagon");
+            string temporaryCapacityBlocker = null;
+            if (assignedWagon != null && assignedWagon.IsWagon
+                && assignedWagon.OwnerKind == "business"
+                && string.Equals(assignedWagon.OwnerId, carrier.InstanceId, StringComparison.Ordinal))
+            {
+                temporaryCapacityBlocker = FreightProduction?.Service?.FindExclusivityConflict(
+                    null, assignedWagon.AssetId, EntityId.Invalid, null);
+                if (string.IsNullOrWhiteSpace(temporaryCapacityBlocker) && assignedWagon.IsReserved)
+                    temporaryCapacityBlocker = $"Wagon '{assignedWagon.AssetId}' is reserved by '{assignedWagon.ReservedBy}' for '{assignedWagon.ReservedFor}'.";
+            }
+            if (string.IsNullOrWhiteSpace(temporaryCapacityBlocker) && HasOpenAssignedTask(carrier.Owner.PersonId))
+                temporaryCapacityBlocker = "Ethan has an incompatible assigned or in-progress task.";
+            if (!string.IsNullOrWhiteSpace(temporaryCapacityBlocker))
+            {
+                string priorReason = request.RefusalReason;
+                book.DeferTemporarily(request.RequestId, temporaryCapacityBlocker);
+                if (!string.Equals(priorReason, temporaryCapacityBlocker, StringComparison.Ordinal))
+                    Debug.Log($"[FreightAgreement] Request '{request.RequestId}' remains open; Glen's contact is deferred until B3 has capacity: {temporaryCapacityBlocker}", this);
+                return;
+            }
             if (!string.IsNullOrWhiteSpace(request.ContactTravelTaskId))
             {
                 WorkTask existingTravel = hub.Tasks.FindTaskByIdString(request.ContactTravelTaskId);
@@ -3091,6 +3315,14 @@ namespace LandLedgers.Orchestration.Systems
             Debug.Log($"[FreightAgreement] Glen P{glen.id} was assigned contact travel task '{travel.TaskId}' to Ethan P{ethan.id} " +
                 $"at B3 staging building {ethan.homeBuildingId}; route={route.TotalMiles:0.00} mi local, " +
                 $"planned estimate={route.TotalMinutes} min, task completes only on visible arrival. Request='{requestId}'.", this);
+        }
+
+        private static bool IsTemporaryFreightCapacityRefusal(string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason)) return false;
+            return reason.IndexOf("already bound to live shipment", StringComparison.OrdinalIgnoreCase) >= 0
+                || reason.IndexOf("equipment reservation", StringComparison.OrdinalIgnoreCase) >= 0
+                || reason.IndexOf("incompatible assigned or in-progress task", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private void LogFreightAgreementBlockerOnce(string key, string message)
@@ -3299,7 +3531,8 @@ namespace LandLedgers.Orchestration.Systems
                 populationManager.State, consumptionPlanner, dailyPurchaseExecutor,
                 absoluteDayIndex, diag, hub.WorkTimeBudgets,
                 restaurantMeals, boardingMeals, hotelMeals,
-                hub.HouseholdInventories, hub.MealLog, null, populationMemberships);
+                hub.HouseholdInventories, hub.MealLog, null, populationMemberships,
+                populationManager != null && populationManager.ConditionDebuffsSuppressed);
             if (report.MealsMissed > 0 || report.PurchasesMade > 0)
             {
                 Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
@@ -3320,10 +3553,13 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     if (household == null) continue;
                     int cashCents = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
-                    foreach (MissedMealRecord missed in hub.MealLog.GetMissedMeals(household.id))
+                    var missedByPerson = hub.MealLog.GetMissedMeals(household.id)
+                        .Where(missed => missed != null && missed.DayIndex == absoluteDayIndex)
+                        .GroupBy(missed => missed.PersonId);
+                    foreach (IGrouping<int, MissedMealRecord> missedGroup in missedByPerson)
                     {
-                        if (missed == null || missed.DayIndex != absoluteDayIndex) continue;
-                        PersonState person = populationManager.State.GetPerson(missed.PersonId);
+                        MissedMealRecord firstMiss = missedGroup.First();
+                        PersonState person = populationManager.State.GetPerson(firstMiss.PersonId);
                         HouseholdInventory inventory = hub.HouseholdInventories.Get(household.id);
                         int availableFoodUnits = 0;
                         if (inventory != null)
@@ -3335,8 +3571,11 @@ namespace LandLedgers.Orchestration.Systems
                                     availableFoodUnits += inventory.GetAvailableUnits(itemId);
                             }
                         }
-                        Debug.LogWarning($"[FoodEconomy] meal missed: person='{person?.DisplayName ?? $"P{missed.PersonId}"}', " +
-                            $"household=H{missed.HouseholdId}, slot={missed.Slot}, reason='{missed.Reason}', " +
+                        string missedSlots = string.Join(", ", missedGroup.Select(missed => missed.Slot.ToString()).Distinct());
+                        string reasons = string.Join("; ", missedGroup.Select(missed => missed.Reason)
+                            .Where(reason => !string.IsNullOrWhiteSpace(reason)).Distinct());
+                        Debug.LogWarning($"[FoodEconomy] meals missed: person='{person?.DisplayName ?? $"P{firstMiss.PersonId}"}', " +
+                            $"household=H{firstMiss.HouseholdId}, missed={missedGroup.Count()} slot(s) [{missedSlots}], reason='{reasons}', " +
                             $"food stock at meal resolution={availableFoodUnits} units, " +
                             $"household cash={cashCents}c. Shopping is a separate later step; cash alone does not prove a valid seller or stock.", this);
                     }
@@ -3352,17 +3591,34 @@ namespace LandLedgers.Orchestration.Systems
                 // affordability and unmet meals; they do not alter state.
                 const int maxDiagnosticsPerDay = 12;
                 var visible = new List<string>(Math.Min(diag.Count, maxDiagnosticsPerDay));
-                foreach (string message in diag)
+
+                // Batch shopping runs after meal resolution and can emit
+                // dozens of per-person hardship and shortage diagnostics.
+                // Keep the cause of a failed real shopping trip ahead of
+                // those repetitive summaries so the log explains why new
+                // retail stock did not reach household custody.
+                for (int i = 0; i < diag.Count && visible.Count < maxDiagnosticsPerDay; i++)
                 {
-                    if (visible.Count >= maxDiagnosticsPerDay) break;
+                    string message = diag[i];
                     if (!string.IsNullOrWhiteSpace(message)
-                        && message.StartsWith("[FoodEconomy] purchase", StringComparison.Ordinal))
+                        && message.StartsWith("[FoodEconomy] purchase", StringComparison.Ordinal)
+                        && !visible.Contains(message))
                         visible.Add(message);
                 }
                 for (int i = 0; i < diag.Count && visible.Count < maxDiagnosticsPerDay; i++)
                 {
-                    if (!string.IsNullOrWhiteSpace(diag[i]) && !visible.Contains(diag[i]))
-                        visible.Add(diag[i]);
+                    string message = diag[i];
+                    if (string.IsNullOrWhiteSpace(message) || visible.Contains(message)) continue;
+                    if (message.StartsWith("Day " + absoluteDayIndex + ": batch ", StringComparison.Ordinal)
+                        || message.StartsWith("Day " + absoluteDayIndex + ": shopping FAILED", StringComparison.Ordinal)
+                        || message.StartsWith("[SimulationDrivers] household errands H", StringComparison.Ordinal))
+                        visible.Add(message);
+                }
+                for (int i = 0; i < diag.Count && visible.Count < maxDiagnosticsPerDay; i++)
+                {
+                    string message = diag[i];
+                    if (!string.IsNullOrWhiteSpace(message) && !visible.Contains(message))
+                        visible.Add(message);
                 }
 
                 string omitted = diag.Count > visible.Count
@@ -3628,8 +3884,9 @@ namespace LandLedgers.Orchestration.Systems
             if (OffMapJourneys.IsOffMapPerson(ethan.id))
             {
                 refusal = $"P{ethan.id} is off-map; no town task may start.";
-                LogRefusalDayKeyed("offmap-person:" + ethan.id, dayIndex,
-                    $"[BusinessTask] Task '{task.TaskId}' refused for P{ethan.id}: person is off-map on day {dayIndex}; no town task may start.");
+                // The caller owns task-level refusal reporting. Emitting a
+                // day-keyed warning here made a single retained task produce
+                // one warning every day for the entire multi-day journey.
                 return false;
             }
 
@@ -4168,6 +4425,18 @@ namespace LandLedgers.Orchestration.Systems
 
             if (refusal != null)
             {
+                if (IsTemporaryFreightCapacityRefusal(refusal))
+                {
+                    string priorReason = request.RefusalReason;
+                    string deferRefusal = book.DeferTemporarily(request.RequestId, refusal);
+                    if (deferRefusal == null)
+                    {
+                        if (!string.Equals(priorReason, refusal, StringComparison.Ordinal))
+                            Debug.Log($"[FreightAgreement] Ethan P{trip.CarrierOperatorPersonId} deferred request '{request.RequestId}' after the timed meeting because carrier capacity is temporarily occupied: {refusal}. The same request will be reconsidered when the team is free.", this);
+                        return;
+                    }
+                    refusal = deferRefusal;
+                }
                 book.SetStatus(request.RequestId, FreightServiceRequestStatus.Refused, refusal);
                 Debug.LogWarning($"[FreightAgreement] Ethan P{trip.CarrierOperatorPersonId} refused request '{request.RequestId}' after the timed meeting: {refusal}", this);
                 return;
@@ -4520,6 +4789,16 @@ namespace LandLedgers.Orchestration.Systems
                     Debug.Log($"[BusinessFeed] Ethan P{ethan.id} returned from B0 without a purchase; B3 '{trip.BusinessId}' need remains open.", this);
                     return;
                 }
+                if (!trip.Batch.HasValidCustodyIdentity)
+                {
+                    // JsonUtility can materialize an empty nested Batch when
+                    // the refused checkout serialized a null batch on the
+                    // return task. Never submit that placeholder to the
+                    // receipt authority or custody-retry ledger.
+                    Debug.Log($"[BusinessFeed] Ethan P{ethan.id} returned from B0 without a valid purchased-feed batch; " +
+                        $"B3 '{trip.BusinessId}' need remains open and no receipt was attempted.", this);
+                    return;
+                }
                 int stockBefore = buyer.RuntimeState.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory);
                 BusinessFeedPurchase.Result receipt = BusinessFeedPurchase.ReceiveAtBusiness(trip.Batch, buyer.RuntimeState);
                 if (!receipt.Succeeded)
@@ -4569,19 +4848,68 @@ namespace LandLedgers.Orchestration.Systems
                     && candidate.AnimalId.ToString() == "A0" && candidate.OwnerKind == AnimalOwnerKind.Business
                     && candidate.OwnerId == freight.InstanceId) { horse = candidate; break; }
             EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
-            if (horse == null || wagon == null || wagon.OwnerKind != "business" || wagon.OwnerId != freight.InstanceId
-                || wagon.HitchingAnimalIds == null || wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString())) return;
+            if (horse == null || wagon == null || wagon.OwnerKind != "business" || wagon.OwnerId != freight.InstanceId) return;
 
-            FreightServiceAgreement agreement = FreightProduction?.ServiceAgreements?.Agreements?.FirstOrDefault(candidate =>
-                candidate != null && candidate.Status == FreightServiceAgreementStatus.Accepted
-                && !string.IsNullOrWhiteSpace(candidate.ShipmentId)
-                && string.Equals(candidate.CarrierBusinessId, freight.InstanceId, StringComparison.Ordinal));
-            if (agreement == null || string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)) return;
+            FreightServiceAgreement agreement = FreightProduction?.ServiceAgreements
+                ?.FindNextAwaitingPreparation(FreightProduction.AllShipments());
+            if (agreement == null
+                || !string.Equals(agreement.CarrierBusinessId, freight.InstanceId, StringComparison.Ordinal)) return;
             LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
                 && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
             if (shipment == null || shipment.Status != LogisticsShipmentStatus.Planned
                 || !shipment.requiresDispatchAuthorization
                 || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)) return;
+
+            // A completed freight run releases the team's shipment reservation,
+            // but the horse remains physically hitched to its wagon. Requiring
+            // another hitch task in that state strands every later accepted
+            // shipment at the early-return above. Reuse the existing physical
+            // attachment only when both durable identities, ownership, health,
+            // and equipment readiness still validate; TaskAuthority will then
+            // create/schedule the new shipment's ordinary dispatch task.
+            bool alreadyAttached = horse.TransportState == HorseTransportState.AttachedToWagon
+                && string.Equals(horse.AttachedWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
+                && wagon.HitchingAnimalIds != null
+                && wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString());
+            if (alreadyAttached)
+            {
+                if (!HorseAuthority.IsWorkReady(horse) || !wagon.IsUsable
+                    || wagon.IsTransportAssigned || wagon.IsReserved
+                    || !string.IsNullOrWhiteSpace(horse.CurrentAssignmentId)
+                    || horse.CurrentUse != HorseUseKind.None)
+                {
+                    LogFreightAgreementBlockerOnce("attached-team-not-ready:" + shipment.ShipmentId,
+                        $"[Hitching] Shipment '{shipment.ShipmentId}' waits to reuse the attached A0/wagon team: horse or wagon is not currently available and work-ready.");
+                    return;
+                }
+
+                string reusedPreparationRefusal = FreightProduction.ServiceAgreements.MarkPreparedForDispatch(
+                    agreement.AgreementId, shipment.ShipmentId, AbsoluteNowGameSeconds());
+                if (reusedPreparationRefusal != null)
+                {
+                    LogFreightAgreementBlockerOnce("attached-team-prepare:" + shipment.ShipmentId,
+                        $"[Hitching] Shipment '{shipment.ShipmentId}' retains its accepted state; attached-team preparation was refused: {reusedPreparationRefusal}");
+                    return;
+                }
+
+                // Dispatch start validates this durable marker against the
+                // shipment. It used to retain the previous trip's ID after
+                // the terminal draft-team reservation was released, so the
+                // otherwise valid second task remained queued forever.
+                // Hitch-task fields are cleared because no new hitch operation
+                // was performed; the team remains physically attached.
+                wagon.HitchPreparationAttempted = false;
+                wagon.HitchPreparationTaskId = string.Empty;
+                wagon.HitchPreparationTravelTaskId = string.Empty;
+                wagon.HitchPreparationShipmentId = shipment.ShipmentId;
+
+                Debug.Log($"[Hitching] Reused already attached, available A0 '{horse.AnimalId}' and wagon '{wagon.AssetId}' " +
+                    $"for accepted shipment '{shipment.ShipmentId}'; no duplicate hitch operation or equipment identity was created.", this);
+                CreatePreparedFreightDispatchTask(agreement, shipment, freight, horse, wagon, absoluteDayIndex);
+                return;
+            }
+
+            if (wagon.HitchingAnimalIds == null || wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString())) return;
             if (wagon.HitchPreparationAttempted
                 && string.Equals(wagon.HitchPreparationShipmentId, shipment.ShipmentId, StringComparison.Ordinal))
             {
@@ -4772,7 +5100,8 @@ namespace LandLedgers.Orchestration.Systems
                 // capacity factor and remaining budget minutes — so a
                 // no-window stall names its cause instead of returning
                 // silently.
-                float capacityFactor = DailyNeedsService.WorkCapacityFactor(ethan);
+                float capacityFactor = DailyNeedsService.WorkCapacityFactor(
+                    ethan, populationManager != null && populationManager.ConditionDebuffsSuppressed);
                 WorkTimeBudget budget = hub.WorkTimeBudgets?.GetOrCreate(EntityId.For(EntityKind.Person, ethan.id));
                 LogRefusalDayKeyed("no-window:" + hitch.TaskId, dayIndex,
                     $"[Hitching] Task '{hitch.TaskId}' has no free work window on day {dayIndex} " +
@@ -5208,6 +5537,9 @@ namespace LandLedgers.Orchestration.Systems
                     && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
                 BusinessInstanceState freight = FindBusiness(agreement.CarrierBusinessId);
                 int operatorId = freight?.Owner?.PersonId ?? -1;
+                string operatorEntityId = operatorId >= 0
+                    ? EntityId.For(EntityKind.Person, operatorId).ToString()
+                    : string.Empty;
                 PersonState operatorPerson = operatorId >= 0 ? populationManager.State.GetPerson(operatorId) : null;
                 AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
                 EquipmentAsset wagon = hub.TransportAssets?.Get("opening-freight-wagon");
@@ -5221,7 +5553,7 @@ namespace LandLedgers.Orchestration.Systems
                 bool wagonReservedForShipment = wagon != null
                     && wagon.IsTransportAssigned
                     && string.Equals(wagon.CurrentShipmentId, shipment?.ShipmentId, StringComparison.Ordinal)
-                    && string.Equals(wagon.CurrentDriverPersonId, operatorId.ToString(), StringComparison.Ordinal)
+                    && string.Equals(wagon.CurrentDriverPersonId, operatorEntityId, StringComparison.Ordinal)
                     && wagon.DraftAnimalIds != null
                     && wagon.DraftAnimalIds.Contains(horse != null ? horse.AnimalId.ToString() : string.Empty);
                 string refusal = agreement.PreparedGameSeconds <= agreement.AcceptedGameSeconds
@@ -6008,9 +6340,9 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
-        /// Pass VIII Worker 7: installs the worker-availability seam on the
-        /// hub task authority (idempotent). A dead person is never offered
-        /// work at assignment or start, no matter which caller forgot to check.
+        /// Installs the worker-availability seam on the hub task authority
+        /// (idempotent). Dead and actively off-map people are never offered
+        /// town work at assignment or start, regardless of caller checks.
         /// </summary>
         private void EnsureWorkerAvailabilitySeam()
         {
@@ -6020,20 +6352,23 @@ namespace LandLedgers.Orchestration.Systems
                 if (worker.Kind != LandLedgers.Primitives.EntityKind.Person) return false;
                 if (populationManager?.State == null) return false;
                 PersonState person = populationManager.State.GetPerson(worker.Id);
-                return person != null && person.deathDayIndex >= 0;
+                return person == null || person.deathDayIndex >= 0
+                    || OffMapJourneys.IsOffMapPerson(worker.Id);
             };
         }
 
         private void AddLaborWorker(int personId, HashSet<int> seen, List<SchedulerAvailableWorker> workers, int dayIndex)
         {
             if (personId < 0 || !seen.Add(personId)) return;
-            // Pass VIII Worker 7: the dead are never scheduled — not through
-            // employment records (ended at death) and not through the owner
-            // path below.
+            // Dead or actively off-map persons are never included in the
+            // scheduler's worker pool. This prevents a queued town task from
+            // being repeatedly assigned to a freight operator who is still
+            // on an active journey.
             if (populationManager?.State != null)
             {
                 PersonState person = populationManager.State.GetPerson(personId);
-                if (person != null && person.deathDayIndex >= 0) return;
+                if (person == null || person.deathDayIndex >= 0
+                    || OffMapJourneys.IsOffMapPerson(personId)) return;
             }
             EntityId personEntity = EntityId.For(EntityKind.Person, personId);
             WorkTimeBudget budget = hub.WorkTimeBudgets.GetOrCreate(personEntity);
@@ -6172,8 +6507,27 @@ namespace LandLedgers.Orchestration.Systems
 
             if (diag.Count > 0)
             {
-                Debug.LogWarning("[SimulationDrivers] due events: " + string.Join(" | ", diag));
+                // Successful due-event work is ordinary simulation activity,
+                // not a warning. Keep each unexpected/refused transition loud.
+                // In particular, do not route the DomesticLaborDriver's
+                // successful "completed ..." summaries through Warning: at
+                // accelerated speed that produced hundreds of false alarms.
+                var failures = diag.Where(IsDueEventFailureDiagnostic).ToList();
+                if (failures.Count > 0)
+                    Debug.LogWarning("[SimulationDrivers] due-event failures: " + string.Join(" | ", failures));
             }
+        }
+
+        private static bool IsDueEventFailureDiagnostic(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return false;
+            return message.IndexOf("failed", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("could not", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("unknown", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("unavailable", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("skipped", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("no built-in handler", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("reached its due event after the task had already closed", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private void DispatchDueEvent(DueEvent dueEvent, int dayIndex, List<string> diag)
@@ -6666,9 +7020,10 @@ namespace LandLedgers.Orchestration.Systems
                     }
                     else
                     {
-                        float capacity = DailyNeedsService.WorkCapacityFactor(owner);
+                        float capacity = DailyNeedsService.WorkCapacityFactor(
+                            owner, populationManager != null && populationManager.ConditionDebuffsSuppressed);
                         callerDailyBudgetMinutes = LandLedgers.Economy.Businesses.Bakery.BakeryPersonTimeBudget.PersonMinutesPerDay(capacity);
-                        diagnostics.Add($"DriveBakeryWholesalePlanning: baker P{ownerPersonId} person budget {callerDailyBudgetMinutes.Value}m at capacity {capacity:0.00} — Precheck refuses a batch that cannot fit it.");
+
                     }
                 }
             }
@@ -6796,6 +7151,9 @@ namespace LandLedgers.Orchestration.Systems
             string expectedRef = FreightDispatchTaskPrefix + agreement.AgreementId + ":" + agreement.ShipmentId;
             BusinessInstanceState carrier = FindBusiness(agreement.CarrierBusinessId);
             int operatorId = carrier?.Owner?.PersonId ?? -1;
+            string operatorEntityId = operatorId >= 0
+                ? EntityId.For(EntityKind.Person, operatorId).ToString()
+                : string.Empty;
             PersonState operatorPerson = operatorId >= 0 ? populationManager?.State?.GetPerson(operatorId) : null;
             AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
             EquipmentAsset wagon = hub?.TransportAssets?.Get(taskData.WagonId);
@@ -6852,7 +7210,7 @@ namespace LandLedgers.Orchestration.Systems
                 && horse.CurrentUse == HorseUseKind.Draft
                 && string.Equals(horse.CurrentAssignmentId, shipment.ShipmentId, StringComparison.Ordinal)
                 && string.Equals(wagon.CurrentShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
-                && string.Equals(wagon.CurrentDriverPersonId, operatorId.ToString(), StringComparison.Ordinal);
+                && string.Equals(wagon.CurrentDriverPersonId, operatorEntityId, StringComparison.Ordinal);
             bool justBound = false;
             if (!alreadyBound)
             {
@@ -6863,7 +7221,7 @@ namespace LandLedgers.Orchestration.Systems
                     return;
                 }
                 string bindRefusal = WagonAuthority.TryAssignDraftTeam(wagon, new List<AnimalState> { horse },
-                    operatorId.ToString(), shipment.ShipmentId,
+                    operatorEntityId, shipment.ShipmentId,
                     new AnimalAvailabilityAuthority(hub.ReservationAuthority),
                     AbsoluteNowGameSeconds(), float.MaxValue);
                 if (bindRefusal != null)
@@ -6874,6 +7232,19 @@ namespace LandLedgers.Orchestration.Systems
                 }
                 justBound = true;
             }
+
+            if (!string.IsNullOrWhiteSpace(shipment.physicalDriverPersonId)
+                && !string.Equals(shipment.physicalDriverPersonId, operatorEntityId, StringComparison.Ordinal))
+            {
+                if (justBound)
+                    WagonAuthority.ReleaseDraftTeam(wagon, new List<AnimalState> { horse },
+                        new AnimalAvailabilityAuthority(hub.ReservationAuthority));
+                LogFreightAgreementBlockerOnce("dispatch-driver-identity:" + shipment.ShipmentId,
+                    $"[FreightDispatch] Completed task '{task.TaskId}' did not authorize shipment '{shipment.ShipmentId}': physical driver identity '{shipment.physicalDriverPersonId}' does not match assigned operator '{operatorEntityId}'.");
+                return;
+            }
+            shipment.physicalDriverPersonId = operatorEntityId;
+            shipment.physicalTransportBound = true;
 
             if (!FreightProduction.AuthorizeShipmentDispatch(shipment.ShipmentId, out string authorizationRefusal))
             {

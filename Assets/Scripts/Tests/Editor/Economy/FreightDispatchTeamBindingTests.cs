@@ -220,12 +220,13 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         private float NowGameSeconds() => Day * 86400f + 8 * 3600f;
+        private static string DriverEntityId => EntityId.For(EntityKind.Person, EthanId).ToString();
 
         // The exact bind call HandleCompletedFreightDispatchTask performs
         // (S3): same authority (the shared reservation authority), same
         // float.MaxValue window, same shipment assignment id.
         private string BindTeam() => WagonAuthority.TryAssignDraftTeam(wagon,
-            new List<AnimalState> { horse }, EthanId.ToString(), ShipmentId,
+            new List<AnimalState> { horse }, DriverEntityId, ShipmentId,
             new AnimalAvailabilityAuthority(reservations), NowGameSeconds(), float.MaxValue);
 
         // The exact already-bound predicate the handler checks before
@@ -234,7 +235,7 @@ namespace LandLedgers.EditorTests.Economy
         private bool IsAlreadyBoundToShipment() => horse.CurrentUse == HorseUseKind.Draft
             && string.Equals(horse.CurrentAssignmentId, ShipmentId, StringComparison.Ordinal)
             && string.Equals(wagon.CurrentShipmentId, ShipmentId, StringComparison.Ordinal)
-            && string.Equals(wagon.CurrentDriverPersonId, EthanId.ToString(), StringComparison.Ordinal);
+            && string.Equals(wagon.CurrentDriverPersonId, DriverEntityId, StringComparison.Ordinal);
 
         private bool Authorize() => freight.AuthorizeShipmentDispatch(ShipmentId, out _);
 
@@ -296,7 +297,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(HorseUseKind.Draft, horse.CurrentUse);
             Assert.AreEqual(ShipmentId, horse.CurrentAssignmentId);
             Assert.AreEqual(ShipmentId, wagon.CurrentShipmentId);
-            Assert.AreEqual(EthanId.ToString(), wagon.CurrentDriverPersonId);
+            Assert.AreEqual(DriverEntityId, wagon.CurrentDriverPersonId);
             Assert.IsTrue(wagon.DraftAnimalIds.Contains(horse.AnimalId.ToString()));
             Assert.AreEqual(1, reservations.ReservationsForTask(ShipmentId).Count,
                 "one unified-reservation record holds the horse for this shipment");
@@ -481,7 +482,7 @@ namespace LandLedgers.EditorTests.Economy
             EquipmentAsset restoredWagon =
                 JsonUtility.FromJson<EquipmentAsset>(JsonUtility.ToJson(wagon));
             Assert.AreEqual(ShipmentId, restoredWagon.CurrentShipmentId);
-            Assert.AreEqual(EthanId.ToString(), restoredWagon.CurrentDriverPersonId);
+            Assert.AreEqual(DriverEntityId, restoredWagon.CurrentDriverPersonId);
             Assert.IsTrue(restoredWagon.DraftAnimalIds.Contains(horse.AnimalId.ToString()));
         }
     }

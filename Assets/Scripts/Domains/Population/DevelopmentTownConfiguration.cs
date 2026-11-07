@@ -162,6 +162,8 @@ namespace LandLedgers.Population
         [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
         [SerializeField] private BakeryWholesaleAccountDefinition[] wholesaleAccounts = Array.Empty<BakeryWholesaleAccountDefinition>();
         [SerializeField] private string freightBusinessKey = "freight-company";
+        [SerializeField, Min(0), Tooltip("Finite development-town opening fuel endowment for the configured Bakery. This is scenario stock, applied once and never replenished automatically.")]
+        private int openingBakeryFuelUnits;
         /// <summary>
         /// Plan 10 E4 (Obj 8; D-2): the owner-supplied fuel-dealer
         /// conversion factor — intake units per bakery fuel unit
@@ -193,6 +195,7 @@ namespace LandLedgers.Population
         public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
         public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => wholesaleAccounts ?? Array.Empty<BakeryWholesaleAccountDefinition>();
         public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
+        public int OpeningBakeryFuelUnits => openingBakeryFuelUnits;
         /// <summary>Plan 10 E4: the D-2 fuel-dealer conversion factor; 0 = unset (no dealer conversion).</summary>
         public int FuelDealerIntakeUnitsPerBakeryUnit => fuelDealerIntakeUnitsPerBakeryUnit;
         public string OpeningHorseId => openingHorseId ?? string.Empty;

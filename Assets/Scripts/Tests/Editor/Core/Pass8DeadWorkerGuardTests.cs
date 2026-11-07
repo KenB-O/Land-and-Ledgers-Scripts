@@ -31,6 +31,7 @@ namespace LandLedgers.EditorTests.Core
             public TaskAuthority Tasks = new TaskAuthority();
             public WorkTimeBudgetStore Budgets = new WorkTimeBudgetStore();
             public HashSet<int> Dead = new HashSet<int>();
+            public HashSet<int> OffMap = new HashSet<int>();
 
             public Fixture()
             {
@@ -39,7 +40,8 @@ namespace LandLedgers.EditorTests.Core
                 Budgets.EnsureDay(1);
                 // The production wiring marks the deceased unavailable.
                 Tasks.IsWorkerUnavailable = worker =>
-                    worker.Kind == EntityKind.Person && Dead.Contains(worker.Id);
+                    worker.Kind == EntityKind.Person
+                    && (Dead.Contains(worker.Id) || OffMap.Contains(worker.Id));
             }
 
             public WorkTask NewTask()
@@ -71,6 +73,25 @@ namespace LandLedgers.EditorTests.Core
             Assert.AreEqual(TaskStatus.Queued, task.Status, "a refused assignment leaves the task queued");
             Assert.AreEqual(600, f.Budgets.GetOrCreate(Person(7)).MinutesRemaining,
                 "no budget was booked for the dead");
+        }
+
+        [Test]
+        public void AssignTask_RefusesAnOffMapWorkerAndAllowsThemAfterReturn()
+        {
+            var f = new Fixture();
+            f.OffMap.Add(7);
+            WorkTask task = f.NewTask();
+
+            Assert.IsFalse(f.Tasks.AssignTask(task.TaskId, Person(7), f.Budgets, out string reason));
+            StringAssert.Contains("unavailable", reason);
+            Assert.AreEqual(TaskStatus.Queued, task.Status,
+                "an off-map worker keeps the task queued until a legitimate return");
+            Assert.AreEqual(600, f.Budgets.GetOrCreate(Person(7)).MinutesRemaining,
+                "no town work budget is booked while the worker is away");
+
+            f.OffMap.Remove(7);
+            Assert.IsTrue(f.Tasks.AssignTask(task.TaskId, Person(7), f.Budgets, out reason), reason);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status);
         }
 
         [Test]

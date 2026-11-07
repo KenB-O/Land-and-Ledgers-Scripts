@@ -195,7 +195,8 @@ namespace LandLedgers.EditorTests.Economy
             // Hitch completion leaves the prepared identities available. Reserve the actual draft
             // team through HorseAuthority/WagonAuthority for this shipment before dispatch starts.
             string reserveRefusal = WagonAuthority.TryAssignDraftTeam(wagon,
-                new List<AnimalState> { horse }, EthanId.ToString(), ShipmentId,
+                new List<AnimalState> { horse },
+                LandLedgers.Primitives.EntityId.For(LandLedgers.Primitives.EntityKind.Person, EthanId).ToString(), ShipmentId,
                 new AnimalAvailabilityAuthority(hub.ReservationAuthority), hooks.NowGameSeconds,
                 hooks.NowGameSeconds + 2 * 86400f);
             Assert.IsNull(reserveRefusal, reserveRefusal);
@@ -230,7 +231,8 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(LotId, shipment.CargoLotId);
             Assert.AreEqual(HorseUseKind.Draft, horse.CurrentUse);
             Assert.AreEqual(ShipmentId, wagon.CurrentShipmentId);
-            Assert.AreEqual(EthanId.ToString(), wagon.CurrentDriverPersonId);
+            Assert.AreEqual(LandLedgers.Primitives.EntityId.For(
+                LandLedgers.Primitives.EntityKind.Person, EthanId).ToString(), wagon.CurrentDriverPersonId);
 
             // Repeated ticks never start dispatch and never duplicate the
             // staging travel task: at most one open travel task exists.

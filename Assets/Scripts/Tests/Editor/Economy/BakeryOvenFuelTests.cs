@@ -76,6 +76,31 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void ScenarioOpeningFuelEndowment_IsFiniteNamedAndIdempotent()
+        {
+            var diagnostics = new List<string>();
+            var bakery = new BakeryShopRuntime("bakery-biz-1");
+            var business = new BusinessRuntimeState();
+            business.BindBusinessIdentity("bakery-biz-1");
+            var ids = new EntityIdRegistry();
+
+            Assert.IsTrue(ScenarioOpeningBakeryFuelEndowment.TryApply(
+                bakery, business, ids, "millbrook-development-town", "bakery", 9217, 40, 0,
+                diagnostics, out string firstReport, out string firstError), firstError);
+            Assert.AreEqual(40, bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId));
+            Assert.IsTrue(bakery.FuelStock.Lots[0].IsBootstrapEndowment);
+            StringAssert.Contains("DevelopmentTownConfiguration", bakery.FuelStock.Lots[0].SupplierNote);
+
+            Assert.IsTrue(ScenarioOpeningBakeryFuelEndowment.TryApply(
+                bakery, business, ids, "millbrook-development-town", "bakery", 9217, 40, 0,
+                diagnostics, out string secondReport, out string secondError), secondError);
+            Assert.AreEqual(40, bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId));
+            Assert.AreEqual(1, bakery.FuelStock.Lots.Count);
+            StringAssert.Contains("already recorded", secondReport);
+            Assert.IsNotEmpty(firstReport);
+        }
+
+        [Test]
         public void ReceiveLot_RefusesOrphanFuel_Loudly()
         {
             var diag = new List<string>();

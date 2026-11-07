@@ -54,7 +54,7 @@ namespace LandLedgers.Economy.Farming.Integration
         /// </summary>
         public bool TryHold(BusinessFeedPurchase.Batch batch)
         {
-            if (batch == null || string.IsNullOrWhiteSpace(batch.TransactionId)) return false;
+            if (batch == null || !batch.HasValidCustodyIdentity) return false;
             if (pending.ContainsKey(batch.TransactionId)) return false;
             pending[batch.TransactionId] = batch;
             return true;

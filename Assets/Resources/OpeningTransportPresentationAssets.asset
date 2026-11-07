@@ -14,4 +14,5 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Economy.Transport.OpeningTransportPresentationAssets
   horsePrefab: {fileID: 3631131018280871194, guid: f43d7d331bb2cd8438260b01e1ff268a, type: 3}
   wagonPrefab: {fileID: 2532316502339358137, guid: dd7bb2b8300ad4547bed073f3098f16e, type: 3}
+  regionalTownPrefab: {fileID: 7759033778680235137, guid: dae9377daf96fc44ab919ed1dcdc635d, type: 3}
   horseIdleController: {fileID: 9100000, guid: bc9d470a0c52be246b52ef66e7b6e0db, type: 2}

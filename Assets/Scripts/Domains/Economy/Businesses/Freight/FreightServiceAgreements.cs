@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Freight
@@ -108,6 +109,41 @@ namespace LandLedgers.Economy.Freight
         public FreightServiceAgreement FindAgreementForRequest(string requestId) => agreements.Find(a =>
             a != null && string.Equals(a.RequestId, requestId, StringComparison.Ordinal));
 
+        /// <summary>
+        /// Selects the next accepted, registered shipment which has not yet
+        /// entered preparation. Completed agreements remain in the book for
+        /// their audit trail, so acceptance alone is not a sufficient
+        /// eligibility test for the single opening horse and wagon.
+        /// </summary>
+        public FreightServiceAgreement FindNextAwaitingPreparation(IReadOnlyList<LogisticsShipmentState> shipments)
+        {
+            if (shipments == null || shipments.Count == 0) return null;
+            foreach (FreightServiceAgreement agreement in agreements)
+            {
+                if (agreement == null
+                    || agreement.Status != FreightServiceAgreementStatus.Accepted
+                    || agreement.ShipmentRegistrationPending
+                    || string.IsNullOrWhiteSpace(agreement.ShipmentId)
+                    || agreement.PreparedGameSeconds > 0f
+                    || !string.IsNullOrWhiteSpace(agreement.DispatchTaskId)
+                    || !string.Equals(agreement.FulfilmentStatus, "Pending pickup", StringComparison.Ordinal))
+                    continue;
+
+                foreach (LogisticsShipmentState shipment in shipments)
+                {
+                    if (shipment == null
+                        || !string.Equals(shipment.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal)
+                        || !string.Equals(shipment.FreightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)
+                        || shipment.Status != LogisticsShipmentStatus.Planned
+                        || !shipment.requiresDispatchAuthorization
+                        || shipment.loadApplied)
+                        continue;
+                    return agreement;
+                }
+            }
+            return null;
+        }
+
         public string CreateRequest(FreightServiceRequest request, out FreightServiceRequest existing)
         {
             existing = null;
@@ -137,6 +173,28 @@ namespace LandLedgers.Economy.Freight
                 return "Freight request is already terminal; status cannot be changed.";
             request.Status = status;
             request.RefusalReason = refusal ?? string.Empty;
+            return null;
+        }
+
+        /// <summary>
+        /// Returns a request to the open queue after a verified temporary
+        /// carrier-capacity conflict. The same stable request and cargo lot
+        /// are retried; no new request or agreement is created.
+        /// </summary>
+        public string DeferTemporarily(string requestId, string reason)
+        {
+            FreightServiceRequest request = FindRequest(requestId);
+            if (request == null) return "Unknown freight service request.";
+            if (request.Status == FreightServiceRequestStatus.Accepted
+                || FindAgreementForRequest(requestId) != null)
+                return "An accepted freight agreement cannot be deferred as an unaccepted request.";
+            if (string.IsNullOrWhiteSpace(reason)) return "A temporary deferral requires its cause.";
+
+            request.Status = FreightServiceRequestStatus.Open;
+            request.RefusalReason = reason.Trim();
+            request.ContactTravelTaskId = string.Empty;
+            request.MeetingTaskId = string.Empty;
+            request.MeetingOperatorReservationId = string.Empty;
             return null;
         }
 

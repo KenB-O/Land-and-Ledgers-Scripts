@@ -301,7 +301,8 @@ namespace LandLedgers.Economy.Ordering
         /// </summary>
         public static Review2StockingResult StockShelfToLive(
             Pass3StoreCatalog catalog, string productId, int units, string categoryId,
-            IGeneralStoreTradingPort storePort, List<string> diag)
+            IGeneralStoreTradingPort storePort, List<string> diag,
+            string itemUnitLabel = null, string sourceBakeryLotId = null, int dayIndex = 0)
         {
             var result = new Review2StockingResult { Units = units };
             if (catalog == null || string.IsNullOrWhiteSpace(productId) || units <= 0
@@ -336,8 +337,24 @@ namespace LandLedgers.Economy.Ordering
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }
-            string stockProblem = storePort.ReceiveStock(categoryId, units,
-                $"wholesale bakery lot, {productId}");
+            string stockProblem;
+            if (storePort is IIdentifiedRetailStockReceivingPort identifiedPort
+                && storePort is IItemLevelGeneralStoreTradingPort itemPort
+                && itemPort.UsesItemLevelInventory(productId))
+            {
+                string stableSource = !string.IsNullOrWhiteSpace(sourceBakeryLotId)
+                    ? sourceBakeryLotId.Trim()
+                    : $"day-{dayIndex}-units-{units}";
+                string retailLotId = $"bakery-wholesale:{storePort.StoreBusinessId}:{productId}:{stableSource}";
+                string unit = string.IsNullOrWhiteSpace(itemUnitLabel) ? "loaf" : itemUnitLabel.Trim();
+                stockProblem = identifiedPort.ReceiveRetailItemLot(retailLotId, productId, categoryId, unit,
+                    units, $"Bakery wholesale; source lot {sourceBakeryLotId ?? "pending-shelf-retry"}", dayIndex);
+            }
+            else
+            {
+                stockProblem = storePort.ReceiveStock(categoryId, units,
+                    $"wholesale bakery lot, {productId}");
+            }
             if (stockProblem != null)
             {
                 line.ShelfUnits += units;

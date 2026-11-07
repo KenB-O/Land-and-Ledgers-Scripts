@@ -543,5 +543,47 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId), "bin still holds exactly 1 notion");
             Assert.AreEqual(1, s.StoreService.Orders.Count, "still exactly one notions order");
         }
+
+        [Test]
+        public void Driver_RefeedsExistingPlannedBatch_WhenNoNewWholesaleBatchIsCreated()
+        {
+            var s = NewSetup();
+            var reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag));
+            SeedInputs(s, 24, 0, 1);
+            BookAccount(s, 24, 30, 2, 1);
+
+            BakeryWholesaleDailyResult first = BakeryWholesaleDailyDriver.RunDay(
+                DriverInputsFor(s, reg, 1), s.Diag);
+            Assert.AreEqual(1, first.BatchesPlanned);
+            Assert.AreEqual(1, first.NotionsOrdered,
+                "the planned batch should place one real notions order");
+            Assert.AreEqual(0, first.BatchesBaked,
+                "the order is in transit, so no notions are fabricated or batch completed");
+            Assert.AreEqual(1, s.Bakery.Batches.Count);
+            Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage);
+
+            // The existing planned batch already covers wholesale demand,
+            // so the next day's planner creates no new ID. Its real import
+            // arrival must still be received and fed to that active batch.
+            BakeryWholesaleDailyResult retry = BakeryWholesaleDailyDriver.RunDay(
+                DriverInputsFor(s, reg, 15), s.Diag);
+
+            Assert.AreEqual(0, retry.BatchesPlanned,
+                "no second batch should be created while the original covers demand");
+            Assert.AreEqual(1, retry.NotionsUnitsFed,
+                "the pending import should transfer from the store procurement lot into Bakery custody");
+            Assert.AreEqual(1, retry.BatchesBaked,
+                "the existing batch can now proceed through the normal production authority");
+            Assert.AreEqual(1, s.Bakery.Batches.Count,
+                "retrying the existing work must not duplicate production");
+            Assert.AreEqual(BakeryBatchStage.Baked, s.Bakery.Batches[0].Stage);
+            Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "the legitimate notion is consumed by the completed batch");
+            Assert.AreEqual(1, s.Bakery.BreadShelf.Count,
+                "one identifiable bread batch is produced");
+            Assert.AreEqual(1, s.StoreService.Orders.Count,
+                "recovery must not place a duplicate supplier order");
+        }
     }
 }

@@ -257,7 +257,14 @@ namespace LandLedgers.Economy.BreadDrivers
             // store cannot cover is named here and covered by the Millbrook
             // reorder in slice 2B — the bake proceeds on whatever flour
             // arrived, and a remaining shortfall is the loud Precheck refusal.
-            int batchesToday = result.BatchesPlanned;
+            // PlanWholesaleBatches returns only newly created IDs. A prior
+            // batch can remain active after a legitimate input refusal and
+            // already cover the wholesale account, so today's new-plan count
+            // is zero even though the execution driver has real work to retry.
+            // Use the driver's adopted active set for input procurement and
+            // Precheck; otherwise delayed notions arrivals are never received
+            // or fed and the batch remains permanently blocked.
+            int batchesToday = inputs.ProductionDriver.PlannedBatchIds.Count;
             int flourOnHandLb = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
             int needLb = batchesToday * BakeryBreadCatalog.BreadFlourPerBatch - flourOnHandLb;
             int? flourCostPerBatchCents = null;

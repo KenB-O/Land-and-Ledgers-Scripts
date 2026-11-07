@@ -111,7 +111,7 @@ namespace LandLedgers.Time
         [Header("Progression")]
         [Tooltip("Real seconds needed for one full in-game day at 1x speed.")]
         [Min(1f)]
-        public float realSecondsPerGameDayAt1x = 60f;
+        public float realSecondsPerGameDayAt1x = 120f;
 
         [Tooltip("Short simulation tick interval in in-game minutes. Used for schedules, economy sampling, and other small-step systems.")]
         [Min(1f)]
@@ -188,8 +188,8 @@ namespace LandLedgers.Time
                 // TimeManager's standard conversion multiplies the selected
                 // speed by GameSecondsPerDay / realSecondsPerGameDayAt1x.
                 // This inverse makes one real second advance exactly one game
-                // second, regardless of whether an accelerated day is 60 or
-                // 30 real seconds.
+                // second, regardless of whether an accelerated day is 120 or
+                // 60 real seconds.
                 SimulationSpeed.RealTime => Mathf.Max(1f, realSecondsPerGameDayAt1x) / GameSecondsPerDay,
                 SimulationSpeed.Speed1x => speed1xMultiplier,
                 SimulationSpeed.Speed2x => speed2xMultiplier,

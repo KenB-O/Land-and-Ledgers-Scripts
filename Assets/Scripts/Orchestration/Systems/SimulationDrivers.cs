@@ -2102,7 +2102,7 @@ namespace LandLedgers.Orchestration.Systems
             {
                 if (active == null || !active.IsActive || !active.RequiresPhysicalArrivalConfirmation
                     || active.PhysicalOriginArrivalConfirmed || active.DueReturnDayIndex > absoluteDayIndex) continue;
-                LogFreightAgreementBlockerOnce("physical-return:" + active.JourneyId,
+                LogRefusalDayKeyed("physical-return:" + active.JourneyId, absoluteDayIndex,
                     $"[OffMapJourney] Journey '{active.JourneyId}' reached its estimated return day but remains active: no physical return-arrival event has been confirmed.");
             }
             List<OffMapJourneyRecord> returned = OffMapJourneys.CompleteDueJourneys(absoluteDayIndex, deliverCargo: null, diag);
@@ -2205,7 +2205,7 @@ namespace LandLedgers.Orchestration.Systems
                 // only for legacy journeys without a physical route.
                 if (record.RequiresPhysicalArrivalConfirmation && !record.PhysicalDestinationArrivalConfirmed)
                 {
-                    LogFreightAgreementBlockerOnce("physical-pickup:" + shipment.ShipmentId,
+                    LogRefusalDayKeyed("physical-pickup:" + shipment.ShipmentId, absoluteDayIndex,
                         $"[FreightPickup] Shipment '{shipment.ShipmentId}' remains pending: no physical arrival at destination '{record.DestinationLocationId}' has been confirmed.");
                     continue;
                 }
@@ -2217,7 +2217,7 @@ namespace LandLedgers.Orchestration.Systems
                     && string.Equals(candidate.LotId, shipment.CargoLotId, StringComparison.Ordinal));
                 if (lot == null)
                 {
-                    LogFreightAgreementBlockerOnce("supplier-pickup:" + shipment.ShipmentId,
+                    LogRefusalDayKeyed("supplier-pickup:" + shipment.ShipmentId, absoluteDayIndex,
                         $"[FreightPickup] Supplier pickup refused for shipment '{shipment.ShipmentId}': paid lot '{shipment.CargoLotId}' is absent from Millbrook's lots.");
                     return;
                 }
@@ -2233,7 +2233,7 @@ namespace LandLedgers.Orchestration.Systems
                 // (h) Commit through the same adapter WorkLoading uses.
                 if (!hooks.CommitSourceLot(shipment, shipment.PlannedQuantityUnits, out string reason))
                 {
-                    LogFreightAgreementBlockerOnce("supplier-pickup:" + shipment.ShipmentId,
+                    LogRefusalDayKeyed("supplier-pickup:" + shipment.ShipmentId, absoluteDayIndex,
                         $"[FreightPickup] Supplier pickup refused for shipment '{shipment.ShipmentId}': {reason}");
                     return;
                 }
@@ -2264,7 +2264,7 @@ namespace LandLedgers.Orchestration.Systems
         /// missing route/presentation binding leaves the active journey and
         /// cargo untouched for a later daily retry.
         /// </summary>
-        private void DrivePhysicalFreightReturns()
+        private void DrivePhysicalFreightReturns(int absoluteDayIndex)
         {
             if (FreightProduction?.ServiceAgreements?.Agreements == null) return;
             OpeningTransportPresentationController presentation =
@@ -2300,7 +2300,7 @@ namespace LandLedgers.Orchestration.Systems
 
                 if (!presentation.BeginCoupledPhysicalReturn(shipment, journey, operatorPersonId))
                 {
-                    LogFreightAgreementBlockerOnce("physical-return-start:" + journey.JourneyId,
+                    LogRefusalDayKeyed("physical-return-start:" + journey.JourneyId, absoluteDayIndex,
                         $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
                 }
             }
@@ -3095,7 +3095,7 @@ namespace LandLedgers.Orchestration.Systems
             // A source lot becomes return cargo only after the pickup adapter
             // committed it. Start the continuous physical return once that
             // custody transition exists; retries are idempotent while moving.
-            DrivePhysicalFreightReturns();
+            DrivePhysicalFreightReturns(absoluteDayIndex);
             // Slice S10: retry refused departures (after returns, before the
             // tick, so a departure attempted today holds the shipment for
             // today's tick). The scan's guards make it a no-op for departed

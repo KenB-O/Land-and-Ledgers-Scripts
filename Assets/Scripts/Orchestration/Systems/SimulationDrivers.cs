@@ -610,6 +610,11 @@ namespace LandLedgers.Orchestration.Systems
                     populationManager.State, householdMemberships, currentJourneys);
             }
 
+            // Plan 08 Slice 4 (Q03, AUD-266): wire the live off-map journey
+            // authority into the loop. Set once after the if/else so a rebind
+            // does not matter; RebindPopulationAuthorities does not touch it.
+            householdShoppingLoop.OffMapJourneys = OffMapJourneys;
+
         }
 
         /// <summary>
@@ -3575,7 +3580,8 @@ namespace LandLedgers.Orchestration.Systems
                 absoluteDayIndex, diag, hub.WorkTimeBudgets,
                 restaurantMeals, boardingMeals, hotelMeals,
                 hub.HouseholdInventories, hub.MealLog, null, populationMemberships,
-                populationManager != null && populationManager.ConditionDebuffsSuppressed);
+                populationManager != null && populationManager.ConditionDebuffsSuppressed,
+                OffMapJourneys);
             if (report.MealsMissed > 0 || report.PurchasesMade > 0)
             {
                 Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
@@ -7658,6 +7664,7 @@ namespace LandLedgers.Orchestration.Systems
                     Tasks = hub.Tasks,
                     Budgets = hub.WorkTimeBudgets,
                     PersonEntityId = id => EntityId.For(EntityKind.Person, id),
+                    OffMapJourneys = OffMapJourneys,
                 };
                 List<HouseholdErrandPlan> plans = hub.HouseholdErrands.PlanDay(
                     household.id, absoluteDayIndex, errandCtx, diagnostics);

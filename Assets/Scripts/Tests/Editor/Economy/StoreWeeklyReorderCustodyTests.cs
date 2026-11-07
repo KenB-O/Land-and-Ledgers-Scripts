@@ -451,6 +451,40 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(StoreWeeklyReorderPlanner.BuildShipmentTerms(null, "staple_food", 20, 50, 25, 30) == null);
         }
 
+        // 12. (Plan 06 Slice 0 companion) The named-supplier seam the
+        // reserve repair will reuse, with REAL adapters and the REAL
+        // delivered-cost delegate: for a 5u meat need the cheapest
+        // delivered cost is Ashford Butcher (beef 6c + 125c solo freight
+        // over 5u = 31c/u), ahead of Redfield Butcher (beef 7c + 225c
+        // freight over 5u = 52c/u). The chosen supplier then ships real
+        // stock: Ship decrements its on-hand meat by exactly the shipped
+        // count.
+        [Test]
+        public void ChooseNamedSupplier_RealAdaptersAndRealDeliveredCost_PicksAshfordButcherForMeat()
+        {
+            var adapters = RegionalSupplierSet.CreateAll();
+            var suppliers = RegionalSupplierSet.AsSuppliers(adapters);
+            Func<IUpstreamGoodsSupplier, string, string, int, int> delivered =
+                (s, categoryId, itemId, units) => RegionalDeliveredCost.DeliveredCentsPerUnit(
+                    s, categoryId, units, RegionalFreightRateCard.OpeningCompany);
+
+            bool found = StoreWeeklyReorderPlanner.TryChooseNamedSupplier(
+                suppliers, "meat", 5, delivered,
+                out IUpstreamGoodsSupplier chosen, out int goods, out int deliveredCost);
+
+            Assert.IsTrue(found);
+            Assert.AreEqual("ashford_butcher", chosen.SupplierId);
+            Assert.AreEqual(6, goods);
+            Assert.AreEqual(31, deliveredCost);
+
+            var butcher = adapters.Find(a => a.SupplierId == "ashford_butcher");
+            Assert.NotNull(butcher);
+            int before = butcher.AvailableUnits("meat");
+            Assert.AreEqual(5, chosen.Ship("meat", 5, 0, new List<string>()));
+            Assert.AreEqual(before - 5, butcher.AvailableUnits("meat"),
+                "Ship must decrement the supplier's real stock by exactly the shipped count.");
+        }
+
         // 11. (W1) The anonymous-fallback refusal names the category and the
         // registered-supplier gap — the loud signal the weekly step logs
         // instead of silently conjuring.

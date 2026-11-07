@@ -5,6 +5,7 @@ using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Time;
+using LandLedgers.World.Regional;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -613,6 +614,116 @@ namespace LandLedgers.EditorTests.Population
             }
         }
 
+        [Test]
+        public void OffMapReservePurchaseConjuresGoodsAndDestroysCash()
+        {
+            // Plan 06 Slice 0 discriminator (AUD-328): the household pays
+            // real cash for off-map reserve units that no supplier ever
+            // shipped and no seller was ever credited for.
+            //
+            // DRIVE-LEVEL CORRECTION to the plan (recorded in the slice
+            // report): the plan says to drive ResolveHouseholdReserveNeeds
+            // by reflection, but the household charge lives one level up —
+            // ResolveDailySales charges totalHouseholdSpend (including
+            // OffMapWalletSpendCents) through ChargeHouseholdCents, and the
+            // inner method only returns the spend. Driving the inner method
+            // alone cannot show observation 1 (cash falls), so this test
+            // drives the public daily entry ResolveDailySales, which
+            // internally drives ResolveHouseholdReserveNeeds. The defect
+            // claim itself is unchanged, and the source check stands: no
+            // Ship call exists anywhere in the GSRM reserve path, and
+            // OffMapWalletSpendCents has no production use outside this
+            // manager.
+            GameObject storeObject = new("Reserve Off Map Discriminator Store");
+            GameObject populationObject = new("Reserve Off Map Discriminator Population");
+            try
+            {
+                GeneralStoreBusinessDefinition definition = LoadGeneralStoreDefinition();
+                GeneralStoreRuntimeManager manager = CreateStoreRuntime(storeObject, definition, out BusinessRuntimeState runtime);
+                PopulationManager population = populationObject.AddComponent<PopulationManager>();
+                HouseholdState household = CreateHousehold();
+                // Daily budget cap: weeklyIncomeSnapshot 20 pays 120c/day,
+                // less than the meat need. 10000 pays 60000c/day, so the
+                // budget never binds and the purchase size is the need.
+                household.weeklyIncomeSnapshot = 10000;
+                household.EnsureHouseholdReservesInitialized(true);
+                HouseholdReserveState meat = household.GetReserve("meat");
+                for (int i = 0; i < household.reserves.Count; i++)
+                {
+                    if (household.reserves[i] != null && !string.Equals(household.reserves[i].categoryId, "meat", System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        household.reserves[i].currentUnits = household.reserves[i].targetUnits;
+                    }
+                }
+                meat.currentUnits = 0;
+                int meatTarget = meat.targetUnits;
+                population.State.households.Add(household);
+                SetPrivateField(manager, "populationManager", population);
+                // Bind an inventory registry so the mirrored lots are
+                // observable; without one the bridge silently mirrors
+                // nowhere and observation 2 could not be read.
+                var inventories = new HouseholdInventoryRegistry();
+                manager.HouseholdInventories = inventories;
+                // Zero every store category stock so the local leg cannot
+                // sell and every purchase is forced off-map.
+                foreach (string categoryId in new[] { "staple_food", "meat", "household_goods", "clothing", "tools_hardware", "medicine_remedies" })
+                {
+                    CategoryStockState stock = runtime.GetCategoryStock(categoryId);
+                    if (stock != null)
+                    {
+                        stock.SetCurrentStockForTests(0);
+                    }
+                }
+                // Register the real regional suppliers with the manager
+                // BEFORE driving, so observation 4 is live: the chain
+                // exists, is stocked, and the purchase still never
+                // touches it.
+                InvokePrivateMethod(manager, "EnsureRegionalSuppliersExist");
+                var adapters = (List<RegionalSupplierAdapter>)GetPrivateField(manager, "regionalSuppliers");
+                Assert.NotNull(adapters, "The manager should hold the twelve registered regional suppliers.");
+                int supplierMeatBefore = TotalAvailableUnits(adapters, "meat");
+                Assert.Greater(supplierMeatBefore, 0, "The fixture needs stocked regional suppliers to discriminate against.");
+                int offMapUnitValue = GetOffMapReserveUnitValue(manager, "meat");
+                Assert.Greater(offMapUnitValue, 0);
+                int cashBefore = household.spendingMoneyCents;
+                int tillBefore = runtime.CurrentCashCents;
+
+                manager.ResolveDailySales();
+
+                // 2. The meat reserve rises to target and the mirrored
+                // lots rise by exactly the same units.
+                int meatBought = meat.currentUnits;
+                Assert.AreEqual(meatTarget, meatBought, "Expected the off-map leg to fill the meat need to target within the uncapped budget.");
+                HouseholdInventory inventory = inventories.Get(household.id);
+                Assert.NotNull(inventory, "The bound inventory registry should hold the household inventory.");
+                Assert.AreEqual(meatBought, SumLotUnits(inventory, HouseholdItemCatalog.UnspecifiedMeatId),
+                    "The mirrored meat lots must rise by exactly the reserve credit.");
+                // 1. Household cash falls by exactly the off-map spend.
+                Assert.AreEqual(cashBefore - meatBought * offMapUnitValue, household.spendingMoneyCents,
+                    "Household cash must fall by exactly the off-map purchase value.");
+                // 3. Store cash and store stock are unchanged, and nothing
+                // was bought locally.
+                Assert.AreEqual(tillBefore, runtime.CurrentCashCents, "No store sale happened, so the till must not move.");
+                Assert.AreEqual(0, runtime.GetCategoryStock("meat").CurrentStockUnits);
+                Assert.AreEqual(0, manager.LastDailyReserveLocalUnits, "No local reserve purchase should have happened.");
+                Assert.Greater(manager.LastDailyReserveOffMapUnits, 0, "The off-map leg must have bought units.");
+                // 4. Every regional supplier's on-hand meat total is
+                // unchanged: no supplier shipped these units.
+                Assert.AreEqual(supplierMeatBefore, TotalAvailableUnits(adapters, "meat"),
+                    "No supplier shipped: the units were conjured, not bought.");
+                // 5. No shipment exists for the household and no seller was
+                // credited: the fixture binds no LogisticsRuntimeManager, so
+                // no shipment can exist; the unchanged till (3) plus the
+                // unchanged supplier stock (4) together show no seller
+                // anywhere received the household's cash.
+            }
+            finally
+            {
+                Object.DestroyImmediate(populationObject);
+                Object.DestroyImmediate(storeObject);
+            }
+        }
+
         private static HouseholdState CreateHousehold()
         {
             return new HouseholdState
@@ -764,6 +875,60 @@ namespace LandLedgers.EditorTests.Population
                 BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(method);
             return method.Invoke(manager, new object[] { household, budgetCents });
+        }
+
+        private static int GetOffMapReserveUnitValue(GeneralStoreRuntimeManager manager, string categoryId)
+        {
+            MethodInfo method = typeof(GeneralStoreRuntimeManager).GetMethod(
+                "GetOffMapReserveUnitValueCents",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method);
+            return (int)method.Invoke(manager, new object[] { categoryId });
+        }
+
+        private static object GetPrivateField(object target, string fieldName)
+        {
+            FieldInfo field = target.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field, $"Field {fieldName} should exist on {target.GetType().Name}.");
+            return field.GetValue(target);
+        }
+
+        private static void InvokePrivateMethod(object target, string methodName)
+        {
+            MethodInfo method = target.GetType().GetMethod(
+                methodName,
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method, $"Method {methodName} should exist on {target.GetType().Name}.");
+            method.Invoke(target, null);
+        }
+
+        private static int TotalAvailableUnits(List<RegionalSupplierAdapter> adapters, string categoryId)
+        {
+            int total = 0;
+            for (int i = 0; i < adapters.Count; i++)
+            {
+                if (adapters[i] != null)
+                {
+                    total += adapters[i].AvailableUnits(categoryId);
+                }
+            }
+
+            return total;
+        }
+
+        private static int SumLotUnits(HouseholdInventory inventory, string itemId)
+        {
+            int total = 0;
+            for (int i = 0; i < inventory.Lots.Count; i++)
+            {
+                HouseholdItemLot lot = inventory.Lots[i];
+                if (lot != null && string.Equals(lot.ItemId, itemId, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    total += lot.QuantityUnits;
+                }
+            }
+
+            return total;
         }
 
         private static int GetResultInt(object result, string fieldName)

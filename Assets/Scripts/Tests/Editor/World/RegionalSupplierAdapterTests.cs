@@ -183,6 +183,22 @@ namespace LandLedgers.Tests.World
         }
 
         [Test]
+        public void DeliveredCost_RealFreightCard_PricesMeatOrder_GoodsPlusSoloFreight()
+        {
+            // Plan 06 Slice 0 companion: the exact seam the reserve repair
+            // will price through — the supplier quote plus the wired
+            // delivered-cost delegate (OpeningCompany card), no invented
+            // rate. Meat quote is the cheapest in-stock item: beef at 6c.
+            var butcher = new RegionalSupplierAdapter(RegionalBusinessRegistry.AshfordButcher);
+            Assert.AreEqual(6, butcher.QuoteUnitCostCents("meat"));
+            // Ashford is 50 miles: solo freight 25c + 2 x 50mi x 1c = 125c.
+            // Delivered per unit for 5u: ceil((6 x 5 + 125) / 5) = 31c.
+            Assert.AreEqual(31, RegionalDeliveredCost.DeliveredCentsPerUnit(butcher, "meat", 5, RegionalFreightRateCard.OpeningCompany));
+            // A one-unit order carries the whole freight: 6 + 125 = 131c.
+            Assert.AreEqual(131, RegionalDeliveredCost.DeliveredCentsPerUnit(butcher, "meat", 1, RegionalFreightRateCard.OpeningCompany));
+        }
+
+        [Test]
         public void AllTwelveBusinesses_BecomeSuppliers()
         {
             var adapters = RegionalSupplierSet.CreateAll();

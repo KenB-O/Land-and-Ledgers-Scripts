@@ -105,6 +105,66 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void AdoptPlannedBatches_EmptyLaterDay_RetainsActiveRefusedBatchForRetry()
+        {
+            var diag = new List<string>();
+            BakeryShopRuntime bakery = NewBakeryWithOven(diag);
+            var ids = new EntityIdRegistry();
+            SeedFlourAndNotions(bakery, ids, diag);
+            var driver = new Series2BakeryProductionDriver(
+                bakery, new Series2InStockBakeryFuelSource(bakery));
+
+            List<string> firstPlan = bakery.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 1, diag);
+            Assert.IsNotNull(firstPlan);
+            driver.AdoptPlannedBatches(1, firstPlan, diag);
+
+            int refused = driver.RunScheduledDay(
+                1, true, WorkstationCatalog.BakeOven, OvenFinder(), null, diag, ids);
+            Assert.AreEqual(-1, refused, "the empty fuel store must refuse the first attempt");
+            Assert.AreEqual(BakeryBatchStage.Planned, bakery.Batches[0].Stage,
+                "refusal leaves the real batch available for a later attempt");
+
+            // On the following day the wholesale planner returns no new IDs
+            // because this active batch already covers the account. The
+            // production driver must keep its retry identity instead of
+            // orphaning the batch or creating another one.
+            driver.AdoptPlannedBatches(2, new List<string>(), diag);
+
+            Assert.AreEqual(2, driver.PlannedDayIndex);
+            CollectionAssert.AreEqual(firstPlan, driver.PlannedBatchIds);
+            Assert.AreEqual(1, bakery.Batches.Count, "retry adoption must not duplicate production work");
+            Assert.AreEqual(100, bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "the refused attempt consumed no flour");
+            Assert.AreEqual(10, bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "the refused attempt consumed no notions");
+        }
+
+        [Test]
+        public void AdoptPlannedBatches_NewDriver_ReattachesActiveRuntimeBatchForRetry()
+        {
+            var diag = new List<string>();
+            BakeryShopRuntime bakery = NewBakeryWithOven(diag);
+            List<string> planned = bakery.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 1, diag);
+            Assert.IsNotNull(planned);
+            Assert.AreEqual(1, bakery.Batches.Count);
+
+            // Simulate the transient execution index being rebuilt while
+            // the BakeryShopRuntime still owns the legitimate planned batch.
+            var reboundDriver = new Series2BakeryProductionDriver(
+                bakery, new Series2InStockBakeryFuelSource(bakery));
+            reboundDriver.AdoptPlannedBatches(2, new List<string>(), diag);
+
+            CollectionAssert.AreEqual(planned, reboundDriver.PlannedBatchIds,
+                "an active runtime batch must be executable again after driver rebind");
+            Assert.AreEqual(2, reboundDriver.PlannedDayIndex,
+                "the retained real batch may be retried at the next daily opening");
+            Assert.AreEqual(1, bakery.Batches.Count,
+                "re-adoption must not create a duplicate batch");
+            Assert.AreEqual(BakeryBatchStage.Planned, bakery.Batches[0].Stage,
+                "adoption itself must not advance production");
+        }
+
+        [Test]
         public void AdoptPlannedBatches_UnknownId_WarnsAndRefusesRun()
         {
             var diag = new List<string>();

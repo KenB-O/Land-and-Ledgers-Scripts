@@ -152,14 +152,60 @@ namespace LandLedgers.Economy.BreadDrivers
         public void AdoptPlannedBatches(int dayIndex, List<string> batchIds, List<string> diag)
         {
             PlannedDayIndex = dayIndex;
-            PlannedBatchIds.Clear();
-            if (batchIds == null) return;
-            foreach (string batchId in batchIds)
+            // A wholesale batch can remain in the shop's active pipeline
+            // after Precheck refuses (for example, its first notions order
+            // has a real transit delay). PlanWholesaleBatches correctly
+            // counts that batch toward the account and therefore returns no
+            // new ids on the next day. Replacing this driver's list with
+            // that empty result used to orphan the still-Planned batch: it
+            // blocked duplicate planning but was never retried. Keep only
+            // prior ids which still resolve to active runtime batches, then
+            // merge today's newly planned ids. Completed or scrapped batches
+            // naturally fall out, and no new batch is created here.
+            var merged = new List<string>();
+            if (bakery != null)
             {
-                if (string.IsNullOrWhiteSpace(batchId)) continue;
-                string trimmed = batchId.Trim();
-                if (!PlannedBatchIds.Contains(trimmed)) PlannedBatchIds.Add(trimmed);
+                foreach (string previousId in PlannedBatchIds)
+                {
+                    if (string.IsNullOrWhiteSpace(previousId)) continue;
+                    foreach (var batch in bakery.Batches)
+                    {
+                        if (batch != null && batch.IsActive
+                            && string.Equals(batch.BatchId, previousId, System.StringComparison.Ordinal))
+                        {
+                            if (!merged.Contains(previousId)) merged.Add(previousId);
+                            break;
+                        }
+                    }
+                }
+
+                // The BakeryShopRuntime is the durable authority for the
+                // batch pipeline; this driver's list is only an execution
+                // index. After a save restore, a driver rebind, or another
+                // runtime reinitialization, the wholesale planner can return
+                // no new ids because an active batch already covers demand.
+                // Re-adopt the real active batches so that such a batch stays
+                // executable instead of stranding the account behind a
+                // "nothing planned" refusal. This is reference recovery only:
+                // no batch is created, advanced, or duplicated here.
+                foreach (var batch in bakery.Batches)
+                {
+                    if (batch == null || !batch.IsActive
+                        || string.IsNullOrWhiteSpace(batch.BatchId)) continue;
+                    if (!merged.Contains(batch.BatchId)) merged.Add(batch.BatchId);
+                }
             }
+            if (batchIds != null)
+            {
+                foreach (string batchId in batchIds)
+                {
+                    if (string.IsNullOrWhiteSpace(batchId)) continue;
+                    string trimmed = batchId.Trim();
+                    if (!merged.Contains(trimmed)) merged.Add(trimmed);
+                }
+            }
+            PlannedBatchIds.Clear();
+            PlannedBatchIds.AddRange(merged);
 
             if (bakery != null && diag != null)
             {

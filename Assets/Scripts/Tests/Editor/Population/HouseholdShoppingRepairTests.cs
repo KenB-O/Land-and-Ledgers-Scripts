@@ -158,7 +158,7 @@ namespace LandLedgers.EditorTests.Population
             public int HouseholdId = 7;
             public int Day = 0; // Monday (day-of-week index 0)
 
-            public static Fixture Create()
+            public static Fixture Create(double routeMiles = 2.0)
             {
                 var f = new Fixture();
                 f.Population = new PopulationState();
@@ -189,7 +189,7 @@ namespace LandLedgers.EditorTests.Population
                 f.Journeys = new JourneyModel();
                 f.Journeys.RegisterLocation(new JourneyLocation("home", JourneyLocationKind.Farmstead, "Morrow Farm", 0f, 0f));
                 f.Journeys.RegisterLocation(new JourneyLocation("store", JourneyLocationKind.Store, "General Store", 2f, 0f));
-                f.Journeys.AddEdge("home", "store", 2.0f, "river road");
+                f.Journeys.AddEdge("home", "store", (float)routeMiles, "river road");
 
                 f.Tasks = new TaskAuthority();
                 HouseholdShoppingLoop.RegisterTaskDefinitions(f.Tasks);
@@ -258,17 +258,84 @@ namespace LandLedgers.EditorTests.Population
                 };
             }
 
-            public void PlanDay()
+            public void PlanDay(System.Func<int, DailyActivityPlanner.PersonDayPlanInputs> inputsFor = null)
             {
                 Planner.PlanHouseholdDay(
                     new List<int> { 1, 2 },
-                    pid => new DailyActivityPlanner.PersonDayPlanInputs
+                    inputsFor ?? (pid => new DailyActivityPlanner.PersonDayPlanInputs
                     {
                         PersonId = pid,
                         HouseholdId = HouseholdId,
                         AgeBand = AgeBand.Adult18Plus,
-                    },
+                    }),
                     Day, Tracker, Budgets, Diagnostics);
+            }
+
+            public DailyActivityPlanner.PersonDayPlanInputs DefaultInputs(int personId)
+            {
+                return new DailyActivityPlanner.PersonDayPlanInputs
+                {
+                    PersonId = personId,
+                    HouseholdId = HouseholdId,
+                    AgeBand = AgeBand.Adult18Plus,
+                };
+            }
+
+            /// <summary>Commits work-time budget directly (no reservation).</summary>
+            public void DrainBudget(int personId, int minutes)
+            {
+                WorkTimeBudget budget = Budgets.GetOrCreate(EntityId.For(EntityKind.Person, personId));
+                string rejection;
+                Assert.IsTrue(budget.TryCommit(minutes, out rejection), rejection);
+            }
+
+            public int BudgetRemaining(int personId)
+            {
+                return Budgets.GetOrCreate(EntityId.For(EntityKind.Person, personId)).MinutesRemaining;
+            }
+
+            /// <summary>Closes the fake store early (same open days, 08:00 open).</summary>
+            public void SetStoreCloseMinute(int closeMinute)
+            {
+                Port.Capability.Hours = new StoreTradingHours
+                {
+                    OpenDayOfWeekIndices = new List<int> { 0, 1, 2, 3, 4, 5 },
+                    OpenMinuteOfDay = 480,
+                    CloseMinuteOfDay = closeMinute,
+                };
+            }
+
+            public bool HasReservation(int personId, PersonActivityKind kind, int startMinute, int endMinute, bool released)
+            {
+                foreach (PersonActivityReservation r in Tracker.Reservations)
+                {
+                    if (r != null && r.PersonId == personId && r.DayIndex == Day
+                        && r.Activity == kind && r.StartMinuteOfDay == startMinute
+                        && r.EndMinuteOfDay == endMinute && r.Released == released)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            public bool ActiveReservationsOverlap(int personId)
+            {
+                List<PersonActivityReservation> active = Tracker.ActiveFor(personId, Day);
+                for (int i = 0; i < active.Count; i++)
+                {
+                    for (int j = i + 1; j < active.Count; j++)
+                    {
+                        if (active[i].StartMinuteOfDay < active[j].EndMinuteOfDay
+                            && active[j].StartMinuteOfDay < active[i].EndMinuteOfDay)
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
             }
 
             public void Fund(int cents)
@@ -507,6 +574,218 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(monday.TripExecuted, "the identical trip on Monday must succeed: " + monday.FailureReason);
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
             Assert.AreEqual(10000 - 50, f.Balance());
+        }
+
+        [Test]
+        public void WindowSearch_SkipsJobSeekingBlock()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+
+            // Tomas is at work all day (non-preemptible), so Anna — the
+            // unemployed preferred shopper — is the only candidate. Her
+            // job-seeking block (540-720) and rest (480-510) together cover
+            // every departure before 720 for the 95-minute trip.
+            Assert.IsNull(f.Tracker.TryReserve(1, PersonActivityKind.Work, f.Day, 480, 600, "test work"));
+            f.PlanDay(pid =>
+            {
+                DailyActivityPlanner.PersonDayPlanInputs inputs = f.DefaultInputs(pid);
+                if (pid == 2)
+                {
+                    inputs.IsJobSeeker = true;
+                }
+
+                return inputs;
+            });
+            Assert.AreEqual(420, f.BudgetRemaining(2), "job-seeking must have committed 180 of the 600-min budget");
+
+            List<HouseholdErrandPlan> plans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
+            Assert.AreEqual(1, plans.Count);
+            HouseholdShoppingLoop.BatchShoppingResult batch =
+                f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, f.Options(), f.Diagnostics);
+
+            Assert.IsTrue(batch.TripExecuted, "the trip must fit after the job-seeking block: " + batch.FailureReason);
+            Assert.AreEqual(2, batch.ShopperPersonId, "Anna shops; Tomas is at work");
+            Assert.AreEqual(10, batch.UnitsAcquiredTotal);
+            Assert.IsTrue(string.Join(" | ", f.Diagnostics).Contains("departs at 720"),
+                "the departure must be logged at 720, diagnostics: " + string.Join(" | ", f.Diagnostics));
+            // The job-seeking block and the rest that did not overlap the
+            // chosen window are intact; nothing productive was preempted.
+            Assert.IsTrue(f.HasReservation(2, PersonActivityKind.JobSeeking, 540, 720, released: false),
+                "job-seeking [540,720] must be intact");
+            Assert.IsTrue(f.HoldsRestCoveringMinute(2, 480), "Anna's rest [480,510] must be intact (trip left at 720)");
+            Assert.IsTrue(f.HasReservation(1, PersonActivityKind.Work, 480, 1080, released: false),
+                "Tomas's work block must be intact");
+        }
+
+        [Test]
+        public void WindowSearch_NeverPreemptsSleep()
+        {
+            // Long route (2.5 mi, 50 min one way, 115-min trip) and a store
+            // closing at 540: the pre-check passes (arrival 530 is tradable),
+            // but every departure the search can offer either overlaps
+            // Anna's job-seeking block or arrives after close — so no window
+            // works, and the trip must fail without touching sleep.
+            Fixture f = Fixture.Create(routeMiles: 2.5);
+            f.SetStoreCloseMinute(540);
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+
+            Assert.IsNull(f.Tracker.TryReserve(1, PersonActivityKind.Work, f.Day, 480, 600, "test work"));
+            f.PlanDay(pid =>
+            {
+                DailyActivityPlanner.PersonDayPlanInputs inputs = f.DefaultInputs(pid);
+                if (pid == 2)
+                {
+                    inputs.IsJobSeeker = true;
+                }
+
+                return inputs;
+            });
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "no-window-sleep-safe");
+
+            Assert.IsFalse(batch.TripExecuted, "no window fits, so no trip may execute");
+            Assert.IsTrue(batch.FailureReason.Contains("No shopper in any searched window"),
+                "the search must refuse loudly with the last tried window, got: " + batch.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status, "the need stays open for the next day");
+            Assert.AreEqual(10000, f.Balance(), "no money moves on a refused trip");
+            Assert.AreEqual(16, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId));
+            Assert.IsTrue(f.HasReservation(2, PersonActivityKind.Sleeping, 0, 420, released: false),
+                "morning sleep [0,420] must be intact");
+            Assert.IsTrue(f.HasReservation(2, PersonActivityKind.Sleeping, 1320, 1440, released: false),
+                "evening sleep [1320,1440] must be intact");
+            Assert.IsTrue(f.HasReservation(1, PersonActivityKind.Sleeping, 0, 420, released: false),
+                "Tomas's morning sleep must be intact");
+            int shoppingReservations = 0;
+            foreach (PersonActivityReservation r in f.Tracker.Reservations)
+            {
+                if (r != null && r.Activity == PersonActivityKind.Shopping)
+                {
+                    shoppingReservations++;
+                }
+            }
+
+            Assert.AreEqual(0, shoppingReservations, "no shopping window was ever reserved");
+        }
+
+        [Test]
+        public void WindowSearch_SundayStaysOpen()
+        {
+            Fixture f = Fixture.Create();
+            f.Day = 6; // Sunday (day-of-week index 6)
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+            f.PlanDay();
+
+            HouseholdShoppingLoop.BatchShoppingResult sunday = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, 6, f.Options(), "sunday-no-departure");
+            Assert.IsFalse(sunday.TripExecuted, "no departure is offered on Sunday");
+            Assert.IsTrue(sunday.FailureReason.Contains("closed"),
+                "the Sunday failure must name the closure, got: " + sunday.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+
+            // Monday the same need is served, with the same planned day.
+            f.Day = 7;
+            f.PlanDay();
+            HouseholdShoppingLoop.BatchShoppingResult monday = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, 7, f.Options(), "monday-served");
+            Assert.IsTrue(monday.TripExecuted, "Monday must serve the need: " + monday.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+            Assert.AreEqual(10000 - 50, f.Balance());
+        }
+
+        [Test]
+        public void WindowSearch_BudgetRespected()
+        {
+            // Preferred shopper (Anna) is budget-short even though free:
+            // the other adult shops instead.
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+            f.PlanDay();
+            f.DrainBudget(2, 510); // Anna: 90 min left, trip needs 95.
+            Assert.AreEqual(90, f.BudgetRemaining(2));
+            Assert.AreEqual(600, f.BudgetRemaining(1));
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "budget-fallback");
+            Assert.IsTrue(batch.TripExecuted, "Tomas has budget and must shop: " + batch.FailureReason);
+            Assert.AreEqual(1, batch.ShopperPersonId, "the budget-short preferred shopper must not be chosen");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+            Assert.IsTrue(f.HoldsRestCoveringMinute(2, 480), "Anna's rest must be untouched (she did not shop)");
+
+            // Nobody has budget: the trip fails with the budget reason and
+            // no money moves.
+            Fixture g = Fixture.Create();
+            g.Fund(10000);
+            HouseholdPurchasingNeed need2 = g.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+            g.PlanDay();
+            g.DrainBudget(1, 510);
+            g.DrainBudget(2, 510);
+            Assert.AreEqual(90, g.BudgetRemaining(1));
+            Assert.AreEqual(90, g.BudgetRemaining(2));
+
+            HouseholdShoppingLoop.BatchShoppingResult broke = g.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need2 }, g.Day, g.Options(), "budget-none");
+            Assert.IsFalse(broke.TripExecuted, "no member can afford the trip time");
+            Assert.IsTrue(broke.FailureReason.Contains("work minutes left"),
+                "the failure must name the budget shortfall, got: " + broke.FailureReason);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need2.Status);
+            Assert.AreEqual(10000, g.Balance(), "no money moves on a refused trip");
+        }
+
+        [Test]
+        public void NoDoubleBooking()
+        {
+            // Plan wording note: the shopping reservation is released when
+            // the trip completes (ExecuteBatch releases it before marking
+            // the trip executed — the Pass V coordinated-errands test pins
+            // ActiveFor == 0 after a trip). So the faithful invariant after
+            // a successful trip is: exactly ONE shopping reservation was
+            // ever created for the window, it is now released, and no two
+            // unreleased reservations overlap for either member.
+            Fixture f = Fixture.Create();
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
+            f.PlanDay();
+
+            List<HouseholdErrandPlan> plans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
+            HouseholdShoppingLoop.BatchShoppingResult batch =
+                f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, f.Options(), f.Diagnostics);
+            Assert.IsTrue(batch.TripExecuted, batch.FailureReason);
+            int shopper = batch.ShopperPersonId;
+
+            int shoppingCount = 0;
+            PersonActivityReservation shopping = null;
+            foreach (PersonActivityReservation r in f.Tracker.Reservations)
+            {
+                if (r != null && r.PersonId == shopper && r.DayIndex == f.Day
+                    && r.Activity == PersonActivityKind.Shopping)
+                {
+                    shoppingCount++;
+                    shopping = r;
+                }
+            }
+
+            Assert.AreEqual(1, shoppingCount, "exactly one shopping reservation may be created for the trip");
+            Assert.IsNotNull(shopping);
+            Assert.AreEqual(480, shopping.StartMinuteOfDay, "the trip departs at 480 (rest preempted)");
+            Assert.AreEqual(95, shopping.DurationMinutes, "the window is the 95-min trip estimate");
+            Assert.IsTrue(shopping.Released, "the shopping reservation is released once the trip completes");
+            Assert.IsFalse(f.ActiveReservationsOverlap(1), "P1 holds no overlapping reservations");
+            Assert.IsFalse(f.ActiveReservationsOverlap(2), "P2 holds no overlapping reservations");
+            foreach (PersonActivityReservation r in f.Tracker.ActiveFor(shopper, f.Day))
+            {
+                Assert.IsTrue(r.Activity != PersonActivityKind.Shopping, "no unreleased shopping reservation remains");
+            }
+
+            Assert.IsTrue(f.HasReservation(shopper, PersonActivityKind.Resting, 480, 510, released: true),
+                "the shopper's [480,510] rest was released for the trip");
+            Assert.IsTrue(f.HasReservation(shopper, PersonActivityKind.Resting, 420, 450, released: false),
+                "the shopper's other rest was untouched");
         }
     }
 }

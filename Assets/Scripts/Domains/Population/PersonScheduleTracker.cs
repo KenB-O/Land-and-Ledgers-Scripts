@@ -306,8 +306,7 @@ namespace LandLedgers.Population
 
         /// <summary>Whether the Person is free for the whole window (no overlap).</summary>
         public bool IsFree(int personId, int dayIndex, int startMinuteOfDay, int durationMinutes)
-        {
-            int start = Math.Max(0, startMinuteOfDay);
+        {            int start = Math.Max(0, startMinuteOfDay);
             int duration = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
             int end = start + duration;
 
@@ -332,6 +331,121 @@ namespace LandLedgers.Population
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Plan 02 Slice 1: the unreleased reservations overlapping a window
+        /// (empty when the Person is free). The window search uses this to
+        /// tell "blocked only by Resting" from "blocked by real work" without
+        /// guessing from a refusal string.
+        /// </summary>
+        public List<PersonActivityReservation> Overlapping(int personId, int dayIndex, int startMinuteOfDay, int durationMinutes)
+        {
+            var result = new List<PersonActivityReservation>();
+            int start = Math.Max(0, startMinuteOfDay);
+            int duration = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
+            int end = start + duration;
+
+            List<PersonActivityReservation> bucket = BucketFor(personId, dayIndex);
+            if (bucket == null)
+            {
+                return result;
+            }
+
+            for (int i = 0; i < bucket.Count; i++)
+            {
+                PersonActivityReservation existing = bucket[i];
+                if (existing == null || existing.Released)
+                {
+                    continue;
+                }
+
+                if (start < existing.EndMinuteOfDay && existing.StartMinuteOfDay < end)
+                {
+                    result.Add(existing);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Plan 02 Slice 1: reserves a window, releasing ONLY overlapping
+        /// Resting reservations — atomically, in this one call. Returns null
+        /// on success (the TryReserve convention), or a loud refusal naming
+        /// the first overlapping non-Resting activity. The caller must have
+        /// already proven the rest of the window (budget, store hours) before
+        /// calling: a released rest is gone, never silently kept, and is
+        /// never lost to a trip that then fails to reserve, because the
+        /// release and the reserve happen together here. Sleeping, Work,
+        /// Building, Cooking, JobSeeking, Managing and Eating are never
+        /// preempted by this method — only Resting yields.
+        /// </summary>
+        public string TryReservePreemptingRest(
+            int personId,
+            PersonActivityKind activity,
+            int dayIndex,
+            int startMinuteOfDay,
+            int durationMinutes,
+            string label,
+            out string releasedRestSummary)
+        {
+            releasedRestSummary = string.Empty;
+            if (personId < 0)
+            {
+                return "Refused: no real Person — only a real Person holds a schedule (Canon 13.4).";
+            }
+
+            int start = Math.Max(0, startMinuteOfDay);
+            int duration = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
+            int end = start + duration;
+            if (end > 1440)
+            {
+                return $"Refused: P{personId} {activity} [{start}-{end}] runs past midnight — split across days instead.";
+            }
+
+            List<PersonActivityReservation> overlapping = Overlapping(personId, dayIndex, start, duration);
+            var restToRelease = new List<PersonActivityReservation>();
+            foreach (PersonActivityReservation existing in overlapping)
+            {
+                if (existing == null)
+                {
+                    continue;
+                }
+
+                if (existing.Activity != PersonActivityKind.Resting)
+                {
+                    return $"Refused: P{personId} is already {existing.Activity} " +
+                        $"[{existing.StartMinuteOfDay}-{existing.EndMinuteOfDay}] on day {dayIndex} " +
+                        $"({existing.Label}); cannot also do {activity} [{start}-{end}]. " +
+                        "Person time is authoritative — one activity at a time.";
+                }
+
+                restToRelease.Add(existing);
+            }
+
+            // Every overlap is Resting: release them and reserve in one call.
+            var released = new List<string>();
+            foreach (PersonActivityReservation rest in restToRelease)
+            {
+                rest.Released = true;
+                released.Add($"Resting [{rest.StartMinuteOfDay}-{rest.EndMinuteOfDay}]");
+            }
+
+            var reservation = new PersonActivityReservation
+            {
+                ReservationId = $"sched-{dayIndex}-{nextReservationSequence++}",
+                PersonId = personId,
+                Activity = activity,
+                DayIndex = dayIndex,
+                StartMinuteOfDay = start,
+                DurationMinutes = duration,
+                Label = label ?? string.Empty,
+            };
+            reservations.Add(reservation);
+            IndexReservation(reservation);
+            releasedRestSummary = released.Count > 0 ? string.Join(", ", released) : string.Empty;
+            return null;
         }
 
         /// <summary>Save: captures reservation state (owning runtime class holds its DTO).</summary>
@@ -520,6 +634,197 @@ namespace LandLedgers.Population
             }
 
             reason = "No available shopper: " + string.Join(" ", rejections);
+            if (offMapJourneys == null)
+            {
+                reason += " (Off-map guard not installed: no OffMapJourneyAuthority was provided.)";
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Plan 02 Slice 1: window search with interruptible-rest preemption.
+        /// The fixed 08:00 departure collides every day with the rest block
+        /// the daily planner sprinkles over 480-510, so a single-departure
+        /// ChooseShopper fails every member every day. This search steps
+        /// departures forward from <paramref name="earliestDepartureMinute"/>
+        /// in 15-minute steps (the DailyActivityPlanner.ReserveInFreeGap
+        /// precedent) and returns the first departure where some member can
+        /// shop, in the unchanged preference order (adult woman first, then
+        /// adult, then young worker) at each candidate departure.
+        ///
+        /// A member is eligible at a departure when: they pass the same
+        /// exclusions as ChooseShopper (known, living, old enough, on-map);
+        /// their remaining work-time budget covers the trip; the whole trip
+        /// window is free OR is blocked only by Resting reservations (which
+        /// the atomic TryReservePreemptingRest later releases — never
+        /// Sleeping, Work, Building, Cooking, JobSeeking, Managing or
+        /// Eating: the search steps around those instead); the arrival is
+        /// tradable per <paramref name="tradingCheckAtArrival"/> and leaves
+        /// the in-store minutes inside opening hours; and the return leg
+        /// completes before store close and before sleep. The found departure
+        /// is returned through <paramref name="departureMinute"/> (-1 when
+        /// no window works); the caller must route it through the single
+        /// ShoppingLoopOptions.DepartureMinuteOfDay so all later math uses
+        /// the same minute. Deterministic: earliest departure wins, and at
+        /// each departure the preference order decides.
+        /// </summary>
+        public static int ChooseShopperWithWindowSearch(
+            PopulationState population,
+            List<int> memberIds,
+            int dayIndex,
+            int earliestDepartureMinute,
+            int tripDurationMinutes,
+            int oneWayMinutes,
+            int inStoreMinutes,
+            Func<int, string> tradingCheckAtArrival,
+            PersonScheduleTracker scheduleTracker,
+            WorkTimeBudgetStore budgets,
+            Func<int, LandLedgers.Primitives.EntityId> personEntityId,
+            out int departureMinute,
+            out string reason,
+            OffMapJourneyAuthority offMapJourneys = null)
+        {
+            departureMinute = -1;
+            reason = null;
+            if (population == null || memberIds == null || memberIds.Count == 0)
+            {
+                reason = "No household members to choose a shopper from.";
+                return -1;
+            }
+
+            int earliest = Math.Max(0, earliestDepartureMinute);
+            int duration = WorkTimeMath.ClampToWholeMinutes(tripDurationMinutes);
+            int oneWay = Math.Max(1, oneWayMinutes);
+            int inStore = Math.Max(1, inStoreMinutes);
+            // Return leg completes before store close (1080) and before sleep
+            // (1320); arrival must leave the in-store minutes inside hours.
+            int latest = Math.Min(1080 - duration, 1320 - duration);
+            latest = Math.Min(latest, 1080 - oneWay - inStore);
+            if (earliest > latest)
+            {
+                reason = $"No shopping window: the {duration}-min trip cannot fit between " +
+                    $"departure {earliest} and close/sleep (last feasible departure {latest}).";
+                return -1;
+            }
+
+            var rejections = new List<string>();
+            int lastTried = earliest;
+            for (int departure = earliest; departure <= latest; departure += 15)
+            {
+                lastTried = departure;
+                int arrival = departure + oneWay;
+                string tradingProblem = tradingCheckAtArrival != null ? tradingCheckAtArrival(arrival) : null;
+                if (tradingProblem != null)
+                {
+                    rejections.Add($"departure {departure}: cannot trade at arrival ({tradingProblem}).");
+                    continue;
+                }
+
+                int preferredWoman = -1;
+                int adultFallback = -1;
+                int youngWorkerFallback = -1;
+                for (int i = 0; i < memberIds.Count; i++)
+                {
+                    int personId = memberIds[i];
+                    PersonState person = population.GetPerson(personId);
+                    if (person == null)
+                    {
+                        rejections.Add($"departure {departure}: P{personId}: not a known person.");
+                        continue;
+                    }
+
+                    if (person.deathDayIndex >= 0)
+                    {
+                        rejections.Add($"departure {departure}: P{personId}: deceased.");
+                        continue;
+                    }
+
+                    if (offMapJourneys != null && offMapJourneys.IsOffMapPerson(personId))
+                    {
+                        rejections.Add($"departure {departure}: P{personId}: off-map (freight journey).");
+                        continue;
+                    }
+
+                    if (person.ageBand < AgeBand.YoungWorker16To17)
+                    {
+                        rejections.Add($"departure {departure}: P{personId}: {person.ageBand} is too young to shop alone.");
+                        continue;
+                    }
+
+                    if (budgets != null && personEntityId != null)
+                    {
+                        LandLedgers.Primitives.EntityId eid = personEntityId(personId);
+                        if (eid.IsValid)
+                        {
+                            WorkTimeBudget budget = budgets.GetOrCreate(eid);
+                            if (budget.MinutesRemaining < duration)
+                            {
+                                rejections.Add($"departure {departure}: P{personId}: only {budget.MinutesRemaining} work minutes left, trip needs {duration}.");
+                                continue;
+                            }
+                        }
+                    }
+
+                    if (scheduleTracker != null)
+                    {
+                        if (scheduleTracker.IsFree(personId, dayIndex, departure, duration))
+                        {
+                            // Free for the whole window: no preemption needed.
+                        }
+                        else
+                        {
+                            // Blocked: eligible only when every overlapping
+                            // reservation is Resting (yieldable); any other
+                            // activity means the search steps around it.
+                            List<PersonActivityReservation> overlapping =
+                                scheduleTracker.Overlapping(personId, dayIndex, departure, duration);
+                            bool onlyRest = overlapping.Count > 0;
+                            foreach (PersonActivityReservation r in overlapping)
+                            {
+                                if (r == null || r.Activity != PersonActivityKind.Resting)
+                                {
+                                    onlyRest = false;
+                                    break;
+                                }
+                            }
+
+                            if (!onlyRest)
+                            {
+                                rejections.Add($"departure {departure}: P{personId}: schedule conflict during the trip window.");
+                                continue;
+                            }
+                        }
+                    }
+
+                    if (person.ageBand >= AgeBand.Adult18Plus)
+                    {
+                        if (person.isFemale)
+                        {
+                            if (preferredWoman < 0) preferredWoman = personId;
+                        }
+                        else if (adultFallback < 0)
+                        {
+                            adultFallback = personId;
+                        }
+                    }
+                    else if (youngWorkerFallback < 0)
+                    {
+                        youngWorkerFallback = personId;
+                    }
+                }
+
+                int chosen = preferredWoman >= 0 ? preferredWoman
+                    : adultFallback >= 0 ? adultFallback
+                    : youngWorkerFallback;
+                if (chosen >= 0)
+                {
+                    departureMinute = departure;
+                    return chosen;
+                }
+            }
+
+            reason = $"No shopper in any searched window from {earliest} to {lastTried} " +
+                $"(trip needs {duration} min): " + string.Join(" ", rejections);
             if (offMapJourneys == null)
             {
                 reason += " (Off-map guard not installed: no OffMapJourneyAuthority was provided.)";

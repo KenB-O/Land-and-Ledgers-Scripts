@@ -635,16 +635,45 @@ namespace LandLedgers.Population
             batchNeeds.Sort((a, b) => b.Urgency01.CompareTo(a.Urgency01));
 
             // ---- One shopper for the whole trip. ----
+            // Plan 02 Slice 1: search departures forward from the requested
+            // one (480 = store opening) instead of trying that single slot.
+            // The daily planner sprinkles a Resting block over 480-510 on
+            // every member, so the old single-departure choice failed every
+            // member every day. The search finds the first departure where a
+            // member is free or blocked only by Resting (yieldable through
+            // the atomic swap in ReserveShoppingWindow); it never preempts
+            // Sleeping, Work, Building, Cooking, JobSeeking, Managing or
+            // Eating, and it checks budget and store hours per departure.
+            // The found departure flows through the single
+            // options.DepartureMinuteOfDay so arrival math, leg planning,
+            // the reservation and the batch estimate all use the same minute.
             int estimateMinutes = EstimateTripMinutes(homeLocation,
                 new List<IGoodsSupplier> { winner }, options)
                 + Math.Max(0, batchNeeds.Count - 1) * Math.Max(1, options.InStoreMinutes);
             batch.EstimatedMinutes = estimateMinutes;
+            int requestedDeparture = options.DepartureMinuteOfDay;
             string shopperReason = null;
-            int shopperId = options.ShopperPersonIdOverride >= 0
-                ? options.ShopperPersonIdOverride
-                : ShopperAssignmentPolicy.ChooseShopper(
-                    population, memberIds, dayIndex, options.DepartureMinuteOfDay, estimateMinutes,
-                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
+            int shopperId;
+            int foundDeparture = requestedDeparture;
+            if (options.ShopperPersonIdOverride >= 0)
+            {
+                shopperId = options.ShopperPersonIdOverride;
+            }
+            else
+            {
+                JourneyRoute winnerRoute = journeys.FindRoute(homeLocation, winner.LocationId, TravelMode.Foot);
+                int oneWayMinutes = winnerRoute.Found ? Math.Max(1, winnerRoute.TotalMinutes) : 1;
+                var winnerItemSupplier = winner as IItemResolvingSupplier;
+                shopperId = ShopperAssignmentPolicy.ChooseShopperWithWindowSearch(
+                    population, memberIds, dayIndex, requestedDeparture, estimateMinutes,
+                    oneWayMinutes, options.InStoreMinutes,
+                    arrival => winnerItemSupplier == null
+                        ? null
+                        : winnerItemSupplier.CheckTradingCapability(dayIndex, arrival),
+                    scheduleTracker, budgets, personEntityId, out foundDeparture, out shopperReason,
+                    offMapJourneys);
+            }
+
             if (shopperId < 0)
             {
                 batch.FailureReason = $"Unavailable shopper: {shopperReason ?? "nobody can shop today."} Needs stay open.";
@@ -667,6 +696,13 @@ namespace LandLedgers.Population
                     batch.FailureReason = $"Shopper override rejected: {overrideProblem}";
                     return batch;
                 }
+            }
+
+            options.DepartureMinuteOfDay = foundDeparture;
+            if (foundDeparture != requestedDeparture)
+            {
+                diag.Add($"Day {dayIndex}: batch {batch.PlanId} — P{shopperId} departs at {foundDeparture} " +
+                    $"(window search from {requestedDeparture}); trip window ~{estimateMinutes} min.");
             }
 
             batch.ShopperPersonId = shopperId;
@@ -701,7 +737,7 @@ namespace LandLedgers.Population
 
             // ---- One reservation for the whole trip (person-time is exclusive). ----
             var windowResult = new ShoppingTripResult { HouseholdId = householdId };
-            string reservationId = ReserveShoppingWindow(shopperId, dayIndex, options, estimateMinutes, windowResult, diag);
+            string reservationId = ReserveShoppingWindow(shopperId, dayIndex, options, estimateMinutes, windowResult, diag, allowRestPreemption: true);
             if (reservationId == null)
             {
                 batch.FailureReason = windowResult.FailureReason ?? "Trip window reservation refused.";
@@ -1853,20 +1889,48 @@ namespace LandLedgers.Population
             return worst + Math.Max(1, options.InStoreMinutes);
         }
 
+        /// <summary>
+        /// Reserves the shopping window. With
+        /// <paramref name="allowRestPreemption"/> (the ExecuteBatch path only),
+        /// overlapping Resting reservations are released atomically with the
+        /// reserve (TryReservePreemptingRest) — the window search has already
+        /// proven the rest of the window, so a released rest is never lost to
+        /// a trip that fails to reserve. The single-need path passes false
+        /// and keeps the old strict behaviour.
+        /// </summary>
         private string ReserveShoppingWindow(
             int shopperId, int dayIndex, ShoppingLoopOptions options, int estimateMinutes,
-            ShoppingTripResult result, List<string> diag)
+            ShoppingTripResult result, List<string> diag, bool allowRestPreemption = false)
         {
-            string refusal = scheduleTracker.TryReserve(
-                shopperId, PersonActivityKind.Shopping, dayIndex,
-                options.DepartureMinuteOfDay, estimateMinutes,
-                $"shopping trip for H{result.HouseholdId}");
+            string refusal;
+            string releasedRest = string.Empty;
+            if (allowRestPreemption)
+            {
+                refusal = scheduleTracker.TryReservePreemptingRest(
+                    shopperId, PersonActivityKind.Shopping, dayIndex,
+                    options.DepartureMinuteOfDay, estimateMinutes,
+                    $"shopping trip for H{result.HouseholdId}", out releasedRest);
+            }
+            else
+            {
+                refusal = scheduleTracker.TryReserve(
+                    shopperId, PersonActivityKind.Shopping, dayIndex,
+                    options.DepartureMinuteOfDay, estimateMinutes,
+                    $"shopping trip for H{result.HouseholdId}");
+            }
+
             if (refusal != null)
             {
                 AddEvent(result, dayIndex, ShoppingEventKind.Failure, shopperId, null,
                     $"Double-booking refused: {refusal}", string.Empty);
                 result.FailureReason = refusal;
                 return null;
+            }
+
+            if (!string.IsNullOrEmpty(releasedRest))
+            {
+                diag.Add($"Day {dayIndex}: P{shopperId} shopping released rest {releasedRest} " +
+                    $"for the trip window from minute {options.DepartureMinuteOfDay}.");
             }
 
             // Fetch the real reservation id for later release.

@@ -799,5 +799,135 @@ namespace LandLedgers.EditorTests.Economy
             // owner decision naming the demand path before any fix — no
             // allocation-path production change in this plan.
         }
+
+        private static LogisticsShipmentState FindShipmentIn(FreightProductionDriver driver, string shipmentId)
+        {
+            foreach (LogisticsShipmentState candidate in driver.AllShipments())
+            {
+                if (candidate != null && string.Equals(candidate.ShipmentId, shipmentId, StringComparison.Ordinal))
+                    return candidate;
+            }
+            return null;
+        }
+
+        [Test]
+        public void SaveLoad_MidSecondHaul_RestoresExactlyOnce()
+        {
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+            DriveHaul1ToCompletion();
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out _, out FreightServiceAgreement agreement2,
+                out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+
+            // One tick: the loaded Planned shipment dispatches to InTransit.
+            hooks.IsVehicleOffMap = _ => false;
+            Tick();
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment2.Status,
+                "haul 2 must be in transit at capture");
+            Assert.AreEqual(1, shipment2.RemainingQuantityUnits, "cargo intact at capture");
+            Assert.IsTrue(!lot2.Received, "lot 2 is not received yet at capture");
+
+            FreightShipmentService.FreightServiceSaveDto dto = freight.CaptureSaveDto();
+
+            // Restore into a fresh driver/service with the same hooks (the
+            // loaded game).
+            var restoredFreight = new FreightProductionDriver();
+            restoredFreight.EnsureCompany(CarrierId, carrierRuntime);
+            restoredFreight.RegisterBusinessRuntime(BakeryId, payerRuntime);
+            restoredFreight.Service.RegisterWagon(wagon);
+            List<LogisticsShipmentState> restored = restoredFreight.RestoreSaveDto(dto, hooks, diag);
+            Assert.AreEqual(2, restored.Count, "exactly 2 shipments restored");
+            Assert.AreEqual(2, restoredFreight.AllShipments().Count, "the company holds both exactly once");
+            LogisticsShipmentState restored1 = FindShipmentIn(restoredFreight, ShipmentId);
+            LogisticsShipmentState restored2 = FindShipmentIn(restoredFreight, shipment2.ShipmentId);
+            Assert.IsNotNull(restored1, "haul 1 must be among the restored shipments");
+            Assert.IsNotNull(restored2, "haul 2 must be among the restored shipments");
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, restored1.Status, "haul 1 stays Completed after restore");
+            Assert.IsTrue(restored1.FreightRevenueCollected, "haul 1 stays collected after restore");
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, restored2.Status, "haul 2 resumes in transit");
+            Assert.AreEqual(1, restored2.RemainingQuantityUnits, "haul 2 cargo intact after restore");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled,
+                restoredFreight.ServiceAgreements.FindAgreement(AgreementId).Status,
+                "haul 1 agreement stays Fulfilled after restore");
+
+            // Finish haul 2 with the restored driver only. The original
+            // driver is never ticked again, so nothing can settle twice.
+            var trace = new List<LogisticsShipmentStatus>();
+            for (int tick = 0; tick < 8 && restored2.Status != LogisticsShipmentStatus.Completed; tick++)
+            {
+                restoredFreight.AdvanceTick(86400f, hooks, Handler(), diag);
+                trace.Add(restored2.Status);
+            }
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, restored2.Status,
+                "restored haul 2 must complete; trace: " + string.Join(", ", trace));
+            Assert.IsTrue(lot2.Received, "lot 2 received exactly once after restore");
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count, "no duplicate bakery lot after restore");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer total -250c across both hauls after restore");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier total +250c across both hauls after restore");
+            Assert.AreEqual(0, restoredFreight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after restore");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled,
+                restoredFreight.ServiceAgreements.FindAgreement(agreement2.AgreementId).Status,
+                "haul 2 agreement fulfilled after restore");
+        }
+
+        [Test]
+        public void RefusedDelivery_SecondHaul_HoldsCargoCollectsNothing()
+        {
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+            DriveHaul1ToCompletion();
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out _, out FreightServiceAgreement agreement2,
+                out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+
+            // The receiver refuses haul 2 (the bakery cannot take the lot).
+            ReceiveFreightCargoLotHandler adapterReceive = hooks.ReceiveCargoLot;
+            hooks.ReceiveCargoLot = (LogisticsShipmentState s, int qty, out string reason) =>
+            {
+                reason = "test refusal: bakery cannot receive the lot";
+                return false;
+            };
+            hooks.IsVehicleOffMap = _ => false;
+            var trace = new List<LogisticsShipmentStatus>();
+            for (int tick = 0; tick < 8 && shipment2.Status != LogisticsShipmentStatus.Delayed; tick++)
+            {
+                Tick();
+                trace.Add(shipment2.Status);
+            }
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment2.Status,
+                "a refused delivery must hold as Delayed; trace: " + string.Join(", ", trace));
+            Assert.AreEqual(1, shipment2.RemainingQuantityUnits, "cargo stays in wagon custody");
+            Assert.IsTrue(!shipment2.deliveryApplied, "no delivery is applied");
+            Assert.IsTrue(!lot2.Received, "the lot is not received");
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "no second debit while refused (only haul 1 settled)");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "no second credit while refused");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement2.Status,
+                "no agreement fulfilment while refused");
+
+            // Allow the receiver and retry: resume from the delay, then tick
+            // to completion.
+            hooks.ReceiveCargoLot = adapterReceive;
+            freight.Service.ResumeShipment(shipment2, hooks);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment2.Status, "the retry resumes at Arrived");
+            TickUntilCompleted(shipment2, "retried haul 2");
+            Assert.IsTrue(lot2.Received, "the retried haul receives the lot once");
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count, "no duplicate bakery lot after the retry");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "the retry settles the second 125c exactly once");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "the carrier is credited the second 125c exactly once");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement2.Status,
+                "the retried haul fulfils its agreement");
+        }
     }
 }

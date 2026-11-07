@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.World;
 using NUnit.Framework;
 using UnityEditor;
@@ -289,11 +290,11 @@ namespace LandLedgers.EditorTests.Population
             // Plan 01 Slice 1a: fresh New Game after a previous session -
             // generate, clear, generate again on the same manager. The
             // registry must match the latest generation only, with no stale
-            // members from the earlier session. (ClearPopulationSnapshot
-            // does not itself clear the registry in Slice 1 - that is
-            // Slice 2; the next generation's clear-then-load is what
-            // replaces the stale set, so no intermediate registry state is
-            // asserted here.)
+            // members from the earlier session. (Slice 2: ClearPopulationSnapshot
+            // now also clears the registry on the same instance, so the
+            // intermediate state is empty; the dedicated
+            // ClearPopulationSnapshot_ClearsRegistryOnSameInstance test
+            // asserts that, and this test asserts the regeneration.)
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
                 "Assets/Core/Population/DevelopmentTownConfiguration.asset");
             Assert.IsNotNull(configuration);
@@ -318,6 +319,213 @@ namespace LandLedgers.EditorTests.Population
             CollectionAssert.AreEqual(new[] { 9 }, manager.Memberships.GetActiveMembers(5));
             CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
                 "No Register rejection may fire on the regeneration after clear.");
+        }
+
+        [Test]
+        public void AuthoredNineResidentTown_SaveLoadRoundTrip_PreservesMembershipsAndCursor()
+        {
+            // Plan 01 Slice 2 (UNITY-OWED): generate, capture the save
+            // DTO, load it into a FRESH manager, and assert identical
+            // memberships - same membership IDs, same person/household
+            // pairs, same ActiveCount - with the membership allocator
+            // cursor restored so the next membership ID (9) does not
+            // collide with the restored set (0-8).
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+
+            var membershipIdsBefore = new Dictionary<int, int>();
+            var membersBefore = new Dictionary<int, List<int>>();
+            for (int personId = 1; personId <= 9; personId++)
+            {
+                membershipIdsBefore[personId] = manager.Memberships.GetActiveMembership(personId).MembershipId;
+            }
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                membersBefore[householdId] = manager.Memberships.GetActiveMembers(householdId);
+            }
+
+            PopulationSaveDto saved = manager.CaptureSaveDto();
+            Assert.IsNotNull(saved.householdMemberships);
+            Assert.AreEqual(9, saved.householdMemberships.memberships.Count);
+
+            GameObject freshObject = null;
+            try
+            {
+                PopulationManager fresh = CreateFreshManager(out freshObject);
+                fresh.LoadFromSaveDto(saved);
+
+                Assert.IsNotNull(fresh.Memberships);
+                Assert.AreEqual(9, fresh.Memberships.ActiveCount,
+                    "The loaded registry must hold exactly the nine saved memberships.");
+                CollectionAssert.IsEmpty(fresh.Memberships.Diagnostics,
+                    "No Register rejection may fire when restoring saved memberships.");
+                for (int personId = 1; personId <= 9; personId++)
+                {
+                    HouseholdMembership membership = fresh.Memberships.GetActiveMembership(personId);
+                    Assert.IsNotNull(membership, $"P{personId} must hold a membership after load.");
+                    Assert.AreEqual(membershipIdsBefore[personId], membership.MembershipId,
+                        $"P{personId} membership id must survive the round-trip unchanged.");
+                }
+                for (int householdId = 1; householdId <= 5; householdId++)
+                {
+                    CollectionAssert.AreEqual(membersBefore[householdId], fresh.Memberships.GetActiveMembers(householdId),
+                        $"H{householdId} members must be identical after load.");
+                }
+
+                var entityIds = (EntityIdRegistry)GetPrivateField(fresh, "entityIds");
+                Assert.IsNotNull(entityIds);
+                Assert.AreEqual(9, entityIds.PeekNext(EntityKind.Membership),
+                    "The membership allocator cursor must be restored to 9 so the next allocated membership id cannot collide with the restored 0-8.");
+            }
+            finally
+            {
+                if (freshObject != null) Object.DestroyImmediate(freshObject);
+            }
+        }
+
+        [Test]
+        public void AuthoredNineResidentTown_SaveLoadLegacyNullDto_RebuildsFromMemberIds()
+        {
+            // Plan 01 Slice 2 (UNITY-OWED): a save DTO with
+            // householdMemberships == null (legacy path) rebuilds the
+            // memberships from the persisted household memberIds mirrors,
+            // reproducing the same pairs and ActiveCount.
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+
+            PopulationSaveDto saved = manager.CaptureSaveDto();
+            saved.householdMemberships = null;
+
+            GameObject freshObject = null;
+            try
+            {
+                PopulationManager fresh = CreateFreshManager(out freshObject);
+                fresh.LoadFromSaveDto(saved);
+
+                Assert.IsNotNull(fresh.Memberships);
+                Assert.AreEqual(9, fresh.Memberships.ActiveCount,
+                    "The legacy rebuild must reproduce all nine memberships from memberIds.");
+                CollectionAssert.IsEmpty(fresh.Memberships.Diagnostics,
+                    "No Register rejection may fire on the legacy rebuild.");
+                CollectionAssert.AreEqual(new[] { 1, 2 }, fresh.Memberships.GetActiveMembers(1));
+                CollectionAssert.AreEqual(new[] { 3, 4 }, fresh.Memberships.GetActiveMembers(2));
+                CollectionAssert.AreEqual(new[] { 5, 6 }, fresh.Memberships.GetActiveMembers(3));
+                CollectionAssert.AreEqual(new[] { 7, 8 }, fresh.Memberships.GetActiveMembers(4));
+                CollectionAssert.AreEqual(new[] { 9 }, fresh.Memberships.GetActiveMembers(5));
+                for (int personId = 1; personId <= 9; personId++)
+                {
+                    HouseholdMembership membership = fresh.Memberships.GetActiveMembership(personId);
+                    Assert.IsNotNull(membership, $"P{personId} must hold a membership after the legacy rebuild.");
+                    Assert.AreEqual(personId - 1, membership.MembershipId,
+                        "A fresh manager rebuilds membership ids 0-8 in household-then-member order.");
+                }
+            }
+            finally
+            {
+                if (freshObject != null) Object.DestroyImmediate(freshObject);
+            }
+        }
+
+        [Test]
+        public void AuthoredNineResidentTown_SaveLoadTwice_IsIdempotent()
+        {
+            // Plan 01 Slice 2 (UNITY-OWED): loading the same save DTO
+            // twice is clear-then-load on the SAME registry instance -
+            // identical memberships, no duplicates, no ActiveCount growth.
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+
+            PopulationSaveDto saved = manager.CaptureSaveDto();
+
+            GameObject freshObject = null;
+            try
+            {
+                PopulationManager fresh = CreateFreshManager(out freshObject);
+                fresh.LoadFromSaveDto(saved);
+                HouseholdMembershipRegistry registryAfterFirstLoad = fresh.Memberships;
+                Assert.IsNotNull(registryAfterFirstLoad);
+                Assert.AreEqual(9, registryAfterFirstLoad.ActiveCount);
+
+                fresh.LoadFromSaveDto(saved);
+
+                Assert.IsTrue(object.ReferenceEquals(registryAfterFirstLoad, fresh.Memberships),
+                    "Double load must clear-then-load the same registry instance, never replace it.");
+                Assert.AreEqual(9, fresh.Memberships.ActiveCount,
+                    "A second load must not grow ActiveCount or duplicate memberships.");
+                CollectionAssert.IsEmpty(fresh.Memberships.Diagnostics,
+                    "No Register rejection may fire on the second load.");
+                for (int personId = 1; personId <= 9; personId++)
+                {
+                    HouseholdMembership membership = fresh.Memberships.GetActiveMembership(personId);
+                    Assert.IsNotNull(membership, $"P{personId} must hold a membership after the second load.");
+                    Assert.AreEqual(personId - 1, membership.MembershipId,
+                        $"P{personId} membership id must be unchanged by the second load.");
+                }
+                CollectionAssert.AreEqual(new[] { 1, 2 }, fresh.Memberships.GetActiveMembers(1));
+                CollectionAssert.AreEqual(new[] { 3, 4 }, fresh.Memberships.GetActiveMembers(2));
+                CollectionAssert.AreEqual(new[] { 5, 6 }, fresh.Memberships.GetActiveMembers(3));
+                CollectionAssert.AreEqual(new[] { 7, 8 }, fresh.Memberships.GetActiveMembers(4));
+                CollectionAssert.AreEqual(new[] { 9 }, fresh.Memberships.GetActiveMembers(5));
+            }
+            finally
+            {
+                if (freshObject != null) Object.DestroyImmediate(freshObject);
+            }
+        }
+
+        [Test]
+        public void AuthoredNineResidentTown_ClearPopulationSnapshot_ClearsRegistryOnSameInstance()
+        {
+            // Plan 01 Slice 2 (UNITY-OWED): ClearPopulationSnapshot also
+            // clears the registry on the same instance, so a New Game
+            // reset cannot leave stale memberships behind. This is the
+            // intermediate state the Slice 1 GenerateAfterClear test
+            // deliberately did not assert.
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+            HouseholdMembershipRegistry registryBeforeClear = manager.Memberships;
+            Assert.IsNotNull(registryBeforeClear);
+            Assert.AreEqual(9, registryBeforeClear.ActiveCount);
+
+            manager.ClearPopulationSnapshot();
+
+            Assert.IsTrue(object.ReferenceEquals(registryBeforeClear, manager.Memberships),
+                "Clear must empty the registry in place, never replace the instance.");
+            Assert.AreEqual(0, manager.Memberships.ActiveCount,
+                "No stale membership may survive a population snapshot clear.");
+            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
+                "Clear drops prior diagnostics with the records.");
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                CollectionAssert.IsEmpty(manager.Memberships.GetActiveMembers(householdId),
+                    $"H{householdId} must have no members after the clear.");
+            }
+            for (int personId = 1; personId <= 9; personId++)
+            {
+                Assert.AreEqual(-1, manager.Memberships.GetActiveHouseholdId(personId),
+                    $"P{personId} must hold no membership after the clear.");
+                Assert.IsNull(manager.Memberships.GetActiveMembership(personId));
+            }
+        }
+
+        private PopulationManager CreateFreshManager(out GameObject freshObject)
+        {
+            // Plan 01 Slice 2: a second manager sharing the test world,
+            // configured exactly like the SetUp manager, for load-into-
+            // fresh-manager round-trip tests. The caller destroys it.
+            freshObject = new GameObject("FreshPopulationManager");
+            var fresh = freshObject.AddComponent<PopulationManager>();
+            fresh.Configure(world, settings, false);
+            fresh.HouseholdLedgers = new HouseholdLedgerRegistry();
+            return fresh;
         }
 
         [Test]

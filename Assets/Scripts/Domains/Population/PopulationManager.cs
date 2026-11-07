@@ -323,6 +323,12 @@ namespace LandLedgers.Population
         {
             state.Clear();
             EnsureDemographicStack(freshKinship: true);
+            // Plan 01 Slice 2: ClearPopulationSnapshot also clears the
+            // registry on the SAME instance (Slice 1 deliberately left
+            // this out). A New Game reset must not leave stale memberships
+            // behind for the next generation to inherit; Clear() is
+            // in-place, so holders keep reading the same live object.
+            membershipRegistry.Clear();
             estateService.Clear();
             pregnancies.Clear();
             lastHealthResolutionDayIndex = -1;

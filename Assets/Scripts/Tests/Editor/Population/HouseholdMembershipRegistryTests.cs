@@ -328,6 +328,153 @@ namespace LandLedgers.EditorTests.Population
             }
         }
 
+        /// <summary>Asserts a registry holds exactly the authored nine, with membership IDs 0-8 and no rejections.</summary>
+        private static void AssertAuthoredNine(HouseholdMembershipRegistry registry)
+        {
+            Assert.AreEqual(9, registry.ActiveCount);
+            Assert.AreEqual(0, registry.Diagnostics.Count, "No Register rejection may fire on the authored set.");
+            int expectedMembershipId = 0;
+            for (int h = 0; h < AuthoredHouseholds.Length; h++)
+            {
+                CollectionAssert.AreEqual(AuthoredHouseholds[h], registry.GetActiveMembers(h + 1),
+                    $"H{h + 1} members must be exactly the authored members.");
+                foreach (int personId in AuthoredHouseholds[h])
+                {
+                    HouseholdMembership membership = registry.GetActiveMembership(personId);
+                    Assert.IsNotNull(membership, $"P{personId} must hold a membership.");
+                    Assert.AreEqual(expectedMembershipId++, membership.MembershipId,
+                        $"P{personId} membership id must follow household-then-member allocation order.");
+                    Assert.AreEqual(h + 1, membership.HouseholdId);
+                    Assert.IsTrue(membership.IsActive);
+                }
+            }
+        }
+
+        [Test]
+        public void Registry_SaveDtoRoundTrip_PreservesIdsPairsAndActiveCount()
+        {
+            // Plan 01 Slice 2 (HARNESS-RUN): the registry-level save
+            // shape - CaptureSaveDto / LoadFromSaveDto round-trips the
+            // authored nine with identical membership IDs, person/household
+            // pairs, and ActiveCount. The captured DTO is a snapshot:
+            // later mutations of the source must not leak into it.
+            HouseholdMembershipRegistry source = BuildAuthoredNine();
+            HouseholdMembershipRegistrySaveDto dto = source.CaptureSaveDto();
+
+            var loaded = new HouseholdMembershipRegistry();
+            loaded.LoadFromSaveDto(dto);
+            AssertAuthoredNine(loaded);
+
+            Assert.IsTrue(source.EndMembership(1, endDayIndex: 50, reason: "moved out"),
+                "Mutating the source after capture must not affect the already-captured DTO.");
+            Assert.AreEqual(8, source.ActiveCount);
+            AssertAuthoredNine(loaded);
+        }
+
+        [Test]
+        public void Registry_SaveDtoDoubleLoad_IsIdempotent()
+        {
+            // Plan 01 Slice 2 (HARNESS-RUN): loading the same save DTO
+            // twice is clear-then-load, so the second load reproduces the
+            // identical set with no duplicates and no ActiveCount growth.
+            HouseholdMembershipRegistrySaveDto dto = BuildAuthoredNine().CaptureSaveDto();
+
+            var registry = new HouseholdMembershipRegistry();
+            registry.LoadFromSaveDto(dto);
+            AssertAuthoredNine(registry);
+
+            registry.LoadFromSaveDto(dto);
+
+            AssertAuthoredNine(registry);
+        }
+
+        [Test]
+        public void Registry_LoadFromNullDto_ClearsToEmpty()
+        {
+            // Plan 01 Slice 2 (HARNESS-RUN): the registry-level null-DTO
+            // contract - a null DTO (or a DTO with null memberships)
+            // clears the registry to empty. The manager-level legacy path
+            // (rebuild from memberIds) is Unity-owed, not this test.
+            HouseholdMembershipRegistry registry = BuildAuthoredNine();
+
+            registry.LoadFromSaveDto(null);
+
+            Assert.AreEqual(0, registry.ActiveCount);
+            CollectionAssert.IsEmpty(registry.AllMemberships());
+            Assert.AreEqual(-1, registry.GetActiveHouseholdId(1));
+
+            registry = BuildAuthoredNine();
+            registry.LoadFromSaveDto(new HouseholdMembershipRegistrySaveDto { memberships = null });
+
+            Assert.AreEqual(0, registry.ActiveCount);
+            CollectionAssert.IsEmpty(registry.AllMemberships());
+        }
+
+        [Test]
+        public void Registry_SaveDtoPreservesEndedMemberships()
+        {
+            // Plan 01 Slice 2 (HARNESS-RUN): ended records are part of
+            // the registry state and must survive the round-trip, so the
+            // loaded registry holds the same active set AND the same ended
+            // record (AllMemberships covers both lifecycles).
+            HouseholdMembershipRegistry source = BuildAuthoredNine();
+            Assert.IsTrue(source.EndMembership(1, endDayIndex: 50, reason: "moved out"));
+            Assert.AreEqual(8, source.ActiveCount);
+
+            var loaded = new HouseholdMembershipRegistry();
+            loaded.LoadFromSaveDto(source.CaptureSaveDto());
+
+            Assert.AreEqual(8, loaded.ActiveCount);
+            Assert.AreEqual(9, loaded.AllMemberships().Count,
+                "All membership records (active + ended) must survive the round-trip.");
+            Assert.AreEqual(-1, loaded.GetActiveHouseholdId(1), "P1 has no active membership after the round-trip.");
+            HouseholdMembership ended = null;
+            foreach (HouseholdMembership membership in loaded.AllMemberships())
+            {
+                if (membership.MembershipId == 0)
+                {
+                    ended = membership;
+                }
+            }
+            Assert.IsNotNull(ended, "The ended record for membership 0 must be present in the loaded registry.");
+            Assert.IsTrue(!ended.IsActive);
+            Assert.AreEqual(HouseholdMembershipLifecycle.Ended, ended.Lifecycle);
+            Assert.AreEqual(1, ended.PersonId);
+            Assert.AreEqual(1, ended.HouseholdId);
+        }
+
+        [Test]
+        public void Registry_LoadFromSaveDto_ReplacesStaleSet()
+        {
+            // Plan 01 Slice 2 (HARNESS-RUN): LoadFromSaveDto is
+            // clear-then-load, so loading a different set replaces the
+            // stale one entirely - nothing from the earlier set survives.
+            HouseholdMembershipRegistry registry = BuildAuthoredNine();
+
+            var later = new HouseholdMembershipRegistry();
+            Assert.IsNull(later.Register(ActiveMembership(0, 1, 2)));
+            Assert.IsNull(later.Register(ActiveMembership(1, 2, 1)));
+            Assert.IsNull(later.Register(ActiveMembership(2, 3, 2)));
+            Assert.IsNull(later.Register(ActiveMembership(3, 4, 2)));
+            Assert.IsNull(later.Register(ActiveMembership(4, 5, 3)));
+            Assert.IsNull(later.Register(ActiveMembership(5, 6, 3)));
+            Assert.IsNull(later.Register(ActiveMembership(6, 7, 4)));
+            Assert.IsNull(later.Register(ActiveMembership(7, 8, 4)));
+
+            registry.LoadFromSaveDto(later.CaptureSaveDto());
+
+            Assert.AreEqual(8, registry.ActiveCount);
+            Assert.AreEqual(0, registry.Diagnostics.Count);
+            Assert.AreEqual(2, registry.GetActiveHouseholdId(1));
+            Assert.AreEqual(1, registry.GetActiveHouseholdId(2));
+            Assert.AreEqual(-1, registry.GetActiveHouseholdId(9),
+                "P9 has no membership in the loaded set and must not linger from the earlier set.");
+            CollectionAssert.AreEqual(new[] { 2 }, registry.GetActiveMembers(1));
+            CollectionAssert.AreEqual(new[] { 1, 3, 4 }, registry.GetActiveMembers(2));
+            CollectionAssert.IsEmpty(registry.GetActiveMembers(5),
+                "H5 has no members in the loaded set; its earlier membership must not survive.");
+        }
+
         [Test]
         public void Registry_ClearThenLoad_MatchesLatestGenerationOnly()
         {

@@ -215,5 +215,221 @@ namespace LandLedgers.EditorTests.Population
             Assert.That(population.people[2].nutrition.nutrition01, Is.EqualTo(0.7f).Within(0.000001f),
                 "The current registry member receives two meals and recovers once.");
         }
+
+        // ---------- Plan 01 Slice 3 (HARNESS-RUN): end-to-end needs over the authored nine ----------
+
+        // Authored households in ID order (H1..H5), exactly as
+        // PopulationManager.RebuildMembershipRegistry constructs them:
+        // person IDs 1-9, household IDs 1-5, membership IDs 0-8.
+        private static readonly int[][] AuthoredHouseholds =
+        {
+            new[] { 1, 2 },
+            new[] { 3, 4 },
+            new[] { 5, 6 },
+            new[] { 7, 8 },
+            new[] { 9 },
+        };
+
+        private static int AuthoredHouseholdOf(int personId)
+        {
+            for (int h = 0; h < AuthoredHouseholds.Length; h++)
+            {
+                foreach (int memberId in AuthoredHouseholds[h])
+                {
+                    if (memberId == personId)
+                    {
+                        return h + 1;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        private sealed class AuthoredNineFixture
+        {
+            public PopulationState Population;
+            public HouseholdMembershipRegistry Memberships;
+            public HouseholdLedgerRegistry Ledgers;
+            public EmbodiedPurchaseExecutor Executor;
+            public HouseholdConsumptionPlanner Planner;
+        }
+
+        /// <summary>
+        /// Builds the authored nine as a hand-built registry population: 9
+        /// adults aged 27-35 (Adult18Plus, FullLaborMarket) in 5 households,
+        /// one Active registry membership per resident (IDs 0-8). The legacy
+        /// household memberIds mirrors are deliberately stale - every
+        /// household lists only P1 - so any serving that follows the mirror
+        /// instead of the registry fails these tests.
+        /// </summary>
+        private static AuthoredNineFixture BuildAuthoredNineFixture(int reserveUnits)
+        {
+            var fixture = new AuthoredNineFixture();
+            fixture.Population = new PopulationState();
+            for (int personId = 1; personId <= 9; personId++)
+            {
+                fixture.Population.people.Add(new PersonState
+                {
+                    id = personId,
+                    firstName = "Resident" + personId,
+                    lastName = "Test",
+                    age = 26 + personId,
+                    ageBand = AgeBand.Adult18Plus,
+                    laborAccessLevel = LaborAccessLevel.FullLaborMarket,
+                    householdId = AuthoredHouseholdOf(personId),
+                });
+            }
+            for (int h = 0; h < AuthoredHouseholds.Length; h++)
+            {
+                var household = new HouseholdState { id = h + 1 };
+                household.memberIds.Add(1);
+                household.reserves.Add(new HouseholdReserveState
+                {
+                    categoryId = "staple_food",
+                    displayName = "Staple food",
+                    currentUnits = reserveUnits,
+                    lowThresholdUnits = 20,
+                    targetUnits = 30,
+                });
+                fixture.Population.households.Add(household);
+            }
+
+            fixture.Memberships = new HouseholdMembershipRegistry();
+            int nextMembershipId = 0;
+            for (int h = 0; h < AuthoredHouseholds.Length; h++)
+            {
+                foreach (int personId in AuthoredHouseholds[h])
+                {
+                    string rejection = fixture.Memberships.Register(new HouseholdMembership
+                    {
+                        MembershipId = nextMembershipId++,
+                        PersonId = personId,
+                        HouseholdId = h + 1,
+                        Lifecycle = HouseholdMembershipLifecycle.Active,
+                        StartDayIndex = 0,
+                        Source = HouseholdMembershipSource.Authored,
+                    });
+                    Assert.IsNull(rejection, $"P{personId} into H{h + 1} must register cleanly.");
+                }
+            }
+
+            fixture.Ledgers = new HouseholdLedgerRegistry();
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                string funding = fixture.Ledgers.GetOrCreate(householdId).RecordInflow(
+                    0, 100000, HouseholdIncomeSource.OwnerContribution,
+                    "test-capital", "test funding", "test");
+                Assert.IsNull(funding, funding);
+            }
+
+            var suppliers = new SupplierDirectory();
+            var store = new TestSupplier();
+            store.Stock["staple_food"] = 1000;
+            suppliers.Register(store);
+
+            var journeys = new JourneyModel();
+            journeys.RegisterLocation(new JourneyLocation("home", JourneyLocationKind.Farmstead, "Home", 0f, 0f));
+            journeys.RegisterLocation(new JourneyLocation("store", JourneyLocationKind.Store, "Store", 2f, 0f));
+            journeys.AddEdge("home", "store", 2.0f, "road");
+
+            fixture.Executor = new EmbodiedPurchaseExecutor(
+                fixture.Population, fixture.Ledgers, suppliers, journeys, pid => "home");
+            fixture.Planner = new HouseholdConsumptionPlanner();
+            return fixture;
+        }
+
+        [Test]
+        public void AuthoredNine_ExecuteDay_ServesAllFiveHouseholdsWithActingAdults()
+        {
+            // Plan 01 Slice 3: adult resolution end to end. Stocked reserves
+            // mean no shopping is needed; every household must still resolve
+            // a real acting adult through the registry alone.
+            AuthoredNineFixture fixture = BuildAuthoredNineFixture(reserveUnits: 100);
+            var localDiag = new List<string>();
+
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                fixture.Population, fixture.Planner, fixture.Executor, 0, localDiag,
+                memberships: fixture.Memberships);
+
+            Assert.AreEqual(5, report.HouseholdsServed,
+                "All five authored households must resolve an acting adult.");
+            Assert.AreEqual(18, report.MealsEaten, "Nine residents x two meals.");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.AreEqual(0, report.PurchasesMade, "Stocked reserves mean no shopping is needed.");
+            Assert.IsTrue(localDiag.TrueForAll(message => !message.Contains("no acting adult")),
+                "No household may report 'no acting adult' with the repaired registry.");
+            for (int h = 0; h < AuthoredHouseholds.Length; h++)
+            {
+                Assert.AreEqual(100 - 2 * AuthoredHouseholds[h].Length,
+                    fixture.Population.households[h].reserves[0].currentUnits,
+                    $"H{h + 1} reserves must fall by exactly one unit per meal eaten.");
+            }
+        }
+
+        [Test]
+        public void AuthoredNine_ShortfallIsShoppedForByActingAdults()
+        {
+            // Plan 01 Slice 3: shopping task creation end to end. Empty
+            // reserves mean every household's shortfall must be shopped for
+            // by its own acting adult through the embodied executor - not
+            // conjured, and not shopped by the stale mirror's P1 for all.
+            AuthoredNineFixture fixture = BuildAuthoredNineFixture(reserveUnits: 0);
+            var localDiag = new List<string>();
+
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                fixture.Population, fixture.Planner, fixture.Executor, 0, localDiag,
+                memberships: fixture.Memberships);
+
+            Assert.AreEqual(5, report.HouseholdsServed,
+                "All five authored households must resolve an acting adult.");
+            Assert.AreEqual(18, report.MealsEaten, "Nine residents x two meals, all shopped for.");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.Greater(report.PurchasesMade, 0, "The shortfall was shopped for, not conjured.");
+            Assert.Greater(report.SpendCents, 0);
+            Assert.IsTrue(localDiag.TrueForAll(message => !message.Contains("no acting adult")),
+                "No household may report 'no acting adult' with the repaired registry.");
+        }
+
+        [Test]
+        public void AuthoredNine_LotBackedMeals_ConsumeRealBreadLots()
+        {
+            // Plan 01 Slice 3: household meal execution end to end, lot-backed.
+            // Forty loaves per household is 3.3+ staple days of supply for a
+            // two-person household (daily use = members x 3 expected meals x 2
+            // staple units), so the flexible midday slot is served: three
+            // scheduled slots per resident, 27 meals, each consuming one real
+            // loaf from a real lot and recorded in the meal log.
+            AuthoredNineFixture fixture = BuildAuthoredNineFixture(reserveUnits: 0);
+            var inventories = new HouseholdInventoryRegistry();
+            var mealLog = new HouseholdMealLogRegistry();
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                Assert.IsNull(inventories.GetOrCreate(householdId).AddLot(
+                    HouseholdItemCatalog.BreadId, 40, 0, "test larder"));
+            }
+            var localDiag = new List<string>();
+
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                fixture.Population, fixture.Planner, null, 0, localDiag,
+                inventories: inventories, mealLog: mealLog,
+                mealPolicy: MealSchedulingPolicy.Default,
+                memberships: fixture.Memberships);
+
+            Assert.AreEqual(5, report.HouseholdsServed,
+                "All five authored households must resolve an acting adult.");
+            Assert.AreEqual(27, report.MealsEaten, "Nine residents x three scheduled slots, all lot-backed.");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.IsTrue(localDiag.TrueForAll(message => !message.Contains("no acting adult")),
+                "No household may report 'no acting adult' with the repaired registry.");
+            int loggedMeals = 0;
+            for (int h = 0; h < AuthoredHouseholds.Length; h++)
+            {
+                loggedMeals += mealLog.GetMeals(h + 1).Count;
+                Assert.AreEqual(40 - 3 * AuthoredHouseholds[h].Length,
+                    inventories.GetOrCreate(h + 1).GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                    $"H{h + 1} bread must fall by exactly one loaf per meal served.");
+            }
+            Assert.AreEqual(27, loggedMeals, "Every served meal must be recorded in the meal log.");
+        }
     }
 }

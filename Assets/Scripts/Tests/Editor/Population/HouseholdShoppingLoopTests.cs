@@ -950,5 +950,89 @@ namespace LandLedgers.EditorTests.Population
             Assert.Greater(readModel.PersonJourney(1).Count, 0);
         }
 
+        // ---------- Plan 01 Slice 3 (UNITY-OWED): shopping over the authored nine ----------
+
+        [Test]
+        public void ExecuteNeed_AuthoredNine_ResolvesRealShopperPerHousehold()
+        {
+            // Plan 01 Slice 3, Unity Test Runner only: with the repaired
+            // registry, the shopping loop resolves a real shopper from the
+            // authoritative memberships for every authored household - H1-H4
+            // (two members each) and H5 (one member) - and each trip plan
+            // completes with conservation. Passing is left for Codex; this
+            // test never runs in the Roslyn harness (this file is
+            // harness-excluded).
+            Fixture f = Fixture.Create();
+            int[][] authored =
+            {
+                new[] { 1, 2 }, new[] { 3, 4 }, new[] { 5, 6 }, new[] { 7, 8 }, new[] { 9 },
+            };
+            var population = new PopulationState();
+            var registry = new HouseholdMembershipRegistry();
+            int nextMembershipId = 0;
+            for (int h = 0; h < authored.Length; h++)
+            {
+                population.households.Add(new HouseholdState { id = h + 1 });
+                foreach (int personId in authored[h])
+                {
+                    population.people.Add(new PersonState
+                    {
+                        id = personId,
+                        firstName = "Resident" + personId,
+                        lastName = "Test",
+                        age = 26 + personId,
+                        ageBand = AgeBand.Adult18Plus,
+                    });
+                    Assert.IsNull(registry.Register(new HouseholdMembership
+                    {
+                        MembershipId = nextMembershipId++,
+                        PersonId = personId,
+                        HouseholdId = h + 1,
+                        Lifecycle = HouseholdMembershipLifecycle.Active,
+                        StartDayIndex = 0,
+                        Source = HouseholdMembershipSource.Authored,
+                    }), $"P{personId} into H{h + 1} must register cleanly.");
+                    f.Knowledge.LearnSupplier(personId, "store-1", "lives in the same town", 0);
+                    f.PersonLocations[personId] = "home";
+                }
+                string funding = f.Ledgers.GetOrCreate(h + 1).RecordInflow(
+                    0, 10000, HouseholdIncomeSource.OwnerContribution,
+                    "test-capital", "test funding", "test");
+                Assert.IsNull(funding, funding);
+            }
+            Assert.AreEqual(9, registry.ActiveCount);
+
+            f.Loop.RebindPopulationAuthorities(population, registry, f.Journeys);
+
+            for (int h = 0; h < authored.Length; h++)
+            {
+                HouseholdPurchasingNeed need = f.Needs.CreateNeed(h + 1, HouseholdItemCatalog.FlourId, f.Day);
+                need.UnitsNeeded = 5;
+                need.Urgency01 = 0.9f;
+                need.ReasonSummary = "test need";
+
+                ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+                Assert.IsTrue(result.Success, result.FailureReason);
+                Assert.IsTrue(System.Array.IndexOf(authored[h], result.ShopperPersonId) >= 0,
+                    $"H{h + 1} shopper must be one of its authored members, got P{result.ShopperPersonId}.");
+                Assert.AreEqual(5, result.UnitsAcquired);
+                Assert.AreEqual(600, result.BuyerOutflowCents, "5u flour at 120c.");
+                Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+                Assert.AreEqual(0, result.UnitsStillNeeded);
+            }
+
+            Assert.GreaterOrEqual(f.Loop.TripHistory.Count, 5, "One trip per household must be recorded.");
+            Assert.AreEqual(75, f.StoreStock(), "25u flour sold across the five trips.");
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                Assert.AreEqual(9400, f.Ledgers.GetOrCreate(householdId).GetBalanceCents(),
+                    $"H{householdId} must have paid exactly 600c for its trip.");
+                Assert.AreEqual(5, f.Inventories.GetOrCreate(householdId)
+                    .GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                    $"H{householdId} must hold the 5u it bought.");
+            }
+        }
+
     }
 }

@@ -252,6 +252,63 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void AuthoredNineResidentTown_DailyNeeds_LotBackedMealsServeAllHouseholds()
+        {
+            // Plan 01 Slice 3, Unity Test Runner only: the full end-to-end
+            // path through the real manager. With the repaired registry,
+            // ExecuteDay over the generated population serves all 5
+            // households with a resolved acting adult and lot-backed meal
+            // consumption: forty loaves per household is 3.3+ staple days of
+            // supply for a two-person household, so the flexible midday slot
+            // is served - three scheduled slots per resident, 27 meals, each
+            // consuming one real loaf and recorded in the meal log. Passing
+            // is left for Codex; this test never runs in the Roslyn harness
+            // (this file is harness-excluded).
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+            Assert.AreEqual(9, manager.Memberships.ActiveCount,
+                "Exactly one Active membership per resident must exist at generation.");
+
+            var inventories = new HouseholdInventoryRegistry();
+            var mealLog = new HouseholdMealLogRegistry();
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                Assert.IsNull(inventories.GetOrCreate(householdId).AddLot(
+                    HouseholdItemCatalog.BreadId, 40, 0, "test larder"),
+                    "Bread lots must land in the household inventory.");
+            }
+
+            var diag = new List<string>();
+            DailyNeedsService.DayReport report = new DailyNeedsService().ExecuteDay(
+                manager.State, new HouseholdConsumptionPlanner(), null, 0, diag,
+                inventories: inventories, mealLog: mealLog,
+                mealPolicy: MealSchedulingPolicy.Default, memberships: manager.Memberships);
+
+            Assert.AreEqual(5, report.HouseholdsServed,
+                "All five households must resolve an acting adult at the first daily needs event.");
+            Assert.AreEqual(27, report.MealsEaten,
+                "Nine residents x three scheduled slots, all lot-backed.");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.IsTrue(diag.TrueForAll(message => !message.Contains("no acting adult")),
+                "No household may report 'no acting adult' at the first daily needs event.");
+            int[][] authoredHouseholds =
+            {
+                new[] { 1, 2 }, new[] { 3, 4 }, new[] { 5, 6 }, new[] { 7, 8 }, new[] { 9 },
+            };
+            int loggedMeals = 0;
+            for (int h = 0; h < authoredHouseholds.Length; h++)
+            {
+                loggedMeals += mealLog.GetMeals(h + 1).Count;
+                Assert.AreEqual(40 - 3 * authoredHouseholds[h].Length,
+                    inventories.GetOrCreate(h + 1).GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                    $"H{h + 1} bread must fall by exactly one loaf per meal served.");
+            }
+            Assert.AreEqual(27, loggedMeals, "Every served meal must be recorded in the meal log.");
+        }
+
+        [Test]
         public void AuthoredNineResidentTown_RebuildTwice_IsIdempotent()
         {
             // Plan 01 Slice 1a: a second generation on the same manager is

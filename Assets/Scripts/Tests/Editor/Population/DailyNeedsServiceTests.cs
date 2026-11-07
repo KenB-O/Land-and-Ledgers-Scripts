@@ -32,6 +32,24 @@ namespace LandLedgers.EditorTests.Population
             }
         }
 
+        private sealed class CapturingExecutor : IEmbodiedPurchaseExecutor
+        {
+            public readonly List<int> ActingPersonIds = new List<int>();
+
+            public PurchaseExecutionResult Execute(ProcurementNeed need, int actingPersonId, int dayIndex)
+            {
+                ActingPersonIds.Add(actingPersonId);
+                return new PurchaseExecutionResult
+                {
+                    NeedSequence = need.NeedSequence,
+                    Success = true,
+                    ActingPersonId = actingPersonId,
+                    UnitsAcquired = need.UnitsNeeded,
+                    AmountPaidCents = 0,
+                };
+            }
+        }
+
         private PopulationState population;
         private HouseholdLedgerRegistry ledgers;
         private SupplierDirectory suppliers;
@@ -162,6 +180,34 @@ namespace LandLedgers.EditorTests.Population
 
             Assert.AreEqual(0, report.HouseholdsServed);
             Assert.AreEqual(0, report.MealsEaten);
+        }
+
+        [Test]
+        public void FindActingAdult_ReturnsOffMapFirstAdult()
+        {
+            // Plan 08 Slice 0 (AUD-266 discriminator): FindActingAdult
+            // picks the first Adult18Plus member with labor access and
+            // never consults the OffMapJourneyAuthority, so the off-map
+            // first adult P1 is handed real person-time shopping. The
+            // capturing executor records the acting adult it receives.
+            // Expected to change in Slice 2: the authority is threaded
+            // through, P1 is skipped, and the recorded adult is P2.
+            journeys.RegisterLocation(new JourneyLocation("gateway", JourneyLocationKind.OffMapGateway, "Depot", 4f, 0f));
+            journeys.AddEdge("home", "gateway", 4.0f, "depot road");
+            var authority = new OffMapJourneyAuthority(journeys);
+            OffMapJourneyRecord record = authority.DepartPerson(
+                1, "home", "Millbrook", 1, 2, "freight",
+                null, null, 0, _ => 0, null, diag);
+            Assert.IsNotNull(record, "DepartPerson must create the journey record: " + string.Join("; ", diag));
+            Assert.IsTrue(authority.IsOffMapPerson(1), "P1 must read off-map while the journey is active.");
+
+            var capturing = new CapturingExecutor();
+            DailyNeedsService.DayReport report = service.ExecuteDay(population, planner, capturing, 0, diag);
+
+            Assert.AreEqual(1, report.HouseholdsServed, "A household with an acting adult is served.");
+            Assert.Greater(capturing.ActingPersonIds.Count, 0, "The executor must have been called at least once.");
+            Assert.IsTrue(capturing.ActingPersonIds.TrueForAll(id => id == 1),
+                "AUD-266: every executor call names P1, the off-map first adult: " + string.Join(",", capturing.ActingPersonIds));
         }
 
         [Test]

@@ -143,6 +143,43 @@ namespace LandLedgers.Population
             }
         }
 
+        /// <summary>
+        /// Plan 08 Slice 1 (Q03, AUD-335): mirrors a loop receipt back
+        /// into the mapped reserve category, the reverse of
+        /// MirrorLotConsumptionToReserve. Credits the reserve by the
+        /// units received (household units), clamped to targetUnits —
+        /// the same clamp ApplyReservePurchase applies — so the excess
+        /// above target lives only in lots, exactly as it does on the
+        /// GSRM leg. Touches lots never. Returns silently when the
+        /// household is null, units are at or below zero, the item
+        /// definition is null, the definition carries no reserve
+        /// category, or the household holds no reserve for that
+        /// category. Each receipt credits once and each consumption
+        /// debits once, so no double-count arises.
+        /// </summary>
+        public static void MirrorLotReceiptToReserve(
+            HouseholdState household,
+            string itemId,
+            int units)
+        {
+            if (household == null || units <= 0)
+            {
+                return;
+            }
+
+            HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
+            if (definition == null || string.IsNullOrWhiteSpace(definition.ReserveCategoryId))
+            {
+                return;
+            }
+
+            HouseholdReserveState reserve = household.GetReserve(definition.ReserveCategoryId);
+            if (reserve != null)
+            {
+                reserve.currentUnits = Math.Max(0, Math.Min(reserve.targetUnits, reserve.currentUnits + units));
+            }
+        }
+
         private static void SeedCategory(
             HouseholdState household,
             HouseholdInventory inventory,

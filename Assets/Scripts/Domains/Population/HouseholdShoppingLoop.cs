@@ -389,6 +389,16 @@ namespace LandLedgers.Population
                 return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
             }
 
+            // Plan 08 Slice 1 (Q03, AUD-335): the loop receipt credits
+            // the mapped reserve by the units received (household units),
+            // clamped to target — the reverse of the meal-consumption
+            // mirror — so the reserve deficit closes and the GSRM path
+            // does not re-buy the same food. One call site covers the
+            // single-need and batched paths alike, carried and delivered
+            // alike; rejected lots never reach this line.
+            HouseholdInventoryReserveBridge.MirrorLotReceiptToReserve(
+                population.GetHousehold(need.HouseholdId), need.ItemId, unitsReceived);
+
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
             need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);

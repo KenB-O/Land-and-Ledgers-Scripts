@@ -826,28 +826,29 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void GSRMRebuysFoodAlreadyHeld()
+        public void GSRMDoesNotRebuyFoodAlreadyHeld()
         {
-            // Plan 08 Slice 0 (AUD-335, GSRM half, Unity Test Runner):
-            // the loop half leaves 5u of flour lots in the household with
-            // the staple_food reserve still at 0. This test drives the
-            // GSRM half from exactly that state and proves the re-buy: on
-            // a gated day the reserve path buys staple_food again and
-            // charges the household a second time for food it already
-            // holds. Expected to change in Slice 1: after the repair the
-            // reserve is credited by the loop receipt, so no second
-            // purchase fires and this test is rewritten into
-            // GSRMDoesNotRebuyFoodAlreadyHeld.
+            // Plan 08 Slice 1 (AUD-335, GSRM half, Unity Test Runner):
+            // REWRITE of the Slice 0 GSRMRebuysFoodAlreadyHeld. The
+            // household now holds the post-repair loop state — flour lots
+            // pre-stocked by a loop receipt with the reserve credited to
+            // target — so the GSRM path must buy nothing for the category
+            // on the gated day and charge nothing. The reserve still falls
+            // by its ordinary daily use (2u for this household), which
+            // leaves it above the staple threshold, so no need arises.
             ReservePurchaseFixture fixture = CreateReservePurchaseFixture("staple_food");
             try
             {
                 HouseholdReserveState staple = fixture.Household.GetReserve("staple_food");
                 Assert.NotNull(staple, "The fixture household must hold a staple_food reserve.");
-                Assert.AreEqual(0, staple.currentUnits, "The reserve starts empty, as after a loop receipt.");
+                HouseholdReserveEvaluator.BuildShoppingNeeds(fixture.Household);
+                int target = staple.targetUnits;
+                Assert.Greater(target, 0, "The staple_food target must be computed from the catalog, not assumed.");
+                staple.currentUnits = target;
                 HouseholdInventory inventory = fixture.Inventories.GetOrCreate(fixture.Household.id);
-                Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.FlourId, 5, 0, "loop receipt (Plan 08 Slice 0)"));
-                Assert.AreEqual(5, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId),
-                    "The household already holds 5u of flour lots from the loop.");
+                Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.FlourId, target, 0, "loop receipt (Plan 08 Slice 1)"));
+                Assert.AreEqual(target, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                    "The household holds a full target of flour lots from the loop.");
 
                 int supplierStapleBefore = 0;
                 foreach (RegionalSupplierAdapter adapter in fixture.Adapters)
@@ -859,22 +860,32 @@ namespace LandLedgers.EditorTests.Population
 
                 fixture.Manager.ResolveDailySales();
 
-                Assert.Greater(staple.currentUnits, 0,
-                    "AUD-335: the GSRM path bought staple_food again despite 5u of flour lots already held.");
-                Assert.AreEqual(
-                    fixture.Manager.LastDailyReserveOffMapUnits + fixture.Manager.LastDailyReserveLocalUnits,
-                    staple.currentUnits, "Every purchased unit must land in the reserve.");
-                Assert.Less(fixture.Household.spendingMoneyCents, cashBefore,
-                    "AUD-335: the household was charged a second time for food it already holds.");
+                Assert.AreEqual(0, fixture.Manager.LastDailyReserveOffMapUnits,
+                    "No off-map staple_food purchase fires after a credited loop receipt.");
+                Assert.AreEqual(0, fixture.Manager.LastDailyReserveLocalUnits,
+                    "No local staple_food purchase fires after a credited loop receipt.");
+                Assert.AreEqual(cashBefore, fixture.Household.spendingMoneyCents,
+                    "No second purchase, no second charge.");
+                Assert.AreEqual(target - staple.lastDailyUseUnits, staple.currentUnits,
+                    "The reserve moves only by its ordinary daily use.");
                 int supplierStapleAfter = 0;
                 foreach (RegionalSupplierAdapter adapter in fixture.Adapters)
                 {
                     supplierStapleAfter += adapter.AvailableUnits("staple_food");
                 }
-                Assert.AreEqual(supplierStapleBefore - fixture.Manager.LastDailyReserveOffMapUnits, supplierStapleAfter,
-                    "Off-map units shipped must leave supplier stock by exactly that count.");
-                Assert.AreEqual(5, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId),
-                    "The loop-held flour lots are untouched by the re-buy.");
+                Assert.AreEqual(supplierStapleBefore, supplierStapleAfter,
+                    "No supplier stock moves for a category already held.");
+                Assert.AreEqual(target, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                    "The loop-held flour lots are untouched.");
+                bool hasStapleNeed = false;
+                foreach (HouseholdReserveNeed need in HouseholdReserveEvaluator.BuildShoppingNeeds(fixture.Household))
+                {
+                    if (string.Equals(need.CategoryId, "staple_food", System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasStapleNeed = true;
+                    }
+                }
+                Assert.IsTrue(!hasStapleNeed, "No staple_food need remains after a credited loop receipt.");
             }
             finally
             {

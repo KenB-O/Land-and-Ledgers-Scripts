@@ -261,11 +261,17 @@ namespace LandLedgers.EditorTests.Population
         [Test]
         public void LoopReceipt_LeavesReserveUnchangedAndDeficitOpen()
         {
-            // Plan 08 Slice 0: a loop receipt lands real flour lots while
-            // the staple_food reserve still reads 0, so the reserve deficit
-            // stays open and the GSRM path would re-buy on the next gated
-            // day. Expected to change in Slice 1: after the repair the
-            // reserve reads the credited units and the deficit is zero.
+            // Plan 08 Slice 0 discriminator, REPAIRED FORM in Slice 1:
+            // the loop receipt now credits the reserve by the units
+            // received, so the reserve reads 5 and the deficit shrinks to
+            // 3 (target 8 less 5 received). The plan's "deficit zero"
+            // wording does not hold for this 5u receipt against the
+            // catalog target of 8; the zero-deficit case is the new
+            // LoopReceipt_ClosesDeficitSoBuildShoppingNeedsReportsNone
+            // below. Note the credited 5u sits exactly at the staple
+            // buying threshold (ceil(8 x 0.6) = 5), so BuildShoppingNeeds
+            // raises no need even though a 3u deficit remains — no re-buy
+            // fires. Only the two named assertions changed here.
             Fixture f = Fixture.Create();
             HouseholdState household = f.Population.GetHousehold(7);
             Assert.NotNull(household, "H7 must exist in the fixture population.");
@@ -287,22 +293,23 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(5, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId),
                 "The receipt succeeds: 5u of flour lots land in the household.");
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
-            Assert.AreEqual(0, reserve.currentUnits,
-                "AUD-335: the loop receipt never credits the reserve, so it still reads 0.");
+            Assert.AreEqual(5, reserve.currentUnits,
+                "Slice 1 repaired form: the loop receipt credits the reserve by the units received.");
             List<HouseholdReserveNeed> needsAfter = HouseholdReserveEvaluator.BuildShoppingNeeds(household);
-            Assert.IsTrue(HasStapleFoodNeed(needsAfter),
-                "AUD-335: the deficit stays open after the loop receipt, so the GSRM path would re-buy.");
-            Assert.AreEqual(target, reserve.targetUnits - reserve.currentUnits,
-                "AUD-335: the deficit still equals the full target.");
+            Assert.IsTrue(!HasStapleFoodNeed(needsAfter),
+                "Slice 1 repaired form: the credited reserve sits at the buying threshold, so no staple_food need remains and no re-buy fires.");
+            Assert.AreEqual(3, reserve.targetUnits - reserve.currentUnits,
+                "Slice 1 repaired form: the deficit is the target less the credited receipt (8 - 5 = 3).");
         }
 
         [Test]
         public void LoopReceipt_SecondReceiptStillLeavesReserveUnchanged()
         {
-            // Plan 08 Slice 0: the defect repeats — a second loop receipt
-            // for the same category also lands lots while the reserve stays
-            // at 0, so the deficit never closes no matter how often the
-            // household shops through the loop.
+            // Plan 08 Slice 0 discriminator, REPAIRED FORM in Slice 1:
+            // the first receipt credits 5u and the second receipt credits
+            // the remaining 3u up to the target, clamped at 8, so the
+            // deficit closes and no staple_food need remains. Only the two
+            // named assertions changed here.
             Fixture f = Fixture.Create();
             HouseholdState household = f.Population.GetHousehold(7);
             HouseholdReserveState reserve = household.GetReserve("staple_food");
@@ -320,11 +327,210 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(result.Success, result.FailureReason);
             Assert.AreEqual(10, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId),
                 "Two receipts land 10u of flour lots in total.");
-            Assert.AreEqual(0, reserve.currentUnits,
-                "AUD-335: even a second loop receipt never credits the reserve.");
+            Assert.AreEqual(8, reserve.currentUnits,
+                "Slice 1 repaired form: the second receipt credits the reserve to the target (clamped at 8).");
             List<HouseholdReserveNeed> needsAfter = HouseholdReserveEvaluator.BuildShoppingNeeds(household);
-            Assert.IsTrue(HasStapleFoodNeed(needsAfter),
-                "AUD-335: the deficit stays open after two loop receipts.");
+            Assert.IsTrue(!HasStapleFoodNeed(needsAfter),
+                "Slice 1 repaired form: two receipts close the deficit, so no staple_food need remains.");
+        }
+
+        // ---------- Slice 1: AUD-335 repair (loop receipt credits reserves) ----------
+
+        [Test]
+        public void LoopReceipt_CreditsReserveByUnitsReceived()
+        {
+            // Plan 08 Slice 1: a 5u flour receipt credits the mapped
+            // staple_food reserve by exactly the units received.
+            Fixture f = Fixture.Create();
+            HouseholdState household = f.Population.GetHousehold(7);
+            HouseholdReserveState reserve = household.GetReserve("staple_food");
+            Assert.NotNull(reserve, "H7 must hold a staple_food reserve.");
+            reserve.currentUnits = 0;
+            HouseholdReserveEvaluator.BuildShoppingNeeds(household);
+            int target = reserve.targetUnits;
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 5);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(5, result.UnitsAcquired);
+            Assert.AreEqual(5, reserve.currentUnits, "The reserve rises by exactly the units received.");
+            Assert.AreEqual(5, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+            Assert.AreEqual(target - 5, reserve.targetUnits - reserve.currentUnits,
+                "The deficit shrinks by exactly the credited receipt.");
+        }
+
+        [Test]
+        public void LoopReceipt_PartialFillCreditsOnlyReceived()
+        {
+            // Plan 08 Slice 1: when the store holds fewer units than the
+            // need, the reserve rises by the received count only and the
+            // need stays open with the remainder.
+            Fixture f = Fixture.Create();
+            HouseholdState household = f.Population.GetHousehold(7);
+            HouseholdReserveState reserve = household.GetReserve("staple_food");
+            Assert.NotNull(reserve, "H7 must hold a staple_food reserve.");
+            reserve.currentUnits = 0;
+            f.Fund(10000);
+            f.Port.Stock["staple_food"] = 3; // only 3u available
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 5);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(3, result.UnitsAcquired);
+            Assert.AreEqual(2, result.UnitsStillNeeded);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status, "A partial purchase must leave the unmet need open.");
+            Assert.AreEqual(3, reserve.currentUnits, "The reserve rises by the received count only.");
+            Assert.AreEqual(3, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+        }
+
+        [Test]
+        public void LoopReceipt_ClampsReserveAtTargetWhileLotsHoldFullAmount()
+        {
+            // Plan 08 Slice 1: a receipt larger than the remaining deficit
+            // stops the reserve at target while the lots hold the full
+            // receipt, exactly as ApplyReservePurchase behaves — the excess
+            // lives only in lots, and no re-buy fires while the reserve
+            // reads at target.
+            Fixture f = Fixture.Create();
+            HouseholdState household = f.Population.GetHousehold(7);
+            HouseholdReserveState reserve = household.GetReserve("staple_food");
+            Assert.NotNull(reserve, "H7 must hold a staple_food reserve.");
+            HouseholdReserveEvaluator.BuildShoppingNeeds(household);
+            int target = reserve.targetUnits;
+            Assert.Greater(target, 0, "The staple_food target must be computed from the catalog, not assumed.");
+            reserve.currentUnits = target - 2; // 2u of deficit remain
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 5);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(5, result.UnitsAcquired);
+            Assert.AreEqual(target, reserve.currentUnits, "The reserve stops at target.");
+            Assert.AreEqual(5, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                "The lots hold the full receipt above the reserve.");
+        }
+
+        [Test]
+        public void LoopReceipt_ItemWithoutReserveCategoryCreditsNothing()
+        {
+            // Plan 08 Slice 1: an item whose category has no household
+            // reserve credits nothing and crashes nothing. No catalogued
+            // item has an empty ReserveCategoryId (verified in source:
+            // every HouseholdItemCatalog definition carries one), so the
+            // loop-reachable form of this guard is a catalogued item
+            // whose category has no household reserve: "book" maps to
+            // "luxury_goods", which the reserve catalog does not define.
+            // The null-definition guard is pinned by the direct helper
+            // call at the end of this test.
+            Fixture f = Fixture.Create();
+            HouseholdState household = f.Population.GetHousehold(7);
+            f.Port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "luxury_goods",
+                OfferedItemIds = new List<string> { "book" },
+                StoreUnitsPerItemUnit = 1,
+            });
+            f.Port.Stock["luxury_goods"] = 100;
+            f.Port.Prices["luxury_goods"] = 50;
+            f.Port.Targets["luxury_goods"] = 100;
+            var reservesBefore = new Dictionary<string, int>();
+            foreach (string categoryId in new[]
+            {
+                "staple_food", "meat", "household_goods", "fuel_wood",
+                "clothing", "tools_hardware", "medicine_remedies",
+            })
+            {
+                HouseholdReserveState reserve = household.GetReserve(categoryId);
+                reservesBefore[categoryId] = reserve != null ? reserve.currentUnits : -1;
+            }
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed("book", 5);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(5, result.UnitsAcquired);
+            Assert.AreEqual(5, f.Inventories.GetOrCreate(7).GetAvailableUnits("book"),
+                "The book lots land.");
+            foreach (KeyValuePair<string, int> entry in reservesBefore)
+            {
+                HouseholdReserveState reserve = household.GetReserve(entry.Key);
+                int after = reserve != null ? reserve.currentUnits : -1;
+                Assert.AreEqual(entry.Value, after, $"Reserve {entry.Key} must be untouched by a book receipt.");
+            }
+
+            HouseholdInventoryReserveBridge.MirrorLotReceiptToReserve(household, "not_a_real_item", 5);
+            foreach (KeyValuePair<string, int> entry in reservesBefore)
+            {
+                HouseholdReserveState reserve = household.GetReserve(entry.Key);
+                int after = reserve != null ? reserve.currentUnits : -1;
+                Assert.AreEqual(entry.Value, after, $"Reserve {entry.Key} must be untouched by an unknown item id.");
+            }
+        }
+
+        [Test]
+        public void LoopReceipt_BatchCreditsEachNeed()
+        {
+            // Plan 08 Slice 1: ExecuteBatch with two needs credits each
+            // mapped reserve by its own receipt through the same shared
+            // settlement unit — one trip, one shopper, two credits.
+            Fixture f = Fixture.Create();
+            f.Port.OfferList[0].OfferedItemIds.Add(HouseholdItemCatalog.BreadId);
+            HouseholdState household = f.Population.GetHousehold(7);
+            HouseholdReserveState reserve = household.GetReserve("staple_food");
+            Assert.NotNull(reserve, "H7 must hold a staple_food reserve.");
+            reserve.currentUnits = 0;
+            HouseholdReserveEvaluator.BuildShoppingNeeds(household);
+            int target = reserve.targetUnits;
+            f.Fund(10000);
+            HouseholdPurchasingNeed flourNeed = f.OpenNeed(HouseholdItemCatalog.FlourId, 5);
+            HouseholdPurchasingNeed breadNeed = f.OpenNeed(HouseholdItemCatalog.BreadId, 3);
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { flourNeed, breadNeed }, f.Day, f.Options());
+
+            Assert.IsTrue(batch.TripExecuted, batch.FailureReason);
+            Assert.AreEqual(2, batch.ServedNeedCount);
+            Assert.AreEqual(8, batch.UnitsAcquiredTotal);
+            Assert.AreEqual(target, reserve.currentUnits, "Both receipts credit the shared staple_food reserve.");
+            Assert.AreEqual(5, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(3, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, flourNeed.Status);
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, breadNeed.Status);
+        }
+
+        [Test]
+        public void LoopReceipt_ClosesDeficitSoBuildShoppingNeedsReportsNone()
+        {
+            // Plan 08 Slice 1: after a full receipt the deficit is zero,
+            // so BuildShoppingNeeds returns no need for the category —
+            // the reserve-side proof that no re-buy fires.
+            Fixture f = Fixture.Create();
+            HouseholdState household = f.Population.GetHousehold(7);
+            HouseholdReserveState reserve = household.GetReserve("staple_food");
+            Assert.NotNull(reserve, "H7 must hold a staple_food reserve.");
+            reserve.currentUnits = 0;
+            HouseholdReserveEvaluator.BuildShoppingNeeds(household);
+            int target = reserve.targetUnits;
+            Assert.Greater(target, 0, "The staple_food target must be computed from the catalog, not assumed.");
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, target);
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(target, result.UnitsAcquired);
+            Assert.AreEqual(target, reserve.currentUnits);
+            Assert.AreEqual(target, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+            List<HouseholdReserveNeed> needsAfter = HouseholdReserveEvaluator.BuildShoppingNeeds(household);
+            Assert.IsTrue(!HasStapleFoodNeed(needsAfter),
+                "After a full receipt BuildShoppingNeeds reports no staple_food need, so no re-buy fires.");
         }
 
         // ---------- Slice 0: AUD-266 discriminator (shopper half) ----------

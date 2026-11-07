@@ -231,6 +231,9 @@ namespace LandLedgers.Orchestration.Systems
         private OffMapAidBusinessRuntime millbrookAidRuntime;
         private int lastMillbrookAidAttemptDay = -1;
         private string lastMillbrookAidRefusal = string.Empty;
+        // Plan 04 Slice 0 (P0-3): once-per-instance driving-identity log
+        // (see DriveMillbrookFreightNegotiation). Log-only.
+        private bool millbrookNegotiationIdentityLogged;
         public Review2StoreFeedRegistry StoreFeedRegistry => storeFeedRegistry;
 
         public void AttachMillbrookAidRuntime(OffMapAidBusinessRuntime runtime)
@@ -3170,6 +3173,19 @@ namespace LandLedgers.Orchestration.Systems
 
         private void DriveMillbrookFreightNegotiation(int dayIndex)
         {
+            // Plan 04 Slice 0 (P0-3): name the driving instance once per
+            // run (GameObject name + instance id + claim state + runtime
+            // null/non-null + BusinessId when present), so Codex can
+            // compare it with the attach log from ConfigureMillbrookAidTable
+            // and tell a wrong-instance attach (A1) from a replaced driving
+            // instance (A2). Log-only; no behavior change.
+            if (!millbrookNegotiationIdentityLogged)
+            {
+                millbrookNegotiationIdentityLogged = true;
+                Debug.Log($"[FreightAgreement] Daily negotiation driving instance: '{gameObject.name}' " +
+                    $"(instance {GetInstanceID()}), authority claim held={hasAuthorityClaim}, " +
+                    $"Millbrook runtime={(millbrookAidRuntime == null ? "null (unresolved)" : "attached, BusinessId=" + millbrookAidRuntime.BusinessId)}.", this);
+            }
             if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
                 || millbrookAidRuntime == null || developmentTownConfiguration == null)
             {
@@ -3181,7 +3197,7 @@ namespace LandLedgers.Orchestration.Systems
                     millbrookAidRuntime == null ? "Millbrook runtime" : null,
                     developmentTownConfiguration == null ? "development-town rate configuration" : null
                 }.Where(value => value != null));
-                LogFreightAgreementBlockerOnce("dependencies", $"[FreightAgreement] Daily request driver is connected on day {dayIndex}, but cannot evaluate the opening order because {missing} is unresolved.");
+                LogFreightAgreementBlockerOnce("dependencies", $"[FreightAgreement] Daily request driver is connected on day {dayIndex}, but cannot evaluate the opening order because {missing} is unresolved. [driving instance '{gameObject.name}' (instance {GetInstanceID()})]");
                 return;
             }
             if (!sharedBusinessRuntime.TryFindByInstanceId("business_bakery_001", out BusinessInstanceState bakery)

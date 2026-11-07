@@ -1948,10 +1948,23 @@ namespace LandLedgers.FirstLedger
                 runtime = new OffMapAidBusinessRuntime(definition);
             if (saveLoadManager != null) saveLoadManager.MillbrookAidRuntime = runtime;
             if (drivers != null) drivers.AttachMillbrookAidRuntime(runtime);
+            // Plan 04 Slice 0 (P0-3): name the drivers instance that
+            // received the attach (GameObject name + instance id + whether
+            // it holds the SimulationDrivers authority claim), so Codex can
+            // compare it with the driving instance logged by
+            // DriveMillbrookFreightNegotiation and tell a wrong-instance
+            // attach (A1) from a replaced driving instance (A2). The claim
+            // is read from the guard, not from the drivers, so this log
+            // stays honest even when the attach landed on the idle instance.
+            // Log-only; no behavior change.
+            string attachIdentity = drivers == null
+                ? "no SimulationDrivers instance received the attach (drivers null)"
+                : $"attached to drivers instance '{drivers.gameObject.name}' (instance {drivers.GetInstanceID()}, " +
+                  $"authority claim held={SingleInstanceAuthorityGuard.IsClaimedBy("SimulationDrivers", drivers)})";
             Debug.Log($"[OffMapAid] Loaded {definition.DisplayName} ({definition.BusinessId}) from Resources: " +
                 $"flour={runtime.GetInventoryUnits("bakery_flour_sack")} lb, wheat={runtime.GetInventoryUnits("wheat_grain")} lb, " +
                 $"sugar={runtime.GetInventoryUnits("sugar")} lb, yeast={runtime.GetInventoryUnits("yeast")} lb; " +
-                "off-map table runtime is attached to the daily driver and save authority.", this);
+                "off-map table runtime is attached to the daily driver and save authority; " + attachIdentity + ".", this);
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD

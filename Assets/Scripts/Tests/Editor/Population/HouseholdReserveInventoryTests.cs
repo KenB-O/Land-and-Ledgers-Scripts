@@ -747,6 +747,240 @@ namespace LandLedgers.EditorTests.Population
             }
         }
 
+        [Test]
+        public void PartialFillReattemptsOnlyTheRemainingDeficit()
+        {
+            // Plan 06 Slice 2 (AUD-328): a partial supplier fill is
+            // exactly once per gated day — the shortfall is never charged,
+            // and the next gated day ships only the remaining deficit.
+            // This distinguishes the AUD-328 claim (fixed: one purchase
+            // moves real stock and real cash exactly once) from the still
+            // open AUD-335 claim (Q03: the loop never credits reserves, so
+            // the same category can be bought again on a later gated day
+            // because the deficit never closes). Here the deficit DOES
+            // close across the two drives (3u then 2u = the 5u need), so
+            // no third purchase fires.
+            ReservePurchaseFixture fixture = CreateReservePurchaseFixture("meat");
+            try
+            {
+                RegionalSupplierAdapter ashfordButcher = fixture.Adapters.Find(a => a.SupplierId == "ashford_butcher");
+                RegionalSupplierAdapter redfieldButcher = fixture.Adapters.Find(a => a.SupplierId == "redfield_butcher");
+                Assert.NotNull(ashfordButcher);
+                Assert.NotNull(redfieldButcher);
+                // Drain Ashford to 3u of meat (cheese only: beef 72 +
+                // bacon 64 + 45 of 48 cheese ship out), so the 5u need can
+                // only partly fill from the cheapest-delivered supplier.
+                // Redfield still holds 184u but is not retried in the
+                // same drive: the helper chooses ONE supplier per need
+                // per day.
+                var diag = new List<string>();
+                Assert.AreEqual(181, ashfordButcher.Ship("meat", 181, 0, diag));
+                Assert.AreEqual(3, ashfordButcher.AvailableUnits("meat"));
+                Assert.AreEqual(3, ashfordButcher.OnHandUnits("cheese"));
+                int redfieldMeatBefore = redfieldButcher.AvailableUnits("meat");
+                HouseholdReserveState meat = fixture.Household.GetReserve("meat");
+                int cashBefore = fixture.Household.spendingMoneyCents;
+
+                fixture.Manager.ResolveDailySales();
+
+                // Day 1: 3u ship at the 3-unit delivered price (goods 6c
+                // + 125c freight over 3u = 48c/u); the 2u shortfall is
+                // never charged and is carried as lost demand at that
+                // same price.
+                Assert.AreEqual(3, meat.currentUnits);
+                Assert.AreEqual(cashBefore - 144, fixture.Household.spendingMoneyCents);
+                Assert.AreEqual(3, fixture.Manager.LastDailyReserveOffMapUnits);
+                Assert.AreEqual(96, fixture.Manager.LastDailyReserveOffMapLostDemandCents);
+                Assert.AreEqual(0, ashfordButcher.AvailableUnits("meat"));
+                Assert.AreEqual(redfieldMeatBefore, redfieldButcher.AvailableUnits("meat"));
+
+                // Gated days pass: the fixture has no clock (absoluteDay
+                // stays 0), so the last attempt is moved back past the
+                // gate cadence instead — the gate's own "days since
+                // attempt" branch opens on the next drive.
+                meat.lastShoppingAttemptDayIndex = -10;
+                int cashAfterDay1 = fixture.Household.spendingMoneyCents;
+
+                fixture.Manager.ResolveDailySales();
+
+                // Day 2: only the remaining 2u deficit ships, now from
+                // Redfield (Ashford is empty): goods 7c + 225c freight
+                // over 2u = 120c/u, 240c total. No double Ship, no double
+                // charge.
+                Assert.AreEqual(5, meat.currentUnits);
+                Assert.AreEqual(cashAfterDay1 - 240, fixture.Household.spendingMoneyCents);
+                Assert.AreEqual(2, fixture.Manager.LastDailyReserveOffMapUnits);
+                Assert.AreEqual(0, fixture.Manager.LastDailyReserveOffMapLostDemandCents);
+                Assert.AreEqual(0, ashfordButcher.AvailableUnits("meat"));
+                Assert.AreEqual(redfieldMeatBefore - 2, redfieldButcher.AvailableUnits("meat"));
+                Assert.AreEqual(70, redfieldButcher.OnHandUnits("beef"), "Cheapest item (beef) ships first.");
+                HouseholdInventory inventory = fixture.Inventories.Get(fixture.Household.id);
+                Assert.NotNull(inventory);
+                Assert.AreEqual(5, SumLotUnits(inventory, HouseholdItemCatalog.UnspecifiedMeatId),
+                    "Lots across both days total exactly the shipped units.");
+            }
+            finally
+            {
+                fixture.Destroy();
+            }
+        }
+
+        [Test]
+        public void SaveLoadPreservesSupplierDecrement()
+        {
+            // Plan 06 Slice 2 (AUD-328): a supplier decrement survives
+            // save and load, and the next gated day neither re-ships nor
+            // re-charges.
+            ReservePurchaseFixture fixture = CreateReservePurchaseFixture("meat");
+            GameObject freshStoreObject = new("Reserve Save Load Fresh Store");
+            try
+            {
+                RegionalSupplierAdapter ashfordButcher = fixture.Adapters.Find(a => a.SupplierId == "ashford_butcher");
+                Assert.NotNull(ashfordButcher);
+                HouseholdReserveState meat = fixture.Household.GetReserve("meat");
+                int cashBefore = fixture.Household.spendingMoneyCents;
+
+                fixture.Manager.ResolveDailySales();
+
+                Assert.AreEqual(5, meat.currentUnits);
+                Assert.AreEqual(cashBefore - 155, fixture.Household.spendingMoneyCents);
+                Assert.AreEqual(179, ashfordButcher.AvailableUnits("meat"));
+                Assert.AreEqual(5, SumLotUnits(fixture.Inventories.Get(fixture.Household.id), HouseholdItemCatalog.UnspecifiedMeatId));
+
+                GeneralStoreSaveDto dto = fixture.Manager.CaptureSaveDto();
+                Assert.NotNull(dto);
+                Assert.NotNull(dto.regionalSupply);
+
+                GeneralStoreRuntimeManager freshManager = CreateStoreRuntime(freshStoreObject, LoadGeneralStoreDefinition(), out BusinessRuntimeState freshRuntime);
+                freshManager.LoadFromSaveDto(dto);
+                var freshAdapters = (List<RegionalSupplierAdapter>)GetPrivateField(freshManager, "regionalSuppliers");
+                Assert.NotNull(freshAdapters);
+                RegionalSupplierAdapter freshAshfordButcher = freshAdapters.Find(a => a.SupplierId == "ashford_butcher");
+                Assert.NotNull(freshAshfordButcher);
+                Assert.AreEqual(179, freshAshfordButcher.AvailableUnits("meat"),
+                    "The restored supplier must hold the post-purchase stock, not the registry starting stock (184).");
+                Assert.AreEqual(67, freshAshfordButcher.OnHandUnits("beef"));
+
+                // The household itself is untouched by the load; bind it
+                // to the fresh manager and drive the next gated day. The
+                // need is gone (reserve full), so nothing ships and
+                // nothing is charged.
+                SetPrivateField(freshManager, "populationManager", fixture.Population);
+                freshManager.HouseholdInventories = fixture.Inventories;
+                meat.lastShoppingAttemptDayIndex = -10;
+                int cashAfterLoad = fixture.Household.spendingMoneyCents;
+
+                freshManager.ResolveDailySales();
+
+                Assert.AreEqual(5, meat.currentUnits, "The load must not change the household reserve.");
+                Assert.AreEqual(5, SumLotUnits(fixture.Inventories.Get(fixture.Household.id), HouseholdItemCatalog.UnspecifiedMeatId),
+                    "The load must not change the household lots.");
+                Assert.AreEqual(cashAfterLoad, fixture.Household.spendingMoneyCents, "No second purchase, no second charge.");
+                Assert.AreEqual(0, freshManager.LastDailyReserveOffMapUnits, "No second Ship after load.");
+                Assert.AreEqual(179, freshAshfordButcher.AvailableUnits("meat"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(freshStoreObject);
+                fixture.Destroy();
+            }
+        }
+
+        [Test]
+        public void NullDtoRestoresStartingStock()
+        {
+            // Plan 06 Slice 2 (AUD-328): a null regional supply DTO (an
+            // old save) restores registry starting stock, so an old save
+            // is never mistaken for a lost decrement.
+            ReservePurchaseFixture fixture = CreateReservePurchaseFixture("meat");
+            try
+            {
+                RegionalSupplierAdapter ashfordButcher = fixture.Adapters.Find(a => a.SupplierId == "ashford_butcher");
+                Assert.NotNull(ashfordButcher);
+                var diag = new List<string>();
+                Assert.AreEqual(5, ashfordButcher.Ship("meat", 5, 0, diag));
+                Assert.AreEqual(179, ashfordButcher.AvailableUnits("meat"));
+
+                InvokePrivateMethodWithArgument(fixture.Manager, "RestoreRegionalSupply", null);
+
+                Assert.AreEqual(184, ashfordButcher.AvailableUnits("meat"));
+                Assert.AreEqual(72, ashfordButcher.OnHandUnits("beef"));
+                Assert.AreEqual(64, ashfordButcher.OnHandUnits("bacon"));
+                Assert.AreEqual(48, ashfordButcher.OnHandUnits("cheese"));
+            }
+            finally
+            {
+                fixture.Destroy();
+            }
+        }
+
+        /// <summary>Shared fixture for the Plan 06 Slice 2 repeat / save-load tests.</summary>
+        private sealed class ReservePurchaseFixture
+        {
+            public GameObject StoreObject;
+            public GameObject PopulationObject;
+            public GeneralStoreRuntimeManager Manager;
+            public BusinessRuntimeState Runtime;
+            public PopulationManager Population;
+            public HouseholdState Household;
+            public HouseholdInventoryRegistry Inventories;
+            public List<RegionalSupplierAdapter> Adapters;
+
+            public void Destroy()
+            {
+                Object.DestroyImmediate(PopulationObject);
+                Object.DestroyImmediate(StoreObject);
+            }
+        }
+
+        private static ReservePurchaseFixture CreateReservePurchaseFixture(string categoryId)
+        {
+            var fixture = new ReservePurchaseFixture();
+            fixture.StoreObject = new GameObject("Reserve Purchase Fixture Store");
+            fixture.PopulationObject = new GameObject("Reserve Purchase Fixture Population");
+            GeneralStoreBusinessDefinition definition = LoadGeneralStoreDefinition();
+            fixture.Manager = CreateStoreRuntime(fixture.StoreObject, definition, out BusinessRuntimeState runtime);
+            fixture.Runtime = runtime;
+            fixture.Population = fixture.PopulationObject.AddComponent<PopulationManager>();
+            HouseholdState household = CreateHousehold();
+            // Daily budget cap: weeklyIncomeSnapshot 10000 pays 60000c/day,
+            // so the budget never binds and the purchase size is the need.
+            household.weeklyIncomeSnapshot = 10000;
+            household.EnsureHouseholdReservesInitialized(true);
+            for (int i = 0; i < household.reserves.Count; i++)
+            {
+                if (household.reserves[i] != null && !string.Equals(household.reserves[i].categoryId, categoryId, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    household.reserves[i].currentUnits = household.reserves[i].targetUnits;
+                }
+            }
+            HouseholdReserveState emptyReserve = household.GetReserve(categoryId);
+            Assert.NotNull(emptyReserve, $"Reserve {categoryId} should exist.");
+            emptyReserve.currentUnits = 0;
+            fixture.Household = household;
+            fixture.Population.State.households.Add(household);
+            SetPrivateField(fixture.Manager, "populationManager", fixture.Population);
+            fixture.Inventories = new HouseholdInventoryRegistry();
+            fixture.Manager.HouseholdInventories = fixture.Inventories;
+            ZeroAllStoreCategoryStocks(runtime);
+            InvokePrivateMethod(fixture.Manager, "EnsureRegionalSuppliersExist");
+            fixture.Adapters = (List<RegionalSupplierAdapter>)GetPrivateField(fixture.Manager, "regionalSuppliers");
+            Assert.NotNull(fixture.Adapters, "The manager should hold the twelve registered regional suppliers.");
+            return fixture;
+        }
+
+        private static void ZeroAllStoreCategoryStocks(BusinessRuntimeState runtime)
+        {
+            foreach (string categoryId in new[] { "staple_food", "meat", "household_goods", "clothing", "tools_hardware", "medicine_remedies" })
+            {
+                CategoryStockState stock = runtime.GetCategoryStock(categoryId);
+                if (stock != null)
+                {
+                    stock.SetCurrentStockForTests(0);
+                }
+            }
+        }
+
         private static HouseholdState CreateHousehold()
         {
             return new HouseholdState
@@ -923,6 +1157,15 @@ namespace LandLedgers.EditorTests.Population
                 BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(method, $"Method {methodName} should exist on {target.GetType().Name}.");
             method.Invoke(target, null);
+        }
+
+        private static void InvokePrivateMethodWithArgument(object target, string methodName, object argument)
+        {
+            MethodInfo method = target.GetType().GetMethod(
+                methodName,
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method, $"Method {methodName} should exist on {target.GetType().Name}.");
+            method.Invoke(target, new object[] { argument });
         }
 
         private static int TotalAvailableUnits(List<RegionalSupplierAdapter> adapters, string categoryId)

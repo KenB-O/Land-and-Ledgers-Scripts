@@ -199,6 +199,48 @@ namespace LandLedgers.Tests.World
         }
 
         [Test]
+        public void RestoreFrom_NullDto_RestoresStartingStock()
+        {
+            // Plan 06 Slice 2 seam: a null DTO restores registry starting
+            // stock (clear-then-load with nothing to load), so an old save
+            // is never mistaken for a lost decrement.
+            var adapter = new RegionalSupplierAdapter(RegionalBusinessRegistry.AshfordButcher);
+            var diag = new List<string>();
+            Assert.AreEqual(5, adapter.Ship("meat", 5, 0, diag));
+            Assert.AreEqual(179, adapter.AvailableUnits("meat"));
+
+            adapter.RestoreFrom(null, diag);
+
+            Assert.AreEqual(184, adapter.AvailableUnits("meat"));
+            Assert.AreEqual(72, adapter.OnHandUnits("beef"));
+            Assert.AreEqual(64, adapter.OnHandUnits("bacon"));
+            Assert.AreEqual(48, adapter.OnHandUnits("cheese"));
+        }
+
+        [Test]
+        public void CaptureInto_RestoreFrom_RoundTrip_PreservesDecrement()
+        {
+            // Plan 06 Slice 2 seam: the save/load round trip preserves a
+            // supplier decrement exactly, and a second restore is
+            // idempotent (clear-then-load).
+            var adapter = new RegionalSupplierAdapter(RegionalBusinessRegistry.AshfordButcher);
+            var diag = new List<string>();
+            Assert.AreEqual(5, adapter.Ship("meat", 5, 0, diag));
+            var dto = new RegionalSupplySaveDto();
+            adapter.CaptureInto(dto);
+
+            var fresh = new RegionalSupplierAdapter(RegionalBusinessRegistry.AshfordButcher);
+            Assert.AreEqual(184, fresh.AvailableUnits("meat"));
+            fresh.RestoreFrom(dto, diag);
+
+            Assert.AreEqual(179, fresh.AvailableUnits("meat"));
+            Assert.AreEqual(67, fresh.OnHandUnits("beef"));
+            fresh.RestoreFrom(dto, diag);
+            Assert.AreEqual(179, fresh.AvailableUnits("meat"),
+                "A second restore must not double-apply the decrement.");
+        }
+
+        [Test]
         public void AllTwelveBusinesses_BecomeSuppliers()
         {
             var adapters = RegionalSupplierSet.CreateAll();

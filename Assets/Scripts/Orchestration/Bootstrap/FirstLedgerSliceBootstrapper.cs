@@ -467,6 +467,17 @@ namespace LandLedgers.FirstLedger
             }
             AppendStartupTiming(timing, stepTimer, "population generation");
 
+            // Plan 01 Slice 1a (P0-1): rebind after generation so
+            // SimulationDrivers re-reads populationManager.Memberships from
+            // the post-generation registry instead of keeping any
+            // pre-generation binding made by the Rebind before generation.
+            // The registry is now a single same-instance object, so this
+            // rebind is belt-and-braces for the whole A family.
+            if (generatePopulationOnPlay && populationManager != null)
+            {
+                FindAnyObjectByType<SimulationDrivers>()?.Rebind();
+            }
+
             // FamilyTreeBuilder is intentionally separate from population
             // generation: its off-map relatives share PopulationState.people
             // and must not be mistaken for residents or migrant arrivals.
@@ -967,6 +978,12 @@ namespace LandLedgers.FirstLedger
             {
                 BuildAuthorityCensus<SimulationSystemsHub>("SimulationSystemsHub"),
                 BuildAuthorityCensus<SimulationDrivers>("SimulationDrivers"),
+                // Plan 01 Slice 1a (P0-1): PopulationManager is the
+                // household-membership authority; a duplicate in the scene
+                // is the leading hypothesis for the 285-day memberless
+                // symptom (generation on one instance, daily drivers
+                // reading the other), so it must be audited like the rest.
+                BuildAuthorityCensus<PopulationManager>("PopulationManager"),
                 BuildAuthorityCensus<CivicFoundationManager>("CivicFoundation"),
                 BuildAuthorityCensus<ScenarioDirector>("ScenarioDirector"),
                 BuildAuthorityCensus<FirstLedgerSliceBootstrapper>("FirstLedgerSliceBootstrapper"),

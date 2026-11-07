@@ -102,6 +102,21 @@ namespace LandLedgers.Population
             return null;
         }
 
+        /// <summary>
+        /// Plan 01 Slice 1a: empties the registry IN PLACE so the manager keeps
+        /// ONE instance for its lifetime (clear-then-load instead of replacing
+        /// the object, which stranded every holder bound to the old instance).
+        /// Active and ended records and diagnostics are all dropped - the
+        /// same contract LoadFromSaveDto already used for its clear step.
+        /// </summary>
+        public void Clear()
+        {
+            activeByPerson.Clear();
+            byMembershipId.Clear();
+            ended.Clear();
+            diagnostics.Clear();
+        }
+
         /// <summary>Ends a person's active membership (move-out, split, dissolve).</summary>
         public bool EndMembership(int personId, int endDayIndex, string reason)
         {
@@ -221,10 +236,7 @@ namespace LandLedgers.Population
         /// <summary>Save support (CLN-1 pattern): clear-then-load.</summary>
         public void LoadFromSaveDto(HouseholdMembershipRegistrySaveDto dto)
         {
-            activeByPerson.Clear();
-            byMembershipId.Clear();
-            ended.Clear();
-            diagnostics.Clear();
+            Clear();
             if (dto == null || dto.memberships == null)
             {
                 return;

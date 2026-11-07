@@ -46,10 +46,9 @@ namespace LandLedgers.EditorTests.Population
             };
         }
 
-        /// <summary>Registers the authored nine onto a fresh registry, in the same order RebuildMembershipRegistry does.</summary>
-        private static HouseholdMembershipRegistry BuildAuthoredNine()
+        /// <summary>Registers the authored nine onto an existing registry, in the same order RebuildMembershipRegistry does.</summary>
+        private static void RegisterAuthoredNine(HouseholdMembershipRegistry registry)
         {
-            var registry = new HouseholdMembershipRegistry();
             int nextMembershipId = 0;
             for (int h = 0; h < AuthoredHouseholds.Length; h++)
             {
@@ -59,6 +58,13 @@ namespace LandLedgers.EditorTests.Population
                     Assert.IsNull(rejection, $"P{personId} into H{h + 1} must register cleanly.");
                 }
             }
+        }
+
+        /// <summary>Registers the authored nine onto a fresh registry, in the same order RebuildMembershipRegistry does.</summary>
+        private static HouseholdMembershipRegistry BuildAuthoredNine()
+        {
+            var registry = new HouseholdMembershipRegistry();
+            RegisterAuthoredNine(registry);
             return registry;
         }
 
@@ -239,6 +245,118 @@ namespace LandLedgers.EditorTests.Population
                 Assert.AreEqual(AuthoredHouseholdOf(personId), rebuilt.GetActiveHouseholdId(personId),
                     "A fresh rebuild restores the authored person-to-household mapping exactly.");
             }
+        }
+
+        [Test]
+        public void Registry_Clear_EmptiesActiveCountMembersAndDiagnostics()
+        {
+            // Plan 01 Slice 1a: Clear() is the clear half of clear-then-load.
+            // Clear on a fresh registry is a safe no-op.
+            var empty = new HouseholdMembershipRegistry();
+            empty.Clear();
+            Assert.AreEqual(0, empty.ActiveCount);
+            Assert.AreEqual(0, empty.Diagnostics.Count);
+            CollectionAssert.IsEmpty(empty.AllMemberships());
+
+            HouseholdMembershipRegistry registry = BuildAuthoredNine();
+            Assert.IsNotNull(registry.Register(ActiveMembership(9, 1, 2)),
+                "Set up a rejection diagnostic so Clear must also drop diagnostics.");
+            Assert.AreEqual(1, registry.Diagnostics.Count);
+
+            registry.Clear();
+
+            Assert.AreEqual(0, registry.ActiveCount, "Clear must drop every Active membership.");
+            Assert.AreEqual(0, registry.Diagnostics.Count,
+                "Clear drops prior diagnostics with the records, matching the LoadFromSaveDto clear contract.");
+            Assert.AreEqual(-1, registry.GetActiveHouseholdId(1));
+            Assert.IsNull(registry.GetActiveMembership(1));
+            CollectionAssert.IsEmpty(registry.GetActiveMembers(1));
+            CollectionAssert.IsEmpty(registry.AllMemberships(), "No membership record of any lifecycle may survive Clear.");
+        }
+
+        [Test]
+        public void Registry_ClearThenLoad_ReproducesAuthoredNine()
+        {
+            // Plan 01 Slice 1a: the clear-then-load contract behind
+            // RebuildMembershipRegistry - the same instance, cleared and
+            // re-registered, reproduces the generation set exactly.
+            // (Instance stability across rebuilds on a real manager is
+            // asserted by the Unity test
+            // AuthoredNineResidentTown_RebuildTwice_IsIdempotent.)
+            HouseholdMembershipRegistry registry = BuildAuthoredNine();
+            registry.Clear();
+            Assert.AreEqual(0, registry.ActiveCount);
+
+            RegisterAuthoredNine(registry);
+
+            Assert.AreEqual(9, registry.ActiveCount);
+            Assert.AreEqual(0, registry.Diagnostics.Count, "Re-registration after Clear must be rejection-free.");
+            for (int personId = 1; personId <= 9; personId++)
+            {
+                Assert.AreEqual(AuthoredHouseholdOf(personId), registry.GetActiveHouseholdId(personId),
+                    $"P{personId} must resolve to its authored household after clear-then-load.");
+            }
+            for (int h = 0; h < AuthoredHouseholds.Length; h++)
+            {
+                CollectionAssert.AreEqual(AuthoredHouseholds[h], registry.GetActiveMembers(h + 1),
+                    $"H{h + 1} members must be exactly the authored members after clear-then-load.");
+            }
+        }
+
+        [Test]
+        public void Registry_DoubleClearThenLoad_IsIdempotent()
+        {
+            // Plan 01 Slice 1a: rebuild twice in a row is idempotent - same
+            // members, no duplicates, no ActiveCount growth.
+            HouseholdMembershipRegistry registry = BuildAuthoredNine();
+
+            registry.Clear();
+            RegisterAuthoredNine(registry);
+            Assert.AreEqual(9, registry.ActiveCount);
+
+            registry.Clear();
+            Assert.AreEqual(0, registry.ActiveCount);
+            RegisterAuthoredNine(registry);
+
+            Assert.AreEqual(9, registry.ActiveCount, "A second clear-then-load must not grow ActiveCount or duplicate memberships.");
+            Assert.AreEqual(0, registry.Diagnostics.Count);
+            for (int personId = 1; personId <= 9; personId++)
+            {
+                HouseholdMembership membership = registry.GetActiveMembership(personId);
+                Assert.IsNotNull(membership, $"P{personId} must hold a membership after the second clear-then-load.");
+                Assert.AreEqual(AuthoredHouseholdOf(personId), membership.HouseholdId);
+            }
+        }
+
+        [Test]
+        public void Registry_ClearThenLoad_MatchesLatestGenerationOnly()
+        {
+            // Plan 01 Slice 1a: fresh New Game after a previous session -
+            // only the latest generation's memberships may remain; nothing
+            // stale from the earlier session survives Clear.
+            HouseholdMembershipRegistry registry = BuildAuthoredNine();
+            registry.Clear();
+
+            // A different later generation: P1/P2 swap households, P9 leaves.
+            Assert.IsNull(registry.Register(ActiveMembership(0, 1, 2)));
+            Assert.IsNull(registry.Register(ActiveMembership(1, 2, 1)));
+            Assert.IsNull(registry.Register(ActiveMembership(2, 3, 2)));
+            Assert.IsNull(registry.Register(ActiveMembership(3, 4, 2)));
+            Assert.IsNull(registry.Register(ActiveMembership(4, 5, 3)));
+            Assert.IsNull(registry.Register(ActiveMembership(5, 6, 3)));
+            Assert.IsNull(registry.Register(ActiveMembership(6, 7, 4)));
+            Assert.IsNull(registry.Register(ActiveMembership(7, 8, 4)));
+
+            Assert.AreEqual(8, registry.ActiveCount);
+            Assert.AreEqual(2, registry.GetActiveHouseholdId(1));
+            Assert.AreEqual(1, registry.GetActiveHouseholdId(2));
+            Assert.AreEqual(-1, registry.GetActiveHouseholdId(9),
+                "P9 has no membership in the latest generation and must not linger from the earlier session.");
+            CollectionAssert.AreEqual(new[] { 2 }, registry.GetActiveMembers(1));
+            CollectionAssert.AreEqual(new[] { 1, 3, 4 }, registry.GetActiveMembers(2));
+            CollectionAssert.IsEmpty(registry.GetActiveMembers(5),
+                "H5 has no members in the latest generation; its earlier membership must not survive.");
+            Assert.AreEqual(0, registry.Diagnostics.Count);
         }
     }
 }

@@ -283,15 +283,22 @@ namespace LandLedgers.Population
             state = result.State;
             RebuildLifecycleManager();
             RebuildMembershipRegistry();
+            string generationSummary = result.Summary;
+            string membershipBoundaryFailure = CheckMembershipGenerationBoundary();
+            if (!string.IsNullOrEmpty(membershipBoundaryFailure))
+            {
+                Debug.LogError($"[Population] Membership generation boundary failed: {membershipBoundaryFailure}", this);
+                generationSummary = $"{generationSummary}\nMEMBERSHIP BOUNDARY FAILED: {membershipBoundaryFailure}";
+            }
             AssignGeneratedBirthDates("World generation; scenario provenance, documented as generated.");
             RefreshAllDerivedAges();
             EnsureBirthdayScheduling("population generation");
             InitializeHealthDefaults();
-            RefreshSettlementMetrics(result.Summary);
+            RefreshSettlementMetrics(generationSummary);
             lastHealthResolutionDayIndex = -1;
             lastSettlementResolutionWeekIndex = -1;
             lastHealthSummary = "No health resolution yet.";
-            RefreshSummaryFields(result.Summary);
+            RefreshSummaryFields(generationSummary);
             SweepUnledgeredHouseholdCashToLedgers("population generation");
 
             if (!logSummary)
@@ -301,13 +308,13 @@ namespace LandLedgers.Population
 
             if (result.HasErrors)
             {
-                Debug.LogWarning(result.Summary + "\n" + BuildValidationLog(), this);
+                Debug.LogWarning(generationSummary + "\n" + BuildValidationLog(), this);
             }
             else
             {
                 string householdPreview = logHouseholdPreview ? "\n" + BuildHouseholdPreview() : string.Empty;
                 string validationLog = state.validationMessages.Count > 0 ? "\n" + BuildValidationLog() : string.Empty;
-                Debug.Log(result.Summary + validationLog + householdPreview, this);
+                Debug.Log(generationSummary + validationLog + householdPreview, this);
             }
         }
 
@@ -484,13 +491,18 @@ namespace LandLedgers.Population
 
         /// <summary>
         /// Rebuilds the membership registry from the household member lists
-        /// (the persisted form). Clear-then-load: the registry is fresh, so no
-        /// stale membership survives.
+        /// (the persisted form). Clear-then-load ON THE SAME instance
+        /// (Plan 01 Slice 1a): the manager keeps one registry for its
+        /// lifetime, so holders bound before generation keep reading the
+        /// live object; no stale membership survives, and no holder is
+        /// stranded on a replaced empty instance. Register rejections are
+        /// logged loudly here (and fail the generation boundary in
+        /// CompletePopulationSnapshot) instead of being swallowed.
         /// </summary>
         private void RebuildMembershipRegistry()
         {
             EnsureDemographicStack();
-            membershipRegistry = new HouseholdMembershipRegistry();
+            membershipRegistry.Clear();
             RebuildLifecycleManager();
             if (state == null || state.households == null)
             {
@@ -524,9 +536,44 @@ namespace LandLedgers.Population
                         Source = HouseholdMembershipSource.Authored,
                         LegacyDiagnostic = "rebuilt from household member list",
                     };
-                    membershipRegistry.Register(membership);
+                    string rejection = membershipRegistry.Register(membership);
+                    if (rejection != null)
+                    {
+                        Debug.LogError(
+                            $"[Population] Membership rebuild rejected P{personId} into H{household.id}: {rejection}", this);
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// Plan 01 Slice 1a: loud generation-boundary check. Every generated
+        /// person must hold exactly one Active membership and no Register
+        /// rejection may have fired. Returns the failure text (including the
+        /// registry Diagnostics) or null when the boundary holds. The caller
+        /// logs it as an error and flags the generation summary; it never
+        /// throws, so a boundary failure is diagnosable, not a crash.
+        /// </summary>
+        private string CheckMembershipGenerationBoundary()
+        {
+            if (membershipRegistry == null || state == null)
+            {
+                return null;
+            }
+
+            int peopleCount = state.people != null ? state.people.Count : 0;
+            var failures = new List<string>();
+            if (membershipRegistry.ActiveCount != peopleCount)
+            {
+                failures.Add($"ActiveCount {membershipRegistry.ActiveCount} != people count {peopleCount}.");
+            }
+
+            if (membershipRegistry.Diagnostics.Count > 0)
+            {
+                failures.Add("Register rejections: " + string.Join(" | ", membershipRegistry.Diagnostics));
+            }
+
+            return failures.Count == 0 ? null : string.Join(" ", failures);
         }
 
         private CalendarAnchor ResolveAnchor()
@@ -1554,7 +1601,10 @@ namespace LandLedgers.Population
         private void RestoreMembershipRegistry(HouseholdMembershipRegistrySaveDto dto)
         {
             EnsureDemographicStack();
-            membershipRegistry = new HouseholdMembershipRegistry();
+            // Plan 01 Slice 1a: same-instance clear-then-load, never a
+            // replacement object; LoadFromSaveDto below clears again as
+            // part of its own contract before loading the saved set.
+            membershipRegistry.Clear();
             RebuildLifecycleManager();
 
             var valid = new HouseholdMembershipRegistrySaveDto();

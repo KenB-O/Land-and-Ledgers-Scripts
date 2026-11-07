@@ -1,12 +1,15 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
+using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.World;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace LandLedgers.EditorTests.Population
 {
@@ -244,6 +247,122 @@ namespace LandLedgers.EditorTests.Population
                 CollectionAssert.AreEqual(membersAtGeneration[householdId],
                     manager.Memberships.GetActiveMembers(householdId),
                     $"H{householdId} memberships must be unchanged by the first daily needs event.");
+            }
+        }
+
+        [Test]
+        public void AuthoredNineResidentTown_RebuildTwice_IsIdempotent()
+        {
+            // Plan 01 Slice 1a: a second generation on the same manager is
+            // clear-then-load on the SAME registry instance - no duplicates,
+            // no ActiveCount growth, identical members, no rejections.
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+            HouseholdMembershipRegistry registryAfterFirst = manager.Memberships;
+            Assert.IsNotNull(registryAfterFirst);
+            Assert.AreEqual(9, registryAfterFirst.ActiveCount);
+
+            manager.GeneratePopulationSnapshot(configuration);
+
+            Assert.IsTrue(object.ReferenceEquals(registryAfterFirst, manager.Memberships),
+                "Rebuild must clear-then-load the same registry instance, never replace it.");
+            Assert.AreEqual(9, manager.Memberships.ActiveCount);
+            CollectionAssert.AreEqual(new[] { 1, 2 }, manager.Memberships.GetActiveMembers(1));
+            CollectionAssert.AreEqual(new[] { 3, 4 }, manager.Memberships.GetActiveMembers(2));
+            CollectionAssert.AreEqual(new[] { 5, 6 }, manager.Memberships.GetActiveMembers(3));
+            CollectionAssert.AreEqual(new[] { 7, 8 }, manager.Memberships.GetActiveMembers(4));
+            CollectionAssert.AreEqual(new[] { 9 }, manager.Memberships.GetActiveMembers(5));
+            for (int personId = 1; personId <= 9; personId++)
+            {
+                Assert.IsNotNull(manager.Memberships.GetActiveMembership(personId),
+                    $"P{personId} must hold a membership after the second generation.");
+            }
+            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
+                "No Register rejection may fire on a rebuild.");
+        }
+
+        [Test]
+        public void AuthoredNineResidentTown_GenerateAfterClear_MatchesLatestGenerationOnly()
+        {
+            // Plan 01 Slice 1a: fresh New Game after a previous session -
+            // generate, clear, generate again on the same manager. The
+            // registry must match the latest generation only, with no stale
+            // members from the earlier session. (ClearPopulationSnapshot
+            // does not itself clear the registry in Slice 1 - that is
+            // Slice 2; the next generation's clear-then-load is what
+            // replaces the stale set, so no intermediate registry state is
+            // asserted here.)
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+            HouseholdMembershipRegistry registryBeforeClear = manager.Memberships;
+            Assert.AreEqual(9, registryBeforeClear.ActiveCount);
+
+            manager.ClearPopulationSnapshot();
+            Assert.AreEqual(0, manager.State.people.Count);
+            Assert.AreEqual(0, manager.State.households.Count);
+
+            manager.GeneratePopulationSnapshot(configuration);
+
+            Assert.IsTrue(object.ReferenceEquals(registryBeforeClear, manager.Memberships),
+                "The registry instance must survive a clear and a regeneration; holders keep reading the same live object.");
+            Assert.AreEqual(9, manager.Memberships.ActiveCount,
+                "The registry must hold exactly the latest generation's nine memberships, no more.");
+            CollectionAssert.AreEqual(new[] { 1, 2 }, manager.Memberships.GetActiveMembers(1));
+            CollectionAssert.AreEqual(new[] { 3, 4 }, manager.Memberships.GetActiveMembers(2));
+            CollectionAssert.AreEqual(new[] { 5, 6 }, manager.Memberships.GetActiveMembers(3));
+            CollectionAssert.AreEqual(new[] { 7, 8 }, manager.Memberships.GetActiveMembers(4));
+            CollectionAssert.AreEqual(new[] { 9 }, manager.Memberships.GetActiveMembers(5));
+            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
+                "No Register rejection may fire on the regeneration after clear.");
+        }
+
+        [Test]
+        public void DuplicatePopulationManager_LogsErrorNamingEveryInstance()
+        {
+            // Plan 01 Slice 1a: the bootstrapper's duplicate-authority audit
+            // must cover PopulationManager (the mechanism-B diagnostic) and
+            // name every instance found. Detection only - the scene keeps
+            // running on the first found instance.
+            GameObject duplicateObject = new GameObject("DuplicatePopulationManager");
+            GameObject bootstrapperObject = new GameObject("DuplicateAuthorityTestBootstrapper");
+            try
+            {
+                duplicateObject.AddComponent<PopulationManager>();
+                FirstLedgerSliceBootstrapper bootstrapper =
+                    bootstrapperObject.AddComponent<FirstLedgerSliceBootstrapper>();
+                MethodInfo reportDuplicates = typeof(FirstLedgerSliceBootstrapper).GetMethod(
+                    "ReportDuplicateSceneAuthorities", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.IsNotNull(reportDuplicates, "The duplicate-authority audit must exist on the bootstrapper.");
+
+                LogAssert.Expect(LogType.Error, new Regex("Duplicate 'PopulationManager' authority in scene"));
+                reportDuplicates.Invoke(bootstrapper, null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(duplicateObject);
+                Object.DestroyImmediate(bootstrapperObject);
+                // The bootstrapper's Awake wires supporting objects when the
+                // scene has none; remove what this test created so later
+                // tests start from the same scene.
+                GameObject saveLoadObject = GameObject.Find("Save Load Manager");
+                if (saveLoadObject != null)
+                {
+                    Object.DestroyImmediate(saveLoadObject);
+                }
+                GameObject eventSystemObject = GameObject.Find("UI Event System");
+                if (eventSystemObject != null)
+                {
+                    Object.DestroyImmediate(eventSystemObject);
+                }
+                GameObject civicObject = GameObject.Find("Civic Foundation");
+                if (civicObject != null)
+                {
+                    Object.DestroyImmediate(civicObject);
+                }
             }
         }
 

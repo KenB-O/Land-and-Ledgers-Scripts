@@ -147,6 +147,106 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(10, manager.Kinship.EdgeCount, "Five authored relationships should be restored once in the shared kinship authority.");
         }
 
+        [Test]
+        public void AuthoredNineResidentTown_MembershipBoundary_MapsNinePersonsToFiveHouseholds()
+        {
+            // Plan 01 Slice 0(c): membership boundary at generation. Authored
+            // mapping (person IDs allocated 1-9 in asset order, households 1-5
+            // in asset order): H1 {1, 2}, H2 {3, 4}, H3 {5, 6}, H4 {7, 8}, H5 {9}.
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+
+            Assert.AreEqual(9, manager.Memberships.ActiveCount,
+                "Exactly one Active membership per resident must exist at generation.");
+            CollectionAssert.AreEqual(new[] { 1, 2 }, manager.Memberships.GetActiveMembers(1));
+            CollectionAssert.AreEqual(new[] { 3, 4 }, manager.Memberships.GetActiveMembers(2));
+            CollectionAssert.AreEqual(new[] { 5, 6 }, manager.Memberships.GetActiveMembers(3));
+            CollectionAssert.AreEqual(new[] { 7, 8 }, manager.Memberships.GetActiveMembers(4));
+            CollectionAssert.AreEqual(new[] { 9 }, manager.Memberships.GetActiveMembers(5));
+
+            int[][] authoredHouseholds =
+            {
+                new[] { 1, 2 }, new[] { 3, 4 }, new[] { 5, 6 }, new[] { 7, 8 }, new[] { 9 },
+            };
+            for (int personId = 1; personId <= 9; personId++)
+            {
+                int expectedHousehold = -1;
+                for (int h = 0; h < authoredHouseholds.Length; h++)
+                {
+                    if (System.Array.IndexOf(authoredHouseholds[h], personId) >= 0)
+                    {
+                        expectedHousehold = h + 1;
+                    }
+                }
+                Assert.AreEqual(expectedHousehold, manager.Memberships.GetActiveHouseholdId(personId),
+                    $"P{personId} must resolve to its authored household.");
+                HouseholdMembership membership = manager.Memberships.GetActiveMembership(personId);
+                Assert.IsNotNull(membership, $"P{personId} must hold a non-null Active membership.");
+                Assert.IsTrue(membership.IsActive);
+            }
+
+            // ActiveCount == 9 plus per-household sets covering exactly persons
+            // 1-9 once proves no person holds two Active memberships.
+            var covered = new List<int>();
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                covered.AddRange(manager.Memberships.GetActiveMembers(householdId));
+            }
+            covered.Sort();
+            CollectionAssert.AreEqual(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }, covered);
+            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
+                "No Register rejection may fire at generation; any rejection diagnostic fails this boundary.");
+        }
+
+        [Test]
+        public void AuthoredNineResidentTown_RegistryIdentityStable_GenerationThroughFirstDailyNeeds()
+        {
+            // Plan 01 Slice 0(c): the registry instance the daily drivers read
+            // at first use must be the same live instance generation populated.
+            // A replaced or stale instance is the Slice 0 mechanism-A signature.
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            manager.GeneratePopulationSnapshot(configuration);
+
+            HouseholdMembershipRegistry registryAtGeneration = manager.Memberships;
+            Assert.IsNotNull(registryAtGeneration);
+            Assert.AreEqual(9, registryAtGeneration.ActiveCount);
+            var membersAtGeneration = new Dictionary<int, List<int>>();
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                membersAtGeneration[householdId] = registryAtGeneration.GetActiveMembers(householdId);
+            }
+
+            // First daily needs event, read through the same manager property
+            // the runtime drivers read (SimulationDrivers.DriveDailyNeeds
+            // re-reads populationManager.Memberships fresh every day).
+            HouseholdMembershipRegistry registryAtFirstUse = manager.Memberships;
+            Assert.IsTrue(object.ReferenceEquals(registryAtGeneration, registryAtFirstUse),
+                "The registry instance at first daily needs use must be the instance generation populated.");
+            var diag = new List<string>();
+            DailyNeedsService.DayReport report = new DailyNeedsService().ExecuteDay(
+                manager.State, new HouseholdConsumptionPlanner(), null, 0, diag,
+                inventories: new HouseholdInventoryRegistry(), mealLog: new HouseholdMealLogRegistry(),
+                mealPolicy: MealSchedulingPolicy.Default, memberships: registryAtFirstUse);
+            Assert.AreEqual(5, report.HouseholdsServed,
+                "All five households must resolve an acting adult at the first daily needs event.");
+            Assert.IsTrue(diag.TrueForAll(message => !message.Contains("no acting adult")),
+                "No household may report 'no acting adult' at the first daily needs event.");
+
+            Assert.IsTrue(object.ReferenceEquals(registryAtGeneration, manager.Memberships),
+                "The registry instance must still be the generation instance after the first daily needs event.");
+            Assert.AreEqual(9, manager.Memberships.ActiveCount);
+            for (int householdId = 1; householdId <= 5; householdId++)
+            {
+                CollectionAssert.AreEqual(membersAtGeneration[householdId],
+                    manager.Memberships.GetActiveMembers(householdId),
+                    $"H{householdId} memberships must be unchanged by the first daily needs event.");
+            }
+        }
+
         private static DevelopmentTownConfiguration CreateSixPersonDatasetUsingCommonType()
         {
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();

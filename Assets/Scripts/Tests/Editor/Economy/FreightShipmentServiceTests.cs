@@ -203,8 +203,19 @@ namespace LandLedgers.Editor.Economy
             Assert.IsFalse(strict.sourceLotDebitApplied);
 
             // Existing construction/legacy freight remains on its original path.
+            // It runs on a second wagon: the strict shipment above already
+            // holds wagon-1 live (Planned), and the A4-13 rule binds a wagon
+            // from creation until a terminal state, so a legacy shipment on
+            // the same wagon is correctly refused. Same shape as
+            // LotCustody_OneLotCannotBeBoundToTwoShipmentRecords.
+            var secondWagon = new EquipmentAsset
+            {
+                AssetId = "wagon-2", Kind = "farm-wagon", DisplayName = "Second wagon",
+                Condition01 = 0.9f, PayloadMassCapacityKg = 1000f, CargoVolumeCapacityM3 = 4f,
+            };
+            service.RegisterWagon(secondWagon);
             LogisticsShipmentState legacy = service.CreateShipment("construction-legacy", "supplier", "site",
-                5, GrainSpec(), "wagon-1", hooks, out string legacyReason);
+                5, GrainSpec(), "wagon-2", hooks, out string legacyReason);
             Assert.IsNotNull(legacy, legacyReason);
             Assert.IsTrue(service.BeginLoading(legacy, loader, hooks, out string legacyBegin), legacyBegin);
             int guard = 0;

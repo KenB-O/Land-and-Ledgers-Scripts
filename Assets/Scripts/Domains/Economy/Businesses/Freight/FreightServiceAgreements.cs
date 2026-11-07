@@ -289,6 +289,49 @@ namespace LandLedgers.Economy.Freight
             return null;
         }
 
+        /// <summary>
+        /// Closes an accepted agreement once its linked shipment is
+        /// Completed with delivery applied and freight revenue collected.
+        /// The shipment state the caller already holds is the evidence;
+        /// no cash moves here, the charge was already settled exactly once
+        /// by the verified collector. A second transition is refused.
+        /// </summary>
+        public string MarkFulfilled(string agreementId, LogisticsShipmentState shipment)
+        {
+            FreightServiceAgreement agreement = FindAgreement(agreementId);
+            if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted)
+                return "Only an accepted freight agreement can be fulfilled.";
+            if (string.IsNullOrWhiteSpace(agreement.ShipmentId)
+                || shipment == null
+                || !string.Equals(shipment.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal)
+                || !string.Equals(shipment.FreightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal))
+                return "Fulfilment requires the agreement's linked shipment.";
+            if (shipment.Status != LogisticsShipmentStatus.Completed || !shipment.deliveryApplied
+                || !shipment.freightRevenueCollected)
+                return "Fulfilment requires a completed shipment with delivery applied and freight revenue collected.";
+            agreement.Status = FreightServiceAgreementStatus.Fulfilled;
+            agreement.FulfilmentStatus = "Fulfilled";
+            return null;
+        }
+
+        /// <summary>
+        /// Cancels an accepted agreement with its cause. Harness-pinned
+        /// but uncalled: no live permanent-failure site that knows the
+        /// agreement has been established (Plan 07 Slice 2 source review),
+        /// so the caller question stays open and no caller is invented.
+        /// A second transition is refused.
+        /// </summary>
+        public string CancelAgreement(string agreementId, string reason)
+        {
+            FreightServiceAgreement agreement = FindAgreement(agreementId);
+            if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted)
+                return "Only an accepted freight agreement can be cancelled.";
+            if (string.IsNullOrWhiteSpace(reason)) return "Cancelling an agreement requires its cause.";
+            agreement.Status = FreightServiceAgreementStatus.Cancelled;
+            agreement.FulfilmentStatus = "Cancelled: " + reason.Trim();
+            return null;
+        }
+
         public string LinkShipment(string agreementId, string shipmentId)
         {
             FreightServiceAgreement agreement = FindAgreement(agreementId);

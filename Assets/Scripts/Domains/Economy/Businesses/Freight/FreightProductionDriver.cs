@@ -445,7 +445,24 @@ namespace LandLedgers.Economy.Freight
             foreach (KeyValuePair<string, FreightCompanyRuntime> entry in companies)
             {
                 businessRuntimes.TryGetValue(entry.Key, out BusinessRuntimeState runtime);
+                // Plan 07 Slice 2 (Q02, AUD-338): capture the uncollected
+                // ids before this tick's verified collection, so only
+                // shipments whose charge was collected on this tick close
+                // their agreement. A shipment whose payer could not be
+                // resolved stays uncollected (flag still false) and is
+                // retried on a later tick, never fulfilled here.
+                List<string> uncollectedBefore = entry.Value.FindUncollectedFreightChargeShipmentIds();
                 entry.Value.CollectAndPostUncollectedRevenue(runtime, ResolvePayerRuntime, diagnostics);
+                foreach (string shipmentId in uncollectedBefore)
+                {
+                    LogisticsShipmentState shipment = AllShipments().Find(item => item != null
+                        && string.Equals(item.ShipmentId, shipmentId, StringComparison.Ordinal));
+                    if (shipment == null || !shipment.FreightRevenueCollected
+                        || string.IsNullOrWhiteSpace(shipment.FreightServiceAgreementId))
+                        continue;
+                    if (serviceAgreements.MarkFulfilled(shipment.FreightServiceAgreementId, shipment) == null)
+                        diagnostics.Add($"FreightProductionDriver: agreement '{shipment.FreightServiceAgreementId}' fulfilled for collected shipment '{shipmentId}'.");
+                }
             }
             return advanced;
         }

@@ -183,6 +183,164 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void MarkFulfilledClosesTheAgreement()
+        {
+            // Plan 07 Slice 2 (Q02, AUD-338): a completed, delivered,
+            // collected agreement reaches Fulfilled, refuses a second
+            // transition, and is skipped by preparation selection.
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.IsNull(book.LinkShipment(agreement.AgreementId, "freight-shipment:request-1"));
+            Assert.IsNull(book.MarkPreparedForDispatch(agreement.AgreementId, agreement.ShipmentId, 3600f));
+            Assert.IsNull(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T20"));
+
+            var completedShipment = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Completed);
+            completedShipment.deliveryApplied = true;
+            completedShipment.freightRevenueCollected = true;
+
+            Assert.IsNull(book.MarkFulfilled(agreement.AgreementId, completedShipment));
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement.Status);
+            Assert.That(book.MarkFulfilled(agreement.AgreementId, completedShipment),
+                Does.Contain("Only an accepted"));
+
+            // Reset the per-step guards so only the Status guard can
+            // exclude the agreement from preparation selection.
+            agreement.PreparedGameSeconds = 0f;
+            agreement.DispatchTaskId = string.Empty;
+            agreement.FulfilmentStatus = "Pending pickup";
+            var plannedShipment = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Planned);
+            Assert.IsNull(book.FindNextAwaitingPreparation(new[] { plannedShipment }),
+                "a Fulfilled agreement must be skipped by its Status, not only by its per-step guards");
+        }
+
+        [Test]
+        public void MarkFulfilledRefusesIncompleteShipments()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.IsNull(book.LinkShipment(agreement.AgreementId, "freight-shipment:request-1"));
+
+            var planned = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Planned);
+            Assert.That(book.MarkFulfilled(agreement.AgreementId, planned),
+                Does.Contain("completed shipment"));
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status);
+
+            var completedUndelivered = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Completed);
+            Assert.That(book.MarkFulfilled(agreement.AgreementId, completedUndelivered),
+                Does.Contain("completed shipment"));
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status);
+
+            var completedUncollected = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Completed);
+            completedUncollected.deliveryApplied = true;
+            Assert.That(book.MarkFulfilled(agreement.AgreementId, completedUncollected),
+                Does.Contain("completed shipment"));
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status);
+        }
+
+        [Test]
+        public void CancelAgreementClosesTheAgreementAndRefusesASecondTransition()
+        {
+            // Plan 07 Slice 2: CancelAgreement is harness-pinned but
+            // uncalled — no live permanent-failure caller was established
+            // in source review, so the caller question stays open.
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.IsNull(book.CancelAgreement(agreement.AgreementId, "source lot destroyed"));
+            Assert.AreEqual(FreightServiceAgreementStatus.Cancelled, agreement.Status);
+            Assert.That(book.CancelAgreement(agreement.AgreementId, "source lot destroyed"),
+                Does.Contain("Only an accepted"));
+            var completedShipment = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Completed);
+            completedShipment.deliveryApplied = true;
+            completedShipment.freightRevenueCollected = true;
+            Assert.That(book.MarkFulfilled(agreement.AgreementId, completedShipment),
+                Does.Contain("Only an accepted"));
+        }
+
+        [Test]
+        public void CancelAgreementRequiresAReason()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.That(book.CancelAgreement(agreement.AgreementId, string.Empty),
+                Does.Contain("requires its cause"));
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status);
+        }
+
+        [Test]
+        public void SaveLoadPreservesEveryStatus()
+        {
+            // Plan 07 Slice 2: a book holding one request in each live
+            // status round-trips through save/load with every status and
+            // id identical, and a double restore is idempotent.
+            var book = new FreightServiceAgreementBook();
+            Assert.IsNull(book.CreateRequest(NewMillbrookRequest("request-open", "lot-open"), out _));
+            var refused = NewMillbrookRequest("request-refused", "lot-refused");
+            Assert.IsNull(book.CreateRequest(refused, out _));
+            Assert.IsNull(book.SetStatus("request-refused", FreightServiceRequestStatus.MeetingScheduled));
+            Assert.IsNull(book.SetStatus("request-refused", FreightServiceRequestStatus.Refused,
+                "Bakery B1 has 40c available for a 125c agreed charge."));
+            CreateSecondAcceptedAgreement(book, "request-accepted", "lot-accepted", 100f);
+            FreightServiceAgreement fulfilled = CreateSecondAcceptedAgreement(book, "request-fulfilled", "lot-fulfilled", 200f);
+            Assert.IsNull(book.LinkShipment(fulfilled.AgreementId, "freight-shipment:request-fulfilled"));
+            var completedShipment = NewPreparedShipment(
+                "freight-shipment:request-fulfilled", fulfilled.AgreementId, LogisticsShipmentStatus.Completed);
+            completedShipment.deliveryApplied = true;
+            completedShipment.freightRevenueCollected = true;
+            Assert.IsNull(book.MarkFulfilled(fulfilled.AgreementId, completedShipment));
+
+            FreightServiceAgreementBookSaveDto dto = book.CaptureSaveDto();
+            var restored = new FreightServiceAgreementBook();
+            restored.RestoreSaveDto(dto);
+            Assert.AreEqual(FreightServiceRequestStatus.Open, restored.FindRequest("request-open").Status);
+            Assert.AreEqual(FreightServiceRequestStatus.Refused, restored.FindRequest("request-refused").Status);
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted,
+                restored.FindAgreementForRequest("request-accepted").Status);
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled,
+                restored.FindAgreementForRequest("request-fulfilled").Status);
+            Assert.AreEqual("freight-agreement:request-fulfilled",
+                restored.FindAgreementForRequest("request-fulfilled").AgreementId);
+            Assert.AreEqual(4, restored.Requests.Count);
+            Assert.AreEqual(2, restored.Agreements.Count);
+
+            restored.RestoreSaveDto(dto);
+            Assert.AreEqual(4, restored.Requests.Count);
+            Assert.AreEqual(2, restored.Agreements.Count);
+            Assert.AreEqual(FreightServiceRequestStatus.Refused, restored.FindRequest("request-refused").Status);
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled,
+                restored.FindAgreementForRequest("request-fulfilled").Status);
+        }
+
+        [Test]
+        public void ReopenedRequestSurvivesSaveLoad()
+        {
+            // Plan 07 Slice 2: a Refused request saved before the fix
+            // restores, reopens through the Slice 1b method, and accepts
+            // with the same 125c quote.
+            const string requestId = "freight-request:millbrook_grain_co:flour-reorder-d0-n1";
+            const string lotId = "aidlot-millbrook_grain_co:flour-reorder-d0-n1";
+            var book = new FreightServiceAgreementBook();
+            Assert.IsNull(book.CreateRequest(NewMillbrookRequest(requestId, lotId), out _));
+            Assert.IsNull(book.SetQuote(requestId, New125Quote("quote-d0-n1")));
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.MeetingScheduled));
+            Assert.IsNull(book.SetStatus(requestId, FreightServiceRequestStatus.Refused,
+                "Bakery B1 has 40c available for a 125c agreed charge."));
+
+            var restored = new FreightServiceAgreementBook();
+            restored.RestoreSaveDto(book.CaptureSaveDto());
+            Assert.AreEqual(FreightServiceRequestStatus.Refused, restored.FindRequest(requestId).Status);
+            Assert.IsNull(restored.ReopenRefusedRequest(requestId,
+                "Lot '" + lotId + "' is still shippable; reopening the refused request for a retried meeting."));
+            Assert.AreEqual(FreightServiceRequestStatus.Open, restored.FindRequest(requestId).Status);
+            Assert.IsNull(restored.SetQuote(requestId, New125Quote("quote-d0-n1")));
+            Assert.IsNull(restored.Accept(requestId, 7, 3, 7200f, out FreightServiceAgreement agreement));
+            Assert.AreEqual("freight-agreement:" + requestId, agreement.AgreementId);
+            Assert.AreEqual(lotId, agreement.CargoLotId);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+        }
+
+        [Test]
         public void CompletedAgreementNeverLeavesAccepted()
         {
             // Plan 07 Slice 0 discriminator (AUD-338): a completed,

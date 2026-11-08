@@ -7690,23 +7690,12 @@ namespace LandLedgers.Orchestration.Systems
                     if (IsArrivalDrivenTravelTask(task)) continue;
                     List<PersonActivityReservation> activeReservations =
                         hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex);
-                    int scheduledMinutes = 0;
-                    for (int i = 0; i < activeReservations.Count; i++)
-                    {
-                        PersonActivityReservation reservation = activeReservations[i];
-                        if (reservation != null &&
-                            (reservation.Activity == PersonActivityKind.Work
-                                || reservation.Activity == PersonActivityKind.Shopping) &&
-                            string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal) &&
-                            tickStartMinute < reservation.EndMinuteOfDay &&
-                            reservation.StartMinuteOfDay < minuteOfDay)
-                        {
-                            int overlapStart = Math.Max(tickStartMinute, reservation.StartMinuteOfDay);
-                            int overlapEnd = Math.Min(minuteOfDay, reservation.EndMinuteOfDay);
-                            scheduledMinutes = Math.Max(scheduledMinutes, overlapEnd - overlapStart);
-                            break;
-                        }
-                    }
+                    // JourneyModel-duration travel consumes the reserved Travel
+                    // window like other scheduled work. Explicit navigation tasks
+                    // were filtered above and still complete only on actor arrival.
+                    int scheduledMinutes = AutonomousTaskProgress.ScheduledMinutes(
+                        task, activeReservations, dayIndex, tickStartMinute, minuteOfDay,
+                        TaskReservationLabel(task));
                     if (scheduledMinutes <= 0) continue;
                     int workMinutes = scheduledMinutes;
                     if (workMinutes <= 0) continue;

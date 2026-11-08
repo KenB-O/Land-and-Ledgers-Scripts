@@ -109,7 +109,7 @@ namespace LandLedgers.EditorTests.Population
 
             Assert.AreEqual(TaskStatus.Complete, started.Task.Status);
             Assert.AreEqual(3, started.Task.MinutesWorked);
-            Assert.AreEqual(3, started.Budgets.GetOrCreate(Worker).WorkedMinutes);
+            Assert.AreEqual(3, started.Budgets.GetOrCreate(Worker).MinutesWorked);
         }
 
         [TestCase(PersonActivityKind.Sleeping)]

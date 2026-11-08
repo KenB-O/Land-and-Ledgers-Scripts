@@ -1606,6 +1606,288 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(0, f.ShoppingReservationCount(2), "no shopping reservation may be held for Anna");
         }
 
+        [Test]
+        public void LongestOpenNeed_NamedInSummary()
+        {
+            // Slice 5 test 1 (original plan section 10, rev1 section 6).
+            // A household with an impossible errand (full-coverage 600-min
+            // shift) and a second, servable-in-principle need (flour, real
+            // offer at 35c/sack, 1 sack = 10 lb — the EndToEnd flour-offer
+            // shape): the summary must name the LONGEST-OPEN need — bread,
+            // opened day 0 — with its age and its first failure reason.
+            // The summary line itself lives in DriveEmbodiedShopping
+            // (SimulationDrivers.cs, harness-excluded), so this test pins,
+            // through the real loop/monitor/registry, exactly the three
+            // facts the line prints — identity, age, first failure reason —
+            // and the line's wording is source-review + Unity-owed. The
+            // expected day-1 line is: "[FoodEconomy] shopping summary day
+            // 1: 0 purchase(s), 0c spent; longest open: H7 'bread' open
+            // since day 0 (1d) — Unavailable shopper: No shopper in any
+            // searched window from 480 to 985 (trip needs 95 min):
+            // departure 480: P1: only 0 work minutes left, trip needs 95.
+            // ... Needs stay open.; still open: H7 bread (...); H7 flour
+            // (...)" (both still-open entries carry the same no-shopper
+            // reason; the full reason lists every 15-min departure).
+            // FIELD CORRECTION (verified in source, not assumed): the plan
+            // names LastEvaluatedDayIndex as the longest-open key, but that
+            // field is refreshed to the current day on every monitor
+            // evaluation (HouseholdShortage.cs:267) — after day 1 bread and
+            // flour TIE at 1, so the literal rule cannot identify a
+            // longest-open need at all. CreatedDayIndex is set once at
+            // creation (HouseholdShortage.cs:389) and never reassigned, so
+            // it is the field the Slice 5 production line uses; this test
+            // pins the tie (both LastEvaluatedDayIndex == 1) and the
+            // CreatedDayIndex order (0 < 1) that resolves it.
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { HouseholdItemCatalog.FlourId },
+                StoreUnitsPerItemUnit = 1,
+                HouseholdUnitsPerStoreUnit = 10,
+                UsesItemLevelInventory = true,
+            });
+            f.Port.ItemLevelItems.Add(HouseholdItemCatalog.FlourId);
+            f.Port.ItemStock[HouseholdItemCatalog.FlourId] = 5;
+            f.Port.ItemPrices[HouseholdItemCatalog.FlourId] = 35;
+            f.Fund(10000);
+
+            // Day 0: bread opens under the full-coverage shift; no trip.
+            WorkTask work0 = f.CreateWorkTask(1, 600);
+            var workDiag0 = new List<string>();
+            HouseholdShoppingLoop.BatchShoppingResult batch0 = f.DriveProductionDay(
+                new List<WorkTask> { work0 }, new List<int> { 1 }, new List<int> { 600 },
+                out int started0, workDiag0);
+            Assert.AreEqual(1, started0, "day 0: the work task must start");
+            Assert.IsNotNull(batch0, "day 0: a plan must be created for the open bread need");
+            Assert.IsTrue(!batch0.TripExecuted, "day 0: no trip may execute over a full-coverage shift");
+            // Day 0's work completes at day end: TaskAuthority.StartTask
+            // refuses a new task while the person already holds an
+            // InProgress task (the Slice 4 occupancy finding), so without
+            // this close day 1's task could never start.
+            Assert.IsTrue(f.Tasks.CompleteTask(work0.TaskId, TaskOutcome.Success, 0, f.Budgets),
+                "day 0's work must complete at day end");
+            HouseholdPurchasingNeed bread0 = f.BreadNeed();
+            Assert.IsNotNull(bread0, "day 0: the bread need must stay open");
+            Assert.AreEqual(0, bread0.CreatedDayIndex, "day 0: bread opens on day 0");
+            ShoppingTripResult breadResult0 = FindNeedResult(batch0, HouseholdItemCatalog.BreadId);
+            Assert.IsNotNull(breadResult0, "day 0: the bread need must carry its own per-need result");
+            Assert.IsTrue(breadResult0.FailureReason.Contains("No shopper in any searched window"),
+                "day 0: the bread per-need reason must name the searched window, got: " + breadResult0.FailureReason);
+            Assert.IsTrue(breadResult0.FailureReason.Contains("work minutes left"),
+                "day 0: the bread per-need reason must name the budget shortfall, got: " + breadResult0.FailureReason);
+
+            // Day 1: a second need opens (flour, hand-created — the test
+            // says so; the monitor is not asked to raise it). Both needs
+            // fail on the same no-shopper reason; bread is longest-open.
+            f.Day = 1;
+            f.Budgets.EnsureDay(1);
+            HouseholdPurchasingNeed flour = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            Assert.AreEqual(1, flour.CreatedDayIndex, "day 1: flour opens on day 1");
+            WorkTask work1 = f.CreateWorkTask(1, 600);
+            var workDiag1 = new List<string>();
+            HouseholdShoppingLoop.BatchShoppingResult batch1 = f.DriveProductionDay(
+                new List<WorkTask> { work1 }, new List<int> { 1 }, new List<int> { 600 },
+                out int started1, workDiag1);
+            Assert.AreEqual(1, started1, "day 1: the work task must start");
+            Assert.IsNotNull(batch1, "day 1: a plan must be created for the open needs");
+            Assert.IsTrue(!batch1.TripExecuted, "day 1: no trip may execute over a full-coverage shift");
+
+            HouseholdPurchasingNeed bread = f.BreadNeed();
+            Assert.IsNotNull(bread, "day 1: the bread need must stay open");
+            Assert.IsNotNull(f.Needs.GetOpenNeed(f.HouseholdId, HouseholdItemCatalog.FlourId),
+                "day 1: the flour need must stay open");
+            // Longest-open identity + age, by creation day: bread (day 0)
+            // predates flour (day 1), so on day 1 bread is 1 day old.
+            Assert.IsTrue(bread.CreatedDayIndex < flour.CreatedDayIndex,
+                "bread (created day " + bread.CreatedDayIndex + ") must be the longest-open need, ahead of flour (created day " +
+                flour.CreatedDayIndex + ")");
+            Assert.AreEqual(1, f.Day - bread.CreatedDayIndex, "day 1: the longest-open need is 1 day old");
+            // The literal plan key cannot resolve this: the day-1 monitor
+            // evaluation refreshed bread to today, tying flour exactly.
+            Assert.AreEqual(1, bread.LastEvaluatedDayIndex,
+                "day 1: the monitor refreshed bread's LastEvaluatedDayIndex to today");
+            Assert.AreEqual(bread.LastEvaluatedDayIndex, flour.LastEvaluatedDayIndex,
+                "LastEvaluatedDayIndex ties at day 1 for both needs — it cannot identify the longest-open need; CreatedDayIndex does");
+            // First failure reason for the longest-open need: the
+            // budget-blocked search text the summary prints.
+            ShoppingTripResult breadResult1 = FindNeedResult(batch1, HouseholdItemCatalog.BreadId);
+            Assert.IsNotNull(breadResult1, "day 1: the bread need must carry its own per-need result");
+            Assert.IsTrue(breadResult1.FailureReason.Contains("No shopper in any searched window"),
+                "day 1: the longest-open need's reason must name the searched window, got: " + breadResult1.FailureReason);
+            Assert.IsTrue(breadResult1.FailureReason.Contains("work minutes left"),
+                "day 1: the longest-open need's reason must name the budget shortfall, got: " + breadResult1.FailureReason);
+            Assert.AreEqual(0, f.ShoppingReservationCount(1), "no shopping reservation may ever be created");
+        }
+
+        [Test]
+        public void UrgentNeed_AttemptedFirst()
+        {
+            // Slice 5 test 2 (original plan section 10, rev1 section 6):
+            // the urgency-sort pin. Two monitor-set open needs — bread at
+            // urgency 1.0 (0 days of supply, 2/day) and flour at low
+            // urgency (6 days of supply on hand at 1/day, urgency
+            // 1 - 6/7) — with cash for exactly ONE of them (70c: the
+            // 14-loaf bread need at 5c). The batch sort
+            // (HouseholdShoppingLoop.cs:643, Urgency01 desc) must make the
+            // high-urgency need claim the shared ledger budget first, so
+            // bread is served in full and flour stays open. Counterfactual
+            // that makes this a real end-to-end pin: had flour been
+            // evaluated first it would claim 35c and bread would be
+            // affordability-downsized to 7 loaves — the observed full bread
+            // service plus unserved flour can only happen with bread first.
+            // The flour failure names the OTHER budget text — Plan 02 Slice
+            // 5's cash-affordability 'budget short'
+            // (HouseholdShoppingLoop.cs:2241) — which must not be confused
+            // with the time-budget 'work minutes left' search text
+            // (PersonScheduleTracker.cs:762).
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { HouseholdItemCatalog.FlourId },
+                StoreUnitsPerItemUnit = 1,
+                HouseholdUnitsPerStoreUnit = 10,
+                UsesItemLevelInventory = true,
+            });
+            f.Port.ItemLevelItems.Add(HouseholdItemCatalog.FlourId);
+            f.Port.ItemStock[HouseholdItemCatalog.FlourId] = 5;
+            f.Port.ItemPrices[HouseholdItemCatalog.FlourId] = 35;
+            f.Fund(70);
+            string seedProblem = f.Inventories.GetOrCreate(f.HouseholdId).AddLot(
+                HouseholdItemCatalog.FlourId, 6, 0, "test seed: 6u flour on hand");
+            Assert.IsNull(seedProblem, seedProblem);
+
+            // Raise both needs through the real monitor in one evaluation.
+            f.Monitor.Evaluate(
+                f.Population.GetHousehold(f.HouseholdId),
+                f.Inventories.GetOrCreate(f.HouseholdId),
+                new Dictionary<string, int>
+                {
+                    { HouseholdItemCatalog.BreadId, 2 },
+                    { HouseholdItemCatalog.FlourId, 1 },
+                },
+                false,
+                new HouseholdSupplyAccess { HasGeneralStore = true, HasCash = true },
+                0, 0, f.Day,
+                HouseholdShortageMonitor.KnownSellerRecognitionPredicate(f.Directory, f.Knowledge, f.MemberIds));
+            HouseholdPurchasingNeed bread = f.BreadNeed();
+            HouseholdPurchasingNeed flour = f.Needs.GetOpenNeed(f.HouseholdId, HouseholdItemCatalog.FlourId);
+            Assert.IsNotNull(bread, "the monitor must open the bread need");
+            Assert.IsNotNull(flour, "the monitor must open the flour need");
+            Assert.AreEqual(1f, bread.Urgency01, "bread at 0 days of supply is maximally urgent");
+            Assert.AreEqual(14, bread.UnitsNeeded, "bread need is 14u (7 days at 2/day)");
+            Assert.IsTrue(flour.Urgency01 > 0f && flour.Urgency01 < 0.5f,
+                "flour at 6 days of supply is low-urgency, got: " + flour.Urgency01);
+            Assert.AreEqual(1, flour.UnitsNeeded, "flour need is 1u (1 day short of the 7-day threshold)");
+            Assert.IsTrue(bread.Urgency01 > flour.Urgency01, "bread must outrank flour on urgency");
+
+            // No work today: the person is free to shop. Drive the plan.
+            f.PlanDay();
+            List<HouseholdErrandPlan> plans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
+            Assert.AreEqual(1, plans.Count, "one plan must batch both open needs");
+            HouseholdShoppingLoop.BatchShoppingResult batch =
+                f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, f.Options(), f.Diagnostics);
+
+            Assert.IsNotNull(batch, "a batch must be produced");
+            Assert.AreEqual(2, batch.NeedResults.Count, "both needs must carry per-need results");
+            Assert.IsTrue(batch.TripExecuted, "the trip must execute: " + batch.FailureReason);
+            Assert.AreEqual(1, batch.ServedNeedCount, "exactly one need may be served on 70c");
+            ShoppingTripResult breadResult = FindNeedResult(batch, HouseholdItemCatalog.BreadId);
+            ShoppingTripResult flourResult = FindNeedResult(batch, HouseholdItemCatalog.FlourId);
+            Assert.IsNotNull(breadResult, "bread must carry a per-need result");
+            Assert.IsNotNull(flourResult, "flour must carry a per-need result");
+            Assert.IsTrue(breadResult.Success, "the high-urgency bread need must be served, got: " + breadResult.FailureReason);
+            Assert.AreEqual(14, breadResult.UnitsAcquired, "bread must be served in full, not downsized");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, bread.Status, "the bread need must be fulfilled");
+            Assert.AreEqual(0, bread.UnitsNeeded, "the bread need must have nothing left");
+            Assert.IsTrue(!flourResult.Success, "the low-urgency flour need must stay unserved");
+            Assert.AreEqual(PurchasingNeedStatus.Open, flour.Status, "the flour need must stay open");
+            Assert.AreEqual(1, flour.UnitsNeeded, "the flour need must keep its full 1u");
+            Assert.IsTrue(flourResult.FailureReason.Contains("budget short"),
+                "the flour reason must name the cash-affordability budget short, got: " + flourResult.FailureReason);
+            Assert.IsTrue(flourResult.FailureReason.Contains("unaffordable"),
+                "the flour reason must name unaffordability, got: " + flourResult.FailureReason);
+            Assert.AreEqual(6, f.Inventories.GetOrCreate(f.HouseholdId).GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                "no flour may be bought — the household still holds its 6u");
+            Assert.AreEqual(5, f.Port.ItemStock[HouseholdItemCatalog.FlourId], "the store must still hold all 5 flour sacks");
+            Assert.AreEqual(0, f.Balance(), "the 70c must be spent in full on the bread");
+        }
+
+        [Test]
+        public void ImpossibleErrand_FiveDays_NoAccumulation()
+        {
+            // Slice 5 test 3 (original plan section 10, rev1 section 6):
+            // Slice 0 test 8 extended to five days on the corrected
+            // mechanisms (600-min task, work-first, rest rule). Still one
+            // open need, zero trips, zero leaked reservations — and the
+            // per-need reason the Slice 5 summary line prints names the
+            // blocker every day. The summary line itself lives in
+            // DriveEmbodiedShopping (SimulationDrivers.cs,
+            // harness-excluded), so the blocker-named-every-day assertion
+            // is made on the per-need failure reason the summary reads;
+            // the line is source-review + Unity-owed.
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Fund(10000);
+            int trips = 0;
+            int shoppingReservationsEver = 0;
+            int firstSequence = -1;
+            for (int day = 0; day <= 4; day++)
+            {
+                f.Day = day;
+                f.Budgets.EnsureDay(day);
+                WorkTask work = f.CreateWorkTask(1, 600);
+                var workDiag = new List<string>();
+                int started;
+                HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                    new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 600 },
+                    out started, workDiag);
+                if (batch != null && batch.TripExecuted) trips++;
+                shoppingReservationsEver += f.ShoppingReservationCount(1);
+                Assert.IsTrue(batch == null || !batch.TripExecuted,
+                    "day " + day + ": no trip may execute although the shift covers every window");
+                Assert.IsTrue(batch == null || batch.FailureReason.Contains("No shopper in any searched window"),
+                    "day " + day + ": the batch must fail naming the searched window, got: " +
+                    (batch == null ? "(no batch)" : batch.FailureReason));
+                Assert.IsTrue(batch == null || batch.FailureReason.Contains("work minutes left"),
+                    "day " + day + ": the batch failure must name the budget shortfall, got: " +
+                    (batch == null ? "(no batch)" : batch.FailureReason));
+                // Slice 5 verification: the PER-NEED reason — the reason
+                // the daily summary prints for this open need — carries
+                // the search's budget text (PersonScheduleTracker.cs:762),
+                // not the Plan 02 Slice 5 cash-affordability 'budget
+                // short' (HouseholdShoppingLoop.cs:2241).
+                ShoppingTripResult breadResult = FindNeedResult(batch, HouseholdItemCatalog.BreadId);
+                Assert.IsNotNull(breadResult, "day " + day + ": the bread need must carry its own per-need result");
+                Assert.IsTrue(breadResult.FailureReason.Contains("No shopper in any searched window"),
+                    "day " + day + ": the per-need reason must name the searched window, got: " + breadResult.FailureReason);
+                Assert.IsTrue(breadResult.FailureReason.Contains("work minutes left"),
+                    "day " + day + ": the per-need reason must name the budget shortfall, got: " + breadResult.FailureReason);
+                HouseholdPurchasingNeed need = f.BreadNeed();
+                Assert.IsNotNull(need, "day " + day + ": a bread need must be open");
+                if (firstSequence < 0) firstSequence = need.NeedSequence;
+                Assert.AreEqual(firstSequence, need.NeedSequence,
+                    "day " + day + ": the same single need must persist, not a fresh duplicate");
+                Assert.AreEqual(1, f.OpenNeedCount(HouseholdItemCatalog.BreadId),
+                    "day " + day + ": exactly one open bread need may exist");
+            }
+
+            Assert.AreEqual(0, trips, "zero trips may execute over the five days");
+            Assert.AreEqual(0, shoppingReservationsEver, "zero shopping reservations may ever be created");
+            Assert.AreEqual(1, f.OpenNeedCount(HouseholdItemCatalog.BreadId), "exactly one open bread need after day 5");
+        }
+
+        private static ShoppingTripResult FindNeedResult(HouseholdShoppingLoop.BatchShoppingResult batch, string itemId)
+        {
+            if (batch?.NeedResults == null) return null;
+            foreach (ShoppingTripResult result in batch.NeedResults)
+            {
+                if (result != null && string.Equals(result.ItemId, itemId, StringComparison.Ordinal)) return result;
+            }
+
+            return null;
+        }
+
         private static bool Overlaps(PersonActivityReservation a, PersonActivityReservation b)
         {
             if (a == null || b == null) return false;

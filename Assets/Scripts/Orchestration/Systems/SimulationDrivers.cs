@@ -7924,8 +7924,30 @@ namespace LandLedgers.Orchestration.Systems
             // still bounds the day's log; the open-need list is capped at 8
             // entries with an "and N more" tail. Needs with no failure
             // recorded today were never attempted (no attempt today).
+            // Plan 05 Slice 5: the line also names the longest-open need —
+            // the open need opened earliest — with its age and its first
+            // failure reason today. "Longest open" is measured by
+            // CreatedDayIndex, NOT by LastEvaluatedDayIndex: the monitor
+            // refreshes LastEvaluatedDayIndex to the current day on every
+            // evaluation (HouseholdShortage.cs:267, also :211 and :226) and
+            // the loop refreshes it on every receipt
+            // (HouseholdShoppingLoop.cs:420, :1729, :1794), so every need
+            // evaluated today ties at today and no longest-open need can be
+            // identified from it — while CreatedDayIndex is set once at
+            // creation (HouseholdShortage.cs:389) and never reassigned.
+            // Age is today minus the creation day. The reason is the same
+            // first-failure map the still-open list reads (or "no attempt
+            // today" when the need was never attempted). No new reason
+            // string: the per-need reason for a budget-blocked trip already
+            // carries the search's budget text ("only N work minutes left,
+            // trip needs M", PersonScheduleTracker.cs:762, inside the "No
+            // shopper in any searched window" reason), which is a different
+            // branch from Plan 02 Slice 5's cash-affordability 'budget
+            // short' (HouseholdShoppingLoop.cs:2241).
             var stillOpenParts = new List<string>();
             int stillOpenTotal = 0;
+            HouseholdPurchasingNeed longestOpenNeed = null;
+            int longestOpenHouseholdId = -1;
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null || hub.PurchasingNeeds == null) continue;
@@ -7935,6 +7957,12 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     if (openNeed == null) continue;
                     stillOpenTotal++;
+                    if (longestOpenNeed == null || openNeed.CreatedDayIndex < longestOpenNeed.CreatedDayIndex)
+                    {
+                        longestOpenNeed = openNeed;
+                        longestOpenHouseholdId = household.id;
+                    }
+
                     if (stillOpenParts.Count < 8)
                     {
                         string failureKey = household.id + ":" + openNeed.ItemId;
@@ -7946,11 +7974,22 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
 
+            string longestOpenText = string.Empty;
+            if (longestOpenNeed != null)
+            {
+                string longestFailureKey = longestOpenHouseholdId + ":" + longestOpenNeed.ItemId;
+                string longestReason = shoppingFailureByNeed.TryGetValue(longestFailureKey, out string longestRecorded)
+                    ? longestRecorded
+                    : "no attempt today";
+                int longestAgeDays = Math.Max(0, absoluteDayIndex - longestOpenNeed.CreatedDayIndex);
+                longestOpenText = $"; longest open: H{longestOpenHouseholdId} '{longestOpenNeed.ItemId}' open since day {longestOpenNeed.CreatedDayIndex} ({longestAgeDays}d) — {longestReason}";
+            }
+
             string stillOpenText = stillOpenTotal == 0
                 ? "none"
                 : string.Join("; ", stillOpenParts)
                     + (stillOpenTotal > stillOpenParts.Count ? $"; and {stillOpenTotal - stillOpenParts.Count} more" : string.Empty);
-            diagnostics.Add($"[FoodEconomy] shopping summary day {absoluteDayIndex}: {shoppingPurchasesMade} purchase(s), {shoppingCentsSpent}c spent; still open: {stillOpenText}");
+            diagnostics.Add($"[FoodEconomy] shopping summary day {absoluteDayIndex}: {shoppingPurchasesMade} purchase(s), {shoppingCentsSpent}c spent{longestOpenText}; still open: {stillOpenText}");
         }
 
         /// <summary>

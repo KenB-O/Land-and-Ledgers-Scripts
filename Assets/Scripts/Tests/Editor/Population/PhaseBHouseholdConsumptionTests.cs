@@ -285,7 +285,8 @@ namespace LandLedgers.Editor.Population
                 if (lot != null && lot.ItemId == HouseholdItemCatalog.BreadId) breadLot = lot;
             }
             Assert.NotNull(breadLot, "The prepared bread lot exists with preparation provenance.");
-            Assert.AreEqual("meal preparation from flour (bake oven, 60 min labor)", breadLot.SourceLabel);
+            Assert.IsTrue(breadLot.SourceLabel.Contains("meal preparation from flour (bake oven, 60 min labor)"),
+                "The prepared bread lot keeps its preparation provenance (plus the F4 canonical provenance key).");
         }
 
         [Test]

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 
 namespace LandLedgers.Population
 {
@@ -90,6 +91,53 @@ namespace LandLedgers.Population
         public string Provenance = string.Empty;
         public GoodsCustodyState Custody;
         public int PurchaseDayIndex;
+        /// <summary>
+        /// W5: household units credited per store unit bought (1 for
+        /// ordinary items; 10 for a flour sack). Custody holds STORE units;
+        /// the receipt multiplies by this. Carried on the batch so a
+        /// restored batch still knows its own package size after
+        /// save/load, when its candidate may no longer exist.
+        /// </summary>
+        public int HouseholdUnitsPerStoreUnit = 1;
+        /// <summary>
+        /// Priority U-3: the selling business's name, as settled. Carried
+        /// on the batch so a restored batch's receipt can name its seller
+        /// without re-resolving the supplier.
+        /// </summary>
+        public string SupplierName = string.Empty;
+
+        /// <summary>
+        /// Priority spoilage integration: the Slice 5 perishable
+        /// condition state of the lot the units were taken from
+        /// (additive; absent when the selling authority carries no
+        /// condition — e.g. a pool purchase — which is an honest
+        /// absence, never a default Fresh). Set by the shopping loop
+        /// at settle from the supplier's last-sale state, carried
+        /// through custody to the household lot at deposit. The
+        /// custody DTO carries batches directly, so the state
+        /// round-trips with the batch.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at the sale.</summary>
+        public bool HasPerishableCondition;
+    }
+
+    /// <summary>
+    /// Priority U-3: save data for the shopping loop's in-transit custody —
+    /// every batch currently held in transit (in hand, on wagon, or
+    /// arranged delivery), plus the batch-id sequence so a later settle
+    /// never reuses an id. Captured by
+    /// HouseholdShoppingLoop.CaptureCustodySaveDto, restored by
+    /// LoadCustodyFromSaveDto (clear-then-load, copy-on-load). The
+    /// coordinator's save DTO carries plans only; this DTO is the custody
+    /// half, owned by the loop and carried into the systems save by the hub.
+    /// </summary>
+    [Serializable]
+    public sealed class HouseholdShoppingCustodySaveDto
+    {
+        public List<CarriedGoodsBatch> Batches = new List<CarriedGoodsBatch>();
+        public int NextBatchSequence;
     }
 
     /// <summary>
@@ -314,6 +362,23 @@ namespace LandLedgers.Population
         public string Counterparty = string.Empty;
         public string ReceiptId = string.Empty;
         public string ObligationId = string.Empty;
+        /// <summary>
+        /// Priority V1: the household lot id the receipt path deposited
+        /// this trip's goods into, resolved through the F4 lot identity
+        /// resolver at deposit time. -1 when no receipt has deposited a
+        /// lot yet (no purchase, or the receipt path has not run).
+        /// Diagnostic only: it changes no cash, stock, Success, or
+        /// need-status semantics.
+        /// </summary>
+        public int ReceivedLotId = -1;
+        /// <summary>
+        /// Priority V1: the canonical provenance key of the deposited lot
+        /// ("authority:household-inventory/lot:&lt;id&gt;"), resolved
+        /// through the F4 lot identity resolver at deposit time. Empty
+        /// when no receipt has deposited a lot yet. Diagnostic only, as
+        /// <see cref="ReceivedLotId"/>.
+        /// </summary>
+        public string ReceivedLotKey = string.Empty;
         public int TravelMinutesTotal;
         public List<RejectedShoppingAlternative> RejectedAlternatives = new List<RejectedShoppingAlternative>();
         public List<ShoppingDiagnosticEvent> Events = new List<ShoppingDiagnosticEvent>();
@@ -354,6 +419,29 @@ namespace LandLedgers.Population
     public interface IItemCatalogSupplier
     {
         bool RecognizesItem(string itemId);
+    }
+
+    /// <summary>
+    /// Priority spoilage integration: an optional surface for suppliers
+    /// whose sale draws from a real lot that carries a perishable
+    /// condition state. After <see cref="IItemResolvingSupplier.SellItem"/>
+    /// returns, the loop reads the state of the units just sold and
+    /// carries it on the batch — the purchase never resets it. A
+    /// supplier that sells from an anonymous pool (no lot) does not
+    /// implement this interface, and the batch honestly carries no
+    /// condition. The state is the taken part's own state (split at
+    /// the sale), in sale units.
+    /// </summary>
+    public interface ILotConditionSupplier
+    {
+        /// <summary>
+        /// The condition state of the units the most recent
+        /// <see cref="IItemResolvingSupplier.SellItem"/> call sold, or
+        /// false when that sale carried no state (refusal, empty sale,
+        /// or a stateless lot). Reset on every SellItem call, including
+        /// refusals, so a stale state never rides a later sale.
+        /// </summary>
+        bool TryGetLastSaleCondition(out PerishableLotState.SaveDto condition);
     }
 
     /// <summary>

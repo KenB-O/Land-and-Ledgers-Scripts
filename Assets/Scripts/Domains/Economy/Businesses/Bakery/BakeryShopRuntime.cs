@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 
 namespace LandLedgers.Economy.Businesses.Bakery
@@ -102,6 +103,20 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// <summary>Upstream flour/notions chains baked into this lot (full provenance).</summary>
         public List<string> InputProvenance = new List<string>();
 
+        /// <summary>
+        /// Priority spoilage integration: the Slice 5 perishable
+        /// condition state attached to this lot (additive; old saves
+        /// load with HasPerishableCondition false, which means "never
+        /// attached", never a default Fresh). Created at bake, aged by
+        /// AgeShelf through the authored AgeToDay rule, split by sale
+        /// and wholesale fulfillment. The save DTO carries the bread
+        /// shelf list directly, so the state round-trips with the lot.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at a creation site.</summary>
+        public bool HasPerishableCondition;
+
         public BakeryBreadLot() { }
 
         /// <summary>
@@ -124,6 +139,18 @@ namespace LandLedgers.Economy.Businesses.Bakery
         {
             int taken = Math.Min(Math.Max(0, requested), UnitCount);
             UnitCount -= taken;
+            // Priority spoilage integration: keep the attached state's
+            // units honest — the lot now holds UnitCount. The taken
+            // part's own state is captured by the caller BEFORE this
+            // call (SellBread / FulfillWholesale split first); a caller
+            // that takes directly (the Review2 wholesale driver) leaves
+            // the taken part unrecorded but the remaining state stays
+            // correct, and this sync is idempotent with the pre-split.
+            if (taken > 0 && HasPerishableCondition)
+            {
+                PerishableCondition = PerishableLotState.FromSaveDto(PerishableCondition)
+                    .WithUnits(UnitCount).CaptureSaveDto();
+            }
             return taken;
         }
     }
@@ -143,6 +170,17 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public int PricePerUnitCents;
         public BakeryGoodsCondition ConditionSoldAt = BakeryGoodsCondition.Fresh;
         public string ProvenanceChain = string.Empty;
+
+        /// <summary>
+        /// Priority spoilage integration: the condition state of the
+        /// units taken from this lot, at the moment of sale (additive;
+        /// absent when the lot carried no state). The buyer carries
+        /// this part forward; the remainder stays on the lot.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at the sale.</summary>
+        public bool HasPerishableCondition;
 
         public BakerySaleRecord() { }
 
@@ -262,6 +300,15 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId ?? string.Empty;
+
+        /// <summary>
+        /// Priority 9 Slice F3 (P9 plan section 4 Slice F3): the custody
+        /// transfer log this runtime records flour/notions dispenses and
+        /// bakes into, when set. Null (the default) means no recording —
+        /// today behaviour. The log is an audit trail only: no flow reads
+        /// it, and a logging failure never fails a bake.
+        /// </summary>
+        public CustodyTransferLog CustodyLog { get; set; }
 
         /// <summary>
         /// W6 (W-5, Obj 9 design): the owner-person link — the SEAM for
@@ -553,6 +600,23 @@ namespace LandLedgers.Economy.Businesses.Bakery
             {
                 if (lot == null) continue;
                 lot.AgeToDay(dayIndex);
+                // Priority spoilage integration: advance an attached
+                // condition state by the SAME authored rule, at the
+                // same simulation-time step. ApplyElapsedTime
+                // recomputes Fresh/DayOld/Stale from the whole-day age
+                // exactly as AgeToDay does, so the attached state can
+                // never disagree with the lot's condition; flour and
+                // every other item are untouched (no authored rule).
+                if (lot.HasPerishableCondition)
+                {
+                    PerishableLotState state = PerishableLotState.FromSaveDto(lot.PerishableCondition);
+                    int elapsed = Math.Max(0, dayIndex - (int)Math.Floor(state.AsOfDay));
+                    if (elapsed > 0)
+                    {
+                        lot.PerishableCondition = PerishableLotState.ApplyElapsedTime(state, elapsed, "ambient")
+                            .CaptureSaveDto();
+                    }
+                }
                 if (lot.Condition == BakeryGoodsCondition.Stale
                     && lot.UnitCount > 0
                     && !wasteNotedLotIds.Contains(lot.LotId.ToString()))
@@ -571,6 +635,32 @@ namespace LandLedgers.Economy.Businesses.Bakery
                     wasteNotedLotIds.Add(lot.LotId.ToString());
                     diag.Add($"BakeryShopRuntime: lot {lot.LotId} ({lot.ProductId}, {lot.UnitCount} units, baked day {lot.BakedDayIndex}) went stale — written off as waste (day {dayIndex}). Never sold.");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Priority 9 Slice F3: one log-only bakery-dispense record per
+        /// dispense line. The source is the bin lot the units came from;
+        /// the destination is the dough batch's custody, which is not a lot,
+        /// so the destination key is Empty. The cause key names the batch,
+        /// the input, the source lot, and the day, so a re-dispense after a
+        /// failed prep (custody returned to the bin) is a new transfer,
+        /// not a duplicate.
+        /// </summary>
+        private void RecordDispense(BakeryDoughBatch batch, List<BakeryFlourDispenseLine> lines, int dayIndex)
+        {
+            if (CustodyLog == null || lines == null) return;
+            foreach (BakeryFlourDispenseLine line in lines)
+            {
+                if (line == null || line.UnitsTaken <= 0) continue;
+                CustodyLog.Record(new CustodyTransferRecord(
+                    dayIndex, line.FlourName, line.UnitsTaken,
+                    new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), line.LotId.ToString()),
+                    LotKey.Empty,
+                    CustodyTransferLog.BakeryAuthority(BusinessInstanceId),
+                    CustodyTransferLog.BatchCustodian(batch.BatchId),
+                    "dispense-" + batch.BatchId + "-" + line.FlourName + "-" + line.LotId.ToString() + "-day" + dayIndex,
+                    CustodyTransferLog.CauseBakeryDispense), out _);
             }
         }
 
@@ -626,6 +716,16 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
                 batch.FlourInCustody.AddRange(flourLines);
                 batch.NotionsUsed.AddRange(notionLines);
+                // Priority 9 Slice F3: custody recording only, once custody
+                // is committed to the batch — one record per dispense line
+                // (per source lot). A prep that fails later returns its
+                // custody to the bin and records nothing. A logging failure
+                // never fails the prep.
+                if (CustodyLog != null)
+                {
+                    RecordDispense(batch, flourLines, dayIndex);
+                    RecordDispense(batch, notionLines, dayIndex);
+                }
                 SetStage(batch, BakeryBatchStage.Prepped, dayIndex,
                     $"prepped ({spec.PrepMinutes}m, {spec.FlourUnitsPerBatch} lb flour from {flourLines.Count} lot(s))");
             }
@@ -802,7 +902,47 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 }
             }
 
+            // Priority 9 Slice F4: the bread lot's own canonical
+            // provenance key rides in its InputProvenance, appended once
+            // (never a second time for the same lot) — the free-text
+            // input lines above are kept verbatim.
+            string canonicalKey = LotIdentity.CanonicalProvenanceKey(
+                CustodyTransferLog.BakeryAuthority(BusinessInstanceId), lot.LotId.ToString());
+            if (!lot.InputProvenance.Contains(canonicalKey))
+                lot.InputProvenance.Add(canonicalKey);
+
+            // Priority spoilage integration: the condition state is
+            // CREATED with the lot at its creation site. Bread is the
+            // only item with an authored aging rule, so it starts
+            // Fresh/Fresh on its bake day, anchored at that day, with
+            // the bake as its source. The flour-to-bread history link
+            // lives in InputProvenance (free text) above; the state's
+            // own handling history starts empty at the bake.
+            lot.PerishableCondition = new PerishableLotState(
+                new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), lot.LotId.ToString()),
+                BakeryBreadCatalog.BreadLoafId,
+                spec.YieldUnitsPerBatch,
+                dayIndex)
+                .WithConditions(PerishablePhysicalCondition.Fresh, PerishablePhysicalCondition.Fresh)
+                .WithSource("bake:" + batch.BatchId, BusinessInstanceId, "bakery:" + BusinessInstanceId)
+                .CaptureSaveDto();
+            lot.HasPerishableCondition = true;
+
             breadShelf.Add(lot);
+            // Priority 9 Slice F3: custody recording only. The batch's
+            // custody becomes the bread lot. A logging failure never fails
+            // the bake.
+            if (CustodyLog != null)
+            {
+                CustodyLog.Record(new CustodyTransferRecord(
+                    dayIndex, lot.ProductId, spec.YieldUnitsPerBatch,
+                    new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), "batch:" + batch.BatchId),
+                    new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), lot.LotId.ToString()),
+                    CustodyTransferLog.BatchCustodian(batch.BatchId),
+                    CustodyTransferLog.BakeryAuthority(BusinessInstanceId),
+                    "bake:" + batch.BatchId,
+                    CustodyTransferLog.CauseBakeryBake), out _);
+            }
             // The inputs are now IN the bread: custody lines move to the lot, so
             // the batch never double-counts and the bin never sees them again.
             batch.FlourInCustody.Clear();
@@ -865,6 +1005,27 @@ namespace LandLedgers.Economy.Businesses.Bakery
             foreach (var lot in ordered)
             {
                 if (remaining <= 0) break;
+                // Priority spoilage integration: split BEFORE taking.
+                // The taken part carries its own condition state onto
+                // the sale record (the buyer carries it forward); the
+                // remainder stays on the lot, unit-synced by TakeUnits.
+                // TakeUnits alone cannot do this: it knows the lot, not
+                // the record. A stateless lot sells exactly as before.
+                PerishableLotState.SaveDto takenCondition = default;
+                bool hasTakenCondition = false;
+                if (lot.HasPerishableCondition && lot.UnitCount > 0)
+                {
+                    int takeable = Math.Min(remaining, lot.UnitCount);
+                    if (takeable > 0)
+                    {
+                        (PerishableLotState remainingState, PerishableLotState takenState) =
+                            PerishableLotState.FromSaveDto(lot.PerishableCondition)
+                                .Split(takeable, dayIndex);
+                        takenCondition = takenState.CaptureSaveDto();
+                        hasTakenCondition = true;
+                        lot.PerishableCondition = remainingState.CaptureSaveDto();
+                    }
+                }
                 int taken = lot.TakeUnits(remaining);
                 if (taken <= 0) continue;
                 remaining -= taken;
@@ -882,6 +1043,8 @@ namespace LandLedgers.Economy.Businesses.Bakery
                     ProvenanceChain = lot.InputProvenance != null
                         ? string.Join(" | ", lot.InputProvenance)
                         : string.Empty,
+                    PerishableCondition = takenCondition,
+                    HasPerishableCondition = hasTakenCondition,
                 });
             }
 
@@ -895,6 +1058,15 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 diag.Add($"BakeryShopRuntime: sold {sold} unit(s) of {productId} (day {dayIndex}).");
             }
 
+            // Priority spoilage integration: the sale records are the
+            // runtime's own record of the sale — they are retained on
+            // the runtime (and so reach the save DTO), not only returned
+            // to the caller. SellBread previously returned them without
+            // retaining them, so Sales stayed empty in live operation
+            // even though the DTO round-trips them and
+            // SaveLoad_RoundTrip_PreservesShelfBatchesAndWasteDedupe
+            // pins the retention.
+            sales.AddRange(records);
             return records;
         }
 
@@ -968,6 +1140,22 @@ namespace LandLedgers.Economy.Businesses.Bakery
             // Age to the TRANSFER day from the preserved baked day: a loaf
             // baked yesterday is day-old when transferred today, never fresh.
             lot.AgeToDay(dayIndex);
+            // Priority spoilage integration: the transferred lot carries
+            // a state anchored at its BAKED day, aged to the transfer
+            // day by the authored rule — never anchored at the transfer
+            // day, which would rejuvenate it. The staged lot carries
+            // no state of its own, so the state is built fresh here.
+            lot.PerishableCondition = PerishableLotState.ApplyElapsedTime(
+                new PerishableLotState(
+                    new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), lot.LotId.ToString()),
+                    BakeryBreadCatalog.BreadLoafId,
+                    staged.Units,
+                    staged.BakedDayIndex)
+                    .WithConditions(PerishablePhysicalCondition.Fresh, PerishablePhysicalCondition.Fresh)
+                    .WithSource("staged-transfer:" + staged.LotId, BusinessInstanceId, "bakery:" + BusinessInstanceId),
+                Math.Max(0, dayIndex - staged.BakedDayIndex), "ambient")
+                .CaptureSaveDto();
+            lot.HasPerishableCondition = true;
             breadShelf.Add(lot);
             transferredStagedLotIds.Add(staged.LotId);
             diag.Add($"BakeryShopRuntime: staged lot '{staged.LotId}' transferred as shop lot {lot.LotId} "
@@ -1120,6 +1308,27 @@ namespace LandLedgers.Economy.Businesses.Bakery
             foreach (var lot in sellable)
             {
                 if (remaining <= 0) break;
+                // Priority spoilage integration: split BEFORE taking,
+                // as in SellBread — the taken part's condition state
+                // rides the delivery record; the remainder stays on
+                // the lot, unit-synced by TakeUnits. A stateless lot
+                // contributes a default (empty) entry, so the list
+                // stays parallel to SellerLotIds / UnitsByLot.
+                PerishableLotState.SaveDto takenCondition = default;
+                bool hasTakenCondition = false;
+                if (lot.HasPerishableCondition && lot.UnitCount > 0)
+                {
+                    int takeable = Math.Min(remaining, lot.UnitCount);
+                    if (takeable > 0)
+                    {
+                        (PerishableLotState remainingState, PerishableLotState takenState) =
+                            PerishableLotState.FromSaveDto(lot.PerishableCondition)
+                                .Split(takeable, dayIndex);
+                        takenCondition = takenState.CaptureSaveDto();
+                        hasTakenCondition = true;
+                        lot.PerishableCondition = remainingState.CaptureSaveDto();
+                    }
+                }
                 int taken = lot.TakeUnits(remaining);
                 if (taken <= 0) continue;
                 remaining -= taken;
@@ -1128,6 +1337,9 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 record.UnitsByLot.Add(taken);
                 record.ConditionByLot.Add(lot.Condition);
                 record.BakedDayByLot.Add(lot.BakedDayIndex);
+                record.PerishableConditionsByLot.Add(hasTakenCondition
+                    ? takenCondition
+                    : new PerishableLotState.SaveDto());
                 if (lot.InputProvenance != null) record.ProvenanceLines.AddRange(lot.InputProvenance);
                 if (lot.Condition == BakeryGoodsCondition.Fresh) freshTaken += taken;
                 else dayOldTaken += taken;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -216,6 +217,21 @@ namespace LandLedgers.Population
         /// <summary>Lineage: ids of lots this lot descends from (split parents, merged constituents).</summary>
         public List<int> AncestryLotIds = new List<int>();
 
+        /// <summary>
+        /// Priority spoilage integration: the Slice 5 perishable
+        /// condition state attached to this lot (additive; old saves
+        /// load with HasPerishableCondition false, which means "never
+        /// attached", never a default Fresh). Set at deposit from the
+        /// carried batch's state, copied by split, never merged across
+        /// different conditions, unit-synced by consume and commitment
+        /// fulfillment. The registry's Export/Import pair carries lots
+        /// directly, so the state round-trips with the lot.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at deposit.</summary>
+        public bool HasPerishableCondition;
+
         public int AvailableUnits => Mathf.Max(0, QuantityUnits - Mathf.Max(0, HeldUnits));
     }
 
@@ -274,7 +290,8 @@ namespace LandLedgers.Population
         /// sourceless additions (no synthetic stock).
         /// </summary>
         public string AddLot(string itemId, int quantityUnits, int dayIndex, string sourceLabel,
-            string qualityBand = "", string sourceKind = "", int ownerPersonId = -1)
+            string qualityBand = "", string sourceKind = "", int ownerPersonId = -1,
+            PerishableLotState condition = null)
         {
             HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
             if (definition == null)
@@ -292,7 +309,7 @@ namespace LandLedgers.Population
                 return Reject($"Rejected lot of {definition.ItemId}: source is required (no synthetic stock).");
             }
 
-            state.Lots.Add(new HouseholdItemLot
+            var lot = new HouseholdItemLot
             {
                 LotId = state.NextLotSequence++,
                 ItemId = definition.ItemId,
@@ -303,7 +320,28 @@ namespace LandLedgers.Population
                 QualityBand = qualityBand ?? string.Empty,
                 SourceKind = sourceKind ?? string.Empty,
                 OwnerPersonId = ownerPersonId,
-            });
+                // Priority spoilage integration: the lot keeps the
+                // condition it arrived with — deposit never resets it.
+                // When the state's units are expressed in sale units
+                // and the lot is credited in household units (a package
+                // item: sacks → lb), the state is synced to the credited
+                // quantity — same goods, household units; the history
+                // and every other dimension are preserved verbatim.
+                PerishableCondition = condition == null
+                    ? default
+                    : (condition.Units != quantityUnits
+                        ? condition.WithUnits(quantityUnits)
+                        : condition).CaptureSaveDto(),
+                HasPerishableCondition = condition != null,
+            };
+            // Priority 9 Slice F4: the lot's own canonical provenance key
+            // is appended to its SourceLabel (free text kept verbatim,
+            // appended once) so the lot's identity survives in its own
+            // provenance field. The key is derived from the lot id just
+            // assigned above.
+            lot.SourceLabel = LotIdentity.AppendProvenanceKey(
+                sourceLabel, CustodyTransferLog.HouseholdInventoryAuthority, lot.LotId.ToString());
+            state.Lots.Add(lot);
             return null;
         }
 
@@ -353,6 +391,28 @@ namespace LandLedgers.Population
             if (source.AncestryLotIds != null)
                 child.AncestryLotIds.AddRange(source.AncestryLotIds);
             child.AncestryLotIds.Add(source.LotId);
+            // Priority spoilage integration: the split divides the
+            // parent's condition state, never averages or resets it —
+            // the child inherits the transferred part, the parent keeps
+            // the remainder, both with the split recorded in history.
+            // The parent's state is self-healed to the lot quantity
+            // first, so a state that drifted from its lot can never make
+            // a previously-working split throw.
+            if (source.HasPerishableCondition)
+            {
+                PerishableLotState parentState = PerishableLotState.FromSaveDto(source.PerishableCondition);
+                if (parentState.Units != source.QuantityUnits)
+                    parentState = parentState.WithUnits(source.QuantityUnits);
+                (PerishableLotState remainingState, PerishableLotState childState) = parentState.Split(units, dayIndex);
+                source.PerishableCondition = remainingState.CaptureSaveDto();
+                child.PerishableCondition = childState.CaptureSaveDto();
+                child.HasPerishableCondition = true;
+            }
+            // Priority 9 Slice F4: the child carries its parent's key as
+            // lineage (copied in SourceLabel above) plus its own canonical
+            // key, appended once — the resolver reads the child's own key.
+            child.SourceLabel = LotIdentity.AppendProvenanceKey(
+                child.SourceLabel, CustodyTransferLog.HouseholdInventoryAuthority, child.LotId.ToString());
             source.QuantityUnits -= units;
             state.Lots.Add(child);
             return child.LotId;
@@ -375,7 +435,7 @@ namespace LandLedgers.Population
                 HouseholdItemLot lot = state.Lots[i];
                 if (lot == null || lot.HeldUnits > 0 || lot.QuantityUnits <= 0) continue;
                 string key = (lot.ItemId ?? string.Empty) + "|" + (lot.QualityBand ?? string.Empty) + "|" +
-                    (lot.SourceKind ?? string.Empty) + "|" + lot.OwnerPersonId;
+                    (lot.SourceKind ?? string.Empty) + "|" + lot.OwnerPersonId + "|" + ConditionSignature(lot);
                 if (!groups.TryGetValue(key, out List<HouseholdItemLot> group))
                 {
                     group = new List<HouseholdItemLot>();
@@ -411,8 +471,38 @@ namespace LandLedgers.Population
                     state.Lots.Remove(other);
                     mergedAway++;
                 }
+                // Priority spoilage integration: the survivor's attached
+                // state tracks the merged quantity (the merge key already
+                // guarantees every merged lot shared the condition).
+                if (survivor.HasPerishableCondition)
+                {
+                    survivor.PerishableCondition = PerishableLotState.FromSaveDto(survivor.PerishableCondition)
+                        .WithUnits(survivor.QuantityUnits).CaptureSaveDto();
+                }
             }
             return mergedAway;
+        }
+
+        /// <summary>
+        /// Priority spoilage integration: the condition signature that
+        /// keeps lots with different perishable conditions from merging
+        /// (Canon XXXI 4.6: mixing never averages, preservation never
+        /// rejuvenates). Two lots merge only when their conditions agree
+        /// on every dimension merging would erase: presence, physical /
+        /// perceived / safety state, produced day, remaining-life
+        /// knowledge and days, preservation method. The LotKey is
+        /// deliberately NOT part of the signature: two lots from
+        /// different source lots with the same condition may merge,
+        /// with lineage kept in the survivor's ancestry.
+        /// </summary>
+        private static string ConditionSignature(HouseholdItemLot lot)
+        {
+            if (lot == null || !lot.HasPerishableCondition) return "absent";
+            PerishableLotState state = PerishableLotState.FromSaveDto(lot.PerishableCondition);
+            return "present|" + state.PhysicalCondition + "|" + state.PerceivedCondition + "|" + state.SafetyState + "|" +
+                state.ProducedOrAcquiredDay + "|" +
+                (state.RemainingUsefulLife.IsKnown ? "life:" + state.RemainingUsefulLife.Days : "life:?") + "|" +
+                (state.PreservationMethod ?? string.Empty);
         }
 
         /// <summary>
@@ -462,6 +552,14 @@ namespace LandLedgers.Population
 
                 lot.QuantityUnits -= take;
                 remaining -= take;
+                // Priority spoilage integration: the eaten lot's attached
+                // state tracks the remaining quantity (the consumption
+                // record is the event; no history event is appended here).
+                if (lot.HasPerishableCondition)
+                {
+                    lot.PerishableCondition = PerishableLotState.FromSaveDto(lot.PerishableCondition)
+                        .WithUnits(lot.QuantityUnits).CaptureSaveDto();
+                }
                 outRecords?.Add(new HouseholdConsumptionRecord
                 {
                     DayIndex = Mathf.Max(0, dayIndex),
@@ -575,6 +673,13 @@ namespace LandLedgers.Population
                 lot.HeldUnits -= take;
                 lot.QuantityUnits -= take;
                 remaining -= take;
+                // Priority spoilage integration: the fulfilled lot's
+                // attached state tracks the remaining quantity.
+                if (lot.HasPerishableCondition)
+                {
+                    lot.PerishableCondition = PerishableLotState.FromSaveDto(lot.PerishableCondition)
+                        .WithUnits(lot.QuantityUnits).CaptureSaveDto();
+                }
             }
 
             RemoveEmptyLots();
@@ -742,6 +847,13 @@ namespace LandLedgers.Population
                             AncestryLotIds = lot.AncestryLotIds != null
                                 ? new List<int>(lot.AncestryLotIds)
                                 : new List<int>(),
+                            // Priority spoilage integration: the attached
+                            // condition state is part of the lot and is
+                            // deep-copied with it (the SaveDto is a value
+                            // snapshot, so copying the struct copies the
+                            // state; the bool travels with it).
+                            PerishableCondition = lot.PerishableCondition,
+                            HasPerishableCondition = lot.HasPerishableCondition,
                         });
                     }
                 }

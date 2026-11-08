@@ -53,6 +53,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Population;
 
 namespace LandLedgers.Economy.Businesses.Bakery
@@ -62,12 +63,21 @@ namespace LandLedgers.Economy.Businesses.Bakery
     /// RegisterIn is the one registration call Codex makes from the
     /// bootstrapper (this pass does NOT edit the bootstrapper).
     /// </summary>
-    public sealed class Series2BakerySupplierAdapter : IItemResolvingSupplier, IOffersTradeCredit
+    public sealed class Series2BakerySupplierAdapter : IItemResolvingSupplier, IOffersTradeCredit, ILotConditionSupplier
     {
         private readonly BakeryShopRuntime bakery;
         private readonly IBusinessCashPort cash;
         private readonly Func<string> tradingCheck;
         private readonly List<string> log = new List<string>();
+
+        /// <summary>
+        /// Priority spoilage integration: the condition state of the
+        /// units the most recent <see cref="SellItem"/> call sold.
+        /// Reset on every SellItem call, including refusals, so a stale
+        /// state never rides a later sale.
+        /// </summary>
+        private PerishableLotState.SaveDto lastSaleCondition;
+        private bool hasLastSaleCondition;
         private string lastReceiptId = string.Empty;
         private int receiptSequence;
 
@@ -183,6 +193,12 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public int SellItem(
             string itemId, int requestedUnits, int dayIndex, ShoppingSettlement settlement, List<string> diagnostics)
         {
+            // Priority spoilage integration: every SellItem call starts
+            // with no last-sale state — a refusal or an empty sale must
+            // never leave a previous sale's state behind for the loop
+            // to read.
+            hasLastSaleCondition = false;
+            lastSaleCondition = default;
             if (!OffersItem(itemId) || requestedUnits <= 0 || bakery == null)
                 return 0;
             string tradingProblem = CheckTradingCapability(dayIndex, 0);
@@ -252,6 +268,36 @@ namespace LandLedgers.Economy.Businesses.Bakery
             }
             if (sold <= 0) return 0;
 
+            // Priority spoilage integration: the taken part's condition
+            // state rides the sale to the buyer. All records share one
+            // baked day (the homogeneous cap above), so one condition.
+            // The state is the first record's taken part, unit-synced
+            // to the total sold when several same-day lots contributed
+            // (same day, same condition — the per-lot breakdown stays on
+            // the sale records and the F3 log). A stateless shelf (lots
+            // baked before this slice attached states) sells exactly as
+            // before, with no state.
+            PerishableLotState.SaveDto firstTaken = default;
+            bool anyTaken = false;
+            int takenUnits = 0;
+            foreach (BakerySaleRecord record in records)
+            {
+                if (record == null || !record.HasPerishableCondition) continue;
+                if (!anyTaken)
+                {
+                    firstTaken = record.PerishableCondition;
+                    anyTaken = true;
+                }
+                takenUnits += Math.Max(0, record.Units);
+            }
+            if (anyTaken && takenUnits > 0)
+            {
+                PerishableLotState combined = PerishableLotState.FromSaveDto(firstTaken);
+                if (combined.Units != takenUnits) combined = combined.WithUnits(takenUnits);
+                lastSaleCondition = combined.CaptureSaveDto();
+                hasLastSaleCondition = true;
+            }
+
             // Every record must share the one quoted price; otherwise the
             // loop's uniform-price settlement cannot match this sale.
             // The cap above makes this unreachable in practice; if it
@@ -279,6 +325,22 @@ namespace LandLedgers.Economy.Businesses.Bakery
             lastReceiptId = $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
             diagnostics?.Add($"'{SupplierName}' sold {sold}u bread ({lastReceiptId}).");
             return sold;
+        }
+
+        // ---- ILotConditionSupplier (Priority spoilage integration) ----
+
+        /// <summary>
+        /// The condition state of the units the most recent
+        /// <see cref="SellItem"/> call sold, or false when that sale
+        /// carried no state (refusal, empty sale, or a stateless lot).
+        /// The state is the taken part's own state (split at the sale),
+        /// in sale units; the loop transfers it to the shopper's
+        /// custody and the batch carries it to deposit.
+        /// </summary>
+        public bool TryGetLastSaleCondition(out PerishableLotState.SaveDto condition)
+        {
+            condition = lastSaleCondition;
+            return hasLastSaleCondition;
         }
 
         // ---- IOffersTradeCredit ----

@@ -637,6 +637,15 @@ namespace LandLedgers.Orchestration.Systems
                 householdShoppingLoop.TimingObserver = hub.DurationDiagnostics;
             }
 
+            // Priority U-3: attach the loop to the hub so the save pipeline
+            // carries its in-transit custody (the hub never constructs the
+            // loop; it only holds the reference for save/load). Must run
+            // before a load restores the hub section — scene wiring builds
+            // this loop before the bootstrapper's Continue branch loads a
+            // save; a loop attached after the hub load leaves the custody
+            // section unrestored for that load.
+            hub.ShoppingLoop = householdShoppingLoop;
+
         }
 
         /// <summary>

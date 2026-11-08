@@ -134,6 +134,11 @@ namespace LandLedgers.Persistence
         public HouseholdAutonomyDriverSaveDto householdAutonomy = new();
         // Pass V P2-1: batched errand plans with claims and reservations.
         public HouseholdErrandPlanRegistrySaveDto householdErrandPlans = new();
+        // Priority U-3 (additive): the shopping loop's in-transit custody
+        // batches. The loop is driver-owned, not hub-owned (see
+        // SimulationSystemsHub.ShoppingLoop); a null loop saves empty, and
+        // old saves without this section load as empty.
+        public HouseholdShoppingCustodySaveDto shoppingCustody = new();
         // Pass V P2-2: durable registry of private household lenders.
         public HouseholdLenderDirectory.HouseholdLenderDirectorySaveDto householdLenders = new();
         // Pass VIII (6.3): the production business lender's servicing books

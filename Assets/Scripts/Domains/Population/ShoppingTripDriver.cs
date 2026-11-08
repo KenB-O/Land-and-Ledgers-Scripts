@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -105,6 +106,22 @@ namespace LandLedgers.Population
         public int BatchCustody;
         public string BatchProvenance = string.Empty;
         public int BatchPurchaseDayIndex;
+        // Priority U-3: the batch's own package size and seller, as
+        // settled — so a restored batch still knows both when its
+        // candidate no longer exists (additive; old saves read 0/empty
+        // and fall back to 1 / the rebuilt candidate).
+        public int BatchHouseholdUnitsPerStoreUnit;
+        public string BatchSupplierName = string.Empty;
+        /// <summary>
+        /// Priority spoilage integration: the batch's attached
+        /// perishable condition state at settle time, as a value
+        /// snapshot (additive; old saves read the default DTO with
+        /// BatchHasPerishableCondition false, which means "no state",
+        /// never a default Fresh). A restored batch carries the state
+        /// into custody and on to deposit.
+        /// </summary>
+        public PerishableLotState.SaveDto BatchPerishableCondition;
+        public bool BatchHasPerishableCondition;
     }
 
     /// <summary>
@@ -552,7 +569,31 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                activeTrips.Add(FromDto(dto));
+                PlannedShoppingTrip trip = FromDto(dto);
+                activeTrips.Add(trip);
+                // Priority U-3: register the restored batch in the loop's
+                // custody, so the trip's batch and the loop's custody are
+                // one object (the read model reports it, the receipt
+                // deposits it exactly once). Idempotent: a second load of
+                // the same DTO re-points at the already-held batch.
+                AttachTripBatchToLoop(trip);
+            }
+        }
+
+        /// <summary>
+        /// Priority U-3: registers a restored trip's batch in the loop's
+        /// custody so the trip's batch and the loop's custody are one
+        /// object. Called on load and again on rehydrate: whichever of the
+        /// loop custody DTO and the driver DTO loads last, the trip ends
+        /// up pointing at the loop-owned instance.
+        /// </summary>
+        private void AttachTripBatchToLoop(PlannedShoppingTrip trip)
+        {
+            if (trip == null || trip.Batch == null || loop == null) return;
+            CarriedGoodsBatch owned = loop.AttachRestoredBatch(trip.Batch);
+            if (owned != null)
+            {
+                trip.Batch = owned;
             }
         }
 
@@ -575,6 +616,14 @@ namespace LandLedgers.Population
                 {
                     continue;
                 }
+
+                // Priority U-3: re-attach the batch to the loop-owned
+                // custody instance — the loop may have loaded its custody
+                // DTO after this driver loaded, replacing the instance this
+                // trip points at. Attaching is idempotent, and a trip that
+                // turns out dead below still keeps its batch in loop
+                // custody (preserved, depositable via ReceiveCarriedBatch).
+                AttachTripBatchToLoop(trip);
 
                 var legs = new HouseholdShoppingLoop.PlannedTrip();
                 bool ok = true;
@@ -689,6 +738,10 @@ namespace LandLedgers.Population
                 dto.BatchCustody = (int)trip.Batch.Custody;
                 dto.BatchProvenance = trip.Batch.Provenance ?? string.Empty;
                 dto.BatchPurchaseDayIndex = trip.Batch.PurchaseDayIndex;
+                dto.BatchHouseholdUnitsPerStoreUnit = Math.Max(1, trip.Batch.HouseholdUnitsPerStoreUnit);
+                dto.BatchSupplierName = trip.Batch.SupplierName ?? string.Empty;
+                dto.BatchPerishableCondition = trip.Batch.PerishableCondition;
+                dto.BatchHasPerishableCondition = trip.Batch.HasPerishableCondition;
             }
 
             return dto;
@@ -735,6 +788,11 @@ namespace LandLedgers.Population
                     Custody = (GoodsCustodyState)dto.BatchCustody,
                     Provenance = dto.BatchProvenance,
                     PurchaseDayIndex = dto.BatchPurchaseDayIndex,
+                    HouseholdUnitsPerStoreUnit = dto.BatchHouseholdUnitsPerStoreUnit > 0
+                        ? dto.BatchHouseholdUnitsPerStoreUnit : 1,
+                    SupplierName = dto.BatchSupplierName ?? string.Empty,
+                    PerishableCondition = dto.BatchPerishableCondition,
+                    HasPerishableCondition = dto.BatchHasPerishableCondition,
                 };
             }
 

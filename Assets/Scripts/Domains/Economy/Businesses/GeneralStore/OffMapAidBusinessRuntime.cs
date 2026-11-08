@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 
 namespace LandLedgers.Economy.Businesses.GeneralStore
 {
@@ -35,6 +36,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string DestinationBusinessId = string.Empty;
         public bool SourceCommitted;
         public bool Received;
+
+        /// <summary>
+        /// Priority spoilage integration: the Slice 5 perishable
+        /// condition state attached to this lot (additive; old saves
+        /// load with HasPerishableCondition false, which means "never
+        /// attached"). Flour sacks carry no authored aging rule, so
+        /// the state is Unknown and never changes with elapsed time.
+        /// Created at order time. The save DTO carries the cargo lots
+        /// directly, so the state round-trips with the lot.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at the order.</summary>
+        public bool HasPerishableCondition;
     }
 
     [Serializable]
@@ -80,6 +95,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public string BusinessId => definition != null ? definition.BusinessId : string.Empty;
         public string DisplayName => definition != null ? definition.DisplayName : string.Empty;
+
+        /// <summary>
+        /// Priority 9 Slice F3 (P9 plan section 4 Slice F3): the custody
+        /// transfer log this runtime records Millbrook orders into, when
+        /// set. Null (the default) means no recording — today behaviour.
+        /// The log is an audit trail only: no flow reads it, and a logging
+        /// failure never fails an order.
+        /// </summary>
+        public CustodyTransferLog CustodyLog { get; set; }
         public float PickupRouteMilesFromTown => definition != null ? Math.Max(0f, definition.PickupRouteMilesFromTown) : 0f;
         public int CashCents => Math.Max(0, cashCents);
         public IReadOnlyList<OffMapAidCashTransaction> CashTransactions => transactions;
@@ -145,6 +169,19 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 TotalCostCents = (int)totalPrice,
                 CreatedDayIndex = Math.Max(0, dayIndex),
             };
+            // Priority spoilage integration: the condition state is
+            // CREATED with the lot at its creation site. The sacks
+            // carry no authored aging rule, so the state is Unknown —
+            // explicit, never a guessed shelf life — anchored at the
+            // order day, in sacks (the order unit).
+            lot.PerishableCondition = new PerishableLotState(
+                new LotKey(CustodyTransferLog.MillbrookAuthority(BusinessId), lot.LotId),
+                "bakery_flour_sack",
+                packageUnits,
+                Math.Max(0, dayIndex))
+                .WithSource(orderId, BusinessId, "supplier:" + BusinessId)
+                .CaptureSaveDto();
+            lot.HasPerishableCondition = true;
             lots.Add(lot);
             transactions.Add(new OffMapAidCashTransaction
             {
@@ -157,6 +194,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 SupplierCashAfterCents = CashCents,
                 OrderId = orderId,
             });
+            // Priority 9 Slice F3: custody recording only. The order is a
+            // creation event — no source lot — and the new cargo lot is held
+            // by the supplier until freight commits it. A logging failure
+            // never fails the order.
+            if (CustodyLog != null)
+            {
+                CustodyLog.Record(new CustodyTransferRecord(
+                    Math.Max(0, dayIndex), flour.ItemId, packageUnits,
+                    LotKey.Empty,
+                    new LotKey(CustodyTransferLog.MillbrookAuthority(BusinessId), lot.LotId),
+                    CustodyTransferLog.SupplierCustodian(BusinessId),
+                    CustodyTransferLog.SupplierCustodian(BusinessId),
+                    orderId, CustodyTransferLog.CauseMillbrookOrder), out _);
+            }
             return null;
         }
 
@@ -309,6 +360,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             InventoryUnit = value.InventoryUnit, BakeryUnits = value.BakeryUnits, TotalCostCents = value.TotalCostCents,
             CreatedDayIndex = value.CreatedDayIndex, ShipmentId = value.ShipmentId,
             DestinationBusinessId = value.DestinationBusinessId, SourceCommitted = value.SourceCommitted, Received = value.Received,
+            // Priority spoilage integration: the attached condition state
+            // is part of the lot and clones with it (the SaveDto is a
+            // value snapshot; the bool travels with it). ExportState and
+            // ImportState both go through this clone, so a dropped field
+            // here would lose the state on save/load.
+            PerishableCondition = value.PerishableCondition, HasPerishableCondition = value.HasPerishableCondition,
         };
         private static OffMapAidCashTransaction Clone(OffMapAidCashTransaction value) => new OffMapAidCashTransaction
         {

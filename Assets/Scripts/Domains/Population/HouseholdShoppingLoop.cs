@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Logistics;
+using LandLedgers.Economy.Storage;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -84,6 +86,191 @@ namespace LandLedgers.Population
         public IReadOnlyList<CarriedGoodsBatch> ActiveCustodyBatches => custodyBatches;
 
         /// <summary>
+        /// Priority U-3: the loop's save surface for in-transit custody.
+        /// Captures every batch currently held in transit plus the
+        /// batch-id sequence, as COPIES — later settlement never mutates
+        /// the captured DTO. Before this surface the batch existed only in
+        /// the loop's private list, so a mid-trip save/load dropped the
+        /// paid-for goods (F5's U-3 pin).
+        /// </summary>
+        public HouseholdShoppingCustodySaveDto CaptureCustodySaveDto()
+        {
+            var dto = new HouseholdShoppingCustodySaveDto { NextBatchSequence = nextBatchSequence };
+            foreach (CarriedGoodsBatch batch in custodyBatches)
+            {
+                if (batch == null) continue;
+                dto.Batches.Add(CopyCustodyBatch(batch));
+            }
+
+            return dto;
+        }
+
+        /// <summary>
+        /// Priority U-3: clear-then-load for in-transit custody. Restores
+        /// the captured batches as fresh copies (never the DTO's objects —
+        /// the E-DEFECT-02 pattern — so a second restore of the same DTO
+        /// loads the same state instead of already-run state). Duplicate
+        /// batch ids in one DTO load once; already-received batches never
+        /// resurrect; a null DTO clears to empty. The batch-id sequence is
+        /// restored from the DTO and raised past every restored id, so a
+        /// later settle never reuses an id.
+        /// </summary>
+        public void LoadCustodyFromSaveDto(HouseholdShoppingCustodySaveDto dto)
+        {
+            custodyBatches.Clear();
+            nextBatchSequence = 0;
+            if (dto == null) return;
+            nextBatchSequence = Math.Max(0, dto.NextBatchSequence);
+            if (dto.Batches == null) return;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (CarriedGoodsBatch batch in dto.Batches)
+            {
+                if (batch == null || string.IsNullOrEmpty(batch.BatchId)) continue;
+                if (batch.Custody == GoodsCustodyState.ReceivedAtHousehold) continue;
+                if (!seen.Add(batch.BatchId)) continue;
+                custodyBatches.Add(CopyCustodyBatch(batch));
+                nextBatchSequence = Math.Max(nextBatchSequence, CustodyBatchSequence(batch.BatchId) + 1);
+            }
+        }
+
+        /// <summary>
+        /// Priority U-3: registers one restored batch in loop custody,
+        /// idempotently — returns the loop-owned instance (the existing one
+        /// when a batch with the same id is already held). The driver calls
+        /// this when it restores a trip so the trip's batch and the loop's
+        /// custody are ONE object, never two copies of the same goods: a
+        /// receipt removes that one object from custody and deposits it
+        /// exactly once.
+        /// </summary>
+        public CarriedGoodsBatch AttachRestoredBatch(CarriedGoodsBatch batch)
+        {
+            if (batch == null || string.IsNullOrEmpty(batch.BatchId)) return null;
+            if (batch.Custody == GoodsCustodyState.ReceivedAtHousehold) return null;
+            foreach (CarriedGoodsBatch existing in custodyBatches)
+            {
+                if (existing != null && string.Equals(existing.BatchId, batch.BatchId, StringComparison.Ordinal))
+                {
+                    return existing;
+                }
+            }
+
+            CarriedGoodsBatch copy = CopyCustodyBatch(batch);
+            custodyBatches.Add(copy);
+            nextBatchSequence = Math.Max(nextBatchSequence, CustodyBatchSequence(batch.BatchId) + 1);
+            return copy;
+        }
+
+        /// <summary>
+        /// Priority U-3: Continue for a restored (or stranded) in-transit
+        /// batch. Deposits one batch the loop still holds in custody into
+        /// household storage through the existing receipt path
+        /// (ReceiveSettledGoods) — the same path the immediate trip uses —
+        /// exactly once: the batch leaves custody when the lot is booked.
+        /// Returns null on success, else a loud reason and nothing moves.
+        /// An ArrangedDelivery batch is refused here: delivery receipt is
+        /// ReceiveDelivery's path (freight arrives at the door). A batch
+        /// with no open need is refused: the receipt must close the need
+        /// it was bought for, never invent one. No money moves here — the
+        /// purchase settled before the save.
+        /// </summary>
+        public string ReceiveCarriedBatch(string batchId, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            CarriedGoodsBatch batch = null;
+            foreach (CarriedGoodsBatch candidate in custodyBatches)
+            {
+                if (candidate != null && string.Equals(candidate.BatchId, batchId, StringComparison.Ordinal))
+                {
+                    batch = candidate;
+                    break;
+                }
+            }
+
+            if (batch == null)
+            {
+                return $"ReceiveCarriedBatch: no batch {batchId} in transit custody — nothing to receive.";
+            }
+
+            if (batch.Custody == GoodsCustodyState.ArrangedDelivery)
+            {
+                return $"ReceiveCarriedBatch: batch {batchId} is an arranged delivery — delivery receipt (ReceiveDelivery) is its path, not this one.";
+            }
+
+            if (batch.Custody == GoodsCustodyState.ReceivedAtHousehold)
+            {
+                return $"ReceiveCarriedBatch: batch {batchId} was already received — refusing a second receipt.";
+            }
+
+            HouseholdPurchasingNeed need = needs.GetOpenNeed(batch.HouseholdId, batch.ItemId);
+            if (need == null)
+            {
+                return $"ReceiveCarriedBatch: batch {batchId} has no open need for {batch.ItemId} in H{batch.HouseholdId} — refusing to receive without the need it was bought for.";
+            }
+
+            var result = new ShoppingTripResult
+            {
+                NeedSequence = need.NeedSequence,
+                HouseholdId = batch.HouseholdId,
+                ShopperPersonId = batch.HolderPersonId,
+                ItemId = batch.ItemId,
+                ReceiptId = batch.ReceiptId,
+                BuyerOutflowCents = batch.Units * batch.UnitPriceCents,
+            };
+            string receiptProblem = ReceiveSettledGoods(
+                result, need, batch, batch.Units, Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                false, batch.SupplierName, batch.HolderPersonId, dayIndex, diag,
+                new ShoppingLoopOptions());
+            if (receiptProblem != null)
+            {
+                return receiptProblem;
+            }
+
+            tripHistory.Add(result);
+            diag.Add($"Day {dayIndex}: carried batch {batchId} received after Continue — P{batch.HolderPersonId} delivered {result.UnitsAcquired}u {batch.ItemId} to H{batch.HouseholdId}.");
+            return null;
+        }
+
+        private static CarriedGoodsBatch CopyCustodyBatch(CarriedGoodsBatch batch)
+        {
+            if (batch == null) return null;
+            return new CarriedGoodsBatch
+            {
+                BatchId = batch.BatchId ?? string.Empty,
+                HouseholdId = batch.HouseholdId,
+                HolderPersonId = batch.HolderPersonId,
+                ItemId = batch.ItemId ?? string.Empty,
+                Units = batch.Units,
+                UnitPriceCents = batch.UnitPriceCents,
+                ReceiptId = batch.ReceiptId ?? string.Empty,
+                Provenance = batch.Provenance ?? string.Empty,
+                Custody = batch.Custody,
+                PurchaseDayIndex = batch.PurchaseDayIndex,
+                HouseholdUnitsPerStoreUnit = Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                SupplierName = batch.SupplierName ?? string.Empty,
+                // Priority spoilage integration: the custody copy keeps
+                // the batch's condition state verbatim (the SaveDto is a
+                // value snapshot; the copy is a new batch object).
+                PerishableCondition = batch.PerishableCondition,
+                HasPerishableCondition = batch.HasPerishableCondition,
+            };
+        }
+
+        /// <summary>Priority spoilage integration: the batch's attached condition state, or null when the batch carries none.</summary>
+        private static PerishableLotState ConditionOf(CarriedGoodsBatch batch) =>
+            batch != null && batch.HasPerishableCondition
+                ? PerishableLotState.FromSaveDto(batch.PerishableCondition)
+                : null;
+
+        /// <summary>Parses the trailing sequence from a "carry-{day}-{seq}" batch id; -1 when it has none.</summary>
+        private static int CustodyBatchSequence(string batchId)
+        {
+            if (string.IsNullOrEmpty(batchId)) return -1;
+            int dash = batchId.LastIndexOf('-');
+            if (dash < 0 || dash == batchId.Length - 1) return -1;
+            return int.TryParse(batchId.Substring(dash + 1), out int sequence) ? sequence : -1;
+        }
+
+        /// <summary>
         /// Test/observability hook: invoked after goods enter custody and
         /// BEFORE the return leg executes. Lets observers verify the
         /// no-teleport invariant (household inventory unchanged mid-trip).
@@ -102,6 +289,80 @@ namespace LandLedgers.Population
         /// diagnostic. Follows the MidTripObserver pattern above.
         /// </summary>
         public ITaskTimingObserver TimingObserver { get; set; }
+
+        /// <summary>
+        /// Priority 9 Slice F3 (P9 plan section 4 Slice F3): the custody
+        /// transfer log this loop records retail purchases and household
+        /// receipts into, when set. Null (the default) means no recording —
+        /// today behaviour. The log is an audit trail only: no flow reads
+        /// it, and a logging failure never fails a trip.
+        /// </summary>
+        public CustodyTransferLog CustodyLog { get; set; }
+
+        private PhysicalCapacityEvaluator capacityEvaluator;
+
+        /// <summary>
+        /// Priority V1: the F2 capacity evaluator this loop consults at
+        /// settle time, before InHand custody is assigned. Always on: when
+        /// nothing is set, the loop builds an OnFootPerson-only evaluator
+        /// (no equipment, business, zone, or wagon authority is connected
+        /// through the loop — the settle-time query is the on-foot leg
+        /// only). A driver or test may set a fully-wired evaluator; the
+        /// loop's settle consultation uses whichever instance is held.
+        /// </summary>
+        public PhysicalCapacityEvaluator CapacityEvaluator
+        {
+            get => capacityEvaluator ?? (capacityEvaluator =
+                new PhysicalCapacityEvaluator(null, null, null, null));
+            set => capacityEvaluator = value;
+        }
+
+        private LotIdentityResolver lotIdentityResolver;
+
+        /// <summary>
+        /// Priority V1: the F4 lot identity resolver this loop uses to
+        /// answer what lot a receipt deposited. Always on: when nothing
+        /// is set, the loop builds a resolver over its own household
+        /// inventory registry. A driver or test may set a resolver over
+        /// more authorities; the loop's deposit resolution uses whichever
+        /// instance is held.
+        /// </summary>
+        public LotIdentityResolver LotIdentityResolver
+        {
+            get => lotIdentityResolver ?? (lotIdentityResolver =
+                new LotIdentityResolver(inventories));
+            set => lotIdentityResolver = value;
+        }
+
+        private PersonInventoryReadModel personInventory;
+
+        /// <summary>
+        /// Priority V1: the Slice 3 person inventory read model as this
+        /// loop's production custody answer — what a person carries, in
+        /// the read model's own terms. Always on: when nothing is set,
+        /// the loop builds the read model over its own custody batches
+        /// (via a HouseholdShoppingReadModel over this loop) and its own
+        /// household inventory registry, answering against the live
+        /// default carry cap. The receipt paths verify each deposit
+        /// through this read model. A driver or test may set a read model
+        /// built with different options instead.
+        /// </summary>
+        public PersonInventoryReadModel PersonInventory
+        {
+            get => personInventory ?? (personInventory =
+                new PersonInventoryReadModel(new HouseholdShoppingReadModel(this, scheduleTracker), inventories));
+            set => personInventory = value;
+        }
+
+        /// <summary>
+        /// Priority V1: the capacity verdict the loop last consulted at
+        /// settle time (null before any settle). The verdict is recorded,
+        /// never silently passed: a DoesNotFit verdict on an over-cap
+        /// load is recorded in diagnostics while the settled purchase
+        /// proceeds per the loop's existing enforcement (see
+        /// SettleAtCounter).
+        /// </summary>
+        public PhysicalCapacityVerdict? LastSettleCapacityVerdict { get; private set; }
 
         public HouseholdShoppingLoop(
             PopulationState population,
@@ -383,6 +644,144 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// Priority 9 Slice F3: log-only recording of the retail purchase.
+        /// The category-pool sale carries no retail lot id, so the source
+        /// lot key is Empty and the gap is named in the log's diagnostics.
+        /// The destination is the carried batch, keyed in the household
+        /// inventory space by its batch id. The cause key is the purchase
+        /// receipt id (the batch id when the site holds no receipt id). A
+        /// logging failure never fails the settlement.
+        /// </summary>
+        private void RecordRetailPurchase(
+            ShoppingTripResult result, ShoppingCandidate chosen,
+            HouseholdPurchasingNeed need, CarriedGoodsBatch batch,
+            int sold, int shopperId, int dayIndex)
+        {
+            if (CustodyLog == null) return;
+            string receiptId = result.ReceiptId;
+            if (string.IsNullOrWhiteSpace(receiptId))
+            {
+                receiptId = batch.BatchId;
+                CustodyLog.Note("custody: retail-purchase for batch " + batch.BatchId +
+                    " has no receipt id at this site; the batch id is the cause key instead.");
+            }
+            var record = new CustodyTransferRecord(
+                dayIndex, need.ItemId, sold,
+                LotKey.Empty,
+                new LotKey(CustodyTransferLog.HouseholdInventoryAuthority, batch.BatchId),
+                CustodyTransferLog.BusinessCustodian(chosen.Supplier.SupplierBusinessId),
+                CustodyTransferLog.PersonCustodian(shopperId),
+                receiptId, CustodyTransferLog.CauseRetailPurchase);
+            if (CustodyLog.Record(record, out _))
+            {
+                CustodyLog.Note("custody: retail-purchase " + record.RecordId +
+                    " has no source lot key — the category-pool sale carries no retail lot id at this site.");
+            }
+        }
+
+        /// <summary>
+        /// Priority 9 Slice F3: log-only recording of a household receipt.
+        /// The source is the carried batch; the destination household lot
+        /// id is not returned by HouseholdInventory.AddLot, so the
+        /// destination key is Empty and the gap is named in the log's
+        /// diagnostics. The cause key is the carried batch id, so the
+        /// receipt links to its purchase record. <paramref name="fromCustodian"/>
+        /// is the pre-receipt holder: the shopper for carried goods, the
+        /// arranged-delivery wagon for a delivery — ExecuteDelivery moves
+        /// the batch "by wagon" with no asset id, so the delivery
+        /// custodian names the delivery itself rather than inventing one.
+        /// A logging failure never fails the receipt. Ownership is NOT
+        /// recorded here: the lot is booked to the household by the
+        /// receipt path itself (OwnerPersonId -1), never to the shopper.
+        /// </summary>
+        private void RecordHouseholdReceipt(
+            CarriedGoodsBatch batch, HouseholdPurchasingNeed need,
+            int unitsReceived, int dayIndex, string fromCustodian)
+        {
+            if (CustodyLog == null) return;
+            var record = new CustodyTransferRecord(
+                dayIndex, need.ItemId, unitsReceived,
+                new LotKey(CustodyTransferLog.HouseholdInventoryAuthority, batch.BatchId),
+                LotKey.Empty,
+                fromCustodian,
+                CustodyTransferLog.HouseholdCustodian(need.HouseholdId),
+                batch.BatchId, CustodyTransferLog.CauseHouseholdReceipt);
+            if (CustodyLog.Record(record, out _))
+            {
+                CustodyLog.Note("custody: household-receipt " + record.RecordId +
+                    " has no destination lot key — HouseholdInventory.AddLot returns no lot id at this site.");
+            }
+        }
+
+        /// <summary>
+        /// Priority V1: after a receipt deposits a lot, resolve the
+        /// deposited lot's identity through the F4 resolver and record
+        /// it on the trip result — the lot id and its canonical
+        /// provenance key, never a bare id passed onward. The lot is
+        /// found by position: AddLot appends exactly one lot on success,
+        /// so the lot at the pre-AddLot count is the deposited one. A
+        /// resolution gap is recorded in diagnostics, never invented,
+        /// and never fails the receipt (the goods are already stored).
+        /// </summary>
+        private void RecordDepositedLotIdentity(
+            HouseholdInventory inventory, int lotIndexBefore,
+            ShoppingTripResult result, List<string> diag)
+        {
+            if (inventory == null || result == null || diag == null) return;
+            if (lotIndexBefore < 0 || lotIndexBefore >= inventory.Lots.Count)
+            {
+                diag.Add($"[V1] deposit identity gap: no lot at index {lotIndexBefore} after receipt for H{result.HouseholdId} — the deposited lot cannot be resolved.");
+                return;
+            }
+
+            HouseholdItemLot deposited = inventory.Lots[lotIndexBefore];
+            if (deposited == null)
+            {
+                diag.Add("[V1] deposit identity gap: the deposited lot slot is empty after receipt.");
+                return;
+            }
+
+            LotIdentity identity = LotIdentityResolver.Resolve(new LotKey(
+                CustodyTransferLog.HouseholdInventoryAuthority, deposited.LotId.ToString()));
+            if (identity == null)
+            {
+                diag.Add($"[V1] deposit identity gap: lot {deposited.LotId} in H{result.HouseholdId} could not be resolved — see the resolver diagnostics. No key is invented.");
+                return;
+            }
+
+            result.ReceivedLotId = deposited.LotId;
+            result.ReceivedLotKey = identity.ProvenanceKey;
+            diag.Add($"[V1] deposit identity: lot {deposited.LotId} ({identity.ItemId} x{identity.Units}) " +
+                $"deposited in H{result.HouseholdId} as {identity.ProvenanceKey}.");
+        }
+
+        /// <summary>
+        /// Priority V1: after a receipt removes the carried batch from
+        /// custody, verify through the loop's production person
+        /// inventory read model that the shopper no longer carries that
+        /// batch. The read model is the custody answer — the loop does
+        /// not re-derive custody inline from its own batch list here.
+        /// A disagreement is a loud diagnostic, never a silent pass,
+        /// and never fails the receipt (the goods are already stored).
+        /// </summary>
+        private void VerifyDepositViaPersonInventory(int shopperId, CarriedGoodsBatch batch, List<string> diag)
+        {
+            if (batch == null || diag == null) return;
+            foreach (PersonInventoryReadModel.CarriedItem carried in PersonInventory.CarriedItems(shopperId))
+            {
+                if (carried != null && string.Equals(carried.BatchId, batch.BatchId, StringComparison.Ordinal))
+                {
+                    diag.Add($"[V1] INCONSISTENCY: P{shopperId} still carries batch {batch.BatchId} " +
+                        "in the person inventory read model after receipt — custody and storage disagree.");
+                    return;
+                }
+            }
+
+            diag.Add($"[V1] deposit verified via PersonInventoryReadModel: P{shopperId} " +
+                $"no longer carries batch {batch.BatchId} after receipt.");
+        }
+
+        /// <summary>
         /// Pass V P2-1: step 16 as a reusable unit — physical receipt ONLY.
         /// Household inventory grows here, and only here, for carried goods.
         /// Updates the need (fulfilled when nothing remains) and the per-need
@@ -408,9 +807,11 @@ namespace LandLedgers.Population
         {
             int unitsReceived = unitsSold * Math.Max(1, householdUnitsPerStoreUnit);
             HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
+            int lotIndexBefore = inventory.Lots.Count;
             string lotRejection = inventory.AddLot(
                 need.ItemId, unitsReceived, dayIndex,
-                batch.Provenance + (useDelivery ? " → delivered" : " → carried home"));
+                batch.Provenance + (useDelivery ? " → delivered" : " → carried home"),
+                condition: ConditionOf(batch));
             if (lotRejection != null)
             {
                 return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
@@ -428,6 +829,15 @@ namespace LandLedgers.Population
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
+            // Priority V1: the deposited lot's identity, resolved
+            // through the F4 resolver, and the deposit verified through
+            // the loop's production person inventory read model.
+            RecordDepositedLotIdentity(inventory, lotIndexBefore, result, diag);
+            VerifyDepositViaPersonInventory(shopperId, batch, diag);
+            RecordHouseholdReceipt(batch, need, unitsReceived, dayIndex,
+                useDelivery
+                    ? CustodyTransferLog.WagonCustodian("arranged-delivery")
+                    : CustodyTransferLog.PersonCustodian(shopperId));
             need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
             need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
             if (need.UnitsNeeded <= 0)
@@ -1171,6 +1581,28 @@ namespace LandLedgers.Population
                 $"INCONSISTENCY: settlement of {totalCost}c was posted but '{chosen.Supplier.SupplierName}' sold 0 units — refunded, manual reconciliation required.");
         }
 
+        // Priority spoilage integration: the purchase never resets the
+        // condition. When the supplier sold from a real lot that carries
+        // a state, the taken part's state rides the batch into custody,
+        // transferred to the shopper's custody at the purchase day (the
+        // split at the sale is already in its history; this appends the
+        // purchase transfer). A pool sale carries none, honestly.
+        // Read immediately after the sale, before any later step can
+        // overwrite the supplier's last-sale state.
+        PerishableLotState.SaveDto soldCondition = default;
+        bool hasSoldCondition = false;
+        if (chosen.ItemSupplier is ILotConditionSupplier conditionSupplier
+            && conditionSupplier.TryGetLastSaleCondition(out PerishableLotState.SaveDto lastSale))
+        {
+            soldCondition = PerishableLotState.FromSaveDto(lastSale)
+                .TransferredTo("person:" + shopperId, dayIndex,
+                    "purchased " + sold + "u " + need.ItemId + " from " + chosen.Supplier.SupplierName)
+                .CaptureSaveDto();
+            hasSoldCondition = true;
+            diag.Add($"[spoilage] batch condition attached at settle: {need.ItemId} " +
+                $"({sold}u, {PerishableLotState.FromSaveDto(soldCondition).PhysicalCondition}) from {chosen.Supplier.SupplierName}.");
+        }
+
         if (sold < units)
         {
             // Partial fill at the counter: the store already posted its
@@ -1228,6 +1660,44 @@ namespace LandLedgers.Population
             $"'{chosen.Supplier.SupplierName}' sold {sold}u {need.ItemId} ({result.ReceiptId}).",
             $"real store stock decreased; business posted {(settlement.Mode == ShoppingSettlementMode.CashFromLedger ? "cash" : "receivable")} {totalCost}c.");
 
+        // ---- Priority V1: consult the F2 capacity evaluator BEFORE
+        // InHand custody is assigned, with the live carry cap supplied.
+        // The load is what the shopper would carry after this purchase:
+        // every batch already in their hand (or wagon) plus the units
+        // just sold. The evaluator answers on the units axis only
+        // against the live cap; mass and volume stay Unknown (no
+        // authored person mass or volume limit exists). The verdict is
+        // recorded on LastSettleCapacityVerdict and in diagnostics. It
+        // does NOT refuse a settled purchase: settlement already posted
+        // above, and the loop's existing enforcement does not refuse an
+        // over-cap no-delivery purchase — the cap gates the delivery
+        // decision at candidate evaluation and the affordability
+        // downsize clamp, so an over-cap verdict here is recorded
+        // loudly instead of silently passed (see the V1 over-cap test).
+        // Refusing here would change purchase quantities, which is a
+        // shopping-rule change, not wiring.
+        var capacityLines = new List<(string ItemId, int Units)>();
+        foreach (CarriedGoodsBatch carried in custodyBatches)
+        {
+            if (carried != null && carried.HolderPersonId == shopperId
+                && (carried.Custody == GoodsCustodyState.InHand || carried.Custody == GoodsCustodyState.Wagon))
+            {
+                capacityLines.Add((carried.ItemId, carried.Units));
+            }
+        }
+
+        capacityLines.Add((need.ItemId, sold));
+        var capacityQuery = new PhysicalCapacityQuery(
+            PhysicalContainerKind.OnFootPerson, "person:" + shopperId,
+            new PhysicalLoad(capacityLines), dayIndex);
+        var capacityContext = PhysicalCapacityEvaluationContext.Default;
+        int carryCap = Math.Max(1, (options ?? new ShoppingLoopOptions()).CarryCapacityUnits);
+        capacityContext.OnFootCarryCapUnits = carryCap;
+        PhysicalCapacityVerdict capacityVerdict = CapacityEvaluator.Evaluate(capacityQuery, capacityContext);
+        LastSettleCapacityVerdict = capacityVerdict;
+        diag.Add($"[V1] capacity consulted at settle: P{shopperId} carrying {capacityVerdict.Load.TotalUnits}u " +
+            $"{need.ItemId} (live cap {carryCap}u) — {capacityVerdict.Outcome}: {capacityVerdict.Reason}");
+
         // ---- Step 14: legitimate custody — in-hand, wagon, or arranged
         // delivery. NOT the household inventory yet. ----
         var batch = new CarriedGoodsBatch
@@ -1245,8 +1715,17 @@ namespace LandLedgers.Population
                 $"day {dayIndex} receipt {result.ReceiptId}" +
                 (settlement.Mode == ShoppingSettlementMode.TradeCreditObligation
                     ? $" on trade credit {settlement.ObligationId}" : " for cash"),
+            // Priority U-3: the batch carries its own package size and
+            // seller, so a restored batch still knows both after save/load.
+            HouseholdUnitsPerStoreUnit = Math.Max(1, chosen.HouseholdUnitsPerStoreUnit),
+            SupplierName = chosen.Supplier != null ? chosen.Supplier.SupplierName ?? string.Empty : string.Empty,
+            // Priority spoilage integration: the batch keeps the
+            // lot's condition from the sale above — never reset.
+            PerishableCondition = soldCondition,
+            HasPerishableCondition = hasSoldCondition,
         };
         custodyBatches.Add(batch);
+        RecordRetailPurchase(result, chosen, need, batch, sold, shopperId, dayIndex);
         AddEvent(result, dayIndex, ShoppingEventKind.Custody, shopperId, need,
             $"{sold}u {need.ItemId} entered {batch.Custody} custody ({batch.BatchId}).",
             $"holder P{shopperId}; household inventory untouched until physical receipt — no teleport.");
@@ -1725,11 +2204,19 @@ namespace LandLedgers.Population
             {
                 // W5: custody holds STORE units (sacks for a package item);
                 // the household is credited packages × package size.
-                int packageSize = Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1);
+                // Priority U-3: the batch carries its own package size from
+                // settle time, so a restored trip whose candidate lost it
+                // still credits correctly; the candidate's value wins when
+                // it is larger (old saves, whose batches carry the 1
+                // default, keep the candidate's size).
+                int packageSize = Math.Max(Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                    Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1));
                 int unitsReceived = batch.Units * packageSize;
                 HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
                 string provenance = batch.Provenance + " → carried home";
-                string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, provenance);
+                int lotIndexBefore = inventory.Lots.Count;
+                string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, provenance,
+                    condition: ConditionOf(batch));
                 if (lotRejection != null)
                 {
                     return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
@@ -1737,6 +2224,13 @@ namespace LandLedgers.Population
 
                 batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
                 custodyBatches.Remove(batch);
+                // Priority V1: the deposited lot's identity, resolved
+                // through the F4 resolver, and the deposit verified
+                // through the loop's production person inventory read model.
+                RecordDepositedLotIdentity(inventory, lotIndexBefore, result, diag);
+                VerifyDepositViaPersonInventory(trip.ShopperPersonId, batch, diag);
+                RecordHouseholdReceipt(batch, need, unitsReceived, dayIndex,
+                    CustodyTransferLog.PersonCustodian(trip.ShopperPersonId));
                 need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
                 need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
                 if (need.UnitsNeeded <= 0)
@@ -1791,10 +2285,15 @@ namespace LandLedgers.Population
             var need = trip.Need;
             // W5: custody holds STORE units (sacks for a package item);
             // the household is credited packages × package size.
-            int packageSize = Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1);
+            // Priority U-3: as in ReceiveAtHome, the batch's own package
+            // size from settle time is authoritative when present.
+            int packageSize = Math.Max(Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1));
             int unitsReceived = batch.Units * packageSize;
             HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
-            string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, batch.Provenance + " → delivered");
+            int lotIndexBefore = inventory.Lots.Count;
+            string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, batch.Provenance + " → delivered",
+                condition: ConditionOf(batch));
             if (lotRejection != null)
             {
                 return $"INCONSISTENCY: delivery {batch.BatchId} arrived but the household lot was rejected: {lotRejection}";
@@ -1802,6 +2301,13 @@ namespace LandLedgers.Population
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
+            // Priority V1: the deposited lot's identity, resolved through
+            // the F4 resolver, and the deposit verified through the
+            // loop's production person inventory read model.
+            RecordDepositedLotIdentity(inventory, lotIndexBefore, trip.Result, diag);
+            VerifyDepositViaPersonInventory(trip.ShopperPersonId, batch, diag);
+            RecordHouseholdReceipt(batch, need, unitsReceived, dayIndex,
+                CustodyTransferLog.WagonCustodian("arranged-delivery"));
             need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
             need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
             if (need.UnitsNeeded <= 0)

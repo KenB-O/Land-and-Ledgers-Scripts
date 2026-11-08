@@ -3,6 +3,7 @@ using EntityId = LandLedgers.Primitives.EntityId;
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Farming.Crops;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Trade;
 using LandLedgers.Primitives;
 
@@ -46,6 +47,22 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// orders only.
         /// </summary>
         public bool IsBootstrapEndowment;
+
+        /// <summary>
+        /// Priority spoilage integration: the Slice 5 perishable
+        /// condition state attached to this lot (additive; old saves
+        /// load with HasPerishableCondition false, which means "never
+        /// attached"). Flour has no authored aging rule, so an attached
+        /// state stays Unknown and never changes with elapsed time.
+        /// Attached by the Millbrook freight adapter at receive; the
+        /// bin itself never invents a state (ReceiveLot stays a dumb
+        /// store). The save DTO carries the bin lots directly, so the
+        /// state round-trips with the lot.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at a creation site.</summary>
+        public bool HasPerishableCondition;
 
         public BakeryFlourLot() { }
 
@@ -188,6 +205,15 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 int take = Math.Min(remaining, lot.Units);
                 lot.Units -= take;
                 remaining -= take;
+                // Priority spoilage integration: keep the attached
+                // state's units honest after the in-place decrement
+                // (the dispense line is the event; no history event
+                // is appended here).
+                if (lot.HasPerishableCondition)
+                {
+                    lot.PerishableCondition = PerishableLotState.FromSaveDto(lot.PerishableCondition)
+                        .WithUnits(lot.Units).CaptureSaveDto();
+                }
                 lines.Add(new BakeryFlourDispenseLine
                 {
                     LotId = lot.LotId,

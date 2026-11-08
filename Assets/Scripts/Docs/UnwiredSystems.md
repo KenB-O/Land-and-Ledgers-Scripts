@@ -77,6 +77,13 @@ found, the test fails loudly rather than passing silently.
 | ResourceObservationReadModel | ReadModels/Civic/ResourceObservationReadModel.cs | ReadModels/Civic | (none) |
 | SettlementCausalExplanation | ReadModels/Causal/SettlementCausalExplanation.cs | ReadModels/Causal | (none) |
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
+| PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
+| PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
+| DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
+| ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
+| SupplierComparison | Domains/Economy/Logistics/SupplierComparison.cs | Domains/Economy/Logistics | (none) |
+| ReplenishmentPlan | Domains/Economy/Logistics/ReplenishmentPlan.cs | Domains/Economy/Logistics | (none) |
+| ProductionPlan | Domains/Economy/Logistics/ProductionPlan.cs | Domains/Economy/Logistics | (none) |
 
 ## Notes per entry
 
@@ -154,6 +161,155 @@ found, the test fails loudly rather than passing silently.
   UNWIRED rather than hidden in the scan baseline, because unlike the
   Saloon types it has no production caller in any file, inside or
   outside the harness subset. Covered by editor tests only.
+- `PhysicalItemSpec` (Priority 9 Slice F1, 2026-11-08) is the physical
+  specification of one unit of an item (mass, volume, dimensions; data
+  flags only). It is registered here honestly as UNWIRED by design, not
+  oversight: the Slice F1 brief is data-only — the registry is seeded,
+  nothing reads it yet, and no flow may change until a later slice wires
+  a reader. Its sibling types need no row: `PhysicalMeasure` and
+  `PhysicalDimensions` are used by the spec itself, and
+  `PhysicalItemSpecRegistry` is a static class (scan-exempt). Remove this
+  row the day a production reader outside `Domains/Economy/Storage`
+  references the spec (Slice 2 capacity queries are the first expected
+  reader); do not wire it merely to clear the entry.
+- `PersonInventoryReadModel` (Priority 9 Slice F3 / Priority B,
+  2026-11-08) is the read-only personal and player inventory query
+  layer (carried batches, household lots owned by a person, equipment
+  grants held, carried load, remaining carry units, carried-container
+  contents). It is registered here honestly as UNWIRED by design, not
+  oversight: the Slice 3 brief wires nothing into live flows — the read
+  model is constructed in tests against the real authorities (shopping
+  loop custody, household inventory registry, equipment grant resolver)
+  and no flow calls it yet. Its sibling types need no row:
+  `CarriedItem`, `OwnedHouseholdLot`, `HeldEquipment` and
+  `CarriedContainerContents` are nested inside the read model and
+  `PersonCarryRemaining` is a nested struct (the scan enumerates
+  concrete public top-level classes only), and `PersonItemCondition` is
+  an enum. Remove this row the day a production flow outside
+  `Domains/Population` calls the read model; do not wire it merely to
+  clear the entry. Priority V1 wires the read model into the shopping
+  loop itself (`HouseholdShoppingLoop.PersonInventory`, deposit
+  verification through the read model) — but the loop sits in the same
+  owning directory, so under the scan's caller rule (same-directory
+  references do not count) that is not a production caller and this row
+  stays. The read model reads the F1/F2 types only through
+  `PhysicalLoad` (a struct, scan-exempt) and references no other
+  registered-unwired type by name, so the `PhysicalItemSpec` row above
+  stays accurate and stays in place. (The `PhysicalCapacityEvaluator`
+  row the Slice 3 note named here was removed by Priority V1 — see the
+  change log — so it no longer appears above.)
+- `PerishableLotState` (Priority E Slice 5, 2026-11-08) is the
+  perishable condition of one lot: separate physical-condition,
+  food-safety, remaining-life, handling-history, and perceived-vs-known
+  dimensions (Canon XXXI 4.5/4.6, Technical XIV 4.1/4.2); deterministic
+  simulation-time deterioration applying only the authored bakery
+  AgeToDay rule; spoilage accounting that removes nothing from any live
+  authority. The row for it was removed by the Priority spoilage
+  integration slice — see the change log — so it no longer appears
+  above. Its sibling types need no row:
+  `PerishablePhysicalCondition`, `PerishableSafetyState`, and
+  `PerishableDisposition` are enums and `UsefulLifeEstimate`,
+  `PerishableHandlingEvent`, `SpoilageRecord`, and the nested
+  `SaveDto` are structs (the scan enumerates concrete public top-level
+  classes only). The `PhysicalItemSpec`,
+  `PersonInventoryReadModel`, and `LotIdentityResolver` rows above stay:
+  the state reads no registered-unwired type by name (it consults no F1
+  spec parameter — the spec carries no aging parameter — and names
+  `BakeryBreadCatalog` only for the authored bread rule).
+- `DemandObservation` (Priority F Slice 6, 2026-11-08) is the
+  business-level demand observation book: completed sales, observed
+  demand, stockout unmet demand, and partial fills recorded separately,
+  with daily/weekly/monthly history, day-of-week pattern, and trend from
+  recorded history only; the same unresolved need is counted once, not
+  once per retry. It is registered here honestly as UNWIRED by design,
+  not oversight: the Slice 6 brief instruments no live flow — the book
+  is fed by explicit Record calls in tests and by derivation from the F3
+  custody log, and no flow calls it yet. Its sibling types need no row:
+  `DemandAttemptRecord`, `DailyDemandPoint`, `DemandHistoryPoint`, and
+  `DemandTrend` are structs and `DemandTrendDirection` is an enum (the
+  scan enumerates concrete public top-level classes only). Remove this
+  row the day a production flow feeds or consults the book; do not wire
+  it merely to clear the entry. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, `PersonInventoryReadModel`,
+  `LotIdentityResolver`, and `PerishableLotState` rows above stay: the
+  book reads the F3 log only and references no other registered-unwired
+  type by name.
+- `ReserveProjection` (Priority F Slice 6, 2026-11-08) is the adaptive
+  reserve recommendation: recomputed from recent demand, uncertainty,
+  usable stock, forecast spoilage, commitments, incoming deliveries,
+  production capacity, lead time, and available storage, with no fixed
+  reserve value and no automatic procurement — a recommendation only. It
+  is registered here honestly as UNWIRED by design, not oversight: the
+  Slice 6 brief wires nothing into live flows — the projection is
+  computed in tests from supplied inputs and no flow calls it yet. Its
+  sibling types need no row: `ReserveInputs`, `ReserveQuantity`,
+  `LeadTimeDays`, and `UsableStockAssessment` are structs and
+  `ReserveConfidence` is an enum (the scan enumerates concrete public
+  top-level classes only). Remove this row the day a production flow
+  consults a projection; do not wire it merely to clear the entry. The
+  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, `LotIdentityResolver`,
+  `PerishableLotState`, and `DemandObservation` rows above stay: the
+  projection reads `PerishableLotState` only from inside its own
+  owning directory (same-directory references are not production
+  callers), and `DemandObservation` only through the caller-supplied
+  `ReserveInputs` bridge in tests.
+- `SupplierComparison` (Priority P5, 2026-11-08) is the read-only
+  supplier comparison: options quoted by the authorities that actually
+  hold them (Millbrook table, catalog quotes, named-SKU orders, settled
+  shipment charges), ranked by expected profit — never by unit price
+  alone — with per-option reasoning and per-axis Unknown handling
+  (profit, arrival, reliability, storage, consolidation). It is
+  registered here honestly as UNWIRED by design, not oversight: the
+  P5 brief wires nothing into live flows — the comparison is computed
+  in tests from supplied options and no flow calls it yet. Its sibling
+  types need no row: `CentsAmount`, `SupplierStorageFit`,
+  `SupplierReliability`, `SpoilageForecast`, `SupplierOption`,
+  `RankedSupplierOption`, and `SupplierComparisonResult` are structs
+  (the scan enumerates concrete public top-level classes only).
+  Remove this row the day a production flow consults a comparison; do
+  not wire it merely to clear the entry. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, `PersonInventoryReadModel`,
+  `LotIdentityResolver`, `PerishableLotState`, `DemandObservation`,
+  and `ReserveProjection` rows above stay: the comparison reads the
+  F3 log and the Slice 5 states only from inside its own owning
+  directory, reuses the Slice 6 `LeadTimeDays` and `ReserveQuantity`
+  structs from the same directory, and references the F1/F2 types
+  nowhere.
+- `ReplenishmentPlan` (Priority P5, 2026-11-08) is the replenishment
+  plan that connects a Slice 6 recommended reserve to the best
+  supplier option for the shortfall: it selects the best affordable
+  comparable option, states expected cost, arrival, and profit, and
+  orders nothing. It is registered here honestly as UNWIRED by design,
+  not oversight: the P5 brief wires nothing into live flows — the plan
+  is computed in tests from a supplied projection and comparison and
+  no flow calls it yet. Remove this row the day a production flow
+  consults a plan; do not wire it merely to clear the entry. The
+  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, `LotIdentityResolver`,
+  `PerishableLotState`, `DemandObservation`, `ReserveProjection`, and
+  `SupplierComparison` rows above stay: the plan reads the projection
+  and the comparison result only, both from inside its own owning
+  directory.
+- `ProductionPlan` (Priority P6, 2026-11-08) is the production
+  planning foundation that connects a projected finished-goods demand
+  to required batches through the recorded Bakery recipe, then to
+  recipe inputs, usable stock, commitments, confirmed incoming
+  supplies, expected spoilage, and cash and capacity constraints. It
+  recommends batches and orders nothing. It is registered here
+  honestly as UNWIRED by design, not oversight: the P6 brief wires
+  nothing into live flows — the plan is computed in tests from
+  supplied inputs and no flow calls it yet. Remove this row the day a
+  production flow consults a plan; do not wire it merely to clear the
+  entry. The `PhysicalItemSpec`, `PersonInventoryReadModel`,
+  `DemandObservation`, `ReserveProjection`, `SupplierComparison`, and
+  `ReplenishmentPlan` rows above stay: the plan reads the Slice 5
+  states, the Slice 6 observation and projection types, and the P5
+  supplier option only from inside its own owning directory, and
+  references the F1/F2 types nowhere. (`PhysicalCapacityEvaluator`,
+  `LotIdentityResolver`, and `PerishableLotState` rows were removed by
+  V1 and the spoilage integration; earlier notes that list them among
+  the rows that "stay" describe the pre-integration state.)
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -296,6 +452,66 @@ note records their audited status so the question does not reopen:
   source-only-by-design types (PassengerManifest, PersonMoneyAccounts,
   ScenarioCoordinator, ScenarioWorldBuilder, RealDemandSource,
   BusinessValuationService).
+- Priority 9 Slice F1 (2026-11-08): `PhysicalItemSpec` registered as
+  UNWIRED by design — data-only spec registry, nothing reads it yet;
+  remove the row when a production reader outside
+  `Domains/Economy/Storage` is wired (Slice 2 capacity queries first).
+- Priority 9 Slice F2 (2026-11-08): `PhysicalCapacityEvaluator`
+  registered as UNWIRED by design — delegating capacity evaluator, no
+  flow calls it yet; remove the row when a production flow calls it.
+  The `PhysicalItemSpec` row stays: the evaluator reads the registry
+  only from inside `Domains/Economy/Storage`, so it is not a production
+  reader outside the spec's directory under the scan's caller rule.
+- Priority 9 Slice F3 / Priority B (2026-11-08):
+  `PersonInventoryReadModel` registered as UNWIRED by design — read-only
+  personal/player inventory query layer, constructed in tests against
+  the real authorities, no flow calls it yet; remove the row when a
+  production flow calls it. The `PhysicalItemSpec` and
+  `PhysicalCapacityEvaluator` rows stay: the read model reads the F1/F2
+  types only through `PhysicalLoad` (a struct) and references no other
+  registered-unwired type by name.
+- Priority 9 Slice F4 / Priority D (2026-11-08):
+  `LotIdentityResolver` registered as UNWIRED by design — read-only
+  lot identity resolver, constructed in tests against the real
+  authorities, no flow calls it yet; remove the row when a
+  production flow calls it. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, and `PersonInventoryReadModel` rows
+  stay: the resolver reads the F1/F2 types only through
+  `PhysicalLoad` (a struct) and references no other
+  registered-unwired type by name. `LotIdentity` needs no row: it
+  has production callers outside its owning directory (the three
+  provenance-append sites).
+- Priority E Slice 5 (2026-11-08):
+  `PerishableLotState` registered as UNWIRED by design — perishable
+  lot condition foundation, constructed in tests alongside the real
+  authorities, no flow calls it yet and no authority DTO carries it.
+  The `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, and `LotIdentityResolver` rows stay:
+  the state reads no registered-unwired type by name.
+- Priority F Slice 6 (2026-11-08):
+  `DemandObservation` registered as UNWIRED by design — demand
+  observation book, fed by explicit Record calls in tests and by
+  derivation from the F3 custody log, no live flow instrumented and no
+  flow calls it yet. `ReserveProjection` registered as UNWIRED by
+  design — adaptive reserve recommendation, computed in tests from
+  supplied inputs, no flow calls it yet. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, `PersonInventoryReadModel`,
+  `LotIdentityResolver`, and `PerishableLotState` rows stay: the book
+  reads the F3 log only, and the projection reads `PerishableLotState`
+  only from inside its own owning directory.
+- Priority P5 (2026-11-08):
+  `SupplierComparison` registered as UNWIRED by design — read-only
+  supplier comparison, ranked by expected profit with per-option
+  reasoning, computed in tests from authority-quoted options, no flow
+  calls it yet. `ReplenishmentPlan` registered as UNWIRED by design —
+  reserve-to-supplier plan stating expected cost, arrival, and profit,
+  computed in tests, orders nothing, no flow calls it yet. The
+  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, `LotIdentityResolver`,
+  `PerishableLotState`, `DemandObservation`, and `ReserveProjection`
+  rows stay: the comparison and the plan read the F3 log, the Slice 5
+  states, and the Slice 6 types only from inside their own owning
+  directory, and reference the F1/F2 types nowhere.
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note
@@ -310,3 +526,77 @@ note records their audited status so the question does not reopen:
   whose `RegisterIn` is the Codex bootstrapper registration call per its
   own doc comment); no type was entered in this registry on the basis of
   the plan alone, and no standalone unwired system was found among the 145.
+- Priority V1 (2026-11-08): `PhysicalCapacityEvaluator` and
+  `LotIdentityResolver` removed from the table above — both are wired
+  into production by the inventory-and-custody vertical slice. The
+  shopping loop consults the evaluator at settle time
+  (`HouseholdShoppingLoop.SettleAtCounter`, OnFootPerson leg with the
+  loop's live carry cap supplied via
+  `PhysicalCapacityEvaluationContext.OnFootCarryCapUnits`; the
+  cap-aware branch answers on units only, mass and volume stay
+  Unknown) and resolves each deposited lot through the resolver
+  (`HouseholdShoppingLoop.RecordDepositedLotIdentity`, all three
+  receipt paths), and the meal service resolves each consumed lot
+  through the resolver (`HouseholdMealService.TryServeFromInventory`,
+  `LastMealLotIdentities`). Both callers sit outside the types'
+  owning directories (`Domains/Population` vs
+  `Domains/Economy/Storage` and `Domains/Economy/Logistics`), so the
+  registry test and the assembly scan both count them as production
+  callers. The `PhysicalItemSpec` row stays: the loop reaches the
+  spec only through the evaluator, which reads the registry from
+  inside `Domains/Economy/Storage`, so no production reader outside
+  the spec's owning directory exists yet. The
+  `PersonInventoryReadModel` row stays: the loop owns a read model
+  (`HouseholdShoppingLoop.PersonInventory`) and verifies deposits
+  through it, but the loop sits in the same owning directory
+  (`Domains/Population`), so under the caller rule that is not a
+  production caller — the row is removed the day a caller outside
+  `Domains/Population` uses the read model. `PerishableLotState`,
+  `DemandObservation`, `ReserveProjection`, `SupplierComparison`, and
+  `ReplenishmentPlan` stay: V1 wires none of them (no Slice 5 state
+  is attached to any authority; the meal and loop paths consult no
+  demand, reserve, or supplier type). Earlier notes that list the
+  evaluator and resolver rows among the rows that "stay" describe the
+  pre-V1 state and are superseded by this entry.
+- Priority spoilage integration (2026-11-08): `PerishableLotState`
+  removed from the table above — the Slice 5 condition state is now
+  carried by real production authorities through real transfers. The
+  bakery attaches a Fresh state at bake (`BakeryShopRuntime.BakeBatch`)
+  and ages it by the authored AgeToDay rule (`AgeShelf`); Millbrook
+  attaches an Unknown state at order time
+  (`OffMapAidBusinessRuntime.TryPlaceOrder`) and the freight adapter
+  re-attaches it to the flour lot at receipt
+  (`MillbrookFlourFreightCustodyAdapter.ReceiveCargoLot`); the bakery
+  adapter carries the taken part's state through the sale
+  (`Series2BakerySupplierAdapter`, via the new `ILotConditionSupplier`
+  surface, read by `HouseholdShoppingLoop.SettleAtCounter`) and the
+  loop deposits it onto the household lot (all three receipt paths);
+  every lot record carries the state through its own DTO pair
+  (bread shelf, flour bin, cargo lots, custody batches, driver DTO,
+  household registry). The callers sit outside the type's owning
+  directory (`Domains/Economy/Logistics` vs `Domains/Economy/Businesses`
+  and `Domains/Population`), so the registry test and the assembly scan
+  both count them as production callers. `DemandObservation`,
+  `ReserveProjection`, `SupplierComparison`, and `ReplenishmentPlan`
+  stay: this slice wires none of them. Earlier notes that list the
+  `PerishableLotState` row among the rows that "stay" describe the
+  pre-spoilage-integration state and are superseded by this entry.
+  Blocked seams recorded in the slice checkpoint, not wired here: the
+  General Store category pool is anonymous (a pool purchase carries no
+  lot condition); the Review2 wholesale driver takes shelf units
+  directly, so its delivery record carries provenance but no states;
+  the retail lot DTO lives in harness-excluded `SaveDtos.cs` whose
+  harness copy is a stale verbatim extraction; the freight shipment
+  carries no condition field (the adapter re-reads the source lot at
+  receive instead); directly seeded bin lots carry no state.
+- Priority P6 (2026-11-08):
+  `ProductionPlan` registered as UNWIRED by design — production
+  planning foundation, computed in tests from supplied inputs
+  (projected demand, recorded Bakery recipe, stock, commitments,
+  confirmed incoming, spoilage, cash, capacity, lead times),
+  recommends batches, orders nothing, no flow calls it yet. The
+  `PhysicalItemSpec`, `PersonInventoryReadModel`,
+  `DemandObservation`, `ReserveProjection`, `SupplierComparison`,
+  and `ReplenishmentPlan` rows stay: the plan reads the Slice 5
+  states, the Slice 6 types, and the P5 option only from inside its
+  own owning directory, and references the F1/F2 types nowhere.

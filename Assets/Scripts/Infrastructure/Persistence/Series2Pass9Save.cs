@@ -838,6 +838,25 @@ namespace LandLedgers.Persistence
             {
                 diag.Add("Series2Pass9Save: Bakery runtime data present in save but no live runtime owner was supplied; bakery state NOT restored.");
             }
+            else if (bakeryRuntime != null)
+            {
+                // Slice 8 (Q04): the save carries no Bakery runtime
+                // section (old save, or a section captured with no live
+                // runtime) but a live runtime exists. Clear it instead
+                // of leaving the newer state in place: LoadFromSaveDto
+                // with a fresh DTO is clear-then-load
+                // (BakeryShopRuntime.cs:1638 — every list is cleared,
+                // flour/fuel stocks cleared, sequences reset), so the
+                // live runtime restores as empty, matching the sibling
+                // legs and the "all Pass 9 state restored as empty"
+                // diagnostic above.
+                bakeryRuntime.LoadFromSaveDto(
+                    new LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime.BakeryShopRuntimeSaveDto
+                    {
+                        BusinessInstanceId = bakeryRuntime.BusinessInstanceId,
+                    });
+                diag.Add("Series2Pass9Save: no Bakery runtime section in save; live runtime cleared (old-save default).");
+            }
 
             // Pass 8 fuel intake lots (DTO already existed).
             if (FuelIntake != null)

@@ -188,8 +188,10 @@ namespace LandLedgers.Editor.Economy
         private TestReservationAuthority reservations;
         private BakeryStagedProductionChain chain;
         private BakeryChainContext ctx;
+        private BakeryChainContext ctx2;
         private float clock;
         private EntityId baker;
+        private EntityId baker2;
         private EntityId business;
         private List<string> diag;
 
@@ -218,6 +220,24 @@ namespace LandLedgers.Editor.Economy
                 DayIndex = 42,
                 BusinessId = business,
                 BakerId = baker,
+                Diagnostics = diag,
+            };
+            // Second baker (P12) for the two-batch tests: one person holds one
+            // active-labor task at a time, so a second batch's begins and work
+            // run under its own baker. Everything else (tasks, clock, scheduler,
+            // reservations, stocks) is shared, so the oven stays the shared
+            // resource under test.
+            baker2 = EntityId.For(EntityKind.Person, 12);
+            ctx2 = new BakeryChainContext
+            {
+                Tasks = tasks,
+                Budgets = budgets,
+                DueEvents = dueEvents,
+                Reservations = reservations,
+                ClockGameSeconds = () => clock,
+                DayIndex = 42,
+                BusinessId = business,
+                BakerId = baker2,
                 Diagnostics = diag,
             };
             StockUp();
@@ -273,7 +293,12 @@ namespace LandLedgers.Editor.Economy
 
         private StagedBakeryBatch BeginBatch()
         {
-            StagedBakeryBatch batch = chain.BeginBatch(BakeryBreadCatalog.BreadLoafId, DeliveryLots(24), ctx, out string reason);
+            return BeginBatch(ctx);
+        }
+
+        private StagedBakeryBatch BeginBatch(BakeryChainContext c)
+        {
+            StagedBakeryBatch batch = chain.BeginBatch(BakeryBreadCatalog.BreadLoafId, DeliveryLots(24), c, out string reason);
             Assert.IsNotNull(batch, "BeginBatch refused: " + reason);
             return batch;
         }
@@ -339,7 +364,12 @@ namespace LandLedgers.Editor.Economy
         /// <summary>Works the batch's current active stage to completion.</summary>
         private void WorkActiveFull(StagedBakeryBatch batch)
         {
-            Assert.IsTrue(chain.WorkBatch(batch, 10000, ctx, out string reason),
+            WorkActiveFull(batch, ctx);
+        }
+
+        private void WorkActiveFull(StagedBakeryBatch batch, BakeryChainContext c)
+        {
+            Assert.IsTrue(chain.WorkBatch(batch, 10000, c, out string reason),
                 "WorkBatch failed at stage " + batch.Process.CurrentStageIndex + ": " + reason);
         }
 
@@ -512,12 +542,20 @@ namespace LandLedgers.Editor.Economy
         {
             chain.OvenBatchCapacity = 4;
             StagedBakeryBatch a = BeginBatch();
-            StagedBakeryBatch b = BeginBatch();
+            // The second batch runs under a second baker (P12): one person holds
+            // one active-labor task at a time, so two back-to-back begins for the
+            // same baker are refused by the authored occupancy rule — and a
+            // single baker could not work both batches in lockstep either, since
+            // the proof->heat entries of two simultaneously completing proofs
+            // would collide on that one baker. The oven, not the baker, is the
+            // shared resource this test exercises, so both batches still begin
+            // and prep in lockstep at clock 0.
+            StagedBakeryBatch b = BeginBatch(ctx2);
             // Lockstep: receive + prepare for both at clock 0.
             WorkActiveFull(a); // receive -> prepare
             WorkActiveFull(a); // prepare -> proof
-            WorkActiveFull(b); // receive -> prepare
-            WorkActiveFull(b); // prepare -> proof
+            WorkActiveFull(b, ctx2); // receive -> prepare
+            WorkActiveFull(b, ctx2); // prepare -> proof
             Assert.AreEqual(BakeryStagedProductionChain.StageProof, a.Process.CurrentStageIndex);
             Assert.AreEqual(BakeryStagedProductionChain.StageProof, b.Process.CurrentStageIndex);
             PumpTo(a.Process.CurrentStageState.DueGameSeconds + 1f); // both proofs complete
@@ -526,8 +564,8 @@ namespace LandLedgers.Editor.Economy
             // Heat + load for both: both enter the bake sharing oven 0 (capacity 4).
             WorkActiveFull(a); // heat -> load
             WorkActiveFull(a); // load -> bake (handoff; oven-0 1/4)
-            WorkActiveFull(b); // heat -> load
-            WorkActiveFull(b); // load -> bake (handoff; oven-0 2/4)
+            WorkActiveFull(b, ctx2); // heat -> load
+            WorkActiveFull(b, ctx2); // load -> bake (handoff; oven-0 2/4)
             Assert.AreEqual(BakeryStagedProductionChain.StageBake, a.Process.CurrentStageIndex);
             Assert.AreEqual(BakeryStagedProductionChain.StageBake, b.Process.CurrentStageIndex);
             Assert.AreEqual(0, a.AssignedOvenIndex, "batch A on oven 0");
@@ -539,10 +577,10 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(BakeryStagedProductionChain.StageUnload, a.Process.CurrentStageIndex);
             Assert.AreEqual(BakeryStagedProductionChain.StageUnload, b.Process.CurrentStageIndex);
             WorkActiveFull(a); // unload -> cool
-            WorkActiveFull(b); // unload -> cool
+            WorkActiveFull(b, ctx2); // unload -> cool
             PumpTo(a.Process.CurrentStageState.DueGameSeconds + 1f); // both -> store
             WorkActiveFull(a); // store -> complete
-            WorkActiveFull(b); // store -> complete
+            WorkActiveFull(b, ctx2); // store -> complete
             Assert.IsTrue(a.Process.IsComplete, "A complete");
             Assert.IsTrue(b.Process.IsComplete, "B complete");
             Assert.AreEqual(24, a.BreadUnitsOut);
@@ -556,16 +594,24 @@ namespace LandLedgers.Editor.Economy
             chain.OvenBatchCapacity = 1;
             reservations.SetCapacity("workstation:bake-oven-0", 1f);
             StagedBakeryBatch a = BeginBatch();
-            StagedBakeryBatch b = BeginBatch();
+            // The second batch runs under a second baker (P12): one person holds
+            // one active-labor task at a time, so two back-to-back begins for the
+            // same baker are refused by the authored occupancy rule — and a
+            // single baker could not work both batches in lockstep either, since
+            // the proof->heat entries of two simultaneously completing proofs
+            // would collide on that one baker. The oven, not the baker, is the
+            // shared resource this test exercises, so both batches still begin
+            // and prep in lockstep at clock 0.
+            StagedBakeryBatch b = BeginBatch(ctx2);
             WorkActiveFull(a); WorkActiveFull(a); // a -> proof
-            WorkActiveFull(b); WorkActiveFull(b); // b -> proof
+            WorkActiveFull(b, ctx2); WorkActiveFull(b, ctx2); // b -> proof
             PumpTo(a.Process.CurrentStageState.DueGameSeconds + 1f); // both -> heat
             WorkActiveFull(a); // heat -> load
             WorkActiveFull(a); // load -> bake (oven 1/1)
             Assert.AreEqual(BakeryStagedProductionChain.StageBake, a.Process.CurrentStageIndex);
             Assert.IsTrue(string.IsNullOrWhiteSpace(a.Process.ParkedReason), "A entered bake");
-            WorkActiveFull(b); // heat -> load
-            WorkActiveFull(b); // load -> bake entry REFUSED (oven full) -> parked after load
+            WorkActiveFull(b, ctx2); // heat -> load
+            WorkActiveFull(b, ctx2); // load -> bake entry REFUSED (oven full) -> parked after load
             Assert.IsFalse(string.IsNullOrWhiteSpace(b.Process.ParkedReason),
                 "B parked at bake entry — no phantom oven conjured");
             Assert.AreEqual(BakeryStagedProductionChain.StageLoad, b.Process.CurrentStageIndex,
@@ -579,13 +625,13 @@ namespace LandLedgers.Editor.Economy
             PumpTo(a.Process.CurrentStageState.DueGameSeconds + 1f); // a -> store
             WorkActiveFull(a); // store -> complete
             Assert.AreEqual(24, a.BreadUnitsOut, "A baked");
-            chain.RetryParked(ctx);
+            chain.RetryParked(ctx2); // B is the only parked batch; retry under its own baker
             Assert.IsTrue(string.IsNullOrWhiteSpace(b.Process.ParkedReason), "B entered bake after retry");
             Assert.AreEqual(BakeryStagedProductionChain.StageBake, b.Process.CurrentStageIndex);
             PumpTo(b.Process.StageStates[BakeryStagedProductionChain.StageBake].DueGameSeconds + 1f);
-            WorkActiveFull(b); // unload -> cool
+            WorkActiveFull(b, ctx2); // unload -> cool
             PumpTo(b.Process.CurrentStageState.DueGameSeconds + 1f); // b -> store
-            WorkActiveFull(b); // store -> complete
+            WorkActiveFull(b, ctx2); // store -> complete
             Assert.AreEqual(24, b.BreadUnitsOut, "B bakes after the oven freed");
         }
 

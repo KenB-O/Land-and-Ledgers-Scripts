@@ -83,6 +83,7 @@ found, the test fails loudly rather than passing silently.
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
 | SupplierComparison | Domains/Economy/Logistics/SupplierComparison.cs | Domains/Economy/Logistics | (none) |
 | ReplenishmentPlan | Domains/Economy/Logistics/ReplenishmentPlan.cs | Domains/Economy/Logistics | (none) |
+| ProductionPlan | Domains/Economy/Logistics/ProductionPlan.cs | Domains/Economy/Logistics | (none) |
 
 ## Notes per entry
 
@@ -290,6 +291,25 @@ found, the test fails loudly rather than passing silently.
   `SupplierComparison` rows above stay: the plan reads the projection
   and the comparison result only, both from inside its own owning
   directory.
+- `ProductionPlan` (Priority P6, 2026-11-08) is the production
+  planning foundation that connects a projected finished-goods demand
+  to required batches through the recorded Bakery recipe, then to
+  recipe inputs, usable stock, commitments, confirmed incoming
+  supplies, expected spoilage, and cash and capacity constraints. It
+  recommends batches and orders nothing. It is registered here
+  honestly as UNWIRED by design, not oversight: the P6 brief wires
+  nothing into live flows — the plan is computed in tests from
+  supplied inputs and no flow calls it yet. Remove this row the day a
+  production flow consults a plan; do not wire it merely to clear the
+  entry. The `PhysicalItemSpec`, `PersonInventoryReadModel`,
+  `DemandObservation`, `ReserveProjection`, `SupplierComparison`, and
+  `ReplenishmentPlan` rows above stay: the plan reads the Slice 5
+  states, the Slice 6 observation and projection types, and the P5
+  supplier option only from inside its own owning directory, and
+  references the F1/F2 types nowhere. (`PhysicalCapacityEvaluator`,
+  `LotIdentityResolver`, and `PerishableLotState` rows were removed by
+  V1 and the spoilage integration; earlier notes that list them among
+  the rows that "stay" describe the pre-integration state.)
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -569,3 +589,14 @@ note records their audited status so the question does not reopen:
   harness copy is a stale verbatim extraction; the freight shipment
   carries no condition field (the adapter re-reads the source lot at
   receive instead); directly seeded bin lots carry no state.
+- Priority P6 (2026-11-08):
+  `ProductionPlan` registered as UNWIRED by design — production
+  planning foundation, computed in tests from supplied inputs
+  (projected demand, recorded Bakery recipe, stock, commitments,
+  confirmed incoming, spoilage, cash, capacity, lead times),
+  recommends batches, orders nothing, no flow calls it yet. The
+  `PhysicalItemSpec`, `PersonInventoryReadModel`,
+  `DemandObservation`, `ReserveProjection`, `SupplierComparison`,
+  and `ReplenishmentPlan` rows stay: the plan reads the Slice 5
+  states, the Slice 6 types, and the P5 option only from inside its
+  own owning directory, and references the F1/F2 types nowhere.

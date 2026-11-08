@@ -1,17 +1,24 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Core;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.FreightFuel;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Ordering;
 using LandLedgers.Economy.Trade;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Tasks;
+using LandLedgers.Time;
 using NUnit.Framework;
 
 namespace LandLedgers.Tests.Economy
@@ -1226,6 +1233,949 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(14, registry.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId));
             Assert.AreEqual(1, registry.Get(1).Lots.Count);
             Assert.AreEqual(1, registry.Get(1).Lots[0].LotId);
+        }
+
+        // ---- Slice 7: mid-work round-trip acceptance ----------------
+        //
+        // Original plan §4 Slice 7: no test drives a save/load round
+        // trip across ALL thirteen directive items at once, mid economic
+        // work, through the real coordinator + authority seams, with
+        // exact conservation and a repeated-load no-duplicate proof.
+        // These three tests compose the already-sound seams plus
+        // Slices 4-6. They are expected to PASS: a failure rewrites
+        // plan §2 for the item that fails, and the slice stops and
+        // reports instead of repairing inside the acceptance.
+        //
+        // BOUNDARY, stated explicitly (plan Slice 7): no
+        // SaveLoadManager, no hub — the test composes the same calls
+        // LoadDefaultSlot makes, in the same order, against fresh
+        // instances. The manager wiring itself (that LoadDefaultSlot
+        // calls these seams in this order with these arguments) is
+        // source-reviewed only; Codex check 18 / §5 items 1-5 owe the
+        // same scenario live, fresh-scene Continue. Roslyn harness
+        // only; no Unity compilation, Test Runner, PlayMode, or scene
+        // wiring is claimed by these tests.
+        //
+        // DEVIATIONS FROM THE PLAN'S FIXTURE SHAPE, verified in source
+        // before writing the tests (recorded here, not silently
+        // weakened):
+        // (a) The plan's item 12 names one open "fr.load-freight" task
+        //     AND item 7 a dispatched mid-journey shipment. A dispatched
+        //     shipment cannot hold an open freight:load task (Slice 6:
+        //     WorkLoading completes the load task and drops the binding
+        //     before Dispatch can run), so the composed scenario keeps
+        //     the two apart: the mid-journey shipment's own load task
+        //     is Complete (as production leaves it), and the open
+        //     fr.load-freight task is a separate pending task — it is
+        //     also the agreement's registered dispatch task — whose
+        //     equipment hold is the loading dock, not the wagon: the
+        //     wagon is already held by the dispatched shipment under
+        //     the shipment id, and the equipment authority refuses a
+        //     second exclusive hold on the same asset (capacity 1).
+        //     The cross-check the plan pins is unchanged: the task's
+        //     handle resolves to a live reservation, orphan count zero.
+        // (b) The plan's item 11 names an operating-ledger record.
+        //     BusinessOperatingLedger lives in BusinessCreation.cs,
+        //     which is harness-excluded (its test file is excluded
+        //     from the harness sources), so no harness test can
+        //     construct it. The settlement leg is pinned here through
+        //     the harness-compiled authorities — the obligation with
+        //     its one payment, the household ledger entries, the Pass 9
+        //     wholesale settlement record, and the carrier-settlement
+        //     rebuild flag — and the operating-ledger record itself is
+        //     owed to Codex §5 item 5 (live before/after readout).
+        // (c) The plan's "two stores must agree" line for item 7
+        //     names LogisticsRuntimeManager as the second shipment
+        //     store. That manager is a MonoBehaviour in a
+        //     harness-excluded file, so it cannot be constructed in
+        //     Roslyn. The seam-level agreement is pinned instead:
+        //     the Pass 9 freight DTO and the service's own capture
+        //     carry the same shipment id with the same flags, and the
+        //     live Unity agreement is owed to Codex §5 item 5.
+        // (d) The plan's item 4 "bin 20 lb flour + 1 notion" is read
+        //     as bin stock: the notions bin lot (lot 904, 1u) is a
+        //     DIFFERENT lot from the batch's notions custody line
+        //     (lot 902, 1u, as in the Slice 1 pin, which carries no
+        //     bin lot for it). Bin notions 1u + custody notions 1u
+        //     are two distinct lots, never the same unit counted
+        //     twice; the test asserts both lots by id.
+        //
+        // TEST-AUTHORING CORRECTION (no production defect, no
+        // stop-rule trigger): the first version created the shipment
+        // through FreightShipmentService.CreateShipment directly, so
+        // it never entered a carrier company's ActiveShipments and
+        // FreightProductionDriver.CaptureSaveDto(AllShipments())
+        // captured zero shipments. The production seam is
+        // FreightProductionDriver.CreateShipment, which ensures the
+        // company, binds the source lot, sets charge/payer/agreement,
+        // and accepts the shipment into the company (TryAcceptShipment
+        // stamps carrierBusinessInstanceId) — the fixture now uses it.
+
+        private const int Q04DayIndex = 2;
+        private const string Q04ReceiptId = "rcpt-q04-7";
+        private const string Q04ShipmentId = "ship-q04-7";
+        private const string Q04MillbrookLotId = "aidlot-millbrook_grain_co:flour-reorder-d57-n16";
+        private const string Q04AgreementRequestId = "freight-req-q04-7";
+        private const string Q04AgreementId = "freight-agreement:freight-req-q04-7";
+        private const string Q04LoadingDockKey = "workstation:loading-dock-1";
+
+        // One live mid-work world: every authority the composed
+        // round trip touches, plus the test-side models of stock the
+        // save DTOs do not themselves carry (the source-lot stock
+        // the custody debit draws from, and the recipient stock a
+        // delivery would land in — neither is persisted; the
+        // persisted custody evidence is the shipment's cargoLotId +
+        // sourceLotDebitApplied flags).
+        private sealed class Q04Scenario
+        {
+            public HouseholdErrandPlanRegistry Errands = new HouseholdErrandPlanRegistry();
+            public HouseholdInventoryRegistry Inventories = new HouseholdInventoryRegistry();
+            public HouseholdLedgerRegistry Ledgers = new HouseholdLedgerRegistry();
+            public TaskAuthority Tasks = new TaskAuthority();
+            public PersonScheduleTracker Schedules = new PersonScheduleTracker();
+            public EquipmentReservationService Equipment = new EquipmentReservationService();
+            public DueEventScheduler DueEvents = new DueEventScheduler();
+            public WorkTimeBudgetStore Budgets = new WorkTimeBudgetStore();
+            public FinancialObligationAuthority Obligations = new FinancialObligationAuthority();
+            public BusinessRuntimeState Store = new BusinessRuntimeState();
+            public OffMapNamedSkuProcurementService Procurement;
+            public Series2Pass9SaveState Pass9;
+            public OffMapAidBusinessRuntime Millbrook;
+            public FreightProductionDriver FreightDriver;
+            public Dictionary<string, int> SourceLotStock = new Dictionary<string, int>(StringComparer.Ordinal);
+            public Dictionary<string, int> RecipientStock = new Dictionary<string, int>(StringComparer.Ordinal);
+            public HashSet<string> SourceLotDebitedShipments = new HashSet<string>(StringComparer.Ordinal);
+            public string PlanId;
+            public string BatchId;
+            public string ObligationId;
+            public EntityId TaskId;
+            public string HandleId;
+            public string DueEventId;
+        }
+
+        // Every DTO the composed capture produces, in one bundle so
+        // the repeated-load test restores the SAME DTO object.
+        private sealed class Q04Captured
+        {
+            public List<HouseholdLedgerState> Ledgers = new List<HouseholdLedgerState>();
+            public List<HouseholdInventoryState> Inventories = new List<HouseholdInventoryState>();
+            public TaskAuthoritySaveDto Tasks;
+            public PersonScheduleTrackerSaveDto Schedules;
+            public WorkTimeBudgetSaveDto Budgets;
+            public HouseholdErrandPlanRegistrySaveDto Errands;
+            public DueEventSchedulerSaveDto DueEvents;
+            public EquipmentReservationAuthoritySaveDto Equipment;
+            public FinancialObligationSaveDto Obligations;
+            public BusinessRuntimeSaveDto Store;
+            public PassXlSliceSaveDto PassXl;
+        }
+
+        private static Q04Scenario NewQ04Scenario()
+        {
+            var scenario = new Q04Scenario();
+            scenario.Procurement = NewNotionsOnlyService(out _, out _);
+            var bakery = new BakeryShopRuntime("bakery-1");
+            var driver = new Series2BakeryProductionDriver(
+                bakery, new Series2InStockBakeryFuelSource(bakery));
+            scenario.FreightDriver = new FreightProductionDriver();
+            scenario.Pass9 = new Series2Pass9SaveState
+            {
+                BakeryRuntime = bakery,
+                BakeryDriver = driver,
+                FreightDriver = scenario.FreightDriver,
+                CarrierSettlement = new Series2CarrierSettlement(),
+            };
+            scenario.Millbrook = NewMillbrookSupplier();
+            scenario.SourceLotStock[Q04MillbrookLotId] = 16;
+            return scenario;
+        }
+
+        // Real FreightShipmentHooks over a scenario's own authorities,
+        // exactly the shape Slice 6's production restore builds
+        // (Tasks, Budgets, Reservations, DayIndex, NowGameSeconds),
+        // plus the custody callbacks the load flow needs. The source
+        // hooks and the restore hooks are built the same way over
+        // their own scenario; only the dicts differ.
+        private static FreightShipmentHooks BuildQ04FreightHooks(Q04Scenario scenario)
+        {
+            var hooks = new FreightShipmentHooks
+            {
+                Tasks = scenario.Tasks,
+                Budgets = scenario.Budgets,
+                DayIndex = Q04DayIndex,
+                Diagnostics = new List<string>(),
+                Reservations = scenario.Equipment,
+                NowGameSeconds = 0f,
+            };
+            hooks.ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string reason) =>
+            {
+                reason = string.Empty;
+                if (quantityUnits <= 0) return 0;
+                string key = string.IsNullOrWhiteSpace(shipment.destinationBusinessInstanceId)
+                    ? "nowhere" : shipment.destinationBusinessInstanceId;
+                scenario.RecipientStock[key] = scenario.RecipientStock.TryGetValue(key, out int have)
+                    ? have + quantityUnits : quantityUnits;
+                return quantityUnits;
+            };
+            hooks.CommitSourceLot = (LogisticsShipmentState shipment, int quantity, out string reason) =>
+            {
+                reason = string.Empty;
+                if (scenario.SourceLotDebitedShipments.Contains(shipment.ShipmentId)) return true;
+                if (!scenario.SourceLotStock.TryGetValue(shipment.CargoLotId, out int onHand) || onHand < quantity)
+                {
+                    reason = "source lot shortfall";
+                    return false;
+                }
+                scenario.SourceLotStock[shipment.CargoLotId] = onHand - quantity;
+                scenario.SourceLotDebitedShipments.Add(shipment.ShipmentId);
+                return true;
+            };
+            return hooks;
+        }
+
+        private static EquipmentAsset NewQ04Wagon(string assetId)
+        {
+            return new EquipmentAsset
+            {
+                AssetId = assetId,
+                Kind = "farm-wagon",
+                DisplayName = "Farm wagon",
+                Condition01 = 0.9f,
+                PayloadMassCapacityKg = 1000f,
+                CargoVolumeCapacityM3 = 4f,
+            };
+        }
+
+        // Builds the source world through the real production seams:
+        // Millbrook import, Bakery planning, procurement import, store
+        // lot receipt, inventory/ledger/errand/schedule/budget/task/
+        // equipment/due-event/obligation writes, then the agreement
+        // request/quote/accept flow and the freight load/dispatch flow.
+        // Every step asserts its own success, so a build failure names
+        // the seam that refused instead of surfacing as a restore
+        // failure later.
+        private static Q04Scenario BuildQ04SourceScenario()
+        {
+            var s = NewQ04Scenario();
+            var diag = new List<string>();
+
+            // (6)/(9) Millbrook: the saved clamped-lot section (160 lb,
+            // 768c, one 16-sack lot uncommitted/unreceived) imported into
+            // the live runtime — the Slice 2 fixture, reused verbatim.
+            Assert.IsNull(s.Millbrook.ImportState(BuildClampedLotMillbrookDto()),
+                "the Millbrook section must import into the live runtime");
+            Assert.AreEqual(160, s.Millbrook.GetInventoryUnits("bakery_flour_sack"));
+            Assert.AreEqual(768, s.Millbrook.CashCents);
+            Assert.AreEqual(1, s.Millbrook.Lots.Count);
+
+            // (4) Bakery: bin 20 lb flour + 1 notion (lot 904), fuel
+            // 30u, one Prepped batch holding 12 lb flour + 1 notion in
+            // custody (notion custody lot 902, distinct from the bin
+            // lot — deviation (d) above), one settled wholesale record.
+            BakeryShopRuntime bakery = s.Pass9.BakeryRuntime;
+            Assert.IsNull(bakery.FlourStock.ReceiveLot(new BakeryFlourLot
+            {
+                LotId = EntityId.For(EntityKind.Lot, 901),
+                FlourName = BakeryBreadCatalog.FlourItemId,
+                Units = 20,
+                AcquiredDayIndex = 0,
+                ImportOrderId = "test-flour-order",
+                OriginName = "Test mill",
+            }, diag), "the 20 lb flour lot must be received; diag: " + string.Join("; ", diag));
+            Assert.IsNull(bakery.FlourStock.ReceiveLot(new BakeryFlourLot
+            {
+                LotId = EntityId.For(EntityKind.Lot, 904),
+                FlourName = BakeryBreadCatalog.NotionsItemId,
+                Units = 1,
+                AcquiredDayIndex = 0,
+                ImportOrderId = "notions-order-1",
+                OriginName = "Test notions",
+            }, diag), "the 1u notions bin lot must be received; diag: " + string.Join("; ", diag));
+            Assert.IsNull(bakery.FuelStock.ReceiveLot(new BakeryFuelLot
+            {
+                LotId = EntityId.For(EntityKind.Lot, 903),
+                FuelName = BakeryBreadCatalog.FuelItemId,
+                Units = 30,
+                AcquiredDayIndex = 0,
+                IsBootstrapEndowment = true,
+            }, diag), "the 30u fuel lot must be received; diag: " + string.Join("; ", diag));
+            List<string> plannedIds = s.Pass9.BakeryDriver.PlanBatches(
+                BakeryBreadCatalog.BreadLoafId, 1, Q04DayIndex, diag);
+            Assert.IsNotNull(plannedIds, "planning must succeed; diag: " + string.Join("; ", diag));
+            Assert.AreEqual(1, plannedIds.Count);
+            s.BatchId = plannedIds[0];
+            BakeryDoughBatch batch = bakery.Batches.First(b => b.BatchId == s.BatchId);
+            batch.Stage = BakeryBatchStage.Prepped;
+            batch.FlourInCustody.Add(new BakeryFlourDispenseLine
+            {
+                LotId = EntityId.For(EntityKind.Lot, 901),
+                FlourName = BakeryBreadCatalog.FlourItemId,
+                UnitsTaken = 12,
+                ProvenanceChain = "Test mill",
+            });
+            batch.NotionsUsed.Add(new BakeryFlourDispenseLine
+            {
+                LotId = EntityId.For(EntityKind.Lot, 902),
+                FlourName = BakeryBreadCatalog.NotionsItemId,
+                UnitsTaken = 1,
+                ProvenanceChain = "Test notions",
+            });
+            s.Pass9.WholesaleSettlements.Add(new Pass3WholesaleSettlement
+            {
+                BakeryLotId = "lot-1",
+                ProductId = "bread",
+                Units = 10,
+                UnitWholesalePriceCents = 50,
+                PayerBusinessId = "bakery-1",
+                PayeeBusinessId = "general-store-1",
+                AmountCents = 500,
+                Settled = true,
+            });
+
+            // (5) Procurement: one notions order in flight (day 1,
+            // arrival day 15) + one lot + one delivered sale id.
+            s.Procurement.ClearState();
+            s.Procurement.ImportState(BuildNotionsProcurementDto());
+            Assert.AreEqual(1, s.Procurement.Orders.Count, "setup: one notions order");
+            Assert.AreEqual(1, s.Procurement.Lots.Count, "setup: one notions lot");
+
+            // (2, store side) Store: one identified retail bread lot,
+            // 24 loaves, with the opening-stock endowment recorded
+            // once — the endowment must not re-apply on restore.
+            s.Store.BindBusinessIdentity("general-store-1");
+            Assert.IsNotNull(s.Store.EnsureCategoryStock("staple_food", 0, 1000),
+                "the store must hold a staple_food category");
+            Assert.IsNull(s.Store.TryAddRetailItemLot("store-lot-bread-1",
+                HouseholdItemCatalog.BreadId, "staple_food", "loaf", 24,
+                "general-store-1", "general-store-1", "bakery wholesale transfer", Q04DayIndex),
+                "the store retail lot must land");
+            Assert.IsTrue(s.Store.RecordAppliedScenarioEndowment("dev-opening-stock"),
+                "the opening-stock endowment must record once");
+
+            // (2)/(3) Household inventory: purchased bread lot (6u,
+            // 2 held, SourceLabel carrying the receipt id) + a second
+            // flour lot (10 lb).
+            s.Inventories.ImportState(new[]
+            {
+                new HouseholdInventoryState
+                {
+                    HouseholdId = 1,
+                    NextLotSequence = 3,
+                    SeededFromReserves = false,
+                    Lots = new List<HouseholdItemLot>
+                    {
+                        new HouseholdItemLot
+                        {
+                            LotId = 1,
+                            ItemId = HouseholdItemCatalog.BreadId,
+                            QuantityUnits = 6,
+                            UnitLabel = "loaf",
+                            AcquiredDayIndex = Q04DayIndex,
+                            SourceLabel = "receipt " + Q04ReceiptId + "; general-store purchase",
+                            HeldUnits = 2,
+                            SourceKind = "purchase",
+                            OwnerPersonId = 1,
+                        },
+                        new HouseholdItemLot
+                        {
+                            LotId = 2,
+                            ItemId = HouseholdItemCatalog.FlourId,
+                            QuantityUnits = 10,
+                            UnitLabel = "lb",
+                            AcquiredDayIndex = Q04DayIndex,
+                            SourceLabel = "millbrook flour purchase",
+                            HeldUnits = 0,
+                            SourceKind = "purchase",
+                            OwnerPersonId = 1,
+                        },
+                    },
+                },
+            });
+            Assert.AreEqual(6, s.Inventories.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId),
+                "setup: household bread lot holds 6");
+
+            // (11, household leg) Ledger: wages in, bread out —
+            // 10000c - 30c (6 loaves x 5c) = 9970c.
+            HouseholdLedger ledger = s.Ledgers.GetOrCreate(1);
+            Assert.IsNull(ledger.RecordInflow(Q04DayIndex, 10000,
+                HouseholdIncomeSource.WageEmployment, "emp-q04-7", "wages day 2", "employer"),
+                "the wage inflow must record");
+            Assert.IsNull(ledger.RecordOutflow(Q04DayIndex, 30, "bread purchase 6 loaves", "general-store-1"),
+                "the bread outflow must record");
+            Assert.AreEqual(9970, ledger.GetBalanceCents(), "setup: ledger balance 9970c");
+
+            // (1) Errand plan Proposed, bread need 7 claimed, shopper
+            // window 720 + 95 min.
+            HouseholdErrandPlan plan = s.Errands.Create(1, Q04DayIndex);
+            s.PlanId = plan.PlanId;
+            Assert.AreEqual("errand-1-2-0", s.PlanId, "the plan id is deterministic from household/day/sequence");
+            Assert.IsTrue(s.Errands.Claim(s.PlanId, 1, 7), "the bread need must claim");
+            s.Errands.NoteEstimate(s.PlanId, 95, 720);
+
+            // (13, person leg) Schedule: Work [480,720] + Shopping
+            // [720,815] for P1 on day 2 — person time exclusive, no
+            // overlap.
+            Assert.IsNull(s.Schedules.TryReserve(1, PersonActivityKind.Work,
+                Q04DayIndex, 480, 240, "day job"), "the Work reservation must hold");
+            Assert.IsNull(s.Schedules.TryReserve(1, PersonActivityKind.Shopping,
+                Q04DayIndex, 720, 95, "bread errand"), "the Shopping reservation must hold");
+            Assert.AreEqual(2, s.Schedules.ActiveFor(1, Q04DayIndex).Count, "setup: two live reservations for P1");
+
+            // (12)/(13) Pending task: fr.load-freight, 15 planned
+            // minutes, 0 worked, assigned to P701, holding the
+            // loading dock through the equipment authority.
+            s.Budgets.EnsureDay(Q04DayIndex);
+            Assert.IsTrue(s.Tasks.RegisterDefinition(
+                new TaskDefinition("fr.load-freight", "Load freight", 15), out string defReason),
+                "the load-freight definition must register: " + defReason);
+            WorkTask task = s.Tasks.CreateTaskWithPlannedMinutes("fr.load-freight",
+                EntityId.For(EntityKind.Business, 3), Q04DayIndex, 15);
+            Assert.IsNotNull(task, "the pending task must be created");
+            s.TaskId = task.TaskId;
+            Assert.IsTrue(s.Tasks.AssignTask(s.TaskId, EntityId.For(EntityKind.Person, 701),
+                s.Budgets, out string assignReason), "the task must assign: " + assignReason);
+            Assert.AreEqual(15, task.PlannedMinutes, "setup: 15 planned minutes");
+            Assert.AreEqual(0, task.MinutesWorked, "setup: 0 minutes worked");
+            var holdRequest = new ReservationRequest(s.TaskId.ToString(), "load freight " + Q04ShipmentId);
+            holdRequest.Items.Add(new ReservationItem(Q04LoadingDockKey, 1f, 0f, 3600f));
+            Assert.IsNull(s.Equipment.TryReserveAll(holdRequest, out ReservationHandle handle),
+                "the loading-dock hold must grant");
+            Assert.IsNotNull(handle, "the hold must return a handle");
+            s.HandleId = handle.ReservationId;
+            Assert.IsTrue(s.Tasks.MarkResourcesReserved(s.TaskId, s.HandleId,
+                "loading dock held", out string markReason),
+                "the task must record its handle: " + markReason);
+            Assert.AreEqual(s.HandleId, task.ReservationHandleId, "setup: task holds its handle id");
+            Assert.AreEqual(TaskStatus.ResourcesReserved, task.Status, "setup: task is ResourcesReserved (open)");
+
+            // (13, due-event leg) Due event for the shipment.
+            Assert.IsNull(s.DueEvents.Schedule(DueEventKind.TaskCompletionDue,
+                3600f, Q04ShipmentId, out string dueEventId), "the due event must schedule");
+            s.DueEventId = dueEventId;
+            Assert.AreEqual("due-TaskCompletionDue-" + Q04ShipmentId, s.DueEventId,
+                "the due event id is deterministic from kind + payload");
+
+            // (11, obligation leg) Obligation open: 125c freight
+            // charge, one 25c payment recorded, 100c outstanding.
+            var ids = new EntityIdRegistry();
+            FinancialObligation obligation = s.Obligations.Create(ids,
+                FinancialObligationKind.Payable, "bakery-1", "millbrook_grain_co",
+                125, Q04DayIndex, string.Empty, "freight charge " + Q04ShipmentId, Q04AgreementId);
+            Assert.IsNotNull(obligation, "the obligation must be created");
+            s.ObligationId = obligation.ObligationId;
+            FinancialPaymentRecord payment = s.Obligations.ApplyPayment(
+                s.ObligationId, 25, Q04DayIndex, "bakery-1", "millbrook_grain_co", "pay-q04-7");
+            Assert.IsNotNull(payment, "the 25c payment must apply");
+            Assert.AreEqual(100, obligation.OutstandingPrincipalCents, "setup: 100c outstanding after one payment");
+            Assert.AreEqual(1, obligation.Payments.Count, "setup: exactly one payment recorded");
+
+            // (7)/(8)/(10) Freight: agreement request -> quote (125c)
+            // -> accept -> link shipment -> prepare -> register the
+            // pending task as the dispatch task; then the real load /
+            // dispatch flow drives the shipment mid-journey.
+            FreightProductionDriver driver = s.FreightDriver;
+            FreightShipmentService service = driver.Service;
+            service.RegisterWagon(NewQ04Wagon("wagon-1"));
+            service.RegisterWagon(NewQ04Wagon("wagon-2"));
+            FreightShipmentHooks hooks = BuildQ04FreightHooks(s);
+            var book = driver.ServiceAgreements;
+            var freightRequest = new FreightServiceRequest
+            {
+                RequestId = Q04AgreementRequestId,
+                RequestingBusinessId = "bakery-1",
+                RequestingPersonId = 1,
+                CarrierBusinessId = "carrier-1",
+                CarrierOperatorPersonId = 702,
+                PickupBusinessId = "millbrook_grain_co",
+                PickupLocationId = "millbrook",
+                DestinationBusinessId = "bakery-1",
+                DestinationLocationId = "bakery-1",
+                CargoLotId = Q04MillbrookLotId,
+                CargoSkuId = "bakery_flour_sack",
+                Quantity = 16,
+                QuantityUnit = "sack",
+            };
+            Assert.IsNull(book.CreateRequest(freightRequest, out _), "the freight request must be created");
+            var quote = new FreightServiceQuote
+            {
+                QuoteId = "quote-q04-7",
+                RateCardBusinessId = "carrier-1",
+                OneWayDistanceMiles = 50f,
+                ChargeableMiles = 50,
+                BaseServiceFeeCents = 125,
+                RatePerMileCents = 0,
+                MileageChargeCents = 0,
+                TotalPriceCents = 125,
+                PayerBusinessId = "bakery-1",
+                PaymentTiming = "After successful delivery",
+            };
+            Assert.IsNull(book.SetQuote(Q04AgreementRequestId, quote), "the 125c quote must set");
+            Assert.IsNull(book.Accept(Q04AgreementRequestId, 702, Q04DayIndex, 0f,
+                out FreightServiceAgreement agreement), "the agreement must be accepted");
+            Assert.IsNotNull(agreement, "acceptance must return the agreement");
+            Assert.AreEqual(Q04AgreementId, agreement.AgreementId, "the agreement id is deterministic from the request");
+
+            LogisticsShipmentState shipment = driver.CreateShipment("carrier-1",
+                Q04ShipmentId, "millbrook_grain_co", "bakery-1", 16,
+                new FreightCargoSpec { MassKgPerUnit = 2f, VolumeM3PerUnit = 0.01f },
+                "wagon-1", hooks, EntityId.For(EntityKind.Person, 702), null,
+                125, "bakery-1", diag, out string createReason,
+                Q04AgreementId, Q04MillbrookLotId, "bakery_flour_sack");
+            Assert.IsNotNull(shipment, "the shipment must be created: " + createReason);
+            Assert.AreEqual("carrier-1", shipment.CarrierBusinessInstanceId,
+                "the driver seam accepts the shipment into the carrier company");
+            Assert.AreEqual(125, shipment.freightChargeCents, "the driver seam sets the 125c charge");
+            Assert.AreEqual("bakery-1", shipment.FreightPayerBusinessInstanceId,
+                "the driver seam sets the payer");
+            Assert.AreEqual(Q04AgreementId, shipment.FreightServiceAgreementId,
+                "the driver seam sets the agreement link");
+            Assert.AreEqual(Q04MillbrookLotId, shipment.CargoLotId,
+                "the driver seam binds the Millbrook source lot");
+            Assert.IsTrue(shipment.requiresSourceLotCustody, "the driver seam marks lot custody");
+            Assert.IsNull(book.LinkShipment(Q04AgreementId, Q04ShipmentId),
+                "the agreement must link its shipment");
+            Assert.IsNull(book.MarkPreparedForDispatch(Q04AgreementId, Q04ShipmentId, 3600f),
+                "the shipment must be marked prepared");
+            Assert.IsNull(book.RegisterDispatchTask(Q04AgreementId, Q04ShipmentId, s.TaskId.ToString()),
+                "the pending task must register as the dispatch task");
+            Assert.IsTrue(service.BeginLoading(shipment, EntityId.For(EntityKind.Person, 701),
+                hooks, out string loadReason), "loading must begin: " + loadReason);
+            int guard = 0;
+            while (!shipment.loadApplied && guard++ < 10)
+                Assert.IsTrue(service.WorkLoading(shipment, 60, hooks, out string workReason),
+                    "loading must work: " + workReason);
+            Assert.IsTrue(shipment.loadApplied, "setup: shipment loaded");
+            Assert.IsTrue(shipment.sourceLotDebitApplied, "setup: source lot debit applied");
+            Assert.AreEqual(0, s.SourceLotStock[Q04MillbrookLotId],
+                "setup: the 16-sack source lot is debited exactly once to 0");
+            Assert.IsTrue(service.Dispatch(shipment, EntityId.For(EntityKind.Person, 702),
+                null, hooks, out string dispatchReason), "dispatch must succeed: " + dispatchReason);
+            Assert.IsTrue(shipment.physicalTransportBound, "setup: transport bound");
+            shipment.transitDurationGameSeconds = 200f;
+            service.AdvanceTransit(shipment, 80f, hooks);
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment.Status, "setup: shipment mid-journey");
+            Assert.Greater(shipment.physicalProgress01, 0f, "setup: transit progressing");
+            Assert.IsTrue(shipment.physicalProgress01 < 1f, "setup: transit not complete");
+            return s;
+        }
+
+        // Capture through the real seams, in BuildSaveDto order: hub
+        // authorities first, then the coordinator (procurement, Pass 9,
+        // Millbrook) — the same capture LoadDefaultSlot's counterpart
+        // performs.
+        private static Q04Captured CaptureQ04Scenario(Q04Scenario s)
+        {
+            var captured = new Q04Captured();
+            s.Ledgers.ExportState(captured.Ledgers);
+            s.Inventories.ExportState(captured.Inventories);
+            captured.Tasks = s.Tasks.CaptureSaveDto();
+            captured.Schedules = s.Schedules.CaptureSaveDto();
+            captured.Budgets = s.Budgets.CaptureSaveDto();
+            captured.Errands = s.Errands.CaptureSaveDto();
+            captured.DueEvents = s.DueEvents.CaptureSaveDto();
+            captured.Equipment = s.Equipment.CaptureSaveDto();
+            captured.Obligations = s.Obligations.CaptureSaveDto();
+            captured.Store = s.Store.CaptureSaveDto();
+            captured.PassXl = PassXlSliceSaveCoordinator.Capture(
+                null, null, s.Procurement, s.Pass9, null, null, s.Millbrook);
+            Assert.IsNotNull(captured.PassXl.series2Pass9, "capture: Pass 9 section present");
+            Assert.IsNotNull(captured.PassXl.millbrookAid, "capture: Millbrook section present");
+            Assert.IsNotNull(captured.PassXl.procurement, "capture: procurement section present");
+            return captured;
+        }
+
+        // Restore into fresh instances, in LoadDefaultSlot order:
+        // population ledgers/inventories, then the hub authorities
+        // (tasks, schedules, budgets, errands, due events, equipment,
+        // obligations), then the store runtime, then the Pass XL
+        // restore with REAL freight hooks built from the restored hub
+        // authorities (Slice 6's production shape).
+        private static void RestoreQ04Scenario(Q04Captured captured, Q04Scenario target)
+        {
+            target.Ledgers.ImportState(captured.Ledgers);
+            target.Inventories.ImportState(captured.Inventories);
+            target.Tasks.LoadFromSaveDto(captured.Tasks);
+            target.Schedules.LoadFromSaveDto(captured.Schedules);
+            target.Budgets.LoadFromSaveDto(captured.Budgets, Q04DayIndex);
+            target.Errands.LoadFromSaveDto(captured.Errands);
+            target.DueEvents.LoadFromSaveDto(captured.DueEvents);
+            target.Equipment.LoadFromSaveDto(captured.Equipment);
+            target.Obligations.LoadFromSaveDto(captured.Obligations);
+            target.Store = BusinessRuntimeState.FromSaveDto(captured.Store, BusinessType.GeneralStore);
+            FreightShipmentHooks restoreHooks = BuildQ04FreightHooks(target);
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                captured.PassXl, null, null, target.Procurement, target.Pass9,
+                restoreHooks, null, null, target.Millbrook);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(restoreDiag.Any(d => d.Contains("Series2Pass9Save: restore complete")),
+                "the Pass 9 restore must run to completion; diag: " + joined);
+            Assert.IsTrue(joined.Contains("restored Millbrook aid table (160 lb flour, 768c retained cash, 1 cargo lots)"),
+                "the Millbrook restore must report the saved values; diag: " + joined);
+            Assert.IsTrue(joined.Contains(
+                    "restored off-map procurement for business 'general-store-1' (1 orders, 1 lots, 0 sales, 1 delivered)"),
+                "the procurement restore must report the saved counts; diag: " + joined);
+        }
+
+        // Exact-conservation assertions for one restored scenario,
+        // item by item against the source scenario's expected values.
+        // Called after every restore (first, second, third) so a
+        // repeated load must reproduce the same state, not just the
+        // first load.
+        private static void AssertQ04ScenarioRestored(Q04Scenario source, Q04Scenario target)
+        {
+            // (1) Household errand plan: same id, Proposed, same
+            // household, same claimed need, same estimate/departure.
+            Assert.AreEqual(1, target.Errands.All.Count, "exactly one errand plan must restore");
+            HouseholdErrandPlan plan = target.Errands.Get(source.PlanId);
+            Assert.IsNotNull(plan, "the errand plan must restore with its id");
+            Assert.AreEqual(HouseholdErrandPlanStatus.Proposed, plan.Status, "the plan must stay Proposed");
+            Assert.AreEqual(1, plan.HouseholdId, "the plan household must restore");
+            List<int> claimed = target.Errands.ClaimedNeedSequences(source.PlanId);
+            Assert.AreEqual(1, claimed.Count, "exactly one need must stay claimed");
+            Assert.AreEqual(7, claimed[0], "the claimed bread need sequence must restore");
+            Assert.AreEqual(95, target.Errands.GetEstimateMinutes(source.PlanId), "the estimate must restore");
+            Assert.AreEqual(720, target.Errands.GetDepartureMinute(source.PlanId), "the departure minute must restore");
+
+            // (2) Purchased lot: bread 6u, 2 held, receipt id in the
+            // SourceLabel; (3) second lot: flour 10 lb. No lot id
+            // appears twice.
+            HouseholdInventory inventory = target.Inventories.Get(1);
+            Assert.IsNotNull(inventory, "household 1 inventory must restore");
+            Assert.AreEqual(2, inventory.Lots.Count, "exactly two lots must restore, never duplicated");
+            HouseholdItemLot breadLot = inventory.Lots.First(l => l.LotId == 1);
+            Assert.AreEqual(HouseholdItemCatalog.BreadId, breadLot.ItemId);
+            Assert.AreEqual(6, breadLot.QuantityUnits, "the bread lot must hold its 6 units");
+            Assert.AreEqual(2, breadLot.HeldUnits, "the bread lot must keep its 2 held units");
+            Assert.AreEqual(4, breadLot.AvailableUnits, "6 - 2 held = 4 available");
+            Assert.IsTrue(breadLot.SourceLabel.Contains(Q04ReceiptId),
+                "the receipt id must survive in the lot's SourceLabel: " + breadLot.SourceLabel);
+            HouseholdItemLot flourLot = inventory.Lots.First(l => l.LotId == 2);
+            Assert.AreEqual(HouseholdItemCatalog.FlourId, flourLot.ItemId);
+            Assert.AreEqual(10, flourLot.QuantityUnits, "the flour lot must hold its 10 lb");
+            Assert.AreEqual(6, inventory.GetTotalUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(10, inventory.GetTotalUnits(HouseholdItemCatalog.FlourId));
+
+            // (11, household leg) Ledger: 10000c in, 30c out, 9970c,
+            // exactly two entries, sequence cursor intact.
+            HouseholdLedger ledger = target.Ledgers.Get(1);
+            Assert.IsNotNull(ledger, "household 1 ledger must restore");
+            Assert.AreEqual(9970, ledger.GetBalanceCents(), "ledger balance must restore at 9970c");
+            Assert.AreEqual(2, ledger.Entries.Count, "exactly two ledger entries must restore");
+            Assert.AreEqual(10000, ledger.Entries[0].AmountCents, "the wage inflow must restore");
+            Assert.AreEqual(-30, ledger.Entries[1].AmountCents, "the bread outflow must restore");
+            Assert.AreEqual(2, ledger.State.NextEntrySequence, "the entry sequence cursor must restore");
+
+            // (4) Bakery: bin 20 lb flour + 1 notion (lot 904), fuel
+            // 30u, same batch id Prepped with 12 lb flour + 1 notion
+            // in custody, planned day 2.
+            Assert.AreEqual(20, target.Pass9.BakeryRuntime.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "the flour bin must restore at 20 lb");
+            Assert.AreEqual(1, target.Pass9.BakeryRuntime.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "the notions bin must restore at 1u");
+            Assert.AreEqual(30, target.Pass9.BakeryRuntime.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "the fuel stock must restore at 30u");
+            Assert.AreEqual(1, target.Pass9.BakeryRuntime.Batches.Count, "exactly one active batch must restore");
+            BakeryDoughBatch restoredBatch = target.Pass9.BakeryRuntime.Batches[0];
+            Assert.AreEqual(source.BatchId, restoredBatch.BatchId, "the batch id must survive verbatim");
+            Assert.AreEqual(BakeryBatchStage.Prepped, restoredBatch.Stage, "the batch stage must restore");
+            Assert.AreEqual(12, restoredBatch.FlourInCustody.Sum(l => l.UnitsTaken),
+                "the batch must keep its 12 lb of flour in custody");
+            Assert.AreEqual(1, restoredBatch.NotionsUsed.Sum(l => l.UnitsTaken),
+                "the batch must keep its 1 notion in custody");
+            Assert.AreEqual(Q04DayIndex, target.Pass9.BakeryDriver.PlannedDayIndex,
+                "the planned day must restore");
+            Assert.AreEqual(1, target.Pass9.BakeryDriver.PlannedBatchIds.Count,
+                "exactly one planned batch id must restore");
+            Assert.AreEqual(source.BatchId, target.Pass9.BakeryDriver.PlannedBatchIds[0],
+                "the planned batch id must survive verbatim");
+
+            // (5) Procurement: 1 order (day 1, arrival 15), 1 lot,
+            // 1 delivered mark.
+            Assert.AreEqual(1, target.Procurement.Orders.Count, "exactly one notions order must restore");
+            NamedSkuOrder order = target.Procurement.Orders[0];
+            Assert.AreEqual("notions-order-1", order.OrderId);
+            Assert.AreEqual(1, order.OrderDayIndex, "the order day must restore");
+            Assert.AreEqual(15, order.ExpectedArrivalDayIndex, "the arrival day must restore");
+            Assert.AreEqual(1, target.Procurement.Lots.Count, "exactly one notions lot must restore");
+            Assert.AreEqual("notions-lot-1", target.Procurement.Lots[0].LotId);
+            Assert.AreEqual(1, target.Procurement.DeliveredSaleIds.Count, "exactly one delivered mark must restore");
+            Assert.AreEqual("sale-notions-1", target.Procurement.DeliveredSaleIds[0]);
+            Assert.IsTrue(target.Procurement.IsSaleDelivered("sale-notions-1"),
+                "the delivered mark must answer as delivered");
+
+            // (6)/(9) Millbrook: stock 160 lb, cash 768c, exactly the
+            // one saved 16-sack lot, uncommitted, unreceived.
+            Assert.AreEqual(160, target.Millbrook.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook stock must restore at 160 lb");
+            Assert.AreEqual(768, target.Millbrook.CashCents, "Millbrook cash must restore at 768c");
+            Assert.AreEqual(1, target.Millbrook.Lots.Count, "exactly one Millbrook lot must restore");
+            OffMapAidCargoLot millbrookLot = target.Millbrook.Lots[0];
+            Assert.AreEqual(Q04MillbrookLotId, millbrookLot.LotId, "the Millbrook lot id must survive verbatim");
+            Assert.AreEqual(16, millbrookLot.PackageUnits, "the lot holds 16 sacks");
+            Assert.AreEqual(160, millbrookLot.InventoryUnits, "the lot holds 160 lb");
+            Assert.AreEqual(768, millbrookLot.TotalCostCents, "the lot costs 16 x 48c");
+            Assert.IsTrue(!millbrookLot.SourceCommitted, "the lot must stay uncommitted");
+            Assert.IsTrue(!millbrookLot.Received, "the lot must stay unreceived");
+
+            // (7) Freight shipment mid-journey: same id, InTransit,
+            // loaded, undelivered, uncollected, 125c, same carrier /
+            // payer / agreement, transport bound to P702 + wagon-1.
+            List<LogisticsShipmentState> shipments = target.FreightDriver.AllShipments();
+            Assert.AreEqual(1, shipments.Count, "exactly one shipment must restore, never duplicated");
+            LogisticsShipmentState shipment = shipments[0];
+            Assert.AreEqual(Q04ShipmentId, shipment.ShipmentId);
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment.Status, "the shipment must stay mid-journey");
+            Assert.IsTrue(shipment.loadApplied, "the load must stay applied");
+            Assert.IsTrue(!shipment.deliveryApplied, "the shipment must stay undelivered");
+            Assert.IsTrue(!shipment.freightRevenueCollected, "no revenue may be collected by the restore");
+            Assert.AreEqual(125, shipment.freightChargeCents, "the 125c freight charge must restore");
+            Assert.AreEqual("carrier-1", shipment.CarrierBusinessInstanceId, "the carrier must restore");
+            Assert.AreEqual("bakery-1", shipment.FreightPayerBusinessInstanceId, "the payer must restore");
+            Assert.AreEqual(Q04AgreementId, shipment.FreightServiceAgreementId, "the agreement link must restore");
+            Assert.IsTrue(shipment.physicalTransportBound, "the transport binding must restore");
+            Assert.AreEqual(EntityId.For(EntityKind.Person, 702).ToString(), shipment.physicalDriverPersonId,
+                "the driver binding must restore");
+            Assert.AreEqual("wagon-1", shipment.physicalWagonAssetId, "the wagon binding must restore");
+            Assert.Greater(shipment.physicalProgress01, 0f, "transit progress must restore above zero");
+            Assert.IsTrue(shipment.physicalProgress01 < 1f, "transit must stay incomplete");
+
+            // (8) Cargo custody: the shipment's cargo lot IS the
+            // Millbrook lot, and the source-lot debit marker survives.
+            // (The test-side source-stock dict is not persisted; the
+            // persisted custody evidence is these two fields.)
+            Assert.AreEqual(Q04MillbrookLotId, shipment.CargoLotId,
+                "the shipment's cargo lot must be the Millbrook lot");
+            Assert.AreEqual("bakery_flour_sack", shipment.cargoSkuId, "the cargo SKU must restore");
+            Assert.IsTrue(shipment.requiresSourceLotCustody, "the shipment must stay lot-custody bound");
+            Assert.IsTrue(shipment.sourceLotDebitApplied, "the source-lot debit marker must survive the restore");
+
+            // (7, second store — deviation (c)) The Pass 9 freight
+            // DTO and the service's own capture agree on the shipment:
+            // same id, same flags. The LogisticsRuntimeManager half
+            // is harness-excluded; Codex §5 item 5 owes it live.
+            FreightShipmentService.FreightServiceSaveDto serviceDto =
+                target.FreightDriver.CaptureSaveDto();
+            Assert.AreEqual(1, serviceDto.Shipments.Count, "the service capture must hold exactly the one shipment");
+            Assert.AreEqual(Q04ShipmentId, serviceDto.Shipments[0].shipmentId,
+                "the service capture must agree with the Pass 9 section on the shipment id");
+            Assert.IsTrue(serviceDto.Shipments[0].loadApplied, "the service capture must agree the load is applied");
+            Assert.IsTrue(!serviceDto.Shipments[0].deliveryApplied, "the service capture must agree it is undelivered");
+            Assert.IsTrue(serviceDto.ShipmentIdsWithDispatchAuthorities.Contains(Q04ShipmentId),
+                "the dispatch authority must rebind on restore (Slice 6): the wagon hold is known again");
+
+            // (10) Freight agreement: accepted, same id, same
+            // shipment, same 125c price, same dispatch task.
+            Assert.AreEqual(1, target.FreightDriver.ServiceAgreements.Agreements.Count,
+                "exactly one agreement must restore");
+            FreightServiceAgreement restoredAgreement =
+                target.FreightDriver.ServiceAgreements.Agreements[0];
+            Assert.AreEqual(Q04AgreementId, restoredAgreement.AgreementId, "the agreement id must survive verbatim");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, restoredAgreement.Status,
+                "the agreement must stay Accepted");
+            Assert.AreEqual(Q04ShipmentId, restoredAgreement.ShipmentId, "the agreement's shipment must restore");
+            Assert.AreEqual(125, restoredAgreement.AgreedPriceCents, "the agreed 125c price must restore");
+            Assert.AreEqual(source.TaskId.ToString(), restoredAgreement.DispatchTaskId,
+                "the dispatch task id must restore");
+            Assert.AreEqual(1, target.FreightDriver.ServiceAgreements.Requests.Count,
+                "exactly one agreement request must restore");
+            Assert.AreEqual(Q04AgreementRequestId,
+                target.FreightDriver.ServiceAgreements.Requests[0].RequestId,
+                "the request id must restore");
+
+            // (11, settlement legs) Obligation open with exactly one
+            // 25c payment and 100c outstanding; wholesale settlement
+            // record settled at 500c; carrier settlement not
+            // collected (the flag, not a second list, is the
+            // authority — a restored mid-journey shipment settles
+            // nothing).
+            FinancialObligation obligation = target.Obligations.Find(source.ObligationId);
+            Assert.IsNotNull(obligation, "the obligation must restore with its id");
+            Assert.AreEqual(FinancialObligationStatus.Active, obligation.Status, "the obligation must stay Active");
+            Assert.AreEqual(125, obligation.OriginalPrincipalCents, "the original 125c principal must restore");
+            Assert.AreEqual(100, obligation.OutstandingPrincipalCents, "100c must stay outstanding after the one payment");
+            Assert.AreEqual(1, obligation.Payments.Count, "exactly one payment must restore, never duplicated");
+            Assert.AreEqual(25, obligation.Payments[0].AmountCents, "the payment amount must restore");
+            Assert.AreEqual(source.ObligationId + ":1", obligation.Payments[0].PaymentId,
+                "the payment id must restore");
+            Assert.IsTrue(!obligation.Settled, "the obligation must stay unsettled");
+            Assert.AreEqual(1, target.Pass9.WholesaleSettlements.Count,
+                "exactly one wholesale settlement record must restore");
+            Assert.AreEqual("lot-1", target.Pass9.WholesaleSettlements[0].BakeryLotId);
+            Assert.IsTrue(target.Pass9.WholesaleSettlements[0].Settled, "the wholesale record must stay settled");
+            Assert.AreEqual(500, target.Pass9.WholesaleSettlements[0].AmountCents,
+                "the wholesale settlement amount must restore at 500c");
+            Assert.IsNotNull(target.Pass9.CarrierSettlement, "the carrier settlement must exist on the target state");
+            Assert.IsTrue(!target.Pass9.CarrierSettlement.AlreadySettled(Q04ShipmentId),
+                "the mid-journey shipment must not read as settled after restore");
+
+            // (12) Pending task: same id, fr.load-freight, open
+            // (ResourcesReserved), 15 planned minutes, 0 worked, same
+            // assignee, same reservation handle id.
+            WorkTask task = target.Tasks.FindTask(source.TaskId);
+            Assert.IsNotNull(task, "the pending task must restore with its id");
+            Assert.AreEqual("fr.load-freight", task.DefinitionId, "the task definition must restore");
+            Assert.IsTrue(task.IsOpen, "the task must stay open");
+            Assert.AreEqual(TaskStatus.ResourcesReserved, task.Status, "the task must stay ResourcesReserved");
+            Assert.AreEqual(15, task.PlannedMinutes, "the task must keep its 15 planned minutes");
+            Assert.AreEqual(0, task.MinutesWorked, "the task must keep 0 minutes worked");
+            Assert.AreEqual(EntityId.For(EntityKind.Person, 701), task.AssigneeId, "the assignee must restore");
+            Assert.AreEqual(source.HandleId, task.ReservationHandleId, "the task's handle id must restore verbatim");
+            Assert.AreEqual(1, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "exactly one open task must exist for the freight owner (the completed load task is not open)");
+
+            // (13) Person reservations + equipment holds + due event
+            // + budget: the shopper's Work + Shopping windows, the
+            // task's loading-dock hold, the dispatch wagon hold, the
+            // shipment due event, and P701's 15 committed minutes.
+            // Orphan count: every open task holding a handle must
+            // resolve it to a live reservation — zero orphans.
+            List<PersonActivityReservation> active = target.Schedules.ActiveFor(1, Q04DayIndex);
+            Assert.AreEqual(2, active.Count, "both person reservations must restore");
+            PersonActivityReservation work = active.First(r => r.Activity == PersonActivityKind.Work);
+            Assert.AreEqual("sched-2-0", work.ReservationId, "the Work reservation id must restore");
+            Assert.AreEqual(480, work.StartMinuteOfDay, "the Work window must restore");
+            Assert.AreEqual(240, work.DurationMinutes, "the Work duration must restore");
+            PersonActivityReservation shopping = active.First(r => r.Activity == PersonActivityKind.Shopping);
+            Assert.AreEqual("sched-2-1", shopping.ReservationId, "the Shopping reservation id must restore");
+            Assert.AreEqual(720, shopping.StartMinuteOfDay, "the Shopping window must restore");
+            Assert.AreEqual(95, shopping.DurationMinutes, "the Shopping duration must restore");
+            List<ReservationHandle> taskHandles =
+                target.Equipment.ReservationsForTask(source.TaskId.ToString());
+            Assert.AreEqual(1, taskHandles.Count, "exactly one live hold must exist for the pending task");
+            Assert.AreEqual(source.HandleId, taskHandles[0].ReservationId,
+                "the task's hold must restore with its id");
+            Assert.AreEqual(1, taskHandles[0].Items.Count, "the hold must carry exactly one item");
+            Assert.AreEqual(Q04LoadingDockKey, taskHandles[0].Items[0].ResourceKey,
+                "the hold must be on the loading dock (deviation (a))");
+            Assert.AreEqual(2, target.Equipment.LiveReservationCount,
+                "exactly two live holds must restore: the task's dock hold and the dispatch wagon hold");
+            Assert.IsTrue(target.Equipment.IsReserved(
+                ReservationKeyConventions.Asset("wagon-1"), 10f),
+                "the dispatch wagon hold must still be live after restore");
+            int orphans = 0;
+            foreach (WorkTask open in target.Tasks.CaptureSaveDto().tasks)
+            {
+                if (open == null || !open.IsOpen) continue;
+                if (string.IsNullOrWhiteSpace(open.ReservationHandleId)) continue;
+                bool resolves = false;
+                foreach (ReservationHandle held in target.Equipment.ReservationsForTask(open.TaskId.ToString()))
+                    if (held.ReservationId == open.ReservationHandleId) resolves = true;
+                if (!resolves) orphans++;
+            }
+            Assert.AreEqual(0, orphans, "no open task may hold a handle with no live reservation (D-Q04-4)");
+            DueEventSchedulerSaveDto dueDto = target.DueEvents.CaptureSaveDto();
+            Assert.AreEqual(1, dueDto.events.Count, "exactly one due event must restore");
+            Assert.AreEqual(source.DueEventId, dueDto.events[0].EventId, "the due event id must restore");
+            Assert.AreEqual(DueEventKind.TaskCompletionDue, dueDto.events[0].Kind, "the due event kind must restore");
+            Assert.AreEqual(3600f, dueDto.events[0].DueGameSeconds, "the due event time must restore");
+            Assert.AreEqual(Q04ShipmentId, dueDto.events[0].PayloadRef, "the due event payload must restore");
+            WorkTimeBudget targetBudget = null;
+            foreach (WorkTimeBudget budget in target.Budgets.CaptureSaveDto().budgets)
+                if (budget != null && budget.PersonId == EntityId.For(EntityKind.Person, 701))
+                    targetBudget = budget;
+            Assert.IsNotNull(targetBudget, "P701's work-time budget must restore");
+            Assert.AreEqual(600, targetBudget.DailyBudgetMinutes, "the daily budget must restore at 600 minutes");
+            // 20 committed minutes, composed exactly: 15 for the open
+            // fr.load-freight task + 5 for the shipment's load task
+            // (base 5 = max(5, (16+9)/10)). The load task worked its
+            // 5 minutes and completed with 0 remaining, so its
+            // commitment is not released — only unused commitment is.
+            Assert.AreEqual(20, targetBudget.MinutesCommitted, "the committed minutes must restore (15 + 5)");
+            Assert.AreEqual(5, targetBudget.MinutesWorked,
+                "the 5 worked minutes on the completed load task must restore");
+
+            // (2, store side) Store: one retail lot, 24 loaves,
+            // category pool 24, endowment recorded exactly once and
+            // refusing a second application (no duplicate seed stock).
+            Assert.AreEqual(1, target.Store.RetailItemLots.Count, "exactly one store retail lot must restore");
+            BusinessRetailItemLotState storeLot = target.Store.RetailItemLots[0];
+            Assert.AreEqual("store-lot-bread-1", storeLot.LotId, "the store lot id must survive verbatim");
+            Assert.AreEqual(HouseholdItemCatalog.BreadId, storeLot.ItemId);
+            Assert.AreEqual(24, storeLot.QuantityUnits, "the store lot must hold its 24 loaves");
+            CategoryStockState category = target.Store.GetCategoryStock("staple_food");
+            Assert.IsNotNull(category, "the staple_food category must restore");
+            Assert.AreEqual(24, category.CurrentStockUnits, "the category pool must restore at 24");
+            Assert.IsTrue(target.Store.HasAppliedScenarioEndowment("dev-opening-stock"),
+                "the endowment must still read as applied after restore");
+            Assert.IsTrue(!target.Store.RecordAppliedScenarioEndowment("dev-opening-stock"),
+                "re-applying the endowment must refuse — no duplicate seed stock");
+        }
+
+        [Test]
+        public void Q04_MidWorkRoundTrip_ExactConservation_AllThirteenItems()
+        {
+            Q04Scenario source = BuildQ04SourceScenario();
+            Q04Captured captured = CaptureQ04Scenario(source);
+
+            Q04Scenario target = NewQ04Scenario();
+            RestoreQ04Scenario(captured, target);
+            AssertQ04ScenarioRestored(source, target);
+        }
+
+        [Test]
+        public void Q04_RepeatedLoad_NoDuplicateSettlementOrCharge()
+        {
+            Q04Scenario source = BuildQ04SourceScenario();
+            Q04Captured captured = CaptureQ04Scenario(source);
+
+            Q04Scenario target = NewQ04Scenario();
+            RestoreQ04Scenario(captured, target);
+            AssertQ04ScenarioRestored(source, target);
+
+            // Second restore of the same DTO object into the SAME live
+            // instances: no second settlement record, no second cash
+            // debit/credit on any ledger, no second lot with the same
+            // id in any inventory, no second shipment, no second
+            // errand plan, no second reservation — the E-DEFECT-02
+            // double-restore shape (same in-memory DTO, already-run
+            // live state).
+            RestoreQ04Scenario(captured, target);
+            AssertQ04ScenarioRestored(source, target);
+
+            // Third restore, still the same DTO object, not a fresh
+            // serialization: the DTO itself must be pristine (no
+            // restore mutated it), and the state must match again.
+            Assert.AreEqual(1, captured.PassXl.series2Pass9.Freight.Shipments.Count,
+                "the captured DTO must not have been mutated by restoring it");
+            Assert.AreEqual(1, captured.PassXl.series2Pass9.WholesaleSettlements.Count,
+                "the captured DTO's settlement list must be pristine after two restores");
+            Assert.AreEqual(1, captured.Ledgers.Count, "the captured ledger list must be pristine");
+            Assert.AreEqual(1, captured.Inventories.Count, "the captured inventory list must be pristine");
+            RestoreQ04Scenario(captured, target);
+            AssertQ04ScenarioRestored(source, target);
+        }
+
+        [Test]
+        public void Q04_RoundTrip_ReceiptIdSurvivesInSourceLabel()
+        {
+            // D-Q04-1 pin: HouseholdItemLot carries no typed
+            // receipt-id field — receipt identity survives only as
+            // SourceLabel text. This test passes on that carriage
+            // alone and records it: the receipt id is recoverable
+            // after the round trip from the lot's own fields, via
+            // SourceLabel. If a typed field is ever added, this
+            // test's reflection pin fails on purpose so the
+            // coordinator revisits D-Q04-1 instead of the carriage
+            // silently changing. The slice does NOT add the field.
+            Q04Scenario source = BuildQ04SourceScenario();
+            Q04Captured captured = CaptureQ04Scenario(source);
+            Q04Scenario target = NewQ04Scenario();
+            RestoreQ04Scenario(captured, target);
+
+            HouseholdItemLot breadLot = target.Inventories.Get(1).Lots.First(l => l.LotId == 1);
+            Assert.IsTrue(breadLot.SourceLabel.Contains(Q04ReceiptId),
+                "the receipt id must be recoverable from the restored lot's own fields: " + breadLot.SourceLabel);
+            HouseholdItemLot flourLot = target.Inventories.Get(1).Lots.First(l => l.LotId == 2);
+            Assert.IsTrue(!flourLot.SourceLabel.Contains(Q04ReceiptId),
+                "the receipt id must be per-lot: the flour lot must not carry the bread receipt");
+
+            System.Reflection.FieldInfo[] fields = typeof(HouseholdItemLot).GetFields();
+            foreach (System.Reflection.FieldInfo field in fields)
+            {
+                Assert.IsTrue(!field.Name.ToLowerInvariant().Contains("receipt"),
+                    "D-Q04-1: HouseholdItemLot must carry no typed receipt field yet — "
+                    + "the receipt id survives via SourceLabel text only; field found: " + field.Name);
+            }
         }
     }
 }

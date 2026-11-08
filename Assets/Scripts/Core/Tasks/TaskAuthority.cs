@@ -174,6 +174,7 @@ namespace LandLedgers.Tasks
             taskLookup[task.TaskId] = task;
             taskLookupByIdString[task.TaskId.ToString()] = task;
             GetOrCreateQueue(ownerId).Add(task);
+            NotifyTimingObserver(task, "CreateTask", currentDayIndex);
             return task;
         }
 
@@ -258,6 +259,7 @@ namespace LandLedgers.Tasks
             }
 
             task.AssignTo(workerId);
+            NotifyTimingObserver(task, "AssignTask", currentDayIndex);
             return true;
         }
 
@@ -389,6 +391,7 @@ namespace LandLedgers.Tasks
             }
 
             task.MarkStarted(currentDayIndex);
+            NotifyTimingObserver(task, "StartTask", currentDayIndex);
             return true;
         }
 
@@ -424,6 +427,7 @@ namespace LandLedgers.Tasks
                 CompleteTask(taskId, TaskOutcome.Success, currentDayIndex, budgetStore);
             }
 
+            NotifyTimingObserver(task, "RecordWork", currentDayIndex);
             return true;
         }
 
@@ -445,6 +449,7 @@ namespace LandLedgers.Tasks
             if (task.HasAssignee && budgetStore != null)
                 budgetStore.GetOrCreate(task.AssigneeId).RecordWorked(wholeMinutes);
             reachedCompletion = task.MinutesRemaining <= 0;
+            NotifyTimingObserver(task, "RecordWorkProgress", currentDayIndex);
             return true;
         }
 
@@ -484,6 +489,7 @@ namespace LandLedgers.Tasks
                 task.MarkComplete(outcome, currentDayIndex);
             }
 
+            NotifyTimingObserver(task, "CompleteTask", currentDayIndex);
             return true;
         }
 
@@ -529,6 +535,7 @@ namespace LandLedgers.Tasks
             ReleaseTaskResources(task);
             task.MarkInterrupted();
             task.Requeue();
+            NotifyTimingObserver(task, "InterruptTask", -1);
             return true;
         }
 
@@ -543,6 +550,7 @@ namespace LandLedgers.Tasks
             ReleaseUnusedCommitment(task, budgetStore);
             ReleaseTaskResources(task);
             task.MarkCancelled();
+            NotifyTimingObserver(task, "CancelTask", -1);
             return true;
         }
 

@@ -115,6 +115,7 @@ namespace LandLedgers.Tasks
 
             task.SetReservationHandleId(reservationId);
             task.MarkResourcesReserved();
+            NotifyTimingObserver(task, "MarkResourcesReserved", -1);
             return true;
         }
 
@@ -134,6 +135,7 @@ namespace LandLedgers.Tasks
             }
 
             task.MarkPaused();
+            NotifyTimingObserver(task, "PauseTask", -1);
             return true;
         }
 
@@ -166,6 +168,7 @@ namespace LandLedgers.Tasks
             task.MarkResumed();
             task.SetDueEventId(string.Empty);
             task.SetDependencyDescription(string.Empty);
+            NotifyTimingObserver(task, "ResumeTask", -1);
             return true;
         }
 
@@ -192,6 +195,7 @@ namespace LandLedgers.Tasks
 
             task.SetDueEventId(dueEventId);
             task.MarkWaitingOnPassiveProcess();
+            NotifyTimingObserver(task, "MarkWaitingOnPassiveProcess", -1);
             return true;
         }
 
@@ -211,6 +215,7 @@ namespace LandLedgers.Tasks
 
             task.SetDependencyDescription(dependencyDescription);
             task.MarkWaitingOnDependency();
+            NotifyTimingObserver(task, "MarkWaitingOnDependency", -1);
             return true;
         }
 
@@ -238,6 +243,7 @@ namespace LandLedgers.Tasks
             task.AddFollowUpTask(correctiveTaskId);
             task.MarkReworkRequired();
             ReleaseTaskResources(task);
+            NotifyTimingObserver(task, "MarkReworkRequired", -1);
             return true;
         }
 

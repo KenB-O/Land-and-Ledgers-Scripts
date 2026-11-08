@@ -77,6 +77,7 @@ found, the test fails loudly rather than passing silently.
 | ResourceObservationReadModel | ReadModels/Civic/ResourceObservationReadModel.cs | ReadModels/Civic | (none) |
 | SettlementCausalExplanation | ReadModels/Causal/SettlementCausalExplanation.cs | ReadModels/Causal | (none) |
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
+| PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
 
 ## Notes per entry
 
@@ -154,6 +155,17 @@ found, the test fails loudly rather than passing silently.
   UNWIRED rather than hidden in the scan baseline, because unlike the
   Saloon types it has no production caller in any file, inside or
   outside the harness subset. Covered by editor tests only.
+- `PhysicalItemSpec` (Priority 9 Slice F1, 2026-11-08) is the physical
+  specification of one unit of an item (mass, volume, dimensions; data
+  flags only). It is registered here honestly as UNWIRED by design, not
+  oversight: the Slice F1 brief is data-only — the registry is seeded,
+  nothing reads it yet, and no flow may change until a later slice wires
+  a reader. Its sibling types need no row: `PhysicalMeasure` and
+  `PhysicalDimensions` are used by the spec itself, and
+  `PhysicalItemSpecRegistry` is a static class (scan-exempt). Remove this
+  row the day a production reader outside `Domains/Economy/Storage`
+  references the spec (Slice 2 capacity queries are the first expected
+  reader); do not wire it merely to clear the entry.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -296,6 +308,10 @@ note records their audited status so the question does not reopen:
   source-only-by-design types (PassengerManifest, PersonMoneyAccounts,
   ScenarioCoordinator, ScenarioWorldBuilder, RealDemandSource,
   BusinessValuationService).
+- Priority 9 Slice F1 (2026-11-08): `PhysicalItemSpec` registered as
+  UNWIRED by design — data-only spec registry, nothing reads it yet;
+  remove the row when a production reader outside
+  `Domains/Economy/Storage` is wired (Slice 2 capacity queries first).
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note

@@ -14,6 +14,7 @@ using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Persistence;
 
@@ -484,6 +485,232 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(2, service2.TrackedShipments.Count, "same DTO twice tracks exactly the same set");
             Assert.AreEqual("ship-s1", service2.TrackedShipments[0].ShipmentId, "S1 still tracked");
             Assert.AreEqual("ship-s2", service2.TrackedShipments[1].ShipmentId, "S2 still tracked");
+        }
+
+        // Q04 Slice 6: FreightShipmentService.RestoreSaveDto rebinds the
+        // load/unload-task bindings and the dispatch authorities when it
+        // is given real FreightShipmentHooks — and skips both, safely,
+        // when hooks are null. The service half is harness-provable;
+        // the production half (SaveLoadManager passing real hooks
+        // instead of the literal null at the Pass XL restore call) is
+        // harness-excluded and source-reviewed only.
+        //
+        // FIXTURE DEVIATION FROM THE PLAN, verified in source before
+        // writing the test (recorded in the slice log, not silently
+        // weakened): the plan names one dispatched mid-journey shipment
+        // holding an OPEN freight:load:<id> task. That combined state
+        // cannot occur through the real service flow — WorkLoading
+        // completes the load task (TaskAuthority.CompleteTask) and
+        // removes the binding the moment loading finishes
+        // (FreightShipmentService.cs, WorkLoading completion branch),
+        // and Dispatch refuses any shipment whose loadApplied is false,
+        // so no dispatched shipment ever has an open load task or a
+        // live load-task binding for a save to carry. The only creator
+        // of freight:load: tasks is BeginLoading, and FindOpenTask
+        // skips Complete tasks, so the rebind could never resolve one
+        // for a dispatched shipment. The fixture therefore uses TWO
+        // shipments in reachable states, and pins the SAME two
+        // assertions the plan names: S1 mid-loading (open load task,
+        // binding captured) for the load-task rebind, and S2 dispatched
+        // mid-journey (transport bound, wagon hold taken through the
+        // reservation authority) for the dispatch-authority rebind.
+        // Both rebinds are the same code paths the single-shipment
+        // fixture would have exercised.
+        private FreightShipmentService.FreightServiceSaveDto BuildRebindFixture(
+            out EquipmentReservationService reservations, out EntityId openLoadTaskId)
+        {
+            RegisterSecondWagon();
+            reservations = new EquipmentReservationService();
+            // Dispatch takes its wagon/driver hold through this hooks'
+            // Reservations, so the captured DTO carries S2 in
+            // ShipmentIdsWithDispatchAuthorities.
+            var dispatchHooks = new FreightShipmentHooks
+            {
+                Tasks = tasks,
+                Budgets = budgets,
+                DayIndex = 42,
+                Diagnostics = new List<string>(),
+                Reservations = reservations,
+                ReceiveShipment = hooks.ReceiveShipment,
+                NowGameSeconds = 0f,
+            };
+
+            // S2: dispatched mid-journey — loaded, dispatched, partway
+            // through transit, transport bound, wagon hold live.
+            LogisticsShipmentState s2 = service.CreateShipment("ship-s2", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-2", dispatchHooks, out string r2);
+            Assert.IsNotNull(s2, r2);
+            Assert.IsTrue(service.BeginLoading(s2, EntityId.For(EntityKind.Person, 703), dispatchHooks, out string l2), l2);
+            int guard = 0;
+            while (!s2.loadApplied && guard++ < 10)
+                Assert.IsTrue(service.WorkLoading(s2, 60, dispatchHooks, out string w2), w2);
+            Assert.IsTrue(s2.loadApplied, "fixture: S2 loaded");
+            Assert.IsTrue(service.Dispatch(s2, driver, null, dispatchHooks, out string d2), d2);
+            Assert.IsTrue(s2.physicalTransportBound, "fixture: S2 transport bound");
+            s2.transitDurationGameSeconds = 200f;
+            service.AdvanceTransit(s2, 80f, dispatchHooks);
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, s2.Status, "fixture: S2 mid-journey");
+
+            // S1: mid-loading — its freight:load:<id> task is open and bound.
+            LogisticsShipmentState s1 = service.CreateShipment("ship-s1", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-1", hooks, out string r1);
+            Assert.IsNotNull(s1, r1);
+            Assert.IsTrue(service.BeginLoading(s1, loader, hooks, out string l1), l1);
+            WorkTask openLoadTask = tasks.FindOpenTask("freight:load:ship-s1",
+                EntityId.For(EntityKind.Business, 3), EntityId.Invalid);
+            Assert.IsNotNull(openLoadTask, "fixture: S1 load task is open");
+            openLoadTaskId = openLoadTask.TaskId;
+
+            FreightShipmentService.FreightServiceSaveDto dto =
+                service.CaptureSaveDto(new List<LogisticsShipmentState> { s1, s2 });
+            Assert.IsTrue(dto.ShipmentIdsWithLoadTasks.Contains("ship-s1"), "fixture: S1 load binding captured");
+            Assert.IsTrue(dto.ShipmentIdsWithDispatchAuthorities.Contains("ship-s2"), "fixture: S2 dispatch authority captured");
+            Assert.IsTrue(reservations.IsReserved(ReservationKeyConventions.Asset("wagon-2"), 10f),
+                "fixture: dispatch holds wagon-2");
+            return dto;
+        }
+
+        private static LogisticsShipmentState FindRestored(
+            List<LogisticsShipmentState> restored, string shipmentId)
+        {
+            foreach (LogisticsShipmentState s in restored)
+            {
+                if (s != null && string.Equals(s.ShipmentId, shipmentId, StringComparison.Ordinal))
+                    return s;
+            }
+            return null;
+        }
+
+        private FreightShipmentHooks RestoreHooks(EquipmentReservationService reservations)
+        {
+            return new FreightShipmentHooks
+            {
+                Tasks = tasks,
+                Budgets = budgets,
+                DayIndex = 42,
+                Diagnostics = new List<string>(),
+                Reservations = reservations,
+                ReceiveShipment = hooks.ReceiveShipment,
+                NowGameSeconds = 0f,
+            };
+        }
+
+        private static FreightShipmentService FreshServiceWithWagons()
+        {
+            var fresh = new FreightShipmentService();
+            fresh.RegisterWagon(new EquipmentAsset
+            {
+                AssetId = "wagon-1", Kind = "farm-wagon", DisplayName = "Farm wagon",
+                Condition01 = 0.9f, PayloadMassCapacityKg = 1000f, CargoVolumeCapacityM3 = 4f,
+            });
+            fresh.RegisterWagon(new EquipmentAsset
+            {
+                AssetId = "wagon-2", Kind = "farm-wagon", DisplayName = "Second wagon",
+                Condition01 = 0.9f, PayloadMassCapacityKg = 1000f, CargoVolumeCapacityM3 = 4f,
+            });
+            return fresh;
+        }
+
+        [Test]
+        public void FreightServiceRestore_WithHooks_RebindsLoadTaskAndDispatchAuthority()
+        {
+            // Reproducing-first per the plan: this test pins the service
+            // behaviour the production path could not reach before the
+            // Slice 6 wiring fix — it PASSES against the service
+            // directly with real hooks, and the production defect was
+            // the literal null SaveLoadManager passed as freightHooks
+            // (see the null-hooks test, which shows the
+            // production-equivalent restore losing both rebinds and
+            // leaking the wagon hold).
+            FreightShipmentService.FreightServiceSaveDto dto = BuildRebindFixture(
+                out EquipmentReservationService reservations, out EntityId openLoadTaskId);
+
+            FreightShipmentService service2 = FreshServiceWithWagons();
+            FreightShipmentHooks restoreHooks = RestoreHooks(reservations);
+            List<LogisticsShipmentState> restored = service2.RestoreSaveDto(dto, restoreHooks);
+            Assert.AreEqual(2, restored.Count, "both shipments restore");
+            LogisticsShipmentState rs1 = FindRestored(restored, "ship-s1");
+            LogisticsShipmentState rs2 = FindRestored(restored, "ship-s2");
+            Assert.IsNotNull(rs1, "S1 restored");
+            Assert.IsNotNull(rs2, "S2 restored");
+            Assert.AreEqual(LogisticsShipmentStatus.Loading, rs1.Status, "S1 still mid-loading");
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, rs2.Status, "S2 still mid-journey");
+
+            // Both rebinds are visible through CaptureSaveDto, the read
+            // surface for the private load/unload-task and
+            // dispatch-authority maps (Slice 5 precedent).
+            FreightShipmentService.FreightServiceSaveDto captured =
+                service2.CaptureSaveDto(new List<LogisticsShipmentState>(service2.TrackedShipments));
+            Assert.IsTrue(captured.ShipmentIdsWithLoadTasks.Contains("ship-s1"), "load-task binding rebinds");
+            Assert.IsTrue(captured.ShipmentIdsWithDispatchAuthorities.Contains("ship-s2"), "dispatch authority rebinds");
+
+            // The rebound load-task binding resolves to the open task
+            // itself: working the restored shipment completes that
+            // same task id.
+            int guard = 0;
+            while (!rs1.loadApplied && guard++ < 10)
+                Assert.IsTrue(service2.WorkLoading(rs1, 60, restoreHooks, out string wreason), wreason);
+            Assert.IsTrue(rs1.loadApplied, "restored S1 finishes loading through the rebound task");
+            WorkTask loadTask = tasks.FindTask(openLoadTaskId);
+            Assert.IsNotNull(loadTask, "load task still known after completion");
+            Assert.AreEqual(TaskStatus.Complete, loadTask.Status, "the rebound binding was the open task");
+
+            // The rebound dispatch authority releases the wagon hold
+            // exactly once when the restored shipment completes —
+            // the plan §2 item 8 pin: no leaked reservation after a
+            // restore with real hooks.
+            service2.AdvanceTransit(rs2, 200f, restoreHooks);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, rs2.Status, "restored S2 arrives");
+            Assert.IsTrue(service2.BeginUnloading(rs2, EntityId.For(EntityKind.Person, 703), restoreHooks, out string ureason), ureason);
+            int uguard = 0;
+            while (rs2.Status != LogisticsShipmentStatus.Completed && uguard++ < 10)
+                Assert.IsTrue(service2.WorkUnloading(rs2, 60, restoreHooks, out string wureason), wureason);
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, rs2.Status, "restored S2 completes after load");
+            Assert.AreEqual(10, recipientStock["store-1"], "goods landed exactly once");
+            Assert.IsTrue(!reservations.IsReserved(ReservationKeyConventions.Asset("wagon-2"), 10f),
+                "wagon-2 hold released on completion — no leak");
+        }
+
+        [Test]
+        public void FreightServiceRestore_NullHooks_SkipsRebindWithoutCrashing()
+        {
+            FreightShipmentService.FreightServiceSaveDto dto = BuildRebindFixture(
+                out EquipmentReservationService reservations, out EntityId openLoadTaskId);
+
+            // Restore with null hooks — exactly what production did
+            // before the Slice 6 wiring fix (SaveLoadManager passed a
+            // literal null as freightHooks): no exception, both
+            // shipments restore, but NEITHER rebind happens.
+            FreightShipmentService service2 = FreshServiceWithWagons();
+            List<LogisticsShipmentState> restored = service2.RestoreSaveDto(dto, null);
+            Assert.AreEqual(2, restored.Count, "shipments still restore with null hooks");
+            LogisticsShipmentState rs1 = FindRestored(restored, "ship-s1");
+            LogisticsShipmentState rs2 = FindRestored(restored, "ship-s2");
+            Assert.IsNotNull(rs1, "S1 restored with null hooks");
+            Assert.IsNotNull(rs2, "S2 restored with null hooks");
+            Assert.AreEqual(LogisticsShipmentStatus.Loading, rs1.Status, "S1 still mid-loading");
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, rs2.Status, "S2 still mid-journey");
+            FreightShipmentService.FreightServiceSaveDto captured =
+                service2.CaptureSaveDto(new List<LogisticsShipmentState>(service2.TrackedShipments));
+            Assert.AreEqual(0, captured.ShipmentIdsWithLoadTasks.Count, "null hooks: no load-task binding rebinds");
+            Assert.AreEqual(0, captured.ShipmentIdsWithDispatchAuthorities.Count, "null hooks: no dispatch authority rebinds");
+
+            // The consequence the production fix closes (plan §2 item 8):
+            // the restored mid-journey shipment completes, but its
+            // wagon hold is never released — the service never rebound
+            // the authority, so completion has nothing to release
+            // through, and the wagon stays held forever.
+            FreightShipmentHooks finishHooks = RestoreHooks(reservations);
+            service2.AdvanceTransit(rs2, 200f, finishHooks);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, rs2.Status, "restored S2 arrives");
+            Assert.IsTrue(service2.BeginUnloading(rs2, EntityId.For(EntityKind.Person, 703), finishHooks, out string ureason), ureason);
+            int uguard = 0;
+            while (rs2.Status != LogisticsShipmentStatus.Completed && uguard++ < 10)
+                Assert.IsTrue(service2.WorkUnloading(rs2, 60, finishHooks, out string wureason), wureason);
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, rs2.Status, "shipment completes even without the rebind");
+            Assert.AreEqual(10, recipientStock["store-1"], "goods landed exactly once");
+            Assert.IsTrue(reservations.IsReserved(ReservationKeyConventions.Asset("wagon-2"), 10f),
+                "null hooks: wagon-2 hold LEAKS after completion — the rebind production skips is the only release path");
         }
 
         private void RegisterSecondWagon()

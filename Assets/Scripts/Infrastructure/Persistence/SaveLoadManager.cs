@@ -6,6 +6,7 @@ using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Orchestration.Scenarios.FirstLedger;
@@ -500,11 +501,59 @@ namespace LandLedgers.Persistence
             // passXlSlice section) restore as flags false and empty
             // procurement. A null drivers object or a null procurement
             // service is diagnosed, never crashed on.
+            // Q04 Slice 6: real freight hooks on the production restore
+            // path. Until now the sixth argument below was a literal
+            // null, so FreightShipmentService.RestoreSaveDto skipped both
+            // rebinds on every production load: dispatch authorities were
+            // never rebound (a restored mid-journey shipment completed
+            // without releasing its wagon hold) and load/unload tasks
+            // were never re-found by definition id. The hooks are built
+            // from the already-restored hub authorities: the hub restore
+            // (tasks, reservations) ran above, before this call, so the
+            // load order the rebind relies on already holds.
+            // Null-safety, verified in source: systemsHub is NOT
+            // guaranteed non-null here (the hub restore above is inside
+            // `if (systemsHub != null)`, and AutoWire only finds the hub,
+            // never creates it), and timeManager is nullable throughout
+            // this method (every use is `?.` or guarded) — so with no hub
+            // the hooks stay null (today's safe behaviour; the service's
+            // null-hooks contract skips the rebinds without crashing),
+            // and with no TimeManager NowGameSeconds is 0. systemsHub
+            // .Tasks / .WorkTimeBudgets / .Reservations are `??=`
+            // accessors (SimulationSystemsHub.cs:152,157,217), so they
+            // are non-null whenever the hub itself is. DayIndex cannot
+            // reuse the `absoluteDayIndex` local: it is declared inside
+            // the `if (systemsHub != null)` block above and is out of
+            // scope here. No DTO change, no new type, no behaviour change
+            // when the section is absent (the hooks are only consumed
+            // when a Freight section exists).
+            FreightShipmentHooks freightHooks = null;
+            List<string> freightRestoreDiagnostics = null;
+            if (systemsHub != null)
+            {
+                freightRestoreDiagnostics = new List<string>();
+                freightHooks = new FreightShipmentHooks
+                {
+                    Tasks = systemsHub.Tasks,
+                    Budgets = systemsHub.WorkTimeBudgets,
+                    Reservations = systemsHub.Reservations,
+                    DayIndex = save != null && save.time != null ? save.time.absoluteDayIndex : 0,
+                    NowGameSeconds = timeManager != null ? timeManager.AbsoluteGameSeconds : 0f,
+                    Diagnostics = freightRestoreDiagnostics,
+                };
+            }
             foreach (string passXlDiagnostic in PassXlSliceSaveCoordinator.Restore(
                 save != null ? save.passXlSlice : null,
-                populationManager, drivers, PassXlProcurementService, Series2Pass9State, null, Series2Pass10State, Review2VerticalD3SaveState, MillbrookAidRuntime))
+                populationManager, drivers, PassXlProcurementService, Series2Pass9State, freightHooks, Series2Pass10State, Review2VerticalD3SaveState, MillbrookAidRuntime))
             {
                 Debug.Log($"[SaveLoad] {passXlDiagnostic}");
+            }
+            if (freightRestoreDiagnostics != null)
+            {
+                foreach (string freightDiagnostic in freightRestoreDiagnostics)
+                {
+                    Debug.Log($"[SaveLoad] {freightDiagnostic}");
+                }
             }
 
             managementPanel?.Refresh();

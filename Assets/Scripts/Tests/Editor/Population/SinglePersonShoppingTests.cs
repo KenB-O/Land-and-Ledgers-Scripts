@@ -2845,6 +2845,202 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(1, f.OpenNeedCount(HouseholdItemCatalog.BreadId), "exactly one open bread need after day 5");
         }
 
+        [Test]
+        public void RemoteWorker_SubstantialTravel_NeedPreserved_NamesRemotePolicy()
+        {
+            // Plan 05 Slice 6 (S6-4), M6: honest failure with the missing
+            // policy named. Single employed man at a remote on-map
+            // workplace (forest-camp, 20 mi from home, 18 mi from the
+            // store) with a 540-min shift, driven 2 days. The worker is AT
+            // the workplace when shopping is considered (scheduleState
+            // AtWork, as in the Slice 4 location-consistency probe
+            // RemoteShopper_LocationConsistent_NoTripFromHome), so the loop
+            // prices the trip from the workplace: 18 mi at 20 min/mi =
+            // 360 min one way, a 735-min trip that fits neither the
+            // 600-min budget nor store hours (last feasible departure 345
+            // < 480). No trip executes, no trip departs from home, no
+            // shopping reservation is held, the need stays open with the
+            // same NeedSequence, and nothing moves.
+            // MISSING DESIGN DEPENDENCY (named here and in the slice
+            // report, NOT in any production diagnostic string): R-REMOTE —
+            // workplace-departed trips / commute shopping. No
+            // dispatch/pathing design exists for when a worker is sent to
+            // work, when they return, or whether shopping departs from the
+            // workplace, so no legitimate opportunity exists at all under
+            // current Canon and architecture. The honest failure IS the
+            // correct behaviour; nothing here is repaired, and no leave
+            // policy, day-off roster, or R-REMOTE design is invented.
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.AddRemoteWorkplace();
+            PersonState worker = f.Population.GetPerson(1);
+            Assert.IsNotNull(worker, "the single worker must exist");
+            worker.scheduleState = PopulationScheduleState.AtWork;
+            f.Fund(10000);
+            int firstSequence = -1;
+            for (int day = 0; day <= 1; day++)
+            {
+                f.Day = day;
+                f.Budgets.EnsureDay(day);
+                // The worker stays at the workplace across the drive:
+                // nothing in the reserve/assign/start path resets
+                // scheduleState (TaskAuthority and
+                // ManagerWorkSchedulerDrive never write it; the loop only
+                // writes it on trip legs, and no trip executes here).
+                Assert.AreEqual(PopulationScheduleState.AtWork, f.Population.GetPerson(1).scheduleState,
+                    "day " + day + ": the worker must still be at the remote workplace when shopping is considered");
+                WorkTask work = f.CreateWorkTask(1, 540);
+                var workDiag = new List<string>();
+                int resolvedBefore = f.ResolvedLocations.Count;
+                int transitionsBefore = f.Transitions.Count;
+                int started;
+                HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                    new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 540 },
+                    out started, workDiag);
+                Assert.AreEqual(1, started,
+                    "day " + day + ": the 540-min work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
+                Assert.IsNotNull(batch, "day " + day + ": a plan must be created for the open bread need");
+                Assert.IsTrue(!batch.TripExecuted,
+                    "day " + day + ": no trip may execute from the remote workplace (failure reason: " + batch.FailureReason + ")");
+                // No trip departs from home: no SetPersonLocation write
+                // moves the worker to the store (asserted from the
+                // Transitions writes, not from PersonLocationId reads —
+                // S6-1 lesson), and every location the loop resolved
+                // during the drive is the workplace, never home.
+                for (int i = transitionsBefore; i < f.Transitions.Count; i++)
+                {
+                    Assert.IsTrue(!string.Equals(f.Transitions[i].LocationId, "store", StringComparison.Ordinal),
+                        "day " + day + ": no trip leg may move the worker to the store");
+                }
+
+                Assert.IsTrue(f.ResolvedLocations.Count > resolvedBefore,
+                    "day " + day + ": the loop must resolve the shopper's location during the drive");
+                for (int i = resolvedBefore; i < f.ResolvedLocations.Count; i++)
+                {
+                    Assert.AreEqual("forest-camp", f.ResolvedLocations[i],
+                        "day " + day + ": every resolved location during the drive must be the workplace, not home");
+                }
+
+                Assert.AreEqual(0, f.ShoppingReservationCount(1),
+                    "day " + day + ": no shopping reservation may be held");
+                HouseholdPurchasingNeed need = f.BreadNeed();
+                Assert.IsNotNull(need, "day " + day + ": the bread need must stay open");
+                Assert.AreEqual(PurchasingNeedStatus.Open, need.Status, "day " + day + ": the need must stay open");
+                if (firstSequence < 0) firstSequence = need.NeedSequence;
+                Assert.AreEqual(firstSequence, need.NeedSequence,
+                    "day " + day + ": the same single need must persist, not a fresh duplicate");
+                Assert.AreEqual(1, f.OpenNeedCount(HouseholdItemCatalog.BreadId),
+                    "day " + day + ": exactly one open bread need may exist");
+                Assert.IsTrue(batch.FailureReason.Contains("735-min trip"),
+                    "day " + day + ": the failure must name the WORKPLACE trip length (735 min), got: " + batch.FailureReason);
+                Assert.IsTrue(batch.FailureReason.Contains("last feasible departure 345"),
+                    "day " + day + ": the failure must name the window boundary for the 735-min trip, got: " + batch.FailureReason);
+                ShoppingTripResult breadResult = FindNeedResult(batch, HouseholdItemCatalog.BreadId);
+                Assert.IsNotNull(breadResult, "day " + day + ": the bread need must carry its own per-need result");
+                Assert.IsTrue(breadResult.FailureReason.Contains("735-min trip"),
+                    "day " + day + ": the per-need reason must name the WORKPLACE trip length, got: " + breadResult.FailureReason);
+                Assert.IsTrue(breadResult.FailureReason.Contains("last feasible departure 345"),
+                    "day " + day + ": the per-need reason must name the window boundary, got: " + breadResult.FailureReason);
+                Assert.AreEqual(10000, f.Balance(), "day " + day + ": no money may move without a trip");
+                Assert.AreEqual(16, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId),
+                    "day " + day + ": no stock may move without a trip");
+                if (day == 0)
+                {
+                    Assert.IsTrue(f.Tasks.CompleteTask(work.TaskId, TaskOutcome.Success, 0, f.Budgets),
+                        "day 0's work must complete at day end");
+                }
+            }
+
+            Assert.AreEqual(1, f.OpenNeedCount(HouseholdItemCatalog.BreadId), "exactly one open bread need after day 2");
+            Assert.AreEqual(10000, f.Balance(), "no money may move over the two days");
+            Assert.AreEqual(16, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId), "no stock may move over the two days");
+        }
+
+        [Test]
+        public void GenuinelyImpossible_FiveDays_NeedPreserved_NamesMissingPolicy()
+        {
+            // Plan 05 Slice 6 (S6-4), M8: honest failure with the missing
+            // policies named. Re-pins Slice 5's
+            // ImpossibleErrand_FiveDays_NoAccumulation outcome (zero trips,
+            // zero shopping reservations, exactly one open bread need with
+            // the same NeedSequence over 5 days under a 600-min shift
+            // covering every store minute) PLUS the new assertions: the
+            // longest-open age reaches 4 days by day 4 (CreatedDayIndex 0
+            // — the Slice 5 field correction: LastEvaluatedDayIndex is
+            // refreshed on every evaluation and cannot identify the
+            // longest-open need) and the per-need reason names the searched
+            // window + budget every day. Each day's work is closed at day
+            // end via CompleteTask so the next day's work can start (Slice
+            // 5 field correction), and the work task is asserted started
+            // each day.
+            // MISSING POLICIES (named here and in the slice report, NOT in
+            // any production diagnostic string): an employment leave policy
+            // — Canon has none, and no universal leave may be invented —
+            // and a day-off roster — no model exists in code or Canon.
+            // Either could change the outcome; neither is invented here.
+            // The honest failure IS the correct behaviour under current
+            // Canon and architecture; nothing here is repaired.
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Fund(10000);
+            int trips = 0;
+            int shoppingReservationsEver = 0;
+            int firstSequence = -1;
+            for (int day = 0; day <= 4; day++)
+            {
+                f.Day = day;
+                f.Budgets.EnsureDay(day);
+                WorkTask work = f.CreateWorkTask(1, 600);
+                var workDiag = new List<string>();
+                int started;
+                HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                    new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 600 },
+                    out started, workDiag);
+                Assert.AreEqual(1, started,
+                    "day " + day + ": the 600-min work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
+                if (batch != null && batch.TripExecuted) trips++;
+                shoppingReservationsEver += f.ShoppingReservationCount(1);
+                Assert.IsTrue(batch == null || !batch.TripExecuted,
+                    "day " + day + ": no trip may execute although the shift covers every window");
+                Assert.IsTrue(batch == null || batch.FailureReason.Contains("No shopper in any searched window"),
+                    "day " + day + ": the batch must fail naming the searched window, got: " +
+                    (batch == null ? "(no batch)" : batch.FailureReason));
+                Assert.IsTrue(batch == null || batch.FailureReason.Contains("work minutes left"),
+                    "day " + day + ": the batch failure must name the budget shortfall, got: " +
+                    (batch == null ? "(no batch)" : batch.FailureReason));
+                ShoppingTripResult breadResult = FindNeedResult(batch, HouseholdItemCatalog.BreadId);
+                Assert.IsNotNull(breadResult, "day " + day + ": the bread need must carry its own per-need result");
+                Assert.IsTrue(breadResult.FailureReason.Contains("No shopper in any searched window"),
+                    "day " + day + ": the per-need reason must name the searched window, got: " + breadResult.FailureReason);
+                Assert.IsTrue(breadResult.FailureReason.Contains("work minutes left"),
+                    "day " + day + ": the per-need reason must name the budget shortfall, got: " + breadResult.FailureReason);
+                HouseholdPurchasingNeed need = f.BreadNeed();
+                Assert.IsNotNull(need, "day " + day + ": a bread need must be open");
+                if (firstSequence < 0) firstSequence = need.NeedSequence;
+                Assert.AreEqual(firstSequence, need.NeedSequence,
+                    "day " + day + ": the same single need must persist, not a fresh duplicate");
+                Assert.AreEqual(1, f.OpenNeedCount(HouseholdItemCatalog.BreadId),
+                    "day " + day + ": exactly one open bread need may exist");
+                Assert.AreEqual(0, need.CreatedDayIndex,
+                    "day " + day + ": the preserved need must still be the day-0 need (CreatedDayIndex 0)");
+                Assert.AreEqual(day, f.Day - need.CreatedDayIndex,
+                    "day " + day + ": the longest-open need must be " + day + " day(s) old");
+                if (day < 4)
+                {
+                    Assert.IsTrue(f.Tasks.CompleteTask(work.TaskId, TaskOutcome.Success, 0, f.Budgets),
+                        "day " + day + "'s work must complete at day end");
+                }
+            }
+
+            Assert.AreEqual(0, trips, "zero trips may execute over the five days");
+            Assert.AreEqual(0, shoppingReservationsEver, "zero shopping reservations may ever be created");
+            Assert.AreEqual(1, f.OpenNeedCount(HouseholdItemCatalog.BreadId), "exactly one open bread need after day 5");
+            HouseholdPurchasingNeed finalNeed = f.BreadNeed();
+            Assert.IsNotNull(finalNeed, "the bread need must still be open after day 4");
+            Assert.AreEqual(0, finalNeed.CreatedDayIndex, "the preserved need was created on day 0");
+            Assert.AreEqual(4, f.Day - finalNeed.CreatedDayIndex, "by day 4 the longest-open need is 4 days old");
+            Assert.AreEqual(10000, f.Balance(), "no money may move over the five days");
+            Assert.AreEqual(16, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId), "no stock may move over the five days");
+        }
+
         private static ShoppingTripResult FindNeedResult(HouseholdShoppingLoop.BatchShoppingResult batch, string itemId)
         {
             if (batch?.NeedResults == null) return null;

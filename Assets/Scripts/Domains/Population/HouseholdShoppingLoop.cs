@@ -724,6 +724,67 @@ namespace LandLedgers.Population
             batch.ShopperPersonId = shopperId;
             string shopperHome = ResolvePersonLocation(shopperId, options);
 
+            // Plan 05 Slice 4 — departure-location consistency: the
+            // pre-check, estimate, and window search above all used
+            // member-0's homeLocation, but the legs below use the shopper's
+            // resolved location. When the chosen shopper resolves elsewhere
+            // (e.g. AtWork at a remote workplace), re-estimate from the
+            // shopper's location and re-run the search with the corrected
+            // trip: the first search's window was priced from the wrong
+            // departure point. If the corrected trip cannot fit any window,
+            // fail honestly with the corrected reason (same failure path as
+            // the first search); if it fits, the corrected departure +
+            // shopper stand, and the legs use the same location the
+            // estimate used. No teleport is introduced: legs always depart
+            // from the shopper's resolved location. (Residual, recorded not
+            // repaired: the :568 pre-check route still tests supplier
+            // viability from member-0's home — it can only admit a supplier
+            // the corrected estimate then refuses, never plan a leg from
+            // home.)
+            if (!string.Equals(shopperHome, homeLocation, StringComparison.OrdinalIgnoreCase))
+            {
+                int correctedEstimate = EstimateTripMinutes(shopperHome,
+                    new List<IGoodsSupplier> { winner }, options)
+                    + Math.Max(0, batchNeeds.Count - 1) * Math.Max(1, options.InStoreMinutes);
+                JourneyRoute correctedRoute = journeys.FindRoute(shopperHome, winner.LocationId, TravelMode.Foot);
+                int correctedOneWay = correctedRoute.Found ? Math.Max(1, correctedRoute.TotalMinutes) : 1;
+                if (correctedEstimate != estimateMinutes)
+                {
+                    string correctedReason = null;
+                    int correctedDeparture;
+                    var correctedWinnerSupplier = winner as IItemResolvingSupplier;
+                    int correctedShopper = ShopperAssignmentPolicy.ChooseShopperWithWindowSearch(
+                        population, memberIds, dayIndex, requestedDeparture, correctedEstimate,
+                        correctedOneWay, options.InStoreMinutes,
+                        arrival => correctedWinnerSupplier == null
+                            ? null
+                            : correctedWinnerSupplier.CheckTradingCapability(dayIndex, arrival),
+                        scheduleTracker, budgets, personEntityId, out correctedDeparture, out correctedReason,
+                        offMapJourneys);
+                    if (correctedShopper < 0)
+                    {
+                        batch.FailureReason = $"Unavailable shopper: {correctedReason ?? "nobody can shop today."} Needs stay open.";
+                        diag.Add($"Day {dayIndex}: batch {batch.PlanId} — {batch.FailureReason}");
+                        FailBatchNeeds(batch, batchNeeds, correctedShopper, dayIndex, batch.FailureReason, diag, options);
+                        return batch;
+                    }
+
+                    if (correctedDeparture != foundDeparture || correctedShopper != shopperId)
+                    {
+                        diag.Add($"Day {dayIndex}: batch {batch.PlanId} — P{correctedShopper} departs at {correctedDeparture} " +
+                            $"(location-corrected search from {foundDeparture}; trip ~{correctedEstimate} min from the shopper's location).");
+                    }
+
+                    foundDeparture = correctedDeparture;
+                    shopperId = correctedShopper;
+                    options.DepartureMinuteOfDay = correctedDeparture;
+                    batch.ShopperPersonId = shopperId;
+                    shopperHome = ResolvePersonLocation(shopperId, options);
+                    estimateMinutes = correctedEstimate;
+                    batch.EstimatedMinutes = correctedEstimate;
+                }
+            }
+
             // ---- Full candidate evaluation per need, sharing one ledger
             // budget in urgency order (no double-spent cash). ----
             var candidates = new Dictionary<HouseholdPurchasingNeed, ShoppingCandidate>();

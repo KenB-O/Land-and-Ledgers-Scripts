@@ -557,7 +557,10 @@ namespace LandLedgers.EditorTests.Population
 
             /// <summary>Starts assigned work the production way: one
             /// WorkAssignmentReport through ManagerWorkSchedulerDrive.
-            /// Returns tasks started; refusal reasons land in diagnostics.</summary>
+            /// Returns tasks started; refusal reasons land in diagnostics.
+            /// This is the COMPOSED path (reserve + assign + start together),
+            /// used by tests that drive work-start without shopping; the
+            /// production-day driver below uses the SPLIT path instead.</summary>
             public int StartWork(List<WorkTask> workTasks, List<int> personIds, List<int> minutesList, List<string> workDiagnostics)
             {
                 var report = new WorkAssignmentReport { BusinessInstanceId = "employer-1", DayIndex = Day };
@@ -577,6 +580,47 @@ namespace LandLedgers.EditorTests.Population
                     report, taskByTextId, Tasks, Tracker, Budgets, Day,
                     workDiagnostics ?? Diagnostics,
                     ManagerWorkSchedulerDrive.DefaultTaskLabel, null);
+            }
+
+            /// <summary>Plan 05 Slice 4 — SPLIT half 1: reserves + assigns
+            /// the day's work (Work reservation + budget commit) without
+            /// starting it, mirroring DriveWorkAssignmentBeforeShopping.
+            /// Returns tasks assigned; the assigned tasks + reservation ids
+            /// come back for the late StartReservedWork call.</summary>
+            public int ReserveWork(List<WorkTask> workTasks, List<int> personIds, List<int> minutesList,
+                List<string> workDiagnostics, out List<WorkTask> assignedTasks,
+                out Dictionary<string, string> reservationIdByTaskId)
+            {
+                var report = new WorkAssignmentReport { BusinessInstanceId = "employer-1", DayIndex = Day };
+                var taskByTextId = new Dictionary<string, WorkTask>(StringComparer.Ordinal);
+                for (int i = 0; i < workTasks.Count; i++)
+                {
+                    report.Assignments.Add(new WorkAssignment
+                    {
+                        TaskId = workTasks[i].TaskId.ToString(),
+                        PersonId = personIds[i],
+                        MinutesCommitted = minutesList[i],
+                    });
+                    taskByTextId[workTasks[i].TaskId.ToString()] = workTasks[i];
+                }
+
+                return ManagerWorkSchedulerDrive.ReserveAndAssignTasks(
+                    report, taskByTextId, Tasks, Tracker, Budgets, Day,
+                    workDiagnostics ?? Diagnostics,
+                    ManagerWorkSchedulerDrive.DefaultTaskLabel, null,
+                    out assignedTasks, out reservationIdByTaskId);
+            }
+
+            /// <summary>Plan 05 Slice 4 — SPLIT half 2: starts work
+            /// previously reserved + assigned by ReserveWork, mirroring
+            /// StartPreAssignedBusinessWork in DriveAutonomousLabor's
+            /// per-business position (after shopping). Returns tasks started.</summary>
+            public int StartReservedWork(List<WorkTask> assignedTasks,
+                Dictionary<string, string> reservationIdByTaskId, List<string> workDiagnostics)
+            {
+                return ManagerWorkSchedulerDrive.StartReservedTasks(
+                    assignedTasks, reservationIdByTaskId, Tasks, Tracker, Day,
+                    workDiagnostics ?? Diagnostics);
             }
 
             public bool HasReservation(int personId, PersonActivityKind kind, int startMinute, int endMinute, bool released)
@@ -599,6 +643,20 @@ namespace LandLedgers.EditorTests.Population
                 foreach (PersonActivityReservation r in Tracker.Reservations)
                 {
                     if (r != null && r.PersonId == personId && r.DayIndex == Day && r.Activity == kind)
+                    {
+                        return r;
+                    }
+                }
+
+                return null;
+            }
+
+            public PersonActivityReservation FindReservationAt(int personId, PersonActivityKind kind, int startMinute)
+            {
+                foreach (PersonActivityReservation r in Tracker.Reservations)
+                {
+                    if (r != null && r.PersonId == personId && r.DayIndex == Day && r.Activity == kind
+                        && r.StartMinuteOfDay == startMinute)
                     {
                         return r;
                     }
@@ -650,14 +708,34 @@ namespace LandLedgers.EditorTests.Population
 
             public int Balance() => Ledgers.GetOrCreate(HouseholdId).GetBalanceCents();
 
-            /// <summary>Drives one day in production order: planner, monitor,
-            /// coordinator plan + execute, then assigned-work start. Returns
-            /// the batch (null when no plan was created).</summary>
+            /// <summary>Drives one day in the Slice 4 production order:
+            /// planner, assigned-work RESERVE + ASSIGN, then monitor +
+            /// coordinator plan + execute (shopping), then assigned-work
+            /// START. Mirrors SimulationDrivers.OnDayChanged after Slice 4
+            /// (DriveDailyActivityPlans :1706, then
+            /// DriveWorkAssignmentBeforeShopping ahead of DriveDailyNeeds
+            /// :1752, then shopping inside it, then the late start in
+            /// DriveAutonomousLabor's per-business position). The split is
+            /// required because StartTask refuses when the person already
+            /// holds an InProgress task and the trip legs start as tasks
+            /// for the shopper through the same authority — starting work
+            /// whole before shopping breaks the trip itself.
+            /// SimulationDrivers itself is harness-excluded; this is the
+            /// harness-reachable equivalent. Returns the batch (null when
+            /// no plan was created).</summary>
             public HouseholdShoppingLoop.BatchShoppingResult DriveProductionDay(
                 List<WorkTask> workTasks, List<int> personIds, List<int> minutesList,
                 out int started, List<string> workDiagnostics)
             {
                 PlanDay();
+                List<WorkTask> assignedTasks = null;
+                Dictionary<string, string> reservationIdByTaskId = null;
+                if (workTasks != null && workTasks.Count > 0)
+                {
+                    ReserveWork(workTasks, personIds, minutesList, workDiagnostics,
+                        out assignedTasks, out reservationIdByTaskId);
+                }
+
                 HouseholdPurchasingNeed need = RaiseBreadNeedViaMonitor();
                 Assert.IsNotNull(need, "the monitor must open the bread need before shopping runs");
                 List<HouseholdErrandPlan> plans = Coordinator.PlanDay(HouseholdId, Day, Context(), Diagnostics);
@@ -668,9 +746,9 @@ namespace LandLedgers.EditorTests.Population
                 }
 
                 started = 0;
-                if (workTasks != null && workTasks.Count > 0)
+                if (assignedTasks != null && assignedTasks.Count > 0)
                 {
-                    started = StartWork(workTasks, personIds, minutesList, workDiagnostics);
+                    started = StartReservedWork(assignedTasks, reservationIdByTaskId, workDiagnostics);
                 }
 
                 return batch;
@@ -701,7 +779,7 @@ namespace LandLedgers.EditorTests.Population
                 out started, workDiag);
 
             Assert.IsNotNull(batch, "a plan must be created for the open bread need");
-            Assert.IsTrue(batch.TripExecuted, "the trip executes at HEAD: " + batch.FailureReason);
+            Assert.IsTrue(batch.TripExecuted, "the trip must execute: " + batch.FailureReason);
             Assert.AreEqual(1, started,
                 "the work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
             Assert.AreEqual(TaskStatus.InProgress, work.Status, "the work task must be started, not merely assigned");
@@ -733,7 +811,7 @@ namespace LandLedgers.EditorTests.Population
                 out started, workDiag);
 
             Assert.IsNotNull(batch, "a plan must be created for the open bread need");
-            Assert.IsTrue(batch.TripExecuted, "the trip executes at HEAD: " + batch.FailureReason);
+            Assert.IsTrue(batch.TripExecuted, "the trip must execute: " + batch.FailureReason);
             Assert.AreEqual(1, started,
                 "the work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
             Assert.AreEqual(TaskStatus.InProgress, work.Status, "the work task must be started, not merely assigned");
@@ -769,7 +847,7 @@ namespace LandLedgers.EditorTests.Population
                 out started, workDiag);
 
             Assert.IsNotNull(batch, "a plan must be created for the open bread need");
-            Assert.IsTrue(batch.TripExecuted, "the trip executes at HEAD: " + batch.FailureReason);
+            Assert.IsTrue(batch.TripExecuted, "the trip must execute: " + batch.FailureReason);
             Assert.AreEqual(2, started,
                 "both work tasks must start (refusals: " + string.Join(" | ", workDiag) + ")");
             Assert.AreEqual(TaskStatus.InProgress, work1.Status, "Tomas's work task must be started");
@@ -1290,27 +1368,43 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void ShoppingFirst_ConsumesBudgetBeforeWorkAssignment()
+        public void WorkFirst_ClaimsBudgetBeforeShopping()
         {
-            // Slice 3 question (a') pin. Drives the HEAD production order
-            // phase by phase (planner -> monitor -> shopping, THEN work
-            // start — mirroring SimulationDrivers.OnDayChanged :1752
-            // DriveDailyNeeds before :1787 DriveAutonomousLabor) and
-            // observes the budget BETWEEN the phases: the 95-min trip
-            // commits first, so when StartAssignedTasks runs the shopper
-            // has only 505 of 600 minutes left and the 540-min work task
-            // is refused on budget. This is the one same-day-shopping
-            // dependence of the assignment step (the shared
-            // WorkTimeBudgetStore); open tasks, the employment registry
-            // and the owner list do not depend on shopping. SLICE 4 FLIPS
-            // THIS TEST: once the assignment loop moves ahead of shopping,
-            // work claims the budget first (540 committed, 60 left) and
-            // the trip is the one refused honestly.
+            // Slice 3 question (a') pin, FLIPPED by Slice 4. Drives the NEW
+            // production order phase by phase (planner -> work RESERVE +
+            // ASSIGN, THEN monitor -> shopping, THEN work START — mirroring
+            // SimulationDrivers.OnDayChanged after Slice 4:
+            // DriveWorkAssignmentBeforeShopping ahead of DriveDailyNeeds,
+            // start late in DriveAutonomousLabor) and observes the budget
+            // BETWEEN the phases: the 540-min work task commits first, so
+            // when shopping runs the shopper has only 60 of 600 minutes
+            // left and the 95-min trip is refused honestly on budget. This
+            // is the one same-day-shopping dependence of the assignment step
+            // (the shared WorkTimeBudgetStore), now claimed in the right
+            // order; open tasks, the employment registry and the owner list
+            // do not depend on shopping. (Slice 3 version drove shopping
+            // first and pinned the 505-min intermediate budget; Slice 4
+            // reverses it. The start is late because StartTask refuses when
+            // the person already holds an InProgress task and the trip legs
+            // start as tasks for the shopper — see the split note on
+            // ReserveAndAssignTasks.)
             Fixture f = Fixture.CreateSingle(female: false);
             f.Fund(10000);
             WorkTask work = f.CreateWorkTask(1, 540);
 
             f.PlanDay();
+            var workDiag = new List<string>();
+            int assigned = f.ReserveWork(
+                new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 540 }, workDiag,
+                out List<WorkTask> assignedTasks, out Dictionary<string, string> reservationIdByTaskId);
+            Assert.AreEqual(1, assigned,
+                "the 540-min work task must be reserved + assigned first (refusals: " + string.Join(" | ", workDiag) + ")");
+            Assert.AreEqual(TaskStatus.Assigned, work.Status, "the work task must be assigned, not yet started");
+
+            WorkTimeBudget budgetAfterWork = f.Budgets.GetOrCreate(EntityId.For(EntityKind.Person, 1));
+            Assert.AreEqual(60, budgetAfterWork.MinutesRemaining,
+                "the 540-min work task must have committed first (600 - 540 = 60) before any shopping runs");
+
             HouseholdPurchasingNeed need = f.RaiseBreadNeedViaMonitor();
             Assert.IsNotNull(need, "the monitor must open the bread need before shopping runs");
             List<HouseholdErrandPlan> plans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
@@ -1318,18 +1412,18 @@ namespace LandLedgers.EditorTests.Population
             HouseholdShoppingLoop.BatchShoppingResult batch =
                 f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, f.Options(), f.Diagnostics);
             Assert.IsNotNull(batch);
-            Assert.IsTrue(batch.TripExecuted, "the trip executes in the HEAD order: " + batch.FailureReason);
+            Assert.IsTrue(!batch.TripExecuted,
+                "no trip may execute once work has claimed the budget (failure reason: " + batch.FailureReason + ")");
+            Assert.IsTrue(batch.FailureReason.Contains("No shopper in any searched window"),
+                "the failure must name the searched window, got: " + batch.FailureReason);
+            Assert.IsTrue(batch.FailureReason.Contains("work minutes left"),
+                "the failure must name the budget shortfall, got: " + batch.FailureReason);
+            Assert.IsNotNull(f.BreadNeed(), "the need must stay open");
+            Assert.AreEqual(PurchasingNeedStatus.Open, f.BreadNeed().Status, "the need must stay open");
 
-            WorkTimeBudget budgetAfterShopping = f.Budgets.GetOrCreate(EntityId.For(EntityKind.Person, 1));
-            Assert.AreEqual(505, budgetAfterShopping.MinutesRemaining,
-                "the 95-min trip must have committed first (600 - 95 = 505) before any work assignment runs");
-
-            var workDiag = new List<string>();
-            int started = f.StartWork(
-                new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 540 }, workDiag);
-            Assert.AreEqual(0, started, "the 540-min work task must be refused after the trip consumed the budget");
-            Assert.IsTrue(string.Join(" | ", workDiag).Contains("505 of 600"),
-                "the refusal must name the budget shortfall, got: " + string.Join(" | ", workDiag));
+            int started = f.StartReservedWork(assignedTasks, reservationIdByTaskId, workDiag);
+            Assert.AreEqual(1, started, "the late start must start the assigned work task");
+            Assert.AreEqual(TaskStatus.InProgress, work.Status, "the work task must be started");
         }
 
         [Test]
@@ -1363,6 +1457,153 @@ namespace LandLedgers.EditorTests.Population
                 "starting work must not set scheduleState to AtWork; it is " + person.scheduleState);
             Assert.AreEqual(PopulationScheduleState.AtHome, person.scheduleState,
                 "the worker stays AtHome — nothing in the work path relocates them");
+        }
+
+        [Test]
+        public void WorkStart_OverRestSprinkle()
+        {
+            // Slice 4 test 2 (rev1 section 2): after PlanDay, StartAssignedTasks
+            // with a 480-start task succeeds, the [480,510] rest is released
+            // and NAMED in diagnostics, the Work reservation is intact.
+            // (Test 11 does NOT cover this — it places Work at 540, where no
+            // rest exists.) FAILS at HEAD (strict TryReserve refuses the rest
+            // overlap); passes once Slice 4 lands the rest rule.
+            Fixture f = Fixture.CreateSingle(female: false);
+            PersonActivityReservation restBefore = null;
+            f.PlanDay();
+            restBefore = f.FindReservationAt(1, PersonActivityKind.Resting, 480);
+            Assert.IsNotNull(restBefore, "PlanDay must sprinkle a [480,510] rest before work starts");
+            Assert.IsTrue(!restBefore.Released, "the rest must start unreleased");
+            Assert.AreEqual(510, restBefore.EndMinuteOfDay, "the rest sprinkle is [480,510]");
+
+            WorkTask work = f.CreateWorkTask(1, 240);
+            var workDiag = new List<string>();
+            int started = f.StartWork(
+                new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 240 }, workDiag);
+            Assert.AreEqual(1, started,
+                "the work task must start over the rest sprinkle (refusals: " + string.Join(" | ", workDiag) + ")");
+            Assert.AreEqual(TaskStatus.InProgress, work.Status, "the work task must be started");
+            PersonActivityReservation restAfter = f.FindReservationAt(1, PersonActivityKind.Resting, 480);
+            Assert.IsNotNull(restAfter, "the rest reservation record must still exist");
+            Assert.IsTrue(restAfter.Released, "the [480,510] rest must be released by the Work reservation");
+            Assert.IsTrue(f.HasReservation(1, PersonActivityKind.Work, 480, 720, released: false),
+                "the Work reservation [480,720] must be intact");
+            string allDiag = string.Join(" | ", workDiag);
+            Assert.IsTrue(allDiag.Contains("released rest"),
+                "the released rest must be NAMED in diagnostics, got: " + allDiag);
+            Assert.IsTrue(allDiag.Contains("Resting [480-510]"),
+                "the diagnostic must name the released rest window, got: " + allDiag);
+        }
+
+        [Test]
+        public void PostShiftWindow_ShopsAfterWork()
+        {
+            // Slice 4 test 3: single employed adult, 240-min task (480-720,
+            // the catalog maximum — rev1 section 3a). Post-fix the trip
+            // departs AFTER the shift: departure 720, window [720,815],
+            // arrival inside store hours, work intact, purchase settles.
+            // This pins the departure minute, which tests 1/2 do not assert.
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Fund(10000);
+            WorkTask work = f.CreateWorkTask(1, 240);
+            var workDiag = new List<string>();
+            int started;
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 240 },
+                out started, workDiag);
+
+            Assert.IsNotNull(batch, "a plan must be created for the open bread need");
+            Assert.AreEqual(1, started,
+                "the work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
+            Assert.AreEqual(TaskStatus.InProgress, work.Status, "the work task must be started");
+            Assert.IsTrue(batch.TripExecuted, "the post-shift trip must execute: " + batch.FailureReason);
+            PersonActivityReservation shopping = f.FindReservation(1, PersonActivityKind.Shopping);
+            PersonActivityReservation workRes = f.FindReservation(1, PersonActivityKind.Work);
+            Assert.IsNotNull(shopping, "the trip must have held a shopping reservation");
+            Assert.IsNotNull(workRes, "the work task must hold a Work reservation");
+            Assert.AreEqual(720, shopping.StartMinuteOfDay,
+                "the trip must depart at 720, after the 480-720 shift; window was [" +
+                shopping.StartMinuteOfDay + "-" + shopping.EndMinuteOfDay + "]");
+            Assert.AreEqual(815, shopping.EndMinuteOfDay, "the 95-min trip from 720 ends at 815");
+            Assert.IsTrue(!Overlaps(shopping, workRes), "the trip window must not overlap the Work reservation");
+            Assert.AreEqual(0, f.OpenNeedCount(HouseholdItemCatalog.BreadId), "the need must be fulfilled by the trip");
+            Assert.AreEqual(10000 - 70, f.Balance(), "buyer debit must equal 14 loaves x the 5c price");
+        }
+
+        [Test]
+        public void NoDoubleBookingAfterReorder()
+        {
+            // Slice 4 test 4: after a day with both a trip and work, the
+            // person holds no overlapping reservations of any kind and the
+            // shopping reservation is released on completion (Plan 02 Slice 1
+            // invariant, re-pinned under the new order).
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Fund(10000);
+            WorkTask work = f.CreateWorkTask(1, 240);
+            var workDiag = new List<string>();
+            int started;
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 240 },
+                out started, workDiag);
+
+            Assert.IsNotNull(batch, "a plan must be created for the open bread need");
+            Assert.IsTrue(batch.TripExecuted, "the trip must execute: " + batch.FailureReason);
+            Assert.AreEqual(1, started,
+                "the work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
+            Assert.IsFalse(f.ActiveReservationsOverlap(1), "the person must hold no overlapping reservations");
+            PersonActivityReservation shopping = f.FindReservation(1, PersonActivityKind.Shopping);
+            Assert.IsNotNull(shopping, "the trip must have held a shopping reservation");
+            Assert.IsTrue(shopping.Released, "the shopping reservation must be released on completion");
+            Assert.IsTrue(f.HasReservation(1, PersonActivityKind.Work, 480, 720, released: false),
+                "the Work reservation [480,720] must still be held");
+        }
+
+        [Test]
+        public void RemoteShopper_LocationConsistent_NoTripFromHome()
+        {
+            // Slice 4 test 6 (rev1 section 5b): location-consistency pin.
+            // Two-adult household, member 0 (Tomas) at home, member 1 (Anna,
+            // the shopper, woman-first) with scheduleState = AtWork and a
+            // remote workplace (forest-camp, 18 mi from the store). The
+            // pre-check, estimate, and legs must all resolve the workplace:
+            // 18 mi at the fixture's 20 min/mi = 360 min one way, a 735-min
+            // trip — budget (600) and store hours both refuse it — with NO
+            // leg planned from home. The trip must fail honestly on the
+            // workplace travel minutes: the corrected search exits early
+            // with "No shopping window: the 735-min trip cannot fit ..."
+            // (last feasible departure 345 < 480), so the reason names the
+            // 735-min workplace trip, not the 95-min home trip and not a
+            // leg-assignment failure. PROBE: fails at HEAD (the estimate
+            // uses member-0 home, 95 min, so the search finds a window and
+            // the trip fails late at leg assignment: "Cannot assign T2: P2
+            // has 225 of 600 daily work minutes remaining; the task needs
+            // 360").
+            Fixture f = Fixture.CreatePair();
+            f.AddRemoteWorkplace();
+            PersonState anna = f.Population.GetPerson(2);
+            Assert.IsNotNull(anna, "Anna must exist");
+            anna.scheduleState = PopulationScheduleState.AtWork;
+            anna.workplaceBuildingId = 900;
+            f.Fund(10000);
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                new List<WorkTask>(), new List<int>(), new List<int>(),
+                out int started, new List<string>());
+            Assert.AreEqual(0, started, "no work is assigned in this location probe");
+
+            Assert.IsNotNull(batch, "a plan must be created for the open bread need");
+            Assert.IsTrue(!batch.TripExecuted,
+                "no trip may execute: from the workplace the trip needs 735 min (failure reason: " +
+                batch.FailureReason + ")");
+            Assert.IsNotNull(f.BreadNeed(), "the need must stay open");
+            Assert.AreEqual(PurchasingNeedStatus.Open, f.BreadNeed().Status, "the need must stay open");
+            Assert.IsTrue(batch.FailureReason.Contains("735-min trip"),
+                "the failure must name the WORKPLACE trip length (735 min), not the 95-min home trip, got: " +
+                batch.FailureReason);
+            Assert.IsTrue(batch.FailureReason.Contains("last feasible departure 345"),
+                "the failure must name the window boundary for the 735-min trip, got: " + batch.FailureReason);
+            Assert.AreEqual(0, f.ShoppingReservationCount(1), "no shopping reservation may be held for Tomas");
+            Assert.AreEqual(0, f.ShoppingReservationCount(2), "no shopping reservation may be held for Anna");
         }
 
         private static bool Overlaps(PersonActivityReservation a, PersonActivityReservation b)

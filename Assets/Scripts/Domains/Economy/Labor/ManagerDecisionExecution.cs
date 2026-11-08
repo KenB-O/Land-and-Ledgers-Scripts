@@ -1431,7 +1431,7 @@ namespace LandLedgers.Economy.Labor
         /// <summary>
         /// Starts the scheduler's assignments. Returns the number of tasks
         /// actually started. Refusals are reported in diagnostics, never
-        /// thrown.
+        /// thrown. Composes ReserveAndAssignTasks + StartReservedTasks.
         /// </summary>
         public static int StartAssignedTasks(
             WorkAssignmentReport report,
@@ -1444,12 +1444,63 @@ namespace LandLedgers.Economy.Labor
             Func<WorkTask, string> reservationLabel,
             Action<EntityId, string> onStarted)
         {
+            ReserveAndAssignTasks(report, taskByTextId, tasks, schedules, budgets,
+                dayIndex, diagnostics, reservationLabel, onStarted,
+                out List<WorkTask> assignedTasks, out Dictionary<string, string> reservationIdByTaskId);
+            return StartReservedTasks(assignedTasks, reservationIdByTaskId, tasks, schedules, dayIndex, diagnostics);
+        }
+
+        /// <summary>
+        /// Plan 05 Slice 4 — the SPLIT half 1 (rev1 section 5b, conditional
+        /// split now required: see below). Reserves each assignment's Work
+        /// window (preempting Resting only — rev1 section 2) and assigns
+        /// the task through TaskAuthority, committing its budget minutes —
+        /// but does NOT start it. Returns the number assigned; the assigned
+        /// tasks and their reservation ids come back through the out
+        /// parameters for the later StartReservedTasks call. The
+        /// <paramref name="onStarted"/> callback fires when a task is
+        /// reserved + assigned (callers use it to record the reservation
+        /// id); it is named onStarted because StartAssignedTasks composes
+        /// this with StartReservedTasks. Refusals are reported in
+        /// diagnostics, never thrown. On an assignment refusal the Work
+        /// reservation is released and the task stays Queued.
+        ///
+        /// Why the split exists: StartTask refuses when the person already
+        /// holds an InProgress task (TaskAuthority.cs:306-316 — one worker,
+        /// one exclusive activity), and the shopping loop starts each trip
+        /// leg as a task for the shopper through the same authority. Moving
+        /// StartAssignedTasks WHOLE ahead of shopping therefore breaks the
+        /// trip itself ("Cannot start task T1: P1 is already occupied by
+        /// in-progress task T0") — the StartTask side effect Slice 3 was
+        /// told to watch for. Reserve + assign is what shopping needs to
+        /// see (the Work reservation + the committed budget); the start
+        /// stays in its late position, after the legs have run and
+        /// completed synchronously. A task whose late start fails keeps
+        /// the reserve-then-release shape of the composed method, except
+        /// the next stacked task keeps the window computed at reserve
+        /// time (a gap, never an overlap).
+        /// </summary>
+        public static int ReserveAndAssignTasks(
+            WorkAssignmentReport report,
+            Dictionary<string, WorkTask> taskByTextId,
+            TaskAuthority tasks,
+            PersonScheduleTracker schedules,
+            WorkTimeBudgetStore budgets,
+            int dayIndex,
+            List<string> diagnostics,
+            Func<WorkTask, string> reservationLabel,
+            Action<EntityId, string> onStarted,
+            out List<WorkTask> assignedTasks,
+            out Dictionary<string, string> reservationIdByTaskId)
+        {
             diagnostics = diagnostics ?? new List<string>();
+            assignedTasks = new List<WorkTask>();
+            reservationIdByTaskId = new Dictionary<string, string>(StringComparer.Ordinal);
             if (report == null || taskByTextId == null || tasks == null || schedules == null || budgets == null)
                 return 0;
 
             var nextStartByPerson = new Dictionary<int, int>();
-            int started = 0;
+            int assigned = 0;
             foreach (WorkAssignment assignment in report.Assignments)
             {
                 if (assignment == null || assignment.PersonId < 0 || !taskByTextId.TryGetValue(assignment.TaskId, out WorkTask task))
@@ -1458,13 +1509,27 @@ namespace LandLedgers.Economy.Labor
                 int startMinute = nextStartByPerson.TryGetValue(assignment.PersonId, out int prior)
                     ? prior : 8 * 60;
                 string label = reservationLabel != null ? reservationLabel(task) : DefaultTaskLabel(task);
-                string reservation = schedules.TryReserve(
+                // Plan 05 Slice 4 (rev1 section 2): Work preempts Resting.
+                // Rest is interruptible by authored policy
+                // (PersonActivityPolicy: Resting falls in the default-true
+                // branch; DailyActivityPlanner: "Rest/Socializing/Eating are
+                // interruptible; Work/Building/Cooking are not") and Plan 02
+                // Slice 1 already yields rest to shopping through this same
+                // seam. Only Resting is released, never Work/Sleeping/
+                // Building/Cooking/JobSeeking/Managing/Eating, and a
+                // released rest is named in diagnostics, never silent.
+                string reservation = schedules.TryReservePreemptingRest(
                     assignment.PersonId, PersonActivityKind.Work, dayIndex, startMinute,
-                    assignment.MinutesCommitted, label);
+                    assignment.MinutesCommitted, label, out string releasedRest);
                 if (reservation != null)
                 {
                     diagnostics.Add($"task {task.TaskId}: {reservation}");
                     continue;
+                }
+
+                if (!string.IsNullOrEmpty(releasedRest))
+                {
+                    diagnostics.Add($"Day {dayIndex}: P{assignment.PersonId} work released rest {releasedRest} for the window from minute {startMinute}.");
                 }
 
                 // PersonScheduleTracker returns null on success (the return
@@ -1492,21 +1557,66 @@ namespace LandLedgers.Economy.Labor
                 }
 
                 EntityId person = EntityId.For(EntityKind.Person, assignment.PersonId);
-                string assignReason = null;
-                string startReason = null;
-                bool assigned = tasks.AssignTask(task.TaskId, person, budgets, out assignReason);
-                bool startedTask = assigned && tasks.StartTask(task.TaskId, dayIndex, out startReason);
-                if (!assigned || !startedTask)
+                bool isAssigned = tasks.AssignTask(task.TaskId, person, budgets, out string assignReason);
+                if (!isAssigned)
                 {
                     schedules.Release(reservationId);
-                    diagnostics.Add($"task {task.TaskId}: assignment refused ({assignReason ?? startReason})");
+                    diagnostics.Add($"task {task.TaskId}: assignment refused ({assignReason})");
                     continue;
                 }
 
+                assignedTasks.Add(task);
+                reservationIdByTaskId[task.TaskId.ToString()] = reservationId;
                 if (onStarted != null)
                     onStarted(task.TaskId, reservationId);
-                started++;
+                assigned++;
                 nextStartByPerson[assignment.PersonId] = startMinute + Math.Max(1, assignment.MinutesCommitted);
+            }
+
+            return assigned;
+        }
+
+        /// <summary>
+        /// Plan 05 Slice 4 — the SPLIT half 2. Starts tasks previously
+        /// reserved + assigned by ReserveAndAssignTasks. Returns the number
+        /// actually started. On a start refusal the Work reservation is
+        /// released (looked up in <paramref name="reservationIdByTaskId"/>)
+        /// and the task stays Assigned for a later attempt, exactly as the
+        /// composed StartAssignedTasks behaved. Tasks that are no longer
+        /// Assigned are skipped.
+        /// </summary>
+        public static int StartReservedTasks(
+            List<WorkTask> assignedTasks,
+            Dictionary<string, string> reservationIdByTaskId,
+            TaskAuthority tasks,
+            PersonScheduleTracker schedules,
+            int dayIndex,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (assignedTasks == null || tasks == null || schedules == null)
+                return 0;
+
+            int started = 0;
+            foreach (WorkTask task in assignedTasks)
+            {
+                if (task == null || task.Status != TaskStatus.Assigned)
+                    continue;
+
+                if (!tasks.StartTask(task.TaskId, dayIndex, out string startReason))
+                {
+                    if (reservationIdByTaskId != null &&
+                        reservationIdByTaskId.TryGetValue(task.TaskId.ToString(), out string reservationId) &&
+                        !string.IsNullOrWhiteSpace(reservationId))
+                    {
+                        schedules.Release(reservationId);
+                    }
+
+                    diagnostics.Add($"task {task.TaskId}: start refused ({startReason})");
+                    continue;
+                }
+
+                started++;
             }
 
             return started;

@@ -1749,6 +1749,20 @@ namespace LandLedgers.Orchestration.Systems
             DriveBoardingHouseDays(absoluteDayIndex);
             DriveStoreFeedProcurement(absoluteDayIndex);
             DriveBusinessHorseFeedProcurement(absoluteDayIndex);
+            // Plan 05 Slice 4 (rev1 section 5b): reserve the day's assigned
+            // work BEFORE shopping runs, so the window search sees the real
+            // Work reservations and plans around them (or fails honestly).
+            // ONLY the blanket assignment loop moves — AssignDailyWork +
+            // ReserveAndAssignTasks — and it moves SPLIT: reserve + assign
+            // ahead of shopping, StartTask stays late (see
+            // ManagerWorkSchedulerDrive.ReserveAndAssignTasks). The manager
+            // DailyCycle/WeeklyCycle decisions, AdvanceShipments,
+            // BusinessLender.ProcessDay and DriveNpcOwnerRequestResolution
+            // stay in DriveAutonomousLabor: the manager decisions read
+            // business stock/cash that shopping changes. Work claims the
+            // shared 600-min budget first; the search then refuses honestly
+            // when the remainder cannot cover the trip. No budget change.
+            DriveWorkAssignmentBeforeShopping(absoluteDayIndex);
             DriveDailyNeeds(absoluteDayIndex);
             // Pass VII Workstream B (P1-5): daily horse care had no production
             // caller — horses never tired and never needed care. Fed from the
@@ -6172,6 +6186,183 @@ namespace LandLedgers.Orchestration.Systems
         /// PersonScheduleTracker remain the only writers for work assignment,
         /// Person time, and task state.
         /// </summary>
+        /// <summary>
+        /// Plan 05 Slice 4 (rev1 section 5b): the moved assignment loop.
+        /// Runs ahead of DriveDailyNeeds in OnDayChanged so shopping sees
+        /// the day's real Work reservations. Per business it is exactly the
+        /// blanket pass DriveAutonomousLabor used to run last: open Queued
+        /// tasks + the AddLaborWorker pool through WorkScheduler.
+        /// AssignDailyWork + ReserveAndAssignTasks — SPLIT: reserve + assign
+        /// only; the start stays late (StartPreAssignedBusinessWork, in
+        /// DriveAutonomousLabor's per-business position), because the
+        /// shopping loop starts each trip leg as a task for the shopper and
+        /// StartTask refuses when the person already holds an InProgress
+        /// task. The worker-availability seam is installed first, as
+        /// DriveAutonomousLabor does. Tasks that fail to start here stay
+        /// Queued and may still be picked up by the in-place manager
+        /// Schedule executor later in the day (same two-call structure as
+        /// before the move, blanket call moved earlier). This method is
+        /// harness-excluded with the rest of SimulationDrivers.cs: verified
+        /// by harness-reachable component tests (loop + scheduler drive)
+        /// plus source-review, and the live order is Unity-owed.
+        /// </summary>
+        private void DriveWorkAssignmentBeforeShopping(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null)
+            {
+                return;
+            }
+
+            EnsureWorkerAvailabilitySeam();
+            var diagnostics = new List<string>();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || string.IsNullOrWhiteSpace(business.InstanceId))
+                {
+                    continue;
+                }
+
+                ReserveAndAssignBusinessWork(business, absoluteDayIndex, diagnostics);
+            }
+
+            if (diagnostics.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] work assignment before shopping: " + string.Join(" | ", diagnostics));
+            }
+        }
+
+        /// <summary>
+        /// One business's blanket assignment pass: open Queued tasks and the
+        /// AddLaborWorker pool (budget-derived availability) through
+        /// WorkScheduler.AssignDailyWork, then ReserveAndAssignTasks
+        /// (reserve + assign only — the start is StartPreAssignedBusinessWork,
+        /// late, in DriveAutonomousLabor). Extracted verbatim from
+        /// DriveAutonomousLabor (Plan 05 Slice 4); the manager-decision half
+        /// of that drive is untouched and still runs there. No manager
+        /// decision is made here: nothing in this pass reads household
+        /// needs, shopping outcomes, store stock, or household cash
+        /// (Slice 3 trace, questions (a')/(f')).
+        /// </summary>
+        private void ReserveAndAssignBusinessWork(BusinessInstanceState business, int absoluteDayIndex, List<string> diagnostics)
+        {
+            EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
+            List<WorkTask> openTasks = hub.Tasks.GetOpenTasks(businessId);
+            if (openTasks == null || openTasks.Count == 0)
+            {
+                return;
+            }
+
+            var workers = new List<SchedulerAvailableWorker>();
+            var seenWorkers = new HashSet<int>();
+            EmploymentRelationshipRegistry registry = business.RuntimeState?.EmploymentRegistry ?? hub.Employments;
+            if (registry != null)
+            {
+                foreach (EmploymentRelationship relationship in registry.GetActiveByEmployer(business.InstanceId))
+                {
+                    AddLaborWorker(relationship?.EmployeePersonId ?? -1, seenWorkers, workers, absoluteDayIndex);
+                }
+            }
+
+            if (business.Owner != null && business.Owner.PersonId >= 0)
+            {
+                AddLaborWorker(business.Owner.PersonId, seenWorkers, workers, absoluteDayIndex);
+            }
+
+            var schedulerWork = new List<SchedulerOpenWorkItem>();
+            var taskByTextId = new Dictionary<string, WorkTask>(StringComparer.Ordinal);
+            foreach (WorkTask task in openTasks)
+            {
+                if (task == null || !task.IsOpen || task.Status != TaskStatus.Queued)
+                {
+                    continue;
+                }
+
+                TaskDefinition definition = hub.Tasks.GetDefinition(task.DefinitionId);
+                string family = definition?.DisplayName;
+                if (string.IsNullOrWhiteSpace(family)) family = task.DefinitionId;
+                schedulerWork.Add(new SchedulerOpenWorkItem
+                {
+                    TaskId = task.TaskId.ToString(),
+                    Family = family,
+                    MinutesRequired = Math.Max(1, task.MinutesRemaining),
+                    RequiredEquipment = definition != null && definition.EquipmentClasses.Count > 0
+                        ? definition.EquipmentClasses[0] : string.Empty,
+                    LocationId = task.LocationId,
+                });
+                taskByTextId[task.TaskId.ToString()] = task;
+            }
+
+            if (schedulerWork.Count == 0 || workers.Count == 0)
+            {
+                return;
+            }
+
+            WorkAssignmentReport assignments = hub.WorkScheduling.AssignDailyWork(
+                new SchedulerInputs
+                {
+                    BusinessInstanceId = business.InstanceId,
+                    DayIndex = absoluteDayIndex,
+                    OpenWork = schedulerWork,
+                    Workers = workers,
+                }, diagnostics);
+            ReserveAndAssignBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
+        }
+
+        private void ReserveAndAssignBusinessTasks(WorkAssignmentReport report, Dictionary<string, WorkTask> tasks, int dayIndex, List<string> diagnostics)
+        {
+            // Plan 05 Slice 4 — SPLIT half 1: reserve + assign only. The
+            // assigned tasks are started late by StartPreAssignedBusinessWork.
+            // One shared implementation with the manager Schedule executor
+            // (ManagerWorkSchedulerDrive) — no drift.
+            ManagerWorkSchedulerDrive.ReserveAndAssignTasks(
+                report, tasks, hub.Tasks, hub.PersonSchedules, hub.WorkTimeBudgets,
+                dayIndex, diagnostics, TaskReservationLabel,
+                (taskId, reservationId) => autonomousTaskReservations[taskId] = reservationId,
+                out _, out _);
+        }
+
+        /// <summary>
+        /// Plan 05 Slice 4 — SPLIT half 2: starts the work reserved +
+        /// assigned before shopping, in DriveAutonomousLabor's per-business
+        /// position (where the blanket pass used to run). Runs after the
+        /// trip legs have executed and completed synchronously during
+        /// shopping, so the shopper's person-time is free again. On a start
+        /// refusal the Work reservation is released and the task stays
+        /// Assigned, exactly as the composed StartAssignedTasks behaved.
+        /// </summary>
+        private void StartPreAssignedBusinessWork(BusinessInstanceState business, int absoluteDayIndex, List<string> diagnostics)
+        {
+            EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
+            List<WorkTask> openTasks = hub.Tasks.GetOpenTasks(businessId);
+            if (openTasks == null || openTasks.Count == 0)
+            {
+                return;
+            }
+
+            var assigned = new List<WorkTask>();
+            foreach (WorkTask task in openTasks)
+            {
+                if (task != null && task.Status == TaskStatus.Assigned)
+                {
+                    assigned.Add(task);
+                }
+            }
+
+            if (assigned.Count == 0)
+            {
+                return;
+            }
+
+            var reservationByTaskId = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (KeyValuePair<EntityId, string> entry in autonomousTaskReservations)
+            {
+                reservationByTaskId[entry.Key.ToString()] = entry.Value;
+            }
+
+            ManagerWorkSchedulerDrive.StartReservedTasks(
+                assigned, reservationByTaskId, hub.Tasks, hub.PersonSchedules, absoluteDayIndex, diagnostics);
+        }
+
         private void DriveAutonomousLabor(int absoluteDayIndex)
         {
             if (hub == null || sharedBusinessRuntime == null)
@@ -6225,8 +6416,11 @@ namespace LandLedgers.Orchestration.Systems
                     AddLaborWorker(business.Owner.PersonId, seenWorkers, workers, absoluteDayIndex);
                 }
 
-                var schedulerWork = new List<SchedulerOpenWorkItem>();
-                var taskByTextId = new Dictionary<string, WorkTask>(StringComparer.Ordinal);
+                // Plan 05 Slice 4: the blanket assignment pass moved ahead
+                // of DriveDailyNeeds (DriveWorkAssignmentBeforeShopping);
+                // this loop now builds only the demand inputs for the
+                // manager cycle. The manager Schedule executor below is the
+                // in-place retry for work that failed to start there.
                 foreach (WorkTask task in openTasks)
                 {
                     if (task == null || !task.IsOpen)
@@ -6238,19 +6432,6 @@ namespace LandLedgers.Orchestration.Systems
                     string family = definition?.DisplayName;
                     if (string.IsNullOrWhiteSpace(family)) family = task.DefinitionId;
                     int minutes = Math.Max(1, task.MinutesRemaining);
-                    if (task.Status == TaskStatus.Queued)
-                    {
-                        schedulerWork.Add(new SchedulerOpenWorkItem
-                        {
-                            TaskId = task.TaskId.ToString(),
-                            Family = family,
-                            MinutesRequired = minutes,
-                            RequiredEquipment = definition != null && definition.EquipmentClasses.Count > 0
-                                ? definition.EquipmentClasses[0] : string.Empty,
-                            LocationId = task.LocationId,
-                        });
-                        taskByTextId[task.TaskId.ToString()] = task;
-                    }
 
                     if (!demandInputs.OpenTaskMinutesByFamily.ContainsKey(family))
                     {
@@ -6326,55 +6507,18 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         diagnostics.Add($"manager execution for {business.InstanceId}: {executionOutcome.Reason}.");
                     }
-                    if (managerDecision != null && managerDecision.Acted &&
-                        string.Equals(managerDecision.ActionKind, ManagerActKinds.Schedule, StringComparison.Ordinal))
-                    {
-                        // The manager's Schedule execution starts tasks through
-                        // the real scheduler; rebuild from fresh task state so
-                        // the blanket pass below never double-schedules work
-                        // the manager already placed.
-                        openTasks = hub.Tasks.GetOpenTasks(businessId);
-                        schedulerWork.Clear();
-                        taskByTextId.Clear();
-                        foreach (WorkTask task in openTasks)
-                        {
-                            if (task == null || !task.IsOpen || task.Status != TaskStatus.Queued)
-                            {
-                                continue;
-                            }
-
-                            TaskDefinition refreshedDefinition = hub.Tasks.GetDefinition(task.DefinitionId);
-                            string refreshedFamily = refreshedDefinition?.DisplayName;
-                            if (string.IsNullOrWhiteSpace(refreshedFamily)) refreshedFamily = task.DefinitionId;
-                            schedulerWork.Add(new SchedulerOpenWorkItem
-                            {
-                                TaskId = task.TaskId.ToString(),
-                                Family = refreshedFamily,
-                                MinutesRequired = Math.Max(1, task.MinutesRemaining),
-                                RequiredEquipment = refreshedDefinition != null && refreshedDefinition.EquipmentClasses.Count > 0
-                                    ? refreshedDefinition.EquipmentClasses[0] : string.Empty,
-                                LocationId = task.LocationId,
-                            });
-                            taskByTextId[task.TaskId.ToString()] = task;
-                        }
-                    }
+                    // Plan 05 Slice 4: no rebuild of schedulerWork here —
+                    // the blanket assignment pass moved ahead of
+                    // DriveDailyNeeds, and the manager Schedule executor
+                    // above builds its own work list from fresh task state.
                     break;
                 }
 
-                if (schedulerWork.Count == 0 || workers.Count == 0)
-                {
-                    continue;
-                }
-
-                WorkAssignmentReport assignments = hub.WorkScheduling.AssignDailyWork(
-                    new SchedulerInputs
-                    {
-                        BusinessInstanceId = business.InstanceId,
-                        DayIndex = absoluteDayIndex,
-                        OpenWork = schedulerWork,
-                        Workers = workers,
-                    }, diagnostics);
-                StartAssignedBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
+                // Plan 05 Slice 4 — SPLIT half 2: start the work reserved +
+                // assigned before shopping, in this per-business position
+                // (where the blanket pass used to run). The trip legs have
+                // executed and completed by now, so the shopper is free.
+                StartPreAssignedBusinessWork(business, absoluteDayIndex, diagnostics);
             }
 
             // G-06: NPC-owner auto-resolution for escalated manager requests —
@@ -6501,16 +6645,6 @@ namespace LandLedgers.Orchestration.Systems
                 AvailableMinutes = availableMinutes,
                 SkillEvidence = new Dictionary<string, float>(),
             });
-        }
-
-        private void StartAssignedBusinessTasks(WorkAssignmentReport report, Dictionary<string, WorkTask> tasks, int dayIndex, List<string> diagnostics)
-        {
-            // Pass VII Workstream D: one shared implementation with the manager
-            // Schedule executor (ManagerWorkSchedulerDrive) — no drift.
-            ManagerWorkSchedulerDrive.StartAssignedTasks(
-                report, tasks, hub.Tasks, hub.PersonSchedules, hub.WorkTimeBudgets,
-                dayIndex, diagnostics, TaskReservationLabel,
-                (taskId, reservationId) => autonomousTaskReservations[taskId] = reservationId);
         }
 
         private static List<string> ScopeNames(DelegationScope scopes)

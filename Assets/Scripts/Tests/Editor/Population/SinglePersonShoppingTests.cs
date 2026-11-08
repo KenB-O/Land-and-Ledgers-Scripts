@@ -1094,13 +1094,13 @@ namespace LandLedgers.EditorTests.Population
         public void AutonomousWorkGenerator_OpensUnservableNeed()
         {
             // Discriminator AWG. GenerateForHousehold with preserved_meat at
-            // 1 day of supply (threshold 7) and a bread control, NO
-            // recognition predicate (the method takes none today). Desired:
-            // no preserved_meat need is created; the bread need IS created,
-            // exactly once, and a second call creates no duplicate. At HEAD
-            // the meat need is created. (Slice 1 adds the optional predicate
-            // and this test is then wired to supply it; as written here it
-            // can only pass once that seam exists.)
+            // 1 day of supply (threshold 7) and a bread control, WITH the
+            // Slice 1 recognition predicate supplied (bread recognized, meat
+            // not — the method takes the optional predicate since Slice 1).
+            // Desired: no preserved_meat need is created; the bread need IS
+            // created, exactly once, and a second call creates no duplicate.
+            // At HEAD (no predicate) the meat need was created; Slice 1
+            // supplies the predicate and this test passes.
             var needs = new HouseholdNeedRegistry();
             var generator = new AutonomousWorkGenerator();
             var diag = new List<string>();
@@ -1111,6 +1111,7 @@ namespace LandLedgers.EditorTests.Population
                 Needs = needs,
                 DayIndex = 100,
                 LowDaysThreshold = 7f,
+                IsRecognizedByKnownSeller = item => item == HouseholdItemCatalog.BreadId,
                 DaysOfSupplyByItem = new Dictionary<string, float>
                 {
                     { HouseholdItemCatalog.PreservedMeatId, 1f },
@@ -1121,7 +1122,7 @@ namespace LandLedgers.EditorTests.Population
             AutonomousWorkGenerator.GenerationReport report = generator.GenerateForHousehold(inputs, diag);
 
             Assert.IsTrue(needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId) == null,
-                "HEAD FAILURE: the generator opened an unservable preserved_meat need — no seller " +
+                "the generator opened an unservable preserved_meat need — no seller " +
                 "recognizes it, so it can never be shopped. Created keys: " +
                 string.Join(",", report.CreatedNeedKeys));
             HouseholdPurchasingNeed bread = needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId);

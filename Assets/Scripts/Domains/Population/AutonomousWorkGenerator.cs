@@ -194,6 +194,13 @@ namespace LandLedgers.Population
             public float LowDaysThreshold = 7f;
             public HouseholdNeedRegistry Needs;
             public int DayIndex;
+            /// <summary>Plan 05 Slice 1 (Plan 02 Slice 2 rule, same wording):
+            /// optional recognition predicate — true when a known seller
+            /// recognizes the item. Null = old behaviour (no filter). When
+            /// supplied and false for an item, the need is skipped with a
+            /// loud refusal; stock is never consulted, so a recognized but
+            /// out-of-stock item still opens a need.</summary>
+            public Func<string, bool> IsRecognizedByKnownSeller;
         }
 
         public sealed class GenerationReport
@@ -431,6 +438,16 @@ namespace LandLedgers.Population
                 if (inputs.Needs.GetOpenNeed(inputs.HouseholdId, entry.Key) != null)
                 {
                     continue; // one open need per item — never duplicates.
+                }
+
+                // Plan 05 Slice 1: recognition filter only, never a stock
+                // filter — mirrors Plan 02 Slice 2 (HouseholdShortageMonitor).
+                if (inputs.IsRecognizedByKnownSeller != null && !inputs.IsRecognizedByKnownSeller(entry.Key))
+                {
+                    string note = $"H{inputs.HouseholdId} will not raise a '{entry.Key}' need: no known seller offers it";
+                    report.Refusals.Add(note);
+                    diag.Add("AutonomousWorkGenerator: " + note);
+                    continue;
                 }
 
                 HouseholdPurchasingNeed need = inputs.Needs.CreateNeed(inputs.HouseholdId, entry.Key, day);

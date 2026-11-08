@@ -297,5 +297,93 @@ namespace LandLedgers.Editor.Population
             AutonomousWorkGenerator.GenerationReport second = f.Generator.GenerateForHousehold(inputs, diag);
             Assert.AreEqual(0, second.CreatedNeedKeys.Count);
         }
+
+        [Test]
+        public void RecognizedButOutOfStock_NeedStillOpens()
+        {
+            // Plan 05 Slice 1: the predicate is a recognition filter only,
+            // never a stock filter. Bread recognized (predicate true) with
+            // zero stock anywhere still opens the need.
+            var f = new Fixture();
+            var diag = new List<string>();
+            var inputs = new AutonomousWorkGenerator.HouseholdGenerationInputs
+            {
+                HouseholdId = 7,
+                HouseholdOwner = EntityId.For(EntityKind.Household, 7),
+                Needs = f.Needs,
+                DayIndex = 100,
+                LowDaysThreshold = 7f,
+                IsRecognizedByKnownSeller = _ => true,
+                DaysOfSupplyByItem = new Dictionary<string, float> { { "bread", 1f } },
+            };
+
+            AutonomousWorkGenerator.GenerationReport report = f.Generator.GenerateForHousehold(inputs, diag);
+
+            Assert.AreEqual(1, report.CreatedNeedKeys.Count);
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, "bread"), "a recognized item opens a need even with zero stock");
+        }
+
+        [Test]
+        public void PredicateNull_OldBehaviourKept()
+        {
+            // Plan 05 Slice 1: no predicate supplied = old behaviour — the
+            // meat need opens exactly as before (documents the opt-in seam;
+            // existing tests keep passing unmodified).
+            var f = new Fixture();
+            var diag = new List<string>();
+            var inputs = new AutonomousWorkGenerator.HouseholdGenerationInputs
+            {
+                HouseholdId = 7,
+                HouseholdOwner = EntityId.For(EntityKind.Household, 7),
+                Needs = f.Needs,
+                DayIndex = 100,
+                LowDaysThreshold = 7f,
+                DaysOfSupplyByItem = new Dictionary<string, float> { { "preserved_meat", 1f } },
+            };
+
+            AutonomousWorkGenerator.GenerationReport report = f.Generator.GenerateForHousehold(inputs, diag);
+
+            Assert.AreEqual(1, report.CreatedNeedKeys.Count);
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, "preserved_meat"), "with no predicate the old behaviour is kept");
+        }
+
+        [Test]
+        public void Suppression_IsLogged()
+        {
+            // Plan 05 Slice 1: the refusal diagnostic names the household and
+            // the item, once per evaluation, in the Plan 02 Slice 2 wording.
+            var f = new Fixture();
+            var diag = new List<string>();
+            var inputs = new AutonomousWorkGenerator.HouseholdGenerationInputs
+            {
+                HouseholdId = 7,
+                HouseholdOwner = EntityId.For(EntityKind.Household, 7),
+                Needs = f.Needs,
+                DayIndex = 100,
+                LowDaysThreshold = 7f,
+                IsRecognizedByKnownSeller = item => item == "bread",
+                DaysOfSupplyByItem = new Dictionary<string, float>
+                {
+                    { "preserved_meat", 1f },
+                    { "bread", 1f },
+                },
+            };
+
+            AutonomousWorkGenerator.GenerationReport report = f.Generator.GenerateForHousehold(inputs, diag);
+
+            Assert.AreEqual(1, report.Refusals.Count, "exactly one refusal for the one unrecognized item");
+            Assert.IsTrue(report.Refusals[0].Contains("H7"), "the refusal must name the household");
+            Assert.IsTrue(report.Refusals[0].Contains("preserved_meat"), "the refusal must name the item");
+            Assert.IsTrue(report.Refusals[0].Contains("no known seller offers it"),
+                "the refusal must use the Slice 2 wording, got: " + report.Refusals[0]);
+            int diagCount = 0;
+            foreach (string line in diag)
+            {
+                if (line.Contains("preserved_meat") && line.Contains("no known seller offers it")) diagCount++;
+            }
+
+            Assert.AreEqual(1, diagCount, "the suppression diagnostic must appear exactly once per evaluation");
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, "bread"), "the recognized item still opens its need");
+        }
     }
 }

@@ -1499,6 +1499,14 @@ namespace LandLedgers.Editor.Integration
                     Needs = Needs,
                     DayIndex = day,
                     LowDaysThreshold = 7f,
+                    // Plan 05 Slice 1: wire the Plan 02 Slice 2 recognition
+                    // predicate from the sim's own supplier directory +
+                    // seller knowledge, so the sim proves the seam. Bread is
+                    // recognized by the registered store for every household
+                    // with a member who knows it; an unrecognized item would
+                    // be suppressed here instead of opening an unservable need.
+                    IsRecognizedByKnownSeller = HouseholdShortageMonitor.KnownSellerRecognitionPredicate(
+                        Directory, Knowledge, Membership.GetActiveMembers(householdId)),
                     DaysOfSupplyByItem = new Dictionary<string, float>
                     {
                         { Bread, DaysOfSupply(householdId, Bread, DailyBreadUse(householdId)) },

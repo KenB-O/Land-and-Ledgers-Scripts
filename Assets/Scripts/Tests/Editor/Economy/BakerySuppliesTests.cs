@@ -194,12 +194,12 @@ namespace LandLedgers.Editor.Economy
                 : null;
         }
 
-        private static Slice NewSlice(int storeCash = 5000, int bakeryCash = 2000)
+        private static Slice NewSlice(int storeCash = 5000, int bakeryCash = 2000, int storeTarget = 1000)
         {
             var s = new Slice();
             s.StoreRuntime.BindBusinessIdentity(StoreInstanceId);
             s.StoreRuntime.AddCashCents(storeCash);
-            s.StoreRuntime.EnsureCategoryStock("staple_food", 0, 1000);
+            s.StoreRuntime.EnsureCategoryStock("staple_food", 0, storeTarget);
             s.BakeryRuntime.BindBusinessIdentity(BakeryInstanceId);
             s.BakeryRuntime.AddCashCents(bakeryCash);
             s.StoreService = new OffMapNamedSkuProcurementService(
@@ -346,7 +346,8 @@ namespace LandLedgers.Editor.Economy
             Slice s, Series2CounterpartyRegistration reg, int dayIndex,
             bool wireNotions = true, OffMapAidBusinessRuntime millbrookSupplier = null,
             bool threadCumulative = false,
-            BakeryWholesaleDailyResult prior = default(BakeryWholesaleDailyResult)) =>
+            BakeryWholesaleDailyResult prior = default(BakeryWholesaleDailyResult),
+            int notionsDepth = 0, int flourDepth = 0) =>
             new BakeryWholesaleDailyInputs
             {
                 Bakery = s.Bakery,
@@ -400,15 +401,18 @@ namespace LandLedgers.Editor.Economy
                 PriorCumulativeNotionsCashSpentCents = prior.CumulativeNotionsCashSpentCents,
                 PriorCumulativeWholesaleRevenueCents = prior.CumulativeWholesaleRevenueCents,
                 CumulativeActualsThreaded = threadCumulative,
+                NotionsPipelineDepthDays = notionsDepth,
+                FlourPipelineDepthDays = flourDepth,
             };
 
         private static BakeryWholesaleDailyResult RunDay(
             Slice s, Series2CounterpartyRegistration reg, int dayIndex,
             bool wireNotions = true, OffMapAidBusinessRuntime millbrookSupplier = null,
             bool threadCumulative = false,
-            BakeryWholesaleDailyResult prior = default(BakeryWholesaleDailyResult)) =>
+            BakeryWholesaleDailyResult prior = default(BakeryWholesaleDailyResult),
+            int notionsDepth = 0, int flourDepth = 0) =>
             BakeryWholesaleDailyDriver.RunDay(
-                DriverInputsFor(s, reg, dayIndex, wireNotions, millbrookSupplier, threadCumulative, prior), s.Diag);
+                DriverInputsFor(s, reg, dayIndex, wireNotions, millbrookSupplier, threadCumulative, prior, notionsDepth, flourDepth), s.Diag);
 
         private static BakeryFlourLot FindBinLot(Slice s, string flourName)
         {
@@ -2356,6 +2360,482 @@ namespace LandLedgers.Editor.Economy
                     "leg B line carries producible: no (flour) from the Precheck outcome; line: " + line);
                 AssertCoverageLineNeverLabelsPlannedYieldAsStock(line);
             }
+        }
+
+        // ---- Priority 3 Slice 4 (2026-11-08): parameterized forward
+        // ordering (mechanism only; live activation BLOCKED on B-1) --
+        //
+        // FORMULA CORRECTION (coordinator flag, resolved by the test
+        // expectation, not by inventing policy): read literally, the
+        // plan's formulas give zero orders at depth 0 — max(0, 0 x
+        // batchesPerDay - onHand - ...) = 0 — which contradicts the
+        // depth-0 test expectation that depth 0 reproduces today's
+        // 14-on / 14-off cycle exactly. The test expectation governs:
+        // depth 0 MUST reproduce today's ordering behaviour exactly
+        // (today's shortfall computation unchanged, same guards).
+        // Implemented depth therefore means: depth 0 = today's
+        // behaviour (order today's post-feed shortfall, notions; order
+        // today's shortfall rounded up to whole sacks, flour); depth
+        // D > 0 adds forward cover on top of today's shortfall, to a
+        // total target of (D + 1) x one day's demand — today plus D
+        // future days — net of on-hand, sellable (notions) and
+        // in-transit arriving within the depth window. The production
+        // default is 0 (current behaviour) until the owner names the
+        // policy (B-1); no nonzero depth is wired in production by
+        // this slice. The depth is a parameter, not a value: no price,
+        // rate, quantity, or package size is invented here.
+        //
+        // DRIVER-SIDE CUSTODY NOTE (coordinator flag, Slice 2 scope):
+        // the daily driver's flour procurement block still computes
+        // its shortfall from bin stock only. That is preserved
+        // exactly at depth 0, and the depth > 0 computation keeps the
+        // same bin-only basis: it subtracts bin on-hand and
+        // outstanding in-transit Millbrook lb, and does NOT subtract
+        // flour already dispensed into a batch's custody (Slice 2's
+        // custody fix is Precheck-only). Driver-side custody
+        // awareness is a separate follow-up, not silently fixed here.
+        private static Series2CounterpartyRegistration ProductionRegistrationWithSupply(int supplyUnits)
+        {
+            Series2CounterpartyRegistration reg = ProductionRegistration();
+            reg.SupplyUnits[BakeryFlourSupply.NotionsMaterialId] = supplyUnits;
+            return reg;
+        }
+
+        private static int TotalNotionsOrderedUnits(Slice s)
+        {
+            int total = 0;
+            if (s.StoreService.Orders != null)
+                foreach (NamedSkuOrder order in s.StoreService.Orders)
+                    if (order != null) total += Math.Max(0, order.UnitsOrdered);
+            return total;
+        }
+
+        // Notions cover visible before a day's RunDay: bin on hand +
+        // sellable store lots + unreceived orders arriving within the
+        // depth window (arrival day in [day, day + depth]). An order
+        // arriving today still counts: step (a) receives it before the
+        // feed, so it covers today.
+        private static int NotionsCoverBeforeDay(Slice s, int day, int depth)
+        {
+            int cover = s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId);
+            cover += Math.Max(0, s.Notions.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId));
+            if (s.StoreService.Orders != null)
+                foreach (NamedSkuOrder order in s.StoreService.Orders)
+                {
+                    if (order == null) continue;
+                    if (!string.Equals(order.SkuId, BakeryFlourSupply.NotionsMaterialId, StringComparison.Ordinal)) continue;
+                    if (order.Stage == NamedSkuOrderStage.Received || order.Stage == NamedSkuOrderStage.Cancelled) continue;
+                    if (order.ExpectedArrivalDayIndex < day || order.ExpectedArrivalDayIndex > day + depth) continue;
+                    cover += Math.Max(0, order.UnitsOrdered);
+                }
+            return cover;
+        }
+
+        private static int OutstandingMillbrookLb(OffMapAidBusinessRuntime supplier)
+        {
+            int total = 0;
+            if (supplier == null || supplier.Lots == null) return 0;
+            foreach (OffMapAidCargoLot lot in supplier.Lots)
+            {
+                if (lot == null) continue;
+                if (lot.Received) continue;
+                if (!string.Equals(lot.BuyerBusinessId, BakeryInstanceId, StringComparison.Ordinal)) continue;
+                total += Math.Max(0, lot.InventoryUnits);
+            }
+            return total;
+        }
+
+        [Test]
+        public void ForwardOrder_Notions_DepthZero_PreservesCurrentCycle()
+        {
+            // Priority 3 Slice 4: depth 0 reproduces the 14-on /
+            // 14-off cycle exactly — the mechanism, unactivated,
+            // changes nothing. Same 60-day drive as Slice 1's
+            // NotionsPipeline_SixtyDayCycle_TwoFullPeriods, with the
+            // depth parameter explicitly 0. Passes before the mechanism
+            // lands (it is today's behaviour) and must keep passing
+            // after it.
+            Slice s = NewSlice();
+            Series2CounterpartyRegistration reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 40);
+            BookAccount(s, 24, 1, 2, 2);
+
+            for (int day = 1; day <= 14; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 0);
+                Assert.AreEqual(1, r.NotionsOrdered, $"depth 0: one priming notion ordered, day {day}");
+                Assert.AreEqual(0, r.BatchesBaked, $"depth 0: nothing bakes before the first arrival, day {day}");
+            }
+            for (int day = 15; day <= 28; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 0);
+                Assert.AreEqual(1, r.BatchesBaked, $"depth 0: the primed pipeline bakes daily, day {day}");
+                Assert.AreEqual(0, r.NotionsOrdered, $"depth 0: no replacement order on an arrival day, day {day}");
+            }
+            for (int day = 29; day <= 42; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 0);
+                Assert.AreEqual(0, r.BatchesBaked, $"depth 0: no bake once the primed window drains, day {day}");
+                Assert.AreEqual(1, r.NotionsOrdered, $"depth 0: orders resume 1/day on stall days, day {day}");
+            }
+            for (int day = 43; day <= 56; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 0);
+                Assert.AreEqual(1, r.BatchesBaked, $"depth 0: the second pipeline window bakes daily, day {day}");
+                Assert.AreEqual(0, r.NotionsOrdered, $"depth 0: no replacement order on an arrival day, day {day}");
+            }
+            for (int day = 57; day <= 60; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 0);
+                Assert.AreEqual(0, r.BatchesBaked, $"depth 0: the stall resumes once the second window drains, day {day}");
+            }
+            Assert.AreEqual(30, s.StoreService.Orders.Count,
+                "depth 0: 30 orders total (14 priming + 14 first-stall + 2 second-stall), as in Slice 1");
+            Assert.AreEqual(28, s.Bakery.WholesaleDeliveries.Count, "depth 0: 28 daily bakes = 28 deliveries");
+            Assert.AreEqual(3064, s.BakeryRuntime.CurrentCashCents,
+                "depth 0: bakery 2,000 - 280c notions feeds + 1,344c wholesale, as in Slice 1");
+            Assert.AreEqual(3656, s.StoreRuntime.CurrentCashCents,
+                "depth 0: store 5,000 - 280c receipts + 280c feeds - 1,344c wholesale, as in Slice 1");
+            Assert.AreEqual(12, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "depth 0: fuel 40 - 28 bakes = 12u left");
+        }
+
+        [Test]
+        public void ForwardOrder_Notions_DepthFourteen_SustainsDailyBakes()
+        {
+            // Priority 3 Slice 4: with pipeline depth 14
+            // (caller-supplied — one full 14-day transit of forward
+            // cover on top of today's need), the notions leg sustains
+            // a daily bake from the first arrival through day 60 with
+            // no stall. Flour is test-seeded 12 lb/day so only the
+            // notions leg can block; fuel is seeded to 60u (46 bakes).
+            //
+            // Fixture counterparty note: the production registration
+            // carries the authored 30u finite supply, and a sustained
+            // 60-day run orders 60u — so the fixture seeds the
+            // counterparty to 100u, exactly as Slice 5 seeds it to 60u
+            // for its acceptance. The 30u production cap itself is
+            // untouched and is Slice 6's pin, not this slice's.
+            //
+            // Expected shape (target = (14 + 1) x 1u = 15u of cover):
+            // day 1 orders 15u in one order (today + 14 forward);
+            // days 2-14 order nothing (15u in transit covers); from
+            // day 15 the pipeline feeds one bake a day and orders one
+            // replacement a day, except day 15 itself, whose 15u
+            // arrival already covers the target after the feed. Total
+            // ordered = 15 + 45 = 60u = 46 baked + 14u steady-state
+            // pipeline stock (in transit at day 60).
+            // Fixture store-cap note: 46 bakes stock 46 x 24 = 1,104
+            // loaves, past the shared fixture's 1,000u staple_food
+            // target - so this test raises the store target to 2,000u.
+            // The cap is a fixture artefact, not the mechanism under
+            // test; the transfer would otherwise refuse on a full
+            // category from the 42nd bake.
+            Slice s = NewSlice(storeTarget: 2000);
+            Series2CounterpartyRegistration reg = ProductionRegistrationWithSupply(100);
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 60);
+            BookAccount(s, 24, 1, 2, 2);
+
+            int ordersBefore;
+            for (int day = 1; day <= 60; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                int coverBefore = NotionsCoverBeforeDay(s, day, 14);
+                ordersBefore = s.StoreService.Orders.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 14);
+                int ordersPlacedToday = s.StoreService.Orders.Count - ordersBefore;
+                Assert.IsTrue(ordersPlacedToday <= 1,
+                    $"at most one notions order per day (exactly-once ordering), day {day}: {ordersPlacedToday} placed");
+                if (coverBefore >= 15)
+                    Assert.AreEqual(0, r.NotionsOrdered,
+                        $"no order on a day whose cover already meets the 15u target (cover {coverBefore}), day {day}");
+                if (day <= 14)
+                {
+                    Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+                    Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                        $"day {day} refuses on notions; refusal: {r.Refusal}");
+                }
+                else
+                {
+                    Assert.AreEqual(1, r.BatchesBaked, $"depth 14 sustains a daily bake, day {day}");
+                    Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                }
+            }
+
+            Assert.AreEqual(15, s.StoreService.Orders[0].UnitsOrdered,
+                "day 1 orders today + 14 forward = 15u in one order");
+            Assert.AreEqual(15, s.StoreService.Orders[0].ExpectedArrivalDayIndex,
+                "the day-1 order arrives day 15 (14-day lag)");
+            for (int i = 1; i < s.StoreService.Orders.Count; i++)
+            {
+                Assert.AreEqual(1, s.StoreService.Orders[i].UnitsOrdered,
+                    $"replacement order {i + 1} is 1u");
+                Assert.AreEqual(s.StoreService.Orders[i].OrderDayIndex + 14, s.StoreService.Orders[i].ExpectedArrivalDayIndex,
+                    $"replacement order {i + 1} arrives 14 days after its order day");
+            }
+            Assert.AreEqual(46, s.StoreService.Orders.Count,
+                "46 orders over the run: 1 bulk priming order + 45 daily replacements (day 15 orders nothing)");
+            Assert.AreEqual(60, TotalNotionsOrderedUnits(s),
+                "total ordered 60u = 46 baked + 14u steady-state pipeline stock, never more");
+            Assert.AreEqual(46, s.Bakery.WholesaleDeliveries.Count, "46 daily bakes = 46 deliveries");
+            Assert.AreEqual(14, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel 60 - 46 bakes = 14u left: fuel never blocks this run");
+            Assert.AreEqual(3748, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 - 460c notions feeds (46 x 10c) + 2,208c wholesale (46 x 48c)");
+            Assert.AreEqual(2792, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 460c receipts + 460c feeds - 2,208c wholesale");
+            Assert.AreEqual(600, s.Market.TotalOutflowCents, "60 orders x 10c booked as market outflow at order time");
+            int inTransitAtEnd = 0;
+            foreach (NamedSkuOrder order in s.StoreService.Orders)
+                if (order != null && order.Stage != NamedSkuOrderStage.Received && order.Stage != NamedSkuOrderStage.Cancelled)
+                    inTransitAtEnd += Math.Max(0, order.UnitsOrdered);
+            Assert.AreEqual(14, inTransitAtEnd,
+                "steady-state pipeline stock at day 60 is 14u in transit (orders days 47-60, arriving days 61-74)");
+        }
+
+        [Test]
+        public void ForwardOrder_Flour_DepthCoversFreightLead_SustainsDailyBakes()
+        {
+            // Priority 3 Slice 4: with the flour depth set to cover
+            // the modelled freight lead, the flour leg sustains a
+            // daily bake once the pipeline primes — until the authored
+            // Millbrook supply itself is exhausted (H-B4, see below).
+            // The modelled lead is 7 days (Set B: pickup ~day+3,
+            // receipt ~day+7); the depth is 14 — one lead of cover
+            // plus one lead of buffer — because depth equal to the
+            // lead alone does NOT sustain daily bakes under the
+            // existing single-outstanding-order guard: the guard
+            // refuses a top-up while an outstanding lot covers the
+            // requested sacks, so with depth 7 the bin drains between
+            // lumpy sack arrivals and stalls (verified in a scratch
+            // run at depth 7: bakes stall on days 17 and 20-21). That
+            // is a policy finding for B-1 (the depth must exceed the
+            // lead, or the guard needs revisiting in a later slice),
+            // not a defect in the mechanism: the mechanism orders
+            // exactly the forward target net of on-hand and
+            // in-transit, and the guard still refuses duplicates. No
+            // value is invented here — both the lead (7) and the depth
+            // (14) are caller-supplied test values.
+            //
+            // STALL FROM DAY 57 (measured, not assumed): daily
+            // bakes run days 8-56 (49 bakes, 588 lb) and stall from
+            // day 57 with the bin at 2 lb and nothing in transit.
+            // This is NOT the H-B4 supply cap: total supply is 230 lb
+            // start + 520 lb deterministic weekly replenishment over
+            // weeks 1-8 = 750 lb, against 636 lb of 60-day demand, so
+            // Millbrook still holds 16 sacks (160 lb) at the stall.
+            // The stall is the forward request meeting two existing
+            // guards at once. First, the single-outstanding-order
+            // guard lets the pipeline drain between lumpy bursts: it
+            // refuses a top-up whenever the outstanding sacks already
+            // cover the requested sacks, even though the outstanding
+            // lot arrives a week later while the bin burns 12 lb/day.
+            // Second, when the drained pipeline finally asks for the
+            // full forward target — 18 sacks on day 57 — the
+            // all-or-nothing insufficient-stock guard refuses the
+            // whole order because Millbrook holds only 16 sacks
+            // ("Millbrook holds 16 sack(s); order requires 18"), so
+            // the driver orders 0 instead of the 16 available, and
+            // the 7-day lead means no flour can arrive before day 64
+            // anyway. Both are follow-up questions for the
+            // coordinator (guard interaction with forward ordering;
+            // partial fill), NOT silent fixes in this slice: the
+            // mechanism orders exactly the forward target net of
+            // on-hand and in-transit, the guards stay intact, and
+            // flour reconciles exactly (ordered = baked + bin +
+            // in transit). A 60-day sustained flour run needs those
+            // questions answered (and, at the H-B4 horizon, B-3).
+            //
+            // Notions are test-seeded 1u/day and the notions step is
+            // unwired, so only the flour leg can block; fuel is seeded
+            // to 60u. The store holds 0 sacks, so all flour comes
+            // through Millbrook; lots are received through the real
+            // receipt seam exactly 7 days after their order day.
+            // Store target raised to 2,000u: 49 bakes x 24 loaves =
+            // 1,176u past the shared fixture's 1,000u staple_food cap.
+            Slice s = NewSlice(storeTarget: 2000);
+            // Authored Millbrook production (plan section 2 H-B4):
+            // 40-80 lb/week toward a 460-lb target reserve. The shared
+            // MillbrookDefinition() carries inventory only, so this
+            // test adds the production row and applies the weekly
+            // replenishment each day; without it the 230-lb starting
+            // stock alone cannot cover 53 bakes (636 lb) and the
+            // supplier runs dry around day 27.
+            OffMapAidBusinessDefinition millbrookDef = MillbrookDefinition();
+            millbrookDef.Production.Add(new OffMapAidProductionRow
+            {
+                ItemId = "bakery_flour_sack",
+                WeeklyMinimumUnits = 40,
+                WeeklyMaximumUnits = 80,
+                TargetReserveUnits = 460,
+            });
+            var supplier = new OffMapAidBusinessRuntime(millbrookDef);
+            var adapter = new MillbrookFlourFreightCustodyAdapter(supplier, s.Bakery, s.Ids);
+            SeedInputs(s, 0, 1, 60);
+            BookAccount(s, 24, 1, 2, 1);
+
+            const int leadDays = 7;
+            const int flourDepth = 14;
+            int firstBakeDay = 0;
+            int firstStallDay = 0;
+            int bakes = 0;
+            int totalReorderSacks = 0;
+            int totalReplenishedLb = 0;
+            int maxConsecutiveEightLbDays = 0;
+            int consecutiveEightLbDays = 0;
+            bool stallRefusalNamesMillbrookStock = false;
+            string firstStallDayDiag = string.Empty;
+            for (int day = 1; day <= 60; day++)
+            {
+                SeedInputs(s, 0, 1, 0);
+                var due = new List<OffMapAidCargoLot>();
+                foreach (OffMapAidCargoLot lot in supplier.Lots)
+                    if (lot != null && !lot.Received && lot.CreatedDayIndex + leadDays <= day)
+                        due.Add(lot);
+                foreach (OffMapAidCargoLot lot in due)
+                    ReceiveMillbrookLot(s, adapter, lot, day);
+
+                int millbrookBefore = supplier.GetInventoryUnits("bakery_flour_sack");
+                supplier.ApplyWeeklyReplenishment(day);
+                totalReplenishedLb += Math.Max(0, supplier.GetInventoryUnits("bakery_flour_sack") - millbrookBefore);
+
+                int lotsBefore = supplier.Lots.Count;
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, null, day, wireNotions: false,
+                    millbrookSupplier: supplier, flourDepth: flourDepth);
+                Assert.IsTrue(supplier.Lots.Count - lotsBefore <= 1,
+                    $"at most one Millbrook reorder lot per day, day {day}");
+                totalReorderSacks += r.MillbrookReorderSacks;
+                int binLb = s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
+                if (r.BatchesBaked == 1)
+                {
+                    if (firstBakeDay == 0) firstBakeDay = day;
+                    Assert.AreEqual(0, firstStallDay,
+                        $"no bake gap before day {day}: bakes ran daily from day {firstBakeDay}, then stalled day {firstStallDay}");
+                    bakes++;
+                    Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes on a bake day, day {day}");
+                }
+                else if (firstBakeDay > 0 && firstStallDay == 0)
+                {
+                    firstStallDay = day;
+                    firstStallDayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+                    stallRefusalNamesMillbrookStock = firstStallDayDiag.Contains("Millbrook holds 16 sack(s)");
+                    Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("flour"),
+                        $"the first stall day refuses on flour; refusal: {r.Refusal}");
+                }
+                if (binLb == 8)
+                {
+                    consecutiveEightLbDays++;
+                    if (consecutiveEightLbDays > maxConsecutiveEightLbDays)
+                        maxConsecutiveEightLbDays = consecutiveEightLbDays;
+                }
+                else
+                {
+                    consecutiveEightLbDays = 0;
+                }
+            }
+
+            Assert.AreEqual(8, firstBakeDay,
+                "the first bake is day 8: the day-1 order is received exactly one 7-day lead later");
+            Assert.AreEqual(57, firstStallDay,
+                "daily bakes stall from day 57, when the drained pipeline's 18-sack forward request exceeds the 16 sacks Millbrook then holds");
+            Assert.AreEqual(49, bakes, "49 daily bakes, days 8-56 with no gap, then the guard-interaction stall");
+            Assert.AreEqual(49, s.Bakery.WholesaleDeliveries.Count, "49 daily bakes = 49 deliveries");
+            Assert.AreEqual(520, totalReplenishedLb,
+                "the deterministic weekly replenishment totals 520 lb over weeks 1-8 (40-80 lb/week, authored range)");
+            Assert.AreEqual(160, supplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook still holds 160 lb (16 sacks) at the end of the run: this stall is not H-B4 exhaustion (total supply 750 lb > 636 lb demand)");
+            Assert.IsTrue(stallRefusalNamesMillbrookStock,
+                "the first stall day's reorder refusal names Millbrook holding 16 sacks against an 18-sack request; diag: " + firstStallDayDiag);
+            Assert.AreEqual(2, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "the bin rests at 2 lb at the end: every ordered pound was either baked or is in the bin");
+            Assert.AreEqual(0, OutstandingMillbrookLb(supplier),
+                "nothing is left in transit at the end of the run");
+            Assert.AreEqual(10 * totalReorderSacks, 12 * bakes
+                + s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId) + OutstandingMillbrookLb(supplier),
+                "flour reconciles exactly: ordered pounds = baked pounds + bin + in transit (no flour created or lost)");
+            Assert.IsTrue(maxConsecutiveEightLbDays <= leadDays,
+                $"the bin never rests at 8 lb for more than the {leadDays}-day lead window (max run {maxConsecutiveEightLbDays} days)");
+            Assert.AreEqual(48 * totalReorderSacks, supplier.CashCents,
+                "Millbrook is paid exactly 48c per reorder sack, once each (exactly-once settlement)");
+            Assert.AreEqual(230 + totalReplenishedLb - 10 * totalReorderSacks, supplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook stock reconciles: 230 start + weekly replenishment - reordered pounds");
+            Assert.AreEqual(2000 - 48 * totalReorderSacks + 48 * bakes, s.BakeryRuntime.CurrentCashCents,
+                "bakery cash reconciles: 2,000 - 48c per reorder sack + 48c per wholesale transfer");
+        }
+
+        [Test]
+        public void ForwardOrder_NeverOrdersBeyondCoveredDemand()
+        {
+            // Priority 3 Slice 4: with depth N, total ordered units
+            // over the run equal total baked demand plus the
+            // steady-state pipeline stock, never more; and no order is
+            // placed on a day whose in-transit + on-hand already
+            // covers depth N. Depth N = 21 here (greater than the
+            // 14-day transit, so in-transit units always arrive
+            // within the depth window and the windowed cover check is
+            // exact): target = (21 + 1) x 1u = 22u. Day 1 orders 22u
+            // in one order; days 2-14 order nothing (22u in transit
+            // covers); from day 15 the pipeline feeds one bake a day
+            // and orders one replacement a day, except day 15 itself.
+            // Total ordered = 22 + 45 = 67u = 46 baked + 21u
+            // steady-state pipeline stock (7u sellable + 14u in
+            // transit at day 60). Fixture counterparty seeded to
+            // 100u, as in the depth-14 test; fuel seeded to 60u.
+            // Store target raised to 2,000u as in the depth-14 test
+            // (46 bakes x 24 loaves = 1,104u past the 1,000u cap).
+            Slice s = NewSlice(storeTarget: 2000);
+            Series2CounterpartyRegistration reg = ProductionRegistrationWithSupply(100);
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 60);
+            BookAccount(s, 24, 1, 2, 2);
+
+            const int depth = 21;
+            int target = depth + 1;
+            int ordersBefore;
+            for (int day = 1; day <= 60; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                int coverBefore = NotionsCoverBeforeDay(s, day, depth);
+                ordersBefore = s.StoreService.Orders.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: depth);
+                Assert.IsTrue(s.StoreService.Orders.Count - ordersBefore <= 1,
+                    $"at most one notions order per day, day {day}");
+                if (coverBefore >= target)
+                    Assert.AreEqual(0, r.NotionsOrdered,
+                        $"no order on a day whose in-transit + on-hand already covers depth {depth} " +
+                        $"(cover {coverBefore} >= target {target}), day {day}");
+                if (day <= 14)
+                {
+                    Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+                }
+                else
+                {
+                    Assert.AreEqual(1, r.BatchesBaked, $"depth {depth} sustains a daily bake, day {day}");
+                }
+            }
+
+            Assert.AreEqual(22, s.StoreService.Orders[0].UnitsOrdered,
+                "day 1 orders today + 21 forward = 22u in one order");
+            Assert.AreEqual(67, TotalNotionsOrderedUnits(s),
+                "total ordered 67u = 46 baked demand + 21u steady-state pipeline stock, never more");
+            Assert.AreEqual(46, s.Bakery.WholesaleDeliveries.Count, "46 daily bakes = 46 deliveries");
+            int pipelineAtEnd = s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId)
+                + Math.Max(0, s.Notions.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId));
+            foreach (NamedSkuOrder order in s.StoreService.Orders)
+                if (order != null && order.Stage != NamedSkuOrderStage.Received && order.Stage != NamedSkuOrderStage.Cancelled)
+                    pipelineAtEnd += Math.Max(0, order.UnitsOrdered);
+            Assert.AreEqual(21, pipelineAtEnd,
+                "steady-state pipeline stock at day 60 is 21u = depth (sellable + in transit + bin)");
+            Assert.AreEqual(46 + pipelineAtEnd, TotalNotionsOrderedUnits(s),
+                "total ordered equals baked demand plus steady-state pipeline stock, exactly");
         }
     }
 }

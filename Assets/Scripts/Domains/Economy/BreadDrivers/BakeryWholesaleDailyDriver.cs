@@ -68,6 +68,17 @@ namespace LandLedgers.Economy.BreadDrivers
         public Series2NotionsSupply NotionsSupply;
         public Series2CounterpartyRegistration NotionsRegistration;
 
+        /// <summary>Priority 3 Slice 4: caller-supplied pipeline depths
+        /// in days, one per supply leg — how many future days of demand
+        /// the pipeline should cover beyond today. Both default to 0
+        /// (today's behaviour exactly); the production default stays 0
+        /// until the owner names the policy (B-1). The forwarder does
+        /// not set these fields, so no nonzero depth is wired in
+        /// production by this slice. Parameters, not values: no depth
+        /// is invented here.</summary>
+        public int NotionsPipelineDepthDays;
+        public int FlourPipelineDepthDays;
+
         /// <summary>Plan 04 Slice 4: cumulative-actuals carrier. The
         /// driver is stateless, so the caller threads the running totals
         /// in (the forwarder keeps them in member fields, diagnostics
@@ -246,6 +257,30 @@ namespace LandLedgers.Economy.BreadDrivers
             return needs;
         }
 
+        /// <summary>Priority 3 Slice 4: pounds of flour in unreceived
+        /// Millbrook lots for this buyer — committed (in freight) and
+        /// uncommitted (awaiting pickup) alike, since both are future
+        /// flour the forward target must not order twice. Received lots
+        /// are already in the bin (on-hand), never counted here. This
+        /// is the depth computation's in-transit figure; it is wider
+        /// than the single-outstanding-order guard's filter (which
+        /// counts uncommitted lots only), and the two are not confused:
+        /// the guard still refuses a duplicate reorder on its own
+        /// terms inside PlaceReorder.</summary>
+        private static int OutstandingMillbrookLb(BakeryWholesaleDailyInputs inputs)
+        {
+            int total = 0;
+            if (inputs == null || inputs.MillbrookSupplier == null || inputs.MillbrookSupplier.Lots == null) return 0;
+            foreach (OffMapAidCargoLot lot in inputs.MillbrookSupplier.Lots)
+            {
+                if (lot == null) continue;
+                if (lot.Received) continue;
+                if (!string.Equals(lot.BuyerBusinessId, inputs.BakeryBusinessId, StringComparison.Ordinal)) continue;
+                total += Math.Max(0, lot.InventoryUnits);
+            }
+            return total;
+        }
+
         public static BakeryWholesaleDailyResult RunDay(BakeryWholesaleDailyInputs inputs, List<string> diag)
         {
             diag = diag ?? new List<string>();
@@ -293,10 +328,28 @@ namespace LandLedgers.Economy.BreadDrivers
             int batchesToday = inputs.ProductionDriver.PlannedBatchIds.Count;
             int flourOnHandLb = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
             int needLb = batchesToday * BakeryBreadCatalog.BreadFlourPerBatch - flourOnHandLb;
+            // Priority 3 Slice 4: forward cover. At depth 0 orderLb ==
+            // needLb, so today's behaviour is unchanged. At depth D > 0
+            // the procurement step seeks (D + 1) x one day's flour need
+            // — today plus D future days — net of bin on-hand and
+            // outstanding in-transit Millbrook lb. The shortfall itself
+            // stays bin-only (Slice 2 scope note): flour already
+            // dispensed into a batch's custody is NOT subtracted here —
+            // driver-side custody awareness is a separate follow-up.
+            // needLb keeps tracking today's shortfall (after the local
+            // purchase) for FlourNeedPoundsRemaining and the "still
+            // short" diagnostic; orderLb tracks the remaining forward
+            // need for the purchase/reorder decisions.
+            int flourDepthDays = Math.Max(0, inputs.FlourPipelineDepthDays);
+            int inTransitFlourLb = flourDepthDays > 0 ? OutstandingMillbrookLb(inputs) : 0;
+            int forwardTargetLb = (flourDepthDays + 1) * batchesToday * BakeryBreadCatalog.BreadFlourPerBatch;
+            int orderLb = flourDepthDays > 0
+                ? Math.Max(0, forwardTargetLb - flourOnHandLb - inTransitFlourLb)
+                : needLb;
             int? flourCostPerBatchCents = null;
-            if (batchesToday > 0 && needLb > 0)
+            if (batchesToday > 0 && (needLb > 0 || orderLb > 0))
             {
-                int sacksNeeded = (needLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
+                int sacksNeeded = (orderLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
                 int storeSacks = inputs.StoreRuntimeState != null
                     ? inputs.StoreRuntimeState.GetRetailItemStockUnits(
                         BakeryFlourLocalPurchase.FlourItemId, BakeryFlourLocalPurchase.FlourCategoryId)
@@ -360,6 +413,7 @@ namespace LandLedgers.Economy.BreadDrivers
                                 result.FlourSacksPurchased += purchase.SacksPurchased;
                                 result.FlourPoundsPurchased += purchase.PoundsReceived;
                                 needLb -= purchase.PoundsReceived;
+                                orderLb -= purchase.PoundsReceived;
                             }
                             else if (!purchase.Succeeded)
                             {
@@ -386,9 +440,9 @@ namespace LandLedgers.Economy.BreadDrivers
                 // any remaining shortfall is the loud Precheck refusal.
                 // The driver has no owner name; the buyer business id is
                 // the honest identifier on the cash transaction.
-                if (needLb > 0 && inputs.MillbrookSupplier != null && inputs.BakeryCashPort != null)
+                if (orderLb > 0 && inputs.MillbrookSupplier != null && inputs.BakeryCashPort != null)
                 {
-                    int sacksRemaining = (needLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
+                    int sacksRemaining = (orderLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
                     string reorderRefusal = MillbrookFlourReorder.PlaceReorder(
                         inputs.MillbrookSupplier, inputs.BakeryCashPort, inputs.BakeryBusinessId,
                         inputs.BakeryBusinessId, sacksRemaining, dayIndex, diag, out OffMapAidCargoLot reorderLot);
@@ -408,6 +462,11 @@ namespace LandLedgers.Economy.BreadDrivers
                     {
                         diag.Add($"BakeryWholesaleDailyDriver: Millbrook reorder refused — {reorderRefusal}");
                     }
+                }
+
+                if (flourDepthDays > 0 && needLb > 0 && orderLb <= 0)
+                {
+                    diag.Add($"BakeryWholesaleDailyDriver: no new flour order — the forward target ({forwardTargetLb} lb) is already covered by {flourOnHandLb} lb on hand + {inTransitFlourLb} lb in transit.");
                 }
 
                 if (needLb > 0)
@@ -452,6 +511,7 @@ namespace LandLedgers.Economy.BreadDrivers
                     BakeryBusinessId = inputs.BakeryBusinessId,
                     BatchesToday = batchesToday,
                     DayIndex = dayIndex,
+                    PipelineDepthDays = inputs.NotionsPipelineDepthDays,
                 };
                 BakeryNotionsDailySupplyResult notionsResult =
                     BakeryNotionsDailySupply.RunDay(notionsInputs, diag);

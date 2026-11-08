@@ -835,6 +835,30 @@ namespace LandLedgers.Economy.Logistics
             /// leaves this empty and restore falls back to shipment state.
             /// </summary>
             public List<string> ShipmentIdsWithDispatchAuthorities = new List<string>();
+            /// <summary>
+            /// Priority 7 Slice 2 (D-F2): the dispatch plans (real driver +
+            /// draft animals) recorded for the captured shipments, so a
+            /// Planned shipment whose transport is not yet bound keeps its
+            /// plan across save/load instead of waiting forever on "no
+            /// dispatch plan". Additive; an old save leaves this null/empty
+            /// and restore behaves exactly as before (no plan, same
+            /// diagnostic, no crash). Format version stays 6.
+            /// </summary>
+            public List<FreightDispatchPlanSaveDto> DispatchPlans = new List<FreightDispatchPlanSaveDto>();
+        }
+
+        /// <summary>
+        /// Priority 7 Slice 2 (D-F2): one persisted dispatch plan — the
+        /// real driver and draft animals for a single shipment, as printed
+        /// by EntityId.ToString ("P7", "A0"). New small serializable type;
+        /// no existing field renamed, no enum touched.
+        /// </summary>
+        [Serializable]
+        public sealed class FreightDispatchPlanSaveDto
+        {
+            public string ShipmentId = string.Empty;
+            public string DriverPersonId = string.Empty;
+            public List<string> AnimalIds = new List<string>();
         }
 
         /// <summary>Captures shipment DTOs (the state's own save DTO — owned by the state).</summary>

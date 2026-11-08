@@ -486,6 +486,33 @@ namespace LandLedgers.Economy.Freight
         {
             FreightShipmentService.FreightServiceSaveDto dto = service.CaptureSaveDto(AllShipments());
             dto.ServiceAgreements = serviceAgreements.CaptureSaveDto();
+            // Priority 7 Slice 2 (D-F2): persist the dispatch plans for the
+            // captured shipments, so a Planned shipment whose transport is
+            // not yet bound keeps its plan across save/load. Only plans for
+            // shipments in this capture are written.
+            dto.DispatchPlans = new List<FreightShipmentService.FreightDispatchPlanSaveDto>();
+            foreach (LogisticsShipmentState shipment in AllShipments())
+            {
+                if (shipment == null)
+                    continue;
+                if (!dispatchPlans.TryGetValue(shipment.ShipmentId, out DispatchPlan plan) || plan == null)
+                    continue;
+                var saved = new FreightShipmentService.FreightDispatchPlanSaveDto
+                {
+                    ShipmentId = shipment.ShipmentId,
+                    DriverPersonId = plan.DriverId.ToString(),
+                    AnimalIds = new List<string>(),
+                };
+                if (plan.AnimalIds != null)
+                {
+                    foreach (EntityId animal in plan.AnimalIds)
+                    {
+                        if (animal.IsValid)
+                            saved.AnimalIds.Add(animal.ToString());
+                    }
+                }
+                dto.DispatchPlans.Add(saved);
+            }
             return dto;
         }
 
@@ -494,7 +521,9 @@ namespace LandLedgers.Economy.Freight
         /// (cleared, then re-filled from the DTO) and the service re-tracks
         /// the restored states, so a mid-transport restore neither loses
         /// nor duplicates cargo. Dispatch plans are re-derived from the
-        /// restored shipments' bound driver/animals.
+        /// restored shipments' bound driver/animals, and — Priority 7 Slice 2
+        /// (D-F2) — from the DTO-carried plans for shipments the rebuild did
+        /// not cover, with the rebuild winning on conflict.
         /// </summary>
         public List<LogisticsShipmentState> RestoreSaveDto(
             FreightShipmentService.FreightServiceSaveDto dto,
@@ -534,6 +563,46 @@ namespace LandLedgers.Economy.Freight
                     }
                     if (TryParseWithKind(shipment.physicalDriverPersonId, EntityKind.Person, out EntityId driver))
                         dispatchPlans[shipment.ShipmentId] = new DispatchPlan { DriverId = driver, AnimalIds = animals };
+                }
+            }
+
+            // Priority 7 Slice 2 (D-F2): re-apply the DTO-carried dispatch
+            // plans AFTER the transport-bound rebuild above. Precedence: the
+            // transport-bound rebuild wins on conflict — it derives from the
+            // shipment's own bound transport, the fresher truth — so a DTO
+            // plan fills only a shipment the rebuild did not cover (e.g. a
+            // Planned shipment whose dispatch task is recorded but whose
+            // transport is not yet bound). A null/missing field (old save)
+            // restores as no plans: today's behavior, no crash, no migration.
+            if (dto != null && dto.DispatchPlans != null)
+            {
+                var restoredById = new Dictionary<string, LogisticsShipmentState>(StringComparer.Ordinal);
+                foreach (LogisticsShipmentState shipment in restored)
+                {
+                    if (shipment != null && !restoredById.ContainsKey(shipment.ShipmentId))
+                        restoredById[shipment.ShipmentId] = shipment;
+                }
+                foreach (FreightShipmentService.FreightDispatchPlanSaveDto saved in dto.DispatchPlans)
+                {
+                    if (saved == null || string.IsNullOrWhiteSpace(saved.ShipmentId))
+                        continue;
+                    if (!restoredById.TryGetValue(saved.ShipmentId, out LogisticsShipmentState shipment)
+                        || shipment == null)
+                        continue;
+                    if (dispatchPlans.ContainsKey(shipment.ShipmentId))
+                        continue;
+                    if (!TryParseWithKind(saved.DriverPersonId, EntityKind.Person, out EntityId driver))
+                        continue;
+                    var animals = new List<EntityId>();
+                    if (saved.AnimalIds != null)
+                    {
+                        foreach (string animalText in saved.AnimalIds)
+                        {
+                            if (TryParseWithKind(animalText, EntityKind.Animal, out EntityId animal))
+                                animals.Add(animal);
+                        }
+                    }
+                    dispatchPlans[shipment.ShipmentId] = new DispatchPlan { DriverId = driver, AnimalIds = animals };
                 }
             }
 

@@ -493,11 +493,52 @@ namespace LandLedgers.EditorTests.Economy
                 trace.Add(restored.Status);
             }
             string diagnosticsText = string.Join("; ", diag);
-            Assert.IsTrue(diagnosticsText.Contains("no dispatch plan"),
-                "the wait must name the missing dispatch plan, but diagnostics were: " + diagnosticsText);
+            Assert.IsTrue(!diagnosticsText.Contains("no dispatch plan"),
+                "the wait must not occur: the dispatch plan was restored from the save DTO, so the shipment must dispatch without ever waiting on a missing plan, but diagnostics were: " + diagnosticsText);
             Assert.AreEqual(LogisticsShipmentStatus.InTransit, restored.Status,
                 "D-F2: the restored Planned shipment must dispatch (InTransit) within the tick loop; trace: "
                 + string.Join(", ", trace) + "; diagnostics: " + diagnosticsText);
+        }
+
+        [Test]
+        public void DispatchPlan_OldSaveWithoutPlans_RestoresAsToday_NoCrash()
+        {
+            // Priority 7 Slice 2 (D-F2) old-save compatibility: a save
+            // written before the repair carries no dispatch-plan field
+            // (null here, as a deserialized pre-fix DTO would read it), and
+            // restores exactly as today — no plan, the same "no dispatch
+            // plan" diagnostic, no crash, and the shipment stays Planned
+            // (stranded, as pre-fix saves in this shape stay stranded; no
+            // silent fix is invented for old saves). Format version stays 6.
+            BindAndAuthorize();
+            SimulateSupplierPickup();
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status, "the picked-up shipment is Planned");
+            Assert.IsTrue(shipment.loadApplied, "the supplier pickup applied the load");
+            Assert.IsTrue(!shipment.physicalTransportBound, "transport is not yet bound before dispatch");
+
+            FreightShipmentService.FreightServiceSaveDto dto = freight.CaptureSaveDto();
+            Assert.IsNotNull(dto.DispatchPlans, "a current capture must carry the plan list");
+            Assert.AreEqual(1, dto.DispatchPlans.Count, "the capture must carry exactly one plan for this fixture");
+            Assert.AreEqual(ShipmentId, dto.DispatchPlans[0].ShipmentId, "the carried plan must name the shipment");
+            Assert.AreEqual("P7", dto.DispatchPlans[0].DriverPersonId, "the carried plan must name driver Ethan (P7)");
+            Assert.AreEqual(1, dto.DispatchPlans[0].AnimalIds.Count, "the carried plan must name one draft animal");
+            Assert.AreEqual("A0", dto.DispatchPlans[0].AnimalIds[0], "the carried plan must name horse A0");
+
+            // Simulate the old save: the field is absent (null).
+            dto.DispatchPlans = null;
+            FreightProductionDriver restoredFreight = RestoreIntoFreshDriver(dto);
+            LogisticsShipmentState restored = FindShipmentIn(restoredFreight, ShipmentId);
+            Assert.IsNotNull(restored, "the restored driver must hold the Planned shipment");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, restored.Status, "the restored shipment is Planned");
+            Assert.IsTrue(restored.loadApplied, "the restored shipment keeps its applied load");
+            hooks.IsVehicleOffMap = _ => false;
+            diag.Clear();
+            restoredFreight.AdvanceTick(86400f, hooks, Handler(), diag);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, restored.Status,
+                "an old save without plans restores as today: the Planned shipment still waits");
+            Assert.IsTrue(string.Join("; ", diag).Contains("no dispatch plan"),
+                "an old save without plans must keep today's diagnostic, but diagnostics were: "
+                + string.Join("; ", diag));
         }
     }
 }

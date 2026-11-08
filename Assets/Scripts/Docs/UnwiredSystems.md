@@ -81,6 +81,7 @@ found, the test fails loudly rather than passing silently.
 | PhysicalCapacityEvaluator | Domains/Economy/Storage/PhysicalCapacityContracts.cs | Domains/Economy/Storage | (none) |
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
 | LotIdentityResolver | Domains/Economy/Logistics/LotIdentity.cs | Domains/Economy/Logistics | (none) |
+| PerishableLotState | Domains/Economy/Logistics/PerishableLotState.cs | Domains/Economy/Logistics | (none) |
 
 ## Notes per entry
 
@@ -225,6 +226,28 @@ found, the test fails loudly rather than passing silently.
   above stay: the resolver reads the F1/F2 types only through
   `PhysicalLoad` (a struct, scan-exempt, in the double-count pin
   test) and references no other registered-unwired type by name.
+- `PerishableLotState` (Priority E Slice 5, 2026-11-08) is the
+  perishable condition of one lot: separate physical-condition,
+  food-safety, remaining-life, handling-history, and perceived-vs-known
+  dimensions (Canon XXXI 4.5/4.6, Technical XIV 4.1/4.2); deterministic
+  simulation-time deterioration applying only the authored bakery
+  AgeToDay rule; spoilage accounting that removes nothing from any live
+  authority. It is registered here honestly as UNWIRED by design, not
+  oversight: the Slice 5 brief activates no driver — the state is
+  constructed in tests alongside the real authorities and no flow calls
+  it yet, and no authority DTO carries it yet (attachment is
+  downstream). Its sibling types need no row:
+  `PerishablePhysicalCondition`, `PerishableSafetyState`, and
+  `PerishableDisposition` are enums and `UsefulLifeEstimate`,
+  `PerishableHandlingEvent`, `SpoilageRecord`, and the nested
+  `SaveDto` are structs (the scan enumerates concrete public top-level
+  classes only). Remove this row the day a production flow or authority
+  DTO carries the state; do not wire it merely to clear the entry. The
+  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, and `LotIdentityResolver` rows above stay:
+  the state reads no registered-unwired type by name (it consults no F1
+  spec parameter — the spec carries no aging parameter — and names
+  `BakeryBreadCatalog` only for the authored bread rule).
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -396,6 +419,13 @@ note records their audited status so the question does not reopen:
   registered-unwired type by name. `LotIdentity` needs no row: it
   has production callers outside its owning directory (the three
   provenance-append sites).
+- Priority E Slice 5 (2026-11-08):
+  `PerishableLotState` registered as UNWIRED by design — perishable
+  lot condition foundation, constructed in tests alongside the real
+  authorities, no flow calls it yet and no authority DTO carries it.
+  The `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, and `LotIdentityResolver` rows stay:
+  the state reads no registered-unwired type by name.
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note

@@ -1552,5 +1552,325 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(18, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 30 - 12 lb after the bake");
             Assert.AreEqual(1, f.Bakery.WholesaleDeliveries.Count, "exactly one delivery record on the restored state");
         }
+
+        // ---- Priority 3 Slice 1 (2026-11-08): pins the smoke-test
+        // flour arithmetic and the 14-on / 14-off reproduction --------
+        // Tests only; no production code. The existing tests seed flour
+        // directly each day (SeedInputs(s, 12, 0, 0)), which bypasses
+        // the freight lag and therefore cannot exhibit the stall. These
+        // four tests add the lag: flour arrives through the Millbrook
+        // receipt seam (ReceiveMillbrookLot) and notions through the
+        // real 14-day pipeline. All four are expected to PASS — they pin
+        // the mechanism, and a failure rewrites plan §2, so none is
+        // worked around here.
+        private static void AssertBlockedLineNamesCause(Slice s, int diagBefore, string batchId, int day, string cause)
+        {
+            string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+            Assert.IsTrue(dayDiag.Contains($"[BakeryProduction] batch {batchId} blocked day {day} ({cause})"),
+                $"the blocked line names the {cause} cause; diag: {dayDiag}");
+            Assert.IsTrue(dayDiag.Contains($"producible: no ({cause})"),
+                $"the blocked line reads producible: no ({cause}); diag: {dayDiag}");
+        }
+
+        [Test]
+        public void Flour_TwoSackDelivery_BakesOnce_LeavesEightLbResidue_BlocksNextBake()
+        {
+            // Priority 3 Slice 1 (H-A1): a 20-lb bin (one 2-sack
+            // Millbrook lot received through the freight receipt seam)
+            // bakes exactly once and leaves 8 lb of residue that can
+            // never bake a 12-lb batch alone. The next day's driver
+            // orders only today's 4-lb shortfall rounded up to 1 sack,
+            // and the batch refuses on flour with the blocked line
+            // reading covered 24u / producible: no (flour) — the exact
+            // smoke-test figure (8 lb vs 12 lb).
+            Slice s = NewSlice();
+            var supplier = new OffMapAidBusinessRuntime(MillbrookDefinition());
+            var adapter = new MillbrookFlourFreightCustodyAdapter(supplier, s.Bakery, s.Ids);
+            var bakeryCash = new Series2BusinessRuntimeCashPort(s.BakeryRuntime);
+
+            Assert.IsNull(supplier.TryPlaceOrder(
+                "test-flour-2sack", BakeryInstanceId, "Glen Pierce", 2, bakeryCash, 1, out OffMapAidCargoLot twoSackLot),
+                "the 2-sack Millbrook order should place");
+            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 96c for 2 sacks at 48c");
+            Assert.AreEqual(96, supplier.CashCents, "Millbrook +96c for the 2-sack order");
+            Assert.AreEqual(210, supplier.GetInventoryUnits("bakery_flour_sack"), "Millbrook 230 - 20 lb");
+            ReceiveMillbrookLot(s, adapter, twoSackLot, 1);
+            Assert.AreEqual(20, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin 20 lb after the 2-sack receipt");
+
+            SeedInputs(s, 0, 1, 40);
+            BookAccount(s, 24, 1, 2, 1);
+
+            BakeryWholesaleDailyResult day1 = RunDay(s, null, 1, wireNotions: false, millbrookSupplier: supplier);
+            Assert.AreEqual(1, day1.BatchesBaked, "day 1 bakes the one batch the 20-lb bin supports");
+            Assert.AreEqual(1, day1.TransfersCompleted, "the transfer completes day 1");
+            Assert.AreEqual(24, day1.UnitsStocked, "24 loaves stocked");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin 20 - 12 lb after the bake: the 8-lb residue");
+            Assert.AreEqual(1952, s.BakeryRuntime.CurrentCashCents, "bakery 1,904c + 48c wholesale");
+
+            int diagBefore = s.Diag.Count;
+            BakeryWholesaleDailyResult day2 = RunDay(s, null, 2, wireNotions: false, millbrookSupplier: supplier);
+            Assert.AreEqual(0, day2.BatchesBaked, "day 2 bakes nothing on the 8-lb residue");
+            Assert.IsTrue(day2.Refusal != null && day2.Refusal.Contains("flour"),
+                "day 2 refuses on flour; refusal: " + day2.Refusal);
+            Assert.AreEqual(4, day2.FlourNeedPoundsRemaining, "the shortfall is 12 - 8 = 4 lb");
+            Assert.AreEqual(1, day2.MillbrookReorderSacks, "the driver orders only today's shortfall rounded up: 1 sack");
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(day2.MillbrookReorderLotId),
+                "the 1-sack reorder is placed day 2");
+            string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+            Assert.IsTrue(dayDiag.Contains("covered 24u"),
+                "the blocked line still calls the planned batch covered; diag: " + dayDiag);
+            Assert.IsTrue(dayDiag.Contains("producible: no (flour)"),
+                "the blocked line states the batch is not producible on flour; diag: " + dayDiag);
+            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "bakery 1,952c - 48c for the 1-sack reorder");
+            Assert.AreEqual(144, supplier.CashCents, "Millbrook +96c (2-sack) + 48c (1-sack reorder)");
+            Assert.AreEqual(200, supplier.GetInventoryUnits("bakery_flour_sack"), "Millbrook 230 - 20 - 10 lb");
+        }
+
+        [Test]
+        public void Flour_ReorderInTransit_NoDuplicateOrder_WhileOutstanding()
+        {
+            // Priority 3 Slice 1 (H-A1): the single-outstanding-order
+            // guard. With the day-2 1-sack reorder lot placed,
+            // uncommitted and unreceived, the day-3 driver refuses a
+            // second reorder naming the outstanding lot and orders
+            // nothing — so the 8-lb residue cannot be closed sooner by
+            // double-ordering while the first sack is still in the
+            // freight pipeline.
+            Slice s = NewSlice();
+            var supplier = new OffMapAidBusinessRuntime(MillbrookDefinition());
+            var adapter = new MillbrookFlourFreightCustodyAdapter(supplier, s.Bakery, s.Ids);
+            var bakeryCash = new Series2BusinessRuntimeCashPort(s.BakeryRuntime);
+
+            Assert.IsNull(supplier.TryPlaceOrder(
+                "test-flour-2sack", BakeryInstanceId, "Glen Pierce", 2, bakeryCash, 1, out OffMapAidCargoLot twoSackLot),
+                "the 2-sack Millbrook order should place");
+            ReceiveMillbrookLot(s, adapter, twoSackLot, 1);
+            Assert.AreEqual(20, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin 20 lb after the 2-sack receipt");
+
+            SeedInputs(s, 0, 1, 40);
+            BookAccount(s, 24, 1, 2, 1);
+
+            BakeryWholesaleDailyResult day1 = RunDay(s, null, 1, wireNotions: false, millbrookSupplier: supplier);
+            Assert.AreEqual(1, day1.BatchesBaked, "day 1 bakes once from the 20-lb bin");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 8 lb after the bake");
+
+            BakeryWholesaleDailyResult day2 = RunDay(s, null, 2, wireNotions: false, millbrookSupplier: supplier);
+            Assert.AreEqual(0, day2.BatchesBaked, "day 2 bakes nothing on the 8-lb residue");
+            Assert.AreEqual(1, day2.MillbrookReorderSacks, "day 2 orders the 4-lb shortfall as 1 sack");
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(day2.MillbrookReorderLotId),
+                "the 1-sack reorder is placed day 2");
+            string reorderLotId = day2.MillbrookReorderLotId;
+            Assert.AreEqual(2, supplier.Lots.Count, "exactly two Millbrook lots (received 2-sack + outstanding 1-sack reorder)");
+            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 96c (2-sack) + 48c wholesale - 48c (1-sack reorder)");
+
+            int diagBefore = s.Diag.Count;
+            BakeryWholesaleDailyResult day3 = RunDay(s, null, 3, wireNotions: false, millbrookSupplier: supplier);
+            Assert.IsTrue(string.IsNullOrWhiteSpace(day3.MillbrookReorderLotId),
+                "no second reorder while the 1-sack lot is outstanding; lot id: " + day3.MillbrookReorderLotId);
+            Assert.AreEqual(0, day3.MillbrookReorderSacks, "no sacks reordered day 3");
+            Assert.AreEqual(0, day3.BatchesBaked, "still nothing bakes day 3");
+            Assert.IsTrue(day3.Refusal != null && day3.Refusal.Contains("flour"),
+                "day 3 still refuses on flour; refusal: " + day3.Refusal);
+            string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+            Assert.IsTrue(dayDiag.Contains("already covers"),
+                "the day-3 refusal names the already-covered outstanding lot; diag: " + dayDiag);
+            Assert.IsTrue(dayDiag.Contains(reorderLotId),
+                "the refusal names the outstanding 1-sack lot; diag: " + dayDiag);
+            int reorderLots = 0;
+            foreach (OffMapAidCargoLot lot in supplier.Lots)
+                if (lot != null && lot.LotId != null && lot.LotId.Contains("flour-reorder-")) reorderLots++;
+            Assert.AreEqual(1, reorderLots, "exactly 1 reorder lot exists");
+            Assert.AreEqual(2, supplier.Lots.Count, "still exactly two Millbrook lots");
+            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "no second debit: bakery cash unchanged by the refused reorder");
+        }
+
+        [Test]
+        public void NotionsPipeline_SixtyDayCycle_TwoFullPeriods()
+        {
+            // Priority 3 Slice 1 (H-B1/H-A2): pins the 14-on / 14-off
+            // notions cycle over a full 60 days. Flour is test-seeded
+            // 12 lb/day so only the notions leg can block; fuel is
+            // seeded to 40u (28 bakes in the run, inside the cap).
+            // Priming orders days 1-14 feed bakes days 15-28; no order
+            // is placed on a bake day, so the pipeline drains and
+            // baking stalls days 29-42 while orders resume 1/day;
+            // those arrivals feed bakes days 43-56; the second stall
+            // resumes days 57-60.
+            //
+            // Finite-counterparty note: the production registration
+            // carries the authored 30u finite supply, so the second
+            // stall window can order only 2 more units (days 57-58,
+            // orders 29-30) before the supply exhausts; days 59-60
+            // order nothing. The 14 + 14 order counts below are the two
+            // full 14-order windows (priming and first stall); the cap
+            // itself is pinned by Slice 6.
+            Slice s = NewSlice();
+            Series2CounterpartyRegistration reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 40);
+            BookAccount(s, 24, 1, 2, 2);
+
+            for (int day = 1; day <= 14; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(1, r.NotionsOrdered, $"one priming notion ordered, day {day}");
+                Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    $"day {day} refuses on notions; refusal: {r.Refusal}");
+            }
+            Assert.AreEqual(14, s.StoreService.Orders.Count, "14 priming orders over days 1-14");
+            for (int i = 0; i < 14; i++)
+            {
+                Assert.AreEqual(i + 15, s.StoreService.Orders[i].ExpectedArrivalDayIndex,
+                    $"priming order {i + 1} arrives day {i + 15} (14-day lag)");
+                Assert.AreEqual(1, s.StoreService.Orders[i].UnitsOrdered,
+                    $"priming order {i + 1} is 1u");
+            }
+
+            for (int day = 15; day <= 28; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(1, r.BatchesBaked, $"the primed pipeline bakes daily, day {day}");
+                Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                Assert.AreEqual(0, r.NotionsOrdered, $"no replacement order on an arrival day (feed covers), day {day}");
+                Assert.AreEqual(1, r.NotionsUnitsFed, $"the day-{day - 14} priming order's unit feeds the day {day} bake");
+            }
+            Assert.AreEqual(14, s.StoreService.Lots.Count, "14 arrival lots, one per priming order");
+            Assert.AreEqual(14, s.Bakery.WholesaleDeliveries.Count, "14 consecutive daily bakes = 14 deliveries");
+
+            for (int day = 29; day <= 42; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(0, r.BatchesBaked, $"no bake once the primed window drains, day {day}");
+                Assert.AreEqual(1, r.NotionsOrdered, $"orders resume 1/day on stall days, day {day}");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    $"day {day} refuses on notions; refusal: {r.Refusal}");
+                AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[s.Bakery.Batches.Count - 1].BatchId, day, "notions");
+            }
+            Assert.AreEqual(28, s.StoreService.Orders.Count, "14 priming + 14 stall-day orders (14 + 14)");
+            for (int i = 14; i < 28; i++)
+            {
+                Assert.AreEqual(s.StoreService.Orders[i].OrderDayIndex + 14, s.StoreService.Orders[i].ExpectedArrivalDayIndex,
+                    $"stall-day order {i + 1} arrives 14 days after its order day");
+                Assert.AreEqual(1, s.StoreService.Orders[i].UnitsOrdered,
+                    $"stall-day order {i + 1} is 1u");
+            }
+
+            for (int day = 43; day <= 56; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(1, r.BatchesBaked, $"the second pipeline window bakes daily, day {day}");
+                Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                Assert.AreEqual(0, r.NotionsOrdered, $"no replacement order on an arrival day (feed covers), day {day}");
+                Assert.AreEqual(1, r.NotionsUnitsFed, $"the day-{day - 14} stall-window order's unit feeds the day {day} bake");
+            }
+            Assert.AreEqual(28, s.StoreService.Lots.Count, "28 arrival lots, one per order placed days 1-42");
+            Assert.AreEqual(28, s.Bakery.WholesaleDeliveries.Count, "28 daily bakes = 28 deliveries over the run");
+
+            for (int day = 57; day <= 60; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(0, r.BatchesBaked, $"the stall resumes once the second window drains, day {day}");
+                Assert.AreEqual(day <= 58 ? 1 : 0, r.NotionsOrdered,
+                    day <= 58
+                        ? $"day {day} orders the 1u shortfall (finite supply still has room)"
+                        : $"day {day} orders nothing: the 30u finite supply is exhausted");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    $"day {day} refuses on notions; refusal: {r.Refusal}");
+                AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[s.Bakery.Batches.Count - 1].BatchId, day, "notions");
+            }
+            Assert.AreEqual(30, s.StoreService.Orders.Count,
+                "30 orders total: 14 priming + 14 first-stall + 2 second-stall, exhausting the 30u finite supply");
+            Assert.AreEqual(300, s.Market.TotalOutflowCents, "30 orders x 10c booked as market outflow at order time");
+            Assert.AreEqual(28, s.StoreService.Lots.Count, "no further arrivals inside the 60-day run (days 57-58 orders arrive days 71-72)");
+            Assert.AreEqual(3064, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 - 280c notions feeds (28 x 10c) + 1,344c wholesale (28 x 48c)");
+            Assert.AreEqual(3656, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 280c receipts + 280c feeds - 1,344c wholesale");
+            Assert.AreEqual(12, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel 40 - 28 bakes = 12u left: fuel never blocks this run");
+        }
+
+        [Test]
+        public void FlourAndNotions_BlockedCauseWord_MatchesFirstFailingInput()
+        {
+            // Priority 3 Slice 1 (A2): the blocked-batch cause word is
+            // the first failing Precheck input in check order (flour,
+            // notions, fuel, kit, oven, budget) — both in
+            // result.Refusal and in the blocked-batch line. Each leg is
+            // a fresh slice with exactly the inputs that leg needs, so
+            // only one gate can fail at a time, plus two order legs
+            // where two inputs fail at once and the earlier check wins
+            // (flour over notions, notions over fuel).
+            //
+            // Leg 1 — flour short (and notions short too): flour is
+            // checked first, so the cause is flour even though notions
+            // also fails.
+            {
+                Slice s = NewSlice();
+                SeedInputs(s, 0, 0, 40);
+                BookAccount(s, 24, 1, 2, 2);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, null, 2, wireNotions: false);
+                Assert.AreEqual(1, r.BatchesPlanned, "leg 1 plans the batch");
+                Assert.AreEqual(0, r.BatchesBaked, "leg 1 bakes nothing");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("flour"),
+                    "leg 1 refuses on flour (checked before notions); refusal: " + r.Refusal);
+                AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[0].BatchId, 2, "flour");
+            }
+
+            // Leg 2 — flour sufficient, notions short: the cause is notions.
+            {
+                Slice s = NewSlice();
+                SeedInputs(s, 12, 0, 40);
+                BookAccount(s, 24, 1, 2, 2);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, null, 2, wireNotions: false);
+                Assert.AreEqual(1, r.BatchesPlanned, "leg 2 plans the batch");
+                Assert.AreEqual(0, r.BatchesBaked, "leg 2 bakes nothing");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    "leg 2 refuses on notions; refusal: " + r.Refusal);
+                AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[0].BatchId, 2, "notions");
+            }
+
+            // Leg 3 — flour sufficient, notions short, fuel 0: notions
+            // is checked before fuel, so the cause is still notions.
+            {
+                Slice s = NewSlice();
+                SeedInputs(s, 12, 0, 0);
+                BookAccount(s, 24, 1, 2, 2);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, null, 2, wireNotions: false);
+                Assert.AreEqual(1, r.BatchesPlanned, "leg 3 plans the batch");
+                Assert.AreEqual(0, r.BatchesBaked, "leg 3 bakes nothing");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    "leg 3 refuses on notions (checked before fuel); refusal: " + r.Refusal);
+                AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[0].BatchId, 2, "notions");
+            }
+
+            // Leg 4 — flour + notions sufficient, fuel 0: the cause is fuel.
+            {
+                Slice s = NewSlice();
+                SeedInputs(s, 12, 1, 0);
+                BookAccount(s, 24, 1, 2, 2);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, null, 2, wireNotions: false);
+                Assert.AreEqual(1, r.BatchesPlanned, "leg 4 plans the batch");
+                Assert.AreEqual(0, r.BatchesBaked, "leg 4 bakes nothing");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("fuel"),
+                    "leg 4 refuses on fuel; refusal: " + r.Refusal);
+                AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[0].BatchId, 2, "fuel");
+            }
+        }
     }
 }

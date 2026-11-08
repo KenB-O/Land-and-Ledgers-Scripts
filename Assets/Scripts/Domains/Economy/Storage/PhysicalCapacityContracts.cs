@@ -4,8 +4,9 @@
 // section 6.2 storage lock). One query shape, many authorities. The
 // evaluator DELEGATES ONLY: it stores no capacity of its own, renders no
 // verdict of its own, and returns the underlying authority's verdict on
-// every leg. No flow calls the evaluator in this slice; it is constructed
-// in tests against the real authorities (the P1 Slice 0/6 real-authority,
+// every leg. Priority V1: the shopping loop consults it at settle time
+// with its live carry cap supplied; it is also constructed in tests
+// against the real authorities (the P1 Slice 0/6 real-authority,
 // test-side driver pattern).
 //
 // Unknown-first rule (P9 plan section 2.4): the load resolves through the
@@ -450,7 +451,7 @@ namespace LandLedgers.Economy.Storage
     /// the lot identity a StorageZone refusal names, and the person-carry
     /// inputs for an OnFootPerson query. All fields optional; unset means
     /// the documented default (condition 1.0, time 0, no descriptor, no
-    /// category, no lot identity, no carry inputs).
+    /// category, no lot identity, no carry inputs, no on-foot carry cap).
     /// </summary>
     public struct PhysicalCapacityEvaluationContext
     {
@@ -463,6 +464,17 @@ namespace LandLedgers.Economy.Storage
         public string ZoneLotId { get; set; }
         public PersonCarryInputs? CarryInputs { get; set; }
 
+        /// <summary>
+        /// Priority V1: the live on-foot carry cap in units, supplied by
+        /// the caller that owns the cap (the shopping loop supplies
+        /// ShoppingLoopOptions.CarryCapacityUnits). Null (the default)
+        /// means no cap was supplied and the OnFootPerson leg keeps its
+        /// Slice 2 Unknown answer. This is the caller's own live rule,
+        /// passed in — the evaluator still authors no person limit of
+        /// its own, and mass/volume stay Unknown either way.
+        /// </summary>
+        public int? OnFootCarryCapUnits { get; set; }
+
         public static PhysicalCapacityEvaluationContext Default => new PhysicalCapacityEvaluationContext();
     }
 
@@ -470,7 +482,7 @@ namespace LandLedgers.Economy.Storage
     /// The shared capacity evaluator (P9 plan section 2.4). DELEGATES ONLY:
     /// constructed with the real authorities and returns their verdicts, never
     /// its own. It stores no capacity value of its own — only the authority
-    /// references — and no flow calls it in this slice.
+    /// references. Priority V1: the shopping loop consults it at settle time.
     ///
     /// Legs:
     /// - Equipment: <see cref="IEquipmentCapacityService.CanAccept"/>, which
@@ -488,9 +500,18 @@ namespace LandLedgers.Economy.Storage
     ///   refusals) — and it places nothing.
     /// - Wagon: <see cref="WagonAuthority.CanCarry"/> — haul capacity only,
     ///   never warehouse accumulation (Technical XIV section 6.2).
-    /// - OnFootPerson: Unknown — no authored limit exists; the live
-    ///   shopping-loop carry cap is untouched and is not consulted here.
+    /// - OnFootPerson: Unknown when no carry cap is supplied — no authored
+    ///   limit exists; the live shopping-loop carry cap is untouched and is
+    ///   not consulted here. Priority V1: when the caller supplies its live
+    ///   carry cap (PhysicalCapacityEvaluationContext.OnFootCarryCapUnits),
+    ///   the leg answers on the units axis only against that cap.
     /// - HorsePack: "no authority" — no horse-pack capacity exists in source.
+    ///
+    /// Priority V1: the shopping loop consults this evaluator at settle
+    /// time (HouseholdShoppingLoop, before InHand custody is assigned)
+    /// with its live carry cap supplied, and the meal-adjacent flows
+    /// resolve lot identities through LotIdentityResolver. The evaluator
+    /// itself still delegates only and authors no limit of its own.
     /// </summary>
     public sealed class PhysicalCapacityEvaluator
     {
@@ -786,16 +807,41 @@ namespace LandLedgers.Economy.Storage
         }
 
         /// <summary>
-        /// OnFootPerson leg: always Unknown. No authored on-foot carry limit
-        /// exists in source, and the missing inputs (body size, strength,
-        /// fatigue) are named in the reason. The live shopping-loop carry cap
-        /// stays the live rule and is deliberately not consulted here: this
-        /// query answers the person-carry question, not the shopping rule.
+        /// OnFootPerson leg: Unknown when no carry cap is supplied — no
+        /// authored on-foot carry limit exists in source, and the missing
+        /// inputs (body size, strength, fatigue) are named in the reason.
+        /// The live shopping-loop carry cap stays the live rule and is
+        /// deliberately not consulted here: this query answers the
+        /// person-carry question, not the shopping rule.
+        ///
+        /// Priority V1: when the caller supplies its live carry cap in
+        /// units (PhysicalCapacityEvaluationContext.OnFootCarryCapUnits),
+        /// the leg answers on the units axis only — Fits when the load
+        /// is within the cap, DoesNotFit when it exceeds it. Mass and
+        /// volume stay Unknown either way (no authored person mass or
+        /// volume limit exists), and the cap itself is the caller's own
+        /// live rule, passed in — the evaluator still authors no person
+        /// limit of its own.
         /// </summary>
         public PhysicalCapacityVerdict EvaluateOnFootPerson(
             PhysicalCapacityQuery query, PhysicalCapacityEvaluationContext context, PhysicalLoadResolution resolved)
         {
             const PhysicalContainerKind kind = PhysicalContainerKind.OnFootPerson;
+            if (context.OnFootCarryCapUnits.HasValue)
+            {
+                int cap = Math.Max(1, context.OnFootCarryCapUnits.Value);
+                if (resolved.TotalUnits <= cap)
+                {
+                    return PhysicalCapacityVerdict.Accepted(kind, resolved,
+                        $"On-foot carry: {resolved.TotalUnits} units within the live carry cap of {cap} units " +
+                        "(ShoppingLoopOptions.CarryCapacityUnits). Mass and volume remain Unknown — no authored person mass or volume limit exists.");
+                }
+
+                return PhysicalCapacityVerdict.Refused(kind, resolved,
+                    $"On-foot carry: {resolved.TotalUnits} units exceeds the live carry cap of {cap} units " +
+                    "(ShoppingLoopOptions.CarryCapacityUnits). Mass and volume remain Unknown — no authored person mass or volume limit exists.");
+            }
+
             string missing;
             if (context.CarryInputs.HasValue)
             {

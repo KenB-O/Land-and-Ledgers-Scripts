@@ -6,6 +6,11 @@
 // item, units, custodian, owner, and provenance key — by reading the
 // owning authority's own records.
 //
+// Priority V1: the shopping loop and the meal service consult this
+// resolver in production (deposit and consumption identity); it is
+// also constructed in tests against the real authorities (the P9
+// Slice 0/6 real-authority, test-side driver pattern).
+//
 // The resolver CREATES NOTHING, MOVES NOTHING, and changes no ownership
 // or custody. It holds no copy of any quantity between calls: every call
 // re-reads its authorities, so two reads of the same state agree and a
@@ -196,10 +201,11 @@ namespace LandLedgers.Economy.Logistics
     /// Read-only lot identity resolver. Constructed with the authorities
     /// it can read; any authority left null means its space is
     /// unresolvable and Resolve returns null for keys in that space with
-    /// the gap named in Diagnostics, never an exception. No flow calls
-    /// this resolver in this slice: it is constructed in tests against
-    /// the real authorities (the P1 Slice 0/6 real-authority, test-side
-    /// driver pattern).
+    /// the gap named in Diagnostics, never an exception. Priority V1:
+    /// the shopping loop consults it at deposit time and the meal
+    /// service at consumption time; it is also constructed in tests
+    /// against the real authorities (the P1 Slice 0/6 real-authority,
+    /// test-side driver pattern).
     /// </summary>
     public sealed class LotIdentityResolver : ILotIdentityResolver
     {

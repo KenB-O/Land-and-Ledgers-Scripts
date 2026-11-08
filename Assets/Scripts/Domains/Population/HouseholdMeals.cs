@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -200,6 +201,7 @@ namespace LandLedgers.Population
     {
         private readonly HouseholdMealLogRegistry log;
         private readonly List<string> diagnostics = new List<string>();
+        private readonly List<LotIdentity> lastMealLotIdentities = new List<LotIdentity>();
 
         public HouseholdMealService(HouseholdMealLogRegistry log)
         {
@@ -207,6 +209,27 @@ namespace LandLedgers.Population
         }
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>
+        /// Priority V1: the F4 lot identity resolver this service uses
+        /// to answer, at consumption time, which lot a meal consumed —
+        /// by canonical identity, not by bare lot id. Null (the default)
+        /// means today's behaviour: meals record the lot id only and
+        /// LastMealLotIdentities stays empty. Set it to a resolver over
+        /// the household inventory registry to resolve consumed lots.
+        /// </summary>
+        public LotIdentityResolver LotIdentityResolver { get; set; }
+
+        /// <summary>
+        /// Priority V1: the identities of the lots the most recent
+        /// ServeHouseholdDay call consumed, resolved through
+        /// <see cref="LotIdentityResolver"/> at consumption time.
+        /// Runtime-only (never saved): a fresh list per served day,
+        /// empty when no resolver is set. A lot that could not be
+        /// resolved is named in <see cref="Diagnostics"/>, never
+        /// invented.
+        /// </summary>
+        public IReadOnlyList<LotIdentity> LastMealLotIdentities => lastMealLotIdentities;
 
         /// <summary>
         /// Explicit raw-to-prepared conversion. Consumes real raw lots and
@@ -311,6 +334,9 @@ namespace LandLedgers.Population
                 return result;
             }
 
+            // Priority V1: a fresh consumption-identity list per served day.
+            lastMealLotIdentities.Clear();
+
             policy ??= MealSchedulingPolicy.Default;
             float stapleDays = EstimateStapleDaysOfSupply(inventory, memberPersonIds.Count, policy);
             List<MealSlot> slots = policy.GetSlotsForDay(stapleDays);
@@ -403,6 +429,30 @@ namespace LandLedgers.Population
                 {
                     diagnostics.Add($"ServeHouseholdDay: {rejection}");
                     continue;
+                }
+
+                // Priority V1: at consumption time, resolve each consumed
+                // lot through the F4 resolver (when one is set) so the
+                // meal names its lots by canonical identity, not by bare
+                // lot id. A lot that cannot be resolved is named in
+                // diagnostics, never invented; an unset resolver means
+                // today's behaviour (lot ids only, empty identity list).
+                if (LotIdentityResolver != null)
+                {
+                    foreach (HouseholdConsumptionRecord consumption in consumptionRecords)
+                    {
+                        LotIdentity identity = LotIdentityResolver.Resolve(new LotKey(
+                            CustodyTransferLog.HouseholdInventoryAuthority, consumption.LotId.ToString()));
+                        if (identity != null)
+                        {
+                            lastMealLotIdentities.Add(identity);
+                        }
+                        else
+                        {
+                            diagnostics.Add($"ServeHouseholdDay: meal consumed lot {consumption.LotId} " +
+                                "but the lot identity resolver could not resolve it — see the resolver diagnostics.");
+                        }
+                    }
                 }
 
                 var record = new HouseholdMealRecord

@@ -78,9 +78,7 @@ found, the test fails loudly rather than passing silently.
 | SettlementCausalExplanation | ReadModels/Causal/SettlementCausalExplanation.cs | ReadModels/Causal | (none) |
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
-| PhysicalCapacityEvaluator | Domains/Economy/Storage/PhysicalCapacityContracts.cs | Domains/Economy/Storage | (none) |
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
-| LotIdentityResolver | Domains/Economy/Logistics/LotIdentity.cs | Domains/Economy/Logistics | (none) |
 | PerishableLotState | Domains/Economy/Logistics/PerishableLotState.cs | Domains/Economy/Logistics | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
@@ -174,24 +172,6 @@ found, the test fails loudly rather than passing silently.
   row the day a production reader outside `Domains/Economy/Storage`
   references the spec (Slice 2 capacity queries are the first expected
   reader); do not wire it merely to clear the entry.
-- `PhysicalCapacityEvaluator` (Priority 9 Slice F2, 2026-11-08) is the
-  shared capacity query evaluator (one query shape delegating to the
-  equipment service, business category target, storage zone, wagon
-  authority, person-carry Unknown, and horse-pack no-authority legs). It
-  is registered here honestly as UNWIRED by design, not oversight: the
-  Slice F2 brief wires nothing into live flows — the evaluator is
-  constructed in tests against the real authorities and no flow calls it
-  yet. Its sibling types need no row: `PhysicalLoad`,
-  `PhysicalCapacityQuery`, `PersonCarryInputs`,
-  `PhysicalCapacityVerdict`, `BusinessStorageCapacityAxes` and
-  `PhysicalCapacityEvaluationContext` are structs and
-  `PhysicalCapacityOutcome` / `PhysicalContainerKind` are enums
-  (scan-exempt: the scan enumerates concrete public classes only).
-  Remove this row the day a production flow calls the evaluator; do not
-  wire it merely to clear the entry. The evaluator reads the F1 spec
-  registry only from inside `Domains/Economy/Storage`, so under the
-  scan's caller rule (same-directory references do not count) the
-  `PhysicalItemSpec` row above stays accurate and stays in place.
 - `PersonInventoryReadModel` (Priority 9 Slice F3 / Priority B,
   2026-11-08) is the read-only personal and player inventory query
   layer (carried batches, household lots owned by a person, equipment
@@ -205,31 +185,19 @@ found, the test fails loudly rather than passing silently.
   `CarriedContainerContents` are nested inside the read model and
   `PersonCarryRemaining` is a nested struct (the scan enumerates
   concrete public top-level classes only), and `PersonItemCondition` is
-  an enum. Remove this row the day a production flow calls the read
-  model; do not wire it merely to clear the entry. The read model reads
-  the F1/F2 types only through `PhysicalLoad` (a struct, scan-exempt)
-  and references no other registered-unwired type by name, so the
-  `PhysicalItemSpec` and `PhysicalCapacityEvaluator` rows above stay
-  accurate and stay in place.
-- `LotIdentityResolver` (Priority 9 Slice F4 / Priority D,
-  2026-11-08) is the read-only lot identity resolver (one LotKey to
-  item, units, custodian, owner, and provenance key, across the
-  household, retail, Millbrook, named-SKU, Bakery, and freight
-  spaces). It is registered here honestly as UNWIRED by design, not
-  oversight: the Slice 4b brief wires nothing into live flows — the
-  resolver is constructed in tests against the real authorities and
-  no flow calls it yet. Its sibling types need no row:
-  `LotIdentity` HAS production callers outside its owning
-  directory (the HouseholdInventory, BakeryShopRuntime, and
-  PurchasedRetailLotReceipt provenance-append sites name it), and
-  `ILotIdentityResolver` is an interface (the scan enumerates
-  concrete public classes only). Remove this row the day a
-  production flow calls the resolver; do not wire it merely to
-  clear the entry. The `PhysicalItemSpec`,
-  `PhysicalCapacityEvaluator`, and `PersonInventoryReadModel` rows
-  above stay: the resolver reads the F1/F2 types only through
-  `PhysicalLoad` (a struct, scan-exempt, in the double-count pin
-  test) and references no other registered-unwired type by name.
+  an enum. Remove this row the day a production flow outside
+  `Domains/Population` calls the read model; do not wire it merely to
+  clear the entry. Priority V1 wires the read model into the shopping
+  loop itself (`HouseholdShoppingLoop.PersonInventory`, deposit
+  verification through the read model) — but the loop sits in the same
+  owning directory, so under the scan's caller rule (same-directory
+  references do not count) that is not a production caller and this row
+  stays. The read model reads the F1/F2 types only through
+  `PhysicalLoad` (a struct, scan-exempt) and references no other
+  registered-unwired type by name, so the `PhysicalItemSpec` row above
+  stays accurate and stays in place. (The `PhysicalCapacityEvaluator`
+  row the Slice 3 note named here was removed by Priority V1 — see the
+  change log — so it no longer appears above.)
 - `PerishableLotState` (Priority E Slice 5, 2026-11-08) is the
   perishable condition of one lot: separate physical-condition,
   food-safety, remaining-life, handling-history, and perceived-vs-known
@@ -543,3 +511,35 @@ note records their audited status so the question does not reopen:
   whose `RegisterIn` is the Codex bootstrapper registration call per its
   own doc comment); no type was entered in this registry on the basis of
   the plan alone, and no standalone unwired system was found among the 145.
+- Priority V1 (2026-11-08): `PhysicalCapacityEvaluator` and
+  `LotIdentityResolver` removed from the table above — both are wired
+  into production by the inventory-and-custody vertical slice. The
+  shopping loop consults the evaluator at settle time
+  (`HouseholdShoppingLoop.SettleAtCounter`, OnFootPerson leg with the
+  loop's live carry cap supplied via
+  `PhysicalCapacityEvaluationContext.OnFootCarryCapUnits`; the
+  cap-aware branch answers on units only, mass and volume stay
+  Unknown) and resolves each deposited lot through the resolver
+  (`HouseholdShoppingLoop.RecordDepositedLotIdentity`, all three
+  receipt paths), and the meal service resolves each consumed lot
+  through the resolver (`HouseholdMealService.TryServeFromInventory`,
+  `LastMealLotIdentities`). Both callers sit outside the types'
+  owning directories (`Domains/Population` vs
+  `Domains/Economy/Storage` and `Domains/Economy/Logistics`), so the
+  registry test and the assembly scan both count them as production
+  callers. The `PhysicalItemSpec` row stays: the loop reaches the
+  spec only through the evaluator, which reads the registry from
+  inside `Domains/Economy/Storage`, so no production reader outside
+  the spec's owning directory exists yet. The
+  `PersonInventoryReadModel` row stays: the loop owns a read model
+  (`HouseholdShoppingLoop.PersonInventory`) and verifies deposits
+  through it, but the loop sits in the same owning directory
+  (`Domains/Population`), so under the caller rule that is not a
+  production caller — the row is removed the day a caller outside
+  `Domains/Population` uses the read model. `PerishableLotState`,
+  `DemandObservation`, `ReserveProjection`, `SupplierComparison`, and
+  `ReplenishmentPlan` stay: V1 wires none of them (no Slice 5 state
+  is attached to any authority; the meal and loop paths consult no
+  demand, reserve, or supplier type). Earlier notes that list the
+  evaluator and resolver rows among the rows that "stay" describe the
+  pre-V1 state and are superseded by this entry.

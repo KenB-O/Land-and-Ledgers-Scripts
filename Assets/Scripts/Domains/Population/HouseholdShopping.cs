@@ -314,6 +314,23 @@ namespace LandLedgers.Population
         public string Counterparty = string.Empty;
         public string ReceiptId = string.Empty;
         public string ObligationId = string.Empty;
+        /// <summary>
+        /// Priority V1: the household lot id the receipt path deposited
+        /// this trip's goods into, resolved through the F4 lot identity
+        /// resolver at deposit time. -1 when no receipt has deposited a
+        /// lot yet (no purchase, or the receipt path has not run).
+        /// Diagnostic only: it changes no cash, stock, Success, or
+        /// need-status semantics.
+        /// </summary>
+        public int ReceivedLotId = -1;
+        /// <summary>
+        /// Priority V1: the canonical provenance key of the deposited lot
+        /// ("authority:household-inventory/lot:&lt;id&gt;"), resolved
+        /// through the F4 lot identity resolver at deposit time. Empty
+        /// when no receipt has deposited a lot yet. Diagnostic only, as
+        /// <see cref="ReceivedLotId"/>.
+        /// </summary>
+        public string ReceivedLotKey = string.Empty;
         public int TravelMinutesTotal;
         public List<RejectedShoppingAlternative> RejectedAlternatives = new List<RejectedShoppingAlternative>();
         public List<ShoppingDiagnosticEvent> Events = new List<ShoppingDiagnosticEvent>();

@@ -39,7 +39,9 @@
 //     the 1:1 translation of that authority's vocabulary into this
 //     layer's, for the slice that reads bakery lots (Slice 5).
 //
-// No flow calls this read model in this slice: it is constructed in
+// Priority V1: the shopping loop owns a read model as its production
+// custody answer (HouseholdShoppingLoop.PersonInventory) and verifies
+// each deposit through it. The read model is also constructed in
 // tests against the real authorities (the P1 Slice 0/6 real-authority,
 // test-side driver pattern). No new transfer mechanism lives here —
 // transfers are Slice 4 (F3/F4). The purchase-to-household-storage

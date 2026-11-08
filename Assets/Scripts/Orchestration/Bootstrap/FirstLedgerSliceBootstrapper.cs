@@ -265,6 +265,21 @@ namespace LandLedgers.FirstLedger
             if (startupIntent == WorldStartupIntent.ContinueDefaultSlot)
             {
                 Debug.Log("[WorldStartup] Continue path selected. Load started before fresh generation; expected fresh generation pass count is zero.", this);
+                // Q04 Slice 2 (re-plan §3, AUD-275): ConfigureMillbrookAidTable
+                // needs no business instance — it loads the definition from
+                // Resources and constructs the runtime itself — so this
+                // pre-load call genuinely works, unlike the Pass 9 owner
+                // (Slice 1, created inside the LoadDefaultSlot window
+                // instead). The drivers instance must be fetched first: the
+                // Continue branch holds none (the New Game body fetches it
+                // at :546). The runtime survives the load intact (nothing
+                // in LoadDefaultSlot clears or replaces MillbrookAidRuntime),
+                // and the Pass XL restore imports the saved section into it.
+                // An old save (no Millbrook section) restores as starting
+                // stock with cash 0 and no lots, and the next save writes a
+                // Millbrook section at starting units (re-plan §1.9).
+                SimulationDrivers continueDrivers = FindAnyObjectByType<SimulationDrivers>();
+                ConfigureMillbrookAidTable(continueDrivers);
                 string loadMessage = "SaveLoadManager is missing.";
                 bool loaded = saveLoadManager != null && saveLoadManager.LoadDefaultSlot(out loadMessage);
                 AppendStartupTiming(timing, stepTimer, "continue load");

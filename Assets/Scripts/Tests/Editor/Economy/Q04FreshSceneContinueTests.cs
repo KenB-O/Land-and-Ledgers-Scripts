@@ -519,5 +519,277 @@ namespace LandLedgers.Tests.Economy
             Assert.IsTrue(noIntakeJoined.Contains("delivered-lot guard NOT restored"),
                 "without an intake the guard loss must be diagnosed; diag: " + noIntakeJoined);
         }
+
+        // ---- Slice 2 (AUD-275): coordinator half -------------------
+        //
+        // PIN, NOT A REPRODUCING FAILURE — read before changing it.
+        // These tests pass before the Slice 2 wiring fix too: they drive
+        // the 9-argument coordinator Restore with a live
+        // OffMapAidBusinessRuntime already supplied, and the coordinator
+        // half is already sound (it imports when the runtime exists).
+        // What they pin is the half the production path must supply:
+        // after the fix, the Continue branch calls
+        // ConfigureMillbrookAidTable(continueDrivers) before
+        // LoadDefaultSlot, so the production restore runs this same
+        // coordinator path with a live runtime instead of taking the
+        // null-runtime drop branch pinned by
+        // ContinueDrop_Pin_MillbrookSectionPresent_NullRuntime. The
+        // Continue-branch call itself is harness-excluded
+        // (FirstLedgerSliceBootstrapper.cs) and is source-reviewed
+        // only; no Unity verification is claimed by these tests.
+
+        // The Millbrook definition, copied from the
+        // MillbrookRuntimeResolutionTests fixture (values copied from
+        // MillbrookGrainCo.asset: 230 lb starting, 48c/sack, 10 lb per
+        // sack, 18 bakery units per sack), never re-derived.
+        private static OffMapAidBusinessRuntime NewMillbrookSupplier()
+        {
+            var definition = new OffMapAidBusinessDefinition
+            {
+                BusinessId = "millbrook_grain_co",
+                DisplayName = "Millbrook Grain Co.",
+                PickupRouteMilesFromTown = 50f,
+                Inventory = new List<OffMapAidInventoryRow>
+                {
+                    new OffMapAidInventoryRow
+                    {
+                        ItemId = "bakery_flour_sack",
+                        DisplayName = "Flour",
+                        InventoryUnit = "lb",
+                        StartingUnits = 230,
+                        OrderUnit = "10 lb sack",
+                        InventoryUnitsPerOrderUnit = 10,
+                        BakeryUnitsPerOrderUnit = 18,
+                        OrderPriceCents = 48,
+                    },
+                },
+            };
+            return new OffMapAidBusinessRuntime(definition);
+        }
+
+        private sealed class FakeMillbrookBuyerCashPort : IBusinessCashPort
+        {
+            public int BalanceCents { get; private set; }
+
+            public FakeMillbrookBuyerCashPort(int balanceCents) => BalanceCents = balanceCents;
+
+            public string TryDebit(int amountCents, string reason)
+            {
+                if (amountCents <= 0 || amountCents > BalanceCents)
+                    return "test cash port refused debit";
+                BalanceCents -= amountCents;
+                return null;
+            }
+
+            public string Credit(int amountCents, string reason)
+            {
+                if (amountCents <= 0) return "test cash port refused credit";
+                BalanceCents += amountCents;
+                return null;
+            }
+        }
+
+        // Places the fixture's 1-sack opening order through the real
+        // production path. CORRECTION to the plan's parenthetical
+        // ("authored definition, 230 lb flour, 0c cash, one uncommitted
+        // 1-sack opening lot"): 230 lb / 0c are the definition's
+        // STARTING values before the order. Placing the opening order
+        // debits 10 lb and credits 48c immediately (pinned by
+        // MillbrookRuntimeResolutionTests.OpeningOrder_SucceedsOnce),
+        // so the live runtime holding the opening lot reads 220 lb /
+        // 48c, not 230 lb / 0c. The post-restore assertions below are
+        // exactly as the plan specifies; only the live pre-restore
+        // reading is stated as production actually gives it.
+        private static OffMapAidBusinessRuntime PlaceMillbrookOpeningOrder(out FakeMillbrookBuyerCashPort bakeryCash)
+        {
+            var supplier = NewMillbrookSupplier();
+            bakeryCash = new FakeMillbrookBuyerCashPort(20000);
+            Assert.IsNull(supplier.TryPlaceOrder(
+                "opening-flour-b1", "bakery_001", "Glen Pierce", 1, bakeryCash, 0, out OffMapAidCargoLot lot),
+                "the opening 1-sack Millbrook order should place");
+            Assert.IsNotNull(lot, "the opening order must produce a lot");
+            Assert.AreEqual(220, supplier.GetInventoryUnits("bakery_flour_sack"), "230 lb - 10 lb");
+            Assert.AreEqual(48, supplier.CashCents, "supplier cash 0 -> 48c");
+            Assert.AreEqual(1, supplier.Lots.Count, "exactly the one opening lot");
+            return supplier;
+        }
+
+        // The saved Millbrook section for the restore pin: 160 lb flour
+        // (16 sacks x 10 lb), 768c retained cash (16 x the authored
+        // 48c/sack), one 16-sack clamped lot, uncommitted and
+        // unreceived — the Slice 4b clamp figures (supplier 160 lb,
+        // request 18 -> 16-sack lot, 160 lb, 768c), arithmetic on
+        // authored values, nothing invented.
+        private static OffMapAidBusinessSaveDto BuildClampedLotMillbrookDto()
+        {
+            return new OffMapAidBusinessSaveDto
+            {
+                BusinessId = "millbrook_grain_co",
+                CashCents = 768,
+                InventoryItemIds = new List<string> { "bakery_flour_sack" },
+                InventoryUnits = new List<int> { 160 },
+                Lots = new List<OffMapAidCargoLot>
+                {
+                    new OffMapAidCargoLot
+                    {
+                        LotId = "aidlot-millbrook_grain_co:flour-reorder-d57-n16",
+                        OrderId = "millbrook_grain_co:flour-reorder-d57-n16",
+                        SkuId = "bakery_flour_sack",
+                        SupplierBusinessId = "millbrook_grain_co",
+                        BuyerBusinessId = "bakery_001",
+                        OrderUnit = "10 lb sack",
+                        PackageUnits = 16,
+                        InventoryUnits = 160,
+                        InventoryUnit = "lb",
+                        BakeryUnits = 288,
+                        TotalCostCents = 768,
+                        CreatedDayIndex = 57,
+                        SourceCommitted = false,
+                        Received = false,
+                    },
+                },
+            };
+        }
+
+        [Test]
+        public void ContinueWiring_Millbrook_RestoreWithSuppliedRuntime_RestoresStockCashLots()
+        {
+            // Coordinator pin (re-plan §3.3 test 1): with a live
+            // runtime supplied, the coordinator restores the saved
+            // Millbrook section. The live runtime holds the opening
+            // lot; the saved section holds the clamped lot — after
+            // restore exactly the saved lot must remain (clear-then-
+            // load), never both. Passes before the wiring fix too.
+            OffMapAidBusinessRuntime runtime = PlaceMillbrookOpeningOrder(out _);
+            var dto = new PassXlSliceSaveDto { millbrookAid = BuildClampedLotMillbrookDto() };
+
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, null, null, null, null, null, runtime);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(!restoreDiag.Any(d => d.Contains("Millbrook aid section is present but no live aid runtime was supplied")),
+                "with a live runtime supplied the drop branch must not run; diag: " + joined);
+            Assert.IsTrue(joined.Contains("restored Millbrook aid table (160 lb flour, 768c retained cash, 1 cargo lots)"),
+                "the restore must report the saved values; diag: " + joined);
+
+            Assert.AreEqual(160, runtime.GetInventoryUnits("bakery_flour_sack"),
+                "stock must restore at the saved 160 lb, not the live 220 lb");
+            Assert.AreEqual(768, runtime.CashCents,
+                "cash must restore at the saved 768c, not the live 48c");
+            Assert.AreEqual(1, runtime.Lots.Count, "exactly the one saved lot must remain, never duplicated");
+            OffMapAidCargoLot lot = runtime.Lots[0];
+            Assert.AreEqual("aidlot-millbrook_grain_co:flour-reorder-d57-n16", lot.LotId,
+                "the saved clamped lot must restore with its id");
+            Assert.AreEqual(16, lot.PackageUnits, "the clamped lot holds 16 sacks");
+            Assert.AreEqual(160, lot.InventoryUnits, "the clamped lot holds 160 lb");
+            Assert.AreEqual(768, lot.TotalCostCents, "the clamped lot costs 16 x 48c");
+            Assert.IsTrue(!lot.SourceCommitted, "the clamped lot must stay uncommitted");
+            Assert.IsTrue(!lot.Received, "the clamped lot must stay unreceived");
+            Assert.IsTrue(!runtime.Lots.Any(l => l.LotId == "aidlot-millbrook_grain_co:opening-flour-b1"),
+                "the live opening lot must be cleared by the restore, not kept alongside the saved lot");
+        }
+
+        [Test]
+        public void ContinueWiring_Millbrook_RestoreThenCapture_SectionSurvivesSaveAfterContinue()
+        {
+            // Amplifier pin (re-plan §3.3 test 2, original plan §0): a
+            // save after Continue must no longer overwrite the good
+            // save with a null Millbrook section. Restore the pin DTO
+            // into a fresh live runtime, then capture through the real
+            // coordinator, as BuildSaveDto does. Passes before the
+            // wiring fix too — it pins the coordinator half.
+            OffMapAidBusinessRuntime runtime = PlaceMillbrookOpeningOrder(out _);
+            var dto = new PassXlSliceSaveDto { millbrookAid = BuildClampedLotMillbrookDto() };
+
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, null, null, null, null, null, runtime);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(joined.Contains("restored Millbrook aid table"),
+                "the Millbrook restore must run; diag: " + joined);
+
+            PassXlSliceSaveDto recaptured = PassXlSliceSaveCoordinator.Capture(
+                null, null, null, null, null, null, runtime);
+            Assert.IsNotNull(recaptured.millbrookAid,
+                "a save after Continue must write a Millbrook section, not null");
+            Assert.AreEqual("millbrook_grain_co", recaptured.millbrookAid.BusinessId);
+            Assert.AreEqual(160, recaptured.millbrookAid.InventoryUnits[recaptured.millbrookAid.InventoryItemIds.IndexOf("bakery_flour_sack")],
+                "the re-saved section must carry the restored 160 lb stock");
+            Assert.AreEqual(768, recaptured.millbrookAid.CashCents,
+                "the re-saved section must carry the restored 768c cash");
+            Assert.AreEqual(1, recaptured.millbrookAid.Lots.Count,
+                "the re-saved section must carry exactly the one restored lot");
+            Assert.AreEqual("aidlot-millbrook_grain_co:flour-reorder-d57-n16", recaptured.millbrookAid.Lots[0].LotId,
+                "the clamped lot id must survive the restore-then-save round trip verbatim");
+        }
+
+        [Test]
+        public void ContinueWiring_Millbrook_OldSaveNoSection_RestoresAsStartingStock()
+        {
+            // Old-save contract (re-plan §3.3 test 3, §1.9): a save
+            // with no Millbrook section restores as the definition's
+            // starting stock with cash 0 and no lots — and the next
+            // save writes a Millbrook section at starting units. This
+            // mirrors the D3 control case and the New Game default; it
+            // is not a defect. The live runtime starts with the opening
+            // lot placed, so the reset is visible, not vacuous.
+            OffMapAidBusinessRuntime runtime = PlaceMillbrookOpeningOrder(out _);
+            var dto = new PassXlSliceSaveDto { millbrookAid = null };
+
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, null, null, null, null, null, runtime);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(joined.Contains("restored Millbrook aid table"),
+                "the restore diagnostic must name the Millbrook table; diag: " + joined);
+            Assert.IsTrue(!restoreDiag.Any(d => d.Contains("Millbrook aid section is present but no live aid runtime was supplied")),
+                "no drop diagnostic may fire when a live runtime was supplied; diag: " + joined);
+
+            Assert.AreEqual(230, runtime.GetInventoryUnits("bakery_flour_sack"),
+                "an old save restores as the definition's 230 lb starting stock");
+            Assert.AreEqual(0, runtime.CashCents, "an old save restores with cash 0");
+            Assert.AreEqual(0, runtime.Lots.Count, "an old save restores with no lots");
+
+            PassXlSliceSaveDto recaptured = PassXlSliceSaveCoordinator.Capture(
+                null, null, null, null, null, null, runtime);
+            Assert.IsNotNull(recaptured.millbrookAid,
+                "the next save writes a Millbrook section at starting units (re-plan §1.9)");
+            Assert.AreEqual(230, recaptured.millbrookAid.InventoryUnits[recaptured.millbrookAid.InventoryItemIds.IndexOf("bakery_flour_sack")]);
+            Assert.AreEqual(0, recaptured.millbrookAid.CashCents);
+            Assert.AreEqual(0, recaptured.millbrookAid.Lots.Count);
+        }
+
+        [Test]
+        public void ContinueWiring_Millbrook_MismatchedBusinessId_RefusesAndKeepsLiveState()
+        {
+            // Refusal visibility (re-plan §3.3 test 4, original plan
+            // §2 item 6): a saved section for a different supplier
+            // must refuse with the "does not match" diagnostic and
+            // leave the live stock, cash, and lots untouched.
+            OffMapAidBusinessRuntime runtime = PlaceMillbrookOpeningOrder(out _);
+            var dto = new PassXlSliceSaveDto
+            {
+                millbrookAid = new OffMapAidBusinessSaveDto
+                {
+                    BusinessId = "other_supplier",
+                    CashCents = 999,
+                    InventoryItemIds = new List<string> { "bakery_flour_sack" },
+                    InventoryUnits = new List<int> { 5 },
+                },
+            };
+
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, null, null, null, null, null, runtime);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(joined.Contains("does not match"),
+                "the refusal diagnostic must name the BusinessId mismatch; diag: " + joined);
+            Assert.IsTrue(joined.Contains("Off-map aid save refused: saved supplier 'other_supplier' does not match 'millbrook_grain_co'."),
+                "the full refusal line must be the coordinator's diagnostic; diag: " + joined);
+
+            Assert.AreEqual(220, runtime.GetInventoryUnits("bakery_flour_sack"),
+                "live stock must stay at the pre-restore 220 lb after a refused import");
+            Assert.AreEqual(48, runtime.CashCents,
+                "live cash must stay at the pre-restore 48c after a refused import");
+            Assert.AreEqual(1, runtime.Lots.Count, "live lots must stay at exactly the opening lot");
+            Assert.AreEqual("aidlot-millbrook_grain_co:opening-flour-b1", runtime.Lots[0].LotId,
+                "the live opening lot must be untouched by the refused import");
+        }
     }
 }

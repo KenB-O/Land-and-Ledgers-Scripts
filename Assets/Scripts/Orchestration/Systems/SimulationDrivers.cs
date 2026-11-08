@@ -3392,8 +3392,11 @@ namespace LandLedgers.Orchestration.Systems
                 if (string.IsNullOrWhiteSpace(temporaryCapacityBlocker) && assignedWagon.IsReserved)
                     temporaryCapacityBlocker = $"Wagon '{assignedWagon.AssetId}' is reserved by '{assignedWagon.ReservedBy}' for '{assignedWagon.ReservedFor}'.";
             }
-            if (string.IsNullOrWhiteSpace(temporaryCapacityBlocker) && HasOpenAssignedTask(carrier.Owner.PersonId))
-                temporaryCapacityBlocker = "Ethan has an incompatible assigned or in-progress task.";
+            // An open task may be assigned for a later reservation window.
+            // Contact travel only needs Glen; the meeting scheduler below
+            // resolves a common real window for both people. Treating every
+            // open Ethan task as a whole-day carrier conflict can pin a valid
+            // freight request indefinitely.
             if (!string.IsNullOrWhiteSpace(temporaryCapacityBlocker))
             {
                 string priorReason = request.RefusalReason;
@@ -4256,24 +4259,8 @@ namespace LandLedgers.Orchestration.Systems
 
         private int FindAvailablePersonStartMinute(int personId, int dayIndex, int nowMinute, int durationMinutes)
         {
-            int candidate = Math.Max(480, nowMinute);
-            List<PersonActivityReservation> existing = hub.PersonSchedules.ActiveFor(personId, dayIndex);
-            while (candidate + durationMinutes <= 1440)
-            {
-                PersonActivityReservation overlap = null;
-                foreach (PersonActivityReservation reservation in existing)
-                {
-                    if (reservation == null || reservation.Released) continue;
-                    if (candidate < reservation.EndMinuteOfDay && reservation.StartMinuteOfDay < candidate + durationMinutes)
-                    {
-                        overlap = reservation;
-                        break;
-                    }
-                }
-                if (overlap == null) return candidate;
-                candidate = Math.Max(candidate + 1, overlap.EndMinuteOfDay);
-            }
-            return -1;
+            return PersonScheduleWindowFinder.FindNextAvailableStartMinute(
+                hub?.PersonSchedules, personId, dayIndex, nowMinute, durationMinutes);
         }
 
         private void ReleaseTaskPersonSchedule(WorkTask task, int dayIndex)
@@ -4399,8 +4386,6 @@ namespace LandLedgers.Orchestration.Systems
             }
             if (!IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId)
                 || !IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
-            if (HasOpenAssignedTask(glen.id) || HasOpenAssignedTask(ethan.id)) return;
-
             if (request.Quote == null)
             {
                 DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
@@ -4486,24 +4471,16 @@ namespace LandLedgers.Orchestration.Systems
 
         private int FindCommonPersonStartMinute(int firstPersonId, int secondPersonId, int dayIndex, int nowMinute, int duration)
         {
-            int candidate = Math.Max(480, nowMinute);
-            for (int i = 0; i < 64; i++)
-            {
-                int first = FindAvailablePersonStartMinute(firstPersonId, dayIndex, candidate, duration);
-                int second = FindAvailablePersonStartMinute(secondPersonId, dayIndex, candidate, duration);
-                if (first < 0 || second < 0) return -1;
-                int next = Math.Max(first, second);
-                if (next == candidate && candidate + duration <= 1440) return candidate;
-                candidate = next;
-            }
-            return -1;
+            return PersonScheduleWindowFinder.FindCommonAvailableStartMinute(
+                hub?.PersonSchedules, firstPersonId, secondPersonId, dayIndex, nowMinute, duration);
         }
 
-        private bool HasOpenAssignedTask(int personId)
+        private bool HasInProgressAssignedTask(int personId)
         {
             if (hub?.Tasks == null) return true;
             foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
-                if (task != null && task.IsOpen && task.HasAssignee && task.AssigneeId.Id == personId) return true;
+                if (task != null && task.Status == TaskStatus.InProgress
+                    && task.HasAssignee && task.AssigneeId.Id == personId) return true;
             return false;
         }
 
@@ -4565,9 +4542,9 @@ namespace LandLedgers.Orchestration.Systems
                 refusal = "Both participants are not physically present at the Freight Company meeting location.";
                 refusalIsTransient = true;
             }
-            else if (HasOpenAssignedTask(ethan.id))
+            else if (HasInProgressAssignedTask(ethan.id))
             {
-                refusal = "Ethan has an incompatible assigned or in-progress task at acceptance time.";
+                refusal = "Ethan is occupied by another in-progress task at acceptance time.";
                 refusalIsTransient = true;
             }
             else if (request.Quote == null || bakery.RuntimeState.CurrentCashCents < request.Quote.TotalPriceCents)

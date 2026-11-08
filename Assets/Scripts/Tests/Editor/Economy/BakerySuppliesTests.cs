@@ -3400,5 +3400,271 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(referenceSummary, restoredSummary,
                 "the save/load run reproduces the uninterrupted 60-day drive's totals exactly (no duplicate order, receipt, or settlement, no lost state)");
         }
+
+        // ---- Priority 3 Slice 6 (2026-11-08): supply-cap evidence
+        // pack -------------------------------------------------------
+        // The three hard caps on sustained production are pinned here
+        // as horizon tests the owner can decide from (plan §8 B-2/B-3):
+        // the 30-unit finite notions counterparty, the 40-unit fuel
+        // opening stock, and Millbrook's 40-80 lb/week replenishment
+        // against 84 lb/week of daily-bake demand. All three tests are
+        // expected to PASS — they pin the caps, and a failure rewrites
+        // the plan's §2 (stop rule, plan §4 Slice 6). Tests only; no
+        // production code.
+        [Test]
+        public void Cap_FiniteNotionsCounterparty_ExhaustsAfterThirtyOrderedUnits()
+        {
+            // Priority 3 Slice 6 (H-B3): with the Slice 4 notions depth
+            // 14 and the AUTHORED 30u finite counterparty (not the
+            // 60u/100u fixture seed of Slices 4-5), the run orders
+            // 15u on day 1 (today + 14 forward) and 1u/day from day
+            // 16, so the 30th ordered unit lands on day 30 and the
+            // first order refusal is day 31. The refusal names the
+            // exhausted finite supply in the diagnostics; the bake
+            // still succeeds while the in-transit pipeline drains
+            // (arrivals through day 44), and bakes stop on notions
+            // from day 45 — no second supply path, no conjured
+            // notions: the bin stays empty and no bake, order, or
+            // arrival follows.
+            Slice s = NewSlice();
+            Series2CounterpartyRegistration reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 60);
+            BookAccount(s, 24, 1, 2, 2);
+
+            int firstRefusalDay = 0;
+            int firstStallDay = 0;
+            int bakes = 0;
+            for (int day = 1; day <= 60; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 14);
+                bool refusedToday = false;
+                for (int i = diagBefore; i < s.Diag.Count; i++)
+                    if (s.Diag[i] != null && s.Diag[i].Contains("exhausted finite supply"))
+                        refusedToday = true;
+                if (refusedToday && firstRefusalDay == 0) firstRefusalDay = day;
+
+                if (day == 1)
+                {
+                    Assert.AreEqual(15, r.NotionsOrdered, "day 1 orders today + 14 forward = 15u in one order");
+                    Assert.AreEqual(0, r.BatchesBaked, "nothing bakes before the first arrival, day 1");
+                }
+                else if (day <= 14)
+                {
+                    Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+                    Assert.AreEqual(0, r.NotionsOrdered, $"no order while the 15u bulk order is in transit, day {day}");
+                }
+                else if (day <= 30)
+                {
+                    Assert.AreEqual(1, r.BatchesBaked, $"a daily bake runs while the pipeline holds, day {day}");
+                    Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                    Assert.AreEqual(day == 15 ? 0 : 1, r.NotionsOrdered,
+                        day == 15
+                            ? "day 15 orders nothing: its 15u arrival already covers the target after the feed"
+                            : $"one 1u replacement order, day {day}");
+                    bakes++;
+                }
+                else if (day <= 44)
+                {
+                    Assert.AreEqual(1, r.BatchesBaked, $"the bake still succeeds on in-transit arrivals, day {day}");
+                    Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                    Assert.AreEqual(0, r.NotionsOrdered, $"the order is refused once the 30u supply is spent, day {day}");
+                    Assert.IsTrue(refusedToday, $"day {day} names the exhausted finite supply in the diagnostics");
+                    bakes++;
+                }
+                else
+                {
+                    Assert.AreEqual(0, r.BatchesBaked, $"no bake once the in-transit pipeline drains, day {day}");
+                    Assert.AreEqual(0, r.NotionsOrdered, $"no order can be placed: the finite supply is spent, day {day}");
+                    Assert.IsTrue(refusedToday, $"day {day} still names the exhausted finite supply in the diagnostics");
+                    Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                        $"day {day} refuses on notions; refusal: {r.Refusal}");
+                    if (firstStallDay == 0) firstStallDay = day;
+                    AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[s.Bakery.Batches.Count - 1].BatchId, day, "notions");
+                }
+            }
+
+            Assert.AreEqual(31, firstRefusalDay, "the first refused notions order is day 31: the 30th unit was ordered day 30");
+            Assert.AreEqual(45, firstStallDay, "bakes stop on notions from day 45: the last in-transit arrival feeds day 44");
+            Assert.AreEqual(30, bakes, "30 daily bakes, days 15-44");
+            Assert.AreEqual(30, s.Bakery.WholesaleDeliveries.Count, "30 daily bakes = 30 deliveries");
+            Assert.AreEqual(16, s.StoreService.Orders.Count, "16 notions orders: 1 bulk order + 15 single replacements (days 16-30); nothing ordered after the supply spent");
+            Assert.AreEqual(30, TotalNotionsOrderedUnits(s), "30 units ordered in total: the authored finite counterparty is exactly spent");
+            Assert.AreEqual(16, s.StoreService.Lots.Count, "16 arrival lots, one per placed order; no arrival follows a refused order");
+            Assert.AreEqual(16, s.StoreService.ReceivedReceiptIds.Count, "16 distinct receipt ids, one per received order");
+            Assert.AreEqual(300, s.Market.TotalOutflowCents, "30 orders x 10c booked as market outflow at order time; a refused order books nothing");
+            Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId), "no notions sit in the bin at day 60: nothing conjured after the stall");
+            Assert.AreEqual(0, s.Notions.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId), "no notions sit sellable in the store at day 60: no second supply path");
+            Assert.AreEqual(3140, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 300c notions feeds (30 x 10c) + 1,440c wholesale (30 x 48c)");
+            Assert.AreEqual(3560, s.StoreRuntime.CurrentCashCents, "store 5,000 - 300c receipts + 300c feeds - 1,440c wholesale");
+            Assert.AreEqual(30, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId), "fuel 60 - 30 bakes = 30u left: fuel never blocks this run");
+            Assert.AreEqual(720, s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits, "store stock 30 bakes x 24 loaves = 720u at day 60 (no sale in the fixture)");
+        }
+
+        [Test]
+        public void Cap_Fuel_FortyUnits_StopsBakeDayFortyOne()
+        {
+            // Priority 3 Slice 6 (H-A4 / plan §8 B-2): with fuel seeded
+            // to exactly the authored 40 opening units and every other
+            // input sufficient (flour + notions test-seeded daily,
+            // notions unwired), the Bakery bakes 40 days (days 2-41)
+            // and then refuses on fuel — day 42, and again day 43 with
+            // the SAME batch id, still Planned: the batch stays planned
+            // and retries, it is never dropped and never duplicated.
+            // The forwarder's fuel-blocker line names D-2 and D-7.
+            Slice s = NewSlice();
+            SeedInputs(s, 0, 0, 40);
+            BookAccount(s, 24, 1, 2, 2);
+
+            for (int day = 2; day <= 41; day++)
+            {
+                SeedInputs(s, 12, 1, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, null, day, wireNotions: false);
+                Assert.AreEqual(1, r.BatchesBaked, $"bake day {day}");
+                Assert.AreEqual(1, r.TransfersCompleted, $"transfer day {day}");
+                Assert.AreEqual(40 - (day - 1),
+                    s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                    $"fuel decrements exactly, day {day} (no unit appears from any other source)");
+            }
+            Assert.AreEqual(40, s.Bakery.WholesaleDeliveries.Count, "40 daily bakes = 40 deliveries");
+
+            SeedInputs(s, 12, 1, 0);
+            int diagBefore = s.Diag.Count;
+            BakeryWholesaleDailyResult refused = RunDay(s, null, 42, wireNotions: false);
+            Assert.AreEqual(0, refused.BatchesBaked, "day 42 bakes nothing: fuel exhausted after 40 bake days");
+            Assert.IsTrue(refused.Refusal != null && refused.Refusal.Contains("fuel"),
+                "day 42 refuses on fuel; refusal: " + refused.Refusal);
+            Assert.AreEqual(0, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel on hand is 0 on day 42");
+            Assert.AreEqual(BakeryBatchStage.Planned,
+                s.Bakery.Batches[s.Bakery.Batches.Count - 1].Stage,
+                "the blocked batch stays Planned");
+            string blockedBatchId = s.Bakery.Batches[s.Bakery.Batches.Count - 1].BatchId;
+            AssertBlockedLineNamesCause(s, diagBefore, blockedBatchId, 42, "fuel");
+
+            // The batch retries the next day with the same id and the
+            // same refusal — it is neither dropped nor duplicated.
+            SeedInputs(s, 12, 1, 0);
+            diagBefore = s.Diag.Count;
+            BakeryWholesaleDailyResult retried = RunDay(s, null, 43, wireNotions: false);
+            Assert.AreEqual(0, retried.BatchesBaked, "day 43 bakes nothing: fuel is still exhausted");
+            Assert.IsTrue(retried.Refusal != null && retried.Refusal.Contains("fuel"),
+                "day 43 refuses on fuel again; refusal: " + retried.Refusal);
+            Assert.AreEqual(blockedBatchId, s.Bakery.Batches[s.Bakery.Batches.Count - 1].BatchId,
+                "the day-43 blocked batch is the same batch id: it retries, it is not re-planned as a second batch");
+            Assert.AreEqual(BakeryBatchStage.Planned,
+                s.Bakery.Batches[s.Bakery.Batches.Count - 1].Stage,
+                "the retried batch is still Planned");
+            AssertBlockedLineNamesCause(s, diagBefore, blockedBatchId, 43, "fuel");
+
+            string fuelLine = BakeryFuelBlockerDiagnostics.BuildFuelLine(new BakeryFuelBlockerInputs
+            {
+                BatchesPlanned = 1,
+                FuelUnitsOnHand = 0,
+                AuthoredFactor = null,
+                YardIntakeExistsInDailyFlow = false,
+                DealerSourceAttached = false,
+                DealerFuelUnitsOnHand = 0,
+            });
+            Assert.IsTrue(fuelLine.Contains("D-2") && fuelLine.Contains("D-7"),
+                "the day-42 fuel line names D-2 and D-7; line: " + fuelLine);
+            Assert.IsTrue(fuelLine.Contains("no dealer source attached"),
+                "the line states no dealer source; line: " + fuelLine);
+            Assert.IsTrue(fuelLine.Contains("no live fuel-yard intake"),
+                "the line states no yard intake; line: " + fuelLine);
+        }
+
+        [Test]
+        public void Cap_MillbrookWeeklyReplenishment_BelowDailyDemand()
+        {
+            // Priority 3 Slice 6 (H-B4 / plan §8 B-3): the authored
+            // Millbrook arithmetic — 230 lb starting reserve, 40-80
+            // lb/week replenishment toward a 460 lb target, against
+            // 84 lb/week of demand at 1 batch/day (7 x 12 lb). The
+            // test drives the REAL ApplyWeeklyReplenishment over 8
+            // weeks and asserts the reserve declines in every week
+            // whose replenishment is below the 84 lb demand — which,
+            // at a 40-80 lb authored range, is every week. The weeks
+            // in which the reserve would empty at maximum vs minimum
+            // replenishment are recorded as diagnostic output, not
+            // asserted as a pass/fail on the reserve itself: the
+            // values are authored balance, not defects.
+            Slice s = NewSlice();
+            OffMapAidBusinessDefinition millbrookDef = MillbrookDefinitionWithProduction();
+            Assert.AreEqual(1, millbrookDef.Production.Count, "the authored Millbrook definition carries one production row");
+            OffMapAidProductionRow production = millbrookDef.Production[0];
+            Assert.AreEqual(40, production.WeeklyMinimumUnits, "authored weekly replenishment minimum is 40 lb");
+            Assert.AreEqual(80, production.WeeklyMaximumUnits, "authored weekly replenishment maximum is 80 lb");
+            Assert.AreEqual(460, production.TargetReserveUnits, "authored replenishment target reserve is 460 lb");
+
+            var supplier = new OffMapAidBusinessRuntime(millbrookDef);
+            Assert.AreEqual(230, supplier.GetInventoryUnits("bakery_flour_sack"),
+                "the authored Millbrook starting reserve is 230 lb");
+
+            const int weeklyDemandLb = 84; // 1 batch/day x 7 days x 12 lb/batch
+            // The modelled reserve is the supplier's stock under daily
+            // baking: each week the real replenishment is added and the
+            // week's 84 lb of demand is drawn. The draw is modelled
+            // through the existing save seam (ExportState, set the
+            // flour row, ImportState): live, real flour orders draw
+            // the stock down to this modelled level, and without the
+            // draw the stock would balloon to the 460 lb target cap
+            // and mask the true per-week replenishment amounts (the
+            // first version of this test saw week 4 capped at 38 lb).
+            int reserve = 230;
+            int totalReplenished = 0;
+            for (int week = 1; week <= 8; week++)
+            {
+                int reserveBefore = reserve;
+                int stockBefore = supplier.GetInventoryUnits("bakery_flour_sack");
+                List<string> messages = supplier.ApplyWeeklyReplenishment(week * 7);
+                int stockAfter = supplier.GetInventoryUnits("bakery_flour_sack");
+                int replenished = stockAfter - stockBefore;
+                totalReplenished += replenished;
+                Assert.IsTrue(replenished >= 40 && replenished <= 80,
+                    $"week {week} replenishes within the authored 40-80 lb range; replenished {replenished} lb");
+                Assert.AreEqual(1, messages.Count, $"week {week} emits one replenishment line");
+                Assert.IsTrue(messages[0].Contains("(week " + week + ")"),
+                    $"week {week} replenishment line names its week; line: {messages[0]}");
+                reserve = reserveBefore + replenished - weeklyDemandLb;
+                Assert.IsTrue(replenished < weeklyDemandLb,
+                    $"week {week} replenishment ({replenished} lb) is below the 84 lb weekly demand");
+                Assert.IsTrue(reserve < reserveBefore,
+                    $"week {week}: the reserve declines whenever weekly demand exceeds that week's replenishment ({reserveBefore} -> {reserve} lb)");
+
+                OffMapAidBusinessSaveDto dto = supplier.ExportState();
+                for (int i = 0; i < dto.InventoryItemIds.Count; i++)
+                    if (string.Equals(dto.InventoryItemIds[i], "bakery_flour_sack", StringComparison.Ordinal))
+                        dto.InventoryUnits[i] = reserve;
+                Assert.IsNull(supplier.ImportState(dto), $"week {week}: modelling the weekly draw through the save seam should succeed");
+                Assert.AreEqual(reserve, supplier.GetInventoryUnits("bakery_flour_sack"),
+                    $"week {week}: the supplier stock after the modelled draw is the modelled reserve");
+            }
+            Assert.AreEqual(520, totalReplenished,
+                "the deterministic weekly replenishment totals 520 lb over weeks 1-8 (as pinned by Slice 5)");
+            Assert.AreEqual(78, reserve,
+                "after 8 weeks the modelled reserve is 230 + 520 - 672 = 78 lb: still positive, still declining");
+
+            // Diagnostic horizon (recorded, not a pass/fail on the
+            // reserve): at maximum replenishment the reserve falls
+            // 4 lb/week and empties in week 58; at minimum it falls
+            // 44 lb/week and empties in week 6.
+            int emptyWeekAtMaximum = 0;
+            int atMaximum = 230;
+            while (atMaximum > 0) { emptyWeekAtMaximum++; atMaximum += 80 - weeklyDemandLb; }
+            int emptyWeekAtMinimum = 0;
+            int atMinimum = 230;
+            while (atMinimum > 0) { emptyWeekAtMinimum++; atMinimum += 40 - weeklyDemandLb; }
+            s.Diag.Add($"Cap_MillbrookWeeklyReplenishment: at maximum replenishment (80 lb/week) the 230 lb reserve empties in week {emptyWeekAtMaximum} against 84 lb/week demand (net -4 lb/week).");
+            s.Diag.Add($"Cap_MillbrookWeeklyReplenishment: at minimum replenishment (40 lb/week) the 230 lb reserve empties in week {emptyWeekAtMinimum} against 84 lb/week demand (net -44 lb/week).");
+            Assert.AreEqual(58, emptyWeekAtMaximum, "at maximum replenishment the reserve empties in week 58");
+            Assert.AreEqual(6, emptyWeekAtMinimum, "at minimum replenishment the reserve empties in week 6");
+            Assert.IsTrue(s.Diag.Exists(d => d != null && d.Contains("empties in week 58")),
+                "the maximum-replenishment horizon is recorded as diagnostic output");
+            Assert.IsTrue(s.Diag.Exists(d => d != null && d.Contains("empties in week 6")),
+                "the minimum-replenishment horizon is recorded as diagnostic output");
+        }
     }
 }

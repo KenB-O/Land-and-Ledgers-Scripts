@@ -31,8 +31,9 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// moved. Request id is deterministic and unique per order
         /// ("flour-reorder-d&lt;day&gt;-n&lt;k&gt;", k = count of existing lots
         /// for this buyer + 1, derived from supplier.Lots, never random).
-        /// Guards: sacks &gt; 0; sacks &lt;= live available sacks
-        /// (supplier stock in pounds / 10); single-outstanding-order rule —
+        /// Guards: sacks &gt; 0; sacks are clamped to live available sacks
+        /// (supplier stock in pounds / 10) and refused only when none
+        /// are available; single-outstanding-order rule —
         /// if uncommitted, unreceived lots for this buyer already cover the
         /// requested sacks, refuse naming the oldest outstanding lot instead
         /// of double-ordering (Obj 47's hazard, same shape as the notions
@@ -61,7 +62,16 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             int availableSacks = Math.Max(0, supplier.GetInventoryUnits(FlourSkuId) / LbPerSack);
             if (sacks > availableSacks)
-                return Refuse(diag, $"Millbrook flour reorder refused: Millbrook holds {availableSacks} sack(s) of flour; order requires {sacks}.");
+            {
+                if (availableSacks == 0)
+                    return Refuse(diag, $"Millbrook flour reorder refused: Millbrook holds {availableSacks} sack(s) of flour; order requires {sacks}.");
+                // Priority 3 Slice 4b (partial fill): order the stock
+                // Millbrook actually holds instead of refusing the
+                // whole order — a fulfillable majority must not stall
+                // the Bakery while sacks sit at the supplier.
+                diag.Add($"Millbrook flour reorder clamped: requested {sacks} sack(s); Millbrook holds {availableSacks} — ordering {availableSacks} sack(s).");
+                sacks = availableSacks;
+            }
 
             OffMapAidCargoLot outstanding = FindShippableLot(supplier, buyerBusinessId);
             if (outstanding != null)

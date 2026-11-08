@@ -2603,10 +2603,9 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void ForwardOrder_Flour_DepthCoversFreightLead_SustainsDailyBakes()
         {
-            // Priority 3 Slice 4: with the flour depth set to cover
+            // Priority 3 Slice 4b: with the flour depth set to cover
             // the modelled freight lead, the flour leg sustains a
-            // daily bake once the pipeline primes — until the authored
-            // Millbrook supply itself is exhausted (H-B4, see below).
+            // daily bake once the pipeline primes, through day 60.
             // The modelled lead is 7 days (Set B: pickup ~day+3,
             // receipt ~day+7); the depth is 14 — one lead of cover
             // plus one lead of buffer — because depth equal to the
@@ -2624,42 +2623,35 @@ namespace LandLedgers.Editor.Economy
             // value is invented here — both the lead (7) and the depth
             // (14) are caller-supplied test values.
             //
-            // STALL FROM DAY 57 (measured, not assumed): daily
-            // bakes run days 8-56 (49 bakes, 588 lb) and stall from
-            // day 57 with the bin at 2 lb and nothing in transit.
-            // This is NOT the H-B4 supply cap: total supply is 230 lb
-            // start + 520 lb deterministic weekly replenishment over
-            // weeks 1-8 = 750 lb, against 636 lb of 60-day demand, so
-            // Millbrook still holds 16 sacks (160 lb) at the stall.
-            // The stall is the forward request meeting two existing
-            // guards at once. First, the single-outstanding-order
-            // guard lets the pipeline drain between lumpy bursts: it
-            // refuses a top-up whenever the outstanding sacks already
-            // cover the requested sacks, even though the outstanding
-            // lot arrives a week later while the bin burns 12 lb/day.
-            // Second, when the drained pipeline finally asks for the
-            // full forward target — 18 sacks on day 57 — the
-            // all-or-nothing insufficient-stock guard refuses the
-            // whole order because Millbrook holds only 16 sacks
-            // ("Millbrook holds 16 sack(s); order requires 18"), so
-            // the driver orders 0 instead of the 16 available, and
-            // the 7-day lead means no flour can arrive before day 64
-            // anyway. Both are follow-up questions for the
-            // coordinator (guard interaction with forward ordering;
-            // partial fill), NOT silent fixes in this slice: the
-            // mechanism orders exactly the forward target net of
-            // on-hand and in-transit, the guards stay intact, and
-            // flour reconciles exactly (ordered = baked + bin +
-            // in transit). A 60-day sustained flour run needs those
-            // questions answered (and, at the H-B4 horizon, B-3).
+            // REPAIR (Slice 4b, partial-fill ordering): Slice 4
+            // pinned a stall from day 57 — daily bakes days 8-56
+            // (49 bakes), then the drained pipeline's 18-sack forward
+            // request met the all-or-nothing insufficient-stock guard
+            // while Millbrook held only 16 sacks ("Millbrook holds
+            // 16 sack(s); order requires 18"), so the driver ordered
+            // 0 instead of the 16 available and no bake was possible
+            // days 57-60. MillbrookFlourReorder.PlaceReorder now
+            // clamps instead of refusing: when 0 < available <
+            // requested it orders the available sacks (one lot, one
+            // debit at the authored 48c/sack) and logs the clamp.
+            // The re-simulation (plan 03b §3(i)) predicts the repair
+            // sustains daily bakes days 8-60 (53 bakes) with clamped
+            // orders on days 51 and 56; the test run governs — the
+            // clamp days below are confirmed from the run, and the
+            // day-60 snapshot (bin 34 lb, in transit 80 lb, Millbrook
+            // 0 lb, 75 sacks, bakery 944c) is the repaired
+            // reconciliation. Total supply is 230 lb start + 520 lb
+            // deterministic weekly replenishment over weeks 1-8 =
+            // 750 lb, fully ordered by day 60: the run ends at genuine
+            // H-B4 exhaustion, not a guard stall.
             //
             // Notions are test-seeded 1u/day and the notions step is
             // unwired, so only the flour leg can block; fuel is seeded
             // to 60u. The store holds 0 sacks, so all flour comes
             // through Millbrook; lots are received through the real
             // receipt seam exactly 7 days after their order day.
-            // Store target raised to 2,000u: 49 bakes x 24 loaves =
-            // 1,176u past the shared fixture's 1,000u staple_food cap.
+            // Store target raised to 2,000u: 53 bakes x 24 loaves =
+            // 1,272u past the shared fixture's 1,000u staple_food cap.
             Slice s = NewSlice(storeTarget: 2000);
             // Authored Millbrook production (plan section 2 H-B4):
             // 40-80 lb/week toward a 460-lb target reserve. The shared
@@ -2690,7 +2682,7 @@ namespace LandLedgers.Editor.Economy
             int totalReplenishedLb = 0;
             int maxConsecutiveEightLbDays = 0;
             int consecutiveEightLbDays = 0;
-            bool stallRefusalNamesMillbrookStock = false;
+            var clampDays = new List<int>();
             string firstStallDayDiag = string.Empty;
             for (int day = 1; day <= 60; day++)
             {
@@ -2713,6 +2705,9 @@ namespace LandLedgers.Editor.Economy
                 Assert.IsTrue(supplier.Lots.Count - lotsBefore <= 1,
                     $"at most one Millbrook reorder lot per day, day {day}");
                 totalReorderSacks += r.MillbrookReorderSacks;
+                string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+                if (dayDiag.Contains("clamped"))
+                    clampDays.Add(day);
                 int binLb = s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
                 if (r.BatchesBaked == 1)
                 {
@@ -2725,8 +2720,7 @@ namespace LandLedgers.Editor.Economy
                 else if (firstBakeDay > 0 && firstStallDay == 0)
                 {
                     firstStallDay = day;
-                    firstStallDayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
-                    stallRefusalNamesMillbrookStock = firstStallDayDiag.Contains("Millbrook holds 16 sack(s)");
+                    firstStallDayDiag = dayDiag;
                     Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("flour"),
                         $"the first stall day refuses on flour; refusal: {r.Refusal}");
                 }
@@ -2744,20 +2738,26 @@ namespace LandLedgers.Editor.Economy
 
             Assert.AreEqual(8, firstBakeDay,
                 "the first bake is day 8: the day-1 order is received exactly one 7-day lead later");
-            Assert.AreEqual(57, firstStallDay,
-                "daily bakes stall from day 57, when the drained pipeline's 18-sack forward request exceeds the 16 sacks Millbrook then holds");
-            Assert.AreEqual(49, bakes, "49 daily bakes, days 8-56 with no gap, then the guard-interaction stall");
-            Assert.AreEqual(49, s.Bakery.WholesaleDeliveries.Count, "49 daily bakes = 49 deliveries");
+            Assert.AreEqual(0, firstStallDay,
+                "no stall through day 60: daily bakes run days 8-60 with no gap; first stall day diag: " + firstStallDayDiag);
+            Assert.AreEqual(53, bakes, "53 daily bakes, days 8-60 with no gap, after the partial-fill repair");
+            Assert.AreEqual(53, s.Bakery.WholesaleDeliveries.Count, "53 daily bakes = 53 deliveries");
             Assert.AreEqual(520, totalReplenishedLb,
                 "the deterministic weekly replenishment totals 520 lb over weeks 1-8 (40-80 lb/week, authored range)");
-            Assert.AreEqual(160, supplier.GetInventoryUnits("bakery_flour_sack"),
-                "Millbrook still holds 160 lb (16 sacks) at the end of the run: this stall is not H-B4 exhaustion (total supply 750 lb > 636 lb demand)");
-            Assert.IsTrue(stallRefusalNamesMillbrookStock,
-                "the first stall day's reorder refusal names Millbrook holding 16 sacks against an 18-sack request; diag: " + firstStallDayDiag);
-            Assert.AreEqual(2, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
-                "the bin rests at 2 lb at the end: every ordered pound was either baked or is in the bin");
-            Assert.AreEqual(0, OutstandingMillbrookLb(supplier),
-                "nothing is left in transit at the end of the run");
+            Assert.AreEqual(0, supplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook holds 0 lb at the end of the run: the total authored supply (230 + 520 = 750 lb) is fully ordered — genuine H-B4 exhaustion, not a guard stall");
+            Assert.IsTrue(clampDays.Count >= 1,
+                "at least one clamped order occurred: the partial-fill repair fired instead of refusing; clamp days: "
+                + string.Join(",", clampDays));
+            Assert.IsTrue(clampDays.Contains(51) && clampDays.Contains(56),
+                "clamped orders fire on days 51 and 56 (re-simulation prediction, confirmed by the run); clamp days: "
+                + string.Join(",", clampDays));
+            Assert.AreEqual(75, totalReorderSacks,
+                "75 sacks ordered over the run (10 x 75 = 750 lb = total authored supply)");
+            Assert.AreEqual(34, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "the bin rests at 34 lb at the end");
+            Assert.AreEqual(80, OutstandingMillbrookLb(supplier),
+                "80 lb is in transit at the end of the run");
             Assert.AreEqual(10 * totalReorderSacks, 12 * bakes
                 + s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId) + OutstandingMillbrookLb(supplier),
                 "flour reconciles exactly: ordered pounds = baked pounds + bin + in transit (no flour created or lost)");
@@ -2767,6 +2767,8 @@ namespace LandLedgers.Editor.Economy
                 "Millbrook is paid exactly 48c per reorder sack, once each (exactly-once settlement)");
             Assert.AreEqual(230 + totalReplenishedLb - 10 * totalReorderSacks, supplier.GetInventoryUnits("bakery_flour_sack"),
                 "Millbrook stock reconciles: 230 start + weekly replenishment - reordered pounds");
+            Assert.AreEqual(944, s.BakeryRuntime.CurrentCashCents,
+                "bakery cash reconciles: 2,000 - 48c per reorder sack (75 x 48) + 48c per wholesale transfer (53 x 48) = 944c");
             Assert.AreEqual(2000 - 48 * totalReorderSacks + 48 * bakes, s.BakeryRuntime.CurrentCashCents,
                 "bakery cash reconciles: 2,000 - 48c per reorder sack + 48c per wholesale transfer");
         }

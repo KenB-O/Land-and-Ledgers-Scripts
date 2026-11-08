@@ -84,6 +84,8 @@ found, the test fails loudly rather than passing silently.
 | PerishableLotState | Domains/Economy/Logistics/PerishableLotState.cs | Domains/Economy/Logistics | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
+| SupplierComparison | Domains/Economy/Logistics/SupplierComparison.cs | Domains/Economy/Logistics | (none) |
+| ReplenishmentPlan | Domains/Economy/Logistics/ReplenishmentPlan.cs | Domains/Economy/Logistics | (none) |
 
 ## Notes per entry
 
@@ -288,6 +290,43 @@ found, the test fails loudly rather than passing silently.
   owning directory (same-directory references are not production
   callers), and `DemandObservation` only through the caller-supplied
   `ReserveInputs` bridge in tests.
+- `SupplierComparison` (Priority P5, 2026-11-08) is the read-only
+  supplier comparison: options quoted by the authorities that actually
+  hold them (Millbrook table, catalog quotes, named-SKU orders, settled
+  shipment charges), ranked by expected profit — never by unit price
+  alone — with per-option reasoning and per-axis Unknown handling
+  (profit, arrival, reliability, storage, consolidation). It is
+  registered here honestly as UNWIRED by design, not oversight: the
+  P5 brief wires nothing into live flows — the comparison is computed
+  in tests from supplied options and no flow calls it yet. Its sibling
+  types need no row: `CentsAmount`, `SupplierStorageFit`,
+  `SupplierReliability`, `SpoilageForecast`, `SupplierOption`,
+  `RankedSupplierOption`, and `SupplierComparisonResult` are structs
+  (the scan enumerates concrete public top-level classes only).
+  Remove this row the day a production flow consults a comparison; do
+  not wire it merely to clear the entry. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, `PersonInventoryReadModel`,
+  `LotIdentityResolver`, `PerishableLotState`, `DemandObservation`,
+  and `ReserveProjection` rows above stay: the comparison reads the
+  F3 log and the Slice 5 states only from inside its own owning
+  directory, reuses the Slice 6 `LeadTimeDays` and `ReserveQuantity`
+  structs from the same directory, and references the F1/F2 types
+  nowhere.
+- `ReplenishmentPlan` (Priority P5, 2026-11-08) is the replenishment
+  plan that connects a Slice 6 recommended reserve to the best
+  supplier option for the shortfall: it selects the best affordable
+  comparable option, states expected cost, arrival, and profit, and
+  orders nothing. It is registered here honestly as UNWIRED by design,
+  not oversight: the P5 brief wires nothing into live flows — the plan
+  is computed in tests from a supplied projection and comparison and
+  no flow calls it yet. Remove this row the day a production flow
+  consults a plan; do not wire it merely to clear the entry. The
+  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, `LotIdentityResolver`,
+  `PerishableLotState`, `DemandObservation`, `ReserveProjection`, and
+  `SupplierComparison` rows above stay: the plan reads the projection
+  and the comparison result only, both from inside its own owning
+  directory.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -477,6 +516,19 @@ note records their audited status so the question does not reopen:
   `LotIdentityResolver`, and `PerishableLotState` rows stay: the book
   reads the F3 log only, and the projection reads `PerishableLotState`
   only from inside its own owning directory.
+- Priority P5 (2026-11-08):
+  `SupplierComparison` registered as UNWIRED by design — read-only
+  supplier comparison, ranked by expected profit with per-option
+  reasoning, computed in tests from authority-quoted options, no flow
+  calls it yet. `ReplenishmentPlan` registered as UNWIRED by design —
+  reserve-to-supplier plan stating expected cost, arrival, and profit,
+  computed in tests, orders nothing, no flow calls it yet. The
+  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, `LotIdentityResolver`,
+  `PerishableLotState`, `DemandObservation`, and `ReserveProjection`
+  rows stay: the comparison and the plan read the F3 log, the Slice 5
+  states, and the Slice 6 types only from inside their own owning
+  directory, and reference the F1/F2 types nowhere.
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note

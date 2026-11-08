@@ -50,7 +50,6 @@ found, the test fails loudly rather than passing silently.
 
 | Type | Source file | Owning directory | Allowlisted refs |
 |---|---|---|---|
-| BakeryShopRuntime | Domains/Economy/Businesses/Bakery/BakeryShopRuntime.cs | Domains/Economy/Businesses/Bakery | (none) |
 | BarberShopRuntime | Domains/Economy/Businesses/Barber/BarberShopRuntime.cs | Domains/Economy/Businesses/Barber | (none) |
 | DoctorPracticeRuntime | Domains/Economy/Businesses/Doctor/DoctorPracticeRuntime.cs | Domains/Economy/Businesses/Doctor | (none) |
 | GrainElevatorShopRuntime | Domains/Economy/Businesses/GrainElevator/GrainElevatorShopRuntime.cs | Domains/Economy/Businesses/GrainElevator | (none) |
@@ -60,7 +59,7 @@ found, the test fails loudly rather than passing silently.
 | NewspaperRuntime | Domains/Economy/Businesses/Newspaper/NewspaperRuntime.cs | Domains/Economy/Businesses/Newspaper | (none) |
 | RestaurantShopRuntime | Domains/Economy/Businesses/Restaurant/RestaurantShopRuntime.cs | Domains/Economy/Businesses/Restaurant | (none) |
 | SaloonRuntime | Domains/Economy/Businesses/Saloon/SaloonRuntime.cs | Domains/Economy/Businesses/Saloon | (none) |
-| SawmillShopRuntime | Domains/Economy/Businesses/Sawmill/SawmillShopRuntime.cs | Domains/Economy/Businesses/Sawmill | (none) |
+| SawmillShopRuntime | Domains/Economy/Businesses/Sawmill/SawmillShopRuntime.cs | Domains/Economy/Businesses/Sawmill | Orchestration/Player/ThreeBusinessSlice.cs |
 | TailorShopRuntime | Domains/Economy/Businesses/Tailor/TailorShopRuntime.cs | Domains/Economy/Businesses/Tailor | (none) |
 | BankRuntime | Domains/Economy/Businesses/Bank/BankRuntime.cs | Domains/Economy/Businesses/Bank | (none) |
 | StagedProductionProcess | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
@@ -75,14 +74,13 @@ found, the test fails loudly rather than passing silently.
 | BlacksmithRuntime | Domains/Economy/Businesses/Blacksmith/BlacksmithRuntime.cs | Domains/Economy/Businesses/Blacksmith | Domains/Economy/Businesses/Wheelwright/WagonRepairEconomy.cs |
 | TanneryRuntime | Domains/Economy/Businesses/Tannery/TanneryRuntime.cs | Domains/Economy/Businesses/Tannery | (none) |
 | PanelModalCoordinator | Presentation/UI/PanelModalCoordinator.cs | Presentation/UI | (none) |
-| SettlementCivicReadModel | ReadModels/Civic/SettlementCivicReadModel.cs | ReadModels/Civic | (none) |
 | ResourceObservationReadModel | ReadModels/Civic/ResourceObservationReadModel.cs | ReadModels/Civic | (none) |
 | SettlementCausalExplanation | ReadModels/Causal/SettlementCausalExplanation.cs | ReadModels/Causal | (none) |
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
 
 ## Notes per entry
 
-- The sixteen `*Runtime` entries are the detailed per-business models
+- The fifteen `*Runtime` entries are the detailed per-business models
   (roughly 32k lines combined, plus the three Pass XII additions).
   Each ships with its own feature helpers in the same directory. None
   is invoked by `SimulationDrivers`, `SharedBusinessRuntimeManager`,
@@ -233,20 +231,54 @@ note records their audited status so the question does not reopen:
   assembly scan cannot see them — this file-based registry test is
   their only machine check, which is why they are also added to the
   registry test's candidate list.
-- Pass XII Worker D: the five panel-contract types above are
+- Priority 8 Slice 3 (2026-11-08): `SawmillShopRuntime` stays registered
+  as UNWIRED in the live tick — no driver, bootstrapper, or daily flow
+  constructs it. Its only production-tree reference is the test-driven
+  scripted `ThreeBusinessSlice` run (`ThreeBusinessSliceRun.Execute`,
+  invoked only by tests), which constructs one slice-local mill and runs
+  sawing through it as a demo; that file is allowlisted in the row above
+  as fixture-adjacent scaffolding, NOT as wiring. If the sawmill is ever
+  constructed by a live driver or the bootstrapper, remove the allowlist
+  and the row together.
+- Priority 8 Slice 3 (2026-11-08): `BakeryShopRuntime` was removed from
+  the table above, not allowlisted: it is wired into the live tick by the
+  campaign's own deliberate Bakery work. The bootstrapper owns the single
+  live instance, binds its owner, builds the `Series2BakeryProductionDriver`
+  on it, and registers its Pass 9 state with `SaveLoadManager`
+  (`FirstLedgerSliceBootstrapper.cs:1990-2019`); `SimulationDrivers`
+  drives daily wholesale planning from it and builds the Millbrook flour
+  custody adapter on it (`SimulationDrivers.cs:3146`, `:7081`);
+  `Series2Pass9Save` captures and restores it; the BreadDrivers
+  (`Series2BakeryProductionDriver`, `BakeryWholesaleDailyDriver`,
+  `BakeryNotionsDailySupply`, `BakeryFlourLocalPurchase`,
+  `Series2BakeryFuelSource`, `Series2NotionsSupply`,
+  `Series2StoreToBakeryFeed`, `Series2DealerBakeryFuelSource`,
+  `Review2BakeryToStoreWholesaleDriver`,
+  `MillbrookFlourFreightCustodyAdapter`, `ScenarioOpeningEquipmentEndowment`,
+  `ScenarioOpeningWholesaleAccounts`) all operate on it. All 16 production
+  call sites were verified in source in Priority 8 Slice 3; none was
+  accidental. Its removal resolves R-06 together with the
+  `SettlementCivicReadModel` removal above and the `SawmillShopRuntime`
+  allowlist.
+- Pass XII Worker D: the four remaining panel-contract types above are
   source-complete read models / panel contracts (scenario HUD is NOT
   among them: `ScenarioHudReadModel` HAS a production caller in
   `ScenarioHudSnapshotBuilder`, in another directory, so it is
   accounted for by caller, not by this table; the static contracts
   `AcquisitionDealReadModel`, `StartupNoticeGate`,
   `ScenarioGuidanceGate`, and `ScenarioHudSnapshotBuilder` are
-  scan-exempt as abstract+sealed in IL). The five registered types
+  scan-exempt as abstract+sealed in IL). The four registered types
   have no production caller until Codex binds them in the scene
-  (modal coordinator, Civic tab, Resources tab, causal surface,
+  (modal coordinator, Resources tab, causal surface,
   person inspection). Registering them here is accounting for
   scene-binding-pending contracts, NOT a claim that they are
   dormant runtimes or broken systems; do not remove a row until a
   real production caller outside its owning directory exists.
+  The fifth, `SettlementCivicReadModel`, was removed in Priority 8
+  Slice 3 (2026-11-08): `GeneralStorePanelController.UpdateGovernment()`
+  now builds it in both branches for the live Civic tab (Plan 05 W-11,
+  verified by `Pass12PlayerExperienceReadModelTests.Civic_BuilderMatchesPanelText`),
+  so it is wired, not scene-binding-pending.
 - Pass XI WS2: BankRuntime note updated for the delivered binding
   contract (deliberately not wired into underwriting; scene binding
   outstanding under G4); HouseholdMoveService re-confirmed caller-free
@@ -264,3 +296,17 @@ note records their audited status so the question does not reopen:
   source-only-by-design types (PassengerManifest, PersonMoneyAccounts,
   ScenarioCoordinator, ScenarioWorldBuilder, RealDemandSource,
   BusinessValuationService).
+- Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
+  `BakeryShopRuntime` removed (wired into the live tick — 16 production
+  call sites verified in source, none accidental; see the Slice 3 note
+  above); `SettlementCivicReadModel` removed (wired into the live Civic
+  tab — `GeneralStorePanelController.UpdateGovernment()` builds it in both
+  branches; see the Pass XII Worker D note above); `SawmillShopRuntime`
+  stays registered, with `Orchestration/Player/ThreeBusinessSlice.cs`
+  allowlisted as fixture-adjacent scripted-slice scaffolding (see the
+  Slice 3 note above). The 145 unaccounted types from R-05 were classified
+  the same day in `Pass9RegistryAssemblyScanTests` (144 feature-internal
+  baseline, 1 source-only-by-design: `Series2FuelDealerSupplierAdapter`,
+  whose `RegisterIn` is the Codex bootstrapper registration call per its
+  own doc comment); no type was entered in this registry on the basis of
+  the plan alone, and no standalone unwired system was found among the 145.

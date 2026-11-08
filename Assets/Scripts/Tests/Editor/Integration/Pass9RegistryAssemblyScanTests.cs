@@ -56,6 +56,17 @@ namespace LandLedgers.EditorTests.Integration
         {
             "PassengerManifest", "PersonMoneyAccounts", "ScenarioCoordinator",
             "ScenarioWorldBuilder", "RealDemandSource", "BusinessValuationService",
+            // Priority 8 Slice 3 (2026-11-08): Series2FuelDealerSupplierAdapter
+            // is a supplier adapter whose only registration path is the Codex
+            // bootstrapper call of its RegisterIn (see its own doc comment in
+            // Domains/Economy/Businesses/FuelDealer/Series2FuelDealerSupplierAdapter.cs);
+            // no production .cs file constructs or registers it today (its
+            // sibling Series2BakerySupplierAdapter IS referenced from
+            // Review2ItemSkuMap.cs and the GeneralStore adapter IS registered
+            // from SimulationDrivers). Scene/bootstrapper scaffolding pending
+            // that registration — not a component consumed by any wired feature,
+            // so it does not belong in the feature-internal baseline below.
+            "Series2FuelDealerSupplierAdapter",
         };
 
         // Mirror of UnwiredSystemsRegistryTests.CandidateTypes (hand-audited,
@@ -263,6 +274,69 @@ namespace LandLedgers.EditorTests.Integration
             "UsedEquipmentPriceGuidance", "UsedEquipmentSale", "ValuationTuning", "WillContest",
             "WillContestCostSchedule", "WillContestGroundClaim", "WorkAssignment", "WorkEvent",
             "WorkerRow", "WorkforceStaffingReadModel", "WorkstationComponentRequirement", "WorldInspectableTarget",
+            // Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
+            // the 144 R-05 unaccounted types classified feature-internal after
+            // per-type source verification (each has no production caller outside
+            // its own file/directory; each is a record / DTO / result / inputs /
+            // params / component type consumed only inside its own feature — see
+            // 08-unity-triage-register.md for the per-type dispositions).
+            // No standalone unwired system was found among the 145: the one
+            // remaining type, Series2FuelDealerSupplierAdapter, is in
+            // SourceOnlyByDesign above.
+            // Task-duration diagnostics (Priority 4, wired service TaskDurationDiagnostics):
+            "TaskDurationDiagnosticSettings", "TaskTimingRecord", "TaskTimingVerdict",
+            // Bakery drivers (wired BreadDrivers / BakeryShopRuntime):
+            "BakeryDeliveryCargoLine", "BakeryDeliveryRun", "BakeryFlourLocalPurchaseInputs", "BakeryFlourLocalPurchaseResult",
+            "BakeryFlourSupplierComparisonResult", "BakeryFlourSupplierInputs", "BakeryHaulingTerms", "BakeryNotionsDailySupplyInputs",
+            "BakeryNotionsDailySupplyResult", "BakeryWasteRecord", "BakeryWholesaleDeliveryRecord", "FlourSupplierQuote",
+            "Series2FlourUnitConversion", "Series2ProcurementSaveRegistration",
+            // General Store / off-map aid (wired runtimes and procurement service):
+            "NamedSkuLotConsumption", "OffMapAidCashTransaction", "OffMapAidInventoryRow", "OffMapAidProductionRow",
+            "OffMapSupplierCatalog", "StoreRestockDriver",
+            // Sawmill (feature entry SawmillShopRuntime stays registered unwired):
+            "SawmillBladeInventory", "SawmillBladeState", "SawmillConversionProfile", "SawmillLumberDispenseLine",
+            "SawmillLumberStock", "SawmillTollDispenseLine", "SawmillTollLogStock", "SawmillTollPickupRegister",
+            "SawmillTollPolicy", "SawmillTollProductCustody", "SawmillTollSawingResult", "TollLogCustodyLot",
+            // Logging (feature entry LoggingOperationRuntime is slice-only, via ThreeBusinessSlice):
+            "LoggingCampCrewEntry", "LoggingCampParameters", "LoggingCampSite", "LoggingCampSupplyDelivery",
+            "LoggingCampSupplyLedger", "LoggingCampWorkDay", "TimberRightsGrant",
+            // Farming (wired farm chains):
+            "DairyBuyerStock", "DairyProcessingBatch", "DairySale", "GeneralStoreFeedSupplier",
+            "PigRecord", "SheepRecord", "WoolLot",
+            // Financing / freight / ordering (wired credit-workout, carrier settlement, settlement paths):
+            "CreditParticipantService", "Pass2StoreActionDecision", "Pass3FuelOutputLot", "Pass3TransportPair",
+            "Pass3WholesaleIntakeResult", "ProductionInputSubstitutionDefinition", "Series2CarrierLeg", "Series2CarrierLegResult",
+            "Series2CarrierQuoteResult", "Series2CarrierSettlementResult", "Series2FreightProductionCarrier", "Series2FuelDealer",
+            "Series2ShelfMoveResult", "Series2WholesaleSettlementResult",
+            // Storage (file-internal model types; no production consumer):
+            "PhysicalStorageZone", "PhysicalStorageZoneDefinition", "StoredLotReference",
+            // Population: arrival / kinship / outmigration / recruitment / travel / reputation (static entry classes or bootstrapper-wired FamilyTreeBuilder chain):
+            "ArrivalSettlementApplication", "ArrivalSettlementOutcome", "ArrivalSettlementRecord", "ArrivalSettlementRequest",
+            "DerivedKinshipResult", "ImmigrationEvaluation", "ImmigrationThresholds", "KinshipDistance",
+            "OutmigrationCloseoutResult", "OutmigrationDestination", "OutmigrationRecord", "OutmigrationRequest",
+            "PersonVisualIdentityBinding", "RecruitmentLead", "RecruitmentLetterRequest", "ThroughTravelerVisit",
+            "TownReputationInputs", "TownReputationSnapshot", "TownReputationWeights", "TravelerOutcome",
+            // Population: Pass 5 town growth (records saved via Series2Pass10Save):
+            "Pass5DepartureRecord", "Pass5DialogueQuestion", "Pass5EnrichedLead", "Pass5FriendEdge",
+            "Pass5OffMapLocation", "Pass5PlayerStatedNeed", "Pass5RoleNeedRank", "Pass5SettlementInputs",
+            "Pass5SettlementReadiness", "Pass5TaskFamilyEvidence", "Pass5TownInputs", "Series2SliceTownGates",
+            // Regional (wired RegionalDeliveredCost / RegionalSupplySaveDto):
+            "RegionalCollectionOrder", "RegionalCollectionStop", "RegionalMultiStopPlan", "RegionalSupplierStockRow",
+            // Persistence save DTOs (wired save paths):
+            "Pass9AutoEatDto", "Pass9AutoSleepDto", "Pass9CatalogLineDto", "Pass9DutyDto",
+            "Pass9DutyTaskDto", "Pass9FuelInputOrderDto", "Pass9FuelSourceParamsDto", "Pass9MissedItemDto",
+            "Pass9OrderDraftDto", "Pass9OrderLineDto", "Pass9OrderRequestDto", "Pass9SequenceEntryDto",
+            "Pass9SkuOfferDto", "Pass9SupplierOfferDto", "Pass9WholesaleSettlementDto", "Review2D3HorseFeedCarryDto",
+            "Review2D3RuntimeItemDto", "Review2D3StoreFeedDto", "Review2VerticalD3SaveDto", "Series2Pass10SaveDto",
+            "Series2Pass10SaveState", "Series2Pass10TownSnapshotDto", "Series2Pass9SaveDto",
+            // Player slices (test-driven slice orchestrators and the persistence-wired Pass 4 player duty):
+            "BusinessCreditPolicy", "BusinessRuntimeCashPort", "Pass4PlayerMessage", "Pass4StalledTaskRecord",
+            "PlayerNpcPlaytestPolicy", "Series2AutoCareLedgerBinding", "Series2AutoCarePaymentResult", "Series2PlayerDutyBinding",
+            "SixPersonSliceRunReport", "SixPersonSliceSnapshot", "SliceCreditSaleResult", "SliceOwnerDrawResult",
+            "SliceOwnerLabourRecord", "SlicePayrollSetup", "SliceWorkAndPayRunReport", "ThreeBusinessBreadSaleResult",
+            "ThreeBusinessFuelSaleResult", "ThreeBusinessSliceRunReport",
+            // Read models (wired EnterpriseValuationReadModel):
+            "EnterpriseValuationResult",
         };
 
         private static string ResolveRepoRoot()

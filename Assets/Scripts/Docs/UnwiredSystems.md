@@ -82,6 +82,8 @@ found, the test fails loudly rather than passing silently.
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
 | LotIdentityResolver | Domains/Economy/Logistics/LotIdentity.cs | Domains/Economy/Logistics | (none) |
 | PerishableLotState | Domains/Economy/Logistics/PerishableLotState.cs | Domains/Economy/Logistics | (none) |
+| DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
+| ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
 
 ## Notes per entry
 
@@ -248,6 +250,44 @@ found, the test fails loudly rather than passing silently.
   the state reads no registered-unwired type by name (it consults no F1
   spec parameter — the spec carries no aging parameter — and names
   `BakeryBreadCatalog` only for the authored bread rule).
+- `DemandObservation` (Priority F Slice 6, 2026-11-08) is the
+  business-level demand observation book: completed sales, observed
+  demand, stockout unmet demand, and partial fills recorded separately,
+  with daily/weekly/monthly history, day-of-week pattern, and trend from
+  recorded history only; the same unresolved need is counted once, not
+  once per retry. It is registered here honestly as UNWIRED by design,
+  not oversight: the Slice 6 brief instruments no live flow — the book
+  is fed by explicit Record calls in tests and by derivation from the F3
+  custody log, and no flow calls it yet. Its sibling types need no row:
+  `DemandAttemptRecord`, `DailyDemandPoint`, `DemandHistoryPoint`, and
+  `DemandTrend` are structs and `DemandTrendDirection` is an enum (the
+  scan enumerates concrete public top-level classes only). Remove this
+  row the day a production flow feeds or consults the book; do not wire
+  it merely to clear the entry. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, `PersonInventoryReadModel`,
+  `LotIdentityResolver`, and `PerishableLotState` rows above stay: the
+  book reads the F3 log only and references no other registered-unwired
+  type by name.
+- `ReserveProjection` (Priority F Slice 6, 2026-11-08) is the adaptive
+  reserve recommendation: recomputed from recent demand, uncertainty,
+  usable stock, forecast spoilage, commitments, incoming deliveries,
+  production capacity, lead time, and available storage, with no fixed
+  reserve value and no automatic procurement — a recommendation only. It
+  is registered here honestly as UNWIRED by design, not oversight: the
+  Slice 6 brief wires nothing into live flows — the projection is
+  computed in tests from supplied inputs and no flow calls it yet. Its
+  sibling types need no row: `ReserveInputs`, `ReserveQuantity`,
+  `LeadTimeDays`, and `UsableStockAssessment` are structs and
+  `ReserveConfidence` is an enum (the scan enumerates concrete public
+  top-level classes only). Remove this row the day a production flow
+  consults a projection; do not wire it merely to clear the entry. The
+  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  `PersonInventoryReadModel`, `LotIdentityResolver`,
+  `PerishableLotState`, and `DemandObservation` rows above stay: the
+  projection reads `PerishableLotState` only from inside its own
+  owning directory (same-directory references are not production
+  callers), and `DemandObservation` only through the caller-supplied
+  `ReserveInputs` bridge in tests.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -426,6 +466,17 @@ note records their audited status so the question does not reopen:
   The `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
   `PersonInventoryReadModel`, and `LotIdentityResolver` rows stay:
   the state reads no registered-unwired type by name.
+- Priority F Slice 6 (2026-11-08):
+  `DemandObservation` registered as UNWIRED by design — demand
+  observation book, fed by explicit Record calls in tests and by
+  derivation from the F3 custody log, no live flow instrumented and no
+  flow calls it yet. `ReserveProjection` registered as UNWIRED by
+  design — adaptive reserve recommendation, computed in tests from
+  supplied inputs, no flow calls it yet. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, `PersonInventoryReadModel`,
+  `LotIdentityResolver`, and `PerishableLotState` rows stay: the book
+  reads the F3 log only, and the projection reads `PerishableLotState`
+  only from inside its own owning directory.
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note

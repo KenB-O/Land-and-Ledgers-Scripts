@@ -1613,5 +1613,460 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.AreEqual(54000f, verdict.UncoveredSeconds, 0.001f,
                 "86400 s open span - 32400 s sleep = 54000 s evaluated normally");
         }
+
+        // ---- Slice 5: acceptance — the two directive examples end to end, plus the
+        // November 6 shape (plan §5 Slice 5). Tests only, no production change.
+        // All six tests drive the real TaskAuthority with a fake advancing clock
+        // and the real TaskDurationDiagnostics service as the installed observer,
+        // with the log sink bound to a capturing List<string>. If a test fails,
+        // STOP per the plan: file the defect with the failing test, do not
+        // improvise a repair inside this slice.
+
+        /// <summary>Counts lines starting with the prefix that also contain the given text.</summary>
+        private static int CountLinesStartingWithContaining(List<string> lines, string prefix, string text)
+        {
+            int count = 0;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith(prefix, StringComparison.Ordinal)
+                    && line.IndexOf(text, StringComparison.Ordinal) >= 0)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        /// <summary>Counts overrun warning lines (open or terminal) naming one task id.</summary>
+        private static int CountOverrunLinesForTask(List<string> lines, EntityId taskId)
+        {
+            return CountLinesStartingWithContaining(lines, "[TaskDuration] overrun", taskId.ToString())
+                + CountLinesStartingWithContaining(lines, "[TaskDuration] completed-overrun", taskId.ToString());
+        }
+
+        // Slice 5 / §3.5 + §4.1 + A2: the 15-minute cargo loading task stuck two
+        // days, end to end through the real TaskAuthority + real FreightMinutes +
+        // the real warning path. Exactly one warning line; every §4 field asserted
+        // (the Slice 3 warning test pins the same line at the emission level; this
+        // is the acceptance re-drive the plan names for this slice).
+        [Test]
+        public void Acceptance_FifteenMinuteLoad_StuckTwoDays_Warns_WithAllFields()
+        {
+            Assert.AreEqual(15, FreightCompanyRuntime.FreightMinutes(300, FreightGoodsClass.Standard),
+                "ceil(300/20) = 15: the directive's example shape, through the real estimator math");
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("fr.load-freight", 1, out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            string reason;
+            WorkTask task = authority.CreateTaskWithPlannedMinutes("fr.load-freight", Business(3), 10, 15, "ship-1");
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 10, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 10, out reason), reason);
+            Assert.AreEqual(15, task.PlannedMinutes);
+
+            // Day 12, 08:00: still InProgress, 0 minutes worked, no reason recorded anywhere.
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun day 12:"),
+                "exactly one overrun warning line; the daily summary is a separate line");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary day 12:"),
+                "exactly one daily summary line");
+            string warning = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] overrun", StringComparison.Ordinal))
+                {
+                    warning = line;
+                }
+            }
+
+            Assert.IsNotNull(warning);
+            string expected = "[TaskDuration] overrun day 12: task " + task.TaskId.ToString()
+                + " 'fr.load-freight' owner " + Business(3).ToString()
+                + " worker " + Person(1).ToString()
+                + " expected 15min active 2880min (172800s, worked 0/15min)"
+                + " queue 0min blocked 0min (none recorded: no reason recorded)"
+                + " travel 0min (none linked)"
+                + " last-transition StartTask day 10 (172800s ago)"
+                + " state InProgress (Active work in progress.) outcome open";
+            Assert.AreEqual(expected, warning,
+                "every §4.1 field in fixed order: task, definition, owner, worker, expected, active, worked, queue, blocked, travel, last transition, state, outcome");
+        }
+
+        // Slice 5 / §3.6 + A3: the legitimate two-day supplier delay (notions order
+        // placed day 1, arrival day 15) evaluated day 3 (47 h) warns nothing and
+        // mislabels nothing as active loading; the record's blocked bucket reads
+        // 47 h L1 with order id + arrival day 15 and active loading reads 0. Then
+        // the clock advances to day 16 with no receipt: exactly one warning, naming
+        // the missed arrival day 15.
+        [Test]
+        public void Acceptance_TwoDaySupplierDelay_DoesNotWarn_AsActiveLoading()
+        {
+            const string dependency = "notions order ord-7, arrives day 15";
+            var clock = new FakeClock { Now = Day(1, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.SupplierArrivalLookup = id => id == dependency ? (int?)15 : null;
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 1, Business(1));
+            string reason;
+            Assert.IsTrue(authority.MarkWaitingOnDependency(task.TaskId, dependency, "notions in transit", out reason), reason);
+
+            // Day 3, 07:00: exactly 47 h after the day-1 08:00 order.
+            clock.Now = Day(3, 25200);
+            TaskTimingVerdict day3 = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 3);
+            Assert.IsNotNull(day3);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, day3.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.L1SupplierLeadTime, day3.ReasonClass);
+            Assert.AreEqual(47f * 3600f, day3.CoveredSeconds, 0.001f,
+                "L1 accrues the full 47 h (arrival day 15 is in the future)");
+            Assert.AreEqual(0f, day3.UncoveredSeconds, 0.001f);
+            StringAssert.Contains("ord-7", day3.EvidenceText);
+            StringAssert.Contains("15", day3.EvidenceText);
+            TaskTimingRecord record = diagnostics.GetRecord(task.TaskId);
+            Assert.AreEqual(0f, record.AccumulatedActiveSeconds, 0.001f,
+                "active loading seconds are 0: the wait is blocked time, not active time");
+
+            diagnostics.Evaluate(clock.Now, 3);
+            Assert.AreEqual(0, lines.Count,
+                "a legitimate L1 wait warns nothing and earns no summary line either: no overrun is open");
+            string joined = string.Join("\n", lines.ToArray());
+            Assert.IsTrue(joined.IndexOf("2820min", StringComparison.Ordinal) < 0,
+                "no line may present the 47 h supplier wait as active loading minutes");
+
+            // Day 16, 08:00: the arrival day (15) has passed with no receipt.
+            clock.Now = Day(16, 28800);
+            TaskTimingVerdict day16 = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 16);
+            Assert.IsNotNull(day16);
+            Assert.AreEqual(TaskTimingVerdictKind.Unexplained, day16.Verdict,
+                "past the arrival day the wait is unexplained from the horizon on");
+            Assert.AreEqual(28800f, day16.UncoveredSeconds, 0.001f,
+                "only the day-16 span (08:00 so far) is unexplained");
+
+            diagnostics.Evaluate(clock.Now, 16);
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun day 16:"),
+                "exactly one warning once the arrival is missed");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary day 16:"),
+                "exactly one daily summary line");
+            string warning = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] overrun", StringComparison.Ordinal))
+                {
+                    warning = line;
+                }
+            }
+
+            Assert.IsNotNull(warning);
+            // Evidence-text note: the dependency key itself already contains
+            // "arrives day 15", and Classify appends "(arrives day 15)" to it
+            // (plus "(arrival day passed)" past the horizon) — the doubled
+            // phrase is the service's evidence construction, not a test typo.
+            string expected = "[TaskDuration] overrun day 16: task " + task.TaskId.ToString()
+                + " 'test.sweep' owner " + Business(1).ToString()
+                + " worker " + Person(1).ToString()
+                + " expected 10min active 0min (0s, worked 0/10min)"
+                + " queue 0min blocked 21600min (L1: notions order ord-7, arrives day 15 (arrives day 15) (arrival day passed))"
+                + " travel 0min (none linked)"
+                + " last-transition MarkWaitingOnDependency day 1 (1296000s ago)"
+                + " state WaitingOnDependency (Blocked on another task, delivery, or person.) outcome open";
+            Assert.AreEqual(expected, warning,
+                "the missed-arrival warning names the arrival day, the 15-day blocked span, and the waiting state — never active loading");
+        }
+
+        // Slice 5 / §3.7 + §3.3: the November 6 hitch shape end to end through the
+        // real warning path. Hitch task assigned day 6; every day the worker's
+        // 600-minute budget is consumed by horse-feed travel tasks, so the start
+        // is refused daily and the refusal is fed in via RecordRefusal (the
+        // diagnostic only ever sees the fed refusal string — the competing
+        // consumption itself lives in the other tasks' budgets, per plan §3.7).
+        // No warning days 6–8 (streak 1–3, within EscalationDays 3); warning on
+        // day 9 (streak 4) quoting the repeated budget reason, naming the last
+        // successful transition (AssignTask day 6) and the competing consumption.
+        [Test]
+        public void Acceptance_Nov6HitchShape_AssignedTenDays_Escalates()
+        {
+            const string refusal = "Cannot start task: worker has 0 minutes remaining (budget consumed by horse-feed travel tasks)";
+            var clock = new FakeClock { Now = Day(6, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(6);
+
+            string reason;
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 6);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 6, out reason), reason);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status);
+
+            for (int day = 6; day <= 9; day++)
+            {
+                clock.Now = Day(day, 28800);
+                budgets.EnsureDay(day);
+                diagnostics.RecordRefusal(task.TaskId.ToString(), "StartTask", refusal, day);
+                TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, day);
+                Assert.IsNotNull(verdict, "day " + day);
+                Assert.AreEqual(TaskTimingReasonClass.L6BudgetScheduleRefusal, verdict.ReasonClass, "day " + day);
+                StringAssert.Contains("horse-feed", verdict.EvidenceText, "day " + day);
+                if (day <= 8)
+                {
+                    Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                        "day " + day + ": streak " + (day - 5) + " is within EscalationDays 3");
+                }
+                else
+                {
+                    Assert.AreEqual(TaskTimingVerdictKind.Escalated, verdict.Verdict,
+                        "day 9: streak 4 exceeds EscalationDays 3 — the repeated legitimate reason is itself diagnostic");
+                }
+
+                diagnostics.Evaluate(clock.Now, day);
+                if (day <= 8)
+                {
+                    Assert.AreEqual(0, lines.Count,
+                        "day " + day + ": a legitimate single-day budget refusal warns nothing");
+                }
+            }
+
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun day 9:"),
+                "exactly one warning on day 9, the first escalation day");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary day 9:"),
+                "exactly one daily summary line on day 9");
+            string warning = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] overrun", StringComparison.Ordinal))
+                {
+                    warning = line;
+                }
+            }
+
+            Assert.IsNotNull(warning);
+            string expected = "[TaskDuration] overrun day 9: task " + task.TaskId.ToString()
+                + " 'test.sweep' owner " + Business(1).ToString()
+                + " worker " + Person(1).ToString()
+                + " expected 10min active 0min (0s, worked 0/10min)"
+                + " queue 0min blocked 0min (L6: " + refusal + ")"
+                + " travel 0min (none linked)"
+                + " last-transition AssignTask day 6 (259200s ago)"
+                + " state Assigned (Worker assigned; work-time budget committed.) outcome open";
+            Assert.AreEqual(expected, warning,
+                "the escalation warning quotes the repeated budget reason and names AssignTask day 6 as the last successful transition");
+        }
+
+        // Slice 5 / §2.5: save/load round-trip rebuilds the timing records at day
+        // resolution. CaptureSaveDto / LoadFromSaveDto carry the open tasks to a
+        // fresh authority; a fresh diagnostics service rebuilds from it. Records
+        // exist for the open tasks, flagged RebuiltAfterLoad, with day-resolution
+        // times (created seconds = CreatedDayIndex x 86400); the next evaluation
+        // warns once per task that day and never duplicates within the day.
+        [Test]
+        public void Acceptance_SaveLoad_RebuildsRecords_DayResolution()
+        {
+            var clock = new FakeClock { Now = Day(2, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(2);
+
+            WorkTask started = CreateAssignStart(authority, budgets, 2, Business(1));
+            string reason;
+            WorkTask queued = authority.CreateTask("test.sweep", Business(1), 2);
+            Assert.AreEqual(TaskStatus.InProgress, started.Status);
+            Assert.AreEqual(TaskStatus.Queued, queued.Status);
+
+            var dto = authority.CaptureSaveDto();
+            var restored = new TaskAuthority();
+            restored.LoadFromSaveDto(dto);
+            Assert.AreEqual(2, restored.GetAllOpenTasks().Count, "both open tasks survive the round-trip");
+
+            var rebuilt = new TaskDurationDiagnostics();
+            List<string> lines = CaptureLines(rebuilt);
+            rebuilt.RebuildFromAuthority(restored);
+
+            TaskTimingRecord startedRecord = rebuilt.GetRecord(started.TaskId);
+            Assert.IsNotNull(startedRecord, "the started task has a rebuilt record");
+            Assert.IsTrue(startedRecord.RebuiltAfterLoad, "rebuilt records are flagged as such");
+            Assert.AreEqual(TaskTimingClockPrecision.DayOnly, startedRecord.ClockPrecision,
+                "intra-day precision is lost across a load — a stated limitation, not a defect");
+            Assert.AreEqual(2 * 86400f, startedRecord.CreatedSeconds, 0.001f,
+                "day resolution: created seconds = CreatedDayIndex x 86400");
+            Assert.AreEqual(2, startedRecord.CreatedDay);
+            Assert.AreEqual("rebuilt-after-load", startedRecord.LastTransitionKind);
+            Assert.AreEqual(2 * 86400f, startedRecord.StartedSeconds, 0.001f,
+                "the started day survives at day resolution");
+            Assert.AreEqual(2, startedRecord.StartedDay);
+
+            TaskTimingRecord queuedRecord = rebuilt.GetRecord(queued.TaskId);
+            Assert.IsNotNull(queuedRecord, "the queued task has a rebuilt record");
+            Assert.IsTrue(queuedRecord.RebuiltAfterLoad);
+            Assert.AreEqual(2 * 86400f, queuedRecord.CreatedSeconds, 0.001f);
+            Assert.AreEqual(-1f, queuedRecord.StartedSeconds, 0.001f, "never started: no started time");
+
+            // Day 4, 08:00: both rebuilt tasks are now >1 day un-progressed, so both
+            // warn — once each that day, never duplicated within the day.
+            clock.Now = Day(4, 28800);
+            rebuilt.Evaluate(clock.Now, 4);
+            Assert.AreEqual(2, CountLinesStartingWith(lines, "[TaskDuration] overrun day 4:"),
+                "one warning per open task on the first evaluation after the load");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary day 4:"));
+            int linesAfterFirst = lines.Count;
+            rebuilt.Evaluate(clock.Now, 4);
+            Assert.AreEqual(linesAfterFirst, lines.Count,
+                "a second evaluation the same day adds no duplicate warnings");
+            Assert.AreEqual(1, CountOverrunLinesForTask(lines, started.TaskId));
+            Assert.AreEqual(1, CountOverrunLinesForTask(lines, queued.TaskId));
+
+            clock.Now = Day(5, 28800);
+            rebuilt.Evaluate(clock.Now, 5);
+            Assert.AreEqual(2, CountOverrunLinesForTask(lines, started.TaskId),
+                "the next day warns again (a repeating warning, not a same-day duplicate)");
+            Assert.AreEqual(2, CountOverrunLinesForTask(lines, queued.TaskId));
+        }
+
+        // Slice 5 / §4.2 + A5: 60 simulated days x 20 open tasks (10 stuck, 5
+        // progressing a little each day, 5 legitimately waiting on a far-future
+        // L1 arrival): every day emits at most MaxWarningsPerDay (12) warning
+        // lines + 1 summary, each task warns at most once per day, and the total
+        // never exceeds the caps — the anti-spam acceptance. The 10 stuck tasks
+        // warn every day from day 1 (10/day; day 0 is inside the 1-day P1 grace);
+        // the progressing and waiting tasks never warn.
+        [Test]
+        public void Acceptance_LongRun_NoSpam()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.SupplierArrivalLookup = id =>
+                id != null && id.IndexOf("notions order", StringComparison.Ordinal) >= 0 ? (int?)100 : null;
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            var stuck = new List<WorkTask>();
+            for (int i = 0; i < 10; i++)
+            {
+                RegisterDefinition(authority, "test.cap" + i, 10);
+                stuck.Add(StartStuckTask(authority, budgets, "test.cap" + i, Business(1), Person(100 + i), 0));
+            }
+
+            RegisterDefinition(authority, "test.prog", 600);
+            var progressing = new List<WorkTask>();
+            for (int i = 0; i < 5; i++)
+            {
+                progressing.Add(StartStuckTask(authority, budgets, "test.prog", Business(1), Person(200 + i), 0));
+            }
+
+            RegisterDefinition(authority, "test.wait", 10);
+            var waiting = new List<WorkTask>();
+            for (int i = 0; i < 5; i++)
+            {
+                WorkTask task = StartStuckTask(authority, budgets, "test.wait", Business(1), Person(300 + i), 0);
+                string reason;
+                Assert.IsTrue(
+                    authority.MarkWaitingOnDependency(task.TaskId, "notions order ord-L" + i + ", arrives day 100", "notions in transit", out reason),
+                    reason);
+                waiting.Add(task);
+            }
+
+            for (int day = 0; day < 60; day++)
+            {
+                budgets.EnsureDay(day);
+                clock.Now = Day(day, 43200); // midday: the progressing tasks work a little
+                foreach (WorkTask task in progressing)
+                {
+                    string reason;
+                    bool reachedCompletion;
+                    Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, 2, budgets, day, out reachedCompletion, out reason), reason);
+                    Assert.IsTrue(!reachedCompletion, "day " + day + ": 2 min/day never completes a 600-minute task");
+                }
+
+                int linesBefore = lines.Count;
+                clock.Now = Day(day, 64800); // 18:00: the daily evaluation
+                diagnostics.Evaluate(clock.Now, day);
+                int emittedToday = lines.Count - linesBefore;
+                // Day 0 the stuck tasks are only 10 h old (created 08:00, evaluated
+                // 18:00): P1 grace (1 day) has not elapsed, so nothing warns yet.
+                // From day 1 on, exactly 10 stuck-task warnings + 1 summary per day.
+                int expectedToday = day == 0 ? 0 : 11;
+                Assert.AreEqual(expectedToday, emittedToday,
+                    "day " + day + ": " + (day == 0 ? "P1 grace absorbs the first day" : "exactly 10 stuck-task warnings + 1 summary — within the 12/day cap, no more, no fewer"));
+                foreach (WorkTask task in stuck)
+                {
+                    int expectedForTask = day == 0 ? 0 : 1;
+                    Assert.AreEqual(expectedForTask, CountLinesStartingWithContaining(lines, "[TaskDuration] overrun day " + day + ":", task.TaskId.ToString()),
+                        "day " + day + ": each stuck task warns at most once per day");
+                }
+            }
+
+            Assert.AreEqual(59 * 11, lines.Count, "59 warning days (days 1–59) x 11 lines/day, never above the caps");
+            Assert.AreEqual(590, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "10 stuck tasks x 59 days = 590 warning lines");
+            Assert.AreEqual(59, CountLinesStartingWith(lines, "[TaskDuration] summary"),
+                "one summary line per warning day (day 0 earns none)");
+            foreach (WorkTask task in progressing)
+            {
+                Assert.AreEqual(0, CountOverrunLinesForTask(lines, task.TaskId),
+                    "a task progressing every day never warns, however long its total span (§3.4)");
+                Assert.AreEqual(120, task.MinutesWorked, "2 min/day x 60 days of real progress");
+            }
+
+            foreach (WorkTask task in waiting)
+            {
+                Assert.AreEqual(0, CountOverrunLinesForTask(lines, task.TaskId),
+                    "a wait covered to a far-future L1 arrival never warns");
+            }
+        }
+
+        // Slice 5 / §3.4: a RecordWorkProgress load task worked a little each day
+        // for 5 days past its nominal 15-minute span never warns — progress in
+        // the last evaluation interval suppresses the stuck warning (P1 false
+        // every day), however long the total span.
+        [Test]
+        public void Acceptance_ProgressingFreightTask_NeverWarns()
+        {
+            Assert.AreEqual(15, FreightCompanyRuntime.FreightMinutes(300, FreightGoodsClass.Standard));
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("fr.load-freight", 1, out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            string reason;
+            WorkTask task = authority.CreateTaskWithPlannedMinutes("fr.load-freight", Business(3), 0, 15, "ship-1");
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 0, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 0, out reason), reason);
+            Assert.AreEqual(15, task.PlannedMinutes);
+
+            for (int day = 0; day <= 4; day++)
+            {
+                budgets.EnsureDay(day);
+                clock.Now = Day(day, 43200); // midday: a little incremental work
+                bool reachedCompletion;
+                Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, 2, budgets, day, out reachedCompletion, out reason), reason);
+                Assert.IsTrue(!reachedCompletion, "day " + day + ": 2 min/day never completes the 15-minute load");
+
+                clock.Now = Day(day, 64800); // 18:00: the daily evaluation
+                TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, day);
+                Assert.IsNotNull(verdict, "day " + day);
+                Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                    "day " + day + ": progress today resets P1, so the task never warns");
+                diagnostics.Evaluate(clock.Now, day);
+                Assert.AreEqual(0, lines.Count,
+                    "day " + day + ": a progressing freight task emits no warning line at all");
+            }
+
+            Assert.AreEqual(10, task.MinutesWorked, "2 min/day x 5 days of real incremental work");
+            Assert.AreEqual(TaskStatus.InProgress, task.Status, "RecordWorkProgress never completes by itself");
+        }
+
     }
 }

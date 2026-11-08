@@ -515,6 +515,11 @@ namespace LandLedgers.Economy.BreadDrivers
                 }
             }
 
+            // Priority 3 Slice 3 (2026-11-08): one pipeline-coverage
+            // line per day, after the notions step and before
+            // RunScheduledDay — log-only, no state or ordering change.
+            LogPipelineCoverage(inputs, dayIndex, diag);
+
             int diagnosticsBeforeRun = diag.Count;
             int baked = inputs.ProductionDriver.RunScheduledDay(
                 dayIndex, inputs.BakerKitUsable, inputs.OvenDefinition,
@@ -687,6 +692,219 @@ namespace LandLedgers.Economy.BreadDrivers
                     return line;
             }
             return $"BakeryWholesaleDailyDriver: bakery production refused for day {dayIndex}; see [BakeryProduction] diagnostics.";
+        }
+
+        /// <summary>
+        /// Priority 3 Slice 3 (2026-11-08): one pipeline-coverage line
+        /// per day — the full pipeline position a reorder decision needs
+        /// (bin, in-custody, in-transit with arrival days, days-of-cover
+        /// at the account's daily rate, next arrival day) in a single
+        /// line, so the investigation can separate H-A1 from H-A2/H-A3
+        /// live. LOG-ONLY: no state, ordering, price, or quantity
+        /// changes; the line is computed only from state the driver
+        /// already holds (bin lots, batch custody lines, the day's
+        /// Millbrook reorder via the supplier's outstanding lots, the
+        /// notions service's order list with ExpectedArrivalDayIndex).
+        /// One line per RunDay call — bounded by construction, the same
+        /// discipline as the 12-per-day blocked-batch cap. The word
+        /// "covered" never appears in this line: the planned yield is
+        /// stated as planned yield, explicitly "not stock".
+        ///
+        /// Days-of-cover = min(flour batch-days, notions batch-days) at
+        /// 1 batch/day, where flour batch-days = (bin + custody +
+        /// in-transit lb) / 12 and notions batch-days = (on hand + in
+        /// flight) / 1. Custody flour counts because it is committed to
+        /// the active batch's bake, which is one of the covered daily
+        /// bakes; the line states its inputs so the figure is auditable
+        /// from the line itself. Fuel on hand is carried as a field (a
+        /// fuel cap is visible there) but does not enter the cover
+        /// figure, which is the flour/notions pipeline position.
+        ///
+        /// Producible is the Precheck verdict evaluated here on the
+        /// same state Precheck will see inside RunScheduledDay — nothing
+        /// mutates between the two calls, and Precheck is pure reads
+        /// plus diagnostics (EvaluateReady included), so it is evaluated
+        /// here against a scratch list and its own lines are not
+        /// duplicated. First failing input is the Precheck refusal's
+        /// cause word in check order (flour → notions → fuel → kit →
+        /// oven → budget), via the same CauseFromRefusal helper the
+        /// blocked-batch line uses.
+        ///
+        /// Millbrook arrival honesty: no Millbrook lot carries a
+        /// scheduled arrival day (OffMapAidCargoLot has CreatedDayIndex
+        /// only; no transit-days figure exists in the driver-held quote
+        /// or freight path), so an outstanding lot is stated with its
+        /// order day and "arrival unscheduled (freight pipeline)" —
+        /// never an invented day. The next-arrival-day field is
+        /// therefore driven by the notions order list
+        /// (ExpectedArrivalDayIndex), the only scheduled arrivals the
+        /// driver holds; when none are scheduled it reads "none in
+        /// flight". A missing notions service reads "unwired (no
+        /// service)" on the in-flight field, never a guessed zero.
+        /// </summary>
+        private static void LogPipelineCoverage(BakeryWholesaleDailyInputs inputs, int dayIndex, List<string> diag)
+        {
+            if (inputs?.Bakery == null || inputs.ProductionDriver == null) return;
+            BakeryShopRuntime bakery = inputs.Bakery;
+
+            int binFlourLb = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
+            int notionsOnHand = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId);
+            int fuelOnHand = bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId);
+            int custodyFlourLb = 0;
+            int custodyNotions = 0;
+            if (bakery.Batches != null)
+            {
+                foreach (BakeryDoughBatch batch in bakery.Batches)
+                {
+                    if (batch == null || !batch.IsActive) continue;
+                    if (batch.FlourInCustody != null)
+                        foreach (BakeryFlourDispenseLine line in batch.FlourInCustody)
+                            if (line != null) custodyFlourLb += Math.Max(0, line.UnitsTaken);
+                    if (batch.NotionsUsed != null)
+                        foreach (BakeryFlourDispenseLine line in batch.NotionsUsed)
+                            if (line != null) custodyNotions += Math.Max(0, line.UnitsTaken);
+                }
+            }
+
+            // Outstanding Millbrook sacks: uncommitted, unreceived lots
+            // for this buyer — the same filter MillbrookFlourReorder's
+            // single-outstanding-order guard uses, so today's reorder
+            // (placed earlier in this RunDay) is included with any prior
+            // outstanding lot. No lot carries a scheduled arrival day.
+            string millbrookText;
+            int transitFlourLb = 0;
+            if (inputs.MillbrookSupplier == null)
+            {
+                millbrookText = "none in flight";
+            }
+            else
+            {
+                var lotTexts = new List<string>();
+                int totalSacks = 0;
+                if (inputs.MillbrookSupplier.Lots != null)
+                {
+                    foreach (OffMapAidCargoLot lot in inputs.MillbrookSupplier.Lots)
+                    {
+                        if (lot == null) continue;
+                        if (!string.Equals(lot.BuyerBusinessId, inputs.BakeryBusinessId, StringComparison.Ordinal)) continue;
+                        if (lot.SourceCommitted || lot.Received) continue;
+                        totalSacks += Math.Max(0, lot.PackageUnits);
+                        transitFlourLb += Math.Max(0, lot.InventoryUnits);
+                        lotTexts.Add($"lot '{lot.LotId}' ordered day {Math.Max(0, lot.CreatedDayIndex)}");
+                    }
+                }
+                millbrookText = lotTexts.Count == 0
+                    ? "none in flight"
+                    : $"{totalSacks} sack(s) ({transitFlourLb} lb), {string.Join("; ", lotTexts)}, arrival unscheduled (freight pipeline)";
+            }
+
+            // Notions in flight by arrival day: live (unreceived,
+            // uncancelled) orders for the configured notions SKU on the
+            // store's procurement service, grouped by their scheduled
+            // arrival day. The next arrival day is the earliest of them.
+            string notionsSku = !string.IsNullOrWhiteSpace(inputs.NotionsRegistration?.SkuId)
+                ? inputs.NotionsRegistration.SkuId
+                : BakeryFlourSupply.NotionsMaterialId;
+            OffMapNamedSkuProcurementService service = inputs.NotionsSupply != null && inputs.NotionsSupply.Procurement != null
+                ? inputs.NotionsSupply.Procurement.Service
+                : null;
+            string notionsFlightText;
+            int inFlightNotions = 0;
+            int? nextArrivalDay = null;
+            if (service == null)
+            {
+                notionsFlightText = "unwired (no service)";
+            }
+            else
+            {
+                var byArrival = new Dictionary<int, int>();
+                if (service.Orders != null)
+                {
+                    foreach (NamedSkuOrder order in service.Orders)
+                    {
+                        if (order == null) continue;
+                        if (!string.Equals(order.SkuId, notionsSku, StringComparison.Ordinal)) continue;
+                        if (order.Stage == NamedSkuOrderStage.Received || order.Stage == NamedSkuOrderStage.Cancelled) continue;
+                        int arrival = order.ExpectedArrivalDayIndex;
+                        int existing = 0;
+                        byArrival.TryGetValue(arrival, out existing);
+                        byArrival[arrival] = existing + Math.Max(0, order.UnitsOrdered);
+                    }
+                }
+                if (byArrival.Count == 0)
+                {
+                    notionsFlightText = "none in flight";
+                }
+                else
+                {
+                    var days = new List<int>(byArrival.Keys);
+                    days.Sort();
+                    var parts = new List<string>();
+                    foreach (int arrival in days)
+                    {
+                        inFlightNotions += byArrival[arrival];
+                        parts.Add($"day {arrival}: {byArrival[arrival]}u");
+                        if (nextArrivalDay == null || arrival < nextArrivalDay.Value) nextArrivalDay = arrival;
+                    }
+                    notionsFlightText = $"{inFlightNotions}u ({string.Join(", ", parts)})";
+                }
+            }
+
+            int flourDays = (binFlourLb + custodyFlourLb + transitFlourLb) / BakeryBreadCatalog.BreadFlourPerBatch;
+            int notionsDays = (notionsOnHand + inFlightNotions) / BakeryBreadCatalog.StandardNotionsPerBatch;
+            int daysOfCover = Math.Min(flourDays, notionsDays);
+            string nextArrivalText = nextArrivalDay.HasValue ? nextArrivalDay.Value.ToString() : "none in flight";
+
+            string firstFail;
+            string producible;
+            if (inputs.ProductionDriver.PlannedBatchIds == null || inputs.ProductionDriver.PlannedBatchIds.Count == 0)
+            {
+                firstFail = "nothing planned";
+                producible = "no (nothing planned)";
+            }
+            else
+            {
+                var scratchDiag = new List<string>();
+                string refusal = inputs.ProductionDriver.Precheck(
+                    dayIndex, inputs.BakerKitUsable, inputs.OvenDefinition,
+                    inputs.FindOvenComponent, inputs.CallerDailyBudgetMinutes, scratchDiag);
+                if (refusal == null)
+                {
+                    firstFail = "none";
+                    producible = "yes";
+                }
+                else
+                {
+                    firstFail = CoverageCauseFromRefusal(refusal);
+                    producible = $"no ({firstFail})";
+                }
+            }
+
+            diag.Add($"[BakeryProduction] pipeline coverage day {dayIndex}: bin flour {binFlourLb} lb, flour in custody {custodyFlourLb} lb, " +
+                $"notions on hand {notionsOnHand}u, notions in custody {custodyNotions}u, fuel {fuelOnHand}u, " +
+                $"Millbrook in transit: {millbrookText}, notions in flight: {notionsFlightText}, " +
+                $"days-of-cover {daysOfCover} at 1 batch/day (planned yield {BakeryBreadCatalog.BreadYieldPerBatch}u/batch, not stock), " +
+                $"next arrival day {nextArrivalText}, first failing input: {firstFail}, producible: {producible}");
+        }
+
+        /// <summary>Priority 3 Slice 3: the coverage line's
+        /// first-failing-input word. The Precheck refusal's cause word
+        /// in check order, via the same CauseFromRefusal helper the
+        /// blocked-batch line uses — except the two degenerate Precheck
+        /// refusals the helper cannot reduce (it returns the whole
+        /// refusal text when no input keyword matches): a missing fuel
+        /// source is not a fuel shortage, and a product with no catalog
+        /// spec is not an input shortfall, so each gets its own short
+        /// label here. The no-batches-planned refusal never reaches
+        /// this helper (LogPipelineCoverage handles the empty plan
+        /// before calling Precheck).</summary>
+        private static string CoverageCauseFromRefusal(string refusal)
+        {
+            if (string.IsNullOrWhiteSpace(refusal)) return "unknown";
+            string lower = refusal.ToLowerInvariant();
+            if (lower.Contains("no fuel source")) return "fuel source missing";
+            if (lower.Contains("no catalog spec")) return "no catalog spec";
+            return CauseFromRefusal(refusal);
         }
 
         /// <summary>Plan 04 Slice 4: one blocked-batch line per active

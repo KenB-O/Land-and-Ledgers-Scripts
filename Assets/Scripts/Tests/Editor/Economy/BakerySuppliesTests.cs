@@ -2082,5 +2082,280 @@ namespace LandLedgers.Editor.Economy
                 "bin still 8 lb: nothing was dispensed");
             Assert.AreEqual(0, r.FlourSacksPurchased, "no flour bought: the store holds 0 sacks");
         }
+
+        // ---- Priority 3 Slice 3 (2026-11-08): pipeline-coverage
+        // diagnostics (log-only production change) -------------------
+        // Defect: the investigation cannot separate H-A1 from H-A2/H-A3
+        // live, because no single line states the Bakery's full pipeline
+        // position: bin, in-custody, in-transit with arrival days,
+        // days-of-cover at the account's daily rate, and next arrival
+        // day. The driver logs refusals and per-day actuals but never
+        // the coverage position a reorder decision needs. These two
+        // tests assert the line's contents in source; they are expected
+        // to FAIL before the diagnostic is added (no such line exists)
+        // and PASS after it.
+        //
+        // FLOUR-ARRIVAL DEVIATION FROM THE PLAN (verified in source
+        // before writing the test): the plan's test 2 asks for "the next
+        // flour arrival day (or 'none in flight')", but no Millbrook lot
+        // carries a scheduled arrival day — OffMapAidCargoLot has
+        // CreatedDayIndex only, and no transit-days figure exists in the
+        // driver-held Millbrook quote or freight path (the pickup ~day+3
+        // / receipt ~day+7 figures in plan §1 are one Set B observation,
+        // not an authored schedule). Inventing a day would violate the
+        // plan's own "compute only from state the driver already holds".
+        // The line therefore states the outstanding lot with its order
+        // day and "arrival unscheduled (freight pipeline)", and the
+        // "next arrival day" field is driven by the notions order list
+        // (ExpectedArrivalDayIndex), the only scheduled arrivals the
+        // driver holds. Test 2 pins exactly that: leg A names the
+        // outstanding reorder lot + order day + unscheduled (no invented
+        // day), leg B (nothing in flight anywhere) reads "none in
+        // flight" on both fields.
+        //
+        // DAYS-OF-COVER DEFINITION (the plan names the field, not the
+        // formula): min(flour batch-days, notions batch-days) at 1
+        // batch/day, where flour batch-days = (bin + custody +
+        // in-transit lb) / 12 and notions batch-days = (on hand + in
+        // flight) / 1. Custody flour counts because it is committed to
+        // the active batch's bake, which is one of the covered daily
+        // bakes; the line states the formula's inputs so the figure is
+        // auditable from the line itself.
+        private static List<string> CoverageLinesForDay(Slice s, int diagBefore, int day)
+        {
+            var found = new List<string>();
+            for (int i = diagBefore; i < s.Diag.Count; i++)
+            {
+                string line = s.Diag[i];
+                if (line != null && line.StartsWith(
+                    "[BakeryProduction] pipeline coverage day " + day + ":", StringComparison.Ordinal))
+                    found.Add(line);
+            }
+            return found;
+        }
+
+        private static int CountCoverageLines(Slice s, int day)
+        {
+            int count = 0;
+            foreach (string line in s.Diag)
+                if (line != null && line.StartsWith(
+                    "[BakeryProduction] pipeline coverage day " + day + ":", StringComparison.Ordinal))
+                    count++;
+            return count;
+        }
+
+        private static void AssertCoverageLineNeverLabelsPlannedYieldAsStock(string line)
+        {
+            // The line must NEVER label planned yield as stock: no
+            // "covered" anywhere in the line (stronger than the plan's
+            // "no covered without planned adjacent" — this line carries
+            // no "covered" at all), and the planned yield is stated as
+            // planned yield, explicitly "not stock".
+            Assert.IsTrue(!line.Contains("covered"),
+                "the coverage line must never say 'covered' — planned yield is not stock; line: " + line);
+            Assert.IsTrue(line.Contains("planned yield 24u/batch, not stock"),
+                "the coverage line states the planned yield as planned yield, never as stock; line: " + line);
+        }
+
+        [Test]
+        public void CoverageLine_ReportsBinCustodyInTransit_AndDaysOfCover()
+        {
+            // Priority 3 Slice 3: drive 3 days of the priming window
+            // (flour test-seeded 12 lb/day, notions through the real
+            // 14-day pipeline) and assert one pipeline coverage line
+            // per day carrying bin flour, flour in custody, outstanding
+            // Millbrook sacks, notions on hand, notions in flight by
+            // arrival day, days-of-cover at 1 batch/day, and the next
+            // arrival day — with producible: no (notions) from the
+            // day's Precheck outcome, matching the day's actual refusal.
+            Slice s = NewSlice();
+            Series2CounterpartyRegistration reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 40);
+            BookAccount(s, 24, 1, 2, 2);
+
+            // Day 1: bin 12 lb, nothing baked (notions-blocked), 1
+            // notion ordered arriving day 15. Cover = min(12/12, 1/1) = 1.
+            SeedInputs(s, 12, 0, 0);
+            int diagBefore1 = s.Diag.Count;
+            BakeryWholesaleDailyResult day1 = RunDay(s, reg, 1);
+            Assert.AreEqual(0, day1.BatchesBaked, "day 1 bakes nothing before the first notions arrival");
+            Assert.IsTrue(day1.Refusal != null && day1.Refusal.Contains("notions"),
+                "day 1 refuses on notions; refusal: " + day1.Refusal);
+            List<string> lines1 = CoverageLinesForDay(s, diagBefore1, 1);
+            Assert.AreEqual(1, lines1.Count, "exactly one coverage line on day 1");
+            string line1 = lines1[0];
+            Assert.IsTrue(line1.Contains("bin flour 12 lb"), "day 1 line carries bin flour 12 lb; line: " + line1);
+            Assert.IsTrue(line1.Contains("flour in custody 0 lb"), "day 1 line carries flour in custody 0 lb; line: " + line1);
+            Assert.IsTrue(line1.Contains("notions on hand 0u"), "day 1 line carries notions on hand 0u; line: " + line1);
+            Assert.IsTrue(line1.Contains("notions in custody 0u"), "day 1 line carries notions in custody 0u; line: " + line1);
+            Assert.IsTrue(line1.Contains("fuel 40u"), "day 1 line carries fuel 40u; line: " + line1);
+            Assert.IsTrue(line1.Contains("Millbrook in transit: none in flight"),
+                "day 1 line carries no outstanding Millbrook sacks (no supplier wired); line: " + line1);
+            Assert.IsTrue(line1.Contains("notions in flight: 1u (day 15: 1u)"),
+                "day 1 line carries the 1u notion in flight arriving day 15; line: " + line1);
+            Assert.IsTrue(line1.Contains("days-of-cover 1 at 1 batch/day"),
+                "day 1 line carries days-of-cover 1; line: " + line1);
+            Assert.IsTrue(line1.Contains("next arrival day 15"),
+                "day 1 line carries next arrival day 15; line: " + line1);
+            Assert.IsTrue(line1.Contains("first failing input: notions"),
+                "day 1 line names notions as the first failing input; line: " + line1);
+            Assert.IsTrue(line1.Contains("producible: no (notions)"),
+                "day 1 line carries producible: no (notions) from the Precheck outcome; line: " + line1);
+            AssertCoverageLineNeverLabelsPlannedYieldAsStock(line1);
+
+            // Day 2: bin 24 lb (12 + 12 seeded, nothing baked), 2
+            // notions in flight (arriving days 15, 16). Cover = 2.
+            SeedInputs(s, 12, 0, 0);
+            int diagBefore2 = s.Diag.Count;
+            BakeryWholesaleDailyResult day2 = RunDay(s, reg, 2);
+            Assert.AreEqual(0, day2.BatchesBaked, "day 2 bakes nothing before the first notions arrival");
+            Assert.IsTrue(day2.Refusal != null && day2.Refusal.Contains("notions"),
+                "day 2 refuses on notions; refusal: " + day2.Refusal);
+            List<string> lines2 = CoverageLinesForDay(s, diagBefore2, 2);
+            Assert.AreEqual(1, lines2.Count, "exactly one coverage line on day 2");
+            string line2 = lines2[0];
+            Assert.IsTrue(line2.Contains("bin flour 24 lb"), "day 2 line carries bin flour 24 lb; line: " + line2);
+            Assert.IsTrue(line2.Contains("flour in custody 0 lb"), "day 2 line carries flour in custody 0 lb; line: " + line2);
+            Assert.IsTrue(line2.Contains("notions on hand 0u"), "day 2 line carries notions on hand 0u; line: " + line2);
+            Assert.IsTrue(line2.Contains("notions in flight: 2u (day 15: 1u, day 16: 1u)"),
+                "day 2 line carries 2u notions in flight by arrival day; line: " + line2);
+            Assert.IsTrue(line2.Contains("days-of-cover 2 at 1 batch/day"),
+                "day 2 line carries days-of-cover 2; line: " + line2);
+            Assert.IsTrue(line2.Contains("next arrival day 15"),
+                "day 2 line carries next arrival day 15 (the earliest in-flight arrival); line: " + line2);
+            Assert.IsTrue(line2.Contains("first failing input: notions"),
+                "day 2 line names notions as the first failing input; line: " + line2);
+            Assert.IsTrue(line2.Contains("producible: no (notions)"),
+                "day 2 line carries producible: no (notions) from the Precheck outcome; line: " + line2);
+            AssertCoverageLineNeverLabelsPlannedYieldAsStock(line2);
+
+            // Day 3: bin 36 lb, 3 notions in flight (days 15-17). Cover = 3.
+            SeedInputs(s, 12, 0, 0);
+            int diagBefore3 = s.Diag.Count;
+            BakeryWholesaleDailyResult day3 = RunDay(s, reg, 3);
+            Assert.AreEqual(0, day3.BatchesBaked, "day 3 bakes nothing before the first notions arrival");
+            Assert.IsTrue(day3.Refusal != null && day3.Refusal.Contains("notions"),
+                "day 3 refuses on notions; refusal: " + day3.Refusal);
+            List<string> lines3 = CoverageLinesForDay(s, diagBefore3, 3);
+            Assert.AreEqual(1, lines3.Count, "exactly one coverage line on day 3");
+            string line3 = lines3[0];
+            Assert.IsTrue(line3.Contains("bin flour 36 lb"), "day 3 line carries bin flour 36 lb; line: " + line3);
+            Assert.IsTrue(line3.Contains("flour in custody 0 lb"), "day 3 line carries flour in custody 0 lb; line: " + line3);
+            Assert.IsTrue(line3.Contains("notions on hand 0u"), "day 3 line carries notions on hand 0u; line: " + line3);
+            Assert.IsTrue(line3.Contains("notions in flight: 3u (day 15: 1u, day 16: 1u, day 17: 1u)"),
+                "day 3 line carries 3u notions in flight by arrival day; line: " + line3);
+            Assert.IsTrue(line3.Contains("days-of-cover 3 at 1 batch/day"),
+                "day 3 line carries days-of-cover 3; line: " + line3);
+            Assert.IsTrue(line3.Contains("next arrival day 15"),
+                "day 3 line carries next arrival day 15; line: " + line3);
+            Assert.IsTrue(line3.Contains("first failing input: notions"),
+                "day 3 line names notions as the first failing input; line: " + line3);
+            Assert.IsTrue(line3.Contains("producible: no (notions)"),
+                "day 3 line carries producible: no (notions) from the Precheck outcome; line: " + line3);
+            AssertCoverageLineNeverLabelsPlannedYieldAsStock(line3);
+
+            // Bounded: exactly one coverage line per day over the run,
+            // and each day's line precedes that day's blocked-batch line
+            // (the coverage line is appended before RunScheduledDay).
+            Assert.AreEqual(1, CountCoverageLines(s, 1), "exactly one coverage line for day 1 in the whole diag");
+            Assert.AreEqual(1, CountCoverageLines(s, 2), "exactly one coverage line for day 2 in the whole diag");
+            Assert.AreEqual(1, CountCoverageLines(s, 3), "exactly one coverage line for day 3 in the whole diag");
+            string day3Diag = string.Join(" | ", s.Diag.GetRange(diagBefore3, s.Diag.Count - diagBefore3));
+            int coverageIndex = day3Diag.IndexOf("[BakeryProduction] pipeline coverage day 3:", StringComparison.Ordinal);
+            int blockedIndex = day3Diag.IndexOf("[BakeryProduction] batch ", StringComparison.Ordinal);
+            Assert.IsTrue(coverageIndex >= 0 && blockedIndex >= 0 && coverageIndex < blockedIndex,
+                "the day-3 coverage line precedes the day-3 blocked-batch line (before RunScheduledDay); diag: " + day3Diag);
+        }
+
+        [Test]
+        public void CoverageLine_BlockedDay_NamesFirstFailingInput_AndNextArrival()
+        {
+            // Priority 3 Slice 3: on a flour-blocked day the coverage
+            // line names flour as the first failing input and states the
+            // flour pipeline position — the outstanding reorder lot with
+            // its order day and "arrival unscheduled" (see the
+            // flour-arrival deviation note above: no scheduled flour
+            // arrival day exists in driver-held state, so none is
+            // invented), or "none in flight" when nothing is outstanding.
+            //
+            // Leg A — a 2-sack Millbrook reorder is outstanding: bin 0
+            // lb, notions sufficient (1u seeded), so flour is the first
+            // failing input and the line must name the reorder lot.
+            {
+                Slice s = NewSlice();
+                var supplier = new OffMapAidBusinessRuntime(MillbrookDefinition());
+                Series2CounterpartyRegistration reg = ProductionRegistration();
+                Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+                SeedInputs(s, 0, 1, 40);
+                BookAccount(s, 24, 1, 2, 1);
+
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult day1 = RunDay(s, reg, 1, millbrookSupplier: supplier);
+                Assert.AreEqual(0, day1.BatchesBaked, "leg A bakes nothing with no flour on hand");
+                Assert.IsTrue(day1.Refusal != null && day1.Refusal.Contains("flour"),
+                    "leg A refuses on flour; refusal: " + day1.Refusal);
+                Assert.AreEqual(2, day1.MillbrookReorderSacks, "leg A orders the 12-lb shortfall as 2 sacks");
+                Assert.IsTrue(!string.IsNullOrWhiteSpace(day1.MillbrookReorderLotId),
+                    "leg A places the 2-sack reorder");
+                List<string> lines = CoverageLinesForDay(s, diagBefore, 1);
+                Assert.AreEqual(1, lines.Count, "leg A: exactly one coverage line on day 1");
+                string line = lines[0];
+                Assert.IsTrue(line.Contains("bin flour 0 lb"), "leg A line carries bin flour 0 lb; line: " + line);
+                Assert.IsTrue(line.Contains("flour in custody 0 lb"), "leg A line carries flour in custody 0 lb; line: " + line);
+                Assert.IsTrue(line.Contains("Millbrook in transit: 2 sack(s) (20 lb)"),
+                    "leg A line carries the 2 outstanding Millbrook sacks / 20 lb; line: " + line);
+                Assert.IsTrue(line.Contains(day1.MillbrookReorderLotId),
+                    "leg A line names the outstanding reorder lot; line: " + line);
+                Assert.IsTrue(line.Contains("ordered day 1"),
+                    "leg A line carries the reorder's order day; line: " + line);
+                Assert.IsTrue(line.Contains("arrival unscheduled (freight pipeline)"),
+                    "leg A line states the flour arrival is unscheduled instead of inventing a day; line: " + line);
+                Assert.IsTrue(line.Contains("notions on hand 1u"), "leg A line carries notions on hand 1u; line: " + line);
+                Assert.IsTrue(line.Contains("notions in flight: none in flight"),
+                    "leg A line carries no notions in flight (the seeded notion covers the need, no order placed); line: " + line);
+                Assert.IsTrue(line.Contains("next arrival day none in flight"),
+                    "leg A line carries no scheduled next arrival day (flour arrival is unscheduled, notions none in flight); line: " + line);
+                Assert.IsTrue(line.Contains("first failing input: flour"),
+                    "leg A line names flour as the first failing input; line: " + line);
+                Assert.IsTrue(line.Contains("producible: no (flour)"),
+                    "leg A line carries producible: no (flour) from the Precheck outcome; line: " + line);
+                AssertCoverageLineNeverLabelsPlannedYieldAsStock(line);
+            }
+
+            // Leg B — nothing in flight anywhere: no Millbrook supplier,
+            // notions wired but the seeded notion covers the need so no
+            // order is placed. Both transit fields read "none in flight".
+            {
+                Slice s = NewSlice();
+                Series2CounterpartyRegistration reg = ProductionRegistration();
+                Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+                SeedInputs(s, 0, 1, 40);
+                BookAccount(s, 24, 1, 2, 2);
+
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, reg, 2);
+                Assert.AreEqual(0, r.BatchesBaked, "leg B bakes nothing with no flour on hand");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("flour"),
+                    "leg B refuses on flour; refusal: " + r.Refusal);
+                Assert.IsTrue(string.IsNullOrWhiteSpace(r.MillbrookReorderLotId),
+                    "leg B places no Millbrook reorder (no supplier wired); lot id: " + r.MillbrookReorderLotId);
+                List<string> lines = CoverageLinesForDay(s, diagBefore, 2);
+                Assert.AreEqual(1, lines.Count, "leg B: exactly one coverage line on day 2");
+                string line = lines[0];
+                Assert.IsTrue(line.Contains("bin flour 0 lb"), "leg B line carries bin flour 0 lb; line: " + line);
+                Assert.IsTrue(line.Contains("Millbrook in transit: none in flight"),
+                    "leg B line carries no flour in flight; line: " + line);
+                Assert.IsTrue(line.Contains("notions in flight: none in flight"),
+                    "leg B line carries no notions in flight; line: " + line);
+                Assert.IsTrue(line.Contains("next arrival day none in flight"),
+                    "leg B line carries next arrival day none in flight; line: " + line);
+                Assert.IsTrue(line.Contains("first failing input: flour"),
+                    "leg B line names flour as the first failing input; line: " + line);
+                Assert.IsTrue(line.Contains("producible: no (flour)"),
+                    "leg B line carries producible: no (flour) from the Precheck outcome; line: " + line);
+                AssertCoverageLineNeverLabelsPlannedYieldAsStock(line);
+            }
+        }
     }
 }

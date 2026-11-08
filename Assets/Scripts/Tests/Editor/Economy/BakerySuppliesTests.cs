@@ -29,8 +29,13 @@ namespace LandLedgers.Editor.Economy
     ///
     /// Fixed-behaviour form: each test asserts the correct end state, so
     /// a passing test means the transition works and a failing test names
-    /// the broken seam. Expected at HEAD: Tests 2 and 3 FAIL (the
-    /// over-ordering seam); Tests 1, 4, 5, 6, 7, 8 PASS.
+    /// the broken seam. REVISION (Plan 04 follow-up, 2026-11-07,
+    /// coordinator decision ~20:40 EST): Tests 2 and 3 were rewritten
+    /// from the over-ordering reading to the NOT-A-DEFECT priming
+    /// reading Slice 2 proved (14 priming orders = 14 future daily
+    /// bakes; orders placed while flour-blocked parallelise the two
+    /// pipelines). Expected at HEAD: ALL tests PASS, including the
+    /// rewritten Tests 2 and 3 and the Slice 2 priming test.
     ///
     /// Fixture deviations from the plan text (test-side, recorded):
     /// (a) Test 1 seeds its 12 lb of test flour on day 1, not day 15:
@@ -549,13 +554,27 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void NotionsPipeline_BlockedBatch_OrdersOnceNotFourteenTimes()
+        public void NotionsPipeline_Priming_FourteenOrders_ForFourteenFutureBakes()
         {
-            // Candidate defect (NOT assumed): a single batch blocked on
-            // notions orders 1 notion EVERY day for 14 days (14 orders,
-            // 14u in flight) for one batch that needs 1u, because the
-            // per-day dedup never subtracts in-transit units. Fixed
-            // behaviour: 1 order totalling 1u in flight.
+            // NOT-A-DEFECT REVISION (Plan 04 follow-up, 2026-11-07,
+            // coordinator decision ~20:40 EST): the 14 orders placed
+            // over days 1-14 for one blocked batch are PRIMING, not
+            // over-ordering. Each day's order is earmarked for a distinct
+            // future daily bake (order day d arrives day d+14 and bakes
+            // that day), because the per-day shortfall is the account's
+            // DAILY demand rate (1 batch/day), not the single active
+            // batch's need. Slice 2 proved this against Set B: bakes on
+            // days 15-18 needed orders placed days 1-4; subtracting
+            // in-transit units (Branch A) would order one notion per
+            // transit window instead of one per bake, a 15-day bake
+            // cycle from a cold start. DO NOT "fix" this test back to
+            // 1 order / 1u: that expectation is unsatisfiable together
+            // with daily baking, and the priming test below
+            // (NotionsPipeline_PrimedWindowBakesThenDrains) pins the
+            // same 14 consecutive daily bakes days 15-28 plus the
+            // pipeline drain that follows. This test owns the
+            // order-count side and the order-to-bake linkage; the
+            // priming test owns the drain cycle.
             Slice s = NewSlice();
             Series2CounterpartyRegistration reg = ProductionRegistration();
             Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
@@ -563,39 +582,204 @@ namespace LandLedgers.Editor.Economy
             BookAccount(s, 24, 1, 2, 2);
 
             for (int day = 1; day <= 14; day++)
-                RunDay(s, reg, day);
-
-            int orders = s.StoreService.Orders.Count;
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                if (day == 1)
+                    Assert.AreEqual(1, r.BatchesPlanned, "day 1 plans the batch");
+                Assert.AreEqual(1, r.NotionsOrdered, $"one priming notion ordered, day {day}");
+                Assert.AreEqual(day, s.StoreService.Orders.Count, $"exactly {day} priming order(s) after day {day}");
+                Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    $"day {day} refuses on notions; refusal: {r.Refusal}");
+            }
             int orderedUnits = 0;
             foreach (NamedSkuOrder o in s.StoreService.Orders)
                 if (o != null) orderedUnits += o.UnitsOrdered;
-            Assert.AreEqual(1, orders,
-                $"BLOCKED-BATCH OVER-ORDER: one active batch needing 1 notion placed {orders} order(s) totalling {orderedUnits}u over days 1-14 " +
-                $"(expected 1 order / 1u in flight); against the 30u finite supply that leaves {30 - orderedUnits}u. " +
-                "The per-day dedup does not subtract in-transit units for an unchanged active batch set.");
+            Assert.AreEqual(14, s.StoreService.Orders.Count,
+                "14 priming orders over days 1-14, one per future daily bake — not one per active batch");
+            Assert.AreEqual(14, orderedUnits, "14u ordered in total, one per future bake");
+            Assert.AreEqual(140, s.Market.TotalOutflowCents, "14 orders x 10c booked as market outflow at order time");
+            for (int i = 0; i < 14; i++)
+            {
+                NamedSkuOrder o = s.StoreService.Orders[i];
+                Assert.AreEqual(i + 1, o.OrderDayIndex, $"priming order {i + 1} placed day {i + 1}");
+                Assert.AreEqual(i + 15, o.ExpectedArrivalDayIndex, $"priming order {i + 1} arrives day {i + 15} for that day's bake");
+                Assert.AreEqual(1, o.UnitsOrdered, $"priming order {i + 1} is 1u");
+                Assert.AreEqual(10, o.TotalCostCents, $"priming order {i + 1} costs 10c");
+            }
+            // The 30u finite supply leaves 16u after the 14 priming
+            // units are committed: supply pressure, not an ordering
+            // defect (a standing wholesale term is D-1-adjacent).
+            Assert.AreEqual(16, 30 - orderedUnits, "30u finite supply minus 14 priming units leaves 16u");
+
+            for (int day = 15; day <= 28; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(1, r.BatchesBaked, $"the primed pipeline bakes daily, day {day}");
+                Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                Assert.AreEqual(0, r.NotionsOrdered, $"no replacement order on an arrival day (feed covers), day {day}");
+                Assert.AreEqual(1, r.NotionsUnitsFed, $"the day-{day - 14} priming order's unit feeds the day {day} bake");
+                Assert.AreEqual(day - 14, s.StoreService.Lots.Count, $"one arrival lot per priming order, day {day}");
+            }
+            Assert.AreEqual(14, s.Bakery.WholesaleDeliveries.Count,
+                "14 consecutive daily bakes = 14 deliveries: every priming unit is consumed by its own day's bake");
+            Assert.AreEqual(14, s.StoreService.Lots.Count, "14 arrival lots, one per priming order");
+            Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "no priming notion is left unconsumed after day 28");
+            Assert.AreEqual(2532, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 - 140c notions feeds + 672c wholesale (14 x 48c)");
+            Assert.AreEqual(4328, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 140c receipts + 140c feeds - 672c wholesale");
         }
 
         [Test]
-        public void NotionsPipeline_FlourBlockedDays_OrderNothingForNotions()
+        public void NotionsPipeline_FlourBlockedDays_PrimingOrders_EnableEarlyFirstBake()
         {
-            // Probe, same seam family as Test 2: the notions step runs
-            // before RunScheduledDay regardless of flour, so a batch
-            // blocked on flour still orders 1 notion/day while its flour
-            // need is unmet. Fixed behaviour: 0 notions orders while the
-            // batch cannot bake for want of flour.
+            // NOT-A-DEFECT REVISION (Plan 04 follow-up, 2026-11-07,
+            // coordinator decision ~20:40 EST): notions orders ARE still
+            // placed (1/day) on flour-blocked days, because the pipeline
+            // primes future bakes that run once flour arrives. Ordering
+            // notions while flour-blocked parallelises the two pipelines;
+            // it is not waste. Slice 2 proved this against Set B: the
+            // first bake (day 15) required a notions order placed on day
+            // 1, days BEFORE flour landed (~day 7 via freight), so
+            // suppressing notions orders until flour is on hand
+            // (Branch B) delays the first bake to (flour day + 14).
+            // DO NOT "fix" this test back to 0 orders on flour-blocked
+            // days: that expectation is unsatisfiable together with the
+            // day-15 first bake, and the two tests as previously written
+            // were mutually unsatisfiable (their first 5 days identical).
+            //
+            // This test demonstrates the priming value in both
+            // directions. Main slice: flour is blocked days 1-6 and
+            // lands day 7, notions orders are placed 1/day throughout,
+            // and the first bake is day 15 — flour day + 8, NOT flour
+            // day + 14 — because the 5 orders placed on the
+            // flour-blocked days 1-5 feed the bakes on days 15-19.
+            // Control slice (the Branch B world): the notions leg is
+            // unwired until flour day 7, so no priming order exists
+            // before flour lands; the first order is placed day 7 and
+            // the first bake is day 21, exactly flour day + 14. The
+            // +14 wait applies ONLY where no priming orders were placed.
             Slice s = NewSlice();
             Series2CounterpartyRegistration reg = ProductionRegistration();
             Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
             SeedInputs(s, 0, 0, 40);
             BookAccount(s, 24, 1, 2, 2);
 
-            for (int day = 1; day <= 5; day++)
-                RunDay(s, reg, day);
+            // Days 1-6: flour-blocked, notions wired — 1 order/day.
+            for (int day = 1; day <= 6; day++)
+            {
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                if (day == 1)
+                    Assert.AreEqual(1, r.BatchesPlanned, "day 1 plans the batch");
+                Assert.AreEqual(1, r.NotionsOrdered, $"a priming notion is ordered even though the batch is flour-blocked, day {day}");
+                Assert.AreEqual(day, s.StoreService.Orders.Count, $"exactly {day} priming order(s) after day {day}");
+                Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes while flour-blocked, day {day}");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("flour"),
+                    $"day {day} refuses on flour (flour is checked before notions); refusal: {r.Refusal}");
+            }
 
-            int orders = s.StoreService.Orders.Count;
-            Assert.AreEqual(0, orders,
-                $"FLOUR-BLOCKED ORDERING: {orders} notions order(s) placed over days 1-5 while the batch could not bake for want of flour " +
-                "(bin flour 0, store flour 0, no Millbrook supplier; expected 0 — the notions need is not actionable until flour exists).");
+            // Days 7-14: flour lands (test-seeded 12 lb/day from day 7,
+            // as Set B's freight flour landed ~day 7); the batch is now
+            // notions-blocked, and priming orders continue 1/day.
+            int firstBakeDay = -1;
+            for (int day = 7; day <= 14; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(1, r.NotionsOrdered, $"one priming notion ordered, day {day}");
+                Assert.AreEqual(day, s.StoreService.Orders.Count, $"exactly {day} priming order(s) after day {day}");
+                Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    $"day {day} refuses on notions; refusal: {r.Refusal}");
+                if (r.BatchesBaked > 0 && firstBakeDay < 0) firstBakeDay = day;
+            }
+            Assert.AreEqual(14, s.StoreService.Orders.Count,
+                "14 priming orders by day 14 (6 placed while flour-blocked, 8 while notions-blocked)");
+            Assert.AreEqual(140, s.Market.TotalOutflowCents, "14 orders x 10c booked as market outflow at order time");
+
+            // Days 15-19: the 5 orders placed on the flour-blocked days
+            // 1-5 arrive and feed 5 consecutive daily bakes — the first
+            // bake is day 15, flour day + 8, with no additional 14-day
+            // wait after flour arrival.
+            for (int day = 15; day <= 19; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(1, r.BatchesBaked, $"the primed pipeline bakes daily, day {day}");
+                Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                Assert.AreEqual(0, r.NotionsOrdered, $"no replacement order on an arrival day (feed covers), day {day}");
+                Assert.AreEqual(1, r.NotionsUnitsFed, $"the day-{day - 14} priming order's unit feeds the day {day} bake");
+                if (r.BatchesBaked > 0 && firstBakeDay < 0) firstBakeDay = day;
+            }
+            Assert.AreEqual(15, firstBakeDay,
+                "first bake day 15 = flour-arrival day 7 + 8, NOT flour day + 14: the flour-blocked-day priming orders removed the wait");
+            Assert.IsTrue(firstBakeDay < 7 + 14,
+                "the first bake precedes the flour-day + 14 earliest (day 21) that applies only with no priming orders");
+            Assert.AreEqual(5, s.Bakery.WholesaleDeliveries.Count,
+                "5 consecutive bakes days 15-19, one per flour-blocked-day priming order");
+            Assert.AreEqual(5, s.StoreService.Lots.Count, "5 arrival lots by day 19, one per consumed priming order");
+            Assert.AreEqual(2190, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 - 50c notions feeds + 240c wholesale (5 x 48c)");
+            Assert.AreEqual(4760, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 50c receipts + 50c feeds - 240c wholesale");
+
+            // CONTROL — the Branch B world (no priming orders before
+            // flour lands): the notions leg stays unwired days 1-6, so
+            // no order exists when flour lands day 7; the first order is
+            // placed day 7 and the first bake is day 21, exactly flour
+            // day + 14. This is the earliest first bake available
+            // WITHOUT priming — the 6 days the main slice saves.
+            Slice c = NewSlice();
+            Series2CounterpartyRegistration creg = ProductionRegistration();
+            Assert.IsNull(creg.RegisterInto(c.Market, c.Diag), "production counterparty registration should succeed");
+            SeedInputs(c, 0, 0, 40);
+            BookAccount(c, 24, 1, 2, 2);
+
+            int controlFirstBakeDay = -1;
+            for (int day = 1; day <= 21; day++)
+            {
+                if (day >= 7) SeedInputs(c, 12, 0, 0);
+                BakeryWholesaleDailyResult r = day < 7
+                    ? RunDay(c, null, day, wireNotions: false)
+                    : RunDay(c, creg, day);
+                if (day == 1)
+                    Assert.AreEqual(1, r.BatchesPlanned, "control day 1 plans the batch");
+                if (day < 7)
+                {
+                    Assert.AreEqual(0, c.StoreService.Orders.Count, $"control: no notions order while the leg is unwired, day {day}");
+                    Assert.AreEqual(0, r.BatchesBaked, $"control: nothing bakes while flour-blocked, day {day}");
+                    Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("flour"),
+                        $"control day {day} refuses on flour; refusal: {r.Refusal}");
+                }
+                else if (day < 21)
+                {
+                    Assert.AreEqual(1, r.NotionsOrdered, $"control: one notion ordered, day {day}");
+                    Assert.AreEqual(day - 6, c.StoreService.Orders.Count, $"control: exactly {day - 6} order(s) after day {day}");
+                    Assert.AreEqual(0, r.BatchesBaked, $"control: nothing bakes before the first arrival, day {day}");
+                    Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                        $"control day {day} refuses on notions; refusal: {r.Refusal}");
+                }
+                else
+                {
+                    Assert.AreEqual(1, r.BatchesBaked, "control: the first bake is day 21");
+                    Assert.AreEqual(1, r.TransfersCompleted, "control: the transfer completes day 21");
+                    Assert.AreEqual(0, r.NotionsOrdered, "control: no replacement order on the arrival day (feed covers)");
+                    Assert.AreEqual(1, r.NotionsUnitsFed, "control: the day-7 order's unit feeds the day 21 bake");
+                }
+                if (r.BatchesBaked > 0 && controlFirstBakeDay < 0) controlFirstBakeDay = day;
+            }
+            Assert.AreEqual(21, controlFirstBakeDay,
+                "control first bake day 21 = flour-arrival day 7 + 14 transit days: the earliest possible first bake with no priming orders");
+            Assert.AreEqual(14, c.StoreService.Orders.Count, "control: 14 orders by day 21 (days 7-20)");
+            Assert.AreEqual(1, c.Bakery.WholesaleDeliveries.Count, "control: exactly one delivery by day 21");
+            Assert.AreEqual(2038, c.BakeryRuntime.CurrentCashCents, "control bakery 2,000 - 10c feed + 48c wholesale");
+            Assert.AreEqual(4952, c.StoreRuntime.CurrentCashCents, "control store 5,000 - 10c receipt + 10c feed - 48c wholesale");
+            Assert.AreEqual(6, controlFirstBakeDay - firstBakeDay,
+                "priming the pipeline during the flour-blocked window brings the first bake 6 days earlier (day 15 vs day 21)");
         }
 
         [Test]
@@ -1011,6 +1195,14 @@ namespace LandLedgers.Editor.Economy
         //    flour-blocked day for no reason). The coordinator/planner
         //    must decide: revise Tests 2/3 to the not-a-defect reading,
         //    or direct a different repair.
+        //    DECIDED (coordinator, ~20:40 EST 2026-11-07) and DONE
+        //    (Plan 04 follow-up, tests only): Tests 2 and 3 were
+        //    rewritten to the not-a-defect priming reading above
+        //    (NotionsPipeline_Priming_FourteenOrders_ForFourteenFutureBakes
+        //    and NotionsPipeline_FlourBlockedDays_PrimingOrders_EnableEarlyFirstBake).
+        //    The plan-conflict failure set is closed by that revision;
+        //    the drain cycle in point 6 stays an open follow-up
+        //    (pipeline-depth / reorder-point policy decision).
         // 6. The GENUINE pipeline finding, pinned below and recorded as
         //    follow-up (not repaired here — it needs a pipeline-depth /
         //    reorder-point policy decision, which neither Slice 2 branch

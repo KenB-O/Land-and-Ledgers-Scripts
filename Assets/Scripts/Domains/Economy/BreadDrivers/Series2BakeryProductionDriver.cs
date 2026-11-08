@@ -258,11 +258,45 @@ namespace LandLedgers.Economy.BreadDrivers
             if (string.IsNullOrEmpty(spec.ProductId))
                 return $"Series2BakeryProductionDriver pre-check refused: planned product '{productId}' has no catalog spec.";
 
-            int flourNeeded = batches * spec.FlourUnitsPerBatch;
+            // Priority 3 Slice 2 (H-A3, 2026-11-08): a batch in Prepped
+            // or Proofing stage already holds its dispensed custody, so
+            // its remaining bin need is only the spec quantity its
+            // custody lines do not already cover (never below 0). A
+            // Planned batch holds nothing and still needs the full spec
+            // from the bin, as does a batch id the runtime no longer
+            // resolves (never bake blind on an unvalidated batch).
+            // Fuel, kit, oven, and budget gates are untouched.
+            int flourNeeded = 0;
+            int notionsNeeded = 0;
+            foreach (string batchId in PlannedBatchIds)
+            {
+                BakeryDoughBatch batch = null;
+                foreach (var candidate in bakery.Batches)
+                {
+                    if (candidate != null && string.Equals(candidate.BatchId, batchId, System.StringComparison.Ordinal))
+                    {
+                        batch = candidate;
+                        break;
+                    }
+                }
+                int flourHeld = 0;
+                int notionsHeld = 0;
+                if (batch != null
+                    && (batch.Stage == BakeryBatchStage.Prepped || batch.Stage == BakeryBatchStage.Proofing))
+                {
+                    if (batch.FlourInCustody != null)
+                        foreach (var line in batch.FlourInCustody)
+                            if (line != null) flourHeld += Math.Max(0, line.UnitsTaken);
+                    if (batch.NotionsUsed != null)
+                        foreach (var line in batch.NotionsUsed)
+                            if (line != null) notionsHeld += Math.Max(0, line.UnitsTaken);
+                }
+                flourNeeded += Math.Max(0, spec.FlourUnitsPerBatch - flourHeld);
+                notionsNeeded += Math.Max(0, spec.NotionUnitsPerBatch - notionsHeld);
+            }
             int flourOnHand = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
             if (flourOnHand < flourNeeded)
                 return $"Series2BakeryProductionDriver pre-check refused: flour {flourOnHand} lb on hand, need {flourNeeded} lb for {batches} batch(es); bake nothing, batches stay planned.";
-            int notionsNeeded = batches * spec.NotionUnitsPerBatch;
             int notionsOnHand = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId);
             if (notionsOnHand < notionsNeeded)
                 return $"Series2BakeryProductionDriver pre-check refused: notions {notionsOnHand}u on hand, need {notionsNeeded}u for {batches} batch(es); bake nothing, batches stay planned.";

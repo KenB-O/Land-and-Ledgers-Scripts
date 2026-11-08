@@ -1872,5 +1872,215 @@ namespace LandLedgers.Editor.Economy
                 AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[0].BatchId, 2, "fuel");
             }
         }
+
+        // ---- Priority 3 Slice 2 (2026-11-08): Precheck custody
+        // accounting (H-A3) ------------------------------------------
+        // Defect: Precheck demands batches x 12 lb in the bin for every
+        // adopted batch regardless of stage, while PrepBatchToProofing
+        // has already dispensed 12 lb into a Prepped/Proofing batch's
+        // FlourInCustody. A stranded batch is therefore refused on flour
+        // forever even though its flour is held, and the driver keeps
+        // naming flour for a batch that needs none. The same
+        // double-count applies to notions (NotionsUsed).
+        //
+        // STRAND-MECHANISM DEVIATION FROM THE PLAN (verified in source
+        // before writing the test): the plan strands the batch with
+        // SetProofingRackSlots(0), but production REFUSES a non-positive
+        // slot count — BakeryShopRuntime.SetProofingRackSlots returns the
+        // refusal "proofing rack needs a positive slot count" and the old
+        // capacity stands (pinned by
+        // BakeryDoughSchedulingTests.SetProofingRackSlots_RefusesNonPositive).
+        // Slots therefore cannot be forced to 0. The strand here uses the
+        // rack's real capacity instead: slots = 1 gives 120 proof-minutes
+        // per day (one slot x 120m), exactly one bread batch's proof, so
+        // three directly-planned batches prepped the same day compete for
+        // it — the first proofs and bakes, the other two strand in
+        // Proofing holding their dispensed custody (12 lb flour + 1
+        // notion each) with the bin at 8 lb. The next day the rack lets
+        // one more proof and bake; restoring slots to 4 on the third day
+        // lets the last held batch proof and bake. The substance the plan
+        // pins is unchanged: a held batch must not be re-charged for
+        // flour/notions it already holds, and the same batch must bake
+        // with no further flour purchase once the rack lets it through.
+        // The driver flour block still computes its shortfall from bin
+        // stock only (FlourNeedPoundsRemaining 16 lb day 2, 4 lb day 3);
+        // that block is OUT OF SCOPE for Slice 2 (Precheck only), so its
+        // shortfall figure is asserted as the unchanged behaviour, and
+        // "no new reorder" is pinned in this unwired fixture (no
+        // Millbrook supplier, store holds 0 sacks): no sacks are bought
+        // and no reorder lot is placed on any day.
+        private static int SumCustodyUnits(List<BakeryFlourDispenseLine> lines)
+        {
+            int total = 0;
+            if (lines != null)
+                foreach (BakeryFlourDispenseLine line in lines)
+                    if (line != null) total += Math.Max(0, line.UnitsTaken);
+            return total;
+        }
+
+        private static List<BakeryDoughBatch> BatchesInStage(Slice s, BakeryBatchStage stage)
+        {
+            var found = new List<BakeryDoughBatch>();
+            foreach (BakeryDoughBatch batch in s.Bakery.Batches)
+                if (batch != null && batch.Stage == stage) found.Add(batch);
+            return found;
+        }
+
+        private static BakeryDoughBatch FindBatch(Slice s, string batchId)
+        {
+            foreach (BakeryDoughBatch batch in s.Bakery.Batches)
+                if (batch != null && string.Equals(batch.BatchId, batchId, StringComparison.Ordinal)) return batch;
+            return null;
+        }
+
+        [Test]
+        public void Precheck_PreppedBatchHoldingCustody_NotChargedAgainForFlour()
+        {
+            // Priority 3 Slice 2 (H-A3): the reproducing test. Expected
+            // to FAIL before the fix (day 2 refuses on flour for batches
+            // holding their 12 lb in custody) and PASS after it.
+            Slice s = NewSlice();
+            SeedInputs(s, 44, 3, 3);
+            BookAccount(s, 24, 1, 2, 1);
+            Assert.IsNull(s.Bakery.SetProofingRackSlots(1, s.Diag),
+                "one rack slot (120 proof-minutes/day) should set; diag: " + string.Join("; ", s.Diag));
+
+            // Three batches planned directly (not via the wholesale
+            // planner): the planner would plan at most one, and the
+            // strand needs three batches competing for one slot's rack
+            // credit. The account is already covered 3 x 24u, so the
+            // planner plans nothing further on any day of the run.
+            List<string> directIds = s.ProductionDriver.PlanBatches(BakeryBreadCatalog.BreadLoafId, 3, 1, s.Diag);
+            Assert.IsNotNull(directIds, "three batches should plan directly; diag: " + string.Join("; ", s.Diag));
+            Assert.AreEqual(3, directIds.Count, "three batches planned directly");
+
+            // Day 1: all three prep (bin 44 -> 8 lb, notions 3 -> 0,
+            // fuel 3 -> 2); the rack proofs only the first, so it bakes
+            // and the other two strand in Proofing holding custody.
+            BakeryWholesaleDailyResult day1 = RunDay(s, null, 1, wireNotions: false);
+            Assert.AreEqual(0, day1.BatchesPlanned, "day 1 plans nothing: the three direct batches already cover the account");
+            Assert.AreEqual(1, day1.BatchesBaked, "day 1 bakes exactly one batch: the rack proofs one per day at 1 slot");
+            Assert.AreEqual(1, day1.TransfersCompleted, "the transfer completes day 1");
+            Assert.AreEqual(24, day1.UnitsStocked, "24 loaves stocked day 1");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin 44 - 3 x 12 lb dispensed at prep = 8 lb after day 1");
+            Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "bin notions 3 - 3 dispensed at prep = 0 after day 1");
+            Assert.AreEqual(2, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel 3 - 1 firing day 1 = 2u");
+            List<BakeryDoughBatch> strandedDay1 = BatchesInStage(s, BakeryBatchStage.Proofing);
+            Assert.AreEqual(2, strandedDay1.Count, "two batches strand in Proofing after day 1 (rack credit exhausted)");
+            foreach (BakeryDoughBatch batch in strandedDay1)
+            {
+                Assert.AreEqual(12, SumCustodyUnits(batch.FlourInCustody),
+                    $"stranded batch {batch.BatchId} holds its 12 lb flour in custody");
+                Assert.AreEqual(1, SumCustodyUnits(batch.NotionsUsed),
+                    $"stranded batch {batch.BatchId} holds its 1 notion in custody");
+                Assert.AreEqual(120, batch.ProofMinutesRemaining,
+                    $"stranded batch {batch.BatchId} got no proof credit day 1");
+            }
+            List<BakeryDoughBatch> bakedDay1 = BatchesInStage(s, BakeryBatchStage.Baked);
+            Assert.AreEqual(1, bakedDay1.Count, "one batch baked day 1");
+            Assert.AreEqual(0, SumCustodyUnits(bakedDay1[0].FlourInCustody),
+                "the baked batch's custody cleared into the bread at baking");
+            Assert.AreEqual(0, SumCustodyUnits(bakedDay1[0].NotionsUsed),
+                "the baked batch's notions cleared into the bread at baking");
+
+            // Day 2 (rack still 1 slot): the two held batches must NOT
+            // be refused on flour — each already holds its 12 lb — even
+            // though the bin reads only 8 lb. Before the fix this
+            // assertion fails: Precheck demands 2 x 12 lb in the bin
+            // and refuses "flour 8 lb on hand, need 24 lb".
+            BakeryWholesaleDailyResult day2 = RunDay(s, null, 2, wireNotions: false);
+            Assert.IsTrue(day2.Refusal == null || !day2.Refusal.Contains("flour"),
+                "day-2 Precheck must not refuse on flour for the held batches; refusal: " + day2.Refusal);
+            Assert.AreEqual(0, day2.BatchesPlanned, "day 2 plans nothing: the two held batches still cover the account");
+            Assert.AreEqual(1, day2.BatchesBaked, "day 2 bakes one held batch (the rack proofs one per day at 1 slot)");
+            Assert.AreEqual(1, day2.TransfersCompleted, "the transfer completes day 2");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin still 8 lb after day 2: the bake consumed custody flour, never bin flour");
+            Assert.AreEqual(0, day2.FlourSacksPurchased, "no flour bought day 2");
+            Assert.IsTrue(string.IsNullOrWhiteSpace(day2.MillbrookReorderLotId),
+                "no Millbrook reorder placed day 2; lot id: " + day2.MillbrookReorderLotId);
+            Assert.AreEqual(16, day2.FlourNeedPoundsRemaining,
+                "the driver flour block still names the bin-only shortfall (2 x 12 - 8 = 16 lb); that block is out of scope for Slice 2 and unchanged");
+            Assert.AreEqual(1, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel 2 - 1 firing day 2 = 1u");
+            List<BakeryDoughBatch> strandedDay2 = BatchesInStage(s, BakeryBatchStage.Proofing);
+            Assert.AreEqual(1, strandedDay2.Count, "one batch still strands in Proofing after day 2");
+            Assert.AreEqual(12, SumCustodyUnits(strandedDay2[0].FlourInCustody),
+                "the still-held batch keeps its 12 lb flour in custody");
+            Assert.AreEqual(1, SumCustodyUnits(strandedDay2[0].NotionsUsed),
+                "the still-held batch keeps its 1 notion in custody");
+            string lastHeldBatchId = strandedDay2[0].BatchId;
+            Assert.AreEqual(2096, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 + 48c + 48c wholesale (no flour/notions cash moves: inputs were test-seeded)");
+            Assert.AreEqual(4904, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 48c - 48c wholesale");
+
+            // Day 3: restore the rack to 4 slots. The last held batch
+            // proofs and bakes with no further flour purchase: the bin
+            // stays at 8 lb and no reorder is placed for it.
+            Assert.IsNull(s.Bakery.SetProofingRackSlots(4, s.Diag),
+                "restoring 4 rack slots should succeed; diag: " + string.Join("; ", s.Diag));
+            BakeryWholesaleDailyResult day3 = RunDay(s, null, 3, wireNotions: false);
+            Assert.IsTrue(day3.Refusal == null || !day3.Refusal.Contains("flour"),
+                "day-3 Precheck must not refuse on flour for the held batch; refusal: " + day3.Refusal);
+            Assert.AreEqual(0, day3.BatchesPlanned, "day 3 plans nothing: the held batch still covers the account");
+            Assert.AreEqual(1, day3.BatchesBaked, "day 3 bakes the last held batch");
+            Assert.AreEqual(1, day3.TransfersCompleted, "the transfer completes day 3");
+            BakeryDoughBatch lastHeld = FindBatch(s, lastHeldBatchId);
+            Assert.IsNotNull(lastHeld, "the day-2 held batch is still on the books day 3");
+            Assert.AreEqual(BakeryBatchStage.Baked, lastHeld.Stage,
+                "the SAME held batch bakes day 3 — no re-plan, no new batch id");
+            Assert.AreEqual(0, BatchesInStage(s, BakeryBatchStage.Proofing).Count,
+                "no batch strands after day 3");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin still 8 lb after day 3: the held batch baked on custody flour alone");
+            Assert.AreEqual(0, day3.FlourSacksPurchased, "no flour bought day 3");
+            Assert.IsTrue(string.IsNullOrWhiteSpace(day3.MillbrookReorderLotId),
+                "no Millbrook reorder placed day 3; lot id: " + day3.MillbrookReorderLotId);
+            Assert.AreEqual(4, day3.FlourNeedPoundsRemaining,
+                "the driver flour block still names the bin-only shortfall (12 - 8 = 4 lb); out of scope for Slice 2 and unchanged");
+            Assert.AreEqual(0, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel 1 - 1 firing day 3 = 0u");
+            Assert.AreEqual(3, s.Bakery.WholesaleDeliveries.Count,
+                "three daily bakes = three deliveries, one per held batch");
+            Assert.AreEqual(2144, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 + 3 x 48c wholesale");
+            Assert.AreEqual(4856, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 3 x 48c wholesale");
+        }
+
+        [Test]
+        public void Precheck_PlannedBatch_StillChargedFullFlourNeed()
+        {
+            // Priority 3 Slice 2 (H-A3), complementary pin: a Planned-stage
+            // batch with nothing in custody still requires the full 12 lb
+            // in the bin. Guards the repair against over-correction — the
+            // custody credit applies only to batches that actually hold
+            // dispensed custody (Prepped/Proofing), never to a batch that
+            // has not prepped yet. Passes before and after the fix.
+            Slice s = NewSlice();
+            SeedInputs(s, 8, 1, 40);
+            BookAccount(s, 24, 1, 2, 2);
+
+            BakeryWholesaleDailyResult r = RunDay(s, null, 2, wireNotions: false);
+            Assert.AreEqual(1, r.BatchesPlanned, "the batch is planned day 2");
+            Assert.AreEqual(0, r.BatchesBaked, "nothing bakes on the 8-lb residue");
+            Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("flour"),
+                "the flour refusal stands for a Planned batch; refusal: " + r.Refusal);
+            Assert.IsTrue(r.Refusal.Contains("flour 8 lb on hand, need 12 lb"),
+                "the refusal charges the full 12 lb for the one Planned batch; refusal: " + r.Refusal);
+            Assert.AreEqual(4, r.FlourNeedPoundsRemaining, "the shortfall is 12 - 8 = 4 lb");
+            Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage, "the batch stays Planned");
+            Assert.AreEqual(0, SumCustodyUnits(s.Bakery.Batches[0].FlourInCustody),
+                "the Planned batch holds no flour in custody");
+            Assert.AreEqual(0, SumCustodyUnits(s.Bakery.Batches[0].NotionsUsed),
+                "the Planned batch holds no notions in custody");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "bin still 8 lb: nothing was dispensed");
+            Assert.AreEqual(0, r.FlourSacksPurchased, "no flour bought: the store holds 0 sacks");
+        }
     }
 }

@@ -777,20 +777,29 @@ namespace LandLedgers.EditorTests.Population
                 Assert.AreEqual(181, ashfordButcher.Ship("meat", 181, 0, diag));
                 Assert.AreEqual(3, ashfordButcher.AvailableUnits("meat"));
                 Assert.AreEqual(3, ashfordButcher.OnHandUnits("cheese"));
+                Assert.AreEqual(10, ashfordButcher.QuoteUnitCostCents("meat"),
+                    "After the drain only cheese remains, so the quote is the cheese price — the 6c beef price must never be charged for cheese.");
                 int redfieldMeatBefore = redfieldButcher.AvailableUnits("meat");
                 HouseholdReserveState meat = fixture.Household.GetReserve("meat");
                 int cashBefore = fixture.Household.spendingMoneyCents;
 
                 fixture.Manager.ResolveDailySales();
 
-                // Day 1: 3u ship at the 3-unit delivered price (goods 6c
-                // + 125c freight over 3u = 48c/u); the 2u shortfall is
-                // never charged and is carried as lost demand at that
-                // same price.
+                // Day 1: 3u ship at the 3-unit delivered price (goods
+                // 10c cheese — the cheapest item with stock after the
+                // drain; beef is out of stock, so its 6c price does not
+                // apply — + 125c freight over 3u = 52c/u, 156c total);
+                // the 2u shortfall is never charged and is carried as
+                // lost demand at that same price (104c).
+                // (Priority 6 deliberate correction: the pre-fix comment
+                // priced the shipped cheese at the beef price; production
+                // 156c is correct per §2 of
+                // 06-plan-12c-household-reserve-discrepancy.md.)
                 Assert.AreEqual(3, meat.currentUnits);
-                Assert.AreEqual(cashBefore - 144, fixture.Household.spendingMoneyCents);
+                // 3u x (10c cheese - 6c beef) = 12c goods delta: 144c -> 156c.
+                Assert.AreEqual(cashBefore - 156, fixture.Household.spendingMoneyCents);
                 Assert.AreEqual(3, fixture.Manager.LastDailyReserveOffMapUnits);
-                Assert.AreEqual(96, fixture.Manager.LastDailyReserveOffMapLostDemandCents);
+                Assert.AreEqual(104, fixture.Manager.LastDailyReserveOffMapLostDemandCents);
                 Assert.AreEqual(0, ashfordButcher.AvailableUnits("meat"));
                 Assert.AreEqual(redfieldMeatBefore, redfieldButcher.AvailableUnits("meat"));
 

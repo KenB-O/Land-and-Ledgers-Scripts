@@ -3697,6 +3697,22 @@ namespace LandLedgers.Orchestration.Systems
                         visible.Add(message);
                 }
 
+                // Priority 1 Slice 0: the daily shopping summary is the
+                // heartbeat line for the shopping investigation; exempt it
+                // from the 12-per-day cap so a bad day cannot hide it
+                // behind earlier diagnostics. Always emit it first.
+                for (int i = 0; i < diag.Count; i++)
+                {
+                    string message = diag[i];
+                    if (!string.IsNullOrWhiteSpace(message)
+                        && message.StartsWith("[FoodEconomy] shopping summary day ", StringComparison.Ordinal)
+                        && !visible.Contains(message))
+                    {
+                        visible.Insert(0, message);
+                        break;
+                    }
+                }
+
                 string omitted = diag.Count > visible.Count
                     ? $" | ... {diag.Count - visible.Count} additional diagnostic(s) omitted"
                     : string.Empty;

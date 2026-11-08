@@ -571,13 +571,36 @@ namespace LandLedgers.FirstLedger
             // concern; registering the seller alone cannot execute a purchase.
             if (simulationDrivers != null && storeRuntime != null)
             {
+                GeneralStoreTradingPort storePort;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                simulationDrivers.RegisterGeneralStoreSupplier(developmentNpcStore != null
+                storePort = developmentNpcStore != null
                     ? storeRuntime.BuildHouseholdTradingPort(developmentNpcStore, simulationDrivers.StoreFeedRegistry)
-                    : storeRuntime.BuildHouseholdTradingPort());
+                    : storeRuntime.BuildHouseholdTradingPort();
 #else
-                simulationDrivers.RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort());
+                storePort = storeRuntime.BuildHouseholdTradingPort();
 #endif
+                simulationDrivers.RegisterGeneralStoreSupplier(storePort);
+                // Priority 1 Slice 0 (log-only): name the registered port
+                // flavour, its stock, and its staffing, so the next Unity
+                // run can separate H1 (knowledge never seeded) from H2
+                // (wrong-state stock read) and H3 (unstaffed). No state,
+                // price, quantity, schedule, or policy change here.
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                string storePortFlavour = developmentNpcStore != null ? "npc" : "fallback";
+                string npcStoreStaffing = developmentNpcStore?.RuntimeState != null
+                    ? developmentNpcStore.RuntimeState.FilledWorkerCount.ToString()
+                    : "no NPC store";
+                if (enableDevelopmentTownConfiguration && ResolveDevelopmentTownConfiguration() != null && developmentNpcStore == null)
+                    Debug.LogError("[WorldStartup] Development town configuration exists but no NPC General Store resolved; registering the fallback trading port instead of the NPC port.", this);
+#else
+                string storePortFlavour = "fallback";
+                string npcStoreStaffing = "no NPC store";
+#endif
+                Debug.Log($"[WorldStartup] Registered general store supplier: flavour={storePortFlavour}, " +
+                    $"StoreBusinessId={storePort.StoreBusinessId}, LocationId={storePort.LocationId}, " +
+                    $"ItemStockUnits(bread)={storePort.ItemStockUnits("bread")}, ItemStockUnits(flour)={storePort.ItemStockUnits("flour")}, " +
+                    $"CategoryStockUnits(staple_food)={storePort.CategoryStockUnits("staple_food")}, " +
+                    $"NPC store FilledWorkerCount={npcStoreStaffing}.", this);
             }
             simulationDrivers?.EnsureGeneralStorePostOfficeForCurrentWorld();
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();

@@ -684,6 +684,84 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNull(book.LinkShipment(nextAgreement.AgreementId, nextShipmentId), "shipment for day " + dayIndex + " must link");
         }
 
+        // Builds a multi-sack haul the way BuildHaul builds a 1-sack haul,
+        // except the shipment is created with the lot's sack count and the
+        // corrected production cargo spec (ProductionCargoSpec: per-sack
+        // mass 4.5359 kg, volume as the production formula gives it). The
+        // request itself keeps BuildHaul's shape exactly (Quantity 1,
+        // QuantityUnit "lb") — no validation links the request quantity to
+        // the shipment quantity, and no new request semantics are invented.
+        // expectClamp: true when the requested sacks exceed Millbrook's live
+        // stock and the P3 Slice 4b clamp must fire (the diag names it and
+        // the lot is the clamped size); false when the full request places.
+        private void BuildMultiSackHaul(int dayIndex, int sacksRequested, string expectedOrderId, bool expectClamp,
+            out OffMapAidCargoLot nextLot, out string requestId,
+            out FreightServiceAgreement nextAgreement, out LogisticsShipmentState nextShipment)
+        {
+            int buyerBefore = buyerCash.BalanceCents;
+            int diagBefore = diag.Count;
+            Assert.IsNull(MillbrookFlourReorder.PlaceReorder(
+                supplier, buyerCash, BakeryId, "Glen Pierce", sacksRequested, dayIndex, diag, out nextLot),
+                "multi-sack reorder on day " + dayIndex + " must place: " + string.Join("; ", diag));
+            Assert.IsNotNull(nextLot, "multi-sack reorder on day " + dayIndex + " must mint a lot");
+            Assert.AreEqual(expectedOrderId, nextLot.OrderId,
+                "reorder id is deterministic (day " + dayIndex + "; TryPlaceOrder prefixes the business id)");
+            Assert.AreEqual(buyerBefore - nextLot.TotalCostCents, buyerCash.BalanceCents,
+                "multi-sack reorder on day " + dayIndex + " debits buyer cash exactly once");
+            string newDiag = string.Join("; ", diag.GetRange(diagBefore, diag.Count - diagBefore));
+            if (expectClamp)
+            {
+                Assert.IsTrue(newDiag.Contains("clamped"),
+                    "the " + sacksRequested + "-sack request against short stock must clamp, but the reorder diagnostics were: " + newDiag);
+                Assert.IsTrue(nextLot.PackageUnits < sacksRequested,
+                    "a clamped lot must hold fewer sacks than requested (" + sacksRequested + "), but holds " + nextLot.PackageUnits);
+            }
+            else
+            {
+                Assert.IsTrue(!newDiag.Contains("clamped"),
+                    "the " + sacksRequested + "-sack request against sufficient stock must not clamp, but the reorder diagnostics were: " + newDiag);
+                Assert.AreEqual(sacksRequested, nextLot.PackageUnits,
+                    "the unclamped lot must hold the requested sacks");
+            }
+            Assert.AreEqual(nextLot.PackageUnits * 10, nextLot.InventoryUnits, "the lot's total pounds are 10 lb per sack");
+            Assert.AreEqual(nextLot.PackageUnits * 48, nextLot.TotalCostCents, "the lot costs the authored 48c per sack");
+
+            FreightServiceAgreementBook book = freight.ServiceAgreements;
+            requestId = "freight-request:" + nextLot.OrderId;
+            var request = new FreightServiceRequest
+            {
+                RequestId = requestId, RequestingBusinessId = BakeryId, CarrierBusinessId = CarrierId,
+                PickupBusinessId = "millbrook_grain_co", DestinationBusinessId = BakeryId,
+                CargoLotId = nextLot.LotId, Quantity = 1, QuantityUnit = "lb", RequestingPersonId = 2,
+                CarrierOperatorPersonId = EthanId, PickupLocationId = "millbrook-pickup",
+                DestinationLocationId = "bakery-door",
+                CargoSkuId = MillbrookFlourFreightCustodyAdapter.FlourSkuId
+            };
+            Assert.IsNull(book.CreateRequest(request, out _), "request for day " + dayIndex + " must record");
+            Assert.IsNull(book.SetQuote(requestId, new FreightServiceQuote
+            {
+                QuoteId = "quote-" + dayIndex, OneWayDistanceMiles = 50f, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = FreightChargeCents, PayerBusinessId = BakeryId, PaymentTiming = "After successful delivery"
+            }), "quote for day " + dayIndex + " must record");
+            Assert.IsNull(book.Accept(requestId, EthanId, dayIndex, dayIndex * 86400f + 40000f, out nextAgreement),
+                "request for day " + dayIndex + " must accept");
+            Assert.IsNotNull(nextAgreement, "acceptance for day " + dayIndex + " must produce an agreement");
+            string nextShipmentId = "freight-shipment:" + requestId;
+            nextShipment = freight.CreateShipment(CarrierId, nextShipmentId, "millbrook_grain_co", BakeryId, nextLot.PackageUnits,
+                ProductionCargoSpec(nextLot), WagonId,
+                hooks, EntityId.For(EntityKind.Person, EthanId), TeamAnimals(),
+                FreightChargeCents, BakeryId, diag, out string shipmentRefusal,
+                nextAgreement.AgreementId, nextLot.LotId, MillbrookFlourFreightCustodyAdapter.FlourSkuId, true);
+            Assert.IsNotNull(nextShipment, "multi-sack shipment for day " + dayIndex + " must create: " + shipmentRefusal);
+            Assert.IsTrue(!nextShipment.IsPreLoadBlocked,
+                "a " + nextLot.PackageUnits + "-sack lot with the corrected spec must ship whole, not block pre-load, but was: " + nextShipment.BlockedReason);
+            Assert.AreEqual(nextLot.PackageUnits, nextShipment.PlannedQuantityUnits,
+                "the multi-sack shipment must plan the lot's whole sack count");
+            Assert.AreEqual(nextLot.LotId, nextShipment.CargoLotId, "the new lot must bind cleanly to the new shipment");
+            Assert.IsNull(book.LinkShipment(nextAgreement.AgreementId, nextShipmentId), "shipment for day " + dayIndex + " must link");
+        }
+
         private void BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
             out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2)
         {
@@ -853,6 +931,224 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNotNull(refusal, "creating a duplicate request for an existing lot id must be refused");
             Assert.IsTrue(refusal.Contains("already exists"),
                 "the duplicate refusal must name the existing request, but got '" + refusal + "'");
+        }
+
+        // ---- Priority 7 Slice 4 (2026-11-08): multi-sack shipment
+        // acceptance. Tests only; no production file is touched. Proves the
+        // full lifecycle for the exact lots D-F1 blocked, with the corrected
+        // spec — and pins that the lot ships WHOLE (no split to dodge
+        // capacity). Per the plan, the pre-Slice-1 failure is recorded from
+        // Slice 0's pin instead of re-breaking the tree: the Slice 0 pin
+        // (ProductionCargoSpec_SixteenSackLot_BlockedPreLoad) FAILED pre-fix
+        // with the replicated production formula checking a 16-sack lot at
+        // 1,161.2 kg against the authored 450 kg wagon.
+
+        [Test]
+        public void SixteenSackClampedLot_ShipsWhole_DeliversAndSettles()
+        {
+            // The exact lot D-F1 blocked. Millbrook holds 16 sacks (the
+            // fixture supplier is drawn down from 220 lb to 160 lb by one
+            // paid 6-sack order first); a forward request for 18 sacks
+            // clamps to a 16-sack lot (768c debited once, the P3 Slice 4b
+            // clamp); the lot ships in ONE shipment with the corrected
+            // per-sack spec (72.6 kg total, inside 450 kg);
+            // CommitFreightPickup commits the whole 16 sacks in that one
+            // shipment; supplier pickup, return tick, unload, Bakery receipt
+            // of 160 lb in ONE lot with ImportOrderId = the clamped lot id;
+            // 125c settles exactly once; agreement Fulfilled; wagon free
+            // afterwards.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion();
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "haul 1 freight charge debited from the bakery exactly once");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "haul 1 freight charge credited to the carrier exactly once");
+
+            // Draw Millbrook down to exactly 16 sacks: 220 lb after the
+            // opening order, minus one paid 6-sack order (288c). The drain
+            // lot stays outstanding (uncommitted, unreceived) but covers
+            // only 6 sacks, so the reorder guard (which refuses only when
+            // outstanding sacks already cover the request) lets the
+            // 18-sack request through to the clamp.
+            int buyerBeforeDrain = buyerCash.BalanceCents;
+            Assert.IsNull(supplier.TryPlaceOrder("drain-six-sack", BakeryId, "Glen Pierce", 6, buyerCash, Day2, out OffMapAidCargoLot drainLot),
+                "the 6-sack draw-down order must place");
+            Assert.AreEqual(6, drainLot.PackageUnits, "the draw-down lot must hold 6 sacks");
+            Assert.AreEqual(288, drainLot.TotalCostCents, "the draw-down lot costs 6 x 48c = 288c");
+            Assert.AreEqual(buyerBeforeDrain - 288, buyerCash.BalanceCents,
+                "the draw-down order debits buyer cash exactly once");
+            Assert.AreEqual(160, supplier.GetInventoryUnits(MillbrookFlourFreightCustodyAdapter.FlourSkuId),
+                "Millbrook must hold exactly 16 sacks (160 lb) before the clamped reorder");
+
+            BuildMultiSackHaul(Day2, 18, "millbrook_grain_co:flour-reorder-d13-n3", true,
+                out OffMapAidCargoLot lot16, out _, out FreightServiceAgreement agreement16, out LogisticsShipmentState shipment16);
+            Assert.AreEqual(16, lot16.PackageUnits, "the clamped lot must hold 16 sacks");
+            Assert.AreEqual(768, lot16.TotalCostCents, "the clamped 16-sack lot costs 16 x 48c = 768c");
+            Assert.AreEqual(160, lot16.InventoryUnits, "the clamped lot holds 160 lb");
+
+            PrepareAndDispatchSecondHaul(agreement16, shipment16);
+            SimulateSupplierPickupFor(shipment16);
+            Assert.IsTrue(lot16.SourceCommitted, "the whole 16-sack lot must be committed to its one shipment");
+            Assert.AreEqual(shipment16.ShipmentId, lot16.ShipmentId, "the lot must name its one shipment");
+            TickUntilCompleted(shipment16, "16-sack haul", Day2);
+
+            Assert.IsTrue(lot16.Received, "the clamped 16-sack lot must be marked received");
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count, "the bakery must hold exactly two flour lots (haul 1 + the 16-sack haul)");
+            BakeryFlourLot receipt16 = null;
+            foreach (BakeryFlourLot flourLot in bakery.FlourStock.Lots)
+            {
+                if (string.Equals(flourLot.ImportOrderId, lot16.LotId, StringComparison.Ordinal)) receipt16 = flourLot;
+            }
+            Assert.IsNotNull(receipt16, "the bakery must hold a receipt for the clamped lot");
+            Assert.AreEqual(160, receipt16.Units, "the clamped lot lands as 160 lb in ONE bakery lot");
+            Assert.IsTrue(shipment16.deliveryApplied, "the 16-sack shipment must record delivery applied");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited a second 125c (total -250c across haul 1 and the 16-sack haul)");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited a second 125c (total +250c)");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after the 16-sack haul");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement16.Status,
+                "the 16-sack agreement must be fulfilled");
+            Assert.IsNull(freight.Service.FindExclusivityConflict(null, WagonId,
+                EntityId.For(EntityKind.Person, EthanId), TeamAnimals()),
+                "wagon/driver/horse must be free after the 16-sack haul completes");
+        }
+
+        [Test]
+        public void EighteenSackLot_ShipsWhole_DeliversAndSettles()
+        {
+            // Millbrook holds 22 sacks after haul 1 (220 lb); an 18-sack
+            // order places a full 18-sack lot (864c debited once, no clamp);
+            // same whole-shipment shape as the 16-sack haul (81.6 kg total,
+            // inside 450 kg); Bakery receipt of 180 lb in ONE lot; 125c
+            // settles exactly once.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion();
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "haul 1 freight charge debited from the bakery exactly once");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "haul 1 freight charge credited to the carrier exactly once");
+
+            BuildMultiSackHaul(Day2, 18, "millbrook_grain_co:flour-reorder-d13-n2", false,
+                out OffMapAidCargoLot lot18, out _, out FreightServiceAgreement agreement18, out LogisticsShipmentState shipment18);
+            Assert.AreEqual(18, lot18.PackageUnits, "the full lot must hold 18 sacks");
+            Assert.AreEqual(864, lot18.TotalCostCents, "the full 18-sack lot costs 18 x 48c = 864c");
+            Assert.AreEqual(180, lot18.InventoryUnits, "the full lot holds 180 lb");
+
+            PrepareAndDispatchSecondHaul(agreement18, shipment18);
+            SimulateSupplierPickupFor(shipment18);
+            Assert.IsTrue(lot18.SourceCommitted, "the whole 18-sack lot must be committed to its one shipment");
+            Assert.AreEqual(shipment18.ShipmentId, lot18.ShipmentId, "the lot must name its one shipment");
+            TickUntilCompleted(shipment18, "18-sack haul", Day2);
+
+            Assert.IsTrue(lot18.Received, "the full 18-sack lot must be marked received");
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count, "the bakery must hold exactly two flour lots (haul 1 + the 18-sack haul)");
+            BakeryFlourLot receipt18 = null;
+            foreach (BakeryFlourLot flourLot in bakery.FlourStock.Lots)
+            {
+                if (string.Equals(flourLot.ImportOrderId, lot18.LotId, StringComparison.Ordinal)) receipt18 = flourLot;
+            }
+            Assert.IsNotNull(receipt18, "the bakery must hold a receipt for the 18-sack lot");
+            Assert.AreEqual(180, receipt18.Units, "the 18-sack lot lands as 180 lb in ONE bakery lot");
+            Assert.IsTrue(shipment18.deliveryApplied, "the 18-sack shipment must record delivery applied");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited a second 125c (total -250c across haul 1 and the 18-sack haul)");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited a second 125c (total +250c)");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after the 18-sack haul");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement18.Status,
+                "the 18-sack agreement must be fulfilled");
+            Assert.IsNull(freight.Service.FindExclusivityConflict(null, WagonId,
+                EntityId.For(EntityKind.Person, EthanId), TeamAnimals()),
+                "wagon/driver/horse must be free after the 18-sack haul completes");
+        }
+
+        [Test]
+        public void MultiSackLot_SplitCommitRefused()
+        {
+            // Complementary pin: CommitFreightPickup with fewer than the
+            // lot's whole PackageUnits is refused and the lot stays
+            // uncommitted (the whole-lot rule; no partial pickup to dodge
+            // capacity). Must pass before and after Slice 1 — it guards the
+            // repair against over-correction. Two levels are pinned: the
+            // supplier authority itself (OffMapAidBusinessRuntime.
+            // CommitFreightPickup refuses a partial quantity) and the
+            // custody adapter, whose ResolveLot refuses a quantity that does
+            // not match the shipment's planned whole-lot quantity before the
+            // authority is even reached. The whole commit afterwards proves
+            // the refusals left nothing half-committed.
+            Assert.IsNull(supplier.TryPlaceOrder("split-sixteen-sack", BakeryId, "Glen Pierce", 16, buyerCash, Day, out OffMapAidCargoLot lot16),
+                "the 16-sack split-test lot must place");
+            Assert.AreEqual(16, lot16.PackageUnits, "the split-test lot must hold 16 sacks");
+            Assert.AreEqual(768, lot16.TotalCostCents, "the split-test lot costs 16 x 48c = 768c");
+
+            // Supplier authority level: a partial quantity is refused.
+            string supplierRefusal = supplier.CommitFreightPickup(lot16.LotId, "freight-shipment:split-test", 15);
+            Assert.IsNotNull(supplierRefusal, "committing 15 of a 16-sack lot must be refused");
+            Assert.IsTrue(supplierRefusal.Contains("does not match"),
+                "the partial-commit refusal must name the quantity mismatch, but got '" + supplierRefusal + "'");
+            Assert.IsTrue(!lot16.SourceCommitted, "the lot must stay uncommitted after the refused partial commit");
+            Assert.IsTrue(string.IsNullOrEmpty(lot16.ShipmentId), "the lot must name no shipment after the refused partial commit");
+
+            // Adapter level: bind the whole lot to a fresh-service shipment
+            // (isolated from the fixture shipment's wagon hold), then a
+            // 15-sack commit through the adapter is refused the same way.
+            var service = new FreightShipmentService();
+            service.RegisterWagon(wagon);
+            LogisticsShipmentState bound = service.CreateShipment("freight-shipment:split-bound", "millbrook_grain_co", BakeryId,
+                lot16.PackageUnits, ProductionCargoSpec(lot16), WagonId, hooks, out string createReason);
+            Assert.IsNotNull(bound, "the split-test shipment must create: " + createReason);
+            Assert.IsTrue(!bound.IsPreLoadBlocked, "the split-test shipment must not be pre-load blocked: " + bound.BlockedReason);
+            Assert.IsTrue(service.TryBindSourceLot(bound, lot16.LotId, MillbrookFlourFreightCustodyAdapter.FlourSkuId, out string bindReason),
+                "the 16-sack lot must bind to its split-test shipment: " + bindReason);
+            Assert.IsTrue(!adapter.CommitSourceLot(bound, 15, out string adapterRefusal),
+                "committing 15 of a 16-sack lot through the adapter must be refused");
+            Assert.IsTrue(adapterRefusal.Contains("does not match"),
+                "the adapter partial-commit refusal must name the quantity mismatch, but got '" + adapterRefusal + "'");
+            Assert.IsTrue(!lot16.SourceCommitted, "the lot must stay uncommitted after the refused adapter partial commit");
+
+            // The whole commit still succeeds afterwards — the refusals
+            // left nothing half-committed.
+            Assert.IsTrue(adapter.CommitSourceLot(bound, 16, out string wholeReason),
+                "the whole 16-sack commit must succeed after the refused partials: " + wholeReason);
+            Assert.IsTrue(lot16.SourceCommitted, "the whole commit must mark the lot committed");
+            Assert.AreEqual(bound.ShipmentId, lot16.ShipmentId, "the whole commit must name the one shipment");
+        }
+
+        [Test]
+        public void VolumeBoundary_TwentySackLot_Passes_TwentyOneSackLot_BlocksOnVolume()
+        {
+            // Pins the CURRENT volume formula's boundary with the corrected
+            // mass: a 20-sack lot passes volume (4.00 m3, within the +0.0001
+            // tolerance) and a 21-sack lot blocks on volume (4.41 m3). This
+            // test pins the formula as written; it does NOT bless the squared
+            // volume formula as correct — its per-sack figure is unauthored
+            // (plan section 4 / B-P7-1, an owner decision). The mass leg is
+            // clean in both cases (20 sacks = 90.7 kg, 21 sacks = 95.3 kg,
+            // both far inside 450 kg), so the 21-sack block names volume.
+            OffMapAidCargoLot lot20 = PlaceLot(20, "volume-twenty-sack");
+            LogisticsShipmentState created20 = CreateWithProductionSpec("freight-shipment:volume-20sack", lot20);
+            Assert.IsTrue(!created20.IsPreLoadBlocked,
+                "a 20-sack lot must pass volume (4.00 m3 at capacity), but was blocked: " + created20.BlockedReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, created20.Status, "a 20-sack lot must be Planned");
+            Assert.AreEqual(20, created20.PlannedQuantityUnits, "a 20-sack lot must plan 20 units");
+
+            OffMapAidCargoLot lot21 = PlaceLot(21, "volume-twenty-one-sack");
+            LogisticsShipmentState created21 = CreateWithProductionSpec("freight-shipment:volume-21sack", lot21);
+            Assert.IsTrue(created21.IsPreLoadBlocked,
+                "a 21-sack lot must block on volume (4.41 m3 over the 4 m3 wagon)");
+            Assert.IsTrue(created21.BlockedReason.Contains("volume"),
+                "the 21-sack block must name volume, but got '" + created21.BlockedReason + "'");
+            Assert.IsTrue(created21.BlockedReason.Contains("4.41"),
+                "the 21-sack block must name the 4.41 m3 checked volume, but got '" + created21.BlockedReason + "'");
+            Assert.IsTrue(!created21.BlockedReason.Contains("mass"),
+                "the 21-sack block must be a volume block, not a mass block, but got '" + created21.BlockedReason + "'");
         }
     }
 }

@@ -277,20 +277,26 @@ namespace LandLedgers.EditorTests.Economy
             return placed;
         }
 
-        // The production cargo spec EXACTLY as the registration call site
-        // builds it (SimulationDrivers.cs:4811-4816): quantityUnits is the
-        // sack count, MassKgPerUnit is the lot's TOTAL pounds converted to kg,
-        // VolumeM3PerUnit is 0.01 m3 per sack-count unit. SimulationDrivers is
-        // harness-excluded, so the test replicates the formula as written (the
-        // P1 Slice 0 precedent); it pins the service-side consequence of the
-        // formula, and the call-site fix itself is source-reviewed +
-        // Codex-verified in Slice 1.
+        // The production cargo spec as the registration call site builds it
+        // AFTER the Slice 1 repair (SimulationDrivers.cs:4811-4816):
+        // quantityUnits is the sack count, MassKgPerUnit is the PER-SACK mass
+        // (the lot's total pounds divided by its sack count, converted to kg:
+        // 10 lb -> 4.5359 kg), VolumeM3PerUnit is 0.01 m3 per sack-count unit
+        // (unchanged in Slice 1 — its per-sack figure is unauthored, plan
+        // section 4 / B-P7-1, pinned not repaired). Slice 1 rewrite (2026-11-08):
+        // the mass line changed from `lot.InventoryUnits * poundsToKg` (the
+        // whole lot's mass passed as the per-unit mass, squaring the sack
+        // count) to the per-sack expression below; the ships assertion does
+        // not change. SimulationDrivers is harness-excluded, so the test
+        // replicates the formula (the P1 Slice 0 precedent); it pins the
+        // service-side consequence of the formula, and the call-site fix
+        // itself is source-reviewed + Codex-verified in Slice 1.
         private static FreightCargoSpec ProductionCargoSpec(OffMapAidCargoLot lot)
         {
             const float poundsToKg = 0.45359237f;
             return new FreightCargoSpec
             {
-                MassKgPerUnit = lot.InventoryUnits * poundsToKg,
+                MassKgPerUnit = ((float)lot.InventoryUnits / Math.Max(1, lot.PackageUnits)) * poundsToKg,
                 VolumeM3PerUnit = 0.01f * Math.Max(1, lot.PackageUnits)
             };
         }
@@ -352,29 +358,87 @@ namespace LandLedgers.EditorTests.Economy
         public void ProductionCargoSpec_SixteenSackLot_BlockedPreLoad()
         {
             // D-F1 (fixed-behaviour form, coordinator correction 2026-11-08,
-            // Option 2): the production spec squares the sack count — a 16-sack
-            // lot is checked at 16 x (160 lb in kg) = 1,161.2 kg against the
-            // authored 450 kg wagon, so today it blocks pre-load; the test
-            // asserts the CORRECT behaviour (it SHIPS) and therefore FAILS
-            // pre-fix, as a reproduction pin must. The ships assertion never
-            // flips; Slice 1 rewrites only the formula replica to the corrected
-            // per-sack mass.
-            // SimulationDrivers is harness-excluded, so the test replicates the
-            // formula as written (the P1 Slice 0 precedent); it pins the
+            // Option 2): the production spec as written in Slice 0 squared
+            // the sack count — a 16-sack lot was checked at 16 x (160 lb in
+            // kg) = 1,161.2 kg against the authored 450 kg wagon, so it
+            // blocked pre-load; the test asserted the CORRECT behaviour (it
+            // SHIPS) and therefore FAILED pre-fix, as a reproduction pin
+            // must. Slice 1 (2026-11-08) rewrote only the formula replica in
+            // ProductionCargoSpec to the corrected per-sack mass (10 lb ->
+            // 4.5359 kg); the ships assertion never flips. The old-formula
+            // blocking behavior stays pinned by the service-level
+            // OverweightCargo_BlockedPreLoad_ZeroCargo_MR_P001 test, untouched.
+            // SimulationDrivers is harness-excluded, so the test replicates
+            // the formula (the P1 Slice 0 precedent); it pins the
             // service-side consequence of the formula, and the call-site fix
             // itself is source-reviewed + Codex-verified in Slice 1.
             var failures = new List<string>();
-            // 16 sacks: checked at 1,161.2 kg today — FAILS pre-fix.
+            // 16 sacks: checked at 1,161.2 kg under the old formula — FAILED
+            // pre-fix; under the corrected formula it is 72.6 kg and ships.
             CheckShipsWithProductionSpec(16, "pin-sixteen-sack", failures);
-            // Boundary companions, same formula: 9 sacks ship (367.4 kg,
-            // passes pre-fix) and 10 sacks ship — today the replicated formula
-            // blocks it (453.6 kg), so this companion FAILS pre-fix and
-            // evidences the boundary; after the Slice 1 replica rewrite both ship.
+            // Boundary companions, same formula: 9 sacks ship (367.4 kg
+            // under the old formula, 40.8 kg under the corrected one) and
+            // 10 sacks ship — under the old formula it blocked (453.6 kg),
+            // so this companion FAILED pre-fix and evidenced the boundary;
+            // after the Slice 1 replica rewrite both ship.
             CheckShipsWithProductionSpec(9, "pin-nine-sack", failures);
             CheckShipsWithProductionSpec(10, "pin-ten-sack", failures);
             Assert.IsTrue(failures.Count == 0,
                 "D-F1: lots built with the production cargo spec must ship; failures: "
                 + string.Join(" | ", failures));
+        }
+
+        // Slice 1 acceptance (2026-11-08): a lot built with the CORRECTED
+        // per-sack spec (4.5359 kg/unit, volume as the production formula
+        // gives it) creates successfully against the 450 kg / 4 m3 wagon,
+        // binds its lot, and is not pre-load blocked. This proves the service
+        // side accepts correctly-specified multi-sack shipments; it cannot
+        // prove the harness-excluded call site (source-reviewed + Codex).
+        private void CheckCorrectedCargoSpecShipsWhole(int sacks, string requestId)
+        {
+            OffMapAidCargoLot lot = PlaceLot(sacks, requestId);
+            FreightCargoSpec spec = ProductionCargoSpec(lot);
+            Assert.IsTrue(Math.Abs(spec.MassKgPerUnit - 4.5359237f) < 0.001f,
+                "the corrected per-sack mass for a " + sacks + "-sack lot must be 10 lb in kg (4.5359), but was "
+                + spec.MassKgPerUnit);
+            var service = new FreightShipmentService();
+            service.RegisterWagon(wagon);
+            LogisticsShipmentState created = service.CreateShipment(
+                "freight-shipment:corrected-" + sacks + "sack", "millbrook_grain_co", BakeryId,
+                lot.PackageUnits, spec, WagonId, hooks, out string reason);
+            Assert.IsNotNull(created,
+                "CreateShipment must return a record for a " + sacks + "-sack lot with the corrected spec, but refused: " + reason);
+            Assert.IsTrue(!created.IsPreLoadBlocked,
+                "a " + sacks + "-sack lot with the corrected spec must not be pre-load blocked, but was: " + created.BlockedReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, created.Status,
+                "a " + sacks + "-sack lot with the corrected spec must be Planned");
+            Assert.IsTrue(!created.loadApplied, "a fresh " + sacks + "-sack shipment must not have loadApplied at creation");
+            Assert.AreEqual(sacks, created.PlannedQuantityUnits,
+                "a " + sacks + "-sack lot must plan " + sacks + " units");
+            Assert.IsTrue(service.TryBindSourceLot(created, lot.LotId,
+                    MillbrookFlourFreightCustodyAdapter.FlourSkuId, out string bindReason),
+                "the " + sacks + "-sack lot must bind to its shipment: " + bindReason);
+            Assert.AreEqual(lot.LotId, created.CargoLotId,
+                "the shipment must carry the lot id after binding");
+        }
+
+        [Test]
+        public void CorrectedCargoSpec_SixteenSackLot_ShipsWhole()
+        {
+            // Slice 1 acceptance: the P3 Slice 4b clamped 16-sack lot
+            // (160 lb) with the corrected per-sack spec is checked at
+            // 16 x 4.5359 kg = 72.6 kg — far inside the authored 450 kg
+            // wagon — and ships whole in one shipment.
+            CheckCorrectedCargoSpecShipsWhole(16, "corrected-sixteen-sack");
+        }
+
+        [Test]
+        public void CorrectedCargoSpec_EighteenSackLot_ShipsWhole()
+        {
+            // Slice 1 acceptance: an 18-sack lot (180 lb) with the corrected
+            // per-sack spec is checked at 18 x 4.5359 kg = 81.6 kg — far
+            // inside the authored 450 kg wagon — and ships whole.
+            CheckCorrectedCargoSpecShipsWhole(18, "corrected-eighteen-sack");
         }
 
         [Test]

@@ -4810,7 +4810,7 @@ namespace LandLedgers.Orchestration.Systems
                         lot.PackageUnits,
                         new LandLedgers.Economy.Logistics.FreightCargoSpec
                         {
-                            MassKgPerUnit = lot.InventoryUnits * poundsToKg,
+                            MassKgPerUnit = ((float)lot.InventoryUnits / Math.Max(1, lot.PackageUnits)) * poundsToKg,
                             VolumeM3PerUnit = 0.01f * Math.Max(1, lot.PackageUnits)
                         }, wagon.AssetId, hooks, EntityId.For(EntityKind.Person, accepted.AcceptingOperatorPersonId),
                         new List<EntityId> { horse.AnimalId }, accepted.AgreedPriceCents, accepted.PayerBusinessId,

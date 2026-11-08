@@ -1150,5 +1150,266 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(!created21.BlockedReason.Contains("mass"),
                 "the 21-sack block must be a volume block, not a mass block, but got '" + created21.BlockedReason + "'");
         }
+
+        // ---- Priority 7 Slice 5 (2026-11-08): cargo custody + physical
+        // journey authority acceptance. Tests only; no production file is
+        // touched. Pins the custody chain for a multi-sack haul (goods move
+        // with the wagon — never teleport, never duplicate, never lost), the
+        // S10 off-map hold, and the conservation invariant. Expected to
+        // PASS: a failure names the leg that fails and the slice stops and
+        // reports instead of repairing inside the acceptance.
+
+        private int CountBakeryReceiptsFor(string sourceLotId)
+        {
+            int count = 0;
+            foreach (BakeryFlourLot flourLot in bakery.FlourStock.Lots)
+            {
+                if (string.Equals(flourLot.ImportOrderId, sourceLotId, StringComparison.Ordinal)) count++;
+            }
+            return count;
+        }
+
+        private BakeryFlourLot FindBakeryReceiptFor(string sourceLotId)
+        {
+            foreach (BakeryFlourLot flourLot in bakery.FlourStock.Lots)
+            {
+                if (string.Equals(flourLot.ImportOrderId, sourceLotId, StringComparison.Ordinal)) return flourLot;
+            }
+            return null;
+        }
+
+        // Drives haul 1 to completion, draws Millbrook down to exactly 16
+        // sacks, and builds the clamped 16-sack haul (the Slice 4 shape).
+        // The caller owns prepare/dispatch/pickup.
+        private void BuildSixteenSackHaul(out OffMapAidCargoLot lot16,
+            out FreightServiceAgreement agreement16, out LogisticsShipmentState shipment16)
+        {
+            DriveHaul1ToCompletion();
+
+            int buyerBeforeDrain = buyerCash.BalanceCents;
+            Assert.IsNull(supplier.TryPlaceOrder("drain-six-sack", BakeryId, "Glen Pierce", 6, buyerCash, Day2, out OffMapAidCargoLot drainLot),
+                "the 6-sack draw-down order must place");
+            Assert.AreEqual(6, drainLot.PackageUnits, "the draw-down lot must hold 6 sacks");
+            Assert.AreEqual(288, drainLot.TotalCostCents, "the draw-down lot costs 6 x 48c = 288c");
+            Assert.AreEqual(buyerBeforeDrain - 288, buyerCash.BalanceCents,
+                "the draw-down order debits buyer cash exactly once");
+            Assert.AreEqual(160, supplier.GetInventoryUnits(MillbrookFlourFreightCustodyAdapter.FlourSkuId),
+                "Millbrook must hold exactly 16 sacks (160 lb) before the clamped reorder");
+
+            BuildMultiSackHaul(Day2, 18, "millbrook_grain_co:flour-reorder-d13-n3", true,
+                out lot16, out _, out agreement16, out shipment16);
+            Assert.AreEqual(16, lot16.PackageUnits, "the clamped lot must hold 16 sacks");
+            Assert.AreEqual(768, lot16.TotalCostCents, "the clamped 16-sack lot costs 16 x 48c = 768c");
+            Assert.AreEqual(160, lot16.InventoryUnits, "the clamped lot holds 160 lb");
+        }
+
+        [Test]
+        public void Custody_MultiSackHaul_GoodsMoveWithWagon_NeverTeleport()
+        {
+            // The custody chain for a 16-sack haul, leg by leg: after
+            // pickup the goods are in wagon custody (physicalLocationId
+            // "wagon:opening-freight-wagon", load applied, source lot
+            // debited, 16 units remaining, lot committed to this shipment);
+            // after the return leg the progress has advanced and the lot is
+            // still unreceived; after unload the Bakery holds one lot with
+            // the same ImportOrderId and the shipment sits at the Bakery.
+            // At no leg does the lot exist in two places: the supplier lot
+            // stays unreceived until Bakery receipt, and the Bakery receipt
+            // count for this lot goes 0 -> 1 with the same id.
+            BuildSixteenSackHaul(out OffMapAidCargoLot lot16,
+                out FreightServiceAgreement agreement16, out LogisticsShipmentState shipment16);
+            PrepareAndDispatchSecondHaul(agreement16, shipment16);
+
+            // Pre-pickup leg: the lot exists only at the supplier.
+            Assert.IsTrue(!lot16.Received, "the lot must be unreceived before pickup");
+            Assert.AreEqual(0, CountBakeryReceiptsFor(lot16.LotId),
+                "no Bakery receipt for the 16-sack lot may exist before pickup");
+            Assert.AreEqual(1, bakery.FlourStock.Lots.Count, "only haul 1's receipt may exist before pickup");
+
+            // Pickup leg: the goods move into wagon custody.
+            SimulateSupplierPickupFor(shipment16);
+            Assert.AreEqual("wagon:" + WagonId, shipment16.physicalLocationId,
+                "after pickup the goods must be with the wagon, but the shipment sits at '" + shipment16.physicalLocationId + "'");
+            Assert.IsTrue(shipment16.loadApplied, "the pickup must apply the load");
+            Assert.IsTrue(shipment16.sourceLotDebitApplied, "the pickup must debit the source lot");
+            Assert.AreEqual(16, shipment16.RemainingQuantityUnits,
+                "the wagon must hold all 16 sacks after pickup");
+            Assert.IsTrue(lot16.SourceCommitted, "the lot must be committed after pickup");
+            Assert.AreEqual(shipment16.ShipmentId, lot16.ShipmentId,
+                "the lot must name its one shipment after pickup");
+            Assert.IsTrue(!lot16.Received, "the lot must stay unreceived while in wagon custody");
+            Assert.AreEqual(0, CountBakeryReceiptsFor(lot16.LotId),
+                "no Bakery receipt for the 16-sack lot may exist while it is in wagon custody");
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment16, 0, out string conservationAtPickup),
+                "conservation must hold at pickup (0 delivered / 16 remaining): " + conservationAtPickup);
+
+            // Return leg, tick 1: dispatch (Planned -> InTransit). The
+            // goods stay with the wagon; nothing has teleported ahead.
+            hooks.DayIndex = Day2;
+            hooks.IsVehicleOffMap = _ => false;
+            Tick();
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment16.Status,
+                "the picked-up shipment must dispatch on the return tick");
+            Assert.AreEqual("wagon:" + WagonId, shipment16.physicalLocationId,
+                "the goods must stay with the wagon on dispatch");
+            Assert.AreEqual(0f, shipment16.physicalProgress01,
+                "no transit progress has accrued at dispatch");
+            Assert.IsTrue(!lot16.Received, "the lot must stay unreceived at dispatch");
+            Assert.AreEqual(0, CountBakeryReceiptsFor(lot16.LotId),
+                "no Bakery receipt for the 16-sack lot may exist at dispatch");
+
+            // Return leg, tick 2: transit advances to arrival. Progress
+            // moves, the lot is still unreceived, still no Bakery receipt.
+            Tick();
+            Assert.IsTrue(shipment16.physicalProgress01 > 0f,
+                "physicalProgress01 must advance on the return leg, but stayed 0");
+            Assert.AreEqual(1f, shipment16.physicalProgress01,
+                "transit progress must reach 1 on arrival");
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment16.Status,
+                "the shipment must arrive on the return leg");
+            Assert.IsTrue(!lot16.Received,
+                "the lot must still be unreceived at arrival — it has not teleported ahead of the wagon");
+            Assert.AreEqual(0, CountBakeryReceiptsFor(lot16.LotId),
+                "no Bakery receipt for the 16-sack lot may exist at arrival");
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment16, 0, out string conservationAtArrival),
+                "conservation must hold at arrival (0 delivered / 16 remaining): " + conservationAtArrival);
+
+            // Delivery leg: unload to completion. The lot lands once, in
+            // one Bakery lot, and the shipment sits at the Bakery.
+            TickUntilCompleted(shipment16, "16-sack custody haul", Day2);
+            Assert.IsTrue(lot16.Received, "the 16-sack lot must be marked received after unload");
+            Assert.AreEqual(1, CountBakeryReceiptsFor(lot16.LotId),
+                "the Bakery receipt count for this lot must go 0 -> 1 with the same id");
+            BakeryFlourLot receipt16 = FindBakeryReceiptFor(lot16.LotId);
+            Assert.IsNotNull(receipt16, "the Bakery must hold a receipt for the 16-sack lot");
+            Assert.AreEqual(160, receipt16.Units, "the 16-sack lot lands as 160 lb in ONE bakery lot");
+            Assert.AreEqual(lot16.LotId, receipt16.ImportOrderId,
+                "the Bakery receipt must carry the same lot id as the supplier lot");
+            Assert.AreEqual(BakeryId, shipment16.physicalLocationId,
+                "after unload the goods must be at the Bakery, but the shipment sits at '" + shipment16.physicalLocationId + "'");
+            Assert.IsTrue(shipment16.deliveryApplied, "the 16-sack shipment must record delivery applied");
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment16, 16, out string conservationAtDelivery),
+                "conservation must hold at delivery (16 delivered / 0 remaining): " + conservationAtDelivery);
+        }
+
+        [Test]
+        public void JourneyAuthority_OffMapHold_SkipsShipment_AndLiftsOnReturn()
+        {
+            // The S10 off-map hold, pinned for a loaded haul: while the
+            // wagon is off-map, AdvanceTick advances nothing for the loaded
+            // shipment — it stays InTransit with cargo intact and no transit
+            // progress accrues. With the hold lifted, the very same tick
+            // advances it to Arrived. The journey authority, not the
+            // calendar, governs the return.
+            BindAndAuthorize();
+            SimulateSupplierPickup();
+            hooks.DayIndex = Day;
+            hooks.IsVehicleOffMap = _ => false;
+            Tick();
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment.Status,
+                "setup: the loaded shipment must dispatch to InTransit");
+            Assert.AreEqual(0f, shipment.physicalProgress01,
+                "setup: no transit progress has accrued at dispatch");
+            Assert.AreEqual(1, shipment.RemainingQuantityUnits,
+                "setup: the 1-sack cargo must be intact at dispatch");
+            Assert.IsTrue(!lot.Received, "setup: the lot must be unreceived at dispatch");
+
+            // Hold: the wagon is off-map, so the tick must skip it.
+            hooks.IsVehicleOffMap = _ => true;
+            diag.Clear();
+            int held = Tick();
+            Assert.AreEqual(0, held,
+                "the S10 hold must advance nothing while the wagon is off-map");
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment.Status,
+                "the held shipment must stay InTransit");
+            Assert.AreEqual(0f, shipment.physicalProgress01,
+                "the held shipment must accrue no transit progress");
+            Assert.AreEqual(1, shipment.RemainingQuantityUnits,
+                "the held shipment must keep its cargo intact");
+            Assert.IsTrue(shipment.loadApplied, "the held shipment must keep its applied load");
+            Assert.IsTrue(lot.SourceCommitted, "the held lot must stay committed to this shipment");
+            Assert.AreEqual(ShipmentId, lot.ShipmentId,
+                "the held lot must still name its one shipment");
+            Assert.IsTrue(!lot.Received, "the held lot must stay unreceived");
+
+            // Lift: the same tick now advances the shipment.
+            hooks.IsVehicleOffMap = _ => false;
+            int advanced = Tick();
+            Assert.IsTrue(advanced > 0,
+                "lifting the hold must advance the shipment on the same tick");
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status,
+                "with the hold lifted the same tick must advance the shipment to Arrived");
+            Assert.AreEqual(1f, shipment.physicalProgress01,
+                "transit progress must reach 1 on arrival");
+            Assert.AreEqual(1, shipment.RemainingQuantityUnits,
+                "the cargo must still be intact at arrival");
+            Assert.IsTrue(!lot.Received, "the lot must still be unreceived at arrival");
+        }
+
+        [Test]
+        public void Custody_DoubleCommitRefused_AndConservationHolds()
+        {
+            // A lot ships whole to one shipment only: committing the same
+            // 16-sack lot to a second shipment is refused and leaves the
+            // first commitment untouched. Conservation holds at every leg —
+            // 0 delivered / 16 remaining in transit, 16 delivered / 0
+            // remaining after delivery — and a deliberately wrong delivered
+            // count is refused with the mismatch named.
+            BuildSixteenSackHaul(out OffMapAidCargoLot lot16,
+                out FreightServiceAgreement agreement16, out LogisticsShipmentState shipment16);
+
+            // Pickup leg: conservation at 0/16.
+            SimulateSupplierPickupFor(shipment16);
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment16, 0, out string conservationAtPickup),
+                "conservation must hold at pickup (0 delivered / 16 remaining): " + conservationAtPickup);
+            Assert.AreEqual(0, shipment16.DeliveredQuantityUnits,
+                "nothing is delivered at pickup");
+            Assert.AreEqual(16, shipment16.RemainingQuantityUnits,
+                "all 16 sacks remain in wagon custody at pickup");
+
+            // Double commit: a second shipment naming the same lot is
+            // refused. The second shipment is built on its own service
+            // (isolated from the fixture shipment's wagon hold) and bound
+            // to the lot, so the refusal comes from the commit authority
+            // itself, not from the bind or the capacity gate.
+            var secondService = new FreightShipmentService();
+            secondService.RegisterWagon(wagon);
+            LogisticsShipmentState second = secondService.CreateShipment(
+                "freight-shipment:double-commit-second", "millbrook_grain_co", BakeryId,
+                lot16.PackageUnits, ProductionCargoSpec(lot16), WagonId, hooks, out string secondReason);
+            Assert.IsNotNull(second,
+                "the second shipment must create on its own service: " + secondReason);
+            Assert.IsTrue(secondService.TryBindSourceLot(second, lot16.LotId,
+                MillbrookFlourFreightCustodyAdapter.FlourSkuId, out string bindReason),
+                "the 16-sack lot must bind to the second shipment for the double-commit probe: " + bindReason);
+            Assert.IsTrue(!adapter.CommitSourceLot(second, 16, out string doubleReason),
+                "committing the same lot to a second shipment must be refused");
+            Assert.IsTrue(doubleReason.Contains("already committed to another shipment"),
+                "the double-commit refusal must name the existing commitment, but got '" + doubleReason + "'");
+            Assert.IsTrue(lot16.SourceCommitted,
+                "the lot must stay committed after the refused double commit");
+            Assert.AreEqual(shipment16.ShipmentId, lot16.ShipmentId,
+                "the lot must still name its first shipment after the refused double commit");
+            Assert.IsTrue(!lot16.Received,
+                "the lot must stay unreceived after the refused double commit");
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment16, 0, out string conservationAfterRefusal),
+                "conservation must still hold after the refused double commit (0 delivered / 16 remaining): "
+                + conservationAfterRefusal);
+
+            // Delivery leg: conservation at 16/0, and a wrong count fails.
+            PrepareAndDispatchSecondHaul(agreement16, shipment16);
+            TickUntilCompleted(shipment16, "16-sack custody haul", Day2);
+            Assert.IsTrue(lot16.Received, "the 16-sack lot must be marked received after unload");
+            Assert.AreEqual(16, shipment16.DeliveredQuantityUnits,
+                "all 16 sacks must be delivered");
+            Assert.AreEqual(0, shipment16.RemainingQuantityUnits,
+                "nothing must remain in wagon custody after delivery");
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment16, 16, out string conservationAtDelivery),
+                "conservation must hold at delivery (16 delivered / 0 remaining): " + conservationAtDelivery);
+            Assert.IsTrue(!freight.Service.VerifyConservation(shipment16, 15, out string wrongReason),
+                "a deliberately wrong delivered count (15 of 16) must be refused");
+            Assert.IsTrue(wrongReason.Contains("planned 16") && wrongReason.Contains("delivered 15"),
+                "the wrong-count refusal must name the mismatch, but got '" + wrongReason + "'");
+        }
     }
 }

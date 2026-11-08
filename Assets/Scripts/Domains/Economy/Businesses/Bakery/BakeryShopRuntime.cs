@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 
 namespace LandLedgers.Economy.Businesses.Bakery
@@ -262,6 +263,15 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId ?? string.Empty;
+
+        /// <summary>
+        /// Priority 9 Slice F3 (P9 plan section 4 Slice F3): the custody
+        /// transfer log this runtime records flour/notions dispenses and
+        /// bakes into, when set. Null (the default) means no recording —
+        /// today behaviour. The log is an audit trail only: no flow reads
+        /// it, and a logging failure never fails a bake.
+        /// </summary>
+        public CustodyTransferLog CustodyLog { get; set; }
 
         /// <summary>
         /// W6 (W-5, Obj 9 design): the owner-person link — the SEAM for
@@ -575,6 +585,32 @@ namespace LandLedgers.Economy.Businesses.Bakery
         }
 
         /// <summary>
+        /// Priority 9 Slice F3: one log-only bakery-dispense record per
+        /// dispense line. The source is the bin lot the units came from;
+        /// the destination is the dough batch's custody, which is not a lot,
+        /// so the destination key is Empty. The cause key names the batch,
+        /// the input, the source lot, and the day, so a re-dispense after a
+        /// failed prep (custody returned to the bin) is a new transfer,
+        /// not a duplicate.
+        /// </summary>
+        private void RecordDispense(BakeryDoughBatch batch, List<BakeryFlourDispenseLine> lines, int dayIndex)
+        {
+            if (CustodyLog == null || lines == null) return;
+            foreach (BakeryFlourDispenseLine line in lines)
+            {
+                if (line == null || line.UnitsTaken <= 0) continue;
+                CustodyLog.Record(new CustodyTransferRecord(
+                    dayIndex, line.FlourName, line.UnitsTaken,
+                    new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), line.LotId.ToString()),
+                    LotKey.Empty,
+                    CustodyTransferLog.BakeryAuthority(BusinessInstanceId),
+                    CustodyTransferLog.BatchCustodian(batch.BatchId),
+                    "dispense-" + batch.BatchId + "-" + line.FlourName + "-" + line.LotId.ToString() + "-day" + dayIndex,
+                    CustodyTransferLog.CauseBakeryDispense), out _);
+            }
+        }
+
+        /// <summary>
         /// D1D: moves one batch from Planned through prep into Proofing.
         /// Prep dispenses flour and notions into the batch's custody (loud
         /// refusal on shortfall — the batch stays planned); proofing claims
@@ -626,6 +662,16 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
                 batch.FlourInCustody.AddRange(flourLines);
                 batch.NotionsUsed.AddRange(notionLines);
+                // Priority 9 Slice F3: custody recording only, once custody
+                // is committed to the batch — one record per dispense line
+                // (per source lot). A prep that fails later returns its
+                // custody to the bin and records nothing. A logging failure
+                // never fails the prep.
+                if (CustodyLog != null)
+                {
+                    RecordDispense(batch, flourLines, dayIndex);
+                    RecordDispense(batch, notionLines, dayIndex);
+                }
                 SetStage(batch, BakeryBatchStage.Prepped, dayIndex,
                     $"prepped ({spec.PrepMinutes}m, {spec.FlourUnitsPerBatch} lb flour from {flourLines.Count} lot(s))");
             }
@@ -803,6 +849,20 @@ namespace LandLedgers.Economy.Businesses.Bakery
             }
 
             breadShelf.Add(lot);
+            // Priority 9 Slice F3: custody recording only. The batch's
+            // custody becomes the bread lot. A logging failure never fails
+            // the bake.
+            if (CustodyLog != null)
+            {
+                CustodyLog.Record(new CustodyTransferRecord(
+                    dayIndex, lot.ProductId, spec.YieldUnitsPerBatch,
+                    new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), "batch:" + batch.BatchId),
+                    new LotKey(CustodyTransferLog.BakeryAuthority(BusinessInstanceId), lot.LotId.ToString()),
+                    CustodyTransferLog.BatchCustodian(batch.BatchId),
+                    CustodyTransferLog.BakeryAuthority(BusinessInstanceId),
+                    "bake:" + batch.BatchId,
+                    CustodyTransferLog.CauseBakeryBake), out _);
+            }
             // The inputs are now IN the bread: custody lines move to the lot, so
             // the batch never double-counts and the bin never sees them again.
             batch.FlourInCustody.Clear();

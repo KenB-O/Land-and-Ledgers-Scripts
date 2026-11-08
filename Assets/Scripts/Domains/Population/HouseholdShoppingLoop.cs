@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -102,6 +103,15 @@ namespace LandLedgers.Population
         /// diagnostic. Follows the MidTripObserver pattern above.
         /// </summary>
         public ITaskTimingObserver TimingObserver { get; set; }
+
+        /// <summary>
+        /// Priority 9 Slice F3 (P9 plan section 4 Slice F3): the custody
+        /// transfer log this loop records retail purchases and household
+        /// receipts into, when set. Null (the default) means no recording —
+        /// today behaviour. The log is an audit trail only: no flow reads
+        /// it, and a logging failure never fails a trip.
+        /// </summary>
+        public CustodyTransferLog CustodyLog { get; set; }
 
         public HouseholdShoppingLoop(
             PopulationState population,
@@ -383,6 +393,76 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// Priority 9 Slice F3: log-only recording of the retail purchase.
+        /// The category-pool sale carries no retail lot id, so the source
+        /// lot key is Empty and the gap is named in the log's diagnostics.
+        /// The destination is the carried batch, keyed in the household
+        /// inventory space by its batch id. The cause key is the purchase
+        /// receipt id (the batch id when the site holds no receipt id). A
+        /// logging failure never fails the settlement.
+        /// </summary>
+        private void RecordRetailPurchase(
+            ShoppingTripResult result, ShoppingCandidate chosen,
+            HouseholdPurchasingNeed need, CarriedGoodsBatch batch,
+            int sold, int shopperId, int dayIndex)
+        {
+            if (CustodyLog == null) return;
+            string receiptId = result.ReceiptId;
+            if (string.IsNullOrWhiteSpace(receiptId))
+            {
+                receiptId = batch.BatchId;
+                CustodyLog.Note("custody: retail-purchase for batch " + batch.BatchId +
+                    " has no receipt id at this site; the batch id is the cause key instead.");
+            }
+            var record = new CustodyTransferRecord(
+                dayIndex, need.ItemId, sold,
+                LotKey.Empty,
+                new LotKey(CustodyTransferLog.HouseholdInventoryAuthority, batch.BatchId),
+                CustodyTransferLog.BusinessCustodian(chosen.Supplier.SupplierBusinessId),
+                CustodyTransferLog.PersonCustodian(shopperId),
+                receiptId, CustodyTransferLog.CauseRetailPurchase);
+            if (CustodyLog.Record(record, out _))
+            {
+                CustodyLog.Note("custody: retail-purchase " + record.RecordId +
+                    " has no source lot key — the category-pool sale carries no retail lot id at this site.");
+            }
+        }
+
+        /// <summary>
+        /// Priority 9 Slice F3: log-only recording of a household receipt.
+        /// The source is the carried batch; the destination household lot
+        /// id is not returned by HouseholdInventory.AddLot, so the
+        /// destination key is Empty and the gap is named in the log's
+        /// diagnostics. The cause key is the carried batch id, so the
+        /// receipt links to its purchase record. <paramref name="fromCustodian"/>
+        /// is the pre-receipt holder: the shopper for carried goods, the
+        /// arranged-delivery wagon for a delivery — ExecuteDelivery moves
+        /// the batch "by wagon" with no asset id, so the delivery
+        /// custodian names the delivery itself rather than inventing one.
+        /// A logging failure never fails the receipt. Ownership is NOT
+        /// recorded here: the lot is booked to the household by the
+        /// receipt path itself (OwnerPersonId -1), never to the shopper.
+        /// </summary>
+        private void RecordHouseholdReceipt(
+            CarriedGoodsBatch batch, HouseholdPurchasingNeed need,
+            int unitsReceived, int dayIndex, string fromCustodian)
+        {
+            if (CustodyLog == null) return;
+            var record = new CustodyTransferRecord(
+                dayIndex, need.ItemId, unitsReceived,
+                new LotKey(CustodyTransferLog.HouseholdInventoryAuthority, batch.BatchId),
+                LotKey.Empty,
+                fromCustodian,
+                CustodyTransferLog.HouseholdCustodian(need.HouseholdId),
+                batch.BatchId, CustodyTransferLog.CauseHouseholdReceipt);
+            if (CustodyLog.Record(record, out _))
+            {
+                CustodyLog.Note("custody: household-receipt " + record.RecordId +
+                    " has no destination lot key — HouseholdInventory.AddLot returns no lot id at this site.");
+            }
+        }
+
+        /// <summary>
         /// Pass V P2-1: step 16 as a reusable unit — physical receipt ONLY.
         /// Household inventory grows here, and only here, for carried goods.
         /// Updates the need (fulfilled when nothing remains) and the per-need
@@ -428,6 +508,10 @@ namespace LandLedgers.Population
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
+            RecordHouseholdReceipt(batch, need, unitsReceived, dayIndex,
+                useDelivery
+                    ? CustodyTransferLog.WagonCustodian("arranged-delivery")
+                    : CustodyTransferLog.PersonCustodian(shopperId));
             need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
             need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
             if (need.UnitsNeeded <= 0)
@@ -1247,6 +1331,7 @@ namespace LandLedgers.Population
                     ? $" on trade credit {settlement.ObligationId}" : " for cash"),
         };
         custodyBatches.Add(batch);
+        RecordRetailPurchase(result, chosen, need, batch, sold, shopperId, dayIndex);
         AddEvent(result, dayIndex, ShoppingEventKind.Custody, shopperId, need,
             $"{sold}u {need.ItemId} entered {batch.Custody} custody ({batch.BatchId}).",
             $"holder P{shopperId}; household inventory untouched until physical receipt — no teleport.");
@@ -1737,6 +1822,8 @@ namespace LandLedgers.Population
 
                 batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
                 custodyBatches.Remove(batch);
+                RecordHouseholdReceipt(batch, need, unitsReceived, dayIndex,
+                    CustodyTransferLog.PersonCustodian(trip.ShopperPersonId));
                 need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
                 need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
                 if (need.UnitsNeeded <= 0)
@@ -1802,6 +1889,8 @@ namespace LandLedgers.Population
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
             custodyBatches.Remove(batch);
+            RecordHouseholdReceipt(batch, need, unitsReceived, dayIndex,
+                CustodyTransferLog.WagonCustodian("arranged-delivery"));
             need.UnitsNeeded = Math.Max(0, need.UnitsNeeded - unitsReceived);
             need.LastEvaluatedDayIndex = Math.Max(0, dayIndex);
             if (need.UnitsNeeded <= 0)

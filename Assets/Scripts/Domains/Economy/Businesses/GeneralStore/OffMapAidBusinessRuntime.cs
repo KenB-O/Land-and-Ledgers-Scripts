@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 
 namespace LandLedgers.Economy.Businesses.GeneralStore
 {
@@ -80,6 +81,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public string BusinessId => definition != null ? definition.BusinessId : string.Empty;
         public string DisplayName => definition != null ? definition.DisplayName : string.Empty;
+
+        /// <summary>
+        /// Priority 9 Slice F3 (P9 plan section 4 Slice F3): the custody
+        /// transfer log this runtime records Millbrook orders into, when
+        /// set. Null (the default) means no recording — today behaviour.
+        /// The log is an audit trail only: no flow reads it, and a logging
+        /// failure never fails an order.
+        /// </summary>
+        public CustodyTransferLog CustodyLog { get; set; }
         public float PickupRouteMilesFromTown => definition != null ? Math.Max(0f, definition.PickupRouteMilesFromTown) : 0f;
         public int CashCents => Math.Max(0, cashCents);
         public IReadOnlyList<OffMapAidCashTransaction> CashTransactions => transactions;
@@ -157,6 +167,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 SupplierCashAfterCents = CashCents,
                 OrderId = orderId,
             });
+            // Priority 9 Slice F3: custody recording only. The order is a
+            // creation event — no source lot — and the new cargo lot is held
+            // by the supplier until freight commits it. A logging failure
+            // never fails the order.
+            if (CustodyLog != null)
+            {
+                CustodyLog.Record(new CustodyTransferRecord(
+                    Math.Max(0, dayIndex), flour.ItemId, packageUnits,
+                    LotKey.Empty,
+                    new LotKey(CustodyTransferLog.MillbrookAuthority(BusinessId), lot.LotId),
+                    CustodyTransferLog.SupplierCustodian(BusinessId),
+                    CustodyTransferLog.SupplierCustodian(BusinessId),
+                    orderId, CustodyTransferLog.CauseMillbrookOrder), out _);
+            }
             return null;
         }
 

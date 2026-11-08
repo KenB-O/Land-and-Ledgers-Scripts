@@ -22,17 +22,33 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         private readonly BakeryShopRuntime bakery;
         private readonly EntityIdRegistry lotIds;
 
+        /// <summary>
+        /// Priority 9 Slice F3 (P9 plan section 4 Slice F3): the custody
+        /// transfer log freight commits and receipts are recorded into,
+        /// when set. Null (the default) means no recording — today
+        /// behaviour. The log is an audit trail only: no flow reads it,
+        /// and a logging failure never fails a commit or receipt.
+        /// </summary>
+        public CustodyTransferLog CustodyLog { get; }
+
         public MillbrookFlourFreightCustodyAdapter(
             OffMapAidBusinessRuntime supplier,
             BakeryShopRuntime bakery,
-            EntityIdRegistry lotIds)
+            EntityIdRegistry lotIds,
+            CustodyTransferLog custodyLog = null)
         {
             this.supplier = supplier;
             this.bakery = bakery;
             this.lotIds = lotIds;
+            CustodyLog = custodyLog;
         }
 
-        public bool CommitSourceLot(LogisticsShipmentState shipment, int packageUnits, out string reason)
+        /// <param name="dayIndex">The simulation day of the pickup, when the
+        /// caller knows it. Defaults to UnknownDayIndex: the freight-commit
+        /// delegate path carries no day, so the record names the gap instead
+        /// of inventing one (the pickup drive passes its day explicitly).</param>
+        public bool CommitSourceLot(LogisticsShipmentState shipment, int packageUnits, out string reason,
+            int dayIndex = CustodyTransferLog.UnknownDayIndex)
         {
             reason = string.Empty;
             OffMapAidCargoLot lot = ResolveLot(shipment, packageUnits, out reason);
@@ -45,6 +61,33 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             reason = supplier.CommitFreightPickup(lot.LotId, shipment.ShipmentId, packageUnits);
             if (reason != null) return false;
+            // Priority 9 Slice F3: custody recording only, after the commit
+            // succeeds. The wagon holds the lot now; wagon custody is not a
+            // lot, so the destination key is Empty. A logging failure never
+            // fails the commit — a repeated commit for the same shipment is
+            // idempotent in the supplier and refused as a duplicate by the
+            // log, so the transfer is still recorded exactly once.
+            if (CustodyLog != null)
+            {
+                string wagonId = shipment.physicalWagonAssetId;
+                if (dayIndex < 0)
+                {
+                    CustodyLog.Note("custody: freight-commit for shipment '" + shipment.ShipmentId +
+                        "' has no day at this site — the freight-commit delegate path carries no day; recorded as day -1 instead of inventing one.");
+                }
+                if (string.IsNullOrWhiteSpace(wagonId))
+                {
+                    CustodyLog.Note("custody: freight-commit for shipment '" + shipment.ShipmentId +
+                        "' has no wagon asset id at this site; custodian recorded as wagon:unknown.");
+                }
+                CustodyLog.Record(new CustodyTransferRecord(
+                    dayIndex, lot.SkuId, packageUnits,
+                    new LotKey(CustodyTransferLog.MillbrookAuthority(supplier.BusinessId), lot.LotId),
+                    LotKey.Empty,
+                    CustodyTransferLog.SupplierCustodian(supplier.BusinessId),
+                    CustodyTransferLog.WagonCustodian(string.IsNullOrWhiteSpace(wagonId) ? "unknown" : wagonId),
+                    shipment.ShipmentId, CustodyTransferLog.CauseFreightCommit), out _);
+            }
             reason = $"Millbrook lot '{lot.LotId}' committed once to shipment '{shipment.ShipmentId}' " +
                 $"({packageUnits} sack(s), {lot.InventoryUnits} {lot.InventoryUnit}).";
             return true;
@@ -78,6 +121,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 reason = supplier.ReceiveAtBakery(lot.LotId, shipment.ShipmentId,
                     bakery.BusinessInstanceId, out _);
                 if (reason != null) return false;
+                // Priority 9 Slice F3: the duplicate receipt is idempotent
+                // in the adapter, and the log refuses the second record for
+                // the same CauseKind plus CauseId — the transfer is still
+                // recorded exactly once.
+                RecordFreightReceive(shipment, lot, existing.LotId, dayIndex);
                 reason = $"Millbrook lot '{lot.LotId}' receipt was already present in Bakery stock; duplicate receipt accepted idempotently.";
                 return true;
             }
@@ -124,9 +172,38 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return false;
             }
 
+            // Priority 9 Slice F3: custody recording only, after the receipt
+            // succeeds. The receipt moves pounds (the Bakery stock unit),
+            // not sacks (the freight unit). A logging failure never fails
+            // the receipt.
+            RecordFreightReceive(shipment, lot, flourLot.LotId, dayIndex);
             reason = $"Received Millbrook lot '{lot.LotId}' as {flourLot.Units} lb Bakery flour " +
                 $"(supplier records {supplierBakeryUnits} bakery units separately).";
             return true;
+        }
+
+        /// <summary>
+        /// Priority 9 Slice F3: one log-only freight-receive record. The
+        /// wagon asset id is read from the shipment; when the shipment
+        /// holds none, the gap is named in diagnostics instead of inventing
+        /// an id.
+        /// </summary>
+        private void RecordFreightReceive(LogisticsShipmentState shipment, OffMapAidCargoLot lot, EntityId bakeryLotId, int dayIndex)
+        {
+            if (CustodyLog == null) return;
+            string wagonId = shipment.physicalWagonAssetId;
+            if (string.IsNullOrWhiteSpace(wagonId))
+            {
+                CustodyLog.Note("custody: freight-receive for shipment '" + shipment.ShipmentId +
+                    "' has no wagon asset id at this site; custodian recorded as wagon:unknown.");
+            }
+            CustodyLog.Record(new CustodyTransferRecord(
+                dayIndex, lot.SkuId, lot.InventoryUnits,
+                new LotKey(CustodyTransferLog.MillbrookAuthority(supplier.BusinessId), lot.LotId),
+                new LotKey(CustodyTransferLog.BakeryAuthority(bakery.BusinessInstanceId), bakeryLotId.ToString()),
+                CustodyTransferLog.WagonCustodian(string.IsNullOrWhiteSpace(wagonId) ? "unknown" : wagonId),
+                CustodyTransferLog.BakeryAuthority(bakery.BusinessInstanceId),
+                shipment.ShipmentId, CustodyTransferLog.CauseFreightReceive), out _);
         }
 
         private OffMapAidCargoLot ResolveLot(LogisticsShipmentState shipment, int packageUnits, out string reason)

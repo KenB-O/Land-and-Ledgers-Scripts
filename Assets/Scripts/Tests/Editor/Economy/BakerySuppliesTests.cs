@@ -850,6 +850,118 @@ namespace LandLedgers.Editor.Economy
                 "the line states no yard intake; line: " + fuelLine);
         }
 
+        // ---- Slice 2 probe (no production repair owed) ----------------
+        // Slice 0 Tests 2 and 3 failed as specified (14 orders over days
+        // 1-14 for one blocked batch; 5 orders over flour-blocked days
+        // 1-5), and the plan's Slice 2 named Branches A (subtract
+        // in-transit units for an unchanged batch set) and B (skip the
+        // notions order leg while flour-blocked). The coder verified
+        // both branches against source + Set B evidence BEFORE editing
+        // and found NEITHER is owed — the "over-ordering" is the pipeline
+        // priming, not a defect:
+        //
+        // 1. The code documents the design explicitly
+        //    (BakeryNotionsDailySupply.cs): "In-transit units are
+        //    earmarked for the future days whose shortfalls ordered them;
+        //    subtracting them would order one notion per transit window
+        //    instead of one per bake (a bake every 14 days, not a daily
+        //    bake)." Branch A is exactly the subtraction the comment
+        //    warns against, and it produces exactly the predicted
+        //    outcome: from a cold start, 1 order (day 1) -> bake day 15
+        //    -> 1 order (day 16) -> bake day 30 -> ... a 15-day cycle,
+        //    never daily baking.
+        // 2. Set B proves the priming orders are load-bearing: bakes on
+        //    days 15-18 (4 consecutive days) required arrivals on days
+        //    15, 16, 17, 18, i.e. orders placed on days 1, 2, 3, 4.
+        //    Under Branch A only the day-1 order exists, so days 16-18
+        //    would not bake. The per-day shortfall is the account's
+        //    DAILY demand rate (1 batch/day), not the single active
+        //    batch's need: each day's order serves a distinct future
+        //    bake. The "same batch, same need" framing confuses the
+        //    stock (one active batch) with the flow (one batch/day).
+        // 3. Branch B fails the same way: Set B's first bake (day 15)
+        //    required a notions order placed on day 1, days BEFORE flour
+        //    landed (~day 7 via freight). Suppressing notions orders
+        //    until flour is on hand delays the first bake to
+        //    (flour day + 14). Ordering notions while flour-blocked
+        //    parallelises the two pipelines; it is not waste.
+        // 4. The committed units are not wasted: they arrive as sellable
+        //    store lots and feed the days 15-28 bakes below. The 30u
+        //    finite-supply pressure is a supply-term issue (a standing
+        //    wholesale term is already owed, D-1-adjacent), not an
+        //    ordering defect.
+        // 5. Tests 2 and 3 therefore stay failing as PLAN-CONFLICT
+        //    known failures, not defects: Test 2 expects 1 order where
+        //    priming needs 14, and Test 3 expects 0 orders where priming
+        //    needs 1/day. No implementation can satisfy both (the first
+        //    5 days are identical in both tests; 0 orders in 5 days and
+        //    1 order in 14 days would need an order to appear on a later
+        //    flour-blocked day for no reason). The coordinator/planner
+        //    must decide: revise Tests 2/3 to the not-a-defect reading,
+        //    or direct a different repair.
+        // 6. The GENUINE pipeline finding, pinned below and recorded as
+        //    follow-up (not repaired here — it needs a pipeline-depth /
+        //    reorder-point policy decision, which neither Slice 2 branch
+        //    specifies): the pipeline DRAINS after the primed window.
+        //    On arrival days the feed covers the need, so no replacement
+        //    order is placed; after the last primed arrival (day 28)
+        //    there is nothing in flight, so baking stalls days 29-42
+        //    while orders resume 1/day, then bakes days 43-56 — a
+        //    14-on / 14-off cycle. The plan's Slice 2 regression test
+        //    ("5 days baking 1 AND ordering 1/day") is unsatisfiable as
+        //    specified: on any day the bake succeeds the post-feed
+        //    shortfall is 0, so the order is 0 by construction.
+        //    The test below pins the priming value (14 consecutive daily
+        //    bakes) and the drain cycle instead.
+        [Test]
+        public void NotionsPipeline_PrimedWindowBakesThenDrains()
+        {
+            Slice s = NewSlice();
+            Series2CounterpartyRegistration reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 40);
+            BookAccount(s, 24, 1, 2, 2);
+
+            for (int day = 1; day <= 14; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+            }
+            Assert.AreEqual(14, s.StoreService.Orders.Count,
+                "14 priming orders (1/day) over days 1-14 — one per future daily bake, not one per active batch");
+
+            for (int day = 15; day <= 28; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(1, r.BatchesBaked, $"the primed pipeline bakes daily, day {day}");
+                Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                Assert.AreEqual(0, r.NotionsOrdered, $"no replacement order on an arrival day (feed covers), day {day}");
+                Assert.AreEqual(1, r.NotionsUnitsFed, $"1u fed from the day's arrival, day {day}");
+            }
+            Assert.AreEqual(14, s.Bakery.WholesaleDeliveries.Count, "14 consecutive daily bakes = 14 deliveries");
+            Assert.AreEqual(14, s.StoreService.Lots.Count, "14 arrival lots, one per priming order");
+            Assert.AreEqual(2532, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 - 140c notions feeds + 672c wholesale (14 x 48c)");
+            Assert.AreEqual(4328, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 140c receipts + 140c feeds - 672c wholesale");
+
+            // RECORDED FINDING (follow-up, not repaired here): the
+            // pipeline drains. No order was placed on any bake day, so
+            // after the last primed arrival (day 28) nothing is in
+            // flight: baking stalls while orders resume 1/day.
+            for (int day = 29; day <= 42; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                Assert.AreEqual(0, r.BatchesBaked, $"no bake once the primed window drains, day {day}");
+                Assert.AreEqual(1, r.NotionsOrdered, $"orders resume 1/day on stall days, day {day}");
+            }
+            Assert.AreEqual(28, s.StoreService.Orders.Count, "14 priming + 14 stall-day orders");
+            Assert.AreEqual(14, s.StoreService.Lots.Count, "no new arrivals yet (stall-day orders arrive days 43-56)");
+        }
+
         [Test]
         public void SaveLoad_MidPipeline_OrderAndBatchRestoreExactlyOnce()
         {

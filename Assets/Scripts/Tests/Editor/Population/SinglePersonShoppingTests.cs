@@ -1289,6 +1289,82 @@ namespace LandLedgers.EditorTests.Population
             }
         }
 
+        [Test]
+        public void ShoppingFirst_ConsumesBudgetBeforeWorkAssignment()
+        {
+            // Slice 3 question (a') pin. Drives the HEAD production order
+            // phase by phase (planner -> monitor -> shopping, THEN work
+            // start — mirroring SimulationDrivers.OnDayChanged :1752
+            // DriveDailyNeeds before :1787 DriveAutonomousLabor) and
+            // observes the budget BETWEEN the phases: the 95-min trip
+            // commits first, so when StartAssignedTasks runs the shopper
+            // has only 505 of 600 minutes left and the 540-min work task
+            // is refused on budget. This is the one same-day-shopping
+            // dependence of the assignment step (the shared
+            // WorkTimeBudgetStore); open tasks, the employment registry
+            // and the owner list do not depend on shopping. SLICE 4 FLIPS
+            // THIS TEST: once the assignment loop moves ahead of shopping,
+            // work claims the budget first (540 committed, 60 left) and
+            // the trip is the one refused honestly.
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Fund(10000);
+            WorkTask work = f.CreateWorkTask(1, 540);
+
+            f.PlanDay();
+            HouseholdPurchasingNeed need = f.RaiseBreadNeedViaMonitor();
+            Assert.IsNotNull(need, "the monitor must open the bread need before shopping runs");
+            List<HouseholdErrandPlan> plans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
+            Assert.AreEqual(1, plans.Count, "one plan batches the open bread need");
+            HouseholdShoppingLoop.BatchShoppingResult batch =
+                f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, f.Options(), f.Diagnostics);
+            Assert.IsNotNull(batch);
+            Assert.IsTrue(batch.TripExecuted, "the trip executes in the HEAD order: " + batch.FailureReason);
+
+            WorkTimeBudget budgetAfterShopping = f.Budgets.GetOrCreate(EntityId.For(EntityKind.Person, 1));
+            Assert.AreEqual(505, budgetAfterShopping.MinutesRemaining,
+                "the 95-min trip must have committed first (600 - 95 = 505) before any work assignment runs");
+
+            var workDiag = new List<string>();
+            int started = f.StartWork(
+                new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 540 }, workDiag);
+            Assert.AreEqual(0, started, "the 540-min work task must be refused after the trip consumed the budget");
+            Assert.IsTrue(string.Join(" | ", workDiag).Contains("505 of 600"),
+                "the refusal must name the budget shortfall, got: " + string.Join(" | ", workDiag));
+        }
+
+        [Test]
+        public void WorkStart_DoesNotRelocateWorker()
+        {
+            // Slice 3 question (d') pin. Starting work must NOT relocate
+            // the worker or set scheduleState to AtWork: StartAssignedTasks
+            // / StartTask write no schedule state (no `scheduleState =` in
+            // Core/Tasks or the labor drive), and ResolvePersonJourneyLocation
+            // (SimulationDrivers.cs:8044-8060) reads scheduleState. So after
+            // a 240-min work task starts, the person is still AtHome — a
+            // trip departing from a remote workplace after a shift cannot
+            // be produced by reservation order alone (R-REMOTE, deferred
+            // to priority 6). Passes at HEAD and post-fix.
+            Fixture f = Fixture.CreateSingle(female: false);
+            f.Fund(10000);
+            WorkTask work = f.CreateWorkTask(1, 240);
+            var workDiag = new List<string>();
+            int started;
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                new List<WorkTask> { work }, new List<int> { 1 }, new List<int> { 240 },
+                out started, workDiag);
+
+            Assert.IsNotNull(batch);
+            Assert.AreEqual(1, started,
+                "the work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
+            Assert.AreEqual(TaskStatus.InProgress, work.Status, "the work task must be started");
+            PersonState person = f.Population.GetPerson(1);
+            Assert.IsNotNull(person, "the person must exist");
+            Assert.IsTrue(person.scheduleState != PopulationScheduleState.AtWork,
+                "starting work must not set scheduleState to AtWork; it is " + person.scheduleState);
+            Assert.AreEqual(PopulationScheduleState.AtHome, person.scheduleState,
+                "the worker stays AtHome — nothing in the work path relocates them");
+        }
+
         private static bool Overlaps(PersonActivityReservation a, PersonActivityReservation b)
         {
             if (a == null || b == null) return false;

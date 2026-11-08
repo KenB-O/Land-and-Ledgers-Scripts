@@ -859,6 +859,18 @@ namespace LandLedgers.Economy.Logistics
             FreightShipmentHooks hooks)
         {
             var out_ = new List<LogisticsShipmentState>();
+            // Q04 Slice 5: clear-then-load. A smaller second save must drop
+            // shipments (and their load/unload-task and dispatch-authority
+            // bindings) the save no longer carries; without this, stale
+            // shipments stay tracked and stale bindings point at tasks and
+            // authorities for shipments that no longer exist. A null DTO
+            // clears too and returns empty, matching the existing null
+            // contract. The driver rebuilds its per-company lists from the
+            // returned shipments, so clearing first does not disturb it.
+            trackedShipments.Clear();
+            loadTasks.Clear();
+            unloadTasks.Clear();
+            dispatchAuthorities.Clear();
             if (dto == null) return out_;
             foreach (LogisticsShipmentSaveDto s in dto.Shipments)
             {

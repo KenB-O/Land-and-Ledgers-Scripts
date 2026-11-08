@@ -387,6 +387,114 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(service2.VerifyConservation(r, 80, out string cons), cons);
         }
 
+        // Q04 Slice 5: FreightShipmentService.RestoreSaveDto must clear the
+        // tracked state on restore (clear-then-load, like the ledger
+        // registry). The private load/unload-task maps have no public
+        // reader; CaptureSaveDto is the read surface — it emits
+        // ShipmentIdsWithLoadTasks / ShipmentIdsWithUnloadTasks from the
+        // live maps. These three tests are reproducing-first: the first
+        // two FAIL before the fix (stale S2 survives the smaller restore)
+        // and PASS after; the third is a pin that passes before and after.
+        [Test]
+        public void FreightServiceRestore_SmallerSecondSave_DropsStaleShipment()
+        {
+            RegisterSecondWagon();
+            LogisticsShipmentState s1 = service.CreateShipment("ship-s1", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-1", hooks, out string r1);
+            LogisticsShipmentState s2 = service.CreateShipment("ship-s2", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-2", hooks, out string r2);
+            Assert.IsNotNull(s1, r1);
+            Assert.IsNotNull(s2, r2);
+            FreightShipmentService.FreightServiceSaveDto fullDto =
+                service.CaptureSaveDto(new List<LogisticsShipmentState> { s1, s2 });
+            FreightShipmentService.FreightServiceSaveDto smallerDto =
+                service.CaptureSaveDto(new List<LogisticsShipmentState> { s1 });
+
+            var service2 = new FreightShipmentService();
+            List<LogisticsShipmentState> restored = service2.RestoreSaveDto(fullDto, null);
+            Assert.AreEqual(2, restored.Count, "full restore returns both shipments");
+            Assert.AreEqual(2, service2.TrackedShipments.Count, "full restore tracks both shipments");
+
+            restored = service2.RestoreSaveDto(smallerDto, null);
+            Assert.AreEqual(1, restored.Count, "smaller restore returns exactly S1");
+            Assert.AreEqual(1, service2.TrackedShipments.Count, "smaller restore must drop stale S2");
+            Assert.AreEqual("ship-s1", service2.TrackedShipments[0].ShipmentId, "only S1 survives");
+        }
+
+        [Test]
+        public void FreightServiceRestore_SmallerSecondSave_DropsStaleLoadTaskBinding()
+        {
+            RegisterSecondWagon();
+            LogisticsShipmentState s1 = service.CreateShipment("ship-s1", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-1", hooks, out string r1);
+            LogisticsShipmentState s2 = service.CreateShipment("ship-s2", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-2", hooks, out string r2);
+            Assert.IsNotNull(s1, r1);
+            Assert.IsNotNull(s2, r2);
+            // Real load tasks: BeginLoading creates and starts the
+            // freight:load:<shipmentId> task and records the binding.
+            // Each shipment loads under a different loader: one person
+            // cannot hold two in-progress tasks at once.
+            Assert.IsTrue(service.BeginLoading(s1, loader, hooks, out string l1), l1);
+            Assert.IsTrue(service.BeginLoading(s2, EntityId.For(EntityKind.Person, 703), hooks, out string l2), l2);
+            FreightShipmentService.FreightServiceSaveDto fullDto =
+                service.CaptureSaveDto(new List<LogisticsShipmentState> { s1, s2 });
+            Assert.IsTrue(fullDto.ShipmentIdsWithLoadTasks.Contains("ship-s1"), "fixture: S1 load binding captured");
+            Assert.IsTrue(fullDto.ShipmentIdsWithLoadTasks.Contains("ship-s2"), "fixture: S2 load binding captured");
+
+            var service2 = new FreightShipmentService();
+            service2.RestoreSaveDto(fullDto, hooks);
+            FreightShipmentService.FreightServiceSaveDto captured =
+                service2.CaptureSaveDto(new List<LogisticsShipmentState>(service2.TrackedShipments));
+            Assert.IsTrue(captured.ShipmentIdsWithLoadTasks.Contains("ship-s1"), "S1 load binding rebinds");
+            Assert.IsTrue(captured.ShipmentIdsWithLoadTasks.Contains("ship-s2"), "S2 load binding rebinds");
+
+            // A smaller second save carrying only S1 (and only S1's load
+            // task) must drop S2's binding, not leave it pointing at a
+            // task for a shipment the save no longer carries.
+            var smallerDto = new FreightShipmentService.FreightServiceSaveDto();
+            smallerDto.Shipments.Add(s1.CaptureSaveDto());
+            smallerDto.ShipmentIdsWithLoadTasks.Add("ship-s1");
+            service2.RestoreSaveDto(smallerDto, hooks);
+            captured = service2.CaptureSaveDto(new List<LogisticsShipmentState>(service2.TrackedShipments));
+            Assert.AreEqual(1, service2.TrackedShipments.Count, "smaller restore tracks only S1");
+            Assert.AreEqual(1, captured.ShipmentIdsWithLoadTasks.Count, "exactly one load-task binding survives");
+            Assert.AreEqual("ship-s1", captured.ShipmentIdsWithLoadTasks[0], "only S1's load binding survives");
+            Assert.IsTrue(!captured.ShipmentIdsWithLoadTasks.Contains("ship-s2"), "no load-task binding remains for S2");
+        }
+
+        [Test]
+        public void FreightServiceRestore_SameDtoTwice_IsIdempotent()
+        {
+            RegisterSecondWagon();
+            LogisticsShipmentState s1 = service.CreateShipment("ship-s1", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-1", hooks, out string r1);
+            LogisticsShipmentState s2 = service.CreateShipment("ship-s2", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-2", hooks, out string r2);
+            Assert.IsNotNull(s1, r1);
+            Assert.IsNotNull(s2, r2);
+            FreightShipmentService.FreightServiceSaveDto dto =
+                service.CaptureSaveDto(new List<LogisticsShipmentState> { s1, s2 });
+
+            var service2 = new FreightShipmentService();
+            List<LogisticsShipmentState> first = service2.RestoreSaveDto(dto, null);
+            List<LogisticsShipmentState> second = service2.RestoreSaveDto(dto, null);
+            Assert.AreEqual(2, first.Count, "first restore returns both shipments");
+            Assert.AreEqual(2, second.Count, "second restore of the same DTO returns both shipments");
+            Assert.AreEqual(2, service2.TrackedShipments.Count, "same DTO twice tracks exactly the same set");
+            Assert.AreEqual("ship-s1", service2.TrackedShipments[0].ShipmentId, "S1 still tracked");
+            Assert.AreEqual("ship-s2", service2.TrackedShipments[1].ShipmentId, "S2 still tracked");
+        }
+
+        private void RegisterSecondWagon()
+        {
+            service.RegisterWagon(new EquipmentAsset
+            {
+                AssetId = "wagon-2", Kind = "farm-wagon", DisplayName = "Second wagon",
+                Condition01 = 0.9f, PayloadMassCapacityKg = 1000f, CargoVolumeCapacityM3 = 4f,
+            });
+        }
+
         [Test]
         public void NoDuplicateGoods_DoubleUnloadImpossible()
         {

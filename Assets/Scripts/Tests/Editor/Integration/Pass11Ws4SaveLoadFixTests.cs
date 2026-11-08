@@ -307,15 +307,17 @@ namespace LandLedgers.Editor.Integration
             FreightShipmentService service2 = NewServiceWithWagon();
             // Restoring the same DTO twice must not create a second hold:
             // the rebind overwrites the same map key with the same authority.
-            // (The second restore's objects are duplicates Track() rejects;
-            // the tracked shipment is the first restore's, so complete that.)
+            // (Clear-then-load: the second restore replaces the tracked set,
+            // so the tracked shipment is the second restore's; complete that.
+            // Completing the first restore's object would be the stale-reference
+            // shape clear-then-load deliberately removes.)
             List<LogisticsShipmentState> restored = service2.RestoreSaveDto(dto, world2.Hooks);
             Assert.AreEqual(1, restored.Count);
             List<LogisticsShipmentState> duplicates = service2.RestoreSaveDto(dto, world2.Hooks);
             Assert.AreEqual(1, duplicates.Count);
             Assert.AreEqual(1, service2.TrackedShipments.Count, "no duplicate tracked shipment");
 
-            CompleteShipment(service2, world2, restored[0]);
+            CompleteShipment(service2, world2, duplicates[0]);
             Assert.AreEqual(50, world2.RecipientStock["store-1"], "goods credited exactly once");
             AssertWagonFreeForNextShipment(service2, world2);
         }

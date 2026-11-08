@@ -848,6 +848,15 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 }
             }
 
+            // Priority 9 Slice F4: the bread lot's own canonical
+            // provenance key rides in its InputProvenance, appended once
+            // (never a second time for the same lot) — the free-text
+            // input lines above are kept verbatim.
+            string canonicalKey = LotIdentity.CanonicalProvenanceKey(
+                CustodyTransferLog.BakeryAuthority(BusinessInstanceId), lot.LotId.ToString());
+            if (!lot.InputProvenance.Contains(canonicalKey))
+                lot.InputProvenance.Add(canonicalKey);
+
             breadShelf.Add(lot);
             // Priority 9 Slice F3: custody recording only. The batch's
             // custody becomes the bread lot. A logging failure never fails

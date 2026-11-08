@@ -80,6 +80,7 @@ found, the test fails loudly rather than passing silently.
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
 | PhysicalCapacityEvaluator | Domains/Economy/Storage/PhysicalCapacityContracts.cs | Domains/Economy/Storage | (none) |
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
+| LotIdentityResolver | Domains/Economy/Logistics/LotIdentity.cs | Domains/Economy/Logistics | (none) |
 
 ## Notes per entry
 
@@ -205,6 +206,25 @@ found, the test fails loudly rather than passing silently.
   and references no other registered-unwired type by name, so the
   `PhysicalItemSpec` and `PhysicalCapacityEvaluator` rows above stay
   accurate and stay in place.
+- `LotIdentityResolver` (Priority 9 Slice F4 / Priority D,
+  2026-11-08) is the read-only lot identity resolver (one LotKey to
+  item, units, custodian, owner, and provenance key, across the
+  household, retail, Millbrook, named-SKU, Bakery, and freight
+  spaces). It is registered here honestly as UNWIRED by design, not
+  oversight: the Slice 4b brief wires nothing into live flows — the
+  resolver is constructed in tests against the real authorities and
+  no flow calls it yet. Its sibling types need no row:
+  `LotIdentity` HAS production callers outside its owning
+  directory (the HouseholdInventory, BakeryShopRuntime, and
+  PurchasedRetailLotReceipt provenance-append sites name it), and
+  `ILotIdentityResolver` is an interface (the scan enumerates
+  concrete public classes only). Remove this row the day a
+  production flow calls the resolver; do not wire it merely to
+  clear the entry. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, and `PersonInventoryReadModel` rows
+  above stay: the resolver reads the F1/F2 types only through
+  `PhysicalLoad` (a struct, scan-exempt, in the double-count pin
+  test) and references no other registered-unwired type by name.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -365,6 +385,17 @@ note records their audited status so the question does not reopen:
   `PhysicalCapacityEvaluator` rows stay: the read model reads the F1/F2
   types only through `PhysicalLoad` (a struct) and references no other
   registered-unwired type by name.
+- Priority 9 Slice F4 / Priority D (2026-11-08):
+  `LotIdentityResolver` registered as UNWIRED by design — read-only
+  lot identity resolver, constructed in tests against the real
+  authorities, no flow calls it yet; remove the row when a
+  production flow calls it. The `PhysicalItemSpec`,
+  `PhysicalCapacityEvaluator`, and `PersonInventoryReadModel` rows
+  stay: the resolver reads the F1/F2 types only through
+  `PhysicalLoad` (a struct) and references no other
+  registered-unwired type by name. `LotIdentity` needs no row: it
+  has production callers outside its owning directory (the three
+  provenance-append sites).
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note

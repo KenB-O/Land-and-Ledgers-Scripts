@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -292,7 +293,7 @@ namespace LandLedgers.Population
                 return Reject($"Rejected lot of {definition.ItemId}: source is required (no synthetic stock).");
             }
 
-            state.Lots.Add(new HouseholdItemLot
+            var lot = new HouseholdItemLot
             {
                 LotId = state.NextLotSequence++,
                 ItemId = definition.ItemId,
@@ -303,7 +304,15 @@ namespace LandLedgers.Population
                 QualityBand = qualityBand ?? string.Empty,
                 SourceKind = sourceKind ?? string.Empty,
                 OwnerPersonId = ownerPersonId,
-            });
+            };
+            // Priority 9 Slice F4: the lot's own canonical provenance key
+            // is appended to its SourceLabel (free text kept verbatim,
+            // appended once) so the lot's identity survives in its own
+            // provenance field. The key is derived from the lot id just
+            // assigned above.
+            lot.SourceLabel = LotIdentity.AppendProvenanceKey(
+                sourceLabel, CustodyTransferLog.HouseholdInventoryAuthority, lot.LotId.ToString());
+            state.Lots.Add(lot);
             return null;
         }
 
@@ -353,6 +362,11 @@ namespace LandLedgers.Population
             if (source.AncestryLotIds != null)
                 child.AncestryLotIds.AddRange(source.AncestryLotIds);
             child.AncestryLotIds.Add(source.LotId);
+            // Priority 9 Slice F4: the child carries its parent's key as
+            // lineage (copied in SourceLabel above) plus its own canonical
+            // key, appended once — the resolver reads the child's own key.
+            child.SourceLabel = LotIdentity.AppendProvenanceKey(
+                child.SourceLabel, CustodyTransferLog.HouseholdInventoryAuthority, child.LotId.ToString());
             source.QuantityUnits -= units;
             state.Lots.Add(child);
             return child.LotId;

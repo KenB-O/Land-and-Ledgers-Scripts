@@ -83,6 +83,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return result;
             }
 
+            // Priority 9 Slice F4: the retail lot's own canonical
+            // provenance key is appended to its provenance (free text kept
+            // verbatim, appended once) so the lot's identity survives in
+            // its own provenance field.
+            string retailProvenance = LotIdentity.AppendProvenanceKey(
+                supplierLot.Provenance + " -> retail receipt " + consumption.ConsumptionId +
+                "; consumed source provenance: " + consumption.Provenance,
+                CustodyTransferLog.BusinessAuthority(destination.BusinessId),
+                result.RetailLotId);
             string refusal = destination.TryAddRetailItemLot(
                 result.RetailLotId,
                 supplierLot.SkuId,
@@ -91,8 +100,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 transferUnits,
                 destination.BusinessId,
                 destination.BusinessId,
-                supplierLot.Provenance + " -> retail receipt " + consumption.ConsumptionId +
-                "; consumed source provenance: " + consumption.Provenance,
+                retailProvenance,
                 dayIndex);
             if (refusal != null)
             {

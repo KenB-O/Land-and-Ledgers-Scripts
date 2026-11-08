@@ -1152,5 +1152,213 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(4952, f.StoreRuntime.CurrentCashCents, "restored store 5,000 - 10c receipt + 10c feed - 48c wholesale");
             Assert.AreEqual(2038, f.BakeryRuntime.CurrentCashCents, "restored bakery 2,000 - 10c feed + 48c wholesale");
         }
+
+        [Test]
+        public void RefusedFeed_BakeryCashShort_RestoresStoreLotsAndCash()
+        {
+            // Plan 04 Slice 6 Test 9: the daily-driver seam pin for the
+            // FeedToBin rollback. The store holds 1 notions lot (1u,
+            // arrived, store paid 10c at receipt); the bakery holds 5c,
+            // short of the 10c feed price. The feed refuses, the store lot
+            // is restored to sellable via UndoConsumption, no cash moves,
+            // the bin gains 0 notions and the batch stays Planned. Funding
+            // the bakery to 15c then lets the SAME feed succeed exactly
+            // once. The registration carries a 1u finite supply, so the
+            // refused day's replacement order cannot create a second
+            // arrival lot before the re-run (the day-2 order leg refuses
+            // on exhausted supply, logged, no crash).
+            Slice s = NewSlice(5000, 5);
+            Series2CounterpartyRegistration reg = Registration(
+                "test-notions", BakeryFlourSupply.NotionsMaterialId, 10, 0, 1, 1);
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "test counterparty registration should succeed");
+            SeedInputs(s, 12, 0, 40);
+            BookAccount(s, 24, 1, 2, 2);
+
+            // Day-1 order (1u, 1-day transit) arrives day 2: store pays 10c.
+            Assert.IsNotNull(s.Notions.PlaceNotionsOrder(
+                reg, 1, 1, NamedSkuPaymentMode.CashOnArrival, null, s.Diag),
+                "the day-1 notions order should place; diag: " + string.Join("; ", s.Diag));
+            List<NamedSkuLot> arrived = s.Notions.ReceiveArrivals(2, null, s.Diag);
+            Assert.AreEqual(1, arrived.Count, "the 1u arrival lands day 2");
+            Assert.AreEqual(1, s.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId),
+                "1u sellable in the store lots on day 2");
+            Assert.AreEqual(4990, s.StoreRuntime.CurrentCashCents, "store 5,000 - 10c receipt");
+            Assert.AreEqual(5, s.BakeryRuntime.CurrentCashCents, "bakery starts at 5c");
+
+            string batchId;
+            {
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult day2 = RunDay(s, reg, 2);
+                Assert.AreEqual(1, day2.BatchesPlanned, "day 2 plans the batch");
+                batchId = s.Bakery.Batches[0].BatchId;
+                Assert.AreEqual(0, day2.NotionsUnitsFed, "the feed refuses: bakery cannot pay 10c with 5c");
+                Assert.AreEqual(0, day2.BatchesBaked, "nothing bakes without the fed notion");
+                Assert.IsTrue(day2.Refusal != null && day2.Refusal.Contains("notions"),
+                    "the bake refuses on notions day 2; refusal: " + day2.Refusal);
+                string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+                Assert.IsTrue(dayDiag.Contains("bakery cash cannot pay the feed price; consumption undone, nothing moved"),
+                    "the feed refusal names the cash shortfall and the rollback; diag: " + dayDiag);
+                Assert.AreEqual(1, s.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId),
+                    "the store lot is restored to sellable 1u via UndoConsumption");
+                Assert.AreEqual(5, s.BakeryRuntime.CurrentCashCents, "bakery cash stays 5c");
+                Assert.AreEqual(4990, s.StoreRuntime.CurrentCashCents, "store cash unchanged by the feed attempt");
+                Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                    "the bin gains 0 notions");
+                Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage, "the batch stays Planned");
+                Assert.AreEqual(0, day2.NotionsOrdered, "no replacement order: the 1u finite supply is exhausted");
+                Assert.AreEqual(1, s.StoreService.Orders.Count, "still exactly one order (the received day-1 order)");
+            }
+
+            // Fund the bakery to 15c; the SAME feed succeeds exactly once.
+            s.BakeryRuntime.AddCashCents(10);
+            Assert.AreEqual(15, s.BakeryRuntime.CurrentCashCents, "bakery funded to 15c");
+            BakeryWholesaleDailyResult day3 = RunDay(s, reg, 3);
+            Assert.AreEqual(0, day3.BatchesPlanned, "day 3 plans nothing: the existing batch covers");
+            Assert.AreEqual(batchId, s.ProductionDriver.PlannedBatchIds[0], "the SAME batch id bakes day 3");
+            Assert.AreEqual(1, day3.NotionsUnitsFed, "the feed succeeds exactly once");
+            Assert.AreEqual(1, day3.BatchesBaked, "the same batch bakes day 3");
+            Assert.AreEqual(1, day3.TransfersCompleted, "the transfer completes day 3");
+            Assert.AreEqual(0, s.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId),
+                "store lot 0u sellable after the one feed");
+            Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "bin notions 0u after the bake (fed 1u, baked 1u)");
+            Assert.AreEqual(53, s.BakeryRuntime.CurrentCashCents, "bakery 15c funded - 10c feed + 48c wholesale");
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "store 4,990c + 10c feed - 48c wholesale");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "exactly one delivery record");
+        }
+
+        [Test]
+        public void SaveLoad_MidFlourPipeline_ReorderLotSurvives_NoDuplicateOrder()
+        {
+            // Plan 04 Slice 6 Test 10: after Test 4's day-1 reorder (2-sack
+            // lot placed, 96c debited), capture the Millbrook supplier DTO
+            // + bakery save DTO, restore into fresh objects, and prove the
+            // lot restores once, a repeat PlaceReorder refuses as
+            // already-covered, and the restored lot still ships and delivers
+            // exactly once. Uses the existing OffMapAidBusinessRuntime DTO
+            // paths; Plan 03 Slice 4 is the save/load precedent (and the
+            // Millbrook SaveRoundTrip test pins double-import idempotency).
+            Slice s = NewSlice();
+            var supplier = new OffMapAidBusinessRuntime(MillbrookDefinition());
+            var adapter = new MillbrookFlourFreightCustodyAdapter(supplier, s.Bakery, s.Ids);
+            var bakeryCash = new Series2BusinessRuntimeCashPort(s.BakeryRuntime);
+
+            Assert.IsNull(supplier.TryPlaceOrder(
+                "opening-flour-b1", BakeryInstanceId, "Glen Pierce", 1, bakeryCash, 1, out OffMapAidCargoLot openingLot),
+                "the opening 1-sack Millbrook order should place");
+            SeedInputs(s, 0, 1, 40);
+            BookAccount(s, 24, 1, 2, 1);
+
+            BakeryWholesaleDailyResult day1 = RunDay(s, null, 1, wireNotions: false, millbrookSupplier: supplier);
+            Assert.AreEqual(1, day1.BatchesPlanned, "day 1 plans the batch");
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(day1.MillbrookReorderLotId),
+                "a 2-sack Millbrook reorder is placed");
+            Assert.IsTrue(day1.MillbrookReorderLotId.Contains("flour-reorder-d1-n2"),
+                "reorder lot id names the reorder; lot id: " + day1.MillbrookReorderLotId);
+            Assert.AreEqual(2, day1.MillbrookReorderSacks, "the reorder covers 2 sacks / 20 lb");
+            Assert.AreEqual(0, day1.BatchesBaked, "nothing bakes day 1: no flour on hand");
+            Assert.AreEqual(1856, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 48c opening - 96c reorder");
+            Assert.AreEqual(144, supplier.CashCents, "Millbrook +48c opening + 96c reorder");
+            Assert.AreEqual(2, supplier.Lots.Count, "exactly two Millbrook lots");
+            string batchId = s.Bakery.Batches[0].BatchId;
+
+            OffMapAidBusinessSaveDto supplierDto = supplier.ExportState();
+            BakeryShopRuntime.BakeryShopRuntimeSaveDto bakeryDto = s.Bakery.CaptureSaveDto();
+            var plannedIds = new List<string>(s.ProductionDriver.PlannedBatchIds);
+            int plannedDay = s.ProductionDriver.PlannedDayIndex;
+
+            var f = new Slice();
+            f.Diag = s.Diag;
+            f.Market = s.Market;
+            f.Ids = s.Ids;
+            f.StoreRuntime.BindBusinessIdentity(StoreInstanceId);
+            f.StoreRuntime.AddCashCents(5000);
+            f.StoreRuntime.EnsureCategoryStock("staple_food", 0, 1000);
+            f.BakeryRuntime.BindBusinessIdentity(BakeryInstanceId);
+            f.BakeryRuntime.AddCashCents(1856);
+            f.StoreService = new OffMapNamedSkuProcurementService(
+                StoreInstanceId, f.Market, new RuntimeCashPort(f.StoreRuntime));
+            f.Procurement = new Series2FlourProcurementDriver(f.StoreService);
+            f.Notions = new Series2NotionsSupply(f.Procurement);
+            f.Bakery = new BakeryShopRuntime(BakeryInstanceId);
+            f.Bakery.LoadFromSaveDto(bakeryDto);
+            f.ProductionDriver = new Series2BakeryProductionDriver(
+                f.Bakery, new Series2InStockBakeryFuelSource(f.Bakery));
+            f.ProductionDriver.RestorePlannedState(plannedDay, plannedIds, f.Diag);
+            f.StorePort = new RuntimeStorePort { Runtime = f.StoreRuntime };
+            f.StorePort.Prices["staple_food"] = 5;
+            f.StorePort.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { "bread" },
+                StoreUnitsPerItemUnit = 1,
+            });
+            var restoredSupplier = new OffMapAidBusinessRuntime(MillbrookDefinition());
+            Assert.IsNull(restoredSupplier.ImportState(supplierDto), "import of the exported supplier state should succeed");
+            var restoredAdapter = new MillbrookFlourFreightCustodyAdapter(restoredSupplier, f.Bakery, f.Ids);
+
+            Assert.AreEqual(2, restoredSupplier.Lots.Count, "exactly two Millbrook lots restored");
+            OffMapAidCargoLot restoredOpening = null;
+            OffMapAidCargoLot restoredReorder = null;
+            foreach (OffMapAidCargoLot candidate in restoredSupplier.Lots)
+            {
+                if (candidate == null) continue;
+                if (string.Equals(candidate.LotId, openingLot.LotId, StringComparison.Ordinal)) restoredOpening = candidate;
+                if (string.Equals(candidate.LotId, day1.MillbrookReorderLotId, StringComparison.Ordinal)) restoredReorder = candidate;
+            }
+            Assert.IsNotNull(restoredOpening, "the opening lot restores with the same id");
+            Assert.IsNotNull(restoredReorder, "the reorder lot restores once with the same id");
+            Assert.AreEqual(2, restoredReorder.PackageUnits, "the restored reorder lot is 2 sacks");
+            Assert.AreEqual(20, restoredReorder.InventoryUnits, "the restored reorder lot is 20 lb");
+            Assert.AreEqual(144, restoredSupplier.CashCents, "restored Millbrook cash 144c");
+            Assert.AreEqual(200, restoredSupplier.GetInventoryUnits("bakery_flour_sack"), "restored Millbrook stock 230 - 10 - 20 lb");
+            Assert.AreEqual(1, f.Bakery.Batches.Count, "the same batch restored");
+            Assert.AreEqual(batchId, f.Bakery.Batches[0].BatchId, "same batch id restored");
+            Assert.AreEqual(BakeryBatchStage.Planned, f.Bakery.Batches[0].Stage, "the batch restores as Planned");
+
+            // A repeat PlaceReorder for the same need refuses as
+            // already-covered: no duplicate order, no second debit.
+            string repeatRefusal = MillbrookFlourReorder.PlaceReorder(
+                restoredSupplier, new Series2BusinessRuntimeCashPort(f.BakeryRuntime),
+                BakeryInstanceId, "Glen Pierce", 2, 1, f.Diag, out OffMapAidCargoLot duplicateLot);
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(repeatRefusal),
+                "a repeat reorder must refuse; diag: " + string.Join("; ", f.Diag));
+            Assert.IsTrue(repeatRefusal.Contains("already covers"),
+                "the refusal names the already-covered outstanding lot; refusal: " + repeatRefusal);
+            Assert.IsNull(duplicateLot, "no duplicate lot is created");
+            Assert.AreEqual(2, restoredSupplier.Lots.Count, "still exactly two Millbrook lots");
+            Assert.AreEqual(1856, f.BakeryRuntime.CurrentCashCents, "no second debit from the refused reorder");
+            Assert.AreEqual(144, restoredSupplier.CashCents, "Millbrook cash unchanged by the refused reorder");
+
+            // The driver re-run on the restored state places no new reorder
+            // either (same already-covered refusal inside the driver).
+            BakeryWholesaleDailyResult repeat = RunDay(f, null, 1, wireNotions: false, millbrookSupplier: restoredSupplier);
+            Assert.IsTrue(string.IsNullOrWhiteSpace(repeat.MillbrookReorderLotId),
+                "no new reorder from the driver re-run; lot id: " + repeat.MillbrookReorderLotId);
+            Assert.AreEqual(0, repeat.BatchesBaked, "nothing bakes before the lots land on the restored state");
+            Assert.AreEqual(2, restoredSupplier.Lots.Count, "still exactly two Millbrook lots after the re-run");
+
+            // The restored lots still ship and deliver exactly once: the
+            // opening 1-sack lot first (list order), then the 2-sack
+            // reorder lot; bin 30 lb, no duplicate delivery.
+            Assert.AreEqual(openingLot.LotId,
+                MillbrookFlourReorder.FindShippableLot(restoredSupplier, BakeryInstanceId)?.LotId,
+                "the restored opening 1-sack lot ships first");
+            ReceiveMillbrookLot(f, restoredAdapter, restoredOpening, 1);
+            Assert.AreEqual(10, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 10 lb after the restored 1-sack receipt");
+            ReceiveMillbrookLot(f, restoredAdapter, restoredReorder, 1);
+            Assert.AreEqual(30, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 30 lb after both restored receipts (no duplicate delivery)");
+            Assert.AreEqual(2, restoredSupplier.Lots.Count, "still exactly two Millbrook lots after both receipts");
+
+            BakeryWholesaleDailyResult afterTwoSacks = RunDay(f, null, 1, wireNotions: false, millbrookSupplier: restoredSupplier);
+            Assert.AreEqual(batchId, f.ProductionDriver.PlannedBatchIds[0], "the SAME restored batch id bakes");
+            Assert.AreEqual(1, afterTwoSacks.BatchesBaked, "the restored batch bakes once both restored lots land");
+            Assert.AreEqual(1, afterTwoSacks.TransfersCompleted, "the transfer completes on the restored state");
+            Assert.AreEqual(24, afterTwoSacks.UnitsStocked, "24 loaves stocked");
+            Assert.AreEqual(1904, f.BakeryRuntime.CurrentCashCents, "restored bakery 1,856c + 48c wholesale");
+            Assert.AreEqual(144, restoredSupplier.CashCents, "Millbrook cash is unchanged by delivery (+144c total)");
+            Assert.AreEqual(18, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 30 - 12 lb after the bake");
+            Assert.AreEqual(1, f.Bakery.WholesaleDeliveries.Count, "exactly one delivery record on the restored state");
+        }
     }
 }

@@ -276,5 +276,34 @@ namespace LandLedgers.EditorTests.Population
                 "a stocked sack carries the authored 35c baseline price");
             Assert.IsTrue(adapter.OffersItem("flour"), "stocked flour at a positive price is a viable offer");
         }
+
+        [Test]
+        public void SecondFlourLot_IsVisibleWithoutRebuild()
+        {
+            // Plan 05 Slice 2 step 3: the NPC-port shape pin extended to a
+            // second lot. A second flour sack landing later must be visible
+            // to the same registered adapter with no rebuild and no
+            // re-registration — the live-read path Plan 02 Slice 3 proved
+            // for bread, now pinned for flour as cumulative stock (2 sacks).
+            BusinessRuntimeState state = OpeningState();
+            var port = new LiveStatePort(state);
+            var adapter = new GeneralStoreSupplierAdapter(port);
+            var directory = new SupplierDirectory();
+            directory.Register(adapter);
+
+            Assert.IsNull(port.ReceiveRetailItemLot(
+                "lot:test:flour:1", "flour", "staple_food", "10 lb sack", 1,
+                "wholesale-receipt:test", 0));
+            Assert.AreEqual(1, adapter.ItemStockUnits("flour"), "the first sack must be visible");
+            Assert.IsNull(port.ReceiveRetailItemLot(
+                "lot:test:flour:2", "flour", "staple_food", "10 lb sack", 1,
+                "wholesale-receipt:test", 0));
+            Assert.AreEqual(2, adapter.ItemStockUnits("flour"),
+                "the second sack must be visible too, with no rebuild");
+            Assert.AreEqual(20, adapter.ItemStockUnits("flour") * adapter.HouseholdUnitsPerStoreUnit("flour"),
+                "two sacks carry 20 household lb");
+            Assert.IsTrue(adapter.OffersItem("flour"), "stocked flour at a positive price stays a viable offer");
+            Assert.AreEqual(1, directory.All.Count, "no re-registration happened");
+        }
     }
 }

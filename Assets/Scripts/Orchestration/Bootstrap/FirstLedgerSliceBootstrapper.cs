@@ -1889,6 +1889,42 @@ namespace LandLedgers.FirstLedger
             }
         }
 
+        // Q04 Slice 1 (re-plan): called by SaveLoadManager.LoadDefaultSlot
+        // AFTER the shared-business restore and BEFORE the Pass XL restore.
+        // The Bakery instance exists only in that window (a pre-load call
+        // warn-returns: no authored Bakery business instance is present yet),
+        // and the planned batch ids / runtime data are unrecoverable after
+        // the restore (LoadDefaultSlot does not retain the DTO).
+        public void EnsurePass9SaveOwnerForRestore()
+        {
+            if (saveLoadManager == null)
+            {
+                Debug.LogWarning("[BakeryRuntime] Pass 9 save owner was not created on restore: SaveLoadManager is missing.", this);
+                return;
+            }
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                pass9 = new Series2Pass9SaveState();
+                saveLoadManager.Series2Pass9State = pass9;
+            }
+            // Reuse, never replace: Restore is clear-then-load into the live
+            // holders, and the drivers cache references to them.
+            if (pass9.FreightDriver == null)
+                pass9.FreightDriver = new LandLedgers.Economy.Freight.FreightProductionDriver();
+            // Mirrors SimulationDrivers.cs:7173: the delivered-lot guard restores
+            // only when the intake instance exists; production creates it lazily
+            // on the first drive, so a real mid-session save can carry delivered
+            // lot ids. (Catalog needs no pre-creation: Restore replaces it.)
+            if (pass9.WholesaleIntake == null)
+                pass9.WholesaleIntake = new LandLedgers.Economy.Ordering.Pass3WholesaleIntake();
+            // Creates/reuses the Bakery runtime + driver when a Bakery business
+            // instance exists (binding the owner, attaching the fuel source);
+            // warn-returns otherwise, leaving the state + freight driver above
+            // in place for the degraded path (section 2.4).
+            ConfigureLiveBakerySaveOwner();
+        }
+
         private void ConfigureLiveBakerySaveOwner()
         {
             if (sharedBusinessRuntime == null || saveLoadManager == null)

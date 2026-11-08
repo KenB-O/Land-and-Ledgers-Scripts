@@ -423,6 +423,19 @@ namespace LandLedgers.Persistence
             save.businesses != null ? save.businesses.lastWeeklyRecurringLocalOrderSummary : null,
             save.businesses != null ? save.businesses.transferAgreements : null,
             save.businesses != null ? save.businesses.lastWeeklyTransferAgreementSummary : null);
+            // Q04 Slice 1 (re-plan): the shared businesses are rebuilt above, so
+            // the Bakery instance exists with its saved id; the Pass XL restore
+            // below consumes Series2Pass9State. The holder must be created here,
+            // in this window — a pre-load call finds no Bakery, a post-load call
+            // is too late. Owner creation stays in FirstLedgerSliceBootstrapper
+            // (one creator; this file does not duplicate the runtime/driver
+            // construction). The bootstrapper is AutoWired at the top of this
+            // method; it is non-null on the only production load path (the
+            // bootstrapper's Continue branch).
+            if (bootstrapper == null)
+                Debug.LogWarning("[SaveLoad] Pass 9 save owner was not created on restore: no FirstLedgerSliceBootstrapper found; the Pass 9 section will drop.", this);
+            else
+                bootstrapper.EnsurePass9SaveOwnerForRestore();
             logisticsRuntime?.LoadFromSaveDto(save.businesses != null ? save.businesses.logistics : null);
             populationManager?.RefreshSettlementMetrics("Population restored from save.");
             // Person actors are derived from the restored population and world.

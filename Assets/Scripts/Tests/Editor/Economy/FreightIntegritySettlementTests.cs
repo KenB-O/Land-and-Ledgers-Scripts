@@ -37,6 +37,8 @@ namespace LandLedgers.EditorTests.Economy
     {
         private const int EthanId = 7;
         private const int Day = 12;
+        private const int Day2 = 13;
+        private const int Day3 = 14;
         private const string CarrierId = "livery_freight_003";
         private const string BakeryId = "bakery_001";
         private const string WagonId = "opening-freight-wagon";
@@ -62,6 +64,7 @@ namespace LandLedgers.EditorTests.Economy
         private BusinessRuntimeState payerRuntime;
         private FakeBusinessCashPort buyerCash;
         private List<string> diag;
+        private List<int> departureDays;
         private JourneyModel journeyModel;
         private OffMapJourneyAuthority journeys;
         private int commitCalls;
@@ -121,6 +124,7 @@ namespace LandLedgers.EditorTests.Economy
         public void SetUp()
         {
             diag = new List<string>();
+            departureDays = new List<int>();
             commitCalls = 0;
             tasks = new TaskAuthority();
             budgets = new WorkTimeBudgetStore();
@@ -539,6 +543,316 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(string.Join("; ", diag).Contains("no dispatch plan"),
                 "an old save without plans must keep today's diagnostic, but diagnostics were: "
                 + string.Join("; ", diag));
+        }
+
+        // ---- Priority 7 Slice 3 (2026-11-08): third consecutive legitimate
+        // delivery acceptance. Tests only; no production file is touched.
+        // Extends the proven two-haul sequence (FreightRepeatabilityTests)
+        // to a THIRD consecutive legitimate delivery with a distinct source
+        // lot and actual supplier pickup. Helpers below mirror the
+        // FreightRepeatabilityTests shapes exactly (same ids, same call
+        // order, same terminal-sweep replica); only the haul number, day,
+        // and quote/shipment ids change.
+
+        private string BindTeamFor(string shipmentId) => WagonAuthority.TryAssignDraftTeam(wagon,
+            new List<AnimalState> { horse },
+            LandLedgers.Primitives.EntityId.For(LandLedgers.Primitives.EntityKind.Person, EthanId).ToString(), shipmentId,
+            new AnimalAvailabilityAuthority(reservations), NowGameSeconds(), float.MaxValue);
+
+        private WorkTask FindLoadTaskFor(string shipmentId) => tasks.FindOpenTask("freight:load:" + shipmentId,
+            EntityId.For(EntityKind.Business, 3), EntityId.Invalid);
+
+        // Drives one already-picked-up shipment to Completed through the
+        // return-day tick loop, on the given simulated day (the wagon is
+        // back: IsVehicleOffMap false). Asserts no load task is created at
+        // any tick. Records the day the shipment first reaches InTransit as
+        // that haul's departure day, so the test can assert the hauls
+        // depart on distinct days.
+        private List<LogisticsShipmentStatus> TickUntilCompleted(LogisticsShipmentState target, string label, int dayIndex)
+        {
+            hooks.DayIndex = dayIndex;
+            hooks.IsVehicleOffMap = _ => false;
+            var trace = new List<LogisticsShipmentStatus>();
+            bool departureRecorded = false;
+            for (int tick = 0; tick < 8 && target.Status != LogisticsShipmentStatus.Completed; tick++)
+            {
+                Tick();
+                trace.Add(target.Status);
+                if (!departureRecorded && target.Status == LogisticsShipmentStatus.InTransit)
+                {
+                    departureDays.Add(dayIndex);
+                    departureRecorded = true;
+                }
+                Assert.IsNull(FindLoadTaskFor(target.ShipmentId),
+                    "no load task is created at any tick in the loop for " + label + " (tick " + tick + ")");
+            }
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, target.Status,
+                label + " did not complete; trace: " + string.Join(", ", trace));
+            return trace;
+        }
+
+        // Haul 1 end to end, exactly as FreightRepeatabilityTests does it.
+        // Asserts completion, receipt, and the fulfilled agreement; the
+        // caller owns the cash assertions.
+        private void DriveHaul1ToCompletion()
+        {
+            BindAndAuthorize();
+            SimulateSupplierPickup();
+            TickUntilCompleted(shipment, "haul 1", Day);
+            Assert.IsTrue(lot.Received, "the paid Millbrook lot must be marked received");
+            Assert.AreEqual(1, bakery.FlourStock.Lots.Count);
+            Assert.AreEqual(10, bakery.FlourStock.Lots[0].Units,
+                "the inventory transfer is pounds, not the separate 18 bakery-unit quotation");
+            Assert.AreEqual(LotId, bakery.FlourStock.Lots[0].ImportOrderId);
+            Assert.IsTrue(shipment.deliveryApplied);
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement.Status,
+                "haul 1 agreement must be fulfilled by the tick's MarkFulfilled path");
+        }
+
+        // The production terminal sweep, replicated call-for-call
+        // (SimulationDrivers.ReleaseTerminalFreightDraftTeams, harness-
+        // excluded): it releases ONLY when the wagon's CurrentShipmentId and
+        // the horse's CurrentAssignmentId still name the terminal shipment.
+        // Those preconditions are asserted first — they are the probe.
+        private void ReleaseTerminalDraftTeam(string terminalShipmentId)
+        {
+            Assert.AreEqual(terminalShipmentId, wagon.CurrentShipmentId,
+                "sweep precondition: the wagon must still name the terminal shipment");
+            Assert.AreEqual(terminalShipmentId, horse.CurrentAssignmentId,
+                "sweep precondition: the horse must still name the terminal shipment");
+            Assert.IsNull(WagonAuthority.ReleaseDraftTeam(wagon, new List<AnimalState> { horse },
+                new AnimalAvailabilityAuthority(reservations)),
+                "the sweep release itself must succeed");
+            Assert.IsTrue(string.IsNullOrEmpty(wagon.CurrentShipmentId), "sweep must clear the wagon's shipment name");
+            Assert.IsTrue(string.IsNullOrEmpty(horse.CurrentAssignmentId), "sweep must clear the horse's assignment name");
+        }
+
+        private void SimulateSupplierPickupFor(LogisticsShipmentState target)
+        {
+            Assert.IsTrue(adapter.CommitSourceLot(target, target.PlannedQuantityUnits, out string reason), reason);
+            ApplyPickupWritesFor(target);
+        }
+
+        // Places the next paid lot and builds its request, quote,
+        // acceptance, shipment, and link. The day parameter is the haul's
+        // simulated day; the reorder id is deterministic
+        // ("flour-reorder-d<day>-n<k>", k = count of existing lots + 1).
+        private void BuildHaul(int dayIndex, string expectedOrderId,
+            out OffMapAidCargoLot nextLot, out string requestId,
+            out FreightServiceAgreement nextAgreement, out LogisticsShipmentState nextShipment)
+        {
+            int buyerBefore = buyerCash.BalanceCents;
+            Assert.IsNull(MillbrookFlourReorder.PlaceReorder(
+                supplier, buyerCash, BakeryId, "Glen Pierce", 1, dayIndex, diag, out nextLot),
+                "reorder on day " + dayIndex + " must place: " + string.Join("; ", diag));
+            Assert.IsNotNull(nextLot, "reorder on day " + dayIndex + " must mint a lot");
+            Assert.AreEqual(expectedOrderId, nextLot.OrderId,
+                "reorder id is deterministic (day " + dayIndex + "; TryPlaceOrder prefixes the business id)");
+            Assert.AreEqual(buyerBefore - nextLot.TotalCostCents, buyerCash.BalanceCents,
+                "reorder on day " + dayIndex + " debits buyer cash exactly once");
+            Assert.AreEqual(48, nextLot.TotalCostCents, "one sack costs the authored 48c");
+
+            FreightServiceAgreementBook book = freight.ServiceAgreements;
+            requestId = "freight-request:" + nextLot.OrderId;
+            var request = new FreightServiceRequest
+            {
+                RequestId = requestId, RequestingBusinessId = BakeryId, CarrierBusinessId = CarrierId,
+                PickupBusinessId = "millbrook_grain_co", DestinationBusinessId = BakeryId,
+                CargoLotId = nextLot.LotId, Quantity = 1, QuantityUnit = "lb", RequestingPersonId = 2,
+                CarrierOperatorPersonId = EthanId, PickupLocationId = "millbrook-pickup",
+                DestinationLocationId = "bakery-door",
+                CargoSkuId = MillbrookFlourFreightCustodyAdapter.FlourSkuId
+            };
+            Assert.IsNull(book.CreateRequest(request, out _), "request for day " + dayIndex + " must record");
+            Assert.IsNull(book.SetQuote(requestId, new FreightServiceQuote
+            {
+                QuoteId = "quote-" + dayIndex, OneWayDistanceMiles = 50f, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = FreightChargeCents, PayerBusinessId = BakeryId, PaymentTiming = "After successful delivery"
+            }), "quote for day " + dayIndex + " must record");
+            Assert.IsNull(book.Accept(requestId, EthanId, dayIndex, dayIndex * 86400f + 40000f, out nextAgreement),
+                "request for day " + dayIndex + " must accept");
+            Assert.IsNotNull(nextAgreement, "acceptance for day " + dayIndex + " must produce an agreement");
+            string nextShipmentId = "freight-shipment:" + requestId;
+            nextShipment = freight.CreateShipment(CarrierId, nextShipmentId, "millbrook_grain_co", BakeryId, 1,
+                new FreightCargoSpec { MassKgPerUnit = 4.54f, VolumeM3PerUnit = 0.02f }, WagonId,
+                hooks, EntityId.For(EntityKind.Person, EthanId), TeamAnimals(),
+                FreightChargeCents, BakeryId, diag, out string shipmentRefusal,
+                nextAgreement.AgreementId, nextLot.LotId, MillbrookFlourFreightCustodyAdapter.FlourSkuId, true);
+            Assert.IsNotNull(nextShipment, "shipment for day " + dayIndex + " must create: " + shipmentRefusal);
+            Assert.AreEqual(nextLot.LotId, nextShipment.CargoLotId, "the new lot must bind cleanly to the new shipment");
+            Assert.IsNull(book.LinkShipment(nextAgreement.AgreementId, nextShipmentId), "shipment for day " + dayIndex + " must link");
+        }
+
+        private void BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+            out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2)
+        {
+            BuildHaul(Day2, "millbrook_grain_co:flour-reorder-d13-n2",
+                out lot2, out request2Id, out agreement2, out shipment2);
+        }
+
+        private void BuildThirdHaul(out OffMapAidCargoLot lot3, out string request3Id,
+            out FreightServiceAgreement agreement3, out LogisticsShipmentState shipment3)
+        {
+            BuildHaul(Day3, "millbrook_grain_co:flour-reorder-d14-n3",
+                out lot3, out request3Id, out agreement3, out shipment3);
+        }
+
+        // Prepare + sweep + rebind + authorize for a follow-on haul, given
+        // the terminal (just-completed) shipment id whose draft-team mirror
+        // the sweep must clear first.
+        private void PrepareAndDispatchHaul(FreightServiceAgreement nextAgreement,
+            LogisticsShipmentState nextShipment, string terminalShipmentId, int dayIndex)
+        {
+            FreightServiceAgreementBook book = freight.ServiceAgreements;
+            Assert.IsNull(book.MarkPreparedForDispatch(nextAgreement.AgreementId, nextShipment.ShipmentId, dayIndex * 86400f + 50000f),
+                "agreement for day " + dayIndex + " must prepare for dispatch");
+            freight.SetDispatchPlan(nextShipment.ShipmentId, EntityId.For(EntityKind.Person, EthanId), TeamAnimals());
+            ReleaseTerminalDraftTeam(terminalShipmentId);
+            Assert.IsNull(BindTeamFor(nextShipment.ShipmentId), "the draft team must rebind to the day-" + dayIndex + " haul");
+            Assert.IsTrue(freight.AuthorizeShipmentDispatch(nextShipment.ShipmentId, out _),
+                "shipment authorization for day " + dayIndex + " must succeed");
+            Assert.IsFalse(nextShipment.requiresDispatchAuthorization);
+        }
+
+        private void PrepareAndDispatchSecondHaul(FreightServiceAgreement agreement2, LogisticsShipmentState shipment2)
+        {
+            PrepareAndDispatchHaul(agreement2, shipment2, ShipmentId, Day2);
+        }
+
+        private void PrepareAndDispatchThirdHaul(FreightServiceAgreement agreement3, LogisticsShipmentState shipment3, string terminalShipmentId)
+        {
+            PrepareAndDispatchHaul(agreement3, shipment3, terminalShipmentId, Day3);
+        }
+
+        [Test]
+        public void ThirdHaul_AfterSecondCompletes_SettlesOnceAndFreesCapacity()
+        {
+            // Third consecutive legitimate delivery: after hauls 1-2
+            // complete, a third lot (day 14, deterministic id
+            // flour-reorder-d14-n3, 48c debited once) is picked up at the
+            // supplier and delivered, settling a third 125c exactly once.
+            // Expected to PASS after Slices 1-2: it composes already-sound
+            // seams; a failure names the leg that fails.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion();
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "haul 1 freight charge debited from the bakery exactly once");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "haul 1 freight charge credited to the carrier exactly once");
+
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            TickUntilCompleted(shipment2, "haul 2", Day2);
+
+            Assert.IsTrue(lot2.Received, "the second paid Millbrook lot must be marked received");
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count, "the bakery must hold exactly two flour lots after haul 2");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited a second 125c (total -250c across both hauls)");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited a second 125c (total +250c across both hauls)");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement2.Status,
+                "second agreement must be fulfilled");
+
+            BuildThirdHaul(out OffMapAidCargoLot lot3, out string request3Id,
+                out FreightServiceAgreement agreement3, out LogisticsShipmentState shipment3);
+            PrepareAndDispatchThirdHaul(agreement3, shipment3, shipment2.ShipmentId);
+            SimulateSupplierPickupFor(shipment3);
+            TickUntilCompleted(shipment3, "haul 3", Day3);
+
+            Assert.IsTrue(lot3.Received, "the third paid Millbrook lot must be marked received");
+            Assert.AreEqual(3, bakery.FlourStock.Lots.Count, "the bakery must hold exactly three flour lots");
+            var importIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (BakeryFlourLot flourLot in bakery.FlourStock.Lots)
+            {
+                Assert.AreEqual(10, flourLot.Units, "each haul credits one 10 lb sack");
+                Assert.IsTrue(importIds.Add(flourLot.ImportOrderId), "no bakery lot was minted twice for one Millbrook lot");
+            }
+            Assert.IsTrue(importIds.Contains(LotId), "haul 1 lot must be among the bakery lots");
+            Assert.IsTrue(importIds.Contains(lot2.LotId), "haul 2 lot must be among the bakery lots");
+            Assert.IsTrue(importIds.Contains(lot3.LotId), "haul 3 lot must be among the bakery lots");
+            Assert.AreEqual(payerBefore - 3 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited a third 125c (total -375c across the three hauls)");
+            Assert.AreEqual(carrierBefore + 3 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited a third 125c (total +375c across the three hauls)");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after all three hauls");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement3.Status,
+                "third agreement must be fulfilled");
+            Assert.IsTrue(!string.Equals(shipment.CargoLotId, shipment2.CargoLotId, StringComparison.Ordinal)
+                && !string.Equals(shipment.CargoLotId, shipment3.CargoLotId, StringComparison.Ordinal)
+                && !string.Equals(shipment2.CargoLotId, shipment3.CargoLotId, StringComparison.Ordinal),
+                "the three shipments must carry three different cargo lots");
+
+            // Hauls run on distinct days: the same-day-departure refusal is
+            // by design and is NOT hit — each haul's recorded departure day
+            // differs (12, 13, 14).
+            Assert.AreEqual(3, departureDays.Count, "each haul must record a departure day");
+            Assert.AreEqual(3, new HashSet<int>(departureDays).Count,
+                "the three hauls must depart on distinct days, but departed on: " + string.Join(", ", departureDays));
+
+            // Capacity free afterwards: no live shipment holds the team.
+            Assert.IsNull(freight.Service.FindExclusivityConflict(null, WagonId,
+                EntityId.For(EntityKind.Person, EthanId), TeamAnimals()),
+                "wagon/driver/horse must be free after the third haul completes");
+            // Lots 1-2 stay bound to their Completed shipments: a
+            // hypothetical fourth shipment cannot re-bind either of them.
+            var hypothetical = new LogisticsShipmentState { shipmentId = "freight-shipment:hypothetical-fourth" };
+            Assert.IsTrue(!freight.Service.TryBindSourceLot(hypothetical, LotId,
+                MillbrookFlourFreightCustodyAdapter.FlourSkuId, out string rebindReason1),
+                "lot 1 must refuse re-binding to a fourth shipment");
+            Assert.IsTrue(rebindReason1.Contains("already assigned"),
+                "the lot 1 refusal must name the existing assignment, but got '" + rebindReason1 + "'");
+            Assert.IsTrue(!freight.Service.TryBindSourceLot(hypothetical, lot2.LotId,
+                MillbrookFlourFreightCustodyAdapter.FlourSkuId, out string rebindReason2),
+                "lot 2 must refuse re-binding to a fourth shipment");
+            Assert.IsTrue(rebindReason2.Contains("already assigned"),
+                "the lot 2 refusal must name the existing assignment, but got '" + rebindReason2 + "'");
+        }
+
+        [Test]
+        public void ThirdHaul_RequestIdDerivesFromLot_NeverCollides()
+        {
+            // Request ids derive from the lot ("freight-request:" +
+            // lot.OrderId) and never collide: hauls 2-3 use the derived
+            // form (haul 1's fixture request predates it and keeps its
+            // "request-1" id), all three ids are distinct, and creating a
+            // duplicate request for an existing lot id is refused by the
+            // book's duplicate guard.
+            DriveHaul1ToCompletion();
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            TickUntilCompleted(shipment2, "haul 2", Day2);
+            BuildThirdHaul(out OffMapAidCargoLot lot3, out string request3Id,
+                out FreightServiceAgreement agreement3, out LogisticsShipmentState shipment3);
+
+            Assert.AreEqual("freight-request:" + lot2.OrderId, request2Id,
+                "the haul 2 request id must derive from its lot");
+            Assert.AreEqual("freight-request:" + lot3.OrderId, request3Id,
+                "the haul 3 request id must derive from its lot");
+            var requestIds = new HashSet<string>(StringComparer.Ordinal) { "request-1", request2Id, request3Id };
+            Assert.AreEqual(3, requestIds.Count,
+                "the three request ids must be distinct, but were: request-1, " + request2Id + ", " + request3Id);
+
+            var duplicate = new FreightServiceRequest
+            {
+                RequestId = request3Id, RequestingBusinessId = BakeryId, CarrierBusinessId = CarrierId,
+                PickupBusinessId = "millbrook_grain_co", DestinationBusinessId = BakeryId,
+                CargoLotId = lot3.LotId, Quantity = 1, QuantityUnit = "lb", RequestingPersonId = 2,
+                CarrierOperatorPersonId = EthanId, PickupLocationId = "millbrook-pickup",
+                DestinationLocationId = "bakery-door",
+                CargoSkuId = MillbrookFlourFreightCustodyAdapter.FlourSkuId
+            };
+            string refusal = freight.ServiceAgreements.CreateRequest(duplicate, out _);
+            Assert.IsNotNull(refusal, "creating a duplicate request for an existing lot id must be refused");
+            Assert.IsTrue(refusal.Contains("already exists"),
+                "the duplicate refusal must name the existing request, but got '" + refusal + "'");
         }
     }
 }

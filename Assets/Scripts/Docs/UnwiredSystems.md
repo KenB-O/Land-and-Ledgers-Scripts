@@ -78,6 +78,7 @@ found, the test fails loudly rather than passing silently.
 | SettlementCausalExplanation | ReadModels/Causal/SettlementCausalExplanation.cs | ReadModels/Causal | (none) |
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
+| PhysicalCapacityEvaluator | Domains/Economy/Storage/PhysicalCapacityContracts.cs | Domains/Economy/Storage | (none) |
 
 ## Notes per entry
 
@@ -166,6 +167,24 @@ found, the test fails loudly rather than passing silently.
   row the day a production reader outside `Domains/Economy/Storage`
   references the spec (Slice 2 capacity queries are the first expected
   reader); do not wire it merely to clear the entry.
+- `PhysicalCapacityEvaluator` (Priority 9 Slice F2, 2026-11-08) is the
+  shared capacity query evaluator (one query shape delegating to the
+  equipment service, business category target, storage zone, wagon
+  authority, person-carry Unknown, and horse-pack no-authority legs). It
+  is registered here honestly as UNWIRED by design, not oversight: the
+  Slice F2 brief wires nothing into live flows — the evaluator is
+  constructed in tests against the real authorities and no flow calls it
+  yet. Its sibling types need no row: `PhysicalLoad`,
+  `PhysicalCapacityQuery`, `PersonCarryInputs`,
+  `PhysicalCapacityVerdict`, `BusinessStorageCapacityAxes` and
+  `PhysicalCapacityEvaluationContext` are structs and
+  `PhysicalCapacityOutcome` / `PhysicalContainerKind` are enums
+  (scan-exempt: the scan enumerates concrete public classes only).
+  Remove this row the day a production flow calls the evaluator; do not
+  wire it merely to clear the entry. The evaluator reads the F1 spec
+  registry only from inside `Domains/Economy/Storage`, so under the
+  scan's caller rule (same-directory references do not count) the
+  `PhysicalItemSpec` row above stays accurate and stays in place.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -312,6 +331,12 @@ note records their audited status so the question does not reopen:
   UNWIRED by design — data-only spec registry, nothing reads it yet;
   remove the row when a production reader outside
   `Domains/Economy/Storage` is wired (Slice 2 capacity queries first).
+- Priority 9 Slice F2 (2026-11-08): `PhysicalCapacityEvaluator`
+  registered as UNWIRED by design — delegating capacity evaluator, no
+  flow calls it yet; remove the row when a production flow calls it.
+  The `PhysicalItemSpec` row stays: the evaluator reads the registry
+  only from inside `Domains/Economy/Storage`, so it is not a production
+  reader outside the spec's directory under the scan's caller rule.
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note

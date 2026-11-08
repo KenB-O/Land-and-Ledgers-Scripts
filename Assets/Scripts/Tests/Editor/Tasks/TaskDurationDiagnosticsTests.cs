@@ -1,4 +1,8 @@
 using System;
+using System.Collections.Generic;
+using LandLedgers.Economy;
+using LandLedgers.Economy.Freight;
+using LandLedgers.FirstLedger;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -507,6 +511,406 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.AreEqual(4, record.MinutesWorkedLastSeen);
             Assert.AreEqual(1200f, record.AccumulatedActiveSeconds, 0.001f,
                 "active from start (1000) to interruption (2200); the progress call at 1600 is not a state exit");
+        }
+
+        // ---- Slice 2: expected vs actual + classification (plan §5 Slice 2) ----
+        // All Slice 2 tests drive the real TaskAuthority with a fake advancing clock
+        // and the real TaskDurationDiagnostics service as the installed observer, plus
+        // the optional evidence lookups (supplier arrival, due-event due time, schedule
+        // windows) fed in by the test. No log lines are emitted in this slice; Classify
+        // returns verdicts to the caller. No test uses wall-clock time, DateTime,
+        // Time.time, frame counts, or Update ticks.
+
+        /// <summary>Absolute game seconds for a fixture day + seconds into that day (day-start convention, plan §1.1).</summary>
+        private static float Day(int day, int secondsIntoDay)
+        {
+            return day * 86400f + secondsIntoDay;
+        }
+
+        private static TaskAuthority CreateAuthorityWithDiagnostics(string definitionId, int baseMinutes, out TaskDurationDiagnostics diagnostics, FakeClock clock)
+        {
+            var authority = new TaskAuthority();
+            string reason;
+            Assert.IsTrue(authority.RegisterDefinition(new TaskDefinition(definitionId, "Sweep", baseMinutes), out reason), reason);
+            diagnostics = new TaskDurationDiagnostics();
+            authority.SetTimingObserver(diagnostics);
+            if (clock != null)
+            {
+                authority.SetTimingClock(clock.Read);
+            }
+
+            return authority;
+        }
+
+        // Slice 2 / M4 + §3.5 setup: 300 standard units -> FreightMinutes 15 -> the
+        // assigned task's expected active duration is 900 s, not provisional.
+        [Test]
+        public void Classify_ExpectedDuration_UsesPlannedMinutes_AfterAssignment()
+        {
+            Assert.AreEqual(15, FreightCompanyRuntime.FreightMinutes(300, FreightGoodsClass.Standard),
+                "ceil(300/20) = 15: the directive's example shape, through the real estimator math");
+
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("fr.load-freight", 1, out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            string reason;
+            WorkTask task = authority.CreateTaskWithPlannedMinutes("fr.load-freight", Business(3), 10, 15, "ship-1");
+            Assert.AreEqual(15, task.PlannedMinutes, "the override base is the planned minutes at creation");
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 10, out reason), reason);
+            Assert.AreEqual(15, task.PlannedMinutes,
+                "the default estimator keeps the override base: EstimateMinutesForBase returns the base unchanged");
+
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 10);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(15, verdict.ExpectedMinutes);
+            Assert.AreEqual(900f, verdict.ExpectedActiveSeconds, 0.001f);
+            Assert.IsTrue(!verdict.IsProvisional, "assigned: the expectation is the booked PlannedMinutes, not provisional");
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict, "just assigned: nothing has stalled yet");
+        }
+
+        // Slice 2 / M4: before assignment the definition's BaseMinutes is the provisional
+        // expectation, labelled provisional in the verdict.
+        [Test]
+        public void Classify_BeforeAssignment_UsesProvisionalBaseMinutes_LabelledProvisional()
+        {
+            var clock = new FakeClock { Now = Day(2, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 2);
+            Assert.AreEqual(10, task.PlannedMinutes, "unassigned: PlannedMinutes is still the definition BaseMinutes");
+
+            clock.Now = Day(2, 32400); // one hour later, still unassigned
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 2);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(10, verdict.ExpectedMinutes, "before assignment the definition BaseMinutes is the provisional expectation (M4)");
+            Assert.AreEqual(600f, verdict.ExpectedActiveSeconds, 0.001f);
+            Assert.IsTrue(verdict.IsProvisional, "unassigned: the expectation is provisional, labelled as such");
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict, "one hour queued: P1 grace (1 day) absorbs it");
+        }
+
+        // Slice 2 / §3.6: notions order placed day 1, arrival day 15; evaluated day 3
+        // (47 h). L1 accrues the full wait; nothing is unexplained; active loading is 0.
+        [Test]
+        public void Classify_SupplierLeadTime_CoversFullWait_NoOverrun()
+        {
+            const string dependency = "notions order ord-7, arrives day 15";
+            var clock = new FakeClock { Now = Day(1, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.SupplierArrivalLookup = id => id == dependency ? (int?)15 : null;
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 1, Business(1));
+            string reason;
+            Assert.IsTrue(authority.MarkWaitingOnDependency(task.TaskId, dependency, "notions in transit", out reason), reason);
+
+            clock.Now = Day(3, 25200); // day 3 07:00: exactly 47 h after the day-1 08:00 order
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 3);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.L1SupplierLeadTime, verdict.ReasonClass);
+            Assert.AreEqual(47f * 3600f, verdict.CoveredSeconds, 0.001f,
+                "L1 accrues the full 47 h (arrival day 15 is in the future)");
+            Assert.AreEqual(0f, verdict.UncoveredSeconds, 0.001f,
+                "nothing unexplained: this must never read as 47 h of active loading");
+            StringAssert.Contains("ord-7", verdict.EvidenceText);
+            StringAssert.Contains("15", verdict.EvidenceText);
+            TaskTimingRecord record = diagnostics.GetRecord(task.TaskId);
+            Assert.AreEqual(0f, record.AccumulatedActiveSeconds, 0.001f,
+                "active loading seconds are 0: the wait is blocked time, not active time");
+        }
+
+        // Slice 2 / §3.2 L1 + §3.6: the same wait, clock advanced past the arrival day
+        // with no receipt. L1 stops accruing at the end of arrival day 15; only the
+        // post-arrival span (day 16 so far) is unexplained.
+        [Test]
+        public void Classify_ExpiredLeadTime_BecomesUnexplained()
+        {
+            const string dependency = "notions order ord-7, arrives day 15";
+            var clock = new FakeClock { Now = Day(1, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.SupplierArrivalLookup = id => id == dependency ? (int?)15 : null;
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 1, Business(1));
+            string reason;
+            Assert.IsTrue(authority.MarkWaitingOnDependency(task.TaskId, dependency, "notions in transit", out reason), reason);
+
+            clock.Now = Day(16, 28800); // day 16 08:00: the arrival day (15) has passed with no receipt
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 16);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Unexplained, verdict.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.L1SupplierLeadTime, verdict.ReasonClass,
+                "the covering class is still L1; the post-arrival span is what is unexplained");
+            Assert.AreEqual(1267200f, verdict.CoveredSeconds, 0.001f,
+                "L1 covers up to the end of arrival day 15: 16*86400 - Day(1,28800)");
+            Assert.AreEqual(28800f, verdict.UncoveredSeconds, 0.001f,
+                "only the day-16 span (08:00 so far) is unexplained");
+            StringAssert.Contains("15", verdict.EvidenceText);
+        }
+
+        // Slice 2 / §3.5: the 15-minute cargo loading task stuck two days. P1 and P2
+        // both true, verdict Unexplained, uncovered seconds 172800 against the 2700 s
+        // P2 threshold.
+        [Test]
+        public void Classify_InProgressNoProgress_TwoDays_Unexplained()
+        {
+            Assert.AreEqual(15, FreightCompanyRuntime.FreightMinutes(300, FreightGoodsClass.Standard));
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("fr.load-freight", 1, out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            string reason;
+            WorkTask task = authority.CreateTaskWithPlannedMinutes("fr.load-freight", Business(3), 10, 15, "ship-1");
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 10, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 10, out reason), reason);
+            Assert.AreEqual(15, task.PlannedMinutes);
+
+            // Day 12, 08:00: still InProgress, 0 minutes worked, no reason recorded anywhere.
+            clock.Now = Day(12, 28800);
+            Assert.AreEqual(0, task.MinutesWorked);
+            TaskTimingRecord record = diagnostics.GetRecord(task.TaskId);
+            TaskTimingVerdict verdict = diagnostics.Classify(record, clock.Now, 12);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Unexplained, verdict.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.NoneRecorded, verdict.ReasonClass);
+            Assert.AreEqual(0f, verdict.CoveredSeconds, 0.001f);
+            Assert.AreEqual(172800f, verdict.UncoveredSeconds, 0.001f,
+                "the whole 2-day span is unexplained; the P2 threshold is 900*2.0+900 = 2700 s");
+            Assert.AreEqual(900f, verdict.ExpectedActiveSeconds, 0.001f);
+            Assert.AreEqual(Day(10, 28800), verdict.LastProgressSeconds, 0.001f,
+                "last progress is the start: no RecordWork ever happened");
+        }
+
+        // Slice 2 / §3.2 L4: a named dependency legitimates the wait. The same shape
+        // with a future arrival day fed in classifies L1 instead (the lookup is what
+        // promotes a named wait to a dated supplier lead).
+        [Test]
+        public void Classify_WaitingOnDependency_NamedBlocker_Legitimate()
+        {
+            const string dependency = "flour delivery #42, miller wagon";
+            var clock = new FakeClock { Now = Day(4, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(4);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 4, Business(1));
+            string reason;
+            Assert.IsTrue(authority.MarkWaitingOnDependency(task.TaskId, dependency, "no flour", out reason), reason);
+
+            clock.Now = Day(4, 36000); // 2 h later
+            TaskTimingVerdict l4 = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 4);
+            Assert.IsNotNull(l4);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, l4.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.L4WaitingOnDependency, l4.ReasonClass);
+            Assert.AreEqual(7200f, l4.CoveredSeconds, 0.001f);
+            Assert.AreEqual(0f, l4.UncoveredSeconds, 0.001f);
+            StringAssert.Contains("flour delivery #42", l4.EvidenceText);
+
+            diagnostics.SupplierArrivalLookup = id => id == dependency ? (int?)9 : null;
+            TaskTimingVerdict l1 = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 4);
+            Assert.IsNotNull(l1);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, l1.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.L1SupplierLeadTime, l1.ReasonClass,
+                "a future arrival day promotes the named wait to L1");
+            Assert.AreEqual(7200f, l1.CoveredSeconds, 0.001f);
+            Assert.AreEqual(0f, l1.UncoveredSeconds, 0.001f);
+        }
+
+        // Slice 2 / §3.2 L4: Paused with no reason recorded anywhere is unexplained.
+        // PauseTask takes a reason string but stores it nowhere on the task (verified in
+        // TaskAuthorityLifecycle.PauseTask: only MarkPaused() is called), so the record
+        // holds only "Paused" and the pause explains nothing.
+        [Test]
+        public void Classify_PausedWithoutReason_Unexplained()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 0, Business(1));
+            string reason;
+            Assert.IsTrue(authority.PauseTask(task.TaskId, budgets, "flour delivery late", out reason), reason);
+
+            clock.Now = Day(2, 28800); // two days paused, no resume, no reason recorded anywhere
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 2);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Unexplained, verdict.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.NoneRecorded, verdict.ReasonClass);
+            Assert.AreEqual(0f, verdict.CoveredSeconds, 0.001f);
+            Assert.AreEqual(172800f, verdict.UncoveredSeconds, 0.001f);
+        }
+
+        // Slice 2 / §3.2 L3: one night under a Sleep reservation 1320->420, reserved as
+        // two windows per day by DailyActivityPlanner (evening 1320+120, morning 0+420,
+        // both on the same day index). L3 covers exactly the 540 sleep minutes inside
+        // the InProgress span; the rest is evaluated normally; a single night never
+        // warns because P1 grace (1 day) absorbs exactly 24 h with no progress.
+        [Test]
+        public void Classify_SleepWindow_CoversNightHoursOnly()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.ScheduleLookup = (personId, dayIndex) =>
+            {
+                if (personId != 1)
+                {
+                    return null;
+                }
+
+                return new List<TaskDurationSleepWindow>
+                {
+                    new TaskDurationSleepWindow { StartMinuteOfDay = 0, DurationMinutes = 420 },
+                    new TaskDurationSleepWindow { StartMinuteOfDay = 1320, DurationMinutes = 120 },
+                };
+            };
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 0, Business(1));
+
+            clock.Now = Day(1, 28800); // next morning, exactly 24 h later
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 1);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                "a single night never warns: P1 grace (1 day) absorbs exactly 24 h with no progress");
+            Assert.AreEqual(TaskTimingReasonClass.L3RestSleep, verdict.ReasonClass);
+            Assert.AreEqual(32400f, verdict.CoveredSeconds, 0.001f,
+                "L3 covers exactly the sleep minutes: 120 evening + 420 morning");
+            Assert.AreEqual(54000f, verdict.UncoveredSeconds, 0.001f,
+                "86400 s open span - 32400 s sleep = 54000 s evaluated normally");
+        }
+
+        // Slice 2 / §3.3 + §3.7: hitch task assigned day 6; every day the worker's
+        // 600-minute budget is consumed by horse-feed travel tasks, so the start is
+        // refused daily. Streaks 1-3 (days 6-8) are legitimate; from streak 4 (day 9)
+        // it escalates, quoting the repeated reason — it does not go silent and is
+        // not reclassified as unexplained.
+        [Test]
+        public void Classify_RepeatedBudgetRefusal_EscalatesAfterEscalationDays()
+        {
+            const string refusal = "Cannot start task: worker has 0 minutes remaining (budget consumed by horse-feed travel tasks)";
+            var clock = new FakeClock { Now = Day(6, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(6);
+
+            string reason;
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 6);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 6, out reason), reason);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status);
+
+            for (int day = 6; day <= 15; day++)
+            {
+                clock.Now = Day(day, 28800);
+                budgets.EnsureDay(day);
+                diagnostics.RecordRefusal(task.TaskId.ToString(), "StartTask", refusal, day);
+                TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, day);
+                Assert.IsNotNull(verdict, "day " + day);
+                Assert.AreEqual(TaskTimingReasonClass.L6BudgetScheduleRefusal, verdict.ReasonClass, "day " + day);
+                StringAssert.Contains("horse-feed", verdict.EvidenceText, "day " + day);
+                if (day <= 8)
+                {
+                    Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                        "day " + day + ": streak " + (day - 5) + " is within EscalationDays 3");
+                    Assert.AreEqual(0f, verdict.UncoveredSeconds, 0.001f, "day " + day);
+                }
+                else
+                {
+                    Assert.AreEqual(TaskTimingVerdictKind.Escalated, verdict.Verdict,
+                        "day " + day + ": streak " + (day - 5) + " exceeds EscalationDays 3");
+                    Assert.AreEqual(0f, verdict.UncoveredSeconds, 0.001f,
+                        "day " + day + ": escalation does not reclassify the stall as unexplained");
+                }
+            }
+        }
+
+        // Slice 2 / §3.4: freight-style incremental work — RecordWorkProgress a little
+        // each day for 5 days. Progress in the last evaluation interval suppresses the
+        // stuck warning (P1 false every day), however long the total span.
+        [Test]
+        public void Classify_ProgressSuppressesStuckWarning()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("test.sweep", 60, out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 0, Business(1));
+            Assert.AreEqual(60, task.PlannedMinutes);
+
+            for (int day = 0; day <= 4; day++)
+            {
+                clock.Now = Day(day, 43200); // midday each day
+                budgets.EnsureDay(day);
+                string reason;
+                bool reachedCompletion;
+                Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, 2, budgets, day, out reachedCompletion, out reason), reason);
+                TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, day);
+                Assert.IsNotNull(verdict, "day " + day);
+                Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                    "day " + day + ": progress today resets P1, so the task never warns however long its span");
+                Assert.AreEqual(Day(day, 43200), verdict.LastProgressSeconds, 0.001f, "day " + day);
+            }
+
+            Assert.AreEqual(10, task.MinutesWorked, "2 min/day x 5 days");
+            Assert.AreEqual(TaskStatus.InProgress, task.Status, "RecordWorkProgress never completes by itself");
+        }
+
+        // Slice 2 / §2.1: queue + assigned-waiting + active + blocked + travel sums to
+        // the open span within one short tick (900 s). Driven through queue -> assign
+        // -> start -> wait -> resume -> complete at distinct clock times, so the sum
+        // is exact here.
+        [Test]
+        public void Classify_RecordArithmetic_SumsToOpenSpan()
+        {
+            var clock = new FakeClock { Now = 1000f };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            string reason;
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 0); // t=1000, Queued
+            clock.Now = 4600f;
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 0, out reason), reason); // queue 3600
+            clock.Now = 8200f;
+            Assert.IsTrue(authority.StartTask(task.TaskId, 0, out reason), reason); // assigned 3600
+            clock.Now = 11800f;
+            Assert.IsTrue(authority.MarkWaitingOnDependency(task.TaskId, "flour delivery #42", "no flour", out reason), reason); // active 3600
+            clock.Now = 19000f;
+            Assert.IsTrue(authority.ResumeTask(task.TaskId, "delivery arrived", out reason), reason); // blocked 7200
+            clock.Now = 22600f;
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 0, budgets)); // active 3600 more
+
+            TaskTimingRecord record = diagnostics.GetRecord(task.TaskId);
+            Assert.IsNotNull(record);
+            float openSpan = record.CompletedSeconds - record.CreatedSeconds;
+            Assert.AreEqual(21600f, openSpan, 0.001f);
+            float bucketSum = record.AccumulatedQueueSeconds + record.AccumulatedAssignedWaitingSeconds
+                + record.AccumulatedActiveSeconds + record.AccumulatedBlockedSeconds + record.AccumulatedTravelSeconds;
+            Assert.AreEqual(21600f, bucketSum, 0.001f, "buckets sum exactly here; the plan allows 900 s");
+            Assert.IsTrue(Math.Abs(bucketSum - openSpan) <= 900f,
+                "§2.1: decomposition sums to the open span within one short tick");
+            Assert.AreEqual(3600f, record.AccumulatedQueueSeconds, 0.001f);
+            Assert.AreEqual(3600f, record.AccumulatedAssignedWaitingSeconds, 0.001f);
+            Assert.AreEqual(7200f, record.AccumulatedActiveSeconds, 0.001f);
+            Assert.AreEqual(7200f, record.AccumulatedBlockedSeconds, 0.001f);
         }
     }
 }

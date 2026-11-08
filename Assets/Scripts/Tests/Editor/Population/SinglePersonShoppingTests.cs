@@ -1803,6 +1803,300 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void TwoEmployedAdults_SameShift_Acceptance_PostShiftShopper()
+        {
+            // Slice 6 S6-2 (M3): two employed adults (H-C), Tomas + Anna,
+            // both 240-min shifts 480-720. Both work tasks start; one
+            // member shops post-shift — the shopper per the policy
+            // preference order (adult woman first,
+            // ShopperAssignmentPolicy.ChooseShopperWithWindowSearch,
+            // PersonScheduleTracker.cs:671+; the existing staggered tests
+            // already pin Anna/P2 as shopper), so Anna (P2) shops, trip
+            // departs 720, window [720,815]; purchase settles 70c; no trip
+            // overlaps either Work reservation; next-day meal from the
+            // purchased lot; exact cash and inventory conservation; lot
+            // with purchase provenance + receipt id; reserve credited then
+            // decremented by the meal.
+            TwoAdultPurchaseToMeal_Acceptance(
+                tomasMinutes: 240, annaMinutes: 240, expectedShopper: 2,
+                expectedDepart: 720, expectedEnd: 815, expectedStarted: 2);
+        }
+
+        [Test]
+        public void TwoEmployedAdults_StaggeredShifts_Acceptance_FreeMemberShopsToMeal()
+        {
+            // Slice 6 S6-2 (M4): member available during store hours
+            // (H-D). Tomas 540-min shift 480-1020, Anna free (no work
+            // today). Anna shops — she is free at the earliest candidate
+            // departure, so the trip departs 480, window [480,575];
+            // Tomas's work starts; purchase settles 70c; no reservation
+            // overlaps for either member; next-day meal from the purchased
+            // lot; exact conservation; lot provenance + receipt id;
+            // reserve credited then decremented. (Scheduling half already
+            // proved by TwoEmployedAdults_StaggeredShifts_FreeMemberShops;
+            // Slice 6 adds the meal/conservation legs.)
+            TwoAdultPurchaseToMeal_Acceptance(
+                tomasMinutes: 540, annaMinutes: 0, expectedShopper: 2,
+                expectedDepart: 480, expectedEnd: 575, expectedStarted: 1);
+        }
+
+        private void TwoAdultPurchaseToMeal_Acceptance(int tomasMinutes, int annaMinutes,
+            int expectedShopper, int expectedDepart, int expectedEnd, int expectedStarted)
+        {
+            Fixture f = Fixture.CreatePair();
+            f.Fund(10000);
+
+            HouseholdReserveState reserve = f.Reserve();
+            Assert.IsNotNull(reserve, "the household must hold a staple_food reserve");
+            int reserveTarget = reserve.targetUnits;
+            Assert.Greater(reserveTarget, 0, "the staple_food target must be computed from the catalog, not assumed");
+            int reserveBefore = reserve.currentUnits;
+
+            int storeCashBefore = f.Port.CashBalance;
+            int storeStockBefore = f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId);
+            int totalCashBefore = storeCashBefore + f.Balance();
+            int totalBreadBefore = storeStockBefore + f.BreadUnits();
+            Assert.AreEqual(50000, storeCashBefore, "the fixture store opens with 50000c");
+            Assert.AreEqual(16, storeStockBefore, "the fixture store opens with 16 loaves");
+            Assert.AreEqual(0, f.BreadUnits(), "the household opens with no bread");
+
+            // (1) A valid need with UnitsNeeded > 0 before the trip, raised
+            // by the real monitor from zero stock (2 loaves/day expected
+            // use, so 14u at urgency 1.0).
+            HouseholdPurchasingNeed need = f.RaiseBreadNeedViaMonitor();
+            Assert.IsNotNull(need, "the monitor must open the bread need before the trip");
+            Assert.AreEqual(14, need.UnitsNeeded, "the monitor opens a 14u bread need for a two-adult household at zero stock");
+            Assert.AreEqual(1f, need.Urgency01, "bread at zero stock is maximally urgent");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status, "the need must be open before the trip");
+
+            WorkTask work1 = tomasMinutes > 0 ? f.CreateWorkTask(1, tomasMinutes) : null;
+            WorkTask work2 = annaMinutes > 0 ? f.CreateWorkTask(2, annaMinutes) : null;
+            var workTasks = new List<WorkTask>();
+            var personIds = new List<int>();
+            var minutesList = new List<int>();
+            if (work1 != null)
+            {
+                workTasks.Add(work1);
+                personIds.Add(1);
+                minutesList.Add(tomasMinutes);
+            }
+
+            if (work2 != null)
+            {
+                workTasks.Add(work2);
+                personIds.Add(2);
+                minutesList.Add(annaMinutes);
+            }
+
+            var workDiag = new List<string>();
+            int started;
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                workTasks, personIds, minutesList, out started, workDiag);
+
+            Assert.IsNotNull(batch, "a plan must be created for the open bread need");
+            Assert.IsTrue(batch.TripExecuted, "the trip must execute: " + batch.FailureReason);
+            Assert.AreEqual(expectedShopper, batch.ShopperPersonId,
+                "the shopper must be the policy-preferred member (adult woman first)");
+
+            // (2) The right person shops, in a window that does not
+            // overlap the shopper's own Work reservation (per-member
+            // person-time; the other member's reservation is checked
+            // intact below, not for clock overlap — see the note there).
+            PersonActivityReservation shopping = f.FindReservation(expectedShopper, PersonActivityKind.Shopping);
+            Assert.IsNotNull(shopping, "the trip must have held a shopping reservation");
+            Assert.AreEqual(expectedDepart, shopping.StartMinuteOfDay,
+                "the trip must depart at " + expectedDepart + "; window was [" +
+                shopping.StartMinuteOfDay + "-" + shopping.EndMinuteOfDay + "]");
+            Assert.AreEqual(expectedEnd, shopping.EndMinuteOfDay,
+                "the trip window must end at " + expectedEnd);
+            PersonActivityReservation workRes1 = f.FindReservation(1, PersonActivityKind.Work);
+            PersonActivityReservation workRes2 = f.FindReservation(2, PersonActivityKind.Work);
+            if (work1 != null)
+            {
+                Assert.IsNotNull(workRes1, "Tomas must hold a Work reservation");
+                Assert.IsTrue(f.HasReservation(1, PersonActivityKind.Work, 480, 480 + tomasMinutes, released: false),
+                    "Tomas's Work reservation [480-" + (480 + tomasMinutes) + "] must still be held");
+            }
+            else
+            {
+                Assert.IsNull(workRes1, "Tomas holds no work today, so he must hold no Work reservation");
+            }
+
+            if (work2 != null)
+            {
+                Assert.IsNotNull(workRes2, "Anna must hold a Work reservation");
+                Assert.IsTrue(f.HasReservation(2, PersonActivityKind.Work, 480, 480 + annaMinutes, released: false),
+                    "Anna's Work reservation [480-" + (480 + annaMinutes) + "] must still be held");
+            }
+            else
+            {
+                Assert.IsNull(workRes2, "Anna holds no work today, so she must hold no Work reservation");
+            }
+
+            // The trip window must not overlap the SHOPPER's own Work
+            // reservation (same person, same person-time). It is NOT
+            // compared against the other member's Work reservation: two
+            // different people may hold reservations over the same clock
+            // minutes — M4's [480,575] trip overlaps Tomas's [480,1020]
+            // shift in clock time and that is legitimate, because Anna,
+            // not Tomas, is shopping. Per-member overlap is pinned by
+            // ActiveReservationsOverlap below.
+            PersonActivityReservation shopperWorkRes =
+                expectedShopper == 1 ? workRes1 : workRes2;
+            Assert.IsTrue(!Overlaps(shopping, shopperWorkRes),
+                "the trip window must not overlap the shopper's own Work reservation");
+
+            Assert.IsTrue(!f.ActiveReservationsOverlap(1), "Tomas holds no overlapping reservations");
+            Assert.IsTrue(!f.ActiveReservationsOverlap(2), "Anna holds no overlapping reservations");
+
+            // (3) Travels from the real location: legs execute and the
+            // shopper's location moves home -> store -> home — no teleport.
+            // Proven from the SetPersonLocation WRITES the legs perform
+            // (HouseholdShoppingLoop.cs:859,866), as in S6-1: the loop only
+            // reads the location at departure. The non-shopper must not
+            // move at all.
+            int nonShopper = expectedShopper == 1 ? 2 : 1;
+            var hops = new List<string>();
+            var nonShopperHops = new List<string>();
+            foreach (LocationHop hop in f.Transitions)
+            {
+                if (hop.PersonId == expectedShopper) hops.Add(hop.LocationId);
+                if (hop.PersonId == nonShopper) nonShopperHops.Add(hop.LocationId);
+            }
+
+            Assert.AreEqual(2, hops.Count, "the shopper must move exactly twice: to the store, then home");
+            Assert.AreEqual("store", hops[0], "first move is home -> store");
+            Assert.AreEqual("home", hops[1], "second move is store -> home");
+            Assert.AreEqual(0, nonShopperHops.Count, "the non-shopper must not travel");
+
+            // (4) Paid work intact: every assigned work task starts.
+            Assert.AreEqual(expectedStarted, started,
+                "every assigned work task must start (refusals: " + string.Join(" | ", workDiag) + ")");
+            if (work1 != null)
+            {
+                Assert.AreEqual(TaskStatus.InProgress, work1.Status, "Tomas's work task must be started, not merely assigned");
+            }
+
+            if (work2 != null)
+            {
+                Assert.AreEqual(TaskStatus.InProgress, work2.Status, "Anna's work task must be started, not merely assigned");
+            }
+
+            ShoppingTripResult breadResult = FindNeedResult(batch, HouseholdItemCatalog.BreadId);
+            Assert.IsNotNull(breadResult, "the batch must carry its own bread result");
+            Assert.IsTrue(breadResult.Success, breadResult.FailureReason);
+            Assert.AreEqual(14, breadResult.UnitsAcquired, "the trip must acquire the full 14-loaf need");
+
+            // (5) Exact price: outflow = units sold x 5c, receipt recorded.
+            Assert.AreEqual(70, breadResult.BuyerOutflowCents, "14 loaves x 5c");
+            Assert.IsTrue(!string.IsNullOrEmpty(breadResult.ReceiptId), "the settlement must record a receipt id");
+            Assert.IsTrue(string.IsNullOrEmpty(breadResult.PartialFillReason),
+                "a fully fulfilled trip carries no partial-fill reason");
+
+            // (6) Cash and inventory reconcile: store cash +outflow,
+            // store stock -units, buyer outflow == store cash in, no
+            // receivable.
+            Assert.AreEqual(storeCashBefore + 70, f.Port.CashBalance, "seller cash must gain exactly 70c");
+            Assert.AreEqual(storeStockBefore - 14, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId),
+                "seller stock must fall by exactly the 14 loaves sold");
+            Assert.AreEqual(breadResult.BuyerOutflowCents, breadResult.StoreCashInCents,
+                "buyer outflow must equal store cash in");
+            Assert.AreEqual(0, breadResult.StoreReceivableCents, "cash settlement creates no receivable");
+            Assert.AreEqual(10000 - 70, f.Balance(), "buyer debit must equal 14 loaves x the 5c price");
+
+            // (7) Identifiable goods: a lot with purchase provenance +
+            // receipt id, custody ReceivedAtHousehold.
+            HouseholdItemLot lot = f.BreadLot();
+            Assert.IsNotNull(lot, "the household must hold a bread lot after the purchase");
+            Assert.AreEqual(14, lot.QuantityUnits, "UnitsAcquired must equal the settled units");
+            Assert.IsTrue(lot.SourceLabel.Contains("purchased 14u bread from"),
+                "the lot must carry purchase provenance, got: " + lot.SourceLabel);
+            Assert.IsTrue(lot.SourceLabel.Contains(breadResult.ReceiptId),
+                "the lot provenance must carry the receipt id, got: " + lot.SourceLabel);
+            Assert.IsTrue(HasEvent(breadResult, ShoppingEventKind.Custody),
+                "the custody transfer into the shopper's hands must be recorded");
+            Assert.IsTrue(HasEvent(breadResult, ShoppingEventKind.Receipt),
+                "the physical receipt at the household must be recorded");
+            Assert.AreEqual(0, f.Loop.ActiveCustodyBatches.Count,
+                "no custody batch may be left stranded after receipt");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status, "the need must be fulfilled by the trip");
+            Assert.AreEqual(0, need.UnitsNeeded, "the fulfilled need must have nothing left");
+
+            // (9, receipt half) The reserve mirror credits the receipt
+            // (clamped to target).
+            int credited = Math.Min(reserveTarget, reserveBefore + 14);
+            Assert.AreEqual(credited, reserve.currentUnits,
+                "the receipt must credit the reserve by the units received (clamped to target)");
+
+            // (10, pre-meals) Total cash and total bread conserved; the
+            // fulfilled need is never re-bought.
+            Assert.AreEqual(totalCashBefore, f.Port.CashBalance + f.Balance(),
+                "cash must move, not be created or destroyed");
+            Assert.AreEqual(totalBreadBefore, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId) + f.BreadUnits(),
+                "bread must move, not be created or destroyed");
+            List<HouseholdErrandPlan> replans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
+            Assert.AreEqual(0, replans.Count, "no open need remains, so no second plan — and no second sale — may form");
+            Assert.AreEqual(2, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId),
+                "the store stock must be untouched by the re-plan");
+
+            // --- Day 1: the meal leg (points 8-9), reusing the S6-1
+            // helper. DriveNextDayMeal closes one prior-day work task;
+            // the other adult's work (when both worked) is closed first
+            // so nobody is left holding an InProgress task into day 1.
+            WorkTask closeWork = work2 ?? work1;
+            WorkTask otherWork = work2 != null ? work1 : null;
+            if (otherWork != null)
+            {
+                Assert.IsTrue(f.Tasks.CompleteTask(otherWork.TaskId, TaskOutcome.Success, 0, f.Budgets),
+                    "the other adult's day-0 work must complete at day end");
+            }
+
+            int receivedLotId = lot.LotId;
+            IReadOnlyList<HouseholdMealRecord> meals = f.DriveNextDayMeal(closeWork);
+            Assert.Greater(meals.Count, 0, "at least one meal must be served on day 1");
+
+            // (8) At least one meal served from the purchased lot, with
+            // the lot id in the meal log.
+            int eaten = 0;
+            bool lotReferenced = false;
+            foreach (HouseholdMealRecord record in meals)
+            {
+                if (record == null || record.ItemsConsumed == null) continue;
+                foreach (MealItemConsumption consumed in record.ItemsConsumed)
+                {
+                    if (consumed != null
+                        && string.Equals(consumed.ItemId, HouseholdItemCatalog.BreadId, StringComparison.Ordinal)
+                        && consumed.LotId == receivedLotId)
+                    {
+                        lotReferenced = true;
+                        eaten += consumed.QuantityUnits;
+                    }
+                }
+            }
+
+            Assert.IsTrue(lotReferenced,
+                "at least one day-1 meal record must reference the purchased lot id " + receivedLotId);
+            Assert.Greater(eaten, 0, "the day-1 meals must have eaten bread from the purchased lot");
+
+            // (9, consumption half) The meal consumption mirror decrements
+            // the reserve by the loaves eaten.
+            Assert.AreEqual(Math.Max(0, credited - eaten), reserve.currentUnits,
+                "meal consumption must decrement the reserve by the loaves eaten");
+            Assert.AreEqual(14 - eaten, f.BreadUnits(),
+                "the household must hold 14 loaves minus the loaves eaten");
+
+            // (10, post-meals) Bread conservation with consumption
+            // accounted; cash unchanged by meals; need stays fulfilled.
+            Assert.AreEqual(totalBreadBefore,
+                f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId) + f.BreadUnits() + eaten,
+                "bread must be conserved across purchase and meals");
+            Assert.AreEqual(totalCashBefore, f.Port.CashBalance + f.Balance(),
+                "cash must stay conserved after meals");
+            Assert.AreEqual(0, f.OpenNeedCount(HouseholdItemCatalog.BreadId),
+                "the fulfilled need must never be re-bought");
+        }
+
+        [Test]
         public void NoDoubleBookingAfterReorder()
         {
             // Slice 4 test 4: after a day with both a trip and work, the

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Primitives;
+using UnityEngine;
 
 namespace LandLedgers.Tasks
 {
@@ -86,6 +87,13 @@ namespace LandLedgers.Tasks
         public int StartedDay { get; set; }
         public float CompletedSeconds { get; set; }
         public int CompletedDay { get; set; }
+
+        /// <summary>
+        /// Outcome recorded at a terminal transition (Slice 3, §4.1 terminal line):
+        /// the <see cref="WorkTask.Outcome"/> the authority held when the completion /
+        /// cancellation / rework notification arrived. None for open tasks.
+        /// </summary>
+        public TaskOutcome Outcome { get; set; }
 
         public string LastTransitionKind { get; set; }
         public float LastTransitionSeconds { get; set; }
@@ -381,7 +389,9 @@ namespace LandLedgers.Tasks
     /// (<see cref="Classify"/>), the diagnostic settings
     /// (<see cref="TaskDurationDiagnosticSettings"/>), the refusal feed
     /// (<see cref="RecordRefusal"/>), and the optional evidence lookups below.
-    /// Still no warnings (Slice 3) and no driver wiring (Slice 4). The service is
+    /// Slice 3 adds warning emission (<see cref="Evaluate"/>) through the injected
+    /// <see cref="LogSink"/>, with the §4.2 caps and the daily summary line, and
+    /// still no driver wiring (Slice 4). The service is
     /// read-only with respect to every economic authority: it holds no ledger, no
     /// obligation, no inventory, and no custody, and it never calls a
     /// state-changing method on <see cref="TaskAuthority"/> (or anything else).
@@ -416,6 +426,29 @@ namespace LandLedgers.Tasks
         private TaskDurationDiagnosticSettings settings = TaskDurationDiagnosticSettings.Defaults;
         private readonly Dictionary<string, TaskTimingRecord> records = new Dictionary<string, TaskTimingRecord>(StringComparer.Ordinal);
         private readonly List<string> recordOrder = new List<string>();
+
+        // ---- Slice 3: warning emission + bounding / rate-limiting (plan §4, §5 Slice 3) ----
+        // The sink defaults to Debug.LogWarning (production) and is settable for tests,
+        // which bind a capturing Action<string>. The service never calls Debug directly
+        // except through the sink, so the harness can assert exact lines.
+        private Action<string> logSink;
+
+        /// <summary>Day-keyed map of the last day each task warned (plan §4.2, LogRefusalDayKeyed precedent).</summary>
+        private readonly Dictionary<string, int> lastWarnedDay = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        /// <summary>Tasks warned as open overruns at least once (drives the summary's new/repeating split).</summary>
+        private readonly HashSet<string> warnedTaskIds = new HashSet<string>(StringComparer.Ordinal);
+
+        /// <summary>Terminal tasks whose completed-overrun line has already been emitted (warn once, §4.2).</summary>
+        private readonly HashSet<string> terminalWarnedIds = new HashSet<string>(StringComparer.Ordinal);
+
+        private int warningsDay = -1;
+        private int warningsToday;
+        private readonly Dictionary<string, int> warningsPerDefinitionToday = new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> warningsPerTaskToday = new Dictionary<string, int>(StringComparer.Ordinal);
+        private int lastSummaryDay = -1;
+        private int lastEvaluationFailedDay = -1;
+        private int evictedCountAtLastSummary;
 
         public TaskDurationDiagnostics()
         {
@@ -465,8 +498,388 @@ namespace LandLedgers.Tasks
         /// </summary>
         public Func<int, int, List<TaskDurationSleepWindow>> ScheduleLookup { get; set; }
 
+        /// <summary>
+        /// The log sink warnings and summaries are emitted through (Slice 3, plan §4.2).
+        /// Defaults to <see cref="Debug.LogWarning"/>; tests bind a capturing
+        /// <see cref="Action{T}"/>. Assigning null restores the default. The service
+        /// never calls <see cref="Debug"/> directly except through this sink.
+        /// </summary>
+        public Action<string> LogSink
+        {
+            get { return logSink ?? (message => Debug.LogWarning(message)); }
+            set { logSink = value; }
+        }
+
         /// <summary>Records evicted by the store bound so far.</summary>
         public int EvictedRecordCount { get; private set; }
+
+        /// <summary>
+        /// Slice 3 — the daily evaluation pass (plan §4, §5 Slice 3). Classifies every
+        /// record, emits warning lines through <see cref="LogSink"/> for open tasks
+        /// whose verdict is Unexplained or Escalated and for terminal tasks whose
+        /// verdict is Unexplained (once, at completion), then emits the daily summary
+        /// line. Enforces the §4.2 caps: at most <see
+        /// cref="TaskDurationDiagnosticSettings.MaxWarningsPerDay"/> warning lines per
+        /// day, at most <see
+        /// cref="TaskDurationDiagnosticSettings.MaxWarningsPerDefinitionPerDay"/> per
+        /// definition per day, at most <see
+        /// cref="TaskDurationDiagnosticSettings.MaxWarningsPerTaskPerDay"/> per task per
+        /// day (day-keyed, <see cref="lastWarnedDay"/>). The summary is emitted at
+        /// most once per day, and only when at least one overrun is open or a terminal
+        /// overrun was warned that day; excess warnings are counted in its omitted
+        /// count, never silently dropped.
+        ///
+        /// Evaluation points only (§4.2): this is called once per day by the day drive
+        /// (Slice 4) and once at a terminal transition — never per tick, never per
+        /// RecordWork call. A diagnostic bug can never abort the day drive: the whole
+        /// pass is wrapped in try/catch, a record whose classification throws is
+        /// skipped (the pass continues with the other records), and at most one
+        /// "[TaskDuration] evaluation failed" line is logged per day.
+        /// </summary>
+        public void Evaluate(float nowSeconds, int nowDay)
+        {
+            try
+            {
+                EvaluateInternal(nowSeconds, nowDay);
+            }
+            catch (Exception ex)
+            {
+                LogEvaluationFailedOnce(nowDay, ex);
+            }
+        }
+
+        private void EvaluateInternal(float nowSeconds, int nowDay)
+        {
+            TaskDurationDiagnosticSettings diagnosticSettings = settings ?? TaskDurationDiagnosticSettings.Defaults;
+
+            if (nowDay != warningsDay)
+            {
+                warningsDay = nowDay;
+                warningsToday = 0;
+                warningsPerDefinitionToday.Clear();
+                warningsPerTaskToday.Clear();
+            }
+
+            int openOverrunCount = 0;
+            int newCount = 0;
+            int repeatingCount = 0;
+            int omittedCount = 0;
+            int terminalWarnedToday = 0;
+            TaskTimingRecord longestOpen = null;
+            TaskTimingVerdict longestVerdict = null;
+            float longestSpan = -1f;
+
+            // Record order is insertion order (oldest first), so the caps favour the
+            // longest-open tasks and the longest-open pick is stable on ties.
+            foreach (string taskId in new List<string>(recordOrder))
+            {
+                TaskTimingRecord record;
+                if (!records.TryGetValue(taskId, out record))
+                {
+                    continue;
+                }
+
+                TaskTimingVerdict verdict;
+                try
+                {
+                    verdict = Classify(record, nowSeconds, nowDay);
+                }
+                catch (Exception ex)
+                {
+                    // One bad record (e.g. a throwing evidence lookup) must not abort
+                    // the pass: skip it, note the failure once per day, keep going.
+                    LogEvaluationFailedOnce(nowDay, ex);
+                    continue;
+                }
+
+                if (verdict == null)
+                {
+                    continue;
+                }
+
+                if (IsTerminalStatus(record.CurrentStatus))
+                {
+                    // Terminal tasks warn once, at completion (P2 alone decides — see
+                    // Classify). A cap-blocked terminal warning is NOT marked warned:
+                    // it is retried on a later evaluation instead of being lost.
+                    if (verdict.Verdict == TaskTimingVerdictKind.Unexplained
+                        && !terminalWarnedIds.Contains(record.TaskId)
+                        && TryEmitWarning(record, verdict, nowSeconds, nowDay, true))
+                    {
+                        terminalWarnedIds.Add(record.TaskId);
+                        terminalWarnedToday++;
+                    }
+
+                    continue;
+                }
+
+                if (verdict.Verdict != TaskTimingVerdictKind.Unexplained
+                    && verdict.Verdict != TaskTimingVerdictKind.Escalated)
+                {
+                    continue;
+                }
+
+                openOverrunCount++;
+                float openSpan = record.CreatedSeconds >= 0f
+                    ? Math.Max(0f, nowSeconds - record.CreatedSeconds)
+                    : 0f;
+                if (openSpan > longestSpan)
+                {
+                    longestSpan = openSpan;
+                    longestOpen = record;
+                    longestVerdict = verdict;
+                }
+
+                int perTask;
+                warningsPerTaskToday.TryGetValue(record.TaskId, out perTask);
+                if (perTask >= diagnosticSettings.MaxWarningsPerTaskPerDay)
+                {
+                    omittedCount++;
+                    continue;
+                }
+
+                if (warningsToday >= diagnosticSettings.MaxWarningsPerDay)
+                {
+                    omittedCount++;
+                    continue;
+                }
+
+                int perDefinition;
+                warningsPerDefinitionToday.TryGetValue(record.DefinitionId, out perDefinition);
+                if (perDefinition >= diagnosticSettings.MaxWarningsPerDefinitionPerDay)
+                {
+                    omittedCount++;
+                    continue;
+                }
+
+                Emit(FormatWarningLine(record, verdict, nowSeconds, nowDay, false));
+                warningsToday++;
+                warningsPerTaskToday[record.TaskId] = perTask + 1;
+                warningsPerDefinitionToday[record.DefinitionId] = perDefinition + 1;
+                lastWarnedDay[record.TaskId] = nowDay;
+                if (warnedTaskIds.Add(record.TaskId))
+                {
+                    newCount++;
+                }
+                else
+                {
+                    repeatingCount++;
+                }
+            }
+
+            if ((openOverrunCount > 0 || terminalWarnedToday > 0) && lastSummaryDay != nowDay)
+            {
+                Emit(FormatSummaryLine(nowDay, openOverrunCount, newCount, repeatingCount,
+                    omittedCount, longestOpen, longestVerdict));
+                lastSummaryDay = nowDay;
+                evictedCountAtLastSummary = EvictedRecordCount;
+            }
+        }
+
+        /// <summary>
+        /// Emits one warning line if the §4.2 caps allow it (global + per-definition;
+        /// the per-task cap does not apply to a terminal line — it warns once ever, at
+        /// completion, even if the task warned as open earlier the same day). Returns
+        /// false when a cap blocks the line, so the caller can retry it later.
+        /// </summary>
+        private bool TryEmitWarning(TaskTimingRecord record, TaskTimingVerdict verdict,
+            float nowSeconds, int nowDay, bool terminal)
+        {
+            TaskDurationDiagnosticSettings diagnosticSettings = settings ?? TaskDurationDiagnosticSettings.Defaults;
+            if (warningsToday >= diagnosticSettings.MaxWarningsPerDay)
+            {
+                return false;
+            }
+
+            int perDefinition;
+            warningsPerDefinitionToday.TryGetValue(record.DefinitionId, out perDefinition);
+            if (perDefinition >= diagnosticSettings.MaxWarningsPerDefinitionPerDay)
+            {
+                return false;
+            }
+
+            Emit(FormatWarningLine(record, verdict, nowSeconds, nowDay, terminal));
+            warningsToday++;
+            warningsPerDefinitionToday[record.DefinitionId] = perDefinition + 1;
+            if (terminal)
+            {
+                lastWarnedDay[record.TaskId] = nowDay;
+            }
+
+            return true;
+        }
+
+        /// <summary>One warning line in the exact §4.1 format, fields in fixed order.</summary>
+        private string FormatWarningLine(TaskTimingRecord record, TaskTimingVerdict verdict,
+            float nowSeconds, int nowDay, bool terminal)
+        {
+            float queueSeconds;
+            float assignedSeconds;
+            float activeSeconds;
+            float blockedSeconds;
+            CurrentBucketTotals(record, nowSeconds, out queueSeconds, out assignedSeconds,
+                out activeSeconds, out blockedSeconds);
+
+            string expected = verdict.ExpectedMinutes + "min"
+                + (verdict.IsProvisional ? " (provisional)" : string.Empty);
+            string worker = record.AssignedSeconds >= 0f ? record.AssigneeId.ToString() : "unassigned";
+            string evidence = TruncateEvidence(verdict.EvidenceText);
+            float secondsSinceLastTransition = record.LastTransitionSeconds >= 0f
+                ? Math.Max(0f, nowSeconds - record.LastTransitionSeconds)
+                : 0f;
+            string outcome = terminal ? record.Outcome.ToString() : "open";
+            string prefix = terminal ? "completed-overrun" : "overrun";
+
+            return "[TaskDuration] " + prefix + " day " + nowDay
+                + ": task " + record.TaskId
+                + " '" + record.DefinitionId + "'"
+                + " owner " + record.OwnerId.ToString()
+                + " worker " + worker
+                + " expected " + expected
+                + " active " + WholeMinutes(activeSeconds) + "min"
+                + " (" + WholeSeconds(activeSeconds) + "s"
+                + ", worked " + record.MinutesWorkedLastSeen + "/" + record.PlannedMinutesLastSeen + "min)"
+                + " queue " + WholeMinutes(queueSeconds) + "min"
+                + " blocked " + WholeMinutes(blockedSeconds) + "min"
+                + " (" + ReasonClassLabel(verdict.ReasonClass) + ": " + evidence + ")"
+                + " travel " + WholeMinutes(record.AccumulatedTravelSeconds) + "min"
+                + " (none linked)"
+                + " last-transition " + record.LastTransitionKind
+                + " day " + record.LastTransitionDay
+                + " (" + WholeSeconds(secondsSinceLastTransition) + "s ago)"
+                + " state " + record.CurrentStatus.ToString()
+                + " (" + TaskLifecyclePolicy.Describe(record.CurrentStatus) + ")"
+                + " outcome " + outcome;
+        }
+
+        /// <summary>The §4.1 daily summary line. Evictions since the last summary are appended when any occurred (§4.2).</summary>
+        private string FormatSummaryLine(int nowDay, int openOverrunCount, int newCount,
+            int repeatingCount, int omittedCount, TaskTimingRecord longestOpen,
+            TaskTimingVerdict longestVerdict)
+        {
+            string line = "[TaskDuration] summary day " + nowDay
+                + ": " + openOverrunCount + " open overrun(s)"
+                + " (" + newCount + " new, " + repeatingCount + " repeating, "
+                + omittedCount + " omitted by cap); longest open: ";
+            if (longestOpen == null || longestVerdict == null)
+            {
+                line += "none";
+            }
+            else
+            {
+                int openDays = longestOpen.CreatedDay >= 0 ? nowDay - longestOpen.CreatedDay : 0;
+                line += "task " + longestOpen.TaskId
+                    + " '" + longestOpen.DefinitionId + "'"
+                    + " " + openDays + "d"
+                    + ", expected " + longestVerdict.ExpectedMinutes + "min"
+                    + ", " + ReasonClassLabel(longestVerdict.ReasonClass);
+            }
+
+            int evictedSinceLastSummary = EvictedRecordCount - evictedCountAtLastSummary;
+            if (evictedSinceLastSummary > 0)
+            {
+                line += "; evicted " + evictedSinceLastSummary + " record(s)";
+            }
+
+            return line;
+        }
+
+        /// <summary>
+        /// Bucket totals at the evaluation time, including the spell still in progress
+        /// (Slice 1 closes buckets only on transitions, so the open spell must be
+        /// counted here — the same rule Classify uses).
+        /// </summary>
+        private static void CurrentBucketTotals(TaskTimingRecord record, float nowSeconds,
+            out float queueSeconds, out float assignedSeconds, out float activeSeconds,
+            out float blockedSeconds)
+        {
+            queueSeconds = record.AccumulatedQueueSeconds;
+            assignedSeconds = record.AccumulatedAssignedWaitingSeconds;
+            activeSeconds = record.AccumulatedActiveSeconds;
+            blockedSeconds = record.AccumulatedBlockedSeconds;
+            if (record.StateEnteredSeconds < 0f || nowSeconds <= record.StateEnteredSeconds)
+            {
+                return;
+            }
+
+            float open = nowSeconds - record.StateEnteredSeconds;
+            switch (record.CurrentStatus)
+            {
+                case TaskStatus.Queued:
+                    queueSeconds += open;
+                    break;
+                case TaskStatus.Assigned:
+                case TaskStatus.ResourcesReserved:
+                    assignedSeconds += open;
+                    break;
+                case TaskStatus.InProgress:
+                    activeSeconds += open;
+                    break;
+                case TaskStatus.Paused:
+                case TaskStatus.WaitingOnDependency:
+                case TaskStatus.WaitingOnPassiveProcess:
+                    blockedSeconds += open;
+                    break;
+            }
+        }
+
+        /// <summary>Evidence text truncated to MaxBlockReasonChars (§4.2); never null.</summary>
+        private string TruncateEvidence(string evidence)
+        {
+            if (string.IsNullOrEmpty(evidence))
+            {
+                return "no reason recorded";
+            }
+
+            TaskDurationDiagnosticSettings diagnosticSettings = settings ?? TaskDurationDiagnosticSettings.Defaults;
+            int max = diagnosticSettings.MaxBlockReasonChars;
+            if (max > 0 && evidence.Length > max)
+            {
+                return evidence.Substring(0, max);
+            }
+
+            return evidence;
+        }
+
+        private static int WholeMinutes(float seconds)
+        {
+            return seconds > 0f ? (int)(seconds / 60f) : 0;
+        }
+
+        private static long WholeSeconds(float seconds)
+        {
+            return seconds > 0f ? (long)Math.Round(seconds) : 0L;
+        }
+
+        /// <summary>
+        /// Logs one "[TaskDuration] evaluation failed: &lt;type&gt;" line, at most once
+        /// per day (§4.2). Never throws: a failing sink is swallowed so a diagnostic
+        /// bug can never abort the day drive.
+        /// </summary>
+        private void LogEvaluationFailedOnce(int nowDay, Exception ex)
+        {
+            if (lastEvaluationFailedDay == nowDay)
+            {
+                return;
+            }
+
+            lastEvaluationFailedDay = nowDay;
+            try
+            {
+                string typeName = ex != null ? ex.GetType().Name : "Exception";
+                Emit("[TaskDuration] evaluation failed: " + typeName);
+            }
+            catch (Exception)
+            {
+                // The sink itself failed; there is nowhere safe to report it.
+            }
+        }
+
+        /// <summary>Emits one line through the injected sink (Debug.LogWarning by default).</summary>
+        private void Emit(string line)
+        {
+            LogSink(line);
+        }
 
         public int RecordCount
         {
@@ -1168,6 +1581,11 @@ namespace LandLedgers.Tasks
                 case "CompleteTask":
                     record.CompletedSeconds = now;
                     record.CompletedDay = day;
+                    record.Outcome = task.Outcome;
+                    break;
+                case "CancelTask":
+                case "MarkReworkRequired":
+                    record.Outcome = task.Outcome;
                     break;
                 case "MarkWaitingOnDependency":
                     record.LastBlockReason = task.DependencyDescription;

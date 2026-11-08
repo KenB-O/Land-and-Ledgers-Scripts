@@ -912,5 +912,459 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.AreEqual(7200f, record.AccumulatedActiveSeconds, 0.001f);
             Assert.AreEqual(7200f, record.AccumulatedBlockedSeconds, 0.001f);
         }
+
+        // ---- Slice 3: warning emission + bounding / rate-limiting (plan §5 Slice 3) ----
+        // All Slice 3 tests drive the real TaskAuthority with a fake advancing clock
+        // and the real TaskDurationDiagnostics service as the installed observer, with
+        // the log sink bound to a capturing List<string> instead of Debug.LogWarning.
+        // No driver wiring exists yet: Evaluate is called by the tests, once per day,
+        // plus once at completion. These tests are written FIRST (reproducing-first):
+        // they fail to build before the Slice 3 implementation (no Evaluate / LogSink)
+        // and must pass after it.
+
+        /// <summary>Binds the service's log sink to a capturing list; returns the list.</summary>
+        private static List<string> CaptureLines(TaskDurationDiagnostics diagnostics)
+        {
+            var lines = new List<string>();
+            diagnostics.LogSink = lines.Add;
+            return lines;
+        }
+
+        private static int CountLinesStartingWith(List<string> lines, string prefix)
+        {
+            int count = 0;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static void RegisterDefinition(TaskAuthority authority, string definitionId, int baseMinutes)
+        {
+            string reason;
+            Assert.IsTrue(authority.RegisterDefinition(new TaskDefinition(definitionId, "Sweep", baseMinutes), out reason), reason);
+        }
+
+        /// <summary>Creates, assigns and starts a task at the fake clock's current time; the task is then left un-progressed (stuck).</summary>
+        private static WorkTask StartStuckTask(TaskAuthority authority, WorkTimeBudgetStore budgets, string definitionId, EntityId owner, EntityId worker, int day)
+        {
+            string reason;
+            WorkTask task = authority.CreateTask(definitionId, owner, day);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, worker, budgets, day, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, day, out reason), reason);
+            return task;
+        }
+
+        // Slice 3 / §3.5 + §4.1: the 15-minute cargo loading task stuck two days emits
+        // exactly one warning line carrying every §4 field in fixed order.
+        [Test]
+        public void Warn_FifteenMinuteLoad_TwoDays_EmitsActionableWarning()
+        {
+            Assert.AreEqual(15, FreightCompanyRuntime.FreightMinutes(300, FreightGoodsClass.Standard));
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("fr.load-freight", 1, out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            string reason;
+            WorkTask task = authority.CreateTaskWithPlannedMinutes("fr.load-freight", Business(3), 10, 15, "ship-1");
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 10, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 10, out reason), reason);
+            Assert.AreEqual(15, task.PlannedMinutes);
+
+            // Day 12, 08:00: still InProgress, 0 minutes worked, no reason recorded anywhere.
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun day 12:"),
+                "exactly one overrun warning line; the daily summary is a separate line");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary day 12:"),
+                "exactly one daily summary line");
+            string warning = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] overrun", StringComparison.Ordinal))
+                {
+                    warning = line;
+                }
+            }
+
+            Assert.IsNotNull(warning);
+            string expected = "[TaskDuration] overrun day 12: task " + task.TaskId.ToString()
+                + " 'fr.load-freight' owner " + Business(3).ToString()
+                + " worker " + Person(1).ToString()
+                + " expected 15min active 2880min (172800s, worked 0/15min)"
+                + " queue 0min blocked 0min (none recorded: no reason recorded)"
+                + " travel 0min (none linked)"
+                + " last-transition StartTask day 10 (172800s ago)"
+                + " state InProgress (Active work in progress.) outcome open";
+            Assert.AreEqual(expected, warning,
+                "every §4.1 field in fixed order: task, definition, owner, worker, expected, active, worked, queue, blocked, travel, last transition, state, outcome");
+        }
+
+        // Slice 3 / §3.6: the legitimate two-day supplier delay emits NO warning line,
+        // and no emitted line mislabels the 47 h wait as active loading.
+        [Test]
+        public void Warn_LegitimateTwoDaySupplierDelay_EmitsNoActiveLoadingWarning()
+        {
+            const string dependency = "notions order ord-7, arrives day 15";
+            var clock = new FakeClock { Now = Day(1, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.SupplierArrivalLookup = id => id == dependency ? (int?)15 : null;
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 1, Business(1));
+            string reason;
+            Assert.IsTrue(authority.MarkWaitingOnDependency(task.TaskId, dependency, "notions in transit", out reason), reason);
+
+            clock.Now = Day(3, 25200); // day 3 07:00: exactly 47 h after the day-1 08:00 order
+            diagnostics.Evaluate(clock.Now, 3);
+
+            Assert.AreEqual(0, lines.Count,
+                "a legitimate L1 wait warns nothing and earns no summary line either: no overrun is open");
+            string joined = string.Join("\n", lines.ToArray());
+            Assert.IsTrue(joined.IndexOf("2820min", StringComparison.Ordinal) < 0,
+                "no line may present the 47 h supplier wait as active loading minutes");
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate,
+                diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 3).Verdict);
+        }
+
+        // Slice 3 / §4.2: one warning per task per day (day-keyed, LogRefusalDayKeyed
+        // precedent). Evaluating twice on the same day warns once; the next day warns again.
+        [Test]
+        public void Warn_SameTask_WarnsAtMostOncePerDay()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            StartStuckTask(authority, budgets, "test.sweep", Business(1), Person(1), 10);
+
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+            diagnostics.Evaluate(clock.Now, 12);
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "two evaluations on the same day: one warning line");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary"),
+                "the daily summary is also emitted at most once per day");
+
+            clock.Now = Day(13, 28800);
+            diagnostics.Evaluate(clock.Now, 13);
+            Assert.AreEqual(2, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "the next day warns again (a repeating warning, not a duplicate)");
+            Assert.AreEqual(2, CountLinesStartingWith(lines, "[TaskDuration] summary"));
+        }
+
+        // Slice 3 / §4.2: the global cap (12/day) binds before the log floods. 20
+        // overrunning tasks on distinct definitions (so the per-definition cap cannot
+        // bind first): at most 12 warning lines + 1 summary, and the summary's
+        // omittedCount accounts for the other 8.
+        [Test]
+        public void Warn_GlobalCap_SummaryCountsOmitted()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            for (int i = 0; i < 20; i++)
+            {
+                RegisterDefinition(authority, "test.cap" + i, 10);
+                StartStuckTask(authority, budgets, "test.cap" + i, Business(1), Person(100 + i), 10);
+            }
+
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+
+            Assert.AreEqual(12, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "MaxWarningsPerDay 12: at most 12 warning lines across all tasks");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary"),
+                "exactly one daily summary line");
+            string summary = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] summary", StringComparison.Ordinal))
+                {
+                    summary = line;
+                }
+            }
+
+            Assert.IsNotNull(summary);
+            StringAssert.Contains("20 open overrun(s)", summary);
+            StringAssert.Contains("12 new", summary);
+            StringAssert.Contains("0 repeating", summary);
+            StringAssert.Contains("8 omitted by cap", summary,
+                "the 8 tasks over the cap are counted in omittedCount, never silently dropped");
+        }
+
+        // Slice 3 / §4.2: the per-definition cap (3/day) stops one broken definition
+        // family from flooding the log. 5 overrunning tasks of one definition: at most
+        // 3 lines for that definition that day, 2 omitted.
+        [Test]
+        public void Warn_PerDefinitionCap_Applies()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            for (int i = 0; i < 5; i++)
+            {
+                StartStuckTask(authority, budgets, "test.sweep", Business(1), Person(200 + i), 10);
+            }
+
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+
+            Assert.AreEqual(3, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "MaxWarningsPerDefinitionPerDay 3: at most 3 lines for one definition per day");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary"));
+            string summary = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] summary", StringComparison.Ordinal))
+                {
+                    summary = line;
+                }
+            }
+
+            Assert.IsNotNull(summary);
+            StringAssert.Contains("5 open overrun(s)", summary);
+            StringAssert.Contains("2 omitted by cap", summary);
+        }
+
+        // Slice 3 / §4.2: a terminal overrun is logged once at completion (as a
+        // completed-overrun line) and never re-warned on later days.
+        [Test]
+        public void Warn_CompletedTask_WarnsOnce_ThenSilent()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("fr.load-freight", 1, out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            string reason;
+            WorkTask task = authority.CreateTaskWithPlannedMinutes("fr.load-freight", Business(3), 10, 15, "ship-1");
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 10, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 10, out reason), reason);
+
+            clock.Now = Day(12, 28800);
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 12, budgets),
+                "completion at day 12 with 0 minutes worked still completes (Slice 1 precedent)");
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+
+            diagnostics.Evaluate(clock.Now, 12);
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] completed-overrun"),
+                "exactly one terminal warning, once at completion");
+            Assert.AreEqual(0, CountLinesStartingWith(lines, "[TaskDuration] overrun day"),
+                "a terminal task never also warns as an open overrun");
+            string terminal = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] completed-overrun", StringComparison.Ordinal))
+                {
+                    terminal = line;
+                }
+            }
+
+            Assert.IsNotNull(terminal);
+            StringAssert.Contains("completed-overrun day 12:", terminal);
+            StringAssert.Contains("state Complete (Finished; outcome recorded.)", terminal);
+            StringAssert.Contains("outcome Success", terminal);
+            StringAssert.Contains("expected 15min", terminal);
+            StringAssert.Contains("active 2880min (172800s, worked 0/15min)", terminal);
+
+            clock.Now = Day(13, 28800);
+            diagnostics.Evaluate(clock.Now, 13);
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] completed-overrun"),
+                "later evaluations emit nothing more for the terminal task");
+            Assert.AreEqual(2, lines.Count,
+                "day 13 adds nothing: the day-12 lines are the completed-overrun line plus its summary line");
+            string day12Summary = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] summary day 12", StringComparison.Ordinal))
+                {
+                    day12Summary = line;
+                }
+            }
+
+            Assert.AreEqual(
+                "[TaskDuration] summary day 12: 0 open overrun(s) (0 new, 0 repeating, 0 omitted by cap); longest open: none",
+                day12Summary,
+                "a terminal-only day still earns a summary (§4.1: an overrun was warned that day), with no open overrun to name");
+            Assert.AreEqual(0, CountLinesStartingWith(lines, "[TaskDuration] summary day 13"),
+                "day 13 has no open overrun and warns nothing, so no summary line");
+        }
+
+        // Slice 3 / §4.2: the record store is bounded (MaxTrackedRecords, test-sized):
+        // terminal records are evicted first, open records are never evicted to make
+        // room, and the eviction count is reported on the daily summary line.
+        [Test]
+        public void Warn_RecordStore_Bounded_EvictsTerminalFirst()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.MaxTrackedRecords = 5;
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            var terminalIds = new List<EntityId>();
+            for (int i = 0; i < 5; i++)
+            {
+                string reason;
+                WorkTask task = authority.CreateTask("test.sweep", Business(1), 10);
+                Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 10, out reason), reason);
+                Assert.IsTrue(authority.StartTask(task.TaskId, 10, out reason), reason);
+                Assert.IsTrue(authority.RecordWork(task.TaskId, task.PlannedMinutes, budgets, 10, out reason), reason);
+                Assert.AreEqual(TaskStatus.Complete, task.Status);
+                terminalIds.Add(task.TaskId);
+            }
+
+            Assert.AreEqual(5, diagnostics.RecordCount, "the store holds the 5 terminal records");
+            WorkTask openA = StartStuckTask(authority, budgets, "test.sweep", Business(1), Person(1), 10);
+            WorkTask openB = StartStuckTask(authority, budgets, "test.sweep", Business(1), Person(2), 10);
+
+            Assert.AreEqual(5, diagnostics.RecordCount, "the store never grows past MaxTrackedRecords");
+            Assert.AreEqual(2, diagnostics.EvictedRecordCount, "two terminal records were evicted to make room");
+            Assert.IsNull(diagnostics.GetRecord(terminalIds[0]), "oldest terminal evicted first");
+            Assert.IsNull(diagnostics.GetRecord(terminalIds[1]), "second-oldest terminal evicted next");
+            Assert.IsNotNull(diagnostics.GetRecord(terminalIds[4]), "the newest terminal survives while older terminals remain to evict");
+            Assert.IsNotNull(diagnostics.GetRecord(openA.TaskId), "an open record is never evicted");
+            Assert.IsNotNull(diagnostics.GetRecord(openB.TaskId), "an open record is never evicted");
+
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+            string summary = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] summary", StringComparison.Ordinal))
+                {
+                    summary = line;
+                }
+            }
+
+            Assert.IsNotNull(summary);
+            StringAssert.Contains("evicted 2 record(s)", summary,
+                "the eviction count is reported on the summary line (§4.2)");
+        }
+
+        // Slice 3 / §4.2: a diagnostic bug must never abort a day drive. A record whose
+        // classification throws (here: the supplier-arrival lookup throws inside
+        // Classify) is skipped, Evaluate returns without an exception, at most one
+        // "[TaskDuration] evaluation failed" line is logged per day, and the other
+        // overrunning task still warns.
+        [Test]
+        public void Warn_EvaluateNeverThrows()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            diagnostics.SupplierArrivalLookup = id => { throw new InvalidOperationException("test lookup failure"); };
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            WorkTask throwing = CreateAssignStart(authority, budgets, 10, Business(1));
+            string reason;
+            Assert.IsTrue(
+                authority.MarkWaitingOnDependency(throwing.TaskId, "order xyz", "waiting", out reason), reason);
+
+            // A second, plain stuck task whose classification never touches the lookup.
+            StartStuckTask(authority, budgets, "test.sweep", Business(1), Person(2), 10);
+
+            clock.Now = Day(12, 28800);
+            Assert.DoesNotThrow(() => diagnostics.Evaluate(clock.Now, 12),
+                "Evaluate must never throw into its caller (the day drive)");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] evaluation failed"),
+                "at most one evaluation-failed line per day");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "the other overrunning task still warns: one bad record does not abort the pass");
+
+            diagnostics.Evaluate(clock.Now, 12);
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] evaluation failed"),
+                "a second evaluation the same day logs no second failed line");
+        }
+
+        // Slice 3 / §4.1: the daily summary line's exact shape — open count, new /
+        // repeating / omitted split, longest open with definition + days + reason class —
+        // and the new/repeating split across days.
+        [Test]
+        public void Warn_DailySummaryLine_Shape()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics("fr.load-freight", 1, out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            string reason;
+            WorkTask first = authority.CreateTaskWithPlannedMinutes("fr.load-freight", Business(3), 10, 15, "ship-1");
+            Assert.IsTrue(authority.AssignTask(first.TaskId, Person(1), budgets, 10, out reason), reason);
+            Assert.IsTrue(authority.StartTask(first.TaskId, 10, out reason), reason);
+            RegisterDefinition(authority, "test.sweep", 10);
+            WorkTask second = StartStuckTask(authority, budgets, "test.sweep", Business(1), Person(2), 10);
+
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary"),
+                "exactly one summary line on day 12");
+            string day12 = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] summary", StringComparison.Ordinal))
+                {
+                    day12 = line;
+                }
+            }
+
+            Assert.IsNotNull(day12);
+            Assert.AreEqual(
+                "[TaskDuration] summary day 12: 2 open overrun(s) (2 new, 0 repeating, 0 omitted by cap); longest open: task "
+                + first.TaskId.ToString() + " 'fr.load-freight' 2d, expected 15min, none recorded",
+                day12);
+
+            clock.Now = Day(13, 28800);
+            diagnostics.Evaluate(clock.Now, 13);
+            Assert.AreEqual(2, CountLinesStartingWith(lines, "[TaskDuration] summary"),
+                "one summary line per day");
+            string day13 = null;
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("[TaskDuration] summary day 13", StringComparison.Ordinal))
+                {
+                    day13 = line;
+                }
+            }
+
+            Assert.IsNotNull(day13);
+            Assert.AreEqual(
+                "[TaskDuration] summary day 13: 2 open overrun(s) (0 new, 2 repeating, 0 omitted by cap); longest open: task "
+                + first.TaskId.ToString() + " 'fr.load-freight' 3d, expected 15min, none recorded",
+                day13);
+            Assert.IsTrue(second.TaskId != first.TaskId, "the two tasks are distinct (sanity)");
+        }
     }
 }

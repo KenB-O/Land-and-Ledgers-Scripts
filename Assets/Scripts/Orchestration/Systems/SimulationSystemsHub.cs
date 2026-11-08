@@ -749,6 +749,18 @@ namespace LandLedgers.Orchestration.Systems
             householdErrandCoordinator ??= new HouseholdErrandCoordinator();
 
         /// <summary>
+        /// Priority U-3: the production shopping loop, owned by
+        /// SimulationDrivers and attached here (see
+        /// BuildHouseholdShoppingLoop) so the hub's save pipeline can carry
+        /// the loop's in-transit custody. Null until attached: a scene
+        /// without a shopping loop saves/loads empty custody, never an
+        /// error. The hub never constructs the loop — the loop needs the
+        /// population manager, memberships, and supplier directory the
+        /// drivers own.
+        /// </summary>
+        public HouseholdShoppingLoop ShoppingLoop { get; set; }
+
+        /// <summary>
         /// Pass III Worker C: hub-owned housing-search registry used by the
         /// RelocateCheaper decision path.
         /// </summary>
@@ -1142,6 +1154,8 @@ namespace LandLedgers.Orchestration.Systems
                 domesticLabor = DomesticLabor.CaptureSaveDto(),
                 domesticLaborDriver = DomesticLaborDriver.CaptureSaveDto(),
                 householdErrandPlans = HouseholdErrands.Plans.CaptureSaveDto(),
+                // Priority U-3: the loop's in-transit custody (null loop = empty).
+                shoppingCustody = ShoppingLoop != null ? ShoppingLoop.CaptureCustodySaveDto() : new HouseholdShoppingCustodySaveDto(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
                 housing = Housing.CaptureSaveDto(),
                 lodgingRegistry = LodgingRegistry.CaptureSaveDto(),
@@ -1264,6 +1278,9 @@ namespace LandLedgers.Orchestration.Systems
             DomesticLabor.LoadFromSaveDto(dto.domesticLabor);
             DomesticLaborDriver.LoadFromSaveDto(dto.domesticLaborDriver);
             HouseholdErrands.Plans.LoadFromSaveDto(dto.householdErrandPlans);
+            // Priority U-3: the loop's in-transit custody (null section on
+            // old saves, or a null loop, loads as empty — never an error).
+            if (dto.shoppingCustody != null && ShoppingLoop != null) ShoppingLoop.LoadCustodyFromSaveDto(dto.shoppingCustody);
             HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
             // Pass IV (Worker 1): due-event schedule (clear-then-load, idempotent).
             DueEvents.LoadFromSaveDto(dto.dueEvents);

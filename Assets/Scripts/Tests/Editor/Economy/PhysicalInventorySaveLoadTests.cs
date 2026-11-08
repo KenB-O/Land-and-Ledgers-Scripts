@@ -865,16 +865,28 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(24, s.Inventories.GetOrCreate(HouseholdId).GetAvailableUnits(HouseholdItemCatalog.BreadId),
                 "after the return leg the household holds the 24 loaves — the loss applies only to a save/load DURING the trip");
 
-            AssertNoSaveSurface(typeof(HouseholdShoppingLoop), "HouseholdShoppingLoop");
+            // Priority U-3 (repair): the loop NOW declares the custody save
+            // surface (CaptureCustodySaveDto / LoadCustodyFromSaveDto) — the
+            // pin above (a fresh loop with no DTO loaded holds no batch)
+            // still stands, because load is explicit: only a loop that
+            // LOADS the captured custody holds the batch. Survival through
+            // the surface is proven in InTransitSaveLoadTests; this test
+            // keeps pinning the unrestored-fresh-loop behaviour.
+            AssertSaveSurface(typeof(HouseholdShoppingLoop), "HouseholdShoppingLoop",
+                "CaptureCustodySaveDto", "LoadCustodyFromSaveDto");
 
             // The real-time path has a DTO that DOES round-trip the batch
-            // scalars — but nothing calls it: zero references to
-            // PlannedShoppingTripSaveDto or ShoppingTripDriver exist in
-            // Infrastructure/ or Orchestration/, and the coordinator's
-            // save DTO (HouseholdErrandPlanRegistrySaveDto) carries plans
-            // and claims only, no trips and no batches. So the DTO
-            // mapping works and is still unwired — a real save/load
-            // drops the batch on both paths.
+            // scalars. Priority U-3 (repair): loading it now ALSO registers
+            // the restored batch in the loop's custody (the driver
+            // re-attaches the trip batch to the loop-owned instance), so
+            // the restored batch is visible to the person inventory read
+            // model and deposits exactly once — proven in
+            // InTransitSaveLoadTests. What is still unwired at manager
+            // level: no production code constructs a ShoppingTripDriver,
+            // and the coordinator's save DTO
+            // (HouseholdErrandPlanRegistrySaveDto) carries plans and
+            // claims only, no trips and no batches; the loop custody DTO
+            // is the half the hub carries into the systems save.
             var driverLoop = new HouseholdShoppingLoop(
                 s.Population, s.Membership, s.Ledgers, s.Inventories, s.Needs,
                 s.Directory, s.ShoppingJourneys, s.Tasks, s.Budgets, s.Tracker, s.Knowledge,
@@ -931,6 +943,32 @@ namespace LandLedgers.Editor.Economy
                     !name.Contains("Save") && !name.Contains("Export") && !name.Contains("Capture")
                     && !name.Contains("Load") && !name.Contains("Import"),
                     label + " must declare no save surface, but declares " + name);
+            }
+        }
+
+        /// <summary>
+        /// Priority U-3: the deliberate counterpart of
+        /// <see cref="AssertNoSaveSurface"/> — a type that MUST declare the
+        /// named save-surface methods (reflection over its own declared
+        /// public methods). Used where a former no-surface pin was
+        /// replaced by the repair that added the surface.
+        /// </summary>
+        private static void AssertSaveSurface(Type type, string label, params string[] methodNames)
+        {
+            foreach (string wanted in methodNames)
+            {
+                bool found = false;
+                foreach (MethodInfo method in type.GetMethods(
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                {
+                    if (string.Equals(method.Name, wanted, StringComparison.Ordinal))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+
+                Assert.IsTrue(found, label + " must declare the save-surface method " + wanted);
             }
         }
 

@@ -90,6 +90,37 @@ namespace LandLedgers.Population
         public string Provenance = string.Empty;
         public GoodsCustodyState Custody;
         public int PurchaseDayIndex;
+        /// <summary>
+        /// W5: household units credited per store unit bought (1 for
+        /// ordinary items; 10 for a flour sack). Custody holds STORE units;
+        /// the receipt multiplies by this. Carried on the batch so a
+        /// restored batch still knows its own package size after
+        /// save/load, when its candidate may no longer exist.
+        /// </summary>
+        public int HouseholdUnitsPerStoreUnit = 1;
+        /// <summary>
+        /// Priority U-3: the selling business's name, as settled. Carried
+        /// on the batch so a restored batch's receipt can name its seller
+        /// without re-resolving the supplier.
+        /// </summary>
+        public string SupplierName = string.Empty;
+    }
+
+    /// <summary>
+    /// Priority U-3: save data for the shopping loop's in-transit custody —
+    /// every batch currently held in transit (in hand, on wagon, or
+    /// arranged delivery), plus the batch-id sequence so a later settle
+    /// never reuses an id. Captured by
+    /// HouseholdShoppingLoop.CaptureCustodySaveDto, restored by
+    /// LoadCustodyFromSaveDto (clear-then-load, copy-on-load). The
+    /// coordinator's save DTO carries plans only; this DTO is the custody
+    /// half, owned by the loop and carried into the systems save by the hub.
+    /// </summary>
+    [Serializable]
+    public sealed class HouseholdShoppingCustodySaveDto
+    {
+        public List<CarriedGoodsBatch> Batches = new List<CarriedGoodsBatch>();
+        public int NextBatchSequence;
     }
 
     /// <summary>

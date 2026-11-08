@@ -86,6 +86,180 @@ namespace LandLedgers.Population
         public IReadOnlyList<CarriedGoodsBatch> ActiveCustodyBatches => custodyBatches;
 
         /// <summary>
+        /// Priority U-3: the loop's save surface for in-transit custody.
+        /// Captures every batch currently held in transit plus the
+        /// batch-id sequence, as COPIES — later settlement never mutates
+        /// the captured DTO. Before this surface the batch existed only in
+        /// the loop's private list, so a mid-trip save/load dropped the
+        /// paid-for goods (F5's U-3 pin).
+        /// </summary>
+        public HouseholdShoppingCustodySaveDto CaptureCustodySaveDto()
+        {
+            var dto = new HouseholdShoppingCustodySaveDto { NextBatchSequence = nextBatchSequence };
+            foreach (CarriedGoodsBatch batch in custodyBatches)
+            {
+                if (batch == null) continue;
+                dto.Batches.Add(CopyCustodyBatch(batch));
+            }
+
+            return dto;
+        }
+
+        /// <summary>
+        /// Priority U-3: clear-then-load for in-transit custody. Restores
+        /// the captured batches as fresh copies (never the DTO's objects —
+        /// the E-DEFECT-02 pattern — so a second restore of the same DTO
+        /// loads the same state instead of already-run state). Duplicate
+        /// batch ids in one DTO load once; already-received batches never
+        /// resurrect; a null DTO clears to empty. The batch-id sequence is
+        /// restored from the DTO and raised past every restored id, so a
+        /// later settle never reuses an id.
+        /// </summary>
+        public void LoadCustodyFromSaveDto(HouseholdShoppingCustodySaveDto dto)
+        {
+            custodyBatches.Clear();
+            nextBatchSequence = 0;
+            if (dto == null) return;
+            nextBatchSequence = Math.Max(0, dto.NextBatchSequence);
+            if (dto.Batches == null) return;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (CarriedGoodsBatch batch in dto.Batches)
+            {
+                if (batch == null || string.IsNullOrEmpty(batch.BatchId)) continue;
+                if (batch.Custody == GoodsCustodyState.ReceivedAtHousehold) continue;
+                if (!seen.Add(batch.BatchId)) continue;
+                custodyBatches.Add(CopyCustodyBatch(batch));
+                nextBatchSequence = Math.Max(nextBatchSequence, CustodyBatchSequence(batch.BatchId) + 1);
+            }
+        }
+
+        /// <summary>
+        /// Priority U-3: registers one restored batch in loop custody,
+        /// idempotently — returns the loop-owned instance (the existing one
+        /// when a batch with the same id is already held). The driver calls
+        /// this when it restores a trip so the trip's batch and the loop's
+        /// custody are ONE object, never two copies of the same goods: a
+        /// receipt removes that one object from custody and deposits it
+        /// exactly once.
+        /// </summary>
+        public CarriedGoodsBatch AttachRestoredBatch(CarriedGoodsBatch batch)
+        {
+            if (batch == null || string.IsNullOrEmpty(batch.BatchId)) return null;
+            if (batch.Custody == GoodsCustodyState.ReceivedAtHousehold) return null;
+            foreach (CarriedGoodsBatch existing in custodyBatches)
+            {
+                if (existing != null && string.Equals(existing.BatchId, batch.BatchId, StringComparison.Ordinal))
+                {
+                    return existing;
+                }
+            }
+
+            CarriedGoodsBatch copy = CopyCustodyBatch(batch);
+            custodyBatches.Add(copy);
+            nextBatchSequence = Math.Max(nextBatchSequence, CustodyBatchSequence(batch.BatchId) + 1);
+            return copy;
+        }
+
+        /// <summary>
+        /// Priority U-3: Continue for a restored (or stranded) in-transit
+        /// batch. Deposits one batch the loop still holds in custody into
+        /// household storage through the existing receipt path
+        /// (ReceiveSettledGoods) — the same path the immediate trip uses —
+        /// exactly once: the batch leaves custody when the lot is booked.
+        /// Returns null on success, else a loud reason and nothing moves.
+        /// An ArrangedDelivery batch is refused here: delivery receipt is
+        /// ReceiveDelivery's path (freight arrives at the door). A batch
+        /// with no open need is refused: the receipt must close the need
+        /// it was bought for, never invent one. No money moves here — the
+        /// purchase settled before the save.
+        /// </summary>
+        public string ReceiveCarriedBatch(string batchId, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            CarriedGoodsBatch batch = null;
+            foreach (CarriedGoodsBatch candidate in custodyBatches)
+            {
+                if (candidate != null && string.Equals(candidate.BatchId, batchId, StringComparison.Ordinal))
+                {
+                    batch = candidate;
+                    break;
+                }
+            }
+
+            if (batch == null)
+            {
+                return $"ReceiveCarriedBatch: no batch {batchId} in transit custody — nothing to receive.";
+            }
+
+            if (batch.Custody == GoodsCustodyState.ArrangedDelivery)
+            {
+                return $"ReceiveCarriedBatch: batch {batchId} is an arranged delivery — delivery receipt (ReceiveDelivery) is its path, not this one.";
+            }
+
+            if (batch.Custody == GoodsCustodyState.ReceivedAtHousehold)
+            {
+                return $"ReceiveCarriedBatch: batch {batchId} was already received — refusing a second receipt.";
+            }
+
+            HouseholdPurchasingNeed need = needs.GetOpenNeed(batch.HouseholdId, batch.ItemId);
+            if (need == null)
+            {
+                return $"ReceiveCarriedBatch: batch {batchId} has no open need for {batch.ItemId} in H{batch.HouseholdId} — refusing to receive without the need it was bought for.";
+            }
+
+            var result = new ShoppingTripResult
+            {
+                NeedSequence = need.NeedSequence,
+                HouseholdId = batch.HouseholdId,
+                ShopperPersonId = batch.HolderPersonId,
+                ItemId = batch.ItemId,
+                ReceiptId = batch.ReceiptId,
+                BuyerOutflowCents = batch.Units * batch.UnitPriceCents,
+            };
+            string receiptProblem = ReceiveSettledGoods(
+                result, need, batch, batch.Units, Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                false, batch.SupplierName, batch.HolderPersonId, dayIndex, diag,
+                new ShoppingLoopOptions());
+            if (receiptProblem != null)
+            {
+                return receiptProblem;
+            }
+
+            tripHistory.Add(result);
+            diag.Add($"Day {dayIndex}: carried batch {batchId} received after Continue — P{batch.HolderPersonId} delivered {result.UnitsAcquired}u {batch.ItemId} to H{batch.HouseholdId}.");
+            return null;
+        }
+
+        private static CarriedGoodsBatch CopyCustodyBatch(CarriedGoodsBatch batch)
+        {
+            if (batch == null) return null;
+            return new CarriedGoodsBatch
+            {
+                BatchId = batch.BatchId ?? string.Empty,
+                HouseholdId = batch.HouseholdId,
+                HolderPersonId = batch.HolderPersonId,
+                ItemId = batch.ItemId ?? string.Empty,
+                Units = batch.Units,
+                UnitPriceCents = batch.UnitPriceCents,
+                ReceiptId = batch.ReceiptId ?? string.Empty,
+                Provenance = batch.Provenance ?? string.Empty,
+                Custody = batch.Custody,
+                PurchaseDayIndex = batch.PurchaseDayIndex,
+                HouseholdUnitsPerStoreUnit = Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                SupplierName = batch.SupplierName ?? string.Empty,
+            };
+        }
+
+        /// <summary>Parses the trailing sequence from a "carry-{day}-{seq}" batch id; -1 when it has none.</summary>
+        private static int CustodyBatchSequence(string batchId)
+        {
+            if (string.IsNullOrEmpty(batchId)) return -1;
+            int dash = batchId.LastIndexOf('-');
+            if (dash < 0 || dash == batchId.Length - 1) return -1;
+            return int.TryParse(batchId.Substring(dash + 1), out int sequence) ? sequence : -1;
+        }
+
+        /// <summary>
         /// Test/observability hook: invoked after goods enter custody and
         /// BEFORE the return leg executes. Lets observers verify the
         /// no-teleport invariant (household inventory unchanged mid-trip).
@@ -1507,6 +1681,10 @@ namespace LandLedgers.Population
                 $"day {dayIndex} receipt {result.ReceiptId}" +
                 (settlement.Mode == ShoppingSettlementMode.TradeCreditObligation
                     ? $" on trade credit {settlement.ObligationId}" : " for cash"),
+            // Priority U-3: the batch carries its own package size and
+            // seller, so a restored batch still knows both after save/load.
+            HouseholdUnitsPerStoreUnit = Math.Max(1, chosen.HouseholdUnitsPerStoreUnit),
+            SupplierName = chosen.Supplier != null ? chosen.Supplier.SupplierName ?? string.Empty : string.Empty,
         };
         custodyBatches.Add(batch);
         RecordRetailPurchase(result, chosen, need, batch, sold, shopperId, dayIndex);
@@ -1988,7 +2166,13 @@ namespace LandLedgers.Population
             {
                 // W5: custody holds STORE units (sacks for a package item);
                 // the household is credited packages × package size.
-                int packageSize = Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1);
+                // Priority U-3: the batch carries its own package size from
+                // settle time, so a restored trip whose candidate lost it
+                // still credits correctly; the candidate's value wins when
+                // it is larger (old saves, whose batches carry the 1
+                // default, keep the candidate's size).
+                int packageSize = Math.Max(Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                    Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1));
                 int unitsReceived = batch.Units * packageSize;
                 HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
                 string provenance = batch.Provenance + " → carried home";
@@ -2062,7 +2246,10 @@ namespace LandLedgers.Population
             var need = trip.Need;
             // W5: custody holds STORE units (sacks for a package item);
             // the household is credited packages × package size.
-            int packageSize = Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1);
+            // Priority U-3: as in ReceiveAtHome, the batch's own package
+            // size from settle time is authoritative when present.
+            int packageSize = Math.Max(Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
+                Math.Max(1, trip.Candidate?.HouseholdUnitsPerStoreUnit ?? 1));
             int unitsReceived = batch.Units * packageSize;
             HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
             int lotIndexBefore = inventory.Lots.Count;

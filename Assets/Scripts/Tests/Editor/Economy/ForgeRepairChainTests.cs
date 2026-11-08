@@ -302,7 +302,12 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, reservations.LiveCount, "forge held by nail run");
 
             EquipmentAsset plow = NewPlow("plow-9");
-            ForgeRepairOrder order = chain.BeginRepair(plow, smith, 0.9, ctx, out string reason);
+            // Second smith (P602) for the repair: the nail run holds P601, and the
+            // authored person-time-exclusive rule refuses a second in-progress task
+            // for the same person. The forge — not the smith — is the resource
+            // under contention here, so the repair runs under its own smith.
+            EntityId repairSmith = EntityId.For(EntityKind.Person, 602);
+            ForgeRepairOrder order = chain.BeginRepair(plow, repairSmith, 0.9, ctx, out string reason);
             Assert.IsNotNull(order, "begin: " + reason);
 
             // Drive to the prepare stage (which wants the forge).

@@ -36,6 +36,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string DestinationBusinessId = string.Empty;
         public bool SourceCommitted;
         public bool Received;
+
+        /// <summary>
+        /// Priority spoilage integration: the Slice 5 perishable
+        /// condition state attached to this lot (additive; old saves
+        /// load with HasPerishableCondition false, which means "never
+        /// attached"). Flour sacks carry no authored aging rule, so
+        /// the state is Unknown and never changes with elapsed time.
+        /// Created at order time. The save DTO carries the cargo lots
+        /// directly, so the state round-trips with the lot.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at the order.</summary>
+        public bool HasPerishableCondition;
     }
 
     [Serializable]
@@ -155,6 +169,19 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 TotalCostCents = (int)totalPrice,
                 CreatedDayIndex = Math.Max(0, dayIndex),
             };
+            // Priority spoilage integration: the condition state is
+            // CREATED with the lot at its creation site. The sacks
+            // carry no authored aging rule, so the state is Unknown —
+            // explicit, never a guessed shelf life — anchored at the
+            // order day, in sacks (the order unit).
+            lot.PerishableCondition = new PerishableLotState(
+                new LotKey(CustodyTransferLog.MillbrookAuthority(BusinessId), lot.LotId),
+                "bakery_flour_sack",
+                packageUnits,
+                Math.Max(0, dayIndex))
+                .WithSource(orderId, BusinessId, "supplier:" + BusinessId)
+                .CaptureSaveDto();
+            lot.HasPerishableCondition = true;
             lots.Add(lot);
             transactions.Add(new OffMapAidCashTransaction
             {
@@ -333,6 +360,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             InventoryUnit = value.InventoryUnit, BakeryUnits = value.BakeryUnits, TotalCostCents = value.TotalCostCents,
             CreatedDayIndex = value.CreatedDayIndex, ShipmentId = value.ShipmentId,
             DestinationBusinessId = value.DestinationBusinessId, SourceCommitted = value.SourceCommitted, Received = value.Received,
+            // Priority spoilage integration: the attached condition state
+            // is part of the lot and clones with it (the SaveDto is a
+            // value snapshot; the bool travels with it). ExportState and
+            // ImportState both go through this clone, so a dropped field
+            // here would lose the state on save/load.
+            PerishableCondition = value.PerishableCondition, HasPerishableCondition = value.HasPerishableCondition,
         };
         private static OffMapAidCashTransaction Clone(OffMapAidCashTransaction value) => new OffMapAidCashTransaction
         {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -111,6 +112,16 @@ namespace LandLedgers.Population
         // and fall back to 1 / the rebuilt candidate).
         public int BatchHouseholdUnitsPerStoreUnit;
         public string BatchSupplierName = string.Empty;
+        /// <summary>
+        /// Priority spoilage integration: the batch's attached
+        /// perishable condition state at settle time, as a value
+        /// snapshot (additive; old saves read the default DTO with
+        /// BatchHasPerishableCondition false, which means "no state",
+        /// never a default Fresh). A restored batch carries the state
+        /// into custody and on to deposit.
+        /// </summary>
+        public PerishableLotState.SaveDto BatchPerishableCondition;
+        public bool BatchHasPerishableCondition;
     }
 
     /// <summary>
@@ -729,6 +740,8 @@ namespace LandLedgers.Population
                 dto.BatchPurchaseDayIndex = trip.Batch.PurchaseDayIndex;
                 dto.BatchHouseholdUnitsPerStoreUnit = Math.Max(1, trip.Batch.HouseholdUnitsPerStoreUnit);
                 dto.BatchSupplierName = trip.Batch.SupplierName ?? string.Empty;
+                dto.BatchPerishableCondition = trip.Batch.PerishableCondition;
+                dto.BatchHasPerishableCondition = trip.Batch.HasPerishableCondition;
             }
 
             return dto;
@@ -778,6 +791,8 @@ namespace LandLedgers.Population
                     HouseholdUnitsPerStoreUnit = dto.BatchHouseholdUnitsPerStoreUnit > 0
                         ? dto.BatchHouseholdUnitsPerStoreUnit : 1,
                     SupplierName = dto.BatchSupplierName ?? string.Empty,
+                    PerishableCondition = dto.BatchPerishableCondition,
+                    HasPerishableCondition = dto.BatchHasPerishableCondition,
                 };
             }
 

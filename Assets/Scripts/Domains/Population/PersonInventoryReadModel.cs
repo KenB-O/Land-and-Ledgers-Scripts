@@ -32,12 +32,15 @@
 //     saddlebags) exist anywhere in the tree, so ItemsInCarriedContainers
 //     always returns empty with that reason named. No container is
 //     invented here.
-//   - A HouseholdItemLot carries no condition field (its QualityBand is
-//     a string facet, not a condition), so an owned lot's condition is
-//     Unknown. A Bakery bread lot DOES carry a condition
-//     (BakeryGoodsCondition Fresh/DayOld/Stale); FromBakeryCondition is
-//     the 1:1 translation of that authority's vocabulary into this
-//     layer's, for the slice that reads bakery lots (Slice 5).
+//   - A HouseholdItemLot carries an attached perishable condition
+//     state only when its deposit carried one (Priority spoilage
+//     integration); its QualityBand is a string facet, not a
+//     condition, so a lot with no attached state reports Unknown. A
+//     Bakery bread lot DOES carry a condition (BakeryGoodsCondition
+//     Fresh/DayOld/Stale); FromBakeryCondition is the 1:1 translation
+//     of that authority's vocabulary into this layer's, and
+//     FromPerishableCondition is the same translation for the
+//     attached Slice 5 state.
 //
 // Priority V1: the shopping loop owns a read model as its production
 // custody answer (HouseholdShoppingLoop.PersonInventory) and verifies
@@ -51,6 +54,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
 
 namespace LandLedgers.Population
@@ -82,8 +86,9 @@ namespace LandLedgers.Population
         /// with the delivery, not carried by the person, and a received
         /// batch has left custody); ownership is the owning household id,
         /// a different field from the holder person id on purpose.
-        /// Condition is Unknown: a carried batch carries provenance and a
-        /// receipt id, not a condition.
+        /// Condition is the batch's attached perishable condition state
+        /// when the sale carried one, else Unknown (a pool purchase
+        /// carries no condition, honestly).
         /// </summary>
         public sealed class CarriedItem
         {
@@ -123,8 +128,9 @@ namespace LandLedgers.Population
         /// One household lot owned by a person (OwnerPersonId facet).
         /// AvailableUnits is the consumable pool (QuantityUnits minus
         /// HeldUnits); HeldUnits are reserved for a commitment and are
-        /// NOT available for consumption. Condition is Unknown: a
-        /// household lot carries no condition field.
+        /// NOT available for consumption. Condition is the lot's
+        /// attached perishable condition state when its deposit carried
+        /// one, else Unknown.
         /// </summary>
         public sealed class OwnedHouseholdLot
         {
@@ -281,7 +287,9 @@ namespace LandLedgers.Population
                     batch.ItemId, batch.Units, batch.BatchId, batch.ReceiptId,
                     batch.Provenance, batch.PurchaseDayIndex, batch.Custody,
                     batch.HolderPersonId, batch.HouseholdId, batch.UnitPriceCents,
-                    PersonItemCondition.Unknown));
+                    batch.HasPerishableCondition
+                        ? FromPerishableCondition(PerishableLotState.FromSaveDto(batch.PerishableCondition).PhysicalCondition)
+                        : PersonItemCondition.Unknown));
             }
 
             return result;
@@ -334,8 +342,8 @@ namespace LandLedgers.Population
         /// across every household in the registry. A lot the household
         /// owns with no person owner (OwnerPersonId -1, the default the
         /// shopping-loop receipt path books) belongs to no person and is
-        /// never listed here. Condition is Unknown: a household lot
-        /// carries no condition field.
+        /// never listed here. Condition is the lot's attached perishable
+        /// condition state when its deposit carried one, else Unknown.
         /// </summary>
         public IReadOnlyList<OwnedHouseholdLot> HouseholdLotsOwnedBy(int personId)
         {
@@ -358,7 +366,9 @@ namespace LandLedgers.Population
                         lot.AvailableUnits, Math.Max(0, lot.HeldUnits),
                         Math.Max(0, lot.QuantityUnits), lot.SourceLabel,
                         lot.AcquiredDayIndex, lot.OwnerPersonId,
-                        PersonItemCondition.Unknown));
+                        lot.HasPerishableCondition
+                            ? FromPerishableCondition(PerishableLotState.FromSaveDto(lot.PerishableCondition).PhysicalCondition)
+                            : PersonItemCondition.Unknown));
                 }
             }
 
@@ -435,6 +445,24 @@ namespace LandLedgers.Population
                 case BakeryGoodsCondition.Fresh: return PersonItemCondition.Fresh;
                 case BakeryGoodsCondition.DayOld: return PersonItemCondition.DayOld;
                 case BakeryGoodsCondition.Stale: return PersonItemCondition.Stale;
+                default: return PersonItemCondition.Unknown;
+            }
+        }
+
+        /// <summary>
+        /// Priority spoilage integration: 1:1 translation of an attached
+        /// perishable condition state's physical condition into this
+        /// layer's: Fresh, DayOld and Stale map to themselves; Unknown —
+        /// the state carries no authored condition — maps to Unknown.
+        /// Translation only: it invents no condition for any lot.
+        /// </summary>
+        public static PersonItemCondition FromPerishableCondition(PerishablePhysicalCondition condition)
+        {
+            switch (condition)
+            {
+                case PerishablePhysicalCondition.Fresh: return PersonItemCondition.Fresh;
+                case PerishablePhysicalCondition.DayOld: return PersonItemCondition.DayOld;
+                case PerishablePhysicalCondition.Stale: return PersonItemCondition.Stale;
                 default: return PersonItemCondition.Unknown;
             }
         }

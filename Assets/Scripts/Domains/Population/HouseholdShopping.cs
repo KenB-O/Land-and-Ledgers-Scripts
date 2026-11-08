@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 
 namespace LandLedgers.Population
 {
@@ -104,6 +105,22 @@ namespace LandLedgers.Population
         /// without re-resolving the supplier.
         /// </summary>
         public string SupplierName = string.Empty;
+
+        /// <summary>
+        /// Priority spoilage integration: the Slice 5 perishable
+        /// condition state of the lot the units were taken from
+        /// (additive; absent when the selling authority carries no
+        /// condition — e.g. a pool purchase — which is an honest
+        /// absence, never a default Fresh). Set by the shopping loop
+        /// at settle from the supplier's last-sale state, carried
+        /// through custody to the household lot at deposit. The
+        /// custody DTO carries batches directly, so the state
+        /// round-trips with the batch.
+        /// </summary>
+        public PerishableLotState.SaveDto PerishableCondition;
+
+        /// <summary>Whether <see cref="PerishableCondition"/> was attached at the sale.</summary>
+        public bool HasPerishableCondition;
     }
 
     /// <summary>
@@ -402,6 +419,29 @@ namespace LandLedgers.Population
     public interface IItemCatalogSupplier
     {
         bool RecognizesItem(string itemId);
+    }
+
+    /// <summary>
+    /// Priority spoilage integration: an optional surface for suppliers
+    /// whose sale draws from a real lot that carries a perishable
+    /// condition state. After <see cref="IItemResolvingSupplier.SellItem"/>
+    /// returns, the loop reads the state of the units just sold and
+    /// carries it on the batch — the purchase never resets it. A
+    /// supplier that sells from an anonymous pool (no lot) does not
+    /// implement this interface, and the batch honestly carries no
+    /// condition. The state is the taken part's own state (split at
+    /// the sale), in sale units.
+    /// </summary>
+    public interface ILotConditionSupplier
+    {
+        /// <summary>
+        /// The condition state of the units the most recent
+        /// <see cref="IItemResolvingSupplier.SellItem"/> call sold, or
+        /// false when that sale carried no state (refusal, empty sale,
+        /// or a stateless lot). Reset on every SellItem call, including
+        /// refusals, so a stale state never rides a later sale.
+        /// </summary>
+        bool TryGetLastSaleCondition(out PerishableLotState.SaveDto condition);
     }
 
     /// <summary>

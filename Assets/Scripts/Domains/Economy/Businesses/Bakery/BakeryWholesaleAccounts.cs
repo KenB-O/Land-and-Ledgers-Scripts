@@ -2,6 +2,7 @@ using EntityId = LandLedgers.Primitives.EntityId;
 
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 
 namespace LandLedgers.Economy.Businesses.Bakery
@@ -119,6 +120,20 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         /// <summary>Baked day of each seller lot, parallel to <see cref="SellerLotIds"/>.</summary>
         public List<int> BakedDayByLot = new List<int>();
+
+        /// <summary>
+        /// Priority spoilage integration: the condition state of the
+        /// units taken from each seller lot, parallel to
+        /// <see cref="SellerLotIds"/> and <see cref="UnitsByLot"/>.
+        /// A default (empty-LotId) entry means that lot carried no
+        /// state — the list stays parallel even for stateless lots.
+        /// Only <see cref="BakeryShopRuntime.FulfillWholesale"/> fills
+        /// this list; <see cref="BakeryShopRuntime.RecordWholesaleTransfer"/>
+        /// (the store path) leaves it empty, because the Review2
+        /// driver takes shelf units directly and its result carries
+        /// only a BakeryGoodsCondition, not a state (blocked seam b).
+        /// </summary>
+        public List<PerishableLotState.SaveDto> PerishableConditionsByLot = new List<PerishableLotState.SaveDto>();
 
         /// <summary>Flour/notions/fuel provenance lines baked into the shipped loaves.</summary>
         public List<string> ProvenanceLines = new List<string>();

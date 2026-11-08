@@ -79,7 +79,6 @@ found, the test fails loudly rather than passing silently.
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
-| PerishableLotState | Domains/Economy/Logistics/PerishableLotState.cs | Domains/Economy/Logistics | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
 | SupplierComparison | Domains/Economy/Logistics/SupplierComparison.cs | Domains/Economy/Logistics | (none) |
@@ -204,18 +203,14 @@ found, the test fails loudly rather than passing silently.
   dimensions (Canon XXXI 4.5/4.6, Technical XIV 4.1/4.2); deterministic
   simulation-time deterioration applying only the authored bakery
   AgeToDay rule; spoilage accounting that removes nothing from any live
-  authority. It is registered here honestly as UNWIRED by design, not
-  oversight: the Slice 5 brief activates no driver — the state is
-  constructed in tests alongside the real authorities and no flow calls
-  it yet, and no authority DTO carries it yet (attachment is
-  downstream). Its sibling types need no row:
+  authority. The row for it was removed by the Priority spoilage
+  integration slice — see the change log — so it no longer appears
+  above. Its sibling types need no row:
   `PerishablePhysicalCondition`, `PerishableSafetyState`, and
   `PerishableDisposition` are enums and `UsefulLifeEstimate`,
   `PerishableHandlingEvent`, `SpoilageRecord`, and the nested
   `SaveDto` are structs (the scan enumerates concrete public top-level
-  classes only). Remove this row the day a production flow or authority
-  DTO carries the state; do not wire it merely to clear the entry. The
-  `PhysicalItemSpec`, `PhysicalCapacityEvaluator`,
+  classes only). The `PhysicalItemSpec`,
   `PersonInventoryReadModel`, and `LotIdentityResolver` rows above stay:
   the state reads no registered-unwired type by name (it consults no F1
   spec parameter — the spec carries no aging parameter — and names
@@ -543,3 +538,34 @@ note records their audited status so the question does not reopen:
   demand, reserve, or supplier type). Earlier notes that list the
   evaluator and resolver rows among the rows that "stay" describe the
   pre-V1 state and are superseded by this entry.
+- Priority spoilage integration (2026-11-08): `PerishableLotState`
+  removed from the table above — the Slice 5 condition state is now
+  carried by real production authorities through real transfers. The
+  bakery attaches a Fresh state at bake (`BakeryShopRuntime.BakeBatch`)
+  and ages it by the authored AgeToDay rule (`AgeShelf`); Millbrook
+  attaches an Unknown state at order time
+  (`OffMapAidBusinessRuntime.TryPlaceOrder`) and the freight adapter
+  re-attaches it to the flour lot at receipt
+  (`MillbrookFlourFreightCustodyAdapter.ReceiveCargoLot`); the bakery
+  adapter carries the taken part's state through the sale
+  (`Series2BakerySupplierAdapter`, via the new `ILotConditionSupplier`
+  surface, read by `HouseholdShoppingLoop.SettleAtCounter`) and the
+  loop deposits it onto the household lot (all three receipt paths);
+  every lot record carries the state through its own DTO pair
+  (bread shelf, flour bin, cargo lots, custody batches, driver DTO,
+  household registry). The callers sit outside the type's owning
+  directory (`Domains/Economy/Logistics` vs `Domains/Economy/Businesses`
+  and `Domains/Population`), so the registry test and the assembly scan
+  both count them as production callers. `DemandObservation`,
+  `ReserveProjection`, `SupplierComparison`, and `ReplenishmentPlan`
+  stay: this slice wires none of them. Earlier notes that list the
+  `PerishableLotState` row among the rows that "stay" describe the
+  pre-spoilage-integration state and are superseded by this entry.
+  Blocked seams recorded in the slice checkpoint, not wired here: the
+  General Store category pool is anonymous (a pool purchase carries no
+  lot condition); the Review2 wholesale driver takes shelf units
+  directly, so its delivery record carries provenance but no states;
+  the retail lot DTO lives in harness-excluded `SaveDtos.cs` whose
+  harness copy is a stale verbatim extraction; the freight shipment
+  carries no condition field (the adapter re-reads the source lot at
+  receive instead); directly seeded bin lots carry no state.

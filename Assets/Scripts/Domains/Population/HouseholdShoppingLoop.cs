@@ -247,8 +247,19 @@ namespace LandLedgers.Population
                 PurchaseDayIndex = batch.PurchaseDayIndex,
                 HouseholdUnitsPerStoreUnit = Math.Max(1, batch.HouseholdUnitsPerStoreUnit),
                 SupplierName = batch.SupplierName ?? string.Empty,
+                // Priority spoilage integration: the custody copy keeps
+                // the batch's condition state verbatim (the SaveDto is a
+                // value snapshot; the copy is a new batch object).
+                PerishableCondition = batch.PerishableCondition,
+                HasPerishableCondition = batch.HasPerishableCondition,
             };
         }
+
+        /// <summary>Priority spoilage integration: the batch's attached condition state, or null when the batch carries none.</summary>
+        private static PerishableLotState ConditionOf(CarriedGoodsBatch batch) =>
+            batch != null && batch.HasPerishableCondition
+                ? PerishableLotState.FromSaveDto(batch.PerishableCondition)
+                : null;
 
         /// <summary>Parses the trailing sequence from a "carry-{day}-{seq}" batch id; -1 when it has none.</summary>
         private static int CustodyBatchSequence(string batchId)
@@ -799,7 +810,8 @@ namespace LandLedgers.Population
             int lotIndexBefore = inventory.Lots.Count;
             string lotRejection = inventory.AddLot(
                 need.ItemId, unitsReceived, dayIndex,
-                batch.Provenance + (useDelivery ? " → delivered" : " → carried home"));
+                batch.Provenance + (useDelivery ? " → delivered" : " → carried home"),
+                condition: ConditionOf(batch));
             if (lotRejection != null)
             {
                 return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
@@ -1569,6 +1581,28 @@ namespace LandLedgers.Population
                 $"INCONSISTENCY: settlement of {totalCost}c was posted but '{chosen.Supplier.SupplierName}' sold 0 units — refunded, manual reconciliation required.");
         }
 
+        // Priority spoilage integration: the purchase never resets the
+        // condition. When the supplier sold from a real lot that carries
+        // a state, the taken part's state rides the batch into custody,
+        // transferred to the shopper's custody at the purchase day (the
+        // split at the sale is already in its history; this appends the
+        // purchase transfer). A pool sale carries none, honestly.
+        // Read immediately after the sale, before any later step can
+        // overwrite the supplier's last-sale state.
+        PerishableLotState.SaveDto soldCondition = default;
+        bool hasSoldCondition = false;
+        if (chosen.ItemSupplier is ILotConditionSupplier conditionSupplier
+            && conditionSupplier.TryGetLastSaleCondition(out PerishableLotState.SaveDto lastSale))
+        {
+            soldCondition = PerishableLotState.FromSaveDto(lastSale)
+                .TransferredTo("person:" + shopperId, dayIndex,
+                    "purchased " + sold + "u " + need.ItemId + " from " + chosen.Supplier.SupplierName)
+                .CaptureSaveDto();
+            hasSoldCondition = true;
+            diag.Add($"[spoilage] batch condition attached at settle: {need.ItemId} " +
+                $"({sold}u, {PerishableLotState.FromSaveDto(soldCondition).PhysicalCondition}) from {chosen.Supplier.SupplierName}.");
+        }
+
         if (sold < units)
         {
             // Partial fill at the counter: the store already posted its
@@ -1685,6 +1719,10 @@ namespace LandLedgers.Population
             // seller, so a restored batch still knows both after save/load.
             HouseholdUnitsPerStoreUnit = Math.Max(1, chosen.HouseholdUnitsPerStoreUnit),
             SupplierName = chosen.Supplier != null ? chosen.Supplier.SupplierName ?? string.Empty : string.Empty,
+            // Priority spoilage integration: the batch keeps the
+            // lot's condition from the sale above — never reset.
+            PerishableCondition = soldCondition,
+            HasPerishableCondition = hasSoldCondition,
         };
         custodyBatches.Add(batch);
         RecordRetailPurchase(result, chosen, need, batch, sold, shopperId, dayIndex);
@@ -2177,7 +2215,8 @@ namespace LandLedgers.Population
                 HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
                 string provenance = batch.Provenance + " → carried home";
                 int lotIndexBefore = inventory.Lots.Count;
-                string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, provenance);
+                string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, provenance,
+                    condition: ConditionOf(batch));
                 if (lotRejection != null)
                 {
                     return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
@@ -2253,7 +2292,8 @@ namespace LandLedgers.Population
             int unitsReceived = batch.Units * packageSize;
             HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
             int lotIndexBefore = inventory.Lots.Count;
-            string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, batch.Provenance + " → delivered");
+            string lotRejection = inventory.AddLot(need.ItemId, unitsReceived, dayIndex, batch.Provenance + " → delivered",
+                condition: ConditionOf(batch));
             if (lotRejection != null)
             {
                 return $"INCONSISTENCY: delivery {batch.BatchId} arrived but the household lot was rejected: {lotRejection}";

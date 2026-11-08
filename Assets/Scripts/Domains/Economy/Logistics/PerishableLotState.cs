@@ -372,6 +372,48 @@ namespace LandLedgers.Economy.Logistics
                 CopyHistory(), Reservations, CurrentProcessLink, Disposition, PreservationMethod);
 
         /// <summary>
+        /// Returns a state with the quantity set; every other dimension
+        /// untouched, and no history event appended. This is the
+        /// bookkeeping sync for authorities that decrement a lot in
+        /// place (a sale, a dispense, a meal): the authority's own
+        /// record — sale record, dispense line, consumption record —
+        /// is the event, so no second event is invented here. The
+        /// split that moves units to a NEW lot is recorded instead by
+        /// <see cref="Split"/>, which appends a split event to both
+        /// parts. A negative quantity is refused: a lot never holds
+        /// negative stock.
+        /// </summary>
+        public PerishableLotState WithUnits(int units)
+        {
+            if (units < 0) throw new ArgumentOutOfRangeException(nameof(units), "a lot cannot hold negative units");
+            return new PerishableLotState(Key, ItemId, units, ProducedOrAcquiredDay, AsOfDay,
+                HasProducedOrAcquiredGameSeconds, ProducedOrAcquiredGameSeconds,
+                SourceTransactionOrBatch, OwnerOrBusiness, LocationOrContainer,
+                PhysicalCondition, PerceivedCondition, SafetyState, SafetyEvidence,
+                RemainingUsefulLife, CopyHistory(),
+                Reservations, CurrentProcessLink, Disposition, PreservationMethod);
+        }
+
+        /// <summary>
+        /// Returns a state with the Technical XIV 4.1 provenance fields
+        /// set (source transaction or batch, owner or business, location
+        /// or container); every other dimension untouched, and no history
+        /// event appended — the provenance is the creation record, not a
+        /// later event. Used when a creation site attaches a state to a
+        /// lot it just made (a bake names its dough batch, a Millbrook
+        /// order names its order id). Nulls become empty strings, never
+        /// a fabricated value.
+        /// </summary>
+        public PerishableLotState WithSource(string sourceTransactionOrBatch, string ownerOrBusiness, string locationOrContainer) =>
+            new PerishableLotState(Key, ItemId, Units, ProducedOrAcquiredDay, AsOfDay,
+                HasProducedOrAcquiredGameSeconds, ProducedOrAcquiredGameSeconds,
+                sourceTransactionOrBatch ?? string.Empty, ownerOrBusiness ?? string.Empty,
+                locationOrContainer ?? string.Empty,
+                PhysicalCondition, PerceivedCondition, SafetyState, SafetyEvidence,
+                RemainingUsefulLife, CopyHistory(),
+                Reservations, CurrentProcessLink, Disposition, PreservationMethod);
+
+        /// <summary>
         /// Deterministic deterioration over simulated elapsed time: a
         /// pure function of simulation time (never wall clock, never
         /// randomness), so equivalent tick sequences give equivalent

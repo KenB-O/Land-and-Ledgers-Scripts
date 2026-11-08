@@ -121,6 +121,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 reason = supplier.ReceiveAtBakery(lot.LotId, shipment.ShipmentId,
                     bakery.BusinessInstanceId, out _);
                 if (reason != null) return false;
+                // Priority spoilage integration: attach the condition
+                // state to a lot that was received before this slice
+                // attached one (attach-if-absent — never overwrite an
+                // existing state, never double-attach on re-receipt).
+                AttachConditionIfAbsent(existing, lot, dayIndex);
                 // Priority 9 Slice F3: the duplicate receipt is idempotent
                 // in the adapter, and the log refuses the second record for
                 // the same CauseKind plus CauseId — the transfer is still
@@ -153,6 +158,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     $"{lot.PackageUnits} sack(s), {lot.InventoryUnits} {lot.InventoryUnit}; " +
                     $"supplier's separate bakery-unit figure={lot.BakeryUnits}."
             };
+            // Priority spoilage integration: the freight receive is a
+            // transfer — the shipment itself carries no condition field
+            // (blocked seam (d)), so the adapter re-reads the source
+            // cargo lot and attaches the same Unknown condition to the
+            // new flour lot, keyed to that lot, in bakery pounds,
+            // anchored at the receive day. Flour has no authored aging
+            // rule, so the state stays Unknown.
+            AttachConditionIfAbsent(flourLot, lot, dayIndex);
             string stockRefusal = bakery.FlourStock.ReceiveLot(flourLot, new List<string>());
             if (stockRefusal != null)
             {
@@ -180,6 +193,29 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             reason = $"Received Millbrook lot '{lot.LotId}' as {flourLot.Units} lb Bakery flour " +
                 $"(supplier records {supplierBakeryUnits} bakery units separately).";
             return true;
+        }
+
+        /// <summary>
+        /// Priority spoilage integration: attaches an Unknown condition
+        /// state to a flour lot received from a Millbrook cargo lot,
+        /// unless the lot already carries one. The state is keyed to
+        /// the flour lot (not the cargo lot), names flour in bakery
+        /// pounds, is anchored at the receive day, and names the source
+        /// cargo lot in its provenance. Flour has no authored aging
+        /// rule, so the condition is Unknown — explicit, never a
+        /// guessed shelf life.
+        /// </summary>
+        private void AttachConditionIfAbsent(BakeryFlourLot flourLot, OffMapAidCargoLot sourceLot, int dayIndex)
+        {
+            if (flourLot == null || sourceLot == null || flourLot.HasPerishableCondition) return;
+            flourLot.PerishableCondition = new PerishableLotState(
+                new LotKey(CustodyTransferLog.BakeryAuthority(bakery.BusinessInstanceId), flourLot.LotId.ToString()),
+                BakeryBreadCatalog.FlourItemId,
+                flourLot.Units,
+                Math.Max(0, dayIndex))
+                .WithSource(sourceLot.LotId, sourceLot.SupplierBusinessId, "bakery:" + bakery.BusinessInstanceId)
+                .CaptureSaveDto();
+            flourLot.HasPerishableCondition = true;
         }
 
         /// <summary>

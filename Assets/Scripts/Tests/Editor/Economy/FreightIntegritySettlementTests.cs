@@ -1664,5 +1664,311 @@ namespace LandLedgers.EditorTests.Economy
             Assert.Fail("no settlement diagnostic names shipment '" + shipmentId
                 + "' with its freight revenue posting; diagnostics: " + string.Join("; ", diag));
         }
+
+        // ---- Priority 7 Slice 7 (2026-11-08): wagon reservation release
+        // + refused delivery + partial remainder + retry acceptance. Tests
+        // only; no production file is touched. Expected to PASS: release,
+        // refusal, and retry are pinned for two hauls by
+        // FreightRepeatabilityTests (CapacityRelease_*, RefusedDelivery_*),
+        // and this slice extends those pins to the third haul and to a
+        // Partial remainder.
+
+        [Test]
+        public void Release_AfterThirdHaul_TeamRebindable_ReservationsReleased()
+        {
+            // After the Slice 3 third haul completes: transport unbound,
+            // no exclusivity conflict on wagon/driver/horse, double
+            // ReleaseShipmentReservations is a no-op, the team refuses
+            // rebind before the terminal sweep and rebinds after it (the
+            // same two halves as the haul-1 pin, now after haul 3).
+            DriveHaul1ToCompletion();
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            TickUntilCompleted(shipment2, "haul 2", Day2);
+            Assert.IsTrue(lot2.Received, "the second paid Millbrook lot must be marked received");
+
+            BuildThirdHaul(out OffMapAidCargoLot lot3, out string request3Id,
+                out FreightServiceAgreement agreement3, out LogisticsShipmentState shipment3);
+            PrepareAndDispatchThirdHaul(agreement3, shipment3, shipment2.ShipmentId);
+            SimulateSupplierPickupFor(shipment3);
+            TickUntilCompleted(shipment3, "haul 3", Day3);
+            Assert.IsTrue(lot3.Received, "the third paid Millbrook lot must be marked received");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement3.Status,
+                "third agreement must be fulfilled");
+
+            Assert.IsFalse(shipment.physicalTransportBound, "completion must unbind haul 1 transport");
+            Assert.IsFalse(shipment2.physicalTransportBound, "completion must unbind haul 2 transport");
+            Assert.IsFalse(shipment3.physicalTransportBound, "completion must unbind haul 3 transport");
+            Assert.IsNull(freight.Service.FindExclusivityConflict(null, WagonId,
+                EntityId.For(EntityKind.Person, EthanId), TeamAnimals()),
+                "no live shipment may hold the wagon/driver/horse after the third haul completes");
+            // ReleaseShipmentReservations is a no-op on re-call.
+            freight.Service.ReleaseShipmentReservations(shipment3);
+            freight.Service.ReleaseShipmentReservations(shipment3);
+            Assert.IsNull(freight.Service.FindExclusivityConflict(null, WagonId,
+                EntityId.For(EntityKind.Person, EthanId), TeamAnimals()),
+                "re-releasing reservations must not re-bind anything");
+
+            // The wagon/horse mirrors still name the terminal shipment until
+            // the terminal sweep runs, so a rebind refuses first — that is
+            // the sweep's precondition, not a defect in the driver.
+            string preSweepRefusal = BindTeamFor("freight-shipment:probe");
+            Assert.IsNotNull(preSweepRefusal, "the team must still be mirror-bound before the sweep runs");
+            Assert.IsTrue(preSweepRefusal.Contains("already assigned"),
+                "the pre-sweep refusal must name the assignment, but got '" + preSweepRefusal + "'");
+            ReleaseTerminalDraftTeam(shipment3.ShipmentId);
+            Assert.IsNull(BindTeamFor("freight-shipment:probe"),
+                "after the sweep the draft team must rebind to a new shipment id");
+        }
+
+        [Test]
+        public void RefusedDelivery_ThirdHaul_HoldsCargoCollectsNothing_RetriesOnce()
+        {
+            // Refuse the third haul's delivery (receiver returns false):
+            // Delayed, 1 unit in wagon custody (a 1-sack third haul, so the
+            // exact count is 1), no delivery, lot not received, payer/carrier
+            // unchanged from the two-haul totals, agreement stays Accepted;
+            // resume -> Arrived -> completes; lot received once, no duplicate
+            // Bakery lot, third 125c settles exactly once, agreement
+            // Fulfilled. The haul-2 shape from FreightRepeatabilityTests
+            // (RefusedDelivery_SecondHaul_HoldsCargoCollectsNothing), now
+            // after two completed hauls.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion();
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            TickUntilCompleted(shipment2, "haul 2", Day2);
+            Assert.IsTrue(lot2.Received, "the second paid Millbrook lot must be marked received");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "two hauls settled before the refused third haul (total -250c)");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited two hauls before the refused third haul (total +250c)");
+
+            BuildThirdHaul(out OffMapAidCargoLot lot3, out string request3Id,
+                out FreightServiceAgreement agreement3, out LogisticsShipmentState shipment3);
+            PrepareAndDispatchThirdHaul(agreement3, shipment3, shipment2.ShipmentId);
+            SimulateSupplierPickupFor(shipment3);
+
+            // The receiver refuses the third haul (the bakery cannot take
+            // the lot).
+            ReceiveFreightCargoLotHandler adapterReceive = hooks.ReceiveCargoLot;
+            hooks.ReceiveCargoLot = (LogisticsShipmentState s, int qty, out string reason) =>
+            {
+                reason = "test refusal: bakery cannot receive the lot";
+                return false;
+            };
+            hooks.IsVehicleOffMap = _ => false;
+            var trace = new List<LogisticsShipmentStatus>();
+            for (int tick = 0; tick < 8 && shipment3.Status != LogisticsShipmentStatus.Delayed; tick++)
+            {
+                Tick();
+                trace.Add(shipment3.Status);
+            }
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment3.Status,
+                "a refused third-haul delivery must hold as Delayed; trace: " + string.Join(", ", trace));
+            Assert.AreEqual(1, shipment3.RemainingQuantityUnits, "cargo stays in wagon custody");
+            Assert.IsTrue(!shipment3.deliveryApplied, "no delivery is applied");
+            Assert.IsTrue(!lot3.Received, "the lot is not received");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "no third debit while refused (only hauls 1-2 settled)");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "no third credit while refused");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement3.Status,
+                "no agreement fulfilment while refused");
+
+            // Allow the receiver and retry: resume from the delay, then tick
+            // to completion. The retry settles exactly once.
+            hooks.ReceiveCargoLot = adapterReceive;
+            freight.Service.ResumeShipment(shipment3, hooks);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment3.Status, "the retry resumes at Arrived");
+            TickUntilCompleted(shipment3, "retried haul 3", Day3);
+            Assert.IsTrue(lot3.Received, "the retried haul receives the lot once");
+            Assert.AreEqual(3, bakery.FlourStock.Lots.Count, "no duplicate bakery lot after the retry");
+            var importIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (BakeryFlourLot flourLot in bakery.FlourStock.Lots)
+            {
+                Assert.AreEqual(10, flourLot.Units, "each haul credits one 10 lb sack");
+                Assert.IsTrue(importIds.Add(flourLot.ImportOrderId), "no bakery lot was minted twice for one Millbrook lot");
+            }
+            Assert.IsTrue(shipment3.FreightRevenueCollected, "the third charge must be collected exactly once");
+            Assert.AreEqual(payerBefore - 3 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "the retry settles the third 125c exactly once (total -375c)");
+            Assert.AreEqual(carrierBefore + 3 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "the carrier is credited the third 125c exactly once (total +375c)");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement3.Status,
+                "the retried haul fulfils its agreement");
+
+            // A further collection pass posts nothing more: the retry
+            // settled exactly once, never twice.
+            int reposted = freight.FindCompany(CarrierId).CollectAndPostUncollectedRevenue(
+                carrierRuntime, freight.ResolvePayerRuntime, diag);
+            Assert.AreEqual(0, reposted, "no second settlement after the retry collection");
+            Assert.AreEqual(payerBefore - 3 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "no second debit after the retry collection");
+            Assert.AreEqual(carrierBefore + 3 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "no second credit after the retry collection");
+        }
+
+        // Builds a 2-unit haul the way BuildHaul builds a 1-sack haul,
+        // except the shipment is created WITHOUT binding the lot: the
+        // shipment carries 2 generic units through the non-custody
+        // (ReceiveShipment) path, while the request/quote/acceptance and
+        // the 125c charge still name the real 2-sack Millbrook lot and its
+        // agreement. The custody path cannot produce a Partial: a custody
+        // shipment's WorkUnloading calls the bool ReceiveCargoLot hook, so
+        // it either delivers the whole lot or holds as Delayed — partial
+        // acceptance exists only on the ReceiveShipment path
+        // (FreightShipmentService.WorkUnloading, non-custody branch), which
+        // is the path this test pins. The placed 2-sack lot therefore stays
+        // outstanding (uncommitted, unreceived) and no Bakery receipt is
+        // asserted here; the plan's Partial assertions (exact counts,
+        // deliveryApplied, conservation, settlement, fulfilment) all hold
+        // on this path.
+        private void BuildTwoUnitHaul(out OffMapAidCargoLot nextLot, out string requestId,
+            out FreightServiceAgreement nextAgreement, out LogisticsShipmentState nextShipment)
+        {
+            int buyerBefore = buyerCash.BalanceCents;
+            Assert.IsNull(MillbrookFlourReorder.PlaceReorder(
+                supplier, buyerCash, BakeryId, "Glen Pierce", 2, Day2, diag, out nextLot),
+                "2-sack reorder on day " + Day2 + " must place: " + string.Join("; ", diag));
+            Assert.IsNotNull(nextLot, "2-sack reorder must mint a lot");
+            Assert.AreEqual("millbrook_grain_co:flour-reorder-d13-n2", nextLot.OrderId,
+                "reorder id is deterministic (day 13; TryPlaceOrder prefixes the business id)");
+            Assert.AreEqual(buyerBefore - nextLot.TotalCostCents, buyerCash.BalanceCents,
+                "2-sack reorder debits buyer cash exactly once");
+            Assert.AreEqual(96, nextLot.TotalCostCents, "two sacks cost the authored 96c");
+            Assert.AreEqual(2, nextLot.PackageUnits, "the lot must hold 2 sacks");
+
+            FreightServiceAgreementBook book = freight.ServiceAgreements;
+            requestId = "freight-request:" + nextLot.OrderId;
+            var request = new FreightServiceRequest
+            {
+                RequestId = requestId, RequestingBusinessId = BakeryId, CarrierBusinessId = CarrierId,
+                PickupBusinessId = "millbrook_grain_co", DestinationBusinessId = BakeryId,
+                CargoLotId = nextLot.LotId, Quantity = 1, QuantityUnit = "lb", RequestingPersonId = 2,
+                CarrierOperatorPersonId = EthanId, PickupLocationId = "millbrook-pickup",
+                DestinationLocationId = "bakery-door",
+                CargoSkuId = MillbrookFlourFreightCustodyAdapter.FlourSkuId
+            };
+            Assert.IsNull(book.CreateRequest(request, out _), "request for the 2-unit haul must record");
+            Assert.IsNull(book.SetQuote(requestId, new FreightServiceQuote
+            {
+                QuoteId = "quote-" + Day2, OneWayDistanceMiles = 50f, ChargeableMiles = 100,
+                BaseServiceFeeCents = 25, RatePerMileCents = 1, MileageChargeCents = 100,
+                TotalPriceCents = FreightChargeCents, PayerBusinessId = BakeryId, PaymentTiming = "After successful delivery"
+            }), "quote for the 2-unit haul must record");
+            Assert.IsNull(book.Accept(requestId, EthanId, Day2, Day2 * 86400f + 40000f, out nextAgreement),
+                "request for the 2-unit haul must accept");
+            Assert.IsNotNull(nextAgreement, "acceptance for the 2-unit haul must produce an agreement");
+            string nextShipmentId = "freight-shipment:" + requestId;
+            nextShipment = freight.CreateShipment(CarrierId, nextShipmentId, "millbrook_grain_co", BakeryId, 2,
+                new FreightCargoSpec { MassKgPerUnit = 4.54f, VolumeM3PerUnit = 0.02f }, WagonId,
+                hooks, EntityId.For(EntityKind.Person, EthanId), TeamAnimals(),
+                FreightChargeCents, BakeryId, diag, out string shipmentRefusal,
+                nextAgreement.AgreementId, string.Empty, string.Empty, true);
+            Assert.IsNotNull(nextShipment, "2-unit shipment must create: " + shipmentRefusal);
+            Assert.IsTrue(!nextShipment.requiresSourceLotCustody,
+                "the 2-unit shipment must not require source-lot custody (no lot bound), so the partial path applies");
+            Assert.AreEqual(2, nextShipment.PlannedQuantityUnits, "the 2-unit shipment must plan 2 units");
+            Assert.IsNull(book.LinkShipment(nextAgreement.AgreementId, nextShipmentId), "2-unit shipment must link");
+        }
+
+        [Test]
+        public void PartialAcceptance_RemainderStaysInWagon_ResumeCompletes()
+        {
+            // Receiver accepts part of a multi-unit shipment (a 2-unit
+            // haul: accept 1, hold 1): status Partial with exact
+            // accepted/remaining counts, deliveryApplied false, no
+            // settlement, no fulfilment; BeginUnloading resumes the
+            // remainder; on full acceptance the shipment completes,
+            // deliveryApplied true, conservation holds (planned ==
+            // delivered + remaining), and the 125c settles exactly once.
+            // Unlike the other Slice 7 tests this haul loads through the
+            // real driver loading path (BeginLoading/WorkLoading), not the
+            // simulated supplier pickup, because a non-custody shipment has
+            // no source lot to commit.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion();
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "haul 1 freight charge debited from the bakery exactly once");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "haul 1 freight charge credited to the carrier exactly once");
+
+            BuildTwoUnitHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+
+            // The receiver accepts 1 unit on the first offer and the whole
+            // remainder on the next offer.
+            int acceptedTotal = 0;
+            hooks.ReceiveShipment = (LogisticsShipmentState s, int qty, out string reason) =>
+            {
+                reason = string.Empty;
+                int accepted = qty > 1 ? 1 : qty;
+                acceptedTotal += accepted;
+                return accepted;
+            };
+
+            hooks.DayIndex = Day2;
+            hooks.IsVehicleOffMap = _ => false;
+            var trace = new List<LogisticsShipmentStatus>();
+            for (int tick = 0; tick < 8 && shipment2.Status != LogisticsShipmentStatus.Partial; tick++)
+            {
+                Tick();
+                trace.Add(shipment2.Status);
+            }
+            Assert.AreEqual(LogisticsShipmentStatus.Partial, shipment2.Status,
+                "a half-accepted delivery must hold as Partial; trace: " + string.Join(", ", trace));
+            Assert.AreEqual(1, shipment2.DeliveredQuantityUnits, "exactly 1 unit accepted");
+            Assert.AreEqual(1, shipment2.RemainingQuantityUnits, "exactly 1 unit remains in wagon custody");
+            Assert.AreEqual(1, acceptedTotal, "the receiver took exactly 1 unit on the first offer");
+            Assert.IsTrue(!shipment2.deliveryApplied, "no delivery is applied while a remainder is held");
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment2, 1, out string conservationAtPartial),
+                "conservation must hold at Partial (planned 2 == delivered 1 + remaining 1): " + conservationAtPartial);
+            Assert.IsTrue(!shipment2.FreightRevenueCollected, "no settlement while a remainder is held");
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "no second debit while Partial (only haul 1 settled)");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "no second credit while Partial");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement2.Status,
+                "no agreement fulfilment while Partial");
+            string conflict = freight.Service.FindExclusivityConflict(null, WagonId,
+                EntityId.For(EntityKind.Person, EthanId), TeamAnimals());
+            Assert.IsNotNull(conflict, "the Partial remainder must keep the wagon bound");
+            Assert.IsTrue(conflict.Contains(WagonId),
+                "the Partial conflict must name the wagon, but got '" + conflict + "'");
+
+            // Resume the remainder: the driver's Partial branch re-offers it
+            // through BeginUnloading, and the receiver now takes it all.
+            TickUntilCompleted(shipment2, "partial remainder resume", Day2);
+            Assert.AreEqual(2, shipment2.DeliveredQuantityUnits, "both units delivered after the resume");
+            Assert.AreEqual(0, shipment2.RemainingQuantityUnits, "nothing remains in wagon custody after the resume");
+            Assert.AreEqual(2, acceptedTotal, "the receiver took the remaining 1 unit on the resume");
+            Assert.IsTrue(shipment2.deliveryApplied, "delivery is applied on full acceptance");
+            Assert.IsTrue(freight.Service.VerifyConservation(shipment2, 2, out string conservationAtDelivery),
+                "conservation must hold at delivery (planned 2 == delivered 2 + remaining 0): " + conservationAtDelivery);
+            Assert.IsTrue(shipment2.FreightRevenueCollected, "the 125c must settle exactly once on completion");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited a second 125c (total -250c across haul 1 and the 2-unit haul)");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited a second 125c (total +250c)");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after the resumed delivery");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement2.Status,
+                "the resumed haul fulfils its agreement");
+            Assert.IsNull(freight.Service.FindExclusivityConflict(null, WagonId,
+                EntityId.For(EntityKind.Person, EthanId), TeamAnimals()),
+                "wagon/driver/horse must be free after the resumed delivery completes");
+        }
     }
 }

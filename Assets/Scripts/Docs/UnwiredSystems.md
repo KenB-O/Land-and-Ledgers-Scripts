@@ -79,6 +79,7 @@ found, the test fails loudly rather than passing silently.
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
 | PhysicalCapacityEvaluator | Domains/Economy/Storage/PhysicalCapacityContracts.cs | Domains/Economy/Storage | (none) |
+| PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
 
 ## Notes per entry
 
@@ -185,6 +186,25 @@ found, the test fails loudly rather than passing silently.
   registry only from inside `Domains/Economy/Storage`, so under the
   scan's caller rule (same-directory references do not count) the
   `PhysicalItemSpec` row above stays accurate and stays in place.
+- `PersonInventoryReadModel` (Priority 9 Slice F3 / Priority B,
+  2026-11-08) is the read-only personal and player inventory query
+  layer (carried batches, household lots owned by a person, equipment
+  grants held, carried load, remaining carry units, carried-container
+  contents). It is registered here honestly as UNWIRED by design, not
+  oversight: the Slice 3 brief wires nothing into live flows — the read
+  model is constructed in tests against the real authorities (shopping
+  loop custody, household inventory registry, equipment grant resolver)
+  and no flow calls it yet. Its sibling types need no row:
+  `CarriedItem`, `OwnedHouseholdLot`, `HeldEquipment` and
+  `CarriedContainerContents` are nested inside the read model and
+  `PersonCarryRemaining` is a nested struct (the scan enumerates
+  concrete public top-level classes only), and `PersonItemCondition` is
+  an enum. Remove this row the day a production flow calls the read
+  model; do not wire it merely to clear the entry. The read model reads
+  the F1/F2 types only through `PhysicalLoad` (a struct, scan-exempt)
+  and references no other registered-unwired type by name, so the
+  `PhysicalItemSpec` and `PhysicalCapacityEvaluator` rows above stay
+  accurate and stay in place.
 - `HouseholdMoveService` (Pass VIII Worker 2; registered by the Pass IX
   review fixes, R-13) executes a household move through the real
   authorities — validated before anything changes, old occupancies ended,
@@ -337,6 +357,14 @@ note records their audited status so the question does not reopen:
   The `PhysicalItemSpec` row stays: the evaluator reads the registry
   only from inside `Domains/Economy/Storage`, so it is not a production
   reader outside the spec's directory under the scan's caller rule.
+- Priority 9 Slice F3 / Priority B (2026-11-08):
+  `PersonInventoryReadModel` registered as UNWIRED by design — read-only
+  personal/player inventory query layer, constructed in tests against
+  the real authorities, no flow calls it yet; remove the row when a
+  production flow calls it. The `PhysicalItemSpec` and
+  `PhysicalCapacityEvaluator` rows stay: the read model reads the F1/F2
+  types only through `PhysicalLoad` (a struct) and references no other
+  registered-unwired type by name.
 - Priority 8 Slice 3 (2026-11-08, overnight economy repair campaign):
   `BakeryShopRuntime` removed (wired into the live tick — 16 production
   call sites verified in source, none accidental; see the Slice 3 note

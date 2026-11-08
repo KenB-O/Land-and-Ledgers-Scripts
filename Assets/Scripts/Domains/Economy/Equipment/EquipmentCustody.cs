@@ -62,6 +62,33 @@ namespace LandLedgers.Economy.Equipment
             grants.Add(grant);
         }
 
+        /// <summary>
+        /// Priority 9 Slice 3 (person inventory read model): read-only
+        /// enumeration of the recorded grants for one holder. Returns a new
+        /// list each call (the grant objects themselves are the authority's
+        /// live records, as elsewhere in this codebase); adding, removing,
+        /// or expiring a grant is still only possible through
+        /// <see cref="AddGrant"/> and the grant's own expiry. A holder with
+        /// no grants gets an empty list, never null and never an error.
+        /// Owned equipment is NOT listed here: ownership is answered by
+        /// <see cref="HasAccess"/> through the caller's owned-kinds
+        /// function, and this resolver holds no owned-kinds record of its
+        /// own to enumerate.
+        /// </summary>
+        public IReadOnlyList<EquipmentAccessGrant> GrantsFor(string holderKind, string holderId)
+        {
+            var result = new List<EquipmentAccessGrant>();
+            foreach (EquipmentAccessGrant grant in grants)
+            {
+                if (grant == null) continue;
+                if (!string.Equals(grant.HolderKind, holderKind, StringComparison.Ordinal)) continue;
+                if (!string.Equals(grant.HolderId, holderId, StringComparison.Ordinal)) continue;
+                result.Add(grant);
+            }
+
+            return result;
+        }
+
         /// <param name="ownedKindsFor">
         /// (holderKind, holderId) → equipment kinds the holder owns and can field.
         /// </param>

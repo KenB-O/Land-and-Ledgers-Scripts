@@ -681,12 +681,28 @@ namespace LandLedgers.Population
             }
         }
 
+        /// <summary>
+        /// Pass XII (E-DEFECT-02 / E-NOTE-01), Q04 Slice 4: copy-on-import
+        /// with replace semantics, mirroring HouseholdLedgerRegistry.
+        /// HouseholdInventory wraps its state object by reference, so
+        /// storing the caller's object would let later consumption mutate
+        /// the caller's snapshot (a second restore of the same in-memory
+        /// object would then load already-run state). Each imported state
+        /// is therefore deep-copied, and the registry is CLEARED first:
+        /// load is clear-then-load like every other authority, so loading
+        /// a second save in the same session cannot keep stale lots
+        /// behind a silent skip. Disk loads are unaffected (fresh objects
+        /// already); only in-memory double restores change, from corrupt
+        /// to correct. Null still means "no data section", not "empty".
+        /// </summary>
         public void ImportState(IEnumerable<HouseholdInventoryState> inStates)
         {
             if (inStates == null)
             {
                 return;
             }
+
+            inventories.Clear();
 
             foreach (HouseholdInventoryState state in inStates)
             {
@@ -695,14 +711,42 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                if (inventories.ContainsKey(state.HouseholdId))
+                var copy = new HouseholdInventoryState
                 {
-                    diagnostics.Add($"ImportState: duplicate inventory for H{state.HouseholdId} skipped.");
-                    continue;
+                    HouseholdId = state.HouseholdId,
+                    NextLotSequence = state.NextLotSequence,
+                    SeededFromReserves = state.SeededFromReserves,
+                    Lots = new List<HouseholdItemLot>(),
+                };
+                if (state.Lots != null)
+                {
+                    foreach (HouseholdItemLot lot in state.Lots)
+                    {
+                        if (lot == null)
+                        {
+                            continue;
+                        }
+
+                        copy.Lots.Add(new HouseholdItemLot
+                        {
+                            LotId = lot.LotId,
+                            ItemId = lot.ItemId,
+                            QuantityUnits = lot.QuantityUnits,
+                            UnitLabel = lot.UnitLabel,
+                            AcquiredDayIndex = lot.AcquiredDayIndex,
+                            SourceLabel = lot.SourceLabel,
+                            HeldUnits = lot.HeldUnits,
+                            QualityBand = lot.QualityBand,
+                            SourceKind = lot.SourceKind,
+                            OwnerPersonId = lot.OwnerPersonId,
+                            AncestryLotIds = lot.AncestryLotIds != null
+                                ? new List<int>(lot.AncestryLotIds)
+                                : new List<int>(),
+                        });
+                    }
                 }
 
-                state.Lots ??= new List<HouseholdItemLot>();
-                inventories[state.HouseholdId] = new HouseholdInventory(state);
+                inventories[state.HouseholdId] = new HouseholdInventory(copy);
             }
         }
     }

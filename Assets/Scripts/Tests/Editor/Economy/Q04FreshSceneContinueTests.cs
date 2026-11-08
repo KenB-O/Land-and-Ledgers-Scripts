@@ -10,6 +10,7 @@ using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Ordering;
 using LandLedgers.Economy.Trade;
 using LandLedgers.Persistence;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using NUnit.Framework;
 
@@ -1072,6 +1073,159 @@ namespace LandLedgers.Tests.Economy
                 "the notions order must restore alongside the horse-feed order");
             Assert.AreEqual(1, service.Lots.Count, "the saved notions lot must restore");
             Assert.AreEqual(1, service.DeliveredSaleIds.Count, "the delivered mark must restore");
+        }
+
+        // Priority 5 Slice 4 — HouseholdInventoryRegistry.ImportState:
+        // clear-then-load + deep copy (original plan §4 Slice 4). No
+        // dedicated inventory save-test file exists, so the four
+        // plan-named tests live here, as the plan permits. All four
+        // are reproducing tests: they FAIL before the fix (ImportState
+        // never clears and skips any household id it already holds,
+        // and wraps the caller's state object by reference) and PASS
+        // after it. The repair copies the ledger registry precedent
+        // (HouseholdLedger.cs ImportState: clear first, deep-copy each
+        // state, null means "no section", not "empty").
+        private static HouseholdItemLot NewBreadLot(int lotId, int units, params int[] ancestry)
+        {
+            return new HouseholdItemLot
+            {
+                LotId = lotId,
+                ItemId = HouseholdItemCatalog.BreadId,
+                QuantityUnits = units,
+                UnitLabel = "loaf",
+                AcquiredDayIndex = 0,
+                SourceLabel = "general-store purchase",
+                HeldUnits = 0,
+                QualityBand = string.Empty,
+                SourceKind = "purchase",
+                OwnerPersonId = -1,
+                AncestryLotIds = new List<int>(ancestry),
+            };
+        }
+
+        private static HouseholdInventoryState NewInventoryState(
+            int householdId, int nextLotSequence, params HouseholdItemLot[] lots)
+        {
+            return new HouseholdInventoryState
+            {
+                HouseholdId = householdId,
+                NextLotSequence = nextLotSequence,
+                SeededFromReserves = false,
+                Lots = new List<HouseholdItemLot>(lots),
+            };
+        }
+
+        [Test]
+        public void HouseholdInventoryImport_SecondLoad_ReplacesFirstLoadLots()
+        {
+            var registry = new HouseholdInventoryRegistry();
+            registry.ImportState(new[]
+            {
+                NewInventoryState(1, 2, NewBreadLot(1, 14)),
+            });
+            Assert.AreEqual(14, registry.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId),
+                "setup: first load holds lot 1, 14 bread.");
+
+            registry.ImportState(new[]
+            {
+                NewInventoryState(1, 3, NewBreadLot(2, 6)),
+            });
+
+            HouseholdInventory inventory = registry.Get(1);
+            Assert.IsNotNull(inventory, "H1 must still exist after the second load.");
+            Assert.AreEqual(1, inventory.Lots.Count, "the second load must replace the first load's lots.");
+            Assert.AreEqual(2, inventory.Lots[0].LotId, "only lot 2 may survive the second load.");
+            Assert.AreEqual(6, inventory.Lots[0].QuantityUnits, "lot 2 must hold its saved 6 units.");
+            Assert.AreEqual(6, inventory.GetTotalUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(3, inventory.State.NextLotSequence,
+                "NextLotSequence must come from the second load, not the first.");
+            Assert.IsTrue(!inventory.Lots.Any(l => l.LotId == 1), "lot 1 must be gone after the second load.");
+        }
+
+        [Test]
+        public void HouseholdInventoryImport_SmallerSecondLoad_DropsAbsentHousehold()
+        {
+            // Mirrors Pass12DoubleRestoreTests.LedgerImport_SmallerLoad_DropsStaleLedgers.
+            var registry = new HouseholdInventoryRegistry();
+            registry.ImportState(new[]
+            {
+                NewInventoryState(1, 2, NewBreadLot(1, 14)),
+                NewInventoryState(2, 2, NewBreadLot(1, 10)),
+            });
+            Assert.IsNotNull(registry.Get(1), "setup: household 1 loaded.");
+            Assert.IsNotNull(registry.Get(2), "setup: household 2 loaded.");
+
+            registry.ImportState(new[]
+            {
+                NewInventoryState(1, 3, NewBreadLot(2, 6)),
+            });
+
+            Assert.IsNotNull(registry.Get(1), "The kept household survives the smaller load.");
+            Assert.AreEqual(6, registry.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId));
+            Assert.IsNull(registry.Get(2),
+                "A smaller save must not leave the dropped household's inventory behind.");
+        }
+
+        [Test]
+        public void HouseholdInventoryImport_SameDtoRestoredTwice_LoadsPristineLots()
+        {
+            var registry = new HouseholdInventoryRegistry();
+            var dto = NewInventoryState(1, 2, NewBreadLot(1, 14, 7, 8));
+            dto.SeededFromReserves = true;
+            registry.ImportState(new[] { dto });
+            Assert.AreEqual(14, registry.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId),
+                "setup: first restore loads 14 bread.");
+
+            // Run the live lots: consume 2 units and dirty the ancestry
+            // on the live copy. Copy-on-import means the DTO object must
+            // not have been mutated by the run.
+            string consumeError = registry.Get(1).Consume(
+                HouseholdItemCatalog.BreadId, 2, 0, "meal", "test", null);
+            Assert.IsNull(consumeError, "setup: consuming 2 of 14 bread must succeed.");
+            registry.Get(1).Lots[0].AncestryLotIds.Add(99);
+            Assert.AreEqual(12, registry.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId),
+                "setup: live lots now hold 12 bread after the meal.");
+            Assert.AreEqual(14, dto.Lots[0].QuantityUnits,
+                "the DTO object must not have been mutated by running the live lots (copy-on-import).");
+            Assert.AreEqual(2, dto.Lots[0].AncestryLotIds.Count,
+                "the DTO lot's ancestry must not have gained the live 99 entry.");
+
+            registry.ImportState(new[] { dto });
+
+            HouseholdInventory inventory = registry.Get(1);
+            Assert.AreEqual(1, inventory.Lots.Count);
+            Assert.AreEqual(1, inventory.Lots[0].LotId);
+            Assert.AreEqual(14, inventory.Lots[0].QuantityUnits,
+                "restoring the same DTO object again must load its pristine 14 units, not the already-run 12.");
+            Assert.AreEqual(2, inventory.Lots[0].AncestryLotIds.Count,
+                "the restored lot's ancestry must be the DTO's [7, 8], not the dirtied live list.");
+            Assert.IsTrue(inventory.Lots[0].AncestryLotIds.Contains(7));
+            Assert.IsTrue(inventory.Lots[0].AncestryLotIds.Contains(8));
+            Assert.IsTrue(!inventory.Lots[0].AncestryLotIds.Contains(99));
+            Assert.AreEqual(2, inventory.State.NextLotSequence);
+            Assert.IsTrue(inventory.State.SeededFromReserves);
+        }
+
+        [Test]
+        public void HouseholdInventoryImport_NullStates_IsNoOp()
+        {
+            // Complementary pin: a null import leaves live state
+            // untouched (guards the repair against over-clearing; the
+            // ledger registry keeps the same null-means-no-section rule).
+            var registry = new HouseholdInventoryRegistry();
+            registry.ImportState(new[]
+            {
+                NewInventoryState(1, 2, NewBreadLot(1, 14)),
+            });
+            Assert.AreEqual(14, registry.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId),
+                "setup: household 1 loaded.");
+
+            registry.ImportState(null);
+
+            Assert.IsNotNull(registry.Get(1), "a null import must not clear live inventories.");
+            Assert.AreEqual(14, registry.Get(1).GetTotalUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(1, registry.Get(1).Lots.Count);
+            Assert.AreEqual(1, registry.Get(1).Lots[0].LotId);
         }
     }
 }

@@ -2839,5 +2839,566 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(46 + pipelineAtEnd, TotalNotionsOrderedUnits(s),
                 "total ordered equals baked demand plus steady-state pipeline stock, exactly");
         }
+
+        // ---- Priority 3 Slice 5 (2026-11-08): 60-day sustained-production acceptance ----
+        // Tests only; no production code. The combined drive runs BOTH
+        // supply legs through the real BakeryWholesaleDailyDriver with
+        // the Slice 4 depth parameters set (notions depth 14, flour
+        // depth 14 covering the modelled 7-day freight lead), fuel
+        // seeded to 60u in the fixture, notions counterparty seeded to
+        // 60u in the fixture, and the Millbrook definition as authored
+        // (230 lb start, weekly replenishment 40-80 lb toward 460 lb).
+        // The fixture seeds fuel and notions supply precisely because
+        // the live caps (40 fuel units, 30-unit notions counterparty)
+        // stop a live 60-day run at ~day 40 (fuel) and ~day 30 of
+        // ordering (notions): this acceptance proves the machinery in
+        // source, and the live acceptance is BLOCKED on plan §8 B-2
+        // (fuel) and B-3 (notions standing terms) plus B-1 (depth).
+        // Slice 5 must NOT be presented as live sustained production.
+        //
+        // Flour-leg anchor: the Slice 4b flour-only drive (notions
+        // test-seeded, first bake day 8) pins 53 bakes days 8-60,
+        // Millbrook 0 lb, bin 34 lb, in transit 80 lb, 75 sacks, bakery
+        // 944c (ForwardOrder_Flour_DepthCoversFreightLead_SustainsDailyBakes).
+        // The combined drive's first bake is day 15 instead (gated by
+        // the first notions arrival), so it bakes 46 times and orders
+        // less flour — Millbrook does not exhaust here — but the flour
+        // leg must satisfy the SAME reconciliation identities (ordered
+        // = baked + bin + in transit; Millbrook 230 + replenished -
+        // ordered; bakery cash per the per-leg formula).
+        private sealed class CombinedRun
+        {
+            public Slice S;
+            public Series2CounterpartyRegistration Reg;
+            public OffMapAidBusinessRuntime Supplier;
+            public MillbrookFlourFreightCustodyAdapter Adapter;
+            public int TotalReplenishedLb;
+        }
+
+        private static OffMapAidBusinessDefinition MillbrookDefinitionWithProduction()
+        {
+            // Authored Millbrook production (plan §2 H-B4): 40-80 lb/week
+            // toward a 460-lb target reserve. The shared
+            // MillbrookDefinition() carries inventory only, so the
+            // combined drive adds the production row and applies the
+            // weekly replenishment each day (same shape as the Slice 4
+            // flour test); without it the 230-lb starting stock alone
+            // cannot cover the run and the supplier runs dry.
+            OffMapAidBusinessDefinition millbrookDef = MillbrookDefinition();
+            millbrookDef.Production.Add(new OffMapAidProductionRow
+            {
+                ItemId = "bakery_flour_sack",
+                WeeklyMinimumUnits = 40,
+                WeeklyMaximumUnits = 80,
+                TargetReserveUnits = 460,
+            });
+            return millbrookDef;
+        }
+
+        private static CombinedRun NewCombinedRun()
+        {
+            Slice s = NewSlice(storeTarget: 2000);
+            Series2CounterpartyRegistration reg = ProductionRegistrationWithSupply(60);
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 60);
+            BookAccount(s, 24, 1, 2, 2);
+            var supplier = new OffMapAidBusinessRuntime(MillbrookDefinitionWithProduction());
+            var adapter = new MillbrookFlourFreightCustodyAdapter(supplier, s.Bakery, s.Ids);
+            return new CombinedRun { S = s, Reg = reg, Supplier = supplier, Adapter = adapter };
+        }
+
+        // One combined day: receive Millbrook lots due under the
+        // modelled 7-day lead, apply the authored weekly replenishment,
+        // then drive the real daily driver with both depths set.
+        private static BakeryWholesaleDailyResult DriveCombinedDay(CombinedRun run, int day)
+        {
+            Slice s = run.S;
+            const int leadDays = 7;
+            var due = new List<OffMapAidCargoLot>();
+            foreach (OffMapAidCargoLot lot in run.Supplier.Lots)
+                if (lot != null && !lot.Received && lot.CreatedDayIndex + leadDays <= day)
+                    due.Add(lot);
+            foreach (OffMapAidCargoLot lot in due)
+                ReceiveMillbrookLot(s, run.Adapter, lot, day);
+
+            int millbrookBefore = run.Supplier.GetInventoryUnits("bakery_flour_sack");
+            run.Supplier.ApplyWeeklyReplenishment(day);
+            run.TotalReplenishedLb += Math.Max(0, run.Supplier.GetInventoryUnits("bakery_flour_sack") - millbrookBefore);
+
+            return RunDay(s, run.Reg, day, millbrookSupplier: run.Supplier, notionsDepth: 14, flourDepth: 14);
+        }
+
+        // One-line totals snapshot for cross-run comparison (Slice 5
+        // tests 2-3): every figure the combined drive must reproduce.
+        private static string TotalsSummary(CombinedRun run, int bakes, int transfers, int flourSacks)
+        {
+            Slice s = run.S;
+            int inTransitNotions = 0;
+            foreach (NamedSkuOrder order in s.StoreService.Orders)
+                if (order != null && order.Stage != NamedSkuOrderStage.Received && order.Stage != NamedSkuOrderStage.Cancelled)
+                    inTransitNotions += Math.Max(0, order.UnitsOrdered);
+            return string.Format(
+                "bakes={0} transfers={1} deliveries={2} notionsOrders={3} notionsUnits={4} notionsInTransit={5} notionsBin={6} notionsSellable={7} flourSacks={8} flourLots={9} binFlour={10} inTransitFlour={11} millbrookStock={12} millbrookCash={13} replenished={14} bakeryCash={15} storeCash={16} marketOutflow={17} fuelLeft={18} storeStock={19}",
+                bakes, transfers, s.Bakery.WholesaleDeliveries.Count,
+                s.StoreService.Orders.Count, TotalNotionsOrderedUnits(s), inTransitNotions,
+                s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                s.Notions.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId),
+                flourSacks, run.Supplier.Lots.Count,
+                s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                OutstandingMillbrookLb(run.Supplier),
+                run.Supplier.GetInventoryUnits("bakery_flour_sack"), run.Supplier.CashCents,
+                run.TotalReplenishedLb, s.BakeryRuntime.CurrentCashCents, s.StoreRuntime.CurrentCashCents,
+                s.Market.TotalOutflowCents, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits);
+        }
+
+        [Test]
+        public void Sustained_SixtyDays_DailyBakes_ExactlyOnce_AllLegs()
+        {
+            // Priority 3 Slice 5: the 60-day sustained-production
+            // acceptance. One combined drive through the real
+            // BakeryWholesaleDailyDriver with notions depth 14 and
+            // flour depth 14, fuel seeded to 60u, notions counterparty
+            // seeded to 60u, Millbrook as authored. The first bake is
+            // day 15 (gated by the first notions arrival on the 14-day
+            // lead); from day 15 through day 60 a bake + transfer must
+            // complete every day. Every order id, lot id, receipt id,
+            // delivery record, and 48c settlement must appear exactly
+            // once; cash must conserve end to end on every leg; store
+            // stock must accumulate exactly 24 loaves per transfer
+            // (no sale in the fixture).
+            //
+            // Exact end-state numbers below are the deterministic
+            // trajectory of this drive (confirmed by a probe run before
+            // pinning): 46 bakes, 66 flour sacks in 9 lots, bin 28 lb,
+            // in transit 80 lb, Millbrook 90 lb left, bakery 580c,
+            // store 2,792c. They are pinned only alongside the
+            // reconciliation identities that must hold for ANY correct
+            // run (flour ordered = baked + bin + in transit; Millbrook
+            // 230 + replenished - ordered; bakery/store cash per the
+            // per-leg formula) — the identities are the check, the
+            // numbers pin the trajectory. The Slice 4b flour-only
+            // anchor (53 bakes days 8-60, 75 sacks, Millbrook 0 lb,
+            // bin 34 lb, in transit 80 lb, bakery 944c) is the same
+            // identities on the flour leg in isolation, where the first
+            // bake is day 8 because notions are test-seeded there; the
+            // combined drive bakes 7 fewer times (days 8-14 are
+            // notions-gated), orders 9 fewer sacks, and leaves
+            // Millbrook with 90 lb instead of exhausting it.
+            CombinedRun run = NewCombinedRun();
+            Slice s = run.S;
+            var notionsOrderIds = new HashSet<string>();
+            var millbrookLotIds = new HashSet<string>();
+            var deliveryIds = new HashSet<string>();
+            var receiptIds = new HashSet<string>();
+            var millbrookTxIds = new HashSet<string>();
+            var binLotIds = new HashSet<string>();
+            int firstBakeDay = 0;
+            int firstStallDay = 0;
+            int bakes = 0;
+            int transfers = 0;
+            int flourSacks = 0;
+            int expectedStoreStock = 0;
+            for (int day = 1; day <= 60; day++)
+            {
+                int ordersBefore = s.StoreService.Orders.Count;
+                int lotsBefore = run.Supplier.Lots.Count;
+                int deliveriesBefore = s.Bakery.WholesaleDeliveries.Count;
+                int receiptsBefore = s.StoreService.ReceivedReceiptIds.Count;
+                BakeryWholesaleDailyResult r = DriveCombinedDay(run, day);
+                Assert.IsTrue(run.Supplier.Lots.Count - lotsBefore <= 1,
+                    $"at most one Millbrook reorder lot per day, day {day}");
+                Assert.IsTrue(s.StoreService.Orders.Count - ordersBefore <= 1,
+                    $"at most one notions order per day, day {day}");
+                flourSacks += r.MillbrookReorderSacks;
+
+                for (int i = ordersBefore; i < s.StoreService.Orders.Count; i++)
+                {
+                    string orderId = s.StoreService.Orders[i].OrderId;
+                    Assert.IsTrue(!string.IsNullOrWhiteSpace(orderId), $"notions order {i} carries an id, day {day}");
+                    Assert.IsTrue(notionsOrderIds.Add(orderId), $"notions order id '{orderId}' appears exactly once (day {day})");
+                }
+                if (!string.IsNullOrWhiteSpace(r.MillbrookReorderLotId))
+                    Assert.IsTrue(millbrookLotIds.Add(r.MillbrookReorderLotId),
+                        $"Millbrook lot id '{r.MillbrookReorderLotId}' appears exactly once (day {day})");
+                for (int i = deliveriesBefore; i < s.Bakery.WholesaleDeliveries.Count; i++)
+                {
+                    BakeryWholesaleDeliveryRecord delivery = s.Bakery.WholesaleDeliveries[i];
+                    Assert.IsTrue(deliveryIds.Add(delivery.DeliveryId),
+                        $"delivery id '{delivery.DeliveryId}' appears exactly once (day {day})");
+                    Assert.AreEqual(24, delivery.Units, $"delivery {i} ships 24 loaves, day {day}");
+                    Assert.AreEqual(48, delivery.TotalCents, $"delivery {i} settles 48c, day {day}");
+                    Assert.AreEqual(day, delivery.DayIndex, $"delivery {i} is dated its bake day, day {day}");
+                }
+                for (int i = receiptsBefore; i < s.StoreService.ReceivedReceiptIds.Count; i++)
+                {
+                    string receiptId = s.StoreService.ReceivedReceiptIds[i];
+                    Assert.IsTrue(!string.IsNullOrWhiteSpace(receiptId), $"receipt {i} carries an id, day {day}");
+                    Assert.IsTrue(receiptIds.Add(receiptId), $"receipt id '{receiptId}' appears exactly once (day {day})");
+                }
+                var liveBinLotIds = new HashSet<string>();
+                foreach (BakeryFlourLot lot in s.Bakery.FlourStock.Lots)
+                {
+                    if (lot == null) continue;
+                    Assert.IsTrue(liveBinLotIds.Add(lot.LotId.ToString()),
+                        $"bin lot id '{lot.LotId}' appears at most once among live bin lots, day {day}");
+                    binLotIds.Add(lot.LotId.ToString());
+                }
+
+                if (r.BatchesBaked == 1)
+                {
+                    if (firstBakeDay == 0) firstBakeDay = day;
+                    Assert.AreEqual(0, firstStallDay,
+                        $"no bake gap before day {day}: bakes ran daily from day {firstBakeDay}, then stalled day {firstStallDay}");
+                    bakes++;
+                    transfers += r.TransfersCompleted;
+                    Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes on a bake day, day {day}");
+                    Assert.AreEqual(24, r.UnitsStocked, $"24 loaves stocked on a bake day, day {day}");
+                    expectedStoreStock += 24;
+                }
+                else
+                {
+                    Assert.AreEqual(0, r.TransfersCompleted, $"no transfer without a bake, day {day}");
+                    Assert.AreEqual(0, r.UnitsStocked, $"nothing stocked without a bake, day {day}");
+                    if (firstBakeDay > 0 && firstStallDay == 0) firstStallDay = day;
+                }
+                Assert.AreEqual(expectedStoreStock, s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits,
+                    $"store stock after day {day} equals prior stock + 24 per transfer - 0 sold (no sale in the fixture)");
+            }
+
+            Assert.AreEqual(15, firstBakeDay, "the first bake is day 15: the day-1 notions order arrives on the 14-day lead");
+            Assert.AreEqual(0, firstStallDay, "no stall through day 60: daily bakes run days 15-60 with no gap");
+            Assert.AreEqual(46, bakes, "46 daily bakes, days 15-60 with no gap");
+            Assert.AreEqual(46, transfers, "46 transfers complete, one per bake");
+            Assert.AreEqual(46, s.Bakery.WholesaleDeliveries.Count, "46 daily bakes = 46 delivery records");
+            Assert.AreEqual(46, deliveryIds.Count, "46 distinct delivery ids, one per delivery record");
+
+            Assert.AreEqual(46, s.StoreService.Orders.Count, "46 notions orders over the run: 1 bulk priming order + 45 daily replacements (day 15 orders nothing)");
+            Assert.AreEqual(46, notionsOrderIds.Count, "46 distinct notions order ids, no duplicate order");
+            Assert.AreEqual(60, TotalNotionsOrderedUnits(s), "total notions ordered 60u = 46 baked + 14u steady-state pipeline stock");
+            Assert.AreEqual(15, s.StoreService.Orders[0].UnitsOrdered, "day 1 orders today + 14 forward = 15u in one order");
+            Assert.AreEqual(15, s.StoreService.Orders[0].ExpectedArrivalDayIndex, "the day-1 notions order arrives day 15 (14-day lag)");
+            for (int i = 1; i < s.StoreService.Orders.Count; i++)
+            {
+                Assert.AreEqual(1, s.StoreService.Orders[i].UnitsOrdered, $"replacement order {i + 1} is 1u");
+                Assert.AreEqual(s.StoreService.Orders[i].OrderDayIndex + 14, s.StoreService.Orders[i].ExpectedArrivalDayIndex,
+                    $"replacement order {i + 1} arrives 14 days after its order day");
+            }
+            int inTransitNotions = 0;
+            foreach (NamedSkuOrder order in s.StoreService.Orders)
+                if (order != null && order.Stage != NamedSkuOrderStage.Received && order.Stage != NamedSkuOrderStage.Cancelled)
+                    inTransitNotions += Math.Max(0, order.UnitsOrdered);
+            Assert.AreEqual(14, inTransitNotions, "steady-state notions pipeline stock at day 60 is 14u in transit (orders days 47-60, arriving days 61-74)");
+            Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId), "bin notions 0u at day 60 (every fed notion bakes the same day)");
+            Assert.AreEqual(0, s.Notions.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId), "no notions sit sellable in the store at day 60");
+            Assert.AreEqual(32, receiptIds.Count, "32 distinct notions receipt ids, one per received order (day-1 bulk order + 31 replacement orders arrived by day 60; 46u received in total)");
+            Assert.AreEqual(32, s.StoreService.Lots.Count, "32 notions lots received by day 60, one per received order");
+
+            Assert.AreEqual(66, flourSacks, "66 flour sacks ordered over the run");
+            Assert.AreEqual(9, run.Supplier.Lots.Count, "9 Millbrook reorder lots over the run");
+            Assert.AreEqual(9, millbrookLotIds.Count, "9 distinct Millbrook lot ids, no duplicate reorder");
+            Assert.AreEqual(28, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "the bin rests at 28 lb at the end");
+            Assert.AreEqual(80, OutstandingMillbrookLb(run.Supplier), "80 lb is in transit at the end of the run");
+            Assert.AreEqual(10 * flourSacks, 12 * bakes
+                + s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId) + OutstandingMillbrookLb(run.Supplier),
+                "flour reconciles exactly: ordered pounds = baked pounds + bin + in transit (no flour created or lost)");
+            Assert.AreEqual(520, run.TotalReplenishedLb,
+                "the deterministic weekly replenishment totals 520 lb over weeks 1-8 (40-80 lb/week, authored range)");
+            Assert.AreEqual(90, run.Supplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook holds 90 lb at the end: 230 start + 520 replenished - 660 ordered (the combined run does not exhaust Millbrook, unlike the flour-only anchor)");
+            Assert.AreEqual(230 + run.TotalReplenishedLb - 10 * flourSacks, run.Supplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook stock reconciles: 230 start + weekly replenishment - reordered pounds");
+            Assert.AreEqual(3168, run.Supplier.CashCents, "Millbrook is paid exactly 48c per reorder sack, once each (66 x 48)");
+            Assert.AreEqual(9, run.Supplier.CashTransactions.Count, "one Millbrook cash transaction per reorder lot (9 lots, 9 settlements)");
+            int millbrookTxTotal = 0;
+            foreach (OffMapAidCashTransaction tx in run.Supplier.CashTransactions)
+            {
+                Assert.IsTrue(millbrookTxIds.Add(tx.TransactionId), $"Millbrook transaction id '{tx.TransactionId}' appears exactly once");
+                Assert.AreEqual(0, tx.AmountCents % 48, $"Millbrook transaction '{tx.TransactionId}' is a whole number of 48c sacks");
+                millbrookTxTotal += tx.AmountCents;
+            }
+            Assert.AreEqual(3168, millbrookTxTotal, "Millbrook settlement transactions sum to exactly 48c per reorder sack");
+
+            Assert.AreEqual(580, s.BakeryRuntime.CurrentCashCents,
+                "bakery cash reconciles: 2,000 - 460c notions feeds (46 x 10c) - 3,168c flour (66 x 48c) + 2,208c wholesale (46 x 48c) = 580c");
+            Assert.AreEqual(2000 - 10 * bakes - 48 * flourSacks + 48 * bakes, s.BakeryRuntime.CurrentCashCents,
+                "bakery cash reconciles from the per-day legs");
+            Assert.AreEqual(2792, s.StoreRuntime.CurrentCashCents,
+                "store cash reconciles: 5,000 - 460c notions receipts (46u received) + 460c feeds - 2,208c wholesale = 2,792c");
+            Assert.AreEqual(5000 - 10 * bakes + 10 * bakes - 48 * bakes, s.StoreRuntime.CurrentCashCents,
+                "store cash reconciles from the per-day legs (receipts and feeds cancel at 46u each)");
+            Assert.AreEqual(600, s.Market.TotalOutflowCents, "60 notions orders x 10c booked as market outflow at order time");
+            Assert.AreEqual(14, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel 60 - 46 bakes = 14u left: fuel never blocks this run (fixture-seeded; live fuel caps at 40u, plan §8 B-2)");
+            Assert.AreEqual(1104, s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits,
+                "store stock 46 bakes x 24 loaves = 1,104u at day 60 (no sale in the fixture)");
+            Assert.AreEqual(1104, expectedStoreStock, "store stock accumulated exactly 24 loaves per transfer over the run");
+        }
+
+        [Test]
+        public void Sustained_SixtyDays_VariedDaySteps_SameOutcome()
+        {
+            // Priority 3 Slice 5: tick-size independence for the 60-day
+            // drive. Run A advances the day loop one day at a time;
+            // run B advances the same 60 days in varied chunk sizes
+            // (1, 2, 3, 5, 4, ... days per chunk), driving every
+            // calendar day exactly once through the real driver in
+            // both runs. Both runs must produce identical bake /
+            // order / transfer totals and identical end state.
+            //
+            // Step-size reading, stated plainly so this test is not
+            // misread: BakeryWholesaleDailyDriver.RunDay processes
+            // exactly one day per call with at most one active batch,
+            // so a step that SKIPPED calendar days could not bake for
+            // them and its totals would differ by construction — the
+            // driver has no multi-day catch-up loop, and this test
+            // does not pretend it does. "Varied step sizes" here means
+            // the outer loop advances in varied chunk sizes while
+            // every day is still driven once; what it pins is that the
+            // grouping of the day drive changes nothing. The driver's
+            // own catch-up path (a planned batch run on a later day
+            // index through Series2BakeryProductionDriver.
+            // RunScheduledDay) is pinned directly by the probe below:
+            // a batch planned for day 2 bakes exactly once when run on
+            // day 5, diagnosed as catch-up. The real OnDayChanged path
+            // is harness-excluded (SimulationDrivers.cs), so the
+            // sub-day tick variant is owed to Codex (plan §7 C-8).
+            CombinedRun runA = NewCombinedRun();
+            int bakesA = 0;
+            int transfersA = 0;
+            int flourSacksA = 0;
+            for (int day = 1; day <= 60; day++)
+            {
+                BakeryWholesaleDailyResult r = DriveCombinedDay(runA, day);
+                bakesA += r.BatchesBaked;
+                transfersA += r.TransfersCompleted;
+                flourSacksA += r.MillbrookReorderSacks;
+            }
+            string summaryA = TotalsSummary(runA, bakesA, transfersA, flourSacksA);
+            Assert.AreEqual(46, bakesA, "run A (1-day steps): 46 daily bakes, days 15-60");
+
+            CombinedRun runB = NewCombinedRun();
+            int bakesB = 0;
+            int transfersB = 0;
+            int flourSacksB = 0;
+            int[] chunks = { 1, 2, 3, 5, 4, 2, 3, 1, 5, 4, 2, 3, 1, 5, 2, 4, 3, 2, 1, 5, 2 };
+            int dayB = 1;
+            foreach (int chunk in chunks)
+            {
+                for (int i = 0; i < chunk; i++)
+                {
+                    BakeryWholesaleDailyResult r = DriveCombinedDay(runB, dayB);
+                    bakesB += r.BatchesBaked;
+                    transfersB += r.TransfersCompleted;
+                    flourSacksB += r.MillbrookReorderSacks;
+                    dayB++;
+                }
+            }
+            Assert.AreEqual(61, dayB, "run B (varied chunks): the chunk sizes cover days 1-60 exactly, no day skipped or repeated");
+            string summaryB = TotalsSummary(runB, bakesB, transfersB, flourSacksB);
+            Assert.AreEqual(summaryA, summaryB,
+                "varied chunk sizes produce the identical 60-day outcome as 1-day steps (no step size changes the outcome)");
+
+            // Catch-up probe: a batch planned for day 2, run on day 5
+            // through the production driver directly, bakes exactly
+            // once and is diagnosed as catch-up, never hidden.
+            Slice c = NewSlice();
+            SeedInputs(c, 24, 2, 2);
+            Assert.IsNotNull(c.ProductionDriver.PlanBatches(BakeryBreadCatalog.BreadLoafId, 1, 2, c.Diag),
+                "the catch-up probe plans one batch for day 2");
+            Assert.AreEqual(1, c.ProductionDriver.RunScheduledDay(
+                5, true, WorkstationCatalog.BakeOven, OvenFinder(), null, c.Diag, c.Ids),
+                "a late run bakes the planned batch; diag: " + string.Join("; ", c.Diag));
+            Assert.IsTrue(c.Diag.Exists(d => d != null && d.Contains("catch-up")),
+                "the late bake is diagnosed as catch-up, never hidden");
+            Assert.AreEqual(1, c.Bakery.BreadShelf.Count, "the catch-up run bakes exactly one batch (one shelf lot)");
+            Assert.AreEqual(24, c.Bakery.BreadShelf[0].UnitCount, "the catch-up batch shelves 24 loaves, once");
+        }
+
+        [Test]
+        public void Sustained_SixtyDays_SaveLoadMidRun_ExactlyOnce()
+        {
+            // Priority 3 Slice 5: save/load at day 30 mid-pipeline
+            // (existing save seams) and the run must complete to day
+            // 60 with no duplicate order, receipt, or settlement.
+            // The save captures the notions procurement state, the
+            // Millbrook supplier state (including its replenishment
+            // week, so no week is re-applied), the bakery DTO (bin and
+            // fuel lots, accounts, delivery records, sequences), and
+            // the production driver's planned state; store cash and
+            // store stock are restored to their day-30 values (they
+            // live in no DTO). The restored run must reproduce the
+            // uninterrupted 60-day drive's totals exactly — a
+            // reference drive runs first for the comparison — and the
+            // union of pre-save and post-save order, lot, receipt,
+            // delivery, and settlement ids must contain no duplicate.
+            CombinedRun reference = NewCombinedRun();
+            int refBakes = 0;
+            int refTransfers = 0;
+            int refFlourSacks = 0;
+            for (int day = 1; day <= 60; day++)
+            {
+                BakeryWholesaleDailyResult r = DriveCombinedDay(reference, day);
+                refBakes += r.BatchesBaked;
+                refTransfers += r.TransfersCompleted;
+                refFlourSacks += r.MillbrookReorderSacks;
+            }
+            string referenceSummary = TotalsSummary(reference, refBakes, refTransfers, refFlourSacks);
+
+            CombinedRun run = NewCombinedRun();
+            Slice s = run.S;
+            int bakes = 0;
+            int transfers = 0;
+            int flourSacks = 0;
+            for (int day = 1; day <= 30; day++)
+            {
+                BakeryWholesaleDailyResult r = DriveCombinedDay(run, day);
+                bakes += r.BatchesBaked;
+                transfers += r.TransfersCompleted;
+                flourSacks += r.MillbrookReorderSacks;
+            }
+            Assert.AreEqual(16, bakes, "16 bakes before the save (days 15-30)");
+            Assert.AreEqual(16, transfers, "16 transfers before the save");
+            Assert.AreEqual(16, s.Bakery.WholesaleDeliveries.Count, "16 delivery records before the save");
+            int storeCashAt30 = s.StoreRuntime.CurrentCashCents;
+            int bakeryCashAt30 = s.BakeryRuntime.CurrentCashCents;
+            int storeStockAt30 = s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits;
+            int fuelAt30 = s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId);
+            int binFlourAt30 = s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
+            Assert.AreEqual(384, storeStockAt30, "store stock at day 30 is 16 bakes x 24 loaves");
+            Assert.AreEqual(44, fuelAt30, "fuel at day 30 is 60 - 16 bakes");
+
+            NamedSkuProcurementSaveDto procurementDto = s.StoreService.ExportState();
+            OffMapAidBusinessSaveDto supplierDto = run.Supplier.ExportState();
+            BakeryShopRuntime.BakeryShopRuntimeSaveDto bakeryDto = s.Bakery.CaptureSaveDto();
+            var plannedIds = new List<string>(s.ProductionDriver.PlannedBatchIds);
+            int plannedDay = s.ProductionDriver.PlannedDayIndex;
+            // Pre-save counts bound the union checks below: the
+            // restored lists CONTAIN the pre-save entries by design,
+            // so only entries past these counts are new and must not
+            // collide with the pre-save id sets.
+            int preOrderCount = s.StoreService.Orders.Count;
+            int preLotCount = run.Supplier.Lots.Count;
+            int preDeliveryCount = s.Bakery.WholesaleDeliveries.Count;
+            int preReceiptCount = s.StoreService.ReceivedReceiptIds.Count;
+            int preTxCount = run.Supplier.CashTransactions.Count;
+            var preOrderIds = new HashSet<string>();
+            foreach (NamedSkuOrder order in s.StoreService.Orders)
+                Assert.IsTrue(preOrderIds.Add(order.OrderId), $"pre-save notions order id '{order.OrderId}' is unique");
+            var preLotIds = new HashSet<string>();
+            foreach (OffMapAidCargoLot lot in run.Supplier.Lots)
+                Assert.IsTrue(preLotIds.Add(lot.LotId), $"pre-save Millbrook lot id '{lot.LotId}' is unique");
+            var preDeliveryIds = new HashSet<string>();
+            foreach (BakeryWholesaleDeliveryRecord delivery in s.Bakery.WholesaleDeliveries)
+                Assert.IsTrue(preDeliveryIds.Add(delivery.DeliveryId), $"pre-save delivery id '{delivery.DeliveryId}' is unique");
+            var preReceiptIds = new HashSet<string>();
+            foreach (string receiptId in s.StoreService.ReceivedReceiptIds)
+                Assert.IsTrue(preReceiptIds.Add(receiptId), $"pre-save receipt id '{receiptId}' is unique");
+            var preTxIds = new HashSet<string>();
+            foreach (OffMapAidCashTransaction tx in run.Supplier.CashTransactions)
+                Assert.IsTrue(preTxIds.Add(tx.TransactionId), $"pre-save Millbrook transaction id '{tx.TransactionId}' is unique");
+
+            var f = new Slice();
+            f.Diag = s.Diag;
+            f.Market = s.Market;
+            f.Ids = s.Ids;
+            f.StoreRuntime.BindBusinessIdentity(StoreInstanceId);
+            f.StoreRuntime.AddCashCents(storeCashAt30);
+            f.StoreRuntime.EnsureCategoryStock("staple_food", storeStockAt30, 2000);
+            f.BakeryRuntime.BindBusinessIdentity(BakeryInstanceId);
+            f.BakeryRuntime.AddCashCents(bakeryCashAt30);
+            f.StoreService = new OffMapNamedSkuProcurementService(
+                StoreInstanceId, f.Market, new RuntimeCashPort(f.StoreRuntime));
+            f.StoreService.ImportState(procurementDto);
+            f.Procurement = new Series2FlourProcurementDriver(f.StoreService);
+            f.Notions = new Series2NotionsSupply(f.Procurement);
+            f.Bakery = new BakeryShopRuntime(BakeryInstanceId);
+            f.Bakery.LoadFromSaveDto(bakeryDto);
+            f.ProductionDriver = new Series2BakeryProductionDriver(
+                f.Bakery, new Series2InStockBakeryFuelSource(f.Bakery));
+            f.ProductionDriver.RestorePlannedState(plannedDay, plannedIds, f.Diag);
+            f.StorePort = new RuntimeStorePort { Runtime = f.StoreRuntime };
+            f.StorePort.Prices["staple_food"] = 5;
+            f.StorePort.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { "bread" },
+                StoreUnitsPerItemUnit = 1,
+            });
+            var restoredSupplier = new OffMapAidBusinessRuntime(MillbrookDefinitionWithProduction());
+            Assert.IsNull(restoredSupplier.ImportState(supplierDto), "import of the exported supplier state should succeed");
+            var restoredAdapter = new MillbrookFlourFreightCustodyAdapter(restoredSupplier, f.Bakery, f.Ids);
+
+            Assert.AreEqual(s.StoreService.Orders.Count, f.StoreService.Orders.Count, "exactly the pre-save notions orders restore");
+            for (int i = 0; i < f.StoreService.Orders.Count; i++)
+                Assert.AreEqual(s.StoreService.Orders[i].OrderId, f.StoreService.Orders[i].OrderId,
+                    $"restored notions order {i} keeps its id");
+            Assert.AreEqual(run.Supplier.Lots.Count, restoredSupplier.Lots.Count, "exactly the pre-save Millbrook lots restore");
+            for (int i = 0; i < restoredSupplier.Lots.Count; i++)
+                Assert.AreEqual(run.Supplier.Lots[i].LotId, restoredSupplier.Lots[i].LotId,
+                    $"restored Millbrook lot {i} keeps its id");
+            Assert.AreEqual(s.Bakery.WholesaleDeliveries.Count, f.Bakery.WholesaleDeliveries.Count, "exactly the pre-save delivery records restore");
+            for (int i = 0; i < f.Bakery.WholesaleDeliveries.Count; i++)
+                Assert.AreEqual(s.Bakery.WholesaleDeliveries[i].DeliveryId, f.Bakery.WholesaleDeliveries[i].DeliveryId,
+                    $"restored delivery record {i} keeps its id");
+            Assert.AreEqual(s.StoreService.ReceivedReceiptIds.Count, f.StoreService.ReceivedReceiptIds.Count, "exactly the pre-save receipt ids restore");
+            for (int i = 0; i < f.StoreService.ReceivedReceiptIds.Count; i++)
+                Assert.AreEqual(s.StoreService.ReceivedReceiptIds[i], f.StoreService.ReceivedReceiptIds[i],
+                    $"restored receipt id {i} is unchanged");
+            Assert.AreEqual(run.Supplier.CashTransactions.Count, restoredSupplier.CashTransactions.Count, "exactly the pre-save Millbrook transactions restore");
+            for (int i = 0; i < restoredSupplier.CashTransactions.Count; i++)
+                Assert.AreEqual(run.Supplier.CashTransactions[i].TransactionId, restoredSupplier.CashTransactions[i].TransactionId,
+                    $"restored Millbrook transaction {i} keeps its id");
+            Assert.AreEqual(bakeryCashAt30, f.BakeryRuntime.CurrentCashCents, "bakery cash restores to its day-30 value");
+            Assert.AreEqual(storeCashAt30, f.StoreRuntime.CurrentCashCents, "store cash restores to its day-30 value");
+            Assert.AreEqual(storeStockAt30, f.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits, "store stock restores to its day-30 value");
+            Assert.AreEqual(fuelAt30, f.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId), "fuel restores to its day-30 value");
+            Assert.AreEqual(binFlourAt30, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin flour restores to its day-30 value");
+            Assert.AreEqual(run.Supplier.CashCents, restoredSupplier.CashCents, "Millbrook cash restores to its day-30 value");
+            Assert.AreEqual(run.Supplier.GetInventoryUnits("bakery_flour_sack"), restoredSupplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook stock restores to its day-30 value");
+
+            var restoredRun = new CombinedRun { S = f, Reg = run.Reg, Supplier = restoredSupplier, Adapter = restoredAdapter, TotalReplenishedLb = run.TotalReplenishedLb };
+            int firstStallDay = 0;
+            for (int day = 31; day <= 60; day++)
+            {
+                BakeryWholesaleDailyResult r = DriveCombinedDay(restoredRun, day);
+                if (r.BatchesBaked == 1)
+                {
+                    bakes++;
+                    Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes on a bake day after the restore, day {day}");
+                    transfers += r.TransfersCompleted;
+                }
+                else if (firstStallDay == 0)
+                {
+                    firstStallDay = day;
+                }
+                flourSacks += r.MillbrookReorderSacks;
+            }
+            Assert.AreEqual(0, firstStallDay, "no stall after the restore: daily bakes run days 31-60 with no gap");
+            Assert.AreEqual(46, bakes, "46 daily bakes total across the save/load boundary (16 before + 30 after)");
+            Assert.AreEqual(46, transfers, "46 transfers total across the save/load boundary");
+            Assert.AreEqual(46, f.Bakery.WholesaleDeliveries.Count, "46 delivery records total across the save/load boundary");
+
+            // Only entries past the pre-save counts are new: the
+            // restored entries themselves are already in the sets by
+            // design, so re-adding them would fail spuriously.
+            for (int i = preOrderCount; i < f.StoreService.Orders.Count; i++)
+                Assert.IsTrue(preOrderIds.Add(f.StoreService.Orders[i].OrderId), $"notions order id '{f.StoreService.Orders[i].OrderId}' appears exactly once across the save/load boundary");
+            for (int i = preLotCount; i < restoredSupplier.Lots.Count; i++)
+                Assert.IsTrue(preLotIds.Add(restoredSupplier.Lots[i].LotId), $"Millbrook lot id '{restoredSupplier.Lots[i].LotId}' appears exactly once across the save/load boundary");
+            for (int i = preDeliveryCount; i < f.Bakery.WholesaleDeliveries.Count; i++)
+                Assert.IsTrue(preDeliveryIds.Add(f.Bakery.WholesaleDeliveries[i].DeliveryId), $"delivery id '{f.Bakery.WholesaleDeliveries[i].DeliveryId}' appears exactly once across the save/load boundary");
+            for (int i = preReceiptCount; i < f.StoreService.ReceivedReceiptIds.Count; i++)
+                Assert.IsTrue(preReceiptIds.Add(f.StoreService.ReceivedReceiptIds[i]), $"receipt id '{f.StoreService.ReceivedReceiptIds[i]}' appears exactly once across the save/load boundary");
+            for (int i = preTxCount; i < restoredSupplier.CashTransactions.Count; i++)
+                Assert.IsTrue(preTxIds.Add(restoredSupplier.CashTransactions[i].TransactionId), $"Millbrook transaction id '{restoredSupplier.CashTransactions[i].TransactionId}' appears exactly once across the save/load boundary");
+            Assert.AreEqual(46, preOrderIds.Count, "46 distinct notions order ids across the whole run");
+            Assert.AreEqual(46, preDeliveryIds.Count, "46 distinct delivery ids across the whole run");
+
+            string restoredSummary = TotalsSummary(restoredRun, bakes, transfers, flourSacks);
+            Assert.AreEqual(referenceSummary, restoredSummary,
+                "the save/load run reproduces the uninterrupted 60-day drive's totals exactly (no duplicate order, receipt, or settlement, no lost state)");
+        }
     }
 }

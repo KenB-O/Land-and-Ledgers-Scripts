@@ -531,6 +531,18 @@ namespace LandLedgers.Economy.Freight
             List<string> diagnostics)
         {
             diagnostics = diagnostics ?? new List<string>();
+            // Priority 7 Slice 8: clear-then-load for the dispatch-plan map
+            // (the P5 Slice 5 precedent, same layer). The company's active
+            // lists are rebuilt clear-then-load below and the service half
+            // clears its tracked state, but this map was never cleared — so
+            // a smaller second save dropped the stale shipment everywhere
+            // except here, and the stale plan then blocked a fresh DTO plan
+            // for the same shipment id on a later re-add (the ContainsKey
+            // skip in the DTO-plan branch below). Clearing first is safe:
+            // every surviving shipment's plan is rebuilt from its bound
+            // transport or re-applied from the DTO below, and a plan for a
+            // shipment the save no longer carries is stale by definition.
+            dispatchPlans.Clear();
             serviceAgreements.RestoreSaveDto(dto != null ? dto.ServiceAgreements : null);
             List<LogisticsShipmentState> restored = service.RestoreSaveDto(dto, hooks);
 

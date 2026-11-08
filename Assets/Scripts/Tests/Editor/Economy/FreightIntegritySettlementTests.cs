@@ -349,6 +349,39 @@ namespace LandLedgers.EditorTests.Economy
             return restoredFreight;
         }
 
+        // Priority 7 Slice 8 (2026-11-08): the multi-shipment form of
+        // RestoreIntoFreshDriver, for saves carrying more than the fixture's
+        // single haul (a mid-transit second haul, or a full + smaller save
+        // pair). Same fresh-driver setup; only the expected count differs.
+        private FreightProductionDriver RestoreIntoFreshDriverMulti(
+            FreightShipmentService.FreightServiceSaveDto dto, int expectedCount)
+        {
+            var restoredFreight = new FreightProductionDriver();
+            restoredFreight.EnsureCompany(CarrierId, carrierRuntime);
+            restoredFreight.RegisterBusinessRuntime(BakeryId, payerRuntime);
+            restoredFreight.Service.RegisterWagon(wagon);
+            List<LogisticsShipmentState> restored = restoredFreight.RestoreSaveDto(dto, hooks, diag);
+            Assert.AreEqual(expectedCount, restored.Count,
+                "exactly " + expectedCount + " shipments restore in this fixture");
+            return restoredFreight;
+        }
+
+        // Priority 7 Slice 8 (2026-11-08): finds the persisted dispatch
+        // plan for one shipment in a save DTO, or null when the DTO carries
+        // none for it. CaptureSaveDto is the read surface for the driver's
+        // private plan map (the P5 Slice 5 precedent: the private
+        // load/unload-task maps are likewise read through the capture).
+        private static FreightShipmentService.FreightDispatchPlanSaveDto FindPlanIn(
+            FreightShipmentService.FreightServiceSaveDto dto, string shipmentId)
+        {
+            if (dto == null || dto.DispatchPlans == null) return null;
+            foreach (FreightShipmentService.FreightDispatchPlanSaveDto plan in dto.DispatchPlans)
+            {
+                if (plan != null && string.Equals(plan.ShipmentId, shipmentId, StringComparison.Ordinal)) return plan;
+            }
+            return null;
+        }
+
         // Checks that a lot built with the production cargo spec SHIPS, collecting
         // any mismatch instead of asserting immediately: NUnit aborts a test at
         // its first failing assert, so hard asserts would hide the 10-sack
@@ -596,6 +629,36 @@ namespace LandLedgers.EditorTests.Economy
             for (int tick = 0; tick < 8 && target.Status != LogisticsShipmentStatus.Completed; tick++)
             {
                 Tick();
+                trace.Add(target.Status);
+                if (!departureRecorded && target.Status == LogisticsShipmentStatus.InTransit)
+                {
+                    departureDays.Add(dayIndex);
+                    departureRecorded = true;
+                }
+                Assert.IsNull(FindLoadTaskFor(target.ShipmentId),
+                    "no load task is created at any tick in the loop for " + label + " (tick " + tick + ")");
+            }
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, target.Status,
+                label + " did not complete; trace: " + string.Join(", ", trace));
+            return trace;
+        }
+
+        // Priority 7 Slice 8 (2026-11-08): the same return-day tick loop as
+        // TickUntilCompleted, but driving the GIVEN driver (a restored
+        // driver) instead of the fixture `freight` field, so a test can
+        // complete a haul with the restored driver only and prove nothing
+        // settles twice. Same shape: no load task at any tick, the
+        // departure day recorded when the shipment first reaches InTransit.
+        private List<LogisticsShipmentStatus> TickUntilCompletedOn(FreightProductionDriver driver,
+            LogisticsShipmentState target, string label, int dayIndex)
+        {
+            hooks.DayIndex = dayIndex;
+            hooks.IsVehicleOffMap = _ => false;
+            var trace = new List<LogisticsShipmentStatus>();
+            bool departureRecorded = false;
+            for (int tick = 0; tick < 8 && target.Status != LogisticsShipmentStatus.Completed; tick++)
+            {
+                driver.AdvanceTick(86400f, hooks, Handler(), diag);
                 trace.Add(target.Status);
                 if (!departureRecorded && target.Status == LogisticsShipmentStatus.InTransit)
                 {
@@ -1969,6 +2032,375 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNull(freight.Service.FindExclusivityConflict(null, WagonId,
                 EntityId.For(EntityKind.Person, EthanId), TeamAnimals()),
                 "wagon/driver/horse must be free after the resumed delivery completes");
+        }
+
+        // ---- Priority 7 Slice 8 (2026-11-08): save/load mid-journey
+        // acceptance. Tests only, except for the one conditional repair the
+        // task authorizes (see SaveLoad_SmallerSecondSave_DropsStaleShipment_
+        // P7 below): P5 Slices 5–7 proved the save/load seams, but no test
+        // captured a Planned, picked-up (return-day) shipment across a
+        // restore and drove it to completion, and no P7-level test proved a
+        // multi-sack haul survives a mid-transit restore with no duplicate
+        // settlement. Expected to PASS after Slice 2 — the D-F2 case FAILS
+        // before Slice 2 by the Slice 0 pin, and that ordering is confirmed
+        // from the Slice 0 log rather than re-breaking the tree.
+
+        [Test]
+        public void SaveLoad_ReturnDayPlannedShipment_CompletesAfterRestore()
+        {
+            // The D-F2 acceptance: capture a Planned, authorized, picked-up
+            // shipment (load applied, not yet dispatched); restore into a
+            // fresh driver; tick with the wagon home; it dispatches
+            // (InTransit), arrives, unloads, delivers, settles 125c once,
+            // and fulfils its agreement — with the dispatch plan carried by
+            // the DTO (the restored driver is asserted to hold a plan for
+            // the shipment id, via the CaptureSaveDto read surface). The
+            // D-F2 pin (Slice 0/2) proved only the dispatch; this test
+            // drives the restored shipment to completion.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            BindAndAuthorize();
+            SimulateSupplierPickup();
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status, "the picked-up shipment is Planned");
+            Assert.IsTrue(shipment.loadApplied, "the supplier pickup applied the load");
+            Assert.IsTrue(!shipment.physicalTransportBound, "transport is not yet bound before dispatch");
+
+            FreightShipmentService.FreightServiceSaveDto dto = freight.CaptureSaveDto();
+            FreightShipmentService.FreightDispatchPlanSaveDto carried = FindPlanIn(dto, ShipmentId);
+            Assert.IsNotNull(carried, "the DTO must carry a dispatch plan for the Planned shipment");
+            Assert.AreEqual("P7", carried.DriverPersonId, "the carried plan must name driver Ethan (P7)");
+            Assert.AreEqual(1, carried.AnimalIds.Count, "the carried plan must name one draft animal");
+            Assert.AreEqual("A0", carried.AnimalIds[0], "the carried plan must name horse A0");
+
+            FreightProductionDriver restoredFreight = RestoreIntoFreshDriver(dto);
+            LogisticsShipmentState restored = FindShipmentIn(restoredFreight, ShipmentId);
+            Assert.IsNotNull(restored, "the restored driver must hold the Planned shipment");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, restored.Status, "the restored shipment is Planned");
+            Assert.IsTrue(restored.loadApplied, "the restored shipment keeps its applied load");
+            Assert.IsTrue(!restored.physicalTransportBound, "the restored shipment is not transport-bound");
+            FreightShipmentService.FreightDispatchPlanSaveDto restoredPlan =
+                FindPlanIn(restoredFreight.CaptureSaveDto(), ShipmentId);
+            Assert.IsNotNull(restoredPlan, "the restored driver must hold a dispatch plan for the shipment id");
+            Assert.AreEqual("P7", restoredPlan.DriverPersonId, "the restored plan must name driver Ethan (P7)");
+            Assert.AreEqual(1, restoredPlan.AnimalIds.Count, "the restored plan must name one draft animal");
+            Assert.AreEqual("A0", restoredPlan.AnimalIds[0], "the restored plan must name horse A0");
+
+            List<LogisticsShipmentStatus> trace =
+                TickUntilCompletedOn(restoredFreight, restored, "restored return-day haul", Day);
+            Assert.IsTrue(trace.Contains(LogisticsShipmentStatus.InTransit),
+                "the restored shipment must dispatch (InTransit); trace: " + string.Join(", ", trace));
+            Assert.IsTrue(trace.Contains(LogisticsShipmentStatus.Arrived),
+                "the restored shipment must arrive; trace: " + string.Join(", ", trace));
+
+            Assert.IsTrue(restored.deliveryApplied, "the restored shipment must record delivery applied");
+            Assert.IsTrue(lot.Received, "the paid Millbrook lot must be marked received");
+            Assert.AreEqual(1, bakery.FlourStock.Lots.Count, "no duplicate bakery lot after restore");
+            Assert.AreEqual(10, bakery.FlourStock.Lots[0].Units, "the receipt holds one 10 lb sack");
+            Assert.AreEqual(LotId, bakery.FlourStock.Lots[0].ImportOrderId,
+                "the receipt must name the Millbrook lot");
+            Assert.IsTrue(restored.FreightRevenueCollected, "the 125c must settle exactly once");
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited exactly 125c once");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited exactly 125c once");
+            Assert.AreEqual(0, restoredFreight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after restore");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled,
+                restoredFreight.ServiceAgreements.FindAgreement(AgreementId).Status,
+                "the agreement must fulfil after the restored haul completes");
+        }
+
+        [Test]
+        public void SaveLoad_MidTransitSixteenSackHaul_RestoresExactlyOnce()
+        {
+            // A 16-sack haul captured InTransit (corrected spec); restore
+            // into a fresh driver; cargo intact (16 units), lot unreceived,
+            // agreement Accepted; complete with the restored driver only;
+            // the Bakery receives exactly 160 lb in one lot, payer/carrier
+            // move exactly 125c once, no duplicate lot, no duplicate
+            // settlement, agreement Fulfilled.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            BuildSixteenSackHaul(out OffMapAidCargoLot lot16,
+                out FreightServiceAgreement agreement16, out LogisticsShipmentState shipment16);
+            PrepareAndDispatchSecondHaul(agreement16, shipment16);
+            SimulateSupplierPickupFor(shipment16);
+
+            hooks.DayIndex = Day2;
+            hooks.IsVehicleOffMap = _ => false;
+            Tick();
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment16.Status,
+                "the 16-sack haul must be InTransit at capture");
+            Assert.AreEqual(16, shipment16.RemainingQuantityUnits, "cargo intact at capture");
+            Assert.IsTrue(!lot16.Received, "lot 16 is not received yet at capture");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement16.Status,
+                "the 16-sack agreement is Accepted at capture");
+            int payerAtCapture = payerRuntime.CurrentCashCents;
+            int carrierAtCapture = carrierRuntime.CurrentCashCents;
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerAtCapture,
+                "only haul 1 has settled at capture (payer -125c)");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierAtCapture,
+                "only haul 1 has settled at capture (carrier +125c)");
+
+            FreightShipmentService.FreightServiceSaveDto dto = freight.CaptureSaveDto();
+
+            FreightProductionDriver restoredFreight = RestoreIntoFreshDriverMulti(dto, 2);
+            LogisticsShipmentState restored1 = FindShipmentIn(restoredFreight, ShipmentId);
+            LogisticsShipmentState restored16 = FindShipmentIn(restoredFreight, shipment16.ShipmentId);
+            Assert.IsNotNull(restored1, "haul 1 must be among the restored shipments");
+            Assert.IsNotNull(restored16, "the 16-sack haul must be among the restored shipments");
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, restored1.Status, "haul 1 stays Completed after restore");
+            Assert.IsTrue(restored1.FreightRevenueCollected, "haul 1 stays collected after restore");
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, restored16.Status,
+                "the 16-sack haul resumes InTransit");
+            Assert.AreEqual(16, restored16.RemainingQuantityUnits, "the 16-sack cargo is intact after restore");
+            Assert.IsTrue(!lot16.Received, "lot 16 stays unreceived after restore");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted,
+                restoredFreight.ServiceAgreements.FindAgreement(agreement16.AgreementId).Status,
+                "the 16-sack agreement stays Accepted after restore");
+
+            // Finish with the restored driver only: the original driver is
+            // never ticked again, so nothing can settle twice.
+            TickUntilCompletedOn(restoredFreight, restored16, "restored 16-sack haul", Day2);
+
+            Assert.IsTrue(lot16.Received, "lot 16 received exactly once after restore");
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count, "no duplicate bakery lot after restore");
+            Assert.AreEqual(1, CountBakeryReceiptsFor(lot16.LotId),
+                "exactly one Bakery receipt for the 16-sack lot");
+            BakeryFlourLot receipt16 = FindBakeryReceiptFor(lot16.LotId);
+            Assert.IsNotNull(receipt16, "the bakery must hold a receipt for the 16-sack lot");
+            Assert.AreEqual(160, receipt16.Units, "the 16-sack lot lands as 160 lb in ONE bakery lot");
+            Assert.IsTrue(restored16.FreightRevenueCollected, "the 16-sack charge must be collected exactly once");
+            Assert.AreEqual(payerAtCapture - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "the restored haul moves the payer exactly 125c once");
+            Assert.AreEqual(carrierAtCapture + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "the restored haul moves the carrier exactly 125c once");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer total -250c across haul 1 and the restored 16-sack haul");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier total +250c across haul 1 and the restored 16-sack haul");
+            Assert.AreEqual(0, restoredFreight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after restore");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled,
+                restoredFreight.ServiceAgreements.FindAgreement(agreement16.AgreementId).Status,
+                "the 16-sack agreement must fulfil");
+            int reposted = restoredFreight.FindCompany(CarrierId).CollectAndPostUncollectedRevenue(
+                carrierRuntime, restoredFreight.ResolvePayerRuntime, diag);
+            Assert.AreEqual(0, reposted, "a second collection pass must post 0c more");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "no second debit on the re-scan");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "no second credit on the re-scan");
+        }
+
+        [Test]
+        public void SaveLoad_DoubleRestore_NoDuplicateSettlementOrShipment()
+        {
+            // Restore the same DTO twice into the same live instances (the
+            // E-DEFECT-02 shape): exactly the same tracked set, no second
+            // shipment id, no second settlement record, no second cash
+            // movement on any runtime, and the Millbrook lot count
+            // unchanged. Then restore a third time from the SAME DTO object
+            // (not a fresh serialization) and assert the same. The DTO is a
+            // mid-transit capture (haul 1 Completed + collected, haul 2
+            // InTransit with its cargo), so the restore also proves a
+            // repeated load never re-collects haul 1 or duplicates haul 2.
+            DriveHaul1ToCompletion();
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            hooks.DayIndex = Day2;
+            hooks.IsVehicleOffMap = _ => false;
+            Tick();
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, shipment2.Status,
+                "haul 2 must be InTransit at capture");
+            Assert.AreEqual(1, shipment2.RemainingQuantityUnits, "cargo intact at capture");
+            Assert.IsTrue(!lot2.Received, "lot 2 is not received yet at capture");
+
+            FreightShipmentService.FreightServiceSaveDto dto = freight.CaptureSaveDto();
+            Assert.AreEqual(2, dto.Shipments.Count, "the captured DTO carries both shipments");
+            Assert.AreEqual(2, dto.DispatchPlans.Count, "the captured DTO carries both plans");
+
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+            int buyerBefore = buyerCash.BalanceCents;
+            int bakeryLotsBefore = bakery.FlourStock.Lots.Count;
+            int millbrookLotsBefore = supplier.Lots.Count;
+
+            var live = new FreightProductionDriver();
+            live.EnsureCompany(CarrierId, carrierRuntime);
+            live.RegisterBusinessRuntime(BakeryId, payerRuntime);
+            live.Service.RegisterWagon(wagon);
+
+            // First restore, then the same DTO object a second and a third
+            // time into the same live driver/service/company instances.
+            for (int restore = 1; restore <= 3; restore++)
+            {
+                live.RestoreSaveDto(dto, hooks, diag);
+                Assert.AreEqual(2, live.AllShipments().Count,
+                    "restore " + restore + ": exactly the same tracked set (2 shipments)");
+                var ids = new HashSet<string>(StringComparer.Ordinal);
+                foreach (LogisticsShipmentState s in live.AllShipments())
+                    Assert.IsTrue(ids.Add(s.ShipmentId),
+                        "restore " + restore + ": no second shipment id ('" + s.ShipmentId + "' twice)");
+                Assert.AreEqual(2, ids.Count, "restore " + restore + ": exactly 2 distinct shipment ids");
+                Assert.AreEqual(2, live.Service.TrackedShipments.Count,
+                    "restore " + restore + ": the service tracks exactly 2 shipments");
+                LogisticsShipmentState r1 = FindShipmentIn(live, ShipmentId);
+                LogisticsShipmentState r2 = FindShipmentIn(live, shipment2.ShipmentId);
+                Assert.IsNotNull(r1, "restore " + restore + ": haul 1 must be present");
+                Assert.IsNotNull(r2, "restore " + restore + ": haul 2 must be present");
+                Assert.AreEqual(LogisticsShipmentStatus.Completed, r1.Status,
+                    "restore " + restore + ": haul 1 stays Completed");
+                Assert.IsTrue(r1.FreightRevenueCollected,
+                    "restore " + restore + ": haul 1 stays collected — no second settlement record");
+                Assert.AreEqual(LogisticsShipmentStatus.InTransit, r2.Status,
+                    "restore " + restore + ": haul 2 stays InTransit");
+                Assert.IsTrue(!r2.FreightRevenueCollected,
+                    "restore " + restore + ": haul 2 stays uncollected until it completes");
+                // FindUncollectedFreightChargeShipmentIds lists only
+                // Completed + delivered + uncollected shipments, so with
+                // haul 1 collected and haul 2 still InTransit the list is
+                // EMPTY — no charge is due yet, and no second settlement
+                // record exists for either haul. (First draft asserted 1
+                // here, naming haul 2 — wrong: an InTransit shipment is
+                // not collectable until it completes; verified in source,
+                // FreightCompanyRuntime.cs:379-395.)
+                List<string> uncollected =
+                    live.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds();
+                Assert.AreEqual(0, uncollected.Count,
+                    "restore " + restore + ": no charge is due (haul 1 collected, haul 2 not yet complete)");
+                Assert.IsTrue(!uncollected.Contains(ShipmentId),
+                    "restore " + restore + ": no second settlement record for haul 1");
+                Assert.IsTrue(!uncollected.Contains(shipment2.ShipmentId),
+                    "restore " + restore + ": haul 2 is not collectable before it completes");
+                Assert.AreEqual(payerBefore, payerRuntime.CurrentCashCents,
+                    "restore " + restore + ": no second cash movement on the payer runtime");
+                Assert.AreEqual(carrierBefore, carrierRuntime.CurrentCashCents,
+                    "restore " + restore + ": no second cash movement on the carrier runtime");
+                Assert.AreEqual(buyerBefore, buyerCash.BalanceCents,
+                    "restore " + restore + ": no second cash movement on the buyer cash port");
+                Assert.AreEqual(bakeryLotsBefore, bakery.FlourStock.Lots.Count,
+                    "restore " + restore + ": no second bakery lot");
+                Assert.AreEqual(millbrookLotsBefore, supplier.Lots.Count,
+                    "restore " + restore + ": the Millbrook lot count is unchanged");
+                FreightShipmentService.FreightServiceSaveDto recaptured = live.CaptureSaveDto();
+                Assert.IsNotNull(FindPlanIn(recaptured, ShipmentId),
+                    "restore " + restore + ": haul 1's plan survives, exactly once");
+                Assert.IsNotNull(FindPlanIn(recaptured, shipment2.ShipmentId),
+                    "restore " + restore + ": haul 2's plan survives, exactly once");
+                Assert.AreEqual(2, recaptured.DispatchPlans.Count,
+                    "restore " + restore + ": exactly two plans, no duplicate plan");
+            }
+
+            // The DTO object itself must be pristine after three restores
+            // from it: restoring must not mutate the save.
+            Assert.AreEqual(2, dto.Shipments.Count, "the DTO must still carry both shipments after three restores");
+            Assert.AreEqual(2, dto.DispatchPlans.Count, "the DTO must still carry both plans after three restores");
+        }
+
+        [Test]
+        public void SaveLoad_SmallerSecondSave_DropsStaleShipment_P7()
+        {
+            // Reference, do not redo: P5 Slice 5 already pins the
+            // SERVICE-level smaller-save drop
+            // (FreightServiceRestore_SmallerSecondSave_DropsStaleShipment).
+            // This test asserts only the DRIVER-level composed half: a
+            // smaller DTO restored through
+            // FreightProductionDriver.RestoreSaveDto drops the stale
+            // shipment from the company's active list and the dispatch-plan
+            // map alike. The P5 test does NOT cover the driver half (it
+            // restores through a bare FreightShipmentService, never through
+            // the driver), so this test is not omitted.
+            //
+            // Slice 2 flag resolution (2026-11-08): FreightProductionDriver.
+            // RestoreSaveDto did NOT clear `dispatchPlans` at its start
+            // (the plan did not ask for it, so the Slice 2 coder left the
+            // pre-existing non-clearing behaviour alone), while the
+            // company's active lists ARE rebuilt clear-then-load
+            // (RestoreActiveShipments clears) and the service half clears
+            // (P5 Slice 5). The plan map therefore kept a stale entry for
+            // a dropped shipment. The plan map has no public reader, and a
+            // re-capture after the smaller restore cannot see the stale
+            // entry — CaptureSaveDto only writes plans for shipments in the
+            // company's active list — so the distinguishing probe is a
+            // re-add: restore a DTO that carries the dropped shipment again
+            // with a DIFFERENT plan driver (P8). Without the clear, the
+            // DTO-plan branch skips it (dispatchPlans.ContainsKey) and the
+            // shipment dispatches with the stale P7 plan; with the clear,
+            // the fresh P8 plan wins. This test FAILS pre-clear on the P8
+            // assertions and PASSES after the one-line clear (the minimal
+            // clear-then-load repair at the same layer, P5 Slice 5
+            // precedent).
+            DriveHaul1ToCompletion();
+
+            // The smaller save: haul 1 only, captured before haul 2 exists.
+            FreightShipmentService.FreightServiceSaveDto smallerDto = freight.CaptureSaveDto();
+            Assert.AreEqual(1, smallerDto.Shipments.Count, "the smaller save carries only haul 1");
+
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment2.Status,
+                "haul 2 is Planned, picked up, not yet dispatched");
+            Assert.IsTrue(shipment2.loadApplied, "haul 2 load applied");
+            Assert.IsTrue(!shipment2.physicalTransportBound, "haul 2 transport not yet bound");
+
+            FreightShipmentService.FreightServiceSaveDto fullDto = freight.CaptureSaveDto();
+            Assert.AreEqual(2, fullDto.Shipments.Count, "the full save carries both hauls");
+            Assert.AreEqual(2, fullDto.DispatchPlans.Count, "the full save carries both plans");
+
+            FreightProductionDriver live = RestoreIntoFreshDriverMulti(fullDto, 2);
+            Assert.AreEqual(2, live.AllShipments().Count, "the live driver holds both shipments after the full restore");
+            Assert.IsNotNull(FindPlanIn(live.CaptureSaveDto(), ShipmentId),
+                "the live driver must hold haul 1's plan after the full restore");
+            Assert.IsNotNull(FindPlanIn(live.CaptureSaveDto(), shipment2.ShipmentId),
+                "the live driver must hold haul 2's plan after the full restore");
+
+            // Smaller second save into the SAME live driver: the stale
+            // shipment must drop from the company's active list.
+            live.RestoreSaveDto(smallerDto, hooks, diag);
+            Assert.AreEqual(1, live.AllShipments().Count,
+                "the smaller restore must drop the stale shipment from the company list");
+            Assert.IsNull(FindShipmentIn(live, shipment2.ShipmentId),
+                "the stale shipment must be gone from the live driver");
+            Assert.IsNotNull(FindShipmentIn(live, ShipmentId), "haul 1 survives the smaller restore");
+
+            // Re-add probe: the full DTO again, but with haul 2's plan
+            // naming a different driver (P8). The fresh plan must win.
+            string freshDriver = EntityId.For(EntityKind.Person, 8).ToString();
+            FreightShipmentService.FreightDispatchPlanSaveDto fullPlan2 = FindPlanIn(fullDto, shipment2.ShipmentId);
+            Assert.IsNotNull(fullPlan2, "the full save must carry haul 2's plan to rewrite");
+            fullPlan2.DriverPersonId = freshDriver;
+            live.RestoreSaveDto(fullDto, hooks, diag);
+            Assert.AreEqual(2, live.AllShipments().Count, "the re-added shipment returns to the company list");
+            LogisticsShipmentState readded = FindShipmentIn(live, shipment2.ShipmentId);
+            Assert.IsNotNull(readded, "the re-added shipment must be in the live driver");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, readded.Status, "the re-added shipment is Planned");
+            Assert.IsTrue(readded.loadApplied, "the re-added shipment keeps its applied load");
+            FreightShipmentService.FreightDispatchPlanSaveDto readdedPlan =
+                FindPlanIn(live.CaptureSaveDto(), shipment2.ShipmentId);
+            Assert.IsNotNull(readdedPlan, "the re-added shipment must hold a plan");
+            Assert.AreEqual(freshDriver, readdedPlan.DriverPersonId,
+                "the re-added shipment must hold the FRESH plan (" + freshDriver + "); a stale P7 plan surviving "
+                + "the smaller restore would block it, but the re-captured plan names '"
+                + readdedPlan.DriverPersonId + "'");
+
+            // Behavioural confirmation: the re-added shipment dispatches
+            // with the fresh plan driver, not the stale one.
+            hooks.DayIndex = Day2;
+            hooks.IsVehicleOffMap = _ => false;
+            diag.Clear();
+            live.AdvanceTick(86400f, hooks, Handler(), diag);
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, readded.Status,
+                "the re-added shipment must dispatch");
+            Assert.AreEqual(freshDriver, readded.physicalDriverPersonId,
+                "the re-added shipment must dispatch with the fresh plan driver (" + freshDriver
+                + "), not the stale P7 plan, but dispatched with '" + readded.physicalDriverPersonId + "'");
         }
     }
 }

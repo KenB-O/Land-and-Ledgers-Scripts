@@ -165,10 +165,6 @@ namespace LandLedgers.EditorTests.Economy
 
             carrierRuntime = Runtime(CarrierId, 0);
             payerRuntime = Runtime(BakeryId, 20000);
-            freight = new FreightProductionDriver();
-            freight.EnsureCompany(CarrierId, carrierRuntime);
-            freight.RegisterBusinessRuntime(BakeryId, payerRuntime);
-            freight.Service.RegisterWagon(wagon);
 
             hooks = new FreightShipmentHooks
             {
@@ -187,7 +183,36 @@ namespace LandLedgers.EditorTests.Economy
                     adapter.ReceiveCargoLot(s, qty, Day, out reason),
             };
 
-            FreightServiceAgreementBook book = freight.ServiceAgreements;
+            freight = BuildFixtureDriver(registerPayer: true);
+
+            journeyModel = new JourneyModel();
+            Assert.IsNull(journeyModel.RegisterLocation(new JourneyLocation("town-center", JourneyLocationKind.Waypoint, "Town Centre", 0f, 0f)));
+            RegionalTownRegistry.ApplyAll(journeyModel, new List<string>());
+            journeys = new OffMapJourneyAuthority(journeyModel);
+        }
+
+        private float NowGameSeconds() => Day * 86400f + 8 * 3600f;
+
+        // ---- Priority 7 Slice 6 (2026-11-08): settlement exactly-once
+        // acceptance. Builds the fixture driver + haul-1 request / quote /
+        // acceptance / shipment / link / prepare / plan, assigning the
+        // `freight`, `shipment`, and `agreement` fields. SetUp calls it
+        // with the payer registered (the normal path); the
+        // unresolvable-payer test calls it with registerPayer false, so
+        // the driver's resolver has no payer runtime and no resolver
+        // entry — the charge must stay uncollected (R-04) until the payer
+        // is registered and a later tick retries. The discarded first
+        // driver in that test never ticks, so its same-id shipment never
+        // binds the shared wagon/horse or touches the lot.
+        private FreightProductionDriver BuildFixtureDriver(bool registerPayer)
+        {
+            var driver = new FreightProductionDriver();
+            driver.EnsureCompany(CarrierId, carrierRuntime);
+            if (registerPayer)
+                driver.RegisterBusinessRuntime(BakeryId, payerRuntime);
+            driver.Service.RegisterWagon(wagon);
+
+            FreightServiceAgreementBook book = driver.ServiceAgreements;
             var request = new FreightServiceRequest
             {
                 RequestId = "request-1", RequestingBusinessId = BakeryId, CarrierBusinessId = CarrierId,
@@ -205,7 +230,7 @@ namespace LandLedgers.EditorTests.Economy
                 TotalPriceCents = FreightChargeCents, PayerBusinessId = BakeryId, PaymentTiming = "After successful delivery"
             }));
             Assert.IsNull(book.Accept(request.RequestId, EthanId, Day, 40000f, out agreement));
-            shipment = freight.CreateShipment(CarrierId, ShipmentId, "millbrook_grain_co", BakeryId, 1,
+            shipment = driver.CreateShipment(CarrierId, ShipmentId, "millbrook_grain_co", BakeryId, 1,
                 new FreightCargoSpec { MassKgPerUnit = 4.54f, VolumeM3PerUnit = 0.02f }, WagonId,
                 hooks, EntityId.For(EntityKind.Person, EthanId), new List<EntityId> { horse.AnimalId },
                 FreightChargeCents, BakeryId, diag, out string shipmentRefusal,
@@ -213,16 +238,10 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNotNull(shipment, shipmentRefusal);
             Assert.IsNull(book.LinkShipment(agreement.AgreementId, ShipmentId));
             Assert.IsNull(book.MarkPreparedForDispatch(agreement.AgreementId, ShipmentId, 50000f));
-            freight.SetDispatchPlan(ShipmentId, EntityId.For(EntityKind.Person, EthanId),
+            driver.SetDispatchPlan(ShipmentId, EntityId.For(EntityKind.Person, EthanId),
                 new List<EntityId> { horse.AnimalId });
-
-            journeyModel = new JourneyModel();
-            Assert.IsNull(journeyModel.RegisterLocation(new JourneyLocation("town-center", JourneyLocationKind.Waypoint, "Town Centre", 0f, 0f)));
-            RegionalTownRegistry.ApplyAll(journeyModel, new List<string>());
-            journeys = new OffMapJourneyAuthority(journeyModel);
+            return driver;
         }
-
-        private float NowGameSeconds() => Day * 86400f + 8 * 3600f;
 
         private EntityId Handler() => EntityId.For(EntityKind.Person, EthanId);
 
@@ -594,7 +613,7 @@ namespace LandLedgers.EditorTests.Economy
         // Haul 1 end to end, exactly as FreightRepeatabilityTests does it.
         // Asserts completion, receipt, and the fulfilled agreement; the
         // caller owns the cash assertions.
-        private void DriveHaul1ToCompletion()
+        private void DriveHaul1ToCompletion(bool expectFulfilled = true)
         {
             BindAndAuthorize();
             SimulateSupplierPickup();
@@ -605,8 +624,11 @@ namespace LandLedgers.EditorTests.Economy
                 "the inventory transfer is pounds, not the separate 18 bakery-unit quotation");
             Assert.AreEqual(LotId, bakery.FlourStock.Lots[0].ImportOrderId);
             Assert.IsTrue(shipment.deliveryApplied);
-            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement.Status,
-                "haul 1 agreement must be fulfilled by the tick's MarkFulfilled path");
+            if (expectFulfilled)
+            {
+                Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement.Status,
+                    "haul 1 agreement must be fulfilled by the tick's MarkFulfilled path");
+            }
         }
 
         // The production terminal sweep, replicated call-for-call
@@ -1410,6 +1432,237 @@ namespace LandLedgers.EditorTests.Economy
                 "a deliberately wrong delivered count (15 of 16) must be refused");
             Assert.IsTrue(wrongReason.Contains("planned 16") && wrongReason.Contains("delivered 15"),
                 "the wrong-count refusal must name the mismatch, but got '" + wrongReason + "'");
+        }
+
+        // ---- Priority 7 Slice 6 (2026-11-08): 125c settlement
+        // exactly-once acceptance. Tests only; no production file is
+        // touched. Checked against FreightDeliveryPaymentAuditTests first:
+        // that file pins the normal path (one haul), the fallback path,
+        // the legacy-collect fence, duplicate receipts, refused delivery,
+        // mid-unload save/restore, and same-day departure — none of it is
+        // duplicated here. What was missing, and is pinned here: the
+        // three-haul settlement statement (375c), the unresolvable-payer
+        // retry (R-04), and the freight_service revenue category with
+        // per-shipment provenance. All three tests live in this file (not
+        // FreightDeliveryPaymentAuditTests.cs) because the three-haul run
+        // and its helpers live here.
+
+        [Test]
+        public void Settlement_ThreeHauls_PayerMinus375CarrierPlus375_NoDuplicate()
+        {
+            // The Slice 3 three-haul run's money legs asserted as one
+            // settlement statement: payer 20000c -> 19625c, carrier 0c ->
+            // 375c, each haul's freightRevenueCollected true exactly once,
+            // no uncollected charge remains, and a second AdvanceTick +
+            // second CollectAndPostUncollectedRevenue pass posts 0c more
+            // (the re-scan is a no-op). Expected to PASS.
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion();
+            Assert.IsTrue(shipment.FreightRevenueCollected,
+                "haul 1 charge must be collected exactly once");
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "haul 1: payer debited 125c once");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "haul 1: carrier credited 125c once");
+
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            TickUntilCompleted(shipment2, "haul 2", Day2);
+            Assert.IsTrue(shipment2.FreightRevenueCollected,
+                "haul 2 charge must be collected exactly once");
+            Assert.AreEqual(payerBefore - 2 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited a second 125c (total -250c across both hauls)");
+            Assert.AreEqual(carrierBefore + 2 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited a second 125c (total +250c across both hauls)");
+
+            BuildThirdHaul(out OffMapAidCargoLot lot3, out string request3Id,
+                out FreightServiceAgreement agreement3, out LogisticsShipmentState shipment3);
+            PrepareAndDispatchThirdHaul(agreement3, shipment3, shipment2.ShipmentId);
+            SimulateSupplierPickupFor(shipment3);
+            TickUntilCompleted(shipment3, "haul 3", Day3);
+            Assert.IsTrue(shipment3.FreightRevenueCollected,
+                "haul 3 charge must be collected exactly once");
+
+            // The settlement statement: payer 20000c -> 19625c, carrier
+            // 0c -> 375c across the three hauls.
+            Assert.AreEqual(19625, payerRuntime.CurrentCashCents,
+                "payer 20000c -> 19625c across the three hauls");
+            Assert.AreEqual(payerBefore - 3 * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debited a third 125c (total -375c across the three hauls)");
+            Assert.AreEqual(375, carrierRuntime.CurrentCashCents,
+                "carrier 0c -> 375c across the three hauls");
+            Assert.AreEqual(carrierBefore + 3 * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credited a third 125c (total +375c across the three hauls)");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after all three hauls");
+
+            // A second AdvanceTick + a second collection pass posts 0c
+            // more: the collected flags make the re-scan a no-op.
+            Tick();
+            int reposted = freight.FindCompany(CarrierId).CollectAndPostUncollectedRevenue(
+                carrierRuntime, freight.ResolvePayerRuntime, diag);
+            Assert.AreEqual(0, reposted, "a second collection pass must post 0c more");
+            Assert.AreEqual(19625, payerRuntime.CurrentCashCents, "no second debit on the re-scan");
+            Assert.AreEqual(375, carrierRuntime.CurrentCashCents, "no second credit on the re-scan");
+            Assert.IsTrue(shipment.FreightRevenueCollected && shipment2.FreightRevenueCollected
+                && shipment3.FreightRevenueCollected,
+                "all three hauls stay collected exactly once after the re-scan");
+        }
+
+        [Test]
+        public void Settlement_UnresolvablePayer_StaysUncollected_RetriedNeverPosted()
+        {
+            // R-04: a haul whose payer runtime is NOT registered with the
+            // driver (no RegisterBusinessRuntime, no resolver entry)
+            // completes and delivers, but the charge stays uncollected —
+            // no phantom carrier credit — the agreement stays Accepted,
+            // and a later tick after registering the payer runtime collects
+            // exactly 125c once and fulfils the agreement. Expected to
+            // PASS. The fixture driver built by SetUp (payer registered)
+            // is replaced here by one built without the payer; it never
+            // ticks, so its same-id shipment never binds the shared
+            // wagon/horse or touches the lot.
+            freight = BuildFixtureDriver(registerPayer: false);
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion(expectFulfilled: false);
+
+            Assert.IsTrue(shipment.deliveryApplied,
+                "the haul still delivers with an unresolvable payer");
+            Assert.IsTrue(lot.Received, "the paid lot must still be marked received");
+            Assert.IsTrue(!shipment.FreightRevenueCollected,
+                "the charge must stay uncollected while the payer cannot be resolved");
+            List<string> uncollected = freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds();
+            Assert.AreEqual(1, uncollected.Count,
+                "exactly the one completed shipment must be uncollected");
+            Assert.AreEqual(ShipmentId, uncollected[0],
+                "the uncollected charge must be this haul's shipment");
+            Assert.AreEqual(payerBefore, payerRuntime.CurrentCashCents,
+                "no debit while the payer is unresolvable");
+            Assert.AreEqual(carrierBefore, carrierRuntime.CurrentCashCents,
+                "no carrier credit while the payer is unresolvable — no phantom revenue");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status,
+                "the agreement stays Accepted, NOT Fulfilled, while its charge is uncollected (AUD-338)");
+
+            // Retries without a payer still collect nothing.
+            Tick();
+            Tick();
+            Assert.IsTrue(!shipment.FreightRevenueCollected,
+                "retries without a payer must still collect nothing");
+            Assert.AreEqual(carrierBefore, carrierRuntime.CurrentCashCents,
+                "still no carrier credit on retry without a payer");
+
+            // Register the payer runtime; the next tick collects exactly
+            // 125c once and fulfils the agreement.
+            freight.RegisterBusinessRuntime(BakeryId, payerRuntime);
+            Tick();
+            Assert.IsTrue(shipment.FreightRevenueCollected,
+                "the charge must collect once the payer resolves");
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "the payer is debited exactly 125c on the retry");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "the carrier is credited exactly 125c on the retry");
+            Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
+                "no uncollected charge remains after the retry");
+            Assert.AreEqual(FreightServiceAgreementStatus.Fulfilled, agreement.Status,
+                "the agreement fulfils once its charge is collected");
+
+            // And a further collection pass posts nothing more.
+            int reposted = freight.FindCompany(CarrierId).CollectAndPostUncollectedRevenue(
+                carrierRuntime, freight.ResolvePayerRuntime, diag);
+            Assert.AreEqual(0, reposted, "no second settlement after the retry collection");
+            Assert.AreEqual(payerBefore - FreightChargeCents, payerRuntime.CurrentCashCents,
+                "no second debit after the retry collection");
+            Assert.AreEqual(carrierBefore + FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "no second credit after the retry collection");
+        }
+
+        [Test]
+        public void Settlement_CarrierRevenueCategory_IsFreightService()
+        {
+            // The posted revenue lands under category "freight_service"
+            // (FreightRevenueCategoryId) with provenance naming the
+            // shipment id, and the payer debit and carrier credit are
+            // equal per shipment — asserted as the pair, not just the
+            // totals. Expected to PASS. The category stock entry is seeded
+            // first: a bare BusinessRuntimeState carries no category rows,
+            // and RecordDailyServiceRevenue records the category leg only
+            // when the row exists (its cash leg always moves).
+            CategoryStockState freightService = carrierRuntime.EnsureCategoryStock(
+                FreightCompanyRuntime.FreightRevenueCategoryId, 0, 0);
+            Assert.IsNotNull(freightService,
+                "the freight_service category row must exist to observe the category leg");
+            Assert.AreEqual(0, freightService.WeekToDateRevenueCents,
+                "no freight_service revenue before any haul");
+
+            int payerBefore = payerRuntime.CurrentCashCents;
+            int carrierBefore = carrierRuntime.CurrentCashCents;
+
+            DriveHaul1ToCompletion();
+            AssertSettlementPair(1, payerBefore, carrierBefore);
+            AssertCategoryRevenue(1 * FreightChargeCents, "after haul 1");
+            AssertProvenanceLogged(ShipmentId);
+
+            BuildSecondHaul(out OffMapAidCargoLot lot2, out string request2Id,
+                out FreightServiceAgreement agreement2, out LogisticsShipmentState shipment2);
+            PrepareAndDispatchSecondHaul(agreement2, shipment2);
+            SimulateSupplierPickupFor(shipment2);
+            TickUntilCompleted(shipment2, "haul 2", Day2);
+            AssertSettlementPair(2, payerBefore, carrierBefore);
+            AssertCategoryRevenue(2 * FreightChargeCents, "after haul 2");
+            AssertProvenanceLogged(shipment2.ShipmentId);
+
+            BuildThirdHaul(out OffMapAidCargoLot lot3, out string request3Id,
+                out FreightServiceAgreement agreement3, out LogisticsShipmentState shipment3);
+            PrepareAndDispatchThirdHaul(agreement3, shipment3, shipment2.ShipmentId);
+            SimulateSupplierPickupFor(shipment3);
+            TickUntilCompleted(shipment3, "haul 3", Day3);
+            AssertSettlementPair(3, payerBefore, carrierBefore);
+            AssertCategoryRevenue(3 * FreightChargeCents, "after haul 3");
+            AssertProvenanceLogged(shipment3.ShipmentId);
+        }
+
+        // Per-shipment pair: after `hauls` hauls, the payer debit and the
+        // carrier credit are equal (125c each), asserted against the same
+        // starting balances — not just the final totals.
+        private void AssertSettlementPair(int hauls, int payerBefore, int carrierBefore)
+        {
+            Assert.AreEqual(payerBefore - hauls * FreightChargeCents, payerRuntime.CurrentCashCents,
+                "payer debit after " + hauls + " haul(s) must be " + (hauls * FreightChargeCents) + "c");
+            Assert.AreEqual(carrierBefore + hauls * FreightChargeCents, carrierRuntime.CurrentCashCents,
+                "carrier credit after " + hauls + " haul(s) must be " + (hauls * FreightChargeCents) + "c");
+        }
+
+        // The freight_service category leg on the carrier runtime: the
+        // revenue posted through RecordDailyServiceRevenue accumulates in
+        // the category row's daily and week-to-date totals.
+        private void AssertCategoryRevenue(int expectedCents, string when)
+        {
+            CategoryStockState freightService = carrierRuntime.GetCategoryStock(
+                FreightCompanyRuntime.FreightRevenueCategoryId);
+            Assert.IsNotNull(freightService, "the freight_service category row must exist " + when);
+            Assert.AreEqual(expectedCents, freightService.WeekToDateRevenueCents,
+                "freight_service category revenue " + when + " must be " + expectedCents + "c");
+            Assert.AreEqual(expectedCents, freightService.LastDailyRevenueCents,
+                "freight_service daily category revenue " + when + " must be " + expectedCents + "c");
+        }
+
+        // The settlement diagnostic CollectAndPostUncollectedRevenue writes
+        // names the shipment id as the provenance of the posted revenue.
+        private void AssertProvenanceLogged(string shipmentId)
+        {
+            foreach (string line in diag)
+            {
+                if (line != null && line.Contains("freight revenue posted") && line.Contains(shipmentId))
+                    return;
+            }
+            Assert.Fail("no settlement diagnostic names shipment '" + shipmentId
+                + "' with its freight revenue posting; diagnostics: " + string.Join("; ", diag));
         }
     }
 }

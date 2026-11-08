@@ -44,6 +44,48 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void JourneyTravelProductionTaskAdvancesInsideItsReservedTravelWindow()
+        {
+            var model = new JourneyModel();
+            Assert.IsNull(model.RegisterLocation(new JourneyLocation(
+                "home", JourneyLocationKind.TownBuilding, "Home", 0f, 0f)));
+            Assert.IsNull(model.RegisterLocation(new JourneyLocation(
+                "store", JourneyLocationKind.Store, "Store", 0.05f, 0f)));
+            Assert.IsNull(model.AddEdge("home", "store", 0.05f, "short lane"));
+
+            var authority = new TaskAuthority();
+            JourneyTravel.RegisterTaskDefinitions(authority);
+            var diagnostics = new List<string>();
+            WorkTask task = JourneyTravel.PlanWorkTravel(authority, model, Worker,
+                "home", "store", TravelMode.Foot, 1, diagnostics);
+
+            Assert.IsNotNull(task, string.Join(" | ", diagnostics));
+            Assert.AreEqual(JourneyTravel.TravelTaskId, task.DefinitionId);
+            Assert.AreEqual("travel:home->store", task.CustomerRef);
+            Assert.AreEqual(1, task.PlannedMinutes, "The short authored route is a one-minute planned task.");
+
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Worker, budgets, 1, out string reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 1, out reason), reason);
+
+            var schedules = new PersonScheduleTracker();
+            string label = ReservationLabel(task);
+            Assert.IsNull(schedules.TryReserve(Worker.Id, PersonActivityKind.Travel, 1,
+                480, task.PlannedMinutes, label));
+
+            int progress = AutonomousTaskProgress.ScheduledMinutes(task,
+                schedules.ActiveFor(Worker.Id, 1), 1, 480, 481, label);
+            Assert.AreEqual(1, progress, "The real Travel reservation covers the production route-time task.");
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, progress, budgets, 1,
+                out bool reached, out reason), reason);
+            Assert.IsTrue(reached);
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 1, budgets));
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+            Assert.AreEqual(1, budgets.GetOrCreate(Worker).MinutesWorked);
+        }
+
+        [Test]
         public void ReservedTravelMinutesAdvanceRouteTimeTaskAndReleaseWorkerOnCompletion()
         {
             var started = StartTask(JourneyTravel.TravelTaskId, 3);

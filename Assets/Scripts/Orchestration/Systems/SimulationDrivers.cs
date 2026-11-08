@@ -231,6 +231,19 @@ namespace LandLedgers.Orchestration.Systems
         private OffMapAidBusinessRuntime millbrookAidRuntime;
         private int lastMillbrookAidAttemptDay = -1;
         private string lastMillbrookAidRefusal = string.Empty;
+        // Plan 04 Slice 4: running bakery actuals for the cumulative
+        // reconciliation line — diagnostics only, never serialized and
+        // never saved (reset on scene reload / Continue, like the
+        // Millbrook attempt fields above). Threaded into
+        // BakeryWholesaleDailyDriver as priors each day and read back
+        // from the result; the driver logs the cumulative line, the
+        // forwarder only carries the totals.
+        private int bakeryCumulativeBatchesBaked;
+        private int bakeryCumulativeFlourCashSpentCents;
+        private int bakeryCumulativeFlourSacksPurchased;
+        private int bakeryCumulativeFlourPoundsPurchased;
+        private int bakeryCumulativeNotionsCashSpentCents;
+        private int bakeryCumulativeWholesaleRevenueCents;
         // Plan 04 Slice 0 (P0-3): once-per-instance driving-identity log
         // (see DriveMillbrookFreightNegotiation). Log-only.
         private bool millbrookNegotiationIdentityLogged;
@@ -7159,8 +7172,26 @@ namespace LandLedgers.Orchestration.Systems
                 NotionsSupply = notionsSupply,
                 NotionsRegistration = notionsRegistration,
                 CallerDailyBudgetMinutes = callerDailyBudgetMinutes,
+                // Plan 04 Slice 4: thread the running actuals in so the
+                // driver can log the cumulative reconciliation line.
+                PriorCumulativeBatchesBaked = bakeryCumulativeBatchesBaked,
+                PriorCumulativeFlourCashSpentCents = bakeryCumulativeFlourCashSpentCents,
+                PriorCumulativeFlourSacksPurchased = bakeryCumulativeFlourSacksPurchased,
+                PriorCumulativeFlourPoundsPurchased = bakeryCumulativeFlourPoundsPurchased,
+                PriorCumulativeNotionsCashSpentCents = bakeryCumulativeNotionsCashSpentCents,
+                PriorCumulativeWholesaleRevenueCents = bakeryCumulativeWholesaleRevenueCents,
+                CumulativeActualsThreaded = true,
             };
             BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, diagnostics);
+
+            // Plan 04 Slice 4: carry the running actuals forward for
+            // tomorrow's cumulative line (diagnostics only — never saved).
+            bakeryCumulativeBatchesBaked = result.CumulativeBatchesBaked;
+            bakeryCumulativeFlourCashSpentCents = result.CumulativeFlourCashSpentCents;
+            bakeryCumulativeFlourSacksPurchased = result.CumulativeFlourSacksPurchased;
+            bakeryCumulativeFlourPoundsPurchased = result.CumulativeFlourPoundsPurchased;
+            bakeryCumulativeNotionsCashSpentCents = result.CumulativeNotionsCashSpentCents;
+            bakeryCumulativeWholesaleRevenueCents = result.CumulativeWholesaleRevenueCents;
 
             // M4 (Plan 04, D-S5 — wire branch): register the bakery's
             // unmet input needs so the weekly real-demand collection sees

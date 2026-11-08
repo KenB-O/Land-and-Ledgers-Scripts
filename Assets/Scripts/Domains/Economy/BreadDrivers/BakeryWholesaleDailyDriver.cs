@@ -67,6 +67,23 @@ namespace LandLedgers.Economy.BreadDrivers
         /// supply path, never conjured notions.</summary>
         public Series2NotionsSupply NotionsSupply;
         public Series2CounterpartyRegistration NotionsRegistration;
+
+        /// <summary>Plan 04 Slice 4: cumulative-actuals carrier. The
+        /// driver is stateless, so the caller threads the running totals
+        /// in (the forwarder keeps them in member fields, diagnostics
+        /// only — never persisted) and reads the updated totals back out
+        /// on the result. All six default to 0. CumulativeActualsThreaded
+        /// says the caller is threading: when true the driver logs the
+        /// cumulative reconciliation line; when false it logs the honest
+        /// per-day actuals line instead — never a cumulative label on
+        /// per-day figures.</summary>
+        public int PriorCumulativeBatchesBaked;
+        public int PriorCumulativeFlourCashSpentCents;
+        public int PriorCumulativeFlourSacksPurchased;
+        public int PriorCumulativeFlourPoundsPurchased;
+        public int PriorCumulativeNotionsCashSpentCents;
+        public int PriorCumulativeWholesaleRevenueCents;
+        public bool CumulativeActualsThreaded;
     }
 
     /// <summary>Millbrook flour quote as filled by the forwarder: sacks and
@@ -127,6 +144,15 @@ namespace LandLedgers.Economy.BreadDrivers
         public int FlourNeedSacks;
         /// <summary>Plan 04 M4: remaining notions shortfall after today's feed (batches minus fed, 0 when covered).</summary>
         public int NotionsNeedUnits;
+        /// <summary>Plan 04 Slice 4: cumulative actuals across the run
+        /// (prior threaded totals + today). Diagnostics only — the
+        /// forwarder carries them, nothing is persisted.</summary>
+        public int CumulativeBatchesBaked;
+        public int CumulativeFlourCashSpentCents;
+        public int CumulativeFlourSacksPurchased;
+        public int CumulativeFlourPoundsPurchased;
+        public int CumulativeNotionsCashSpentCents;
+        public int CumulativeWholesaleRevenueCents;
     }
 
     /// <summary>
@@ -495,7 +521,13 @@ namespace LandLedgers.Economy.BreadDrivers
                 inputs.FindOvenComponent, inputs.CallerDailyBudgetMinutes, diag, inputs.IdRegistry);
             result.BatchesBaked = Math.Max(0, baked);
             if (baked < 0)
+            {
                 result.Refusal = FirstRefusal(diag, diagnosticsBeforeRun, dayIndex);
+                // Plan 04 Slice 4: name the blocked batch once per day
+                // with the refusal's own cause and the retry, so a stall is
+                // visible in the log instead of silent. No state change.
+                LogBlockedBatches(inputs, result, dayIndex, diag);
+            }
 
             // The transfer steps need the store seam; without it the
             // baked bread stays on the bakery shelf — never lost, never
@@ -506,7 +538,10 @@ namespace LandLedgers.Economy.BreadDrivers
                 || string.IsNullOrWhiteSpace(inputs.BakeryBusinessId))
             {
                 diag.Add("BakeryWholesaleDailyDriver: no live store seam (catalog, intake, store port, or cash ports) — transfer skipped, bread stays on the bakery shelf, accounts stay due.");
-                return result;
+                // Plan 04 Slice 4: a batch that baked before the seam
+                // refusal still reports its actuals (the bake happened;
+                // the sale did not — revenue 0 today).
+                return FinishWithActualsLine(inputs, result, 0, diag);
             }
 
             // (c) Stock-then-transfer: retry any bread already sitting on
@@ -526,6 +561,11 @@ namespace LandLedgers.Economy.BreadDrivers
             }
 
             // (d) For each due General Store account, transfer + stock.
+            // Plan 04 Slice 4: the wholesale cash the transfer settles
+            // (units x account price) is today's revenue for the
+            // cumulative-actuals line; the (c) retry above stocks prior-day
+            // shelf bread and moves no wholesale cash, so it is not counted.
+            int wholesaleRevenueTodayCents = 0;
             foreach (var account in bakery.WholesaleAccounts)
             {
                 if (account == null || !account.IsActive) continue;
@@ -589,9 +629,10 @@ namespace LandLedgers.Economy.BreadDrivers
                     continue;
                 }
                 result.TransfersCompleted++;
+                wholesaleRevenueTodayCents += account.UnitsPerDelivery * account.PricePerUnitCents;
             }
 
-            return result;
+            return FinishWithActualsLine(inputs, result, wholesaleRevenueTodayCents, diag);
         }
 
         private static string StoreProductIdFor(string bakeryProductId, List<string> diag)
@@ -646,6 +687,140 @@ namespace LandLedgers.Economy.BreadDrivers
                     return line;
             }
             return $"BakeryWholesaleDailyDriver: bakery production refused for day {dayIndex}; see [BakeryProduction] diagnostics.";
+        }
+
+        /// <summary>Plan 04 Slice 4: one blocked-batch line per active
+        /// planned batch per RunDay call — the same 12-per-day
+        /// diagnostics cap the forwarder applies in DriveDailyNeeds, so
+        /// a many-batch stall stays bounded, with an "and N more" tail.
+        /// The cause comes from the refusal text (CauseFromRefusal);
+        /// "covered" is the yield of every active batch for the same
+        /// product, i.e. the units the account is waiting on. The batch
+        /// stays Planned and retries tomorrow with the same id — the line
+        /// names that so the stall reads as a stall, not a loss.</summary>
+        private static void LogBlockedBatches(BakeryWholesaleDailyInputs inputs, BakeryWholesaleDailyResult result, int dayIndex, List<string> diag)
+        {
+            if (inputs?.Bakery == null || inputs.ProductionDriver == null) return;
+            string cause = CauseFromRefusal(result.Refusal);
+            int logged = 0;
+            int omitted = 0;
+            foreach (string batchId in inputs.ProductionDriver.PlannedBatchIds)
+            {
+                if (string.IsNullOrWhiteSpace(batchId)) continue;
+                BakeryDoughBatch batch = null;
+                foreach (var candidate in inputs.Bakery.Batches)
+                {
+                    if (candidate != null && string.Equals(candidate.BatchId, batchId, StringComparison.Ordinal))
+                    {
+                        batch = candidate;
+                        break;
+                    }
+                }
+                if (batch == null || !batch.IsActive) continue;
+                if (logged >= 12)
+                {
+                    omitted++;
+                    continue;
+                }
+                int coveredUnits = 0;
+                foreach (var candidate in inputs.Bakery.Batches)
+                {
+                    if (candidate == null || !candidate.IsActive) continue;
+                    if (!string.Equals(candidate.ProductId, batch.ProductId, StringComparison.Ordinal)) continue;
+                    coveredUnits += BakeryBreadCatalog.BreadYieldPerBatch;
+                }
+                string accountId = string.Empty;
+                foreach (var account in inputs.Bakery.WholesaleAccounts)
+                {
+                    if (account == null || !account.IsActive) continue;
+                    if (!string.Equals(account.ProductId, batch.ProductId, StringComparison.Ordinal)) continue;
+                    accountId = account.AccountId;
+                    break;
+                }
+                diag.Add($"[BakeryProduction] batch {batch.BatchId} blocked day {dayIndex} ({cause}), planned {batch.ScheduledDayIndex}, covered {coveredUnits}u for account {accountId}, producible: no ({cause}), retries tomorrow with the same batch id");
+                logged++;
+            }
+            if (omitted > 0)
+                diag.Add($"[BakeryProduction] ... {omitted} more blocked batch(es) omitted (12-per-day diagnostics cap)");
+        }
+
+        /// <summary>Plan 04 Slice 4: the blocked-batch cause is the
+        /// Precheck refusal's own wording, reduced to its named input —
+        /// never a new refusal reason invented here. Falls back to the
+        /// refusal text itself when no input keyword matches.</summary>
+        private static string CauseFromRefusal(string refusal)
+        {
+            if (string.IsNullOrWhiteSpace(refusal)) return "unknown";
+            string lower = refusal.ToLowerInvariant();
+            if (lower.Contains("person budget")) return "budget";
+            if (lower.Contains("flour")) return "flour";
+            if (lower.Contains("notions")) return "notions";
+            if (lower.Contains("fuel")) return "fuel";
+            if (lower.Contains("kit")) return "kit";
+            if (lower.Contains("oven")) return "oven";
+            return refusal;
+        }
+
+        /// <summary>Plan 04 Slice 4: cumulative actuals reconciliation.
+        /// Fills the result's cumulative fields (threaded priors + today)
+        /// and, on any day a batch baked, appends the reconciliation line
+        /// after the per-batch economics line. When the caller threads
+        /// totals the line is cumulative; otherwise it is the honest
+        /// per-day actuals line — never a cumulative label on per-day
+        /// figures. The standard figures come from the same inputs as
+        /// the economics line (store flour price, notions registration,
+        /// account price); when any standard component is unknown the
+        /// line says so instead of inventing a standard. No price is
+        /// changed; the line reports both definitions side by side so
+        /// the -20c standard vs actual gap is explained by carryover in
+        /// the open.</summary>
+        private static BakeryWholesaleDailyResult FinishWithActualsLine(
+            BakeryWholesaleDailyInputs inputs, BakeryWholesaleDailyResult result,
+            int wholesaleRevenueTodayCents, List<string> diag)
+        {
+            int flourCashToday = result.FlourSacksPurchased * Math.Max(0, inputs.StoreFlourUnitPriceCents);
+            int notionsPricePerUnit = inputs.NotionsRegistration != null
+                ? Math.Max(0, inputs.NotionsRegistration.UnitGoodsCostCents) : 0;
+            int notionsCashToday = result.NotionsUnitsFed * notionsPricePerUnit;
+            result.CumulativeBatchesBaked = inputs.PriorCumulativeBatchesBaked + result.BatchesBaked;
+            result.CumulativeFlourCashSpentCents = inputs.PriorCumulativeFlourCashSpentCents + flourCashToday;
+            result.CumulativeFlourSacksPurchased = inputs.PriorCumulativeFlourSacksPurchased + result.FlourSacksPurchased;
+            result.CumulativeFlourPoundsPurchased = inputs.PriorCumulativeFlourPoundsPurchased + result.FlourPoundsPurchased;
+            result.CumulativeNotionsCashSpentCents = inputs.PriorCumulativeNotionsCashSpentCents + notionsCashToday;
+            result.CumulativeWholesaleRevenueCents = inputs.PriorCumulativeWholesaleRevenueCents + wholesaleRevenueTodayCents;
+            if (result.BatchesBaked <= 0) return result;
+
+            int batches = inputs.CumulativeActualsThreaded ? result.CumulativeBatchesBaked : result.BatchesBaked;
+            int flour = inputs.CumulativeActualsThreaded ? result.CumulativeFlourCashSpentCents : flourCashToday;
+            int sacks = inputs.CumulativeActualsThreaded ? result.CumulativeFlourSacksPurchased : result.FlourSacksPurchased;
+            int pounds = inputs.CumulativeActualsThreaded ? result.CumulativeFlourPoundsPurchased : result.FlourPoundsPurchased;
+            int notions = inputs.CumulativeActualsThreaded ? result.CumulativeNotionsCashSpentCents : notionsCashToday;
+            int revenue = inputs.CumulativeActualsThreaded ? result.CumulativeWholesaleRevenueCents : wholesaleRevenueTodayCents;
+            string label = inputs.CumulativeActualsThreaded ? "cumulative actuals" : "day actuals";
+            double actualPerBatch = batches > 0 ? (double)(flour + notions) / batches : 0.0;
+            double revenuePerBatch = batches > 0 ? (double)revenue / batches : 0.0;
+            double marginPerBatch = revenuePerBatch - actualPerBatch;
+            string vsStandard;
+            int standardCostPerBatch = -1;
+            int standardMarginPerBatch = 0;
+            if (inputs.Bakery != null
+                && inputs.StoreFlourUnitPriceCents > 0
+                && inputs.NotionsRegistration != null && inputs.NotionsRegistration.UnitGoodsCostCents > 0)
+            {
+                int standardRevenuePerBatch = AccountPricePerUnit(inputs.Bakery, inputs.StoreBusinessId)
+                    * BakeryBreadCatalog.BreadYieldPerBatch;
+                if (standardRevenuePerBatch > 0)
+                {
+                    standardCostPerBatch = BakeryFlourSupplierComparison.SacksPerBatch * inputs.StoreFlourUnitPriceCents
+                        + BakeryBreadCatalog.StandardNotionsPerBatch * inputs.NotionsRegistration.UnitGoodsCostCents;
+                    standardMarginPerBatch = standardRevenuePerBatch - standardCostPerBatch;
+                }
+            }
+            vsStandard = standardCostPerBatch >= 0
+                ? $"vs standard {standardCostPerBatch}c/batch (margin {marginPerBatch:0.0}c/batch actual vs {standardMarginPerBatch}c standard)"
+                : "(standard unknown)";
+            diag.Add($"[BakeryProduction] {label}: {batches} batch(es) baked, flour {flour}c ({sacks} sacks, {pounds} lb), notions {notions}c, revenue {revenue}c, actual {actualPerBatch:0.0}c/batch {vsStandard}");
+            return result;
         }
     }
 }

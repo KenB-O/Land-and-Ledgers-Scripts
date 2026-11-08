@@ -339,7 +339,9 @@ namespace LandLedgers.Editor.Economy
 
         private static BakeryWholesaleDailyInputs DriverInputsFor(
             Slice s, Series2CounterpartyRegistration reg, int dayIndex,
-            bool wireNotions = true, OffMapAidBusinessRuntime millbrookSupplier = null) =>
+            bool wireNotions = true, OffMapAidBusinessRuntime millbrookSupplier = null,
+            bool threadCumulative = false,
+            BakeryWholesaleDailyResult prior = default(BakeryWholesaleDailyResult)) =>
             new BakeryWholesaleDailyInputs
             {
                 Bakery = s.Bakery,
@@ -384,13 +386,24 @@ namespace LandLedgers.Editor.Economy
                 ImportOrderPathExists = false,
                 NotionsSupply = wireNotions ? s.Notions : null,
                 NotionsRegistration = wireNotions ? reg : null,
+                // Plan 04 Slice 4: the test threads cumulative totals
+                // across days exactly as the forwarder does.
+                PriorCumulativeBatchesBaked = prior.CumulativeBatchesBaked,
+                PriorCumulativeFlourCashSpentCents = prior.CumulativeFlourCashSpentCents,
+                PriorCumulativeFlourSacksPurchased = prior.CumulativeFlourSacksPurchased,
+                PriorCumulativeFlourPoundsPurchased = prior.CumulativeFlourPoundsPurchased,
+                PriorCumulativeNotionsCashSpentCents = prior.CumulativeNotionsCashSpentCents,
+                PriorCumulativeWholesaleRevenueCents = prior.CumulativeWholesaleRevenueCents,
+                CumulativeActualsThreaded = threadCumulative,
             };
 
         private static BakeryWholesaleDailyResult RunDay(
             Slice s, Series2CounterpartyRegistration reg, int dayIndex,
-            bool wireNotions = true, OffMapAidBusinessRuntime millbrookSupplier = null) =>
+            bool wireNotions = true, OffMapAidBusinessRuntime millbrookSupplier = null,
+            bool threadCumulative = false,
+            BakeryWholesaleDailyResult prior = default(BakeryWholesaleDailyResult)) =>
             BakeryWholesaleDailyDriver.RunDay(
-                DriverInputsFor(s, reg, dayIndex, wireNotions, millbrookSupplier), s.Diag);
+                DriverInputsFor(s, reg, dayIndex, wireNotions, millbrookSupplier, threadCumulative, prior), s.Diag);
 
         private static BakeryFlourLot FindBinLot(Slice s, string flourName)
         {
@@ -694,6 +707,7 @@ namespace LandLedgers.Editor.Economy
             string batchId = null;
             for (int day = 2; day <= 3; day++)
             {
+                int diagBefore = s.Diag.Count;
                 BakeryWholesaleDailyResult r = RunDay(s, null, day, wireNotions: false);
                 if (day == 2)
                 {
@@ -711,6 +725,16 @@ namespace LandLedgers.Editor.Economy
                     $"day {day} refuses on notions; refusal: {r.Refusal}");
                 Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage, $"the batch stays Planned, day {day}");
                 Assert.AreEqual(1, s.Bakery.Batches.Count, $"no second batch id ever appears, day {day}");
+                // Plan 04 Slice 4: the blocked batch is named once per
+                // day with the refusal's own cause, the plan day, the
+                // covered account and the retry.
+                string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+                Assert.IsTrue(dayDiag.Contains($"[BakeryProduction] batch {batchId} blocked day {day} (notions)"),
+                    $"day {day} names the blocked batch with the notions cause; diag: {dayDiag}");
+                Assert.IsTrue(dayDiag.Contains($"planned 2, covered 24u for account {account.AccountId}"),
+                    $"day {day} names the plan day and the covered account; diag: {dayDiag}");
+                Assert.IsTrue(dayDiag.Contains("producible: no (notions), retries tomorrow with the same batch id"),
+                    $"day {day} names the retry; diag: {dayDiag}");
             }
 
             // Day 4: wire the service + registration; the day-3 order
@@ -737,15 +761,85 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void BlockedBatch_ThreeDays_LogsBlockedLineDaily_NoDuplicate()
+        {
+            // Plan 04 Slice 4: a notions-blocked batch logs the
+            // blocked-batch line once per day with the day count advancing,
+            // the same batch id, the notions cause and the retry — and no
+            // second batch is ever planned. Days 2-4 run unwired; day 5
+            // wires the service + registration and the SAME batch bakes.
+            Slice s = NewSlice();
+            Series2CounterpartyRegistration reg = Registration(
+                "test-notions", BakeryFlourSupply.NotionsMaterialId, 10, 0, 50, 1);
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "test counterparty registration should succeed");
+            SeedInputs(s, 12, 0, 40);
+            BakeryWholesaleAccount account = BookAccount(s, 24, 1, 2, 2);
+
+            string batchId = null;
+            for (int day = 2; day <= 4; day++)
+            {
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, null, day, wireNotions: false);
+                if (day == 2)
+                {
+                    Assert.AreEqual(1, r.BatchesPlanned, "day 2 plans the batch");
+                    batchId = s.Bakery.Batches[0].BatchId;
+                }
+                else
+                {
+                    Assert.AreEqual(0, r.BatchesPlanned, $"day {day} plans nothing: already covered");
+                }
+                Assert.AreEqual(1, s.ProductionDriver.PlannedBatchIds.Count, $"one active batch, day {day}");
+                Assert.AreEqual(batchId, s.ProductionDriver.PlannedBatchIds[0], $"same batch id, day {day}");
+                Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes without notions, day {day}");
+                Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
+                    $"day {day} refuses on notions; refusal: {r.Refusal}");
+                Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage, $"the batch stays Planned, day {day}");
+                Assert.AreEqual(1, s.Bakery.Batches.Count, $"no second batch id ever appears, day {day}");
+                string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
+                Assert.IsTrue(dayDiag.Contains($"[BakeryProduction] batch {batchId} blocked day {day} (notions)"),
+                    $"day {day} logs the blocked line with the advancing day count; diag: {dayDiag}");
+                Assert.IsTrue(dayDiag.Contains($"planned 2, covered 24u for account {account.AccountId}"),
+                    $"day {day} names the plan day and the covered account; diag: {dayDiag}");
+                Assert.IsTrue(dayDiag.Contains("retries tomorrow with the same batch id"),
+                    $"day {day} names the retry; diag: {dayDiag}");
+            }
+
+            // Day 5: wire the service + registration; the day-4 order
+            // (1-day transit) arrives day 5 with 1u sellable.
+            Assert.IsNotNull(s.Notions.PlaceNotionsOrder(
+                reg, 1, 4, NamedSkuPaymentMode.CashOnArrival, null, s.Diag),
+                "the day-4 notions order should place; diag: " + string.Join("; ", s.Diag));
+            List<NamedSkuLot> arrived = s.Notions.ReceiveArrivals(5, null, s.Diag);
+            Assert.AreEqual(1, arrived.Count, "the 1u arrival lands day 5");
+            Assert.AreEqual(1, s.Procurement.SellableUnits(BakeryFlourSupply.NotionsMaterialId),
+                "1u sellable in the store lots on day 5");
+
+            BakeryWholesaleDailyResult day5 = RunDay(s, reg, 5);
+            Assert.AreEqual(0, day5.BatchesPlanned, "day 5 plans nothing: the existing batch covers");
+            Assert.AreEqual(1, s.ProductionDriver.PlannedBatchIds.Count, "one active batch on day 5");
+            Assert.AreEqual(batchId, s.ProductionDriver.PlannedBatchIds[0], "the SAME batch id bakes day 5");
+            Assert.AreEqual(1, day5.NotionsUnitsFed, "the arrived notion feeds the bin");
+            Assert.AreEqual(1, day5.BatchesBaked, "the same batch bakes day 5");
+            Assert.AreEqual(1, day5.TransfersCompleted, "the transfer completes day 5");
+            Assert.AreEqual(BakeryBatchStage.Baked, s.Bakery.Batches[0].Stage, "the batch is Baked on day 5");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "exactly one delivery record");
+            Assert.AreEqual(1, s.Bakery.Batches.Count, "no second batch id ever appears");
+        }
+
+        [Test]
         public void Margin_FiveBakeDays_StandardCostVsActualCash()
         {
-            // Reconciliation probe (no repair in Slice 0): five bake days
-            // buy 2, 1, 1, 1, 1 sacks (60 lb, 174c at 29c) while the
-            // economics line reports the 58c standard cost every day.
-            // Notions ride 5u of sellable store lots (test-seeded pipeline
-            // stock, 50c at receipt); the store is restocked by the test
-            // only between days 4 and 5. The cumulative reconciliation
-            // line is Slice 4's job and is asserted ABSENT here.
+            // Reconciliation probe: five bake days buy 2, 1, 1, 1, 1 sacks
+            // (60 lb, 174c at 29c) while the economics line reports the
+            // 58c standard cost every day. Notions ride 5u of sellable
+            // store lots (test-seeded pipeline stock, 50c at receipt); the
+            // store is restocked by the test only between days 4 and 5.
+            // Plan 04 Slice 4: the cumulative reconciliation line is now
+            // asserted PRESENT, threaded across the five days like the
+            // forwarder threads it — day 6 (5th bake) reads flour 174c
+            // (6 sacks, 60 lb), notions 50c, revenue 240c, actual
+            // 44.8c/batch (margin +3.2c/batch actual vs -20c standard).
             Slice s = NewSlice();
             Series2CounterpartyRegistration reg = Registration(
                 "test-notions", BakeryFlourSupply.NotionsMaterialId, 10, 0, 50, 1);
@@ -761,12 +855,14 @@ namespace LandLedgers.Editor.Economy
 
             int[] expectedSacks = { 2, 1, 1, 1, 1 };
             int totalFlourCash = 0;
+            BakeryWholesaleDailyResult prior = default(BakeryWholesaleDailyResult);
             for (int i = 0; i < 5; i++)
             {
                 int day = 2 + i;
                 if (day == 5) RestockStoreFlour(s, 2);
                 int diagBefore = s.Diag.Count;
-                BakeryWholesaleDailyResult r = RunDay(s, reg, day);
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, threadCumulative: true, prior: prior);
+                prior = r;
                 Assert.AreEqual(1, r.BatchesBaked, $"bake day {day}");
                 Assert.AreEqual(1, r.TransfersCompleted, $"transfer day {day}");
                 Assert.AreEqual(expectedSacks[i], r.FlourSacksPurchased, $"purchase sequence day {day}");
@@ -779,8 +875,24 @@ namespace LandLedgers.Editor.Economy
                     $"day {day} states the standard margin; diag: {dayDiag}");
                 Assert.IsTrue(dayDiag.Contains($"actual flour purchase today: {expectedSacks[i]} sack(s)"),
                     $"day {day} names the actual purchase; diag: {dayDiag}");
-                Assert.IsTrue(!dayDiag.Contains("cumulative actuals"),
-                    $"no cumulative reconciliation line yet (Slice 4's job), day {day}; diag: {dayDiag}");
+                Assert.IsTrue(dayDiag.Contains("cumulative actuals:"),
+                    $"day {day} logs the cumulative reconciliation line; diag: {dayDiag}");
+                if (day == 5)
+                {
+                    Assert.IsTrue(dayDiag.Contains("cumulative actuals: 4 batch(es) baked, flour 145c (5 sacks, 50 lb), notions 40c, revenue 192c"),
+                        $"day 5 cumulative after 4 bakes; diag: {dayDiag}");
+                }
+                if (day == 6)
+                {
+                    Assert.IsTrue(dayDiag.Contains("cumulative actuals: 5 batch(es) baked, flour 174c (6 sacks, 60 lb), notions 50c, revenue 240c, actual 44.8c/batch vs standard 68c/batch (margin 3.2c/batch actual vs -20c standard)"),
+                        $"day 6 cumulative after 5 bakes; diag: {dayDiag}");
+                    Assert.AreEqual(5, r.CumulativeBatchesBaked, "cumulative batches baked");
+                    Assert.AreEqual(174, r.CumulativeFlourCashSpentCents, "cumulative flour cash");
+                    Assert.AreEqual(6, r.CumulativeFlourSacksPurchased, "cumulative flour sacks");
+                    Assert.AreEqual(60, r.CumulativeFlourPoundsPurchased, "cumulative flour pounds");
+                    Assert.AreEqual(50, r.CumulativeNotionsCashSpentCents, "cumulative notions cash");
+                    Assert.AreEqual(240, r.CumulativeWholesaleRevenueCents, "cumulative wholesale revenue");
+                }
             }
 
             Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
@@ -794,8 +906,8 @@ namespace LandLedgers.Editor.Economy
             // vs 48c revenue = +3.2c/batch actual (vs -20c standard).
             Assert.IsTrue(Math.Abs(44.8 - (174.0 / 5.0 + 10.0)) < 0.001, "actual cost 44.8c/batch");
             Assert.IsTrue(Math.Abs(3.2 - (48.0 - (174.0 / 5.0 + 10.0))) < 0.001, "actual margin +3.2c/batch");
-            Assert.IsTrue(!string.Join(" | ", s.Diag).Contains("cumulative actuals"),
-                "the cumulative reconciliation line is absent (Slice 4's job)");
+            Assert.IsTrue(string.Join(" | ", s.Diag).Contains("cumulative actuals: 5 batch(es) baked, flour 174c (6 sacks, 60 lb), notions 50c, revenue 240c, actual 44.8c/batch"),
+                "the cumulative reconciliation line is present across the run");
         }
 
         [Test]

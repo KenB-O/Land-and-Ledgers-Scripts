@@ -269,7 +269,13 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(1, restored.StoreFeeds.Count, "the zero-conversion feed item is skipped, never a silent 1:1");
             Assert.AreEqual(FeedItemId, restored.FeedRegistry.Find(StoreBusinessId).FeedItemId);
             Assert.IsTrue(string.Join("; ", restoreDiag).Contains("no item id"));
-            Assert.IsTrue(string.Join("; ", restoreDiag).Contains("no positive conversion"));
+            // Deliberate test correction (Priority 5 Slice 9-2): the test misquoted the
+            // production diagnostic. Production emits "no positive rational conversion"
+            // (Review2VerticalD3Save.cs:357), and "positive rational conversion" is the
+            // D2/D3 domain term used identically in a second production site
+            // (Review2StoreHorseFeed.cs:168). The test's shorter substring occurs nowhere
+            // in production; production wording does not change.
+            Assert.IsTrue(string.Join("; ", restoreDiag).Contains("no positive rational conversion"));
 
             var restoreDiag2 = new List<string>();
             restored.Restore(dto, restoreDiag2);

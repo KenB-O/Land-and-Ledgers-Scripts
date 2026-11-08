@@ -121,6 +121,33 @@ namespace LandLedgers.Time
             return LiveTop();
         }
 
+        /// <summary>
+        /// Priority 4 Slice 4 — read-only by-id due-time lookup for the
+        /// task-duration diagnostic's L5 evidence feed (plan §3.2 L5, §5
+        /// Slice 4 item 4). Returns true with the event's absolute due
+        /// game seconds when the id is currently scheduled; false for an
+        /// unknown, cancelled, or already-popped id (the diagnostic then
+        /// reports "due time unknown"). Reads only: schedules, cancels,
+        /// and pops nothing.
+        /// </summary>
+        public bool TryGetDueGameSeconds(string eventId, out float dueGameSeconds)
+        {
+            dueGameSeconds = 0f;
+            if (string.IsNullOrEmpty(eventId))
+            {
+                return false;
+            }
+
+            DueEvent due;
+            if (!byId.TryGetValue(eventId, out due) || due == null)
+            {
+                return false;
+            }
+
+            dueGameSeconds = due.DueGameSeconds;
+            return true;
+        }
+
         /// <summary>Cancels every event whose payloadRef matches (task/process cancelled).</summary>
         public void CancelForPayload(string payloadRef)
         {

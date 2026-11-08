@@ -85,6 +85,14 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField]
         private TaskAuthority taskAuthority = new TaskAuthority();
 
+        /// <summary>
+        /// Priority 4 Slice 4 — the installed task-duration diagnostic.
+        /// NOT serialized: its records are ephemeral sidecar state (plan
+        /// §2.5), rebuilt from the authority after a load. Null until
+        /// InstallTaskDurationDiagnostics runs.
+        /// </summary>
+        private TaskDurationDiagnostics taskDurationDiagnostics;
+
         [SerializeField]
         private SkillService skillService = new SkillService();
 
@@ -142,6 +150,9 @@ namespace LandLedgers.Orchestration.Systems
         /// <summary>Phase B: household purchasing needs.</summary>
         public HouseholdNeedRegistry PurchasingNeeds => purchasingNeeds ??= new HouseholdNeedRegistry();
         public TaskAuthority Tasks => taskAuthority ??= new TaskAuthority();
+
+        /// <summary>Priority 4 Slice 4 — the installed task-duration diagnostic, or null when not installed.</summary>
+        public TaskDurationDiagnostics DurationDiagnostics => taskDurationDiagnostics;
         public SkillService Skills => skillService ??= new SkillService();
         public WorkTimeBudgetStore WorkTimeBudgets => workTimeBudgets ??= new WorkTimeBudgetStore();
         public GenericProductionRuntimeRegistry GenericProduction =>
@@ -942,6 +953,77 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Priority 4 Slice 4 — installs the task-duration diagnostic on
+        /// the hub's TaskAuthority (plan §5 Slice 4 item 1). The clock is
+        /// supplied by the caller (production: SimulationDrivers passes
+        /// <c>() =&gt; timeManager.AbsoluteGameSeconds</c> — the hub owns no
+        /// clock). Installing twice returns the existing service and
+        /// re-points its clock at the latest caller's clock (the delegate
+        /// reads the driver's live timeManager field, so it stays current);
+        /// it never installs a second observer.
+        /// The service's log sink defaults to Debug.LogWarning. Evidence
+        /// lookups fed here: L5 due times from the hub-owned
+        /// DueEventScheduler (read-only, TryGetDueGameSeconds); L3
+        /// sleep/rest windows from the hub-owned PersonScheduleTracker
+        /// (ActiveFor, Sleeping/Resting only — the two reservations
+        /// DailyActivityPlanner writes for a wrapping sleep). L1 supplier
+        /// arrivals are NOT fed: no single hub-held seam holds the order
+        /// lists (notions orders live inside BakeryWholesaleDailyDriver's
+        /// per-day inputs, StoreProcurement orders inside the procurement
+        /// drivers), so SupplierArrivalLookup stays null and L1 evidence
+        /// comes from DependencyDescription text alone (plan §7 C-8).
+        /// A freshly installed service rebuilds its records from the
+        /// authority's open tasks (§2.5; a no-op on first boot, the
+        /// restore path for a fresh hub after a load).
+        /// AutonomousSocietyDriver's own TaskAuthority is NOT installed:
+        /// it is legacy — nothing in production constructs it (plan §7
+        /// C-1), so installing there would observe nothing live.
+        /// </summary>
+        public TaskDurationDiagnostics InstallTaskDurationDiagnostics(Func<float> nowSeconds)
+        {
+            if (taskDurationDiagnostics == null)
+            {
+                taskDurationDiagnostics = TaskDurationDiagnosticsWiring.Install(Tasks, nowSeconds);
+                if (taskDurationDiagnostics == null)
+                {
+                    return null;
+                }
+
+                taskDurationDiagnostics.DueEventDueTimeLookup = eventId =>
+                {
+                    float due;
+                    return DueEvents.TryGetDueGameSeconds(eventId, out due) ? (float?)due : null;
+                };
+                taskDurationDiagnostics.ScheduleLookup = (personId, dayIndex) =>
+                {
+                    var windows = new List<TaskDurationSleepWindow>();
+                    foreach (PersonActivityReservation reservation in PersonSchedules.ActiveFor(personId, dayIndex))
+                    {
+                        if (reservation != null
+                            && (reservation.Activity == PersonActivityKind.Sleeping
+                                || reservation.Activity == PersonActivityKind.Resting))
+                        {
+                            windows.Add(new TaskDurationSleepWindow
+                            {
+                                StartMinuteOfDay = reservation.StartMinuteOfDay,
+                                DurationMinutes = reservation.DurationMinutes,
+                            });
+                        }
+                    }
+
+                    return windows;
+                };
+                taskDurationDiagnostics.RebuildFromAuthority(Tasks);
+            }
+            else if (nowSeconds != null)
+            {
+                Tasks.SetTimingClock(nowSeconds);
+            }
+
+            return taskDurationDiagnostics;
+        }
+
+        /// <summary>
         /// P1: registers every static task catalog with the hub's TaskAuthority.
         /// Public + static so EditMode tests can verify coverage without a scene.
         /// </summary>
@@ -1102,6 +1184,12 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             Tasks.LoadFromSaveDto(dto.tasks);
+            // Priority 4 Slice 4 (§2.5): re-observe the restored open
+            // tasks at day resolution. Records the service already holds
+            // (same task ids, observed before the load) are left alone by
+            // RebuildFromAuthority; tasks it never saw get day-resolution
+            // records flagged RebuiltAfterLoad.
+            taskDurationDiagnostics?.RebuildFromAuthority(Tasks);
             Skills.LoadFromSaveDto(dto.skills);
             WorkTimeBudgets.LoadFromSaveDto(dto.workTimeBudgets, absoluteDayIndex);
             Valuation.LoadFromSaveDto(dto.valuation);

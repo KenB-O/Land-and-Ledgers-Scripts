@@ -91,6 +91,18 @@ namespace LandLedgers.Population
         /// </summary>
         public Action<ShoppingTripResult, CarriedGoodsBatch> MidTripObserver { get; set; }
 
+        /// <summary>
+        /// Priority 4 Slice 4 — timing-observer feed for leg refusals
+        /// (plan §5 Slice 4 item 3, §3.2 L6). When set (production: the
+        /// hub-installed TaskDurationDiagnostics, wired by
+        /// SimulationDrivers), leg AssignTask / StartTask refusals are fed
+        /// in via <see cref="ITaskTimingObserver.RecordRefusal"/> so a
+        /// repeatedly refused leg classifies instead of vanishing (G7).
+        /// Null by default: the loop never refuses a trip for lack of a
+        /// diagnostic. Follows the MidTripObserver pattern above.
+        /// </summary>
+        public ITaskTimingObserver TimingObserver { get; set; }
+
         public HouseholdShoppingLoop(
             PopulationState population,
             HouseholdMembershipRegistry membership,
@@ -2338,6 +2350,11 @@ namespace LandLedgers.Population
 
                 if (!tasks.AssignTask(leg.TaskId, shopperEid, budgets, out string assignReason))
                 {
+                    // Priority 4 Slice 4: feed the refusal into the
+                    // task-duration diagnostic (L6) where one is wired.
+                    // The leg task was created above, so the observer has
+                    // a record for it; an unwired loop feeds nothing.
+                    TimingObserver?.RecordRefusal(leg.TaskId.ToString(), "AssignTask", assignReason, dayIndex);
                     Fail(result, need, shopperId, dayIndex,
                         $"Trip scheduling failed: {assignReason} The shopper's time is real — no silent overbooking.", diag, options);
                     return false;
@@ -2367,6 +2384,9 @@ namespace LandLedgers.Population
 
             if (!tasks.StartTask(leg.TaskId, dayIndex, out string startReason))
             {
+                // Priority 4 Slice 4: feed the refusal into the
+                // task-duration diagnostic (L6) where one is wired.
+                TimingObserver?.RecordRefusal(leg.TaskId.ToString(), "StartTask", startReason, dayIndex);
                 Fail(result, need, shopperId, dayIndex,
                     $"Task leg '{legName}' could not start: {startReason}", diag, options);
                 return false;

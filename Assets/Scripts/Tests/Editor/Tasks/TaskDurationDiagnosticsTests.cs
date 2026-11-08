@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Freight;
 using LandLedgers.FirstLedger;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -1365,6 +1366,252 @@ namespace LandLedgers.EditorTests.Tasks
                 + first.TaskId.ToString() + " 'fr.load-freight' 3d, expected 15min, none recorded",
                 day13);
             Assert.IsTrue(second.TaskId != first.TaskId, "the two tasks are distinct (sanity)");
+        }
+
+        // ---- Slice 4: driver wiring + daily evaluation (plan §5 Slice 4) ----
+        // The hub and day-drive call sites (SimulationSystemsHub /
+        // SimulationDrivers) are harness-excluded, so no test here can cover
+        // them directly. What IS harness-reachable is the wiring contract
+        // itself: the TaskDurationDiagnosticsWiring.Install helper the hub
+        // calls (observer + clock on the authority), the evidence-lookup
+        // seams the hub feeds (L5 from the real due-event scheduler, L3
+        // from the real schedule tracker), and the once-per-day Evaluate
+        // cadence through an installed service. These tests pin that
+        // contract; the excluded call sites are source-reviewed only.
+
+        // Slice 4: Install wires the observer and the clock onto a real
+        // TaskAuthority, so transitions are recorded at full precision.
+        [Test]
+        public void Wiring_Install_InstallsObserverAndClock_FullPrecision()
+        {
+            var clock = new FakeClock { Now = Day(1, 3600) };
+            TaskAuthority authority = CreateAuthority();
+            TaskDurationDiagnostics diagnostics = TaskDurationDiagnosticsWiring.Install(authority, clock.Read);
+
+            Assert.IsNotNull(diagnostics, "Install returns the installed service");
+            Assert.IsTrue(authority.HasTimingObserver, "the observer is installed on the authority");
+
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            string reason;
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 1);
+            clock.Now = Day(1, 7200);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 1, out reason), reason);
+            clock.Now = Day(1, 10800);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 1, out reason), reason);
+
+            TaskTimingRecord record = diagnostics.GetRecord(task.TaskId);
+            Assert.IsNotNull(record, "the installed observer recorded the task");
+            Assert.AreEqual(TaskTimingClockPrecision.Full, record.ClockPrecision);
+            Assert.AreEqual(Day(1, 3600), record.CreatedSeconds, 0.001f);
+            Assert.AreEqual(Day(1, 7200), record.AssignedSeconds, 0.001f);
+            Assert.AreEqual(Day(1, 10800), record.StartedSeconds, 0.001f);
+            Assert.IsTrue(clock.Reads > 0, "the clock seam was actually read");
+        }
+
+        // Slice 4: installing on no authority installs nothing.
+        [Test]
+        public void Wiring_Install_NullAuthority_ReturnsNull()
+        {
+            var clock = new FakeClock { Now = Day(1, 3600) };
+            Assert.IsNull(TaskDurationDiagnosticsWiring.Install(null, clock.Read));
+            Assert.AreEqual(0, clock.Reads, "no clock read without an authority");
+        }
+
+        // Slice 4: installing with no clock is the explicit degraded mode —
+        // records are day-only, never silently second-precision.
+        [Test]
+        public void Wiring_Install_NullClock_DayOnlyPrecision()
+        {
+            TaskAuthority authority = CreateAuthority();
+            TaskDurationDiagnostics diagnostics = TaskDurationDiagnosticsWiring.Install(authority, null);
+
+            Assert.IsNotNull(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            WorkTask task = CreateAssignStart(authority, budgets, 1, Business(1));
+
+            TaskTimingRecord record = diagnostics.GetRecord(task.TaskId);
+            Assert.IsNotNull(record);
+            Assert.AreEqual(TaskTimingClockPrecision.DayOnly, record.ClockPrecision);
+        }
+
+        // Slice 4: through an installed service, the daily Evaluate cadence
+        // warns at most once per task per day and warns again the next day —
+        // the cadence OnDayChanged must drive (one Evaluate per day).
+        [Test]
+        public void Wiring_InstalledService_EvaluateOncePerDay()
+        {
+            var clock = new FakeClock { Now = Day(10, 28800) };
+            TaskAuthority authority = CreateAuthority();
+            TaskDurationDiagnostics diagnostics = TaskDurationDiagnosticsWiring.Install(authority, clock.Read);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(10);
+
+            StartStuckTask(authority, budgets, "test.sweep", Business(1), Person(1), 10);
+
+            clock.Now = Day(12, 28800);
+            diagnostics.Evaluate(clock.Now, 12);
+            diagnostics.Evaluate(clock.Now, 12);
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "two evaluations on the same day: one warning line");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary"),
+                "the daily summary is also emitted at most once per day");
+
+            clock.Now = Day(13, 28800);
+            diagnostics.Evaluate(clock.Now, 13);
+            Assert.AreEqual(2, CountLinesStartingWith(lines, "[TaskDuration] overrun"),
+                "the next day warns again (a repeating warning, not a duplicate)");
+            Assert.AreEqual(2, CountLinesStartingWith(lines, "[TaskDuration] summary"));
+        }
+
+        // Slice 4 / §3.2 L5: the due-time lookup the hub feeds from the real
+        // DueEventScheduler covers a passive-process wait up to its due time
+        // and no further. The lookup key is the due event id the scheduler
+        // itself issued, read back through TryGetDueGameSeconds.
+        [Test]
+        public void Wiring_DueEventLookup_FromRealScheduler_CoversWaitUntilDue()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            WorkTask task = CreateAssignStart(authority, budgets, 0, Business(1));
+
+            var scheduler = new DueEventScheduler();
+            string scheduleRefusal = scheduler.Schedule(
+                DueEventKind.TaskCompletionDue, Day(2, 28800), task.TaskId.ToString(), out string eventId);
+            Assert.IsNull(scheduleRefusal, scheduleRefusal);
+            diagnostics.DueEventDueTimeLookup = id =>
+            {
+                float due;
+                return scheduler.TryGetDueGameSeconds(id, out due) ? (float?)due : null;
+            };
+
+            string markReason;
+            Assert.IsTrue(authority.MarkWaitingOnPassiveProcess(task.TaskId, eventId, "passive process", out markReason), markReason);
+
+            clock.Now = Day(2, 25200); // day 2, 07:00 — one hour before the due time
+            TaskTimingVerdict beforeDue = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 2);
+            Assert.IsNotNull(beforeDue);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, beforeDue.Verdict);
+            Assert.AreEqual(TaskTimingReasonClass.L5WaitingOnPassiveProcess, beforeDue.ReasonClass);
+            Assert.AreEqual(169200f, beforeDue.CoveredSeconds, 0.001f,
+                "the whole wait so far is covered: it ends before the due time");
+            Assert.AreEqual(0f, beforeDue.UncoveredSeconds, 0.001f);
+            StringAssert.Contains(eventId, beforeDue.EvidenceText);
+
+            clock.Now = Day(3, 28800); // a day past the due time, still waiting
+            TaskTimingVerdict afterDue = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 3);
+            Assert.AreEqual(TaskTimingVerdictKind.Unexplained, afterDue.Verdict,
+                "past the due time with no resume, the further wait is unexplained");
+            Assert.AreEqual(172800f, afterDue.CoveredSeconds, 0.001f,
+                "L5 accrues only up to the due time (day 2 08:00)");
+            Assert.AreEqual(86400f, afterDue.UncoveredSeconds, 0.001f);
+        }
+
+        // Slice 4: TryGetDueGameSeconds is a read-only by-id read on the
+        // scheduler — the seam Slice 2 found missing. Unknown ids read
+        // false; popped events are gone; cancelling removes the read.
+        [Test]
+        public void Wiring_DueEventScheduler_TryGetDueGameSeconds_ReadOnlyById()
+        {
+            var scheduler = new DueEventScheduler();
+            float due;
+            Assert.IsTrue(!scheduler.TryGetDueGameSeconds("due-no-such-event", out due));
+            Assert.IsTrue(!scheduler.TryGetDueGameSeconds(null, out due));
+            Assert.IsTrue(!scheduler.TryGetDueGameSeconds(string.Empty, out due));
+
+            string refusal = scheduler.Schedule(DueEventKind.TaskCompletionDue, 9999f, "task-1", out string eventId);
+            Assert.IsNull(refusal, refusal);
+            Assert.AreEqual(1, scheduler.ScheduledCount);
+            Assert.IsTrue(scheduler.TryGetDueGameSeconds(eventId, out due));
+            Assert.AreEqual(9999f, due, 0.001f);
+            Assert.AreEqual(1, scheduler.ScheduledCount, "reading a due time schedules nothing");
+
+            scheduler.Cancel(eventId);
+            Assert.IsTrue(!scheduler.TryGetDueGameSeconds(eventId, out due), "cancelled events are gone");
+            Assert.AreEqual(0, scheduler.ScheduledCount);
+
+            string refusal2 = scheduler.Schedule(DueEventKind.TaskCompletionDue, 5555f, "task-2", out string eventId2);
+            Assert.IsNull(refusal2, refusal2);
+            Assert.IsTrue(scheduler.TryGetDueGameSeconds(eventId2, out due));
+            Assert.AreEqual(5555f, due, 0.001f);
+            List<DueEvent> popped = scheduler.PopDue(6000f);
+            Assert.AreEqual(1, popped.Count);
+            Assert.IsTrue(!scheduler.TryGetDueGameSeconds(eventId2, out due), "popped events are gone");
+
+            // The same read exists on the simple scheduler (same contract).
+            var simple = new SimpleDueEventScheduler();
+            string simpleRefusal = simple.Schedule(DueEventKind.TaskCompletionDue, 7777f, "task-3", out string simpleId);
+            Assert.IsNull(simpleRefusal, simpleRefusal);
+            Assert.IsTrue(simple.TryGetDueGameSeconds(simpleId, out due));
+            Assert.AreEqual(7777f, due, 0.001f);
+            simple.Cancel(simpleId);
+            Assert.IsTrue(!simple.TryGetDueGameSeconds(simpleId, out due));
+        }
+
+        // Slice 4 / §3.2 L3: the schedule lookup the hub feeds from the real
+        // PersonScheduleTracker covers exactly the Sleep windows the tracker
+        // holds — the two reservations DailyActivityPlanner writes for a
+        // wrapping sleep (evening 1320+120, morning 0+420 on the same day).
+        // Mirrors Classify_SleepWindow_CoversNightHoursOnly, but the source
+        // is the real tracker, not a hand-built lookup.
+        [Test]
+        public void Wiring_ScheduleLookup_FromRealTracker_CoversSleepMinutes()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+
+            var tracker = new PersonScheduleTracker();
+            Assert.IsNull(tracker.TryReserve(1, PersonActivityKind.Sleeping, 0, 0, 420, "sleep (morning)"));
+            Assert.IsNull(tracker.TryReserve(1, PersonActivityKind.Sleeping, 0, 1320, 120, "sleep (evening)"));
+            // The next day's morning sleep is reserved on that day, as
+            // DailyActivityPlanner reserves it (ReserveSleep per day) — the
+            // task spans the night, so both days' windows must exist.
+            Assert.IsNull(tracker.TryReserve(1, PersonActivityKind.Sleeping, 1, 0, 420, "sleep (morning)"));
+            diagnostics.ScheduleLookup = (personId, dayIndex) =>
+            {
+                if (personId != 1)
+                {
+                    return null;
+                }
+
+                var windows = new List<TaskDurationSleepWindow>();
+                foreach (PersonActivityReservation reservation in tracker.ActiveFor(personId, dayIndex))
+                {
+                    if (reservation.Activity == PersonActivityKind.Sleeping
+                        || reservation.Activity == PersonActivityKind.Resting)
+                    {
+                        windows.Add(new TaskDurationSleepWindow
+                        {
+                            StartMinuteOfDay = reservation.StartMinuteOfDay,
+                            DurationMinutes = reservation.DurationMinutes,
+                        });
+                    }
+                }
+
+                return windows;
+            };
+
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+            WorkTask task = CreateAssignStart(authority, budgets, 0, Business(1));
+
+            clock.Now = Day(1, 28800); // next morning, exactly 24 h later
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 1);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                "a single night never warns: P1 grace (1 day) absorbs exactly 24 h with no progress");
+            Assert.AreEqual(TaskTimingReasonClass.L3RestSleep, verdict.ReasonClass);
+            Assert.AreEqual(32400f, verdict.CoveredSeconds, 0.001f,
+                "L3 covers exactly the sleep minutes the tracker holds: 120 evening + 420 morning");
+            Assert.AreEqual(54000f, verdict.UncoveredSeconds, 0.001f,
+                "86400 s open span - 32400 s sleep = 54000 s evaluated normally");
         }
     }
 }

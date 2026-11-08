@@ -94,6 +94,33 @@ namespace LandLedgers.Time
             return best;
         }
 
+        /// <summary>
+        /// Priority 4 Slice 4 — read-only by-id due-time lookup, the same
+        /// contract as <see cref="DueEventScheduler.TryGetDueGameSeconds"/>:
+        /// true with the event's absolute due game seconds when the id is
+        /// currently scheduled, false for an unknown, cancelled, or
+        /// already-popped id. Reads only.
+        /// </summary>
+        public bool TryGetDueGameSeconds(string eventId, out float dueGameSeconds)
+        {
+            dueGameSeconds = 0f;
+            if (string.IsNullOrEmpty(eventId))
+            {
+                return false;
+            }
+
+            foreach (DueEvent e in events)
+            {
+                if (e != null && string.Equals(e.EventId, eventId, StringComparison.Ordinal))
+                {
+                    dueGameSeconds = e.DueGameSeconds;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public void CancelForPayload(string payloadRef)
         {
             if (string.IsNullOrWhiteSpace(payloadRef))

@@ -628,6 +628,15 @@ namespace LandLedgers.Orchestration.Systems
             // does not matter; RebindPopulationAuthorities does not touch it.
             householdShoppingLoop.OffMapJourneys = OffMapJourneys;
 
+            // Priority 4 Slice 4: wire the diagnostic into the loop so its
+            // leg assign/start refusals feed the L6 streak (the loop may be
+            // built before Awake installs the service; EnsureTaskDurationDiagnostics
+            // re-points it then, and a null service leaves the loop unwired).
+            if (hub.DurationDiagnostics != null)
+            {
+                householdShoppingLoop.TimingObserver = hub.DurationDiagnostics;
+            }
+
         }
 
         /// <summary>
@@ -867,6 +876,10 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Priority 4 Slice 4: re-ensure the diagnostic after a restore
+            // (the hub may be fresh, or its service may predate the load).
+            EnsureTaskDurationDiagnostics();
+
             hub.Tasks.RegisterDefinition(new TaskDefinition(BusinessFeedShoppingTaskId, "Business Feed Shopping", 15), out _);
             hub.Tasks.RegisterDefinition(new TaskDefinition(OpeningHitchTaskId, "Hitch Opening Freight Wagon", Math.Max(1, developmentHitchMinutes)), out _);
             hub.Tasks.RegisterDefinition(new TaskDefinition(FreightMeetingTaskId, "Freight Service Meeting", Math.Max(1, freightMeetingMinutes)), out _);
@@ -1047,6 +1060,11 @@ namespace LandLedgers.Orchestration.Systems
             // worker commitments truthful (WaitingOnPassiveProcess releases the worker;
             // ResumeTask re-commits).
             hub.Tasks.SetWorkTimeBudgetStore(hub.WorkTimeBudgets);
+
+            // Priority 4 Slice 4: install the task-duration diagnostic on
+            // the hub's TaskAuthority, clocked by the authoritative
+            // TimeManager timeline. See EnsureTaskDurationDiagnostics.
+            EnsureTaskDurationDiagnostics();
 
             // Pass IV Worker 2: install the equipment execution gate (Canon 4.1)
             // on the production TaskAuthority. Tasks with equipment, motive-
@@ -1232,6 +1250,33 @@ namespace LandLedgers.Orchestration.Systems
             timeManager.WeekChanged += OnWeekChanged;
             timeManager.ShortTick += OnShortTick;
             subscribedToTimeManager = true;
+        }
+
+        /// <summary>
+        /// Priority 4 Slice 4 — installs the task-duration diagnostic on
+        /// the hub's TaskAuthority, clocked by
+        /// <see cref="TimeManager.AbsoluteGameSeconds"/> (plan §5 Slice 4
+        /// item 1), and hands the service to the shopping loop so its leg
+        /// refusals feed the diagnostic (item 3). Safe to call repeatedly:
+        /// the hub install is idempotent and re-pointing the loop's
+        /// observer at the same service is a plain assignment. Called from
+        /// Awake, Rebind, and the top of OnDayChanged so the observer is
+        /// in place before any day-drive transition. No scheduling
+        /// behaviour changes: the observer only reads transitions.
+        /// </summary>
+        private void EnsureTaskDurationDiagnostics()
+        {
+            if (hub == null || timeManager == null)
+            {
+                return;
+            }
+
+            TaskDurationDiagnostics diagnostics =
+                hub.InstallTaskDurationDiagnostics(() => timeManager.AbsoluteGameSeconds);
+            if (diagnostics != null && householdShoppingLoop != null)
+            {
+                householdShoppingLoop.TimingObserver = diagnostics;
+            }
         }
 
         private void OnDisable()
@@ -1656,6 +1701,11 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Priority 4 Slice 4: the diagnostic must be installed before
+            // the day's first transition is observed (Awake/Rebind normally
+            // install it; this covers any path that subscribed without them).
+            EnsureTaskDurationDiagnostics();
+
             int absoluteDayIndex = timeManager.CurrentAbsoluteDayIndex;
 
             DriveMillbrookAidTable(absoluteDayIndex);
@@ -1799,6 +1849,19 @@ namespace LandLedgers.Orchestration.Systems
             // layoff knowledge routes into real job applications.
             DriveSocialDay(absoluteDayIndex);
             DriveAutonomousLabor(absoluteDayIndex);
+
+            // Priority 4 Slice 4 (plan §5 Slice 4 item 2): the daily
+            // task-duration evaluation, once per day, placed at the end of
+            // the day drive so the day's transitions from every drive above
+            // (work, shopping, domestic, autonomous) are included. Evaluate
+            // never throws (§4.2), so the no-try/catch shape of
+            // OnDayChanged (Priority 1 plan §1 T0) is preserved. Placement
+            // note: the plan's "before the daily summary emission" is the
+            // [TaskDuration] summary line, which Evaluate itself emits —
+            // the [FoodEconomy] shopping summary is emitted inside
+            // DriveDailyNeeds mid-drive, so no placement after the shopping
+            // drive can precede it.
+            hub.DurationDiagnostics?.Evaluate(timeManager.AbsoluteGameSeconds, absoluteDayIndex);
         }
 
         private void DriveMillbrookAidTable(int absoluteDayIndex)

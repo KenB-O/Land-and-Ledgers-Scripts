@@ -192,6 +192,9 @@ namespace LandLedgers.Population
         /// Tick advancement: starts pending tasks whose window has arrived and
         /// registers their completion due-events. Does NOT pop the scheduler —
         /// the caller pops once and dispatches (single pop site per tick).
+        /// Callers pop due events before advancing (see
+        /// SimulationDrivers.OnShortTick, which pops before this tick call), so
+        /// a completion due before a start window is handled first.
         /// </summary>
         public void AdvanceTick(
             float currentGameSeconds,

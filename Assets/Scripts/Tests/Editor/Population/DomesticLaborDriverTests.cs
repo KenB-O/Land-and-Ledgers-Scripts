@@ -273,13 +273,19 @@ namespace LandLedgers.Editor.Population
             const int day = 100;
             f.Driver.DriveDay(f.Inputs(7, 3, 4), day, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
             float startOfDay = day * 86400f;
+            // Pop-then-advance, matching the production call order:
+            // SimulationDrivers.OnShortTick pops due events (ProcessDueEvents)
+            // before DomesticLaborDriver.AdvanceTick, and LivingWorldSim.AdvanceTo
+            // likewise pops before advancing. Advancing first lets a large tick
+            // attempt a new start while an earlier task's completion is still
+            // unpopped, so the start is refused and the entry fails permanently.
             for (float now = startOfDay; now < startOfDay + 86400f; now += tickSeconds)
             {
-                f.Driver.AdvanceTick(now, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
                 foreach (DueEvent ev in f.DueEvents.PopDue(now))
                 {
                     f.Driver.HandleDueEvent(ev, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.FamilyLabor, f.DueEvents, day, diag);
                 }
+                f.Driver.AdvanceTick(now, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
             }
 
             // Drain any completion due just after the last tick (large steps

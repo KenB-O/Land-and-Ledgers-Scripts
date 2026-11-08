@@ -4,9 +4,11 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Ordering;
+using LandLedgers.Economy.Trade;
 using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using NUnit.Framework;
@@ -790,6 +792,286 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(1, runtime.Lots.Count, "live lots must stay at exactly the opening lot");
             Assert.AreEqual("aidlot-millbrook_grain_co:opening-flour-b1", runtime.Lots[0].LotId,
                 "the live opening lot must be untouched by the refused import");
+        }
+
+        // ---- Slice 3 (procurement on Continue): coordinator half ----
+        //
+        // PIN, NOT A REPRODUCING FAILURE — read before changing it.
+        // These tests pass before the Slice 3 wiring fix too: they drive
+        // the 9-argument coordinator Restore with a live
+        // OffMapNamedSkuProcurementService already supplied, and the
+        // coordinator half is already sound (it clears then imports when
+        // the service exists). What they pin is the half the production
+        // path must supply: after the fix, SaveLoadManager.LoadDefaultSlot
+        // calls FirstLedgerSliceBootstrapper.EnsureNotionsProcurementForRestore
+        // between the shared-business restore and the Pass XL restore,
+        // immediately after EnsurePass9SaveOwnerForRestore, so the
+        // production restore runs this same coordinator path with a live
+        // notions-only service instead of taking the null-service drop
+        // branch pinned by
+        // ContinueDrop_Pin_ProcurementSectionPresent_NullService. The
+        // in-window call itself is harness-excluded
+        // (FirstLedgerSliceBootstrapper.cs, SaveLoadManager.cs) and is
+        // source-reviewed only; no Unity verification is claimed by
+        // these tests.
+
+        // Builds the fresh notions-only service exactly as
+        // RegisterNotionsProcurement does: a fresh ExternalMarketAuthority
+        // carrying only the notions counterparty, with terms read from
+        // the catalog's authored registration
+        // (BakeryFlourSupply.EnsureBakeryImportables: 10c/unit, 14
+        // transit days, finite supply FiniteExternalOrderUnits) — never
+        // hardcoded here — and the real Series2BusinessRuntimeCashPort
+        // over a live BusinessRuntimeState, as production passes the
+        // store's RuntimeState. The horse-feed counterparty is NOT on
+        // this market: in editor/development builds the dev feed
+        // registration owns a shared market, but on the release path
+        // (and on this in-window Continue path) the service is
+        // notions-only, and saved horse-feed orders restore as data
+        // anyway (test 3 pins that ImportState does not validate saved
+        // orders against the market's counterparties).
+        private static OffMapNamedSkuProcurementService NewNotionsOnlyService(
+            out ExternalMarketAuthority market, out ImportMaterial notionsMaterial)
+        {
+            market = new ExternalMarketAuthority();
+            var importDiag = new List<string>();
+            BakeryFlourSupply.EnsureBakeryImportables(importDiag);
+            notionsMaterial = ImportCatalog.Get(BakeryFlourSupply.NotionsMaterialId);
+            Assert.IsNotNull(notionsMaterial,
+                "the notions import material must be registered by the catalog fixture; diag: "
+                + string.Join("; ", importDiag));
+            var notionsCounterparty = new ExternalCounterparty
+            {
+                CounterpartyId = BakeryNotionsDailySupply.NotionsSupplierId,
+                DisplayName = BakeryNotionsDailySupply.NotionsSupplierName,
+                TransitDays = notionsMaterial.TransitDays,
+                InitialBudgetCents = 0,
+                SupplyUnits = new Dictionary<string, int>
+                {
+                    [BakeryFlourSupply.NotionsMaterialId] =
+                        BakeryNotionsDailySupply.FiniteExternalOrderUnits,
+                },
+            };
+            Assert.IsNull(market.RegisterCounterparty(notionsCounterparty),
+                "the notions counterparty must register on the fresh market");
+            return new OffMapNamedSkuProcurementService(
+                "general-store-1", market,
+                new Series2BusinessRuntimeCashPort(new BusinessRuntimeState()));
+        }
+
+        // The saved procurement section for the restore pin: one notions
+        // order (order day 1, arrival day 15 = order day + the catalog's
+        // 14 transit days), one lot, and one delivered sale id. Order
+        // price is the catalog's 10c/unit; no freight surcharge (no
+        // freight rate is authored for the railhead route).
+        private static NamedSkuProcurementSaveDto BuildNotionsProcurementDto()
+        {
+            return new NamedSkuProcurementSaveDto
+            {
+                BusinessId = "general-store-1",
+                Orders = new List<NamedSkuOrder>
+                {
+                    new NamedSkuOrder
+                    {
+                        OrderId = "notions-order-1",
+                        BusinessId = "general-store-1",
+                        SkuId = BakeryFlourSupply.NotionsMaterialId,
+                        UnitsOrdered = 1,
+                        UnitGoodsCostCents = 10,
+                        FreightSurchargeCents = 0,
+                        TotalCostCents = 10,
+                        SupplierId = BakeryNotionsDailySupply.NotionsSupplierId,
+                        SupplierName = BakeryNotionsDailySupply.NotionsSupplierName,
+                        OrderDayIndex = 1,
+                        ExpectedArrivalDayIndex = 15,
+                        ReceiptId = "receipt-notions-1",
+                        Stage = NamedSkuOrderStage.Ordered,
+                        PaymentMode = NamedSkuPaymentMode.CashOnArrival,
+                    },
+                },
+                Lots = new List<NamedSkuLot>
+                {
+                    new NamedSkuLot
+                    {
+                        LotId = "notions-lot-1",
+                        SkuId = BakeryFlourSupply.NotionsMaterialId,
+                        BusinessId = "general-store-1",
+                        OrderId = "notions-order-1",
+                        ReceiptId = "receipt-notions-1",
+                        QuantityUnits = 1,
+                        RemainingUnits = 1,
+                        TotalCostCents = 10,
+                        UnitCostCents = 10,
+                        CreatedDayIndex = 15,
+                    },
+                },
+                DeliveredSaleIds = new List<string> { "sale-notions-1" },
+            };
+        }
+
+        [Test]
+        public void ContinueWiring_Procurement_RestoreWithSuppliedService_RestoresOrdersAndLots()
+        {
+            // Coordinator pin (re-plan §4.3 test 1): with a live
+            // notions-only service supplied, the coordinator restores
+            // the saved procurement section, and a second restore of
+            // the same DTO changes nothing (idempotent). Passes before
+            // the wiring fix too.
+            OffMapNamedSkuProcurementService service =
+                NewNotionsOnlyService(out _, out _);
+            var dto = new PassXlSliceSaveDto { procurement = BuildNotionsProcurementDto() };
+
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, service, null, null, null, null, null);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(!restoreDiag.Any(d => d.Contains("no procurement service supplied")),
+                "with a live service supplied the drop branch must not run; diag: " + joined);
+            Assert.IsTrue(joined.Contains(
+                    "restored off-map procurement for business 'general-store-1' (1 orders, 1 lots, 0 sales, 1 delivered)"),
+                "the restore must report the saved counts; diag: " + joined);
+
+            Assert.AreEqual(1, service.Orders.Count, "exactly the one saved notions order must restore");
+            NamedSkuOrder order = service.Orders[0];
+            Assert.AreEqual("notions-order-1", order.OrderId);
+            Assert.AreEqual(BakeryFlourSupply.NotionsMaterialId, order.SkuId);
+            Assert.AreEqual(1, order.OrderDayIndex, "the order day must restore verbatim");
+            Assert.AreEqual(15, order.ExpectedArrivalDayIndex,
+                "the arrival day must restore verbatim (order day 1 + 14 transit days)");
+            Assert.AreEqual(1, service.Lots.Count, "exactly the one saved lot must restore");
+            Assert.AreEqual("notions-lot-1", service.Lots[0].LotId);
+            Assert.AreEqual(1, service.Lots[0].RemainingUnits, "the lot must stay unconsumed");
+            Assert.AreEqual(1, service.DeliveredSaleIds.Count, "exactly the one delivered mark must restore");
+            Assert.AreEqual("sale-notions-1", service.DeliveredSaleIds[0]);
+            Assert.IsTrue(service.IsSaleDelivered("sale-notions-1"),
+                "the delivered mark must answer as delivered");
+
+            // Idempotent: restoring the same DTO again changes nothing.
+            List<string> secondDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, service, null, null, null, null, null);
+            string secondJoined = string.Join("; ", secondDiag);
+            Assert.IsTrue(secondJoined.Contains(
+                    "restored off-map procurement for business 'general-store-1' (1 orders, 1 lots, 0 sales, 1 delivered)"),
+                "the second restore must report the same counts; diag: " + secondJoined);
+            Assert.AreEqual(1, service.Orders.Count, "a second restore must not duplicate the order");
+            Assert.AreEqual(1, service.Lots.Count, "a second restore must not duplicate the lot");
+            Assert.AreEqual(1, service.DeliveredSaleIds.Count, "a second restore must not duplicate the delivered mark");
+        }
+
+        [Test]
+        public void ContinueWiring_Procurement_RestoreThenCapture_SectionSurvivesSaveAfterContinue()
+        {
+            // Amplifier pin (re-plan §4.3 test 2, original plan §0): a
+            // save after Continue must no longer overwrite the good
+            // save with a null procurement section. Restore the pin DTO
+            // into a fresh live service, then capture through the real
+            // coordinator, as BuildSaveDto does. Passes before the
+            // wiring fix too — it pins the coordinator half.
+            OffMapNamedSkuProcurementService service =
+                NewNotionsOnlyService(out _, out _);
+            var dto = new PassXlSliceSaveDto { procurement = BuildNotionsProcurementDto() };
+
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, service, null, null, null, null, null);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(joined.Contains("restored off-map procurement"),
+                "the procurement restore must run; diag: " + joined);
+
+            PassXlSliceSaveDto recaptured = PassXlSliceSaveCoordinator.Capture(
+                null, null, service);
+            Assert.IsNotNull(recaptured.procurement,
+                "a save after Continue must write a procurement section, not null");
+            Assert.AreEqual("general-store-1", recaptured.procurement.BusinessId);
+            Assert.AreEqual(1, recaptured.procurement.Orders.Count,
+                "the re-saved section must carry the restored order");
+            Assert.AreEqual("notions-order-1", recaptured.procurement.Orders[0].OrderId,
+                "the order id must survive the restore-then-save round trip verbatim");
+            Assert.AreEqual(15, recaptured.procurement.Orders[0].ExpectedArrivalDayIndex,
+                "the arrival day must survive the round trip verbatim");
+            Assert.AreEqual(1, recaptured.procurement.Lots.Count,
+                "the re-saved section must carry the restored lot");
+            Assert.AreEqual("notions-lot-1", recaptured.procurement.Lots[0].LotId,
+                "the lot id must survive the restore-then-save round trip verbatim");
+            Assert.AreEqual(1, recaptured.procurement.DeliveredSaleIds.Count,
+                "the re-saved section must carry the delivered mark");
+            Assert.AreEqual("sale-notions-1", recaptured.procurement.DeliveredSaleIds[0],
+                "the delivered sale id must survive the restore-then-save round trip verbatim");
+        }
+
+        [Test]
+        public void ContinueWiring_Procurement_FreshNotionsOnlyService_RestoresSavedOrdersAsData()
+        {
+            // In-window precondition pin (re-plan §4.3 test 3, §1.6):
+            // the fresh market carries only the notions counterparty,
+            // yet a saved horse-feed order (a different supplier /
+            // counterparty, from the dev feed registration's shared
+            // market) restores as data with no refusal — ImportState is
+            // a merge with no market-counterparty validation. This is
+            // the property the in-window registration relies on: the
+            // fresh notions-only service can hold a saved section that
+            // was written against the dev shared service. Passes before
+            // the wiring fix too.
+            //
+            // Horse-feed figures are production's, from
+            // ConfigurePlaytestHorseFeed: supplier "millbrook_grain_co",
+            // item "store_horse_feed_sack", 15c per sack, 1 transit day
+            // — nothing invented.
+            OffMapNamedSkuProcurementService service =
+                NewNotionsOnlyService(out ExternalMarketAuthority market, out ImportMaterial notionsMaterial);
+            ExternalCounterparty notionsCounterparty =
+                market.GetCounterparty(BakeryNotionsDailySupply.NotionsSupplierId);
+            Assert.IsNotNull(notionsCounterparty, "the fresh market must carry the notions counterparty");
+            Assert.AreEqual(notionsMaterial.TransitDays, notionsCounterparty.TransitDays,
+                "the counterparty transit must be the catalog's transit, never hardcoded");
+            Assert.AreEqual(notionsMaterial.PricePerUnitCents, 10,
+                "the catalog's notions price is 10c/unit (read, not hardcoded)");
+            Assert.AreEqual(BakeryNotionsDailySupply.FiniteExternalOrderUnits,
+                notionsCounterparty.SupplyUnits[BakeryFlourSupply.NotionsMaterialId],
+                "the counterparty supply must be the authored finite external order size");
+            Assert.IsNull(market.GetCounterparty("millbrook_grain_co"),
+                "the fresh market must NOT carry the horse-feed counterparty — it is notions-only");
+
+            NamedSkuProcurementSaveDto procurementDto = BuildNotionsProcurementDto();
+            procurementDto.Orders.Add(new NamedSkuOrder
+            {
+                OrderId = "horsefeed-order-1",
+                BusinessId = "general-store-1",
+                SkuId = "store_horse_feed_sack",
+                UnitsOrdered = 1,
+                UnitGoodsCostCents = 15,
+                FreightSurchargeCents = 0,
+                TotalCostCents = 15,
+                SupplierId = "millbrook_grain_co",
+                SupplierName = "Millbrook Grain Co.",
+                OrderDayIndex = 2,
+                ExpectedArrivalDayIndex = 3,
+                ReceiptId = "receipt-horsefeed-1",
+                Stage = NamedSkuOrderStage.Ordered,
+                PaymentMode = NamedSkuPaymentMode.CashOnArrival,
+            });
+            var dto = new PassXlSliceSaveDto { procurement = procurementDto };
+
+            List<string> restoreDiag = PassXlSliceSaveCoordinator.Restore(
+                dto, null, null, service, null, null, null, null, null);
+            string joined = string.Join("; ", restoreDiag);
+            Assert.IsTrue(joined.Contains(
+                    "restored off-map procurement for business 'general-store-1' (2 orders, 1 lots, 0 sales, 1 delivered)"),
+                "the restore must report both orders; diag: " + joined);
+            Assert.IsTrue(!joined.Contains("refus"),
+                "no refusal may fire for the saved horse-feed order; diag: " + joined);
+            Assert.IsTrue(!joined.Contains("does not match"),
+                "no mismatch diagnostic may fire for the saved horse-feed order; diag: " + joined);
+
+            Assert.AreEqual(2, service.Orders.Count, "both saved orders must restore as data");
+            NamedSkuOrder horseFeedOrder = service.Orders.First(o => o.OrderId == "horsefeed-order-1");
+            Assert.AreEqual("store_horse_feed_sack", horseFeedOrder.SkuId);
+            Assert.AreEqual("millbrook_grain_co", horseFeedOrder.SupplierId,
+                "the horse-feed supplier must restore verbatim even though the fresh market has no such counterparty");
+            Assert.AreEqual(2, horseFeedOrder.OrderDayIndex);
+            Assert.AreEqual(3, horseFeedOrder.ExpectedArrivalDayIndex);
+            Assert.IsTrue(service.Orders.Any(o => o.OrderId == "notions-order-1"),
+                "the notions order must restore alongside the horse-feed order");
+            Assert.AreEqual(1, service.Lots.Count, "the saved notions lot must restore");
+            Assert.AreEqual(1, service.DeliveredSaleIds.Count, "the delivered mark must restore");
         }
     }
 }

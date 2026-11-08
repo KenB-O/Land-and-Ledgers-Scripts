@@ -435,7 +435,15 @@ namespace LandLedgers.Persistence
             if (bootstrapper == null)
                 Debug.LogWarning("[SaveLoad] Pass 9 save owner was not created on restore: no FirstLedgerSliceBootstrapper found; the Pass 9 section will drop.", this);
             else
+            {
                 bootstrapper.EnsurePass9SaveOwnerForRestore();
+                // Q04 Slice 3 (re-plan): same window as Slice 1 — the NPC General
+                // Store was rebuilt above, so the procurement service can be
+                // registered with its live runtime before the Pass XL restore below
+                // consumes it. See FirstLedgerSliceBootstrapper.
+                // EnsureNotionsProcurementForRestore for the guard behaviour.
+                bootstrapper.EnsureNotionsProcurementForRestore();
+            }
             logisticsRuntime?.LoadFromSaveDto(save.businesses != null ? save.businesses.logistics : null);
             populationManager?.RefreshSettlementMetrics("Population restored from save.");
             // Person actors are derived from the restored population and world.

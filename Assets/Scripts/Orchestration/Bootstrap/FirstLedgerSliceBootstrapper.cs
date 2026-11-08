@@ -1940,6 +1940,24 @@ namespace LandLedgers.FirstLedger
             ConfigureLiveBakerySaveOwner();
         }
 
+        // Q04 Slice 3 (re-plan): called by SaveLoadManager.LoadDefaultSlot
+        // AFTER the shared-business restore and BEFORE the Pass XL restore,
+        // immediately after EnsurePass9SaveOwnerForRestore. The NPC General
+        // Store exists only in that window (a pre-load call finds no store:
+        // FindDevelopmentNpcGeneralStore scans sharedBusinessRuntime.Businesses,
+        // which is empty until the restore). The guard inside
+        // RegisterNotionsProcurement is untouched: on a first Continue load
+        // the slot is null and a fresh notions-only service is created; on a
+        // second load in the same session the slot is already owned and the
+        // call returns without overwriting (see the staleness limitation in
+        // the slice log / addendum section 1.7).
+        public void EnsureNotionsProcurementForRestore()
+        {
+            BusinessInstanceState storeBusiness = FindDevelopmentNpcGeneralStore();
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            RegisterNotionsProcurement(storeBusiness, drivers);
+        }
+
         private void ConfigureLiveBakerySaveOwner()
         {
             if (sharedBusinessRuntime == null || saveLoadManager == null)

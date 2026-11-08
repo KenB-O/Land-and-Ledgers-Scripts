@@ -553,6 +553,19 @@ namespace LandLedgers.FirstLedger
                     ConfigurePlaytestHorseFeed(developmentNpcStore, simulationDrivers);
             }
 #endif
+            // Plan 04 Slice 5: notions procurement is production wiring,
+            // not a playtest registration — it runs on NewGame in every
+            // build. In editor/development builds ConfigurePlaytestHorseFeed
+            // above already registered the notions counterparty on the
+            // shared feed market and owns the save slot; the method detects
+            // that and returns without overwriting (AttachStoreFeedProcurement
+            // overwrites unconditionally, and the dev service also carries
+            // the horse-feed order). In release builds this is the only
+            // registration. The store is the NPC General Store (the bakery's
+            // wholesale buyer); if it does not resolve, the method logs the
+            // gap and the daily driver names the missing service (F19).
+            if (startupIntent == WorldStartupIntent.NewGame && simulationDrivers != null)
+                RegisterNotionsProcurement(FindDevelopmentNpcGeneralStore(), simulationDrivers);
             // Register the live store with the shared supplier directory. The
             // household membership binding remains an explicit scenario/world
             // concern; registering the seller alone cannot execute a purchase.
@@ -2087,6 +2100,99 @@ namespace LandLedgers.FirstLedger
                 Debug.Log($"[ScenarioFinance] opening business balance: '{business.RuntimeDisplayName}' ({business.InstanceId})={business.RuntimeState.CurrentCashCents}c.", this);
         }
 #endif
+
+        /// <summary>Plan 04 Slice 5: notions procurement for the bakery,
+        /// production wiring — NOT a playtest registration. Runs on NewGame
+        /// in every build (see the ungated call in InitializeSlice). Terms
+        /// are read from the catalog's authored registration
+        /// (BakeryFlourSupply.EnsureBakeryImportables: "Off-map provision
+        /// wholesaler, via railhead", 250 mi, 14 transit days, 10c/unit) —
+        /// never hardcoded here. Supply is a finite external order of
+        /// BakeryNotionsDailySupply.FiniteExternalOrderUnits units — the
+        /// authored bootstrap endowment size, NOT canon; when it is
+        /// exhausted the driver refuses loudly and a standing wholesale
+        /// supply term is owed (D-1-adjacent). No freight surcharge: no
+        /// freight rate is authored for the railhead route (Kennedy must
+        /// approve a production freight rate before one is wired). No order
+        /// is placed here — the daily driver orders the day's shortfall, so
+        /// the pipeline primes from the first planned bake.
+        /// TWO REGISTRATION SITES, ONE PER BUILD FLAVOR: in
+        /// editor/development builds ConfigurePlaytestHorseFeed below
+        /// already registered this same counterparty on the shared feed
+        /// market and owns the save slot — this method detects that
+        /// (PassXlProcurementService non-null) and returns WITHOUT
+        /// overwriting, because AttachStoreFeedProcurement overwrites
+        /// unconditionally and the dev service also carries the horse-feed
+        /// order. In release builds this is the only registration. Do NOT
+        /// "simplify" by deleting either site: deleting the dev half would
+        /// strip the counterparty from the shared dev service, and deleting
+        /// this method would leave release builds with no notions service
+        /// at all (F19).</summary>
+        private void RegisterNotionsProcurement(BusinessInstanceState storeBusiness, SimulationDrivers drivers)
+        {
+            if (drivers == null || storeBusiness?.RuntimeState == null)
+            {
+                Debug.LogError("[NotionsSupply] notions procurement not registered: no drivers or no store runtime.", this);
+                return;
+            }
+            // The development feed registration already owns a procurement
+            // service (with this same notions counterparty on its market) —
+            // never overwrite it. AutoWire guarantees saveLoadManager is
+            // non-null before this point, so the save slot is the reliable
+            // signal.
+            if (saveLoadManager != null && saveLoadManager.PassXlProcurementService != null)
+            {
+                Debug.Log("[NotionsSupply] procurement service already registered (development feed registration owns the slot); notions counterparty already on its market, nothing replaced.", this);
+                return;
+            }
+
+            var market = new ExternalMarketAuthority();
+            var notionsImportDiag = new List<string>();
+            LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.EnsureBakeryImportables(notionsImportDiag);
+            LandLedgers.Economy.Trade.ImportMaterial notionsMaterial =
+                LandLedgers.Economy.Trade.ImportCatalog.Get(
+                    LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId);
+            if (notionsMaterial == null)
+            {
+                Debug.LogError("[NotionsSupply] notions import material is not registered; no notions counterparty registered.", this);
+                return;
+            }
+            var notionsCounterparty = new ExternalCounterparty
+            {
+                CounterpartyId = LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.NotionsSupplierId,
+                DisplayName = LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.NotionsSupplierName,
+                TransitDays = notionsMaterial.TransitDays,
+                InitialBudgetCents = 0,
+                SupplyUnits = new Dictionary<string, int>
+                {
+                    [LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId] =
+                        LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.FiniteExternalOrderUnits,
+                },
+            };
+            string notionsRefusal = market.RegisterCounterparty(notionsCounterparty);
+            if (notionsRefusal != null)
+            {
+                Debug.LogError($"[NotionsSupply] external supplier registration refused: {notionsRefusal}", this);
+                return;
+            }
+            Debug.Log($"[NotionsSupply] '{notionsCounterparty.DisplayName}' registered for SKU " +
+                $"'{LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.NotionsMaterialId}' at {notionsMaterial.PricePerUnitCents}c/unit, " +
+                $"transit {notionsCounterparty.TransitDays} days, finite supply " +
+                $"{LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.FiniteExternalOrderUnits}u; " +
+                "the daily driver orders the day's shortfall (BakeryNotionsDailySupply).", this);
+
+            var procurement = new OffMapNamedSkuProcurementService(
+                storeBusiness.InstanceId, market,
+                new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState));
+            drivers.AttachStoreFeedProcurement(procurement, storeBusiness);
+            if (saveLoadManager != null)
+            {
+                if (saveLoadManager.PassXlProcurementService == null)
+                    saveLoadManager.PassXlProcurementService = procurement;
+                else if (!ReferenceEquals(saveLoadManager.PassXlProcurementService, procurement))
+                    Debug.LogWarning("[NotionsSupply] SaveLoadManager already owns a different PassXl procurement service; notions procurement was not substituted into that slot.", this);
+            }
+        }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private void ConfigurePlaytestHorseFeed(BusinessInstanceState storeBusiness, SimulationDrivers drivers)

@@ -29,6 +29,7 @@
 // contents.
 
 using System;
+using System.Collections.Generic;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
 
@@ -214,6 +215,59 @@ namespace LandLedgers.Population
         public HandOccupancy Current =>
             new HandOccupancy(PersonId, leftLotKey, leftBatchId, rightLotKey, rightBatchId, isTwoHandedHold,
                 leftRequirement, rightRequirement, lastRefusalReason, lastRefusalOperation);
+
+        /// <summary>
+        /// Restores an authoritative snapshot after save loading. The person identity and
+        /// hand invariants are checked before any live state is replaced.
+        /// </summary>
+        public bool RestoreSnapshot(HandOccupancy snapshot, out string refusal)
+        {
+            refusal = string.Empty;
+            if (snapshot == null || snapshot.PersonId != PersonId)
+            {
+                refusal = "HandOccupancy: restore refused — snapshot person identity does not match authority.";
+                return false;
+            }
+
+            bool leftOccupied = !snapshot.LeftLotKey.IsEmpty;
+            bool rightOccupied = !snapshot.RightLotKey.IsEmpty;
+            if ((!leftOccupied && (!string.IsNullOrEmpty(snapshot.LeftBatchId) || snapshot.LeftRequirement != HandRequirement.Unknown))
+                || (!rightOccupied && (!string.IsNullOrEmpty(snapshot.RightBatchId) || snapshot.RightRequirement != HandRequirement.Unknown))
+                || (leftOccupied && snapshot.LeftRequirement != HandRequirement.OneHanded && snapshot.LeftRequirement != HandRequirement.TwoHanded)
+                || (rightOccupied && snapshot.RightRequirement != HandRequirement.OneHanded && snapshot.RightRequirement != HandRequirement.TwoHanded))
+            {
+                refusal = "HandOccupancy: restore refused — empty hands must be clear and occupied hands need a known one- or two-hand requirement.";
+                return false;
+            }
+
+            if (snapshot.IsTwoHandedHold)
+            {
+                if (!leftOccupied || !rightOccupied || snapshot.LeftLotKey != snapshot.RightLotKey
+                    || !string.Equals(snapshot.LeftBatchId, snapshot.RightBatchId, StringComparison.Ordinal)
+                    || snapshot.LeftRequirement != HandRequirement.TwoHanded
+                    || snapshot.RightRequirement != HandRequirement.TwoHanded)
+                {
+                    refusal = "HandOccupancy: restore refused — a two-handed hold must occupy both hands with the same lot and batch.";
+                    return false;
+                }
+            }
+            else if (leftOccupied && rightOccupied && snapshot.LeftLotKey == snapshot.RightLotKey)
+            {
+                refusal = "HandOccupancy: restore refused — one lot cannot occupy both hands as separate one-handed holds.";
+                return false;
+            }
+
+            leftLotKey = snapshot.LeftLotKey;
+            leftBatchId = snapshot.LeftBatchId ?? string.Empty;
+            rightLotKey = snapshot.RightLotKey;
+            rightBatchId = snapshot.RightBatchId ?? string.Empty;
+            isTwoHandedHold = snapshot.IsTwoHandedHold;
+            leftRequirement = snapshot.LeftRequirement;
+            rightRequirement = snapshot.RightRequirement;
+            lastRefusalReason = snapshot.LastRefusalReason ?? string.Empty;
+            lastRefusalOperation = snapshot.LastRefusalOperation ?? string.Empty;
+            return true;
+        }
 
         public bool IsFree(HandSlot hand) => hand == HandSlot.Left ? leftLotKey.IsEmpty : rightLotKey.IsEmpty;
 
@@ -838,6 +892,9 @@ namespace LandLedgers.Population
                     "HandOccupancy: person " + PersonId + " pick up of pail '" + container.ContainerId + "' into the " + HandName(hand) + " hand refused — the " + HandName(hand) + " hand is occupied by " + DescribeLot(occupying, occupyingBatch) + ".");
             }
 
+            string sourceCustodian = string.IsNullOrWhiteSpace(container.LocationId)
+                ? CustodyTransferLog.ContainerCustodian(container.ContainerId)
+                : CustodyTransferLog.LocationCustodian(container.LocationId);
             HandheldContainerOperationResult pickedUp = container.PickUp(PersonId, hand);
             if (!pickedUp.Succeeded)
             {
@@ -870,7 +927,7 @@ namespace LandLedgers.Population
             ClearRefusal();
             RecordTransferKeys(
                 ownKey, ownKey,
-                CustodyTransferLog.ContainerCustodian(container.ContainerId),
+                sourceCustodian,
                 CustodyTransferLog.PersonCustodian(PersonId),
                 CustodyTransferLog.CauseContainerPickup, context);
             return HandOperationResult.Ok(
@@ -887,15 +944,22 @@ namespace LandLedgers.Population
         /// container own key (naming what the hand holds), or when the
         /// container is not held by this person (naming the current
         /// holder, or that it is set down). Only when every check passes
-        /// is container SetDown called and the hand slot — both slots
-        /// when the hold is two-handed — cleared, and one log entry
-        /// recorded with CauseContainerSetDown, from the person custodian
-        /// to the container custodian. Contents stay inside the
+        /// is the container placed at the required location and the hand
+        /// slot — both slots when the hold is two-handed — cleared. One
+        /// CauseContainerSetDown record preserves its identity and moves
+        /// custody from the person to the location. Contents stay inside the
         /// container. A refused set down leaves the hand holding the
         /// container and the container unchanged.
         /// </summary>
         public HandOperationResult SetDownContainer(
             HandSlot hand, HandheldContainer container, HandCustodyContext context = null)
+        {
+            return SetDownContainer(hand, container, string.Empty, context);
+        }
+
+        /// <summary>Sets down a held container at a stable location that remains queryable after it leaves the person's hands.</summary>
+        public HandOperationResult SetDownContainer(
+            HandSlot hand, HandheldContainer container, string locationId, HandCustodyContext context = null)
         {
             if (container == null)
             {
@@ -930,8 +994,14 @@ namespace LandLedgers.Population
                     "HandOccupancy: person " + PersonId + " set down of pail '" + container.ContainerId + "' refused — the pail is held by person " + container.HeldByPersonId + ", not person " + PersonId + ".");
             }
 
+            if (string.IsNullOrWhiteSpace(locationId))
+            {
+                return Refuse("SetDownContainer",
+                    "HandOccupancy: person " + PersonId + " set down of pail '" + container.ContainerId + "' refused — a stable placement location is required.");
+            }
+
             bool wasTwoHanded = isTwoHandedHold;
-            HandheldContainerOperationResult setDown = container.SetDown();
+            HandheldContainerOperationResult setDown = container.SetDown(locationId);
             if (!setDown.Succeeded)
             {
                 return Refuse("SetDownContainer", setDown.Reason);
@@ -962,17 +1032,12 @@ namespace LandLedgers.Population
 
             ClearRefusal();
             RecordTransferKeys(
-                ownKey, LotKey.Empty,
+                ownKey, ownKey,
                 CustodyTransferLog.PersonCustodian(PersonId),
-                CustodyTransferLog.ContainerCustodian(container.ContainerId),
+                CustodyTransferLog.LocationCustodian(container.LocationId),
                 CustodyTransferLog.CauseContainerSetDown, context);
-            if (log != null && context != null)
-            {
-                log.Note("HandOccupancy: container set down for pail '" + container.ContainerId + "' recorded with an empty destination key — no placement surface exists yet in P2b; the pail stays in the person's custody outside any hand.");
-            }
-
             return HandOperationResult.Ok(
-                "HandOccupancy: person " + PersonId + " set down pail '" + container.ContainerId + "' from the " + HandName(hand) + " hand; its contents stay inside.",
+                "HandOccupancy: person " + PersonId + " set down pail '" + container.ContainerId + "' at '" + container.LocationId + "' from the " + HandName(hand) + " hand; its contents stay inside.",
                 ownKey, string.Empty);
         }
 
@@ -983,8 +1048,8 @@ namespace LandLedgers.Population
         /// does not hold this container own key, when the container is
         /// not held by this person, when the hold is two-handed, or when
         /// the to hand is occupied. Only when every check passes is the
-        /// container set down and picked up into the to hand — with no
-        /// log record for either intermediate step — then the from slot
+        /// container atomically moved to the to hand without a transient
+        /// world-placement state, then the from slot
         /// cleared and the to slot filled with the same own key and the
         /// retained requirement, and one log entry recorded with
         /// CauseContainerMove, from the person custodian to the person
@@ -1050,16 +1115,10 @@ namespace LandLedgers.Population
             }
 
             HandRequirement retainedRequirement = fromHand == HandSlot.Left ? leftRequirement : rightRequirement;
-            HandheldContainerOperationResult setDown = container.SetDown();
-            if (!setDown.Succeeded)
+            HandheldContainerOperationResult moved = container.MoveToHand(PersonId, toHand);
+            if (!moved.Succeeded)
             {
-                return Refuse("MoveHeldContainer", setDown.Reason);
-            }
-
-            HandheldContainerOperationResult pickedUp = container.PickUp(PersonId, toHand);
-            if (!pickedUp.Succeeded)
-            {
-                return Refuse("MoveHeldContainer", pickedUp.Reason);
+                return Refuse("MoveHeldContainer", moved.Reason);
             }
 
             if (fromHand == HandSlot.Left)
@@ -1381,6 +1440,128 @@ namespace LandLedgers.Population
             string diagnostic;
             log.Record(record, out diagnostic);
             log.Note("HandOccupancy: hand-release for " + lotKey + " recorded with an empty destination key — no placement surface exists yet in P1a; the lot stays in the person's custody outside any hand.");
+        }
+    }
+
+    /// <summary>
+    /// Runtime owner for per-person hand state. It is the only production
+    /// entry point for allocating a lot to a person's hands, so the same
+    /// lot key cannot be allocated to two people at once. Runtime startup
+    /// may register an empty state for each real population member; an
+    /// unregistered person remains absent until a hand operation or restore.
+    /// </summary>
+    public sealed class PersonHandOccupancyRegistry
+    {
+        private readonly Dictionary<int, HandOccupancyAuthority> byPerson =
+            new Dictionary<int, HandOccupancyAuthority>();
+        private readonly CustodyTransferLog transferLog;
+
+        public PersonHandOccupancyRegistry(CustodyTransferLog transferLog = null)
+        {
+            this.transferLog = transferLog;
+        }
+
+        public int PersonCount => byPerson.Count;
+
+        /// <summary>Creates an empty hand authority for a real Person, preserving identity.</summary>
+        public void EnsurePerson(int personId)
+        {
+            if (personId >= 0) GetOrCreate(personId);
+        }
+
+        public HandOccupancy SnapshotFor(int personId)
+        {
+            return byPerson.TryGetValue(personId, out HandOccupancyAuthority authority)
+                ? authority.Current
+                : null;
+        }
+
+        public HandOperationResult AllocateOneHanded(
+            int personId, LotKey lotKey, string batchId, HandRequirement? requirement,
+            HandSlot hand, HandCustodyContext context = null)
+        {
+            if (personId < 0) return HandOperationResult.Refused("Person hand registry: person id is invalid.");
+            if (IsHeldByAnotherPerson(personId, lotKey))
+                return HandOperationResult.Refused("Person hand registry: lot " + lotKey + " is already held by another person.");
+            return GetOrCreate(personId).AllocateOneHanded(lotKey, batchId, requirement, hand, context);
+        }
+
+        public HandOperationResult AllocateTwoHanded(
+            int personId, LotKey lotKey, string batchId, HandRequirement? requirement,
+            HandCustodyContext context = null)
+        {
+            if (personId < 0) return HandOperationResult.Refused("Person hand registry: person id is invalid.");
+            if (IsHeldByAnotherPerson(personId, lotKey))
+                return HandOperationResult.Refused("Person hand registry: lot " + lotKey + " is already held by another person.");
+            return GetOrCreate(personId).AllocateTwoHanded(lotKey, batchId, requirement, context);
+        }
+
+        public HandOperationResult Release(int personId, HandSlot hand, HandCustodyContext context = null)
+        {
+            return byPerson.TryGetValue(personId, out HandOccupancyAuthority authority)
+                ? authority.Release(hand, context)
+                : HandOperationResult.Refused("Person hand registry: person " + personId + " has no hand state to release.");
+        }
+
+        public List<HandOccupancy> CaptureSnapshots()
+        {
+            var result = new List<HandOccupancy>(byPerson.Count);
+            foreach (KeyValuePair<int, HandOccupancyAuthority> entry in byPerson)
+                result.Add(entry.Value.Current);
+            result.Sort((left, right) => left.PersonId.CompareTo(right.PersonId));
+            return result;
+        }
+
+        /// <summary>Clear-then-load restore; duplicate people or cross-person lot custody is rejected.</summary>
+        public bool RestoreSnapshots(IEnumerable<HandOccupancy> snapshots, out string refusal)
+        {
+            refusal = string.Empty;
+            var replacement = new Dictionary<int, HandOccupancyAuthority>();
+            var heldLots = new HashSet<LotKey>();
+            if (snapshots != null)
+            {
+                foreach (HandOccupancy snapshot in snapshots)
+                {
+                    if (snapshot == null || snapshot.PersonId < 0 || replacement.ContainsKey(snapshot.PersonId))
+                    {
+                        refusal = "Person hand registry: restore refused — null, invalid, or duplicate person entry.";
+                        return false;
+                    }
+
+                    var authority = new HandOccupancyAuthority(snapshot.PersonId, transferLog);
+                    if (!authority.RestoreSnapshot(snapshot, out refusal)) return false;
+                    if ((!snapshot.LeftLotKey.IsEmpty && !heldLots.Add(snapshot.LeftLotKey))
+                        || (!snapshot.RightLotKey.IsEmpty && !snapshot.IsTwoHandedHold && !heldLots.Add(snapshot.RightLotKey)))
+                    {
+                        refusal = "Person hand registry: restore refused — the same lot appears in multiple hand slots or people.";
+                        return false;
+                    }
+                    replacement.Add(snapshot.PersonId, authority);
+                }
+            }
+
+            byPerson.Clear();
+            foreach (KeyValuePair<int, HandOccupancyAuthority> entry in replacement)
+                byPerson.Add(entry.Key, entry.Value);
+            return true;
+        }
+
+        private bool IsHeldByAnotherPerson(int personId, LotKey lotKey)
+        {
+            if (lotKey.IsEmpty) return false;
+            foreach (KeyValuePair<int, HandOccupancyAuthority> entry in byPerson)
+                if (entry.Key != personId && entry.Value.HoldsLot(lotKey)) return true;
+            return false;
+        }
+
+        private HandOccupancyAuthority GetOrCreate(int personId)
+        {
+            if (!byPerson.TryGetValue(personId, out HandOccupancyAuthority authority))
+            {
+                authority = new HandOccupancyAuthority(personId, transferLog);
+                byPerson.Add(personId, authority);
+            }
+            return authority;
         }
     }
 }

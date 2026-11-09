@@ -170,6 +170,12 @@ namespace LandLedgers.Presentation
         {
             if (capturedLighting)
             {
+                // TimeManager awakens before ordinary scene Volumes register. Retry
+                // the volume binding without capturing already-blended sun values.
+                if (globalVolume == null)
+                {
+                    CaptureAuthoredVolumeLighting();
+                }
                 return;
             }
 
@@ -180,6 +186,12 @@ namespace LandLedgers.Presentation
             authoredSunDimmer = hdSun != null ? hdSun.lightDimmer : 1f;
             authoredAmbientIntensity = RenderSettings.ambientIntensity;
 
+            CaptureAuthoredVolumeLighting();
+            capturedLighting = true;
+        }
+
+        private void CaptureAuthoredVolumeLighting()
+        {
             globalVolume = FindPrimaryGlobalVolume();
             if (globalVolume != null && globalVolume.sharedProfile != null)
             {
@@ -194,8 +206,6 @@ namespace LandLedgers.Presentation
                 authoredPostExposure = colorAdjustments.postExposure.value;
                 authoredPostExposureOverride = colorAdjustments.postExposure.overrideState;
             }
-
-            capturedLighting = true;
         }
 
         private static Volume FindPrimaryGlobalVolume()

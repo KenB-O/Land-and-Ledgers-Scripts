@@ -207,6 +207,7 @@ namespace LandLedgers.Economy.Logistics
         public static string BatchCustodian(string batchId) => "batch:" + (batchId ?? string.Empty);
         public static string SupplierCustodian(string supplierId) => "supplier:" + (supplierId ?? string.Empty);
         public static string ContainerCustodian(string containerId) => "container:" + (containerId ?? string.Empty);
+        public static string LocationCustodian(string locationId) => "location:" + (locationId ?? string.Empty);
 
         private readonly List<CustodyTransferRecord> records = new List<CustodyTransferRecord>();
         private readonly List<string> diagnostics = new List<string>();

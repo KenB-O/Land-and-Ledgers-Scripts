@@ -1,0 +1,64 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b1df927f0fe407ba45810966afb291c, type: 3}
+  m_Name: OpenFrontier
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Orchestration.Scenarios.ScenarioAsset
+  scenarioId: open-frontier
+  displayName: Open Frontier
+  description: "Freeform sandbox using the active authored development-town configuration. No campaign objectives or required acknowledgements."
+  playerHousehold:
+    scenarioPlayerId: player
+    householdName: Development Household
+    founderDisplayNames: []
+  populationInclusion:
+    includePlayerHousehold: 1
+    includeTownResidents: 1
+    includeRuralServicePopulation: 0
+    includeTransients: 0
+    notes: Open Frontier includes the development household and town residents; rural-service and transient populations are excluded.
+  startingWorld:
+    scenarioId: open-frontier
+    definitionVersion: 1.0.0
+    startYear: 1897
+    startMonth: 3
+    startDay: 1
+    minResidents: 55
+    maxResidents: 95
+    preferredResidents: 78
+    requiredBusinessIds: []
+    populationNotes: Uses the existing authored development-town population.
+    economicNotes: No scenario-specific economic grants; runtime authorities initialize the authored development town.
+    propertyNotes: Uses existing authored town properties; no scenario property grants.
+    fixedBusinesses: []
+    minVariableBusinesses: 0
+    maxVariableBusinesses: 2
+    playerStart:
+      householdName: Development Household
+      founderCount: 1
+      startingCashCents: 0
+      startingDebtCents: 0
+      professionId:
+      ownsHomeBuilding: 0
+    economyPolicy:
+      cashBandMinCents: 25000
+      cashBandMaxCents: 150000
+      employmentTargetRate01: 0.75
+      debtChance01: 0.25
+      maxDebtCentsPerHousehold: 150000
+      allowedObligationKinds: 0300000000000000
+    propertyGrants: []
+    householdCompositionNotes:
+    validationRulesNotes:
+  goals: []
+  objectives: []
+  startingTaskDefinitionIds: []
+  tunables: []

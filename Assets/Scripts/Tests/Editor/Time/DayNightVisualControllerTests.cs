@@ -38,13 +38,15 @@ namespace LandLedgers.Editor.Time
             float at25x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed25x, 25f);
             float at50x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed50x, 50f);
             float at100x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed100x, 100f);
+            float at250x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed250x, 250f);
 
             Assert.AreEqual(1f, at1x, 0.0001f);
             Assert.That(at10x, Is.LessThan(at1x));
             Assert.That(at25x, Is.LessThan(at10x));
             Assert.That(at50x, Is.LessThan(at25x));
             Assert.That(at100x, Is.LessThan(at50x));
-            Assert.That(at100x, Is.GreaterThan(0f));
+            Assert.That(at250x, Is.LessThan(at100x));
+            Assert.That(at250x, Is.GreaterThan(0f));
         }
 
         [Test]

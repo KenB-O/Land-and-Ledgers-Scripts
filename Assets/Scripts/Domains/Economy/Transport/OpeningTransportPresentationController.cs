@@ -185,6 +185,7 @@ namespace LandLedgers.Economy.Transport
                 return;
             }
             wagonView.BindAsset(wagon.AssetId);
+            wagonView.ApplyCanvasMaterial(wagon);
             wagonView.transform.SetPositionAndRotation(wagonPosition, facing);
             wagonView.gameObject.name = $"Opening Freight Wagon {wagon.AssetId}";
             wagonView.gameObject.SetActive(true);

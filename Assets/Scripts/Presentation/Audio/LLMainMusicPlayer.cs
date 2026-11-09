@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -24,6 +25,11 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
     [SerializeField] private bool autoPopulatePlaylistInEditor = true;
     [SerializeField] private bool debugLogging = true;
 
+    [Header("Player Controls")]
+    [Tooltip("Developer-only curation: hold Ctrl + Alt + Shift and press Pause/Break to remove the playing track from the playlist asset.")]
+    [SerializeField] private Key removeCurrentTrackHotkey = Key.Pause;
+    [SerializeField] private bool requireShiftControlAltForRemove = true;
+
     [Header("Playback")]
     [SerializeField] private PlaybackMode playbackMode = PlaybackMode.IntelligentShuffle;
     [Range(0f, 1f)] [SerializeField] private float masterVolume = 0.85f;
@@ -34,6 +40,7 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
     [Min(0.05f)] [SerializeField] private float skipFadeDuration = 0.5f;
 
     [Header("Playlist")]
+    [SerializeField] private MainMusicPlaylist playlistAsset;
     [SerializeField] private AudioClip[] musicClips = Array.Empty<AudioClip>();
     [SerializeField] private string musicAssetFolder = "Assets/Core/Audio/MainMusic";
     [SerializeField] private string[] runtimeResourcesFolders = Array.Empty<string>();
@@ -122,6 +129,10 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
 
     private void Update()
     {
+#if UNITY_EDITOR
+        HandleRemoveTrackHotkey();
+#endif
+
         isPlayingNow = activeSource != null && activeSource.isPlaying;
 
         if (!isSystemReady || !hasBegun || activeSource == null || currentClip == null)
@@ -231,6 +242,78 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         PrepareQueuedTrack(next, startTime, fade, true);
     }
 
+    /// <summary>
+    /// Removes the currently playing clip from the developer-curated playlist asset.
+    /// The source AudioClip file is left untouched.
+    /// </summary>
+    public bool RemoveCurrentTrackFromOrder()
+    {
+        AudioClip removedClip = currentClip != null
+            ? currentClip
+            : activeSource != null ? activeSource.clip : null;
+
+        if (removedClip == null || playlistAsset == null)
+        {
+            return false;
+        }
+
+        int removedCount = playlistAsset.Remove(removedClip);
+        if (removedCount == 0)
+        {
+            return false;
+        }
+
+#if UNITY_EDITOR
+        UnityEditor.EditorUtility.SetDirty(playlistAsset);
+        if (UnityEditor.EditorUtility.IsPersistent(playlistAsset))
+        {
+            UnityEditor.AssetDatabase.SaveAssetIfDirty(playlistAsset);
+        }
+#endif
+        sanitizedPlaylist.RemoveAll(clip => clip == removedClip);
+        RemoveFromRecentHistory(removedClip);
+        discoveredTrackCount = sanitizedPlaylist.Count;
+        isSystemReady = discoveredTrackCount > 0;
+
+        // Keep an already scheduled, different next track. If the current track had
+        // queued itself (the one-track playlist case), cancel that copy before advancing.
+        if (queuedClip == removedClip)
+        {
+            if (standbySource != null)
+            {
+                standbySource.Stop();
+                standbySource.clip = null;
+            }
+
+            queuedClip = null;
+            nextTrackName = string.Empty;
+            nextQueued = false;
+            swapPending = false;
+            isTransitioning = false;
+        }
+
+        if (swapPending && queuedClip != null)
+        {
+            Debug.Log($"[LLMainMusicPlayer] Removed '{removedClip.name}' from the music order. '{queuedClip.name}' is already next.");
+            return true;
+        }
+
+        AudioClip next = SelectNextClip(removedClip);
+        if (activeSource != null && hasBegun)
+        {
+            double startTime = AudioSettings.dspTime + 0.05d;
+            float fade = next != null
+                ? Mathf.Min(skipFadeDuration, GetSafeCrossfadeDuration(removedClip, next))
+                : skipFadeDuration;
+            PrepareQueuedTrack(next, startTime, fade, true);
+        }
+
+        Debug.Log(next != null
+            ? $"[LLMainMusicPlayer] Removed '{removedClip.name}' from playlist asset '{playlistAsset.name}'. The audio file was kept."
+            : $"[LLMainMusicPlayer] Removed '{removedClip.name}' from playlist asset '{playlistAsset.name}'. The audio file was kept; no tracks remain.");
+        return true;
+    }
+
     public void StopMusic()
     {
         StopAllInternalPlayback();
@@ -274,6 +357,51 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         RefreshPlaylistRuntime();
         RefreshAudioListenerDiagnostics();
         LogStartupDiagnostics();
+    }
+
+#if UNITY_EDITOR
+    private void HandleRemoveTrackHotkey()
+    {
+        if (!Application.isPlaying)
+        {
+            return;
+        }
+
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null || removeCurrentTrackHotkey == Key.None ||
+            !keyboard[removeCurrentTrackHotkey].wasPressedThisFrame)
+        {
+            return;
+        }
+
+        if (requireShiftControlAltForRemove &&
+            (!keyboard.leftShiftKey.isPressed && !keyboard.rightShiftKey.isPressed ||
+             !keyboard.leftCtrlKey.isPressed && !keyboard.rightCtrlKey.isPressed ||
+             !keyboard.leftAltKey.isPressed && !keyboard.rightAltKey.isPressed))
+        {
+            return;
+        }
+
+        RemoveCurrentTrackFromOrder();
+    }
+#endif
+
+    private void RemoveFromRecentHistory(AudioClip removedClip)
+    {
+        if (recentHistory.Count == 0)
+        {
+            return;
+        }
+
+        AudioClip[] retained = recentHistory.ToArray();
+        recentHistory.Clear();
+        for (int i = 0; i < retained.Length; i++)
+        {
+            if (retained[i] != null && retained[i] != removedClip)
+            {
+                recentHistory.Enqueue(retained[i]);
+            }
+        }
     }
 
     private void BeginPlayback()
@@ -401,11 +529,6 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
 
         queuedClip = clip;
         nextTrackName = clip.name;
-
-        if (debugLogging)
-        {
-            Debug.Log($"[LLMainMusicPlayer] Queued next track: {clip.name}");
-        }
     }
 
     private void UpdateVolumes(double dspNow)
@@ -709,9 +832,16 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         sanitizedPlaylist.Clear();
         HashSet<AudioClip> seen = new HashSet<AudioClip>();
 
-        AppendUniqueClips(musicClips, seen);
+        if (playlistAsset != null)
+        {
+            AppendUniqueClips(playlistAsset.Tracks, seen);
+        }
+        else
+        {
+            AppendUniqueClips(musicClips, seen);
+        }
 
-        if (sanitizedPlaylist.Count == 0)
+        if (playlistAsset == null && sanitizedPlaylist.Count == 0)
         {
             LoadFallbackResources(seen);
         }
@@ -720,14 +850,14 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         isSystemReady = discoveredTrackCount > 0;
     }
 
-    private void AppendUniqueClips(AudioClip[] sourceClips, HashSet<AudioClip> seen)
+    private void AppendUniqueClips(IReadOnlyList<AudioClip> sourceClips, HashSet<AudioClip> seen)
     {
         if (sourceClips == null)
         {
             return;
         }
 
-        for (int i = 0; i < sourceClips.Length; i++)
+        for (int i = 0; i < sourceClips.Count; i++)
         {
             AudioClip clip = sourceClips[i];
             if (clip == null)
@@ -915,7 +1045,7 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
 
 #if UNITY_EDITOR
         if (!Application.isPlaying &&
-            autoPopulatePlaylistInEditor &&
+            playlistAsset == null && autoPopulatePlaylistInEditor &&
             !EditorApplication.isCompiling &&
             !EditorApplication.isUpdating)
         {
@@ -936,6 +1066,11 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
 
     private void AutoPopulatePlaylistEditor(bool forceDirty)
     {
+        if (playlistAsset != null)
+        {
+            return;
+        }
+
         List<AudioClip> found = new List<AudioClip>();
 
         string folder = string.IsNullOrWhiteSpace(musicAssetFolder)

@@ -92,11 +92,63 @@ using LandLedgers.Economy.FreightFuel;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Ordering;
+using LandLedgers.Economy.Storage;
 using LandLedgers.Orchestration.Player;
+using LandLedgers.Population;
 using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Persistence
 {
+    [Serializable]
+    public sealed class Pass9PersonHandOccupancyDto
+    {
+        public int PersonId;
+        public string LeftAuthorityId = string.Empty;
+        public string LeftLotId = string.Empty;
+        public string LeftBatchId = string.Empty;
+        public int LeftRequirement;
+        public string RightAuthorityId = string.Empty;
+        public string RightLotId = string.Empty;
+        public string RightBatchId = string.Empty;
+        public int RightRequirement;
+        public bool IsTwoHandedHold;
+        public string LastRefusalReason = string.Empty;
+        public string LastRefusalOperation = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class Pass9HandheldContainerEntryDto
+    {
+        public string AuthorityId = string.Empty;
+        public string LotId = string.Empty;
+        public string BatchId = string.Empty;
+        public string ItemId = string.Empty;
+        public int Units;
+        public int Condition;
+    }
+
+    [Serializable]
+    public sealed class Pass9HandheldContainerDto
+    {
+        public string ContainerId = string.Empty;
+        public int Kind;
+        public int HeldByPersonId = -1;
+        public int HeldHand = -1;
+        public string LocationId = string.Empty;
+        public int MaxUnits = -1;
+        public bool MassKnown;
+        public float MassKg;
+        public bool VolumeKnown;
+        public float VolumeLiters;
+        public bool LengthKnown;
+        public float LengthMeters;
+        public bool WidthKnown;
+        public float WidthMeters;
+        public bool HeightKnown;
+        public float HeightMeters;
+        public List<Pass9HandheldContainerEntryDto> Entries = new List<Pass9HandheldContainerEntryDto>();
+    }
+
     // ---- Pass 2 ----
 
     [Serializable]
@@ -323,6 +375,12 @@ namespace LandLedgers.Persistence
         /// </summary>
         public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
 
+        /// <summary>Additive person-hand snapshots; older saves deserialize this as an empty list.</summary>
+        public List<Pass9PersonHandOccupancyDto> PersonHands = new List<Pass9PersonHandOccupancyDto>();
+
+        /// <summary>Additive physical handheld-container state; older saves deserialize this as an empty list.</summary>
+        public List<Pass9HandheldContainerDto> HandheldContainers = new List<Pass9HandheldContainerDto>();
+
         /// <summary>
         /// Slice S9: off-map journeys recorded by the production
         /// OffMapJourneyAuthority. Additive; old saves leave this null
@@ -376,6 +434,12 @@ namespace LandLedgers.Persistence
         /// on NewGame seeding and re-registers restored ones after a load.
         /// </summary>
         public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
+
+        /// <summary>Live person hand authority; bound by SimulationDrivers and restored in place.</summary>
+        public PersonHandOccupancyRegistry PersonHands;
+
+        /// <summary>Live handheld-container directory; its snapshots are restored in place.</summary>
+        public HandheldContainerRegistry HandheldContainers;
 
         /// <summary>
         /// Slice S9: live snapshot holder for the off-map journeys,
@@ -603,6 +667,79 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no business equipment registers supplied; equipment section saved empty.");
+            }
+
+            if (PersonHands != null)
+            {
+                foreach (HandOccupancy hand in PersonHands.CaptureSnapshots())
+                {
+                    if (hand == null) continue;
+                    dto.PersonHands.Add(new Pass9PersonHandOccupancyDto
+                    {
+                        PersonId = hand.PersonId,
+                        LeftAuthorityId = hand.LeftLotKey.AuthorityId,
+                        LeftLotId = hand.LeftLotKey.LotId,
+                        LeftBatchId = hand.LeftBatchId,
+                        LeftRequirement = (int)hand.LeftRequirement,
+                        RightAuthorityId = hand.RightLotKey.AuthorityId,
+                        RightLotId = hand.RightLotKey.LotId,
+                        RightBatchId = hand.RightBatchId,
+                        RightRequirement = (int)hand.RightRequirement,
+                        IsTwoHandedHold = hand.IsTwoHandedHold,
+                        LastRefusalReason = hand.LastRefusalReason,
+                        LastRefusalOperation = hand.LastRefusalOperation,
+                    });
+                }
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no person hand authority supplied; person hand state saved empty.");
+            }
+
+            if (HandheldContainers != null)
+            {
+                foreach (HandheldContainerSnapshot container in HandheldContainers.CaptureSnapshots())
+                {
+                    if (container == null) continue;
+                    WornContainerCapacity capacity = container.Capacity;
+                    var saved = new Pass9HandheldContainerDto
+                    {
+                        ContainerId = container.ContainerId,
+                        Kind = (int)container.Kind,
+                        HeldByPersonId = container.HeldByPersonId,
+                        HeldHand = container.HeldHand.HasValue ? (int)container.HeldHand.Value : -1,
+                        LocationId = container.LocationId,
+                        MaxUnits = capacity.MaxUnits ?? -1,
+                        MassKnown = capacity.MaxMassKg.IsKnown,
+                        MassKg = capacity.MaxMassKg.Value,
+                        VolumeKnown = capacity.MaxVolumeLiters.IsKnown,
+                        VolumeLiters = capacity.MaxVolumeLiters.Value,
+                        LengthKnown = capacity.InteriorDimensions.Length.IsKnown,
+                        LengthMeters = capacity.InteriorDimensions.Length.Value,
+                        WidthKnown = capacity.InteriorDimensions.Width.IsKnown,
+                        WidthMeters = capacity.InteriorDimensions.Width.Value,
+                        HeightKnown = capacity.InteriorDimensions.Height.IsKnown,
+                        HeightMeters = capacity.InteriorDimensions.Height.Value,
+                    };
+                    foreach (WornContainerEntry entry in container.Entries)
+                    {
+                        if (entry == null) continue;
+                        saved.Entries.Add(new Pass9HandheldContainerEntryDto
+                        {
+                            AuthorityId = entry.LotKey.AuthorityId,
+                            LotId = entry.LotKey.LotId,
+                            BatchId = entry.BatchId,
+                            ItemId = entry.ItemId,
+                            Units = entry.Units,
+                            Condition = (int)entry.Condition,
+                        });
+                    }
+                    dto.HandheldContainers.Add(saved);
+                }
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no handheld-container registry supplied; handheld-container section saved empty.");
             }
 
             // Slice S9: off-map journeys. No deep copy here — the DTO is
@@ -879,6 +1016,86 @@ namespace LandLedgers.Persistence
                 EquipmentRegisters.Add(CopyEquipmentRegister(saved));
             }
 
+            if (PersonHands != null)
+            {
+                var restoredHands = new List<HandOccupancy>();
+                foreach (Pass9PersonHandOccupancyDto saved in dto.PersonHands ?? new List<Pass9PersonHandOccupancyDto>())
+                {
+                    if (saved == null) continue;
+                    if (!Enum.IsDefined(typeof(HandRequirement), saved.LeftRequirement)
+                        || !Enum.IsDefined(typeof(HandRequirement), saved.RightRequirement))
+                    {
+                        diag.Add("Series2Pass9Save: invalid person hand requirement enum; affected person state was not restored.");
+                        continue;
+                    }
+                    restoredHands.Add(new HandOccupancy(
+                        saved.PersonId,
+                        new LotKey(saved.LeftAuthorityId, saved.LeftLotId), saved.LeftBatchId,
+                        new LotKey(saved.RightAuthorityId, saved.RightLotId), saved.RightBatchId,
+                        saved.IsTwoHandedHold,
+                        (HandRequirement)saved.LeftRequirement,
+                        (HandRequirement)saved.RightRequirement,
+                        saved.LastRefusalReason,
+                        saved.LastRefusalOperation));
+                }
+                if (!PersonHands.RestoreSnapshots(restoredHands, out string handRestoreRefusal))
+                    diag.Add(handRestoreRefusal);
+            }
+            else if (dto.PersonHands != null && dto.PersonHands.Count > 0)
+            {
+                diag.Add("Series2Pass9Save: person hand data exists but no live person hand authority was supplied; state was not restored.");
+            }
+
+            if (HandheldContainers != null)
+            {
+                var restoredContainers = new List<HandheldContainerSnapshot>();
+                foreach (Pass9HandheldContainerDto saved in dto.HandheldContainers ?? new List<Pass9HandheldContainerDto>())
+                {
+                    if (saved == null || !Enum.IsDefined(typeof(HandheldContainerKind), saved.Kind)
+                        || (saved.HeldHand != -1 && !Enum.IsDefined(typeof(HandSlot), saved.HeldHand)))
+                    {
+                        diag.Add("Series2Pass9Save: invalid handheld-container kind or hand enum; affected container was not restored.");
+                        continue;
+                    }
+
+                    var entries = new List<WornContainerEntry>();
+                    bool validEntries = true;
+                    foreach (Pass9HandheldContainerEntryDto entry in saved.Entries ?? new List<Pass9HandheldContainerEntryDto>())
+                    {
+                        if (entry == null || !Enum.IsDefined(typeof(PersonItemCondition), entry.Condition))
+                        {
+                            diag.Add("Series2Pass9Save: invalid handheld-container entry condition; affected container was not restored.");
+                            validEntries = false;
+                            break;
+                        }
+                        entries.Add(new WornContainerEntry(
+                            new LotKey(entry.AuthorityId, entry.LotId), entry.BatchId, entry.ItemId,
+                            entry.Units, (PersonItemCondition)entry.Condition));
+                    }
+                    if (!validEntries) continue;
+
+                    var capacity = new WornContainerCapacity(
+                        saved.MaxUnits < 0 ? (int?)null : saved.MaxUnits,
+                        RestoreMeasure(saved.MassKnown, saved.MassKg),
+                        RestoreMeasure(saved.VolumeKnown, saved.VolumeLiters),
+                        new PhysicalDimensions(
+                            RestoreMeasure(saved.LengthKnown, saved.LengthMeters),
+                            RestoreMeasure(saved.WidthKnown, saved.WidthMeters),
+                            RestoreMeasure(saved.HeightKnown, saved.HeightMeters)));
+                    restoredContainers.Add(new HandheldContainerSnapshot(
+                        saved.ContainerId, (HandheldContainerKind)saved.Kind, saved.HeldByPersonId,
+                        saved.HeldHand == -1 ? (HandSlot?)null : (HandSlot)saved.HeldHand,
+                        capacity, entries, saved.LocationId));
+                }
+
+                if (!HandheldContainers.RestoreSnapshots(restoredContainers, out string containerRestoreRefusal))
+                    diag.Add(containerRestoreRefusal);
+            }
+            else if (dto.HandheldContainers != null && dto.HandheldContainers.Count > 0)
+            {
+                diag.Add("Series2Pass9Save: handheld-container state exists but no live container registry was supplied; state was not restored.");
+            }
+
             // Slice S9: off-map journeys. Assignment IS the clear-then-load
             // form for a single DTO; a null section restores as null
             // (no journeys — the old-save default).
@@ -928,6 +1145,11 @@ namespace LandLedgers.Persistence
         /// condition, ownership, or provenance would silently re-issue
         /// equipment the business had worn, sold, or never owned.
         /// </summary>
+        private static PhysicalMeasure RestoreMeasure(bool known, float value)
+        {
+            return known ? PhysicalMeasure.Known(value) : PhysicalMeasure.Unknown;
+        }
+
         private static BusinessEquipmentRegister CopyEquipmentRegister(BusinessEquipmentRegister source)
         {
             var copy = new BusinessEquipmentRegister
@@ -991,6 +1213,7 @@ namespace LandLedgers.Persistence
                 HitchPreparationReservationId = source.HitchPreparationReservationId ?? string.Empty,
                 HitchPreparationShipmentId = source.HitchPreparationShipmentId ?? string.Empty,
                 HitchPreparationAttempted = source.HitchPreparationAttempted,
+                CanvasMaterialVariantIndex = source.CanvasMaterialVariantIndex,
             };
             if (source.OwnershipHistory != null)
                 foreach (EquipmentOwnershipRecord record in source.OwnershipHistory)

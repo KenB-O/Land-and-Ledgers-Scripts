@@ -94,9 +94,9 @@ namespace LandLedgers.Economy.Farming.Crops
                 EquipmentRequirementCodes.Asset("moldboard-plow"));
             Register(taskAuthority, PlantFieldTaskId, "Plant field", PlantMinutesPerAcre,
                 new[] { "planting" });
-            Register(taskAuthority, TendFieldTaskId, "Tend growing crop", TendMinutesPerAcre,
+            RegisterWithHandRequirement(taskAuthority, TendFieldTaskId, "Tend growing crop", TendMinutesPerAcre,
                 new[] { "cultivating" },
-                EquipmentRequirementCodes.Kit("field-hand-kit"));
+                "two-handed", EquipmentRequirementCodes.Kit("field-hand-kit"));
             Register(taskAuthority, HarvestFieldTaskId, "Harvest field", HarvestMinutesPerAcre,
                 new[] { "harvest" },
                 EquipmentRequirementCodes.Asset("scythe") + "|" + EquipmentRequirementCodes.Asset("reaper-binder"));
@@ -112,8 +112,16 @@ namespace LandLedgers.Economy.Farming.Crops
         private static void Register(TaskAuthority taskAuthority, string id, string name,
             int minutesPerUnit, string[] tags, params string[] equipmentCodes)
         {
+            RegisterWithHandRequirement(taskAuthority, id, name, minutesPerUnit, tags, null, equipmentCodes);
+        }
+
+        private static void RegisterWithHandRequirement(TaskAuthority taskAuthority, string id, string name,
+            int minutesPerUnit, string[] tags, string handRequirementSpec, params string[] equipmentCodes)
+        {
             var def = new TaskDefinition(id, name, minutesPerUnit);
             def.SetRequiredSkill(SkillIds.CropTending, tags);
+            if (!string.IsNullOrWhiteSpace(handRequirementSpec))
+                def.SetHandRequirementSpec(handRequirementSpec);
             foreach (string code in equipmentCodes)
                 if (!string.IsNullOrWhiteSpace(code)) def.EquipmentClasses.Add(code);
             taskAuthority.RegisterDefinition(def, out _);

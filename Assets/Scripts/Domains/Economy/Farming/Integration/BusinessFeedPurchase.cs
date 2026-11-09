@@ -25,6 +25,27 @@ namespace LandLedgers.Economy.Farming.Integration
             return deficit == 0 ? 0 : (deficit + feedUnitsPerPackage - 1) / feedUnitsPerPackage;
         }
 
+        /// <summary>
+        /// Caps a planned restock trip to the seller's currently identified
+        /// shelf quantity. A partial purchase is still a real, paid transfer;
+        /// it must not turn a short seller shelf into an all-or-nothing refusal.
+        /// </summary>
+        public static int PackagesAvailableToPurchase(int requestedPackages, int sellerAvailablePackages)
+        {
+            return Math.Min(Math.Max(0, requestedPackages), Math.Max(0, sellerAvailablePackages));
+        }
+
+        /// <summary>
+        /// The shared procurement service may also carry unrelated SKUs
+        /// (for example bakery notions). Only the configured horse-feed SKU
+        /// belongs in the animal-feed retail category.
+        /// </summary>
+        public static bool IsHorseFeedSku(string lotSkuId, string configuredHorseFeedSkuId)
+        {
+            return !string.IsNullOrWhiteSpace(configuredHorseFeedSkuId)
+                && string.Equals(lotSkuId, configuredHorseFeedSkuId, StringComparison.OrdinalIgnoreCase);
+        }
+
         [Serializable]
         public sealed class Batch
         {

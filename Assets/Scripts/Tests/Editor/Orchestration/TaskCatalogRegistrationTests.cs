@@ -68,6 +68,8 @@ namespace LandLedgers.EditorTests.Orchestration
             TaskAuthority tasks = RegisteredAuthority();
 
             Assert.IsNotNull(tasks.GetDefinition(CropChain.PlowFieldTaskId), "plow field");
+            Assert.AreEqual("two-handed", tasks.GetDefinition(CropChain.TendFieldTaskId).HandRequirementSpec,
+                "Tending uses the field-hand kit, including the two-handed hoe.");
             Assert.IsNotNull(tasks.GetDefinition(CropChain.HarvestFieldTaskId), "harvest field");
             Assert.IsNotNull(tasks.GetDefinition(DairyChain.MilkCowTaskId), "milk cow");
             Assert.IsNotNull(tasks.GetDefinition(TimberHarvest.FellTimberTaskId), "fell timber");

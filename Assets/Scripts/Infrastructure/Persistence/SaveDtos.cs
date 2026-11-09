@@ -862,6 +862,13 @@ namespace LandLedgers.Persistence
         /// registry's starting position.
         /// </summary>
         public RegionalSupplySaveDto regionalSupply = new();
+        /// <summary>
+        /// Development-town NPC General Store restock orders. Supplier stock
+        /// remains shared in regionalSupply; this DTO contains only the
+        /// NPC store's independent order/delivery queue so it cannot be
+        /// confused with the player store's procurement lifecycle.
+        /// </summary>
+        public RegionalSupplySaveDto developmentNpcRestock = new();
         public BusinessInstanceSaveDto currentBusiness = new();
     }
 

@@ -20,7 +20,8 @@ namespace LandLedgers.FirstLedger
             None = 0,
             Scheduled = 1,
             AmbientOutbound = 2,
-            AmbientReturning = 3
+            AmbientReturning = 3,
+            TaskDirected = 4
         }
 
         private enum AmbientRouteFailureKind
@@ -707,9 +708,15 @@ namespace LandLedgers.FirstLedger
                     && managed.mover != null && (managed.mover.IsArrivedVisible || managed.mover.IsRouteActive))
                 {
                     managed.person.scheduleState = nextState;
+                    managed.routeMode = AgentRouteMode.TaskDirected;
                     return true;
                 }
-                return TrySendAgent(managed, targetBuildingId, nextState, out _);
+                if (!TrySendAgent(managed, targetBuildingId, nextState, out _)) return false;
+                // A business task owns this route's destination. The normal
+                // workday scheduler must not reinterpret it as a commute and
+                // send the actor home before the task authority observes arrival.
+                managed.routeMode = AgentRouteMode.TaskDirected;
+                return true;
             }
             return false;
         }
@@ -807,9 +814,8 @@ namespace LandLedgers.FirstLedger
                 }
                 if (managed.mover.transform.parent != seat)
                 {
-                    managed.mover.transform.SetParent(seat, false);
+                    managed.mover.transform.SetParent(seat, true);
                     managed.mover.transform.localPosition = new Vector3(0f, RiderSeatVerticalOffsetMetres, 0f);
-                    // The wagon's length runs along its local +X and
                     // the agent's forward is his root +Z: a +90 deg yaw
                     // maps local +Z onto local +X, so he faces along
                     // the heading while seated.
@@ -869,15 +875,14 @@ namespace LandLedgers.FirstLedger
                     Debug.LogWarning($"[CoupledTransport] rider P{personId} Animator '{controllerName}' has no DrivingWagon state; riding without the sitting pose.", this);
                     return false;
                 }
-                animator.applyRootMotion = false;
-                animator.CrossFadeInFixedTime(hash, 0.1f);
+                if (!managed.mover.TrySetPresentationAnimation("DrivingWagon", managed.mover.transform.parent)) return false;
                 return true;
             }
             return false;
         }
 
         /// <summary>
-        /// Slice R3 (2026-11-06, Objective 22): dismount a rider at
+        /// Slice R3(2026-11-06, Objective 22): dismount a rider at
         /// the return leg's arrival. Idempotent no-op (true) when the
         /// riding flag is not set, so a double call can never unparent
         /// him twice or strand him. Re-parents to the agent root with
@@ -911,6 +916,7 @@ namespace LandLedgers.FirstLedger
                 managed.mover.transform.position = groundPosition;
                 managed.mover.transform.rotation = facing;
                 managed.isRiding = false;
+                managed.mover.ClearPresentationAnimation();
                 managed.mover.ShowAtCurrentLocation();
                 Debug.Log($"[CoupledTransport] rider dismounted: P{personId} at staging.", this);
                 return true;
@@ -1383,6 +1389,16 @@ namespace LandLedgers.FirstLedger
                 {
                     ClearAmbientRoute(managed);
                     RefreshMovementStatus($"{managed.person.DisplayName} completed ambient street walk.");
+                    return;
+                }
+
+                if (managed.routeMode == AgentRouteMode.TaskDirected)
+                {
+                    // Keep currentDestinationBuildingId and the transient
+                    // schedule state intact. The owning task driver verifies
+                    // the physical arrival and performs its own state change.
+                    managed.routeMode = AgentRouteMode.None;
+                    RefreshMovementStatus($"{managed.person.DisplayName} reached a task-directed destination.");
                     return;
                 }
 

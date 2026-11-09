@@ -27,12 +27,11 @@
 // moves here; the hand authority transfer methods own the move and the
 // CustodyTransferLog records custody only.
 //
-// Category B on landing: production code, not yet wired into any live
-// path. No production caller owns containers yet (P4), save wiring waits
-// for P6, and no authored container measurement exists (gap G4, open), so
-// no production placement can pass fit until that gap is answered. All
-// capacity numbers in tests are test-only fixtures, never authored
-// measurements.
+// The hub-owned identity/location registry and Pass 9 snapshot section
+// are now wired, but no gameplay path creates or registers pails yet.
+// No authored container measurement exists (gap G4, open), so production
+// placement cannot pass fit until that gap is answered. All capacity
+// numbers in tests are test-only fixtures, never authored measurements.
 
 using System;
 using System.Collections.Generic;
@@ -63,13 +62,14 @@ namespace LandLedgers.Population
         public HandheldContainerSnapshot(
             string containerId, HandheldContainerKind kind, int heldByPersonId,
             HandSlot? heldHand, WornContainerCapacity capacity,
-            IEnumerable<WornContainerEntry> entries)
+            IEnumerable<WornContainerEntry> entries, string locationId = "")
         {
             ContainerId = containerId ?? string.Empty;
             Kind = kind;
             HeldByPersonId = heldByPersonId;
             HeldHand = heldHand;
             Capacity = capacity;
+            LocationId = locationId ?? string.Empty;
             Entries = entries != null
                 ? new List<WornContainerEntry>(entries).AsReadOnly()
                 : new List<WornContainerEntry>().AsReadOnly();
@@ -80,6 +80,8 @@ namespace LandLedgers.Population
         public int HeldByPersonId { get; }
         public HandSlot? HeldHand { get; }
         public WornContainerCapacity Capacity { get; }
+        /// <summary>Stable logical placement while set down; empty only before first placement.</summary>
+        public string LocationId { get; }
         public IReadOnlyList<WornContainerEntry> Entries { get; }
     }
 
@@ -115,11 +117,9 @@ namespace LandLedgers.Population
 
     /// <summary>
     /// One handheld container (this slice: a pail). ContainerId is
-    /// caller-supplied and unique per container within the scope that
-    /// creates it; no registry enforces global uniqueness in P2b, and a
-    /// satchel id colliding with a pail id would collide on own keys,
-    /// because both kinds build own keys from the same ContainerAuthority
-    /// word, so callers keep the two id spaces apart. Capacity is supplied
+    /// caller-supplied; the handheld registry enforces pail identity, but
+    /// a shared registry across worn and handheld kinds is still required
+    /// before production creation. Capacity is supplied
     /// at construction and never changed afterwards. Contents are a
     /// private list of entries, exposed read-only through
     /// <see cref="Entries"/> and the <see cref="Current"/> snapshot. The
@@ -142,6 +142,7 @@ namespace LandLedgers.Population
             Kind = kind;
             HeldByPersonId = -1;
             HeldHand = null;
+            LocationId = string.Empty;
             Capacity = capacity;
         }
 
@@ -154,13 +155,16 @@ namespace LandLedgers.Population
         /// <summary>The hand holding the container, or null when set down. Set only by PickUp, cleared only by SetDown.</summary>
         public HandSlot? HeldHand { get; private set; }
 
+        /// <summary>Stable logical placement while set down, empty before first placement or while held.</summary>
+        public string LocationId { get; private set; }
+
         public WornContainerCapacity Capacity { get; }
 
         public IReadOnlyList<WornContainerEntry> Entries => contents.AsReadOnly();
 
         /// <summary>A copy of the current container state. The snapshot is plain data; mutating it changes nothing.</summary>
         public HandheldContainerSnapshot Current =>
-            new HandheldContainerSnapshot(ContainerId, Kind, HeldByPersonId, HeldHand, Capacity, contents);
+            new HandheldContainerSnapshot(ContainerId, Kind, HeldByPersonId, HeldHand, Capacity, contents, LocationId);
 
         /// <summary>The container's own key: the ContainerAuthority word plus the container id.</summary>
         public LotKey OwnKey => new LotKey(CustodyTransferLog.ContainerAuthority, ContainerId);
@@ -243,21 +247,25 @@ namespace LandLedgers.Population
 
             HeldByPersonId = personId;
             HeldHand = hand;
+            LocationId = string.Empty;
             return HandheldContainerOperationResult.Ok(
                 "HandheldContainer: pail '" + ContainerId + "' is held by person " + personId
                 + " in the " + (hand == HandSlot.Left ? "left" : "right") + " hand.");
         }
 
         /// <summary>
-        /// Sets the container down. Refuses when it is already set down.
-        /// On success it clears the holder to -1 and the held hand to
-        /// null and keeps the contents inside: a set-down container with
-        /// contents is invisible to every person carried view until
-        /// picked up again (a placed-container location is P4 or P6
-        /// work, not fixed here).
+        /// Sets the container down at a known logical location. A blank
+        /// location is refused so a container cannot disappear from both
+        /// person custody and world-location queries.
         /// </summary>
-        public HandheldContainerOperationResult SetDown()
+        public HandheldContainerOperationResult SetDown(string locationId)
         {
+            if (string.IsNullOrWhiteSpace(locationId))
+            {
+                return HandheldContainerOperationResult.Refused(
+                    "HandheldContainer: pail '" + ContainerId + "' set down refused — a stable location id is required.");
+            }
+
             if (HeldByPersonId == -1)
             {
                 return HandheldContainerOperationResult.Refused(
@@ -266,8 +274,69 @@ namespace LandLedgers.Population
 
             HeldByPersonId = -1;
             HeldHand = null;
+            LocationId = locationId.Trim();
             return HandheldContainerOperationResult.Ok(
-                "HandheldContainer: pail '" + ContainerId + "' was set down; its contents stay inside.");
+                "HandheldContainer: pail '" + ContainerId + "' was set down at '" + LocationId + "'; its contents stay inside.");
+        }
+
+        /// <summary>Atomically moves a held container between hands without a transient placed state.</summary>
+        public HandheldContainerOperationResult MoveToHand(int personId, HandSlot hand)
+        {
+            if (HeldByPersonId != personId || !HeldHand.HasValue)
+            {
+                return HandheldContainerOperationResult.Refused(
+                    "HandheldContainer: pail '" + ContainerId + "' move refused — person " + personId + " is not its holder.");
+            }
+
+            HeldHand = hand;
+            LocationId = string.Empty;
+            return HandheldContainerOperationResult.Ok(
+                "HandheldContainer: pail '" + ContainerId + "' moved to the " + (hand == HandSlot.Left ? "left" : "right") + " hand.");
+        }
+
+        /// <summary>Restores a serialized pail location and holder after validating their mutually exclusive states.</summary>
+        public bool RestorePlacement(int heldByPersonId, HandSlot? heldHand, string locationId, out string refusal)
+        {
+            refusal = string.Empty;
+            bool held = heldByPersonId >= 0 && heldHand.HasValue;
+            bool placed = heldByPersonId == -1 && !string.IsNullOrWhiteSpace(locationId);
+            if ((!held && !placed) || (heldByPersonId >= 0 && !heldHand.HasValue)
+                || (heldByPersonId < -1) || (held && !string.IsNullOrWhiteSpace(locationId)))
+            {
+                refusal = "HandheldContainer: placement restore refused — container must be held by one person or set down at one known location.";
+                return false;
+            }
+
+            HeldByPersonId = heldByPersonId;
+            HeldHand = heldHand;
+            LocationId = held ? string.Empty : locationId.Trim();
+            return true;
+        }
+
+        public bool RestoreEntries(IEnumerable<WornContainerEntry> entries, out string refusal)
+        {
+            refusal = string.Empty;
+            var replacement = new List<WornContainerEntry>();
+            var lotKeys = new HashSet<LotKey>();
+            if (entries != null)
+            {
+                foreach (WornContainerEntry entry in entries)
+                {
+                    if (entry == null || entry.LotKey.IsEmpty || entry.LotKey.Equals(OwnKey)
+                        || entry.Units <= 0 || string.IsNullOrWhiteSpace(entry.ItemId)
+                        || !Enum.IsDefined(typeof(PersonItemCondition), entry.Condition)
+                        || !lotKeys.Add(entry.LotKey))
+                    {
+                        refusal = "HandheldContainer: contents restore refused — entry is null, invalid, self-referential, or duplicates a lot.";
+                        return false;
+                    }
+                    replacement.Add(entry);
+                }
+            }
+
+            contents.Clear();
+            contents.AddRange(replacement);
+            return true;
         }
 
         /// <summary>
@@ -368,6 +437,160 @@ namespace LandLedgers.Population
             return HandheldContainerOperationResult.Ok(
                 "HandheldContainer: lot " + lotKey + " taken from pail '" + ContainerId + "'.",
                 lotKey, entry.BatchId);
+        }
+    }
+
+    /// <summary>
+    /// Runtime directory for handheld containers. It preserves one live
+    /// object per pail identity and exposes snapshots for person/location
+    /// queries; mutations remain on the container and hand authorities.
+    /// Persistence wiring is a separate required integration step.
+    /// </summary>
+    public sealed class HandheldContainerRegistry
+    {
+        private readonly Dictionary<string, HandheldContainer> byId =
+            new Dictionary<string, HandheldContainer>(StringComparer.Ordinal);
+
+        public int Count => byId.Count;
+
+        public bool Register(HandheldContainer container, out string refusal)
+        {
+            refusal = string.Empty;
+            if (container == null || string.IsNullOrWhiteSpace(container.ContainerId))
+            {
+                refusal = "HandheldContainerRegistry: registration refused — a pail with a stable non-empty id is required.";
+                return false;
+            }
+
+            if (byId.TryGetValue(container.ContainerId, out HandheldContainer existing))
+            {
+                if (ReferenceEquals(existing, container)) return true;
+                refusal = "HandheldContainerRegistry: registration refused — pail id '" + container.ContainerId + "' is already assigned to a different live object.";
+                return false;
+            }
+
+            foreach (WornContainerEntry candidate in container.Entries)
+            {
+                if (candidate == null || candidate.LotKey.IsEmpty) continue;
+                foreach (HandheldContainer current in byId.Values)
+                {
+                    if (current.Contains(candidate.LotKey))
+                    {
+                        refusal = "HandheldContainerRegistry: registration refused — lot " + candidate.LotKey + " is already inside pail '" + current.ContainerId + "'.";
+                        return false;
+                    }
+                }
+            }
+
+            byId.Add(container.ContainerId, container);
+            return true;
+        }
+
+        public HandheldContainer Find(string containerId)
+        {
+            return !string.IsNullOrWhiteSpace(containerId)
+                && byId.TryGetValue(containerId, out HandheldContainer container)
+                    ? container
+                    : null;
+        }
+
+        public IReadOnlyList<HandheldContainerSnapshot> HeldByPerson(int personId)
+        {
+            var result = new List<HandheldContainerSnapshot>();
+            foreach (HandheldContainer container in byId.Values)
+                if (container.HeldByPersonId == personId) result.Add(container.Current);
+            result.Sort((left, right) => string.CompareOrdinal(left.ContainerId, right.ContainerId));
+            return result.AsReadOnly();
+        }
+
+        public IReadOnlyList<HandheldContainerSnapshot> AtLocation(string locationId)
+        {
+            var result = new List<HandheldContainerSnapshot>();
+            if (string.IsNullOrWhiteSpace(locationId)) return result.AsReadOnly();
+            string normalized = locationId.Trim();
+            foreach (HandheldContainer container in byId.Values)
+                if (container.HeldByPersonId == -1
+                    && string.Equals(container.LocationId, normalized, StringComparison.Ordinal))
+                    result.Add(container.Current);
+            result.Sort((left, right) => string.CompareOrdinal(left.ContainerId, right.ContainerId));
+            return result.AsReadOnly();
+        }
+
+        /// <summary>
+        /// Transfers a hand lot into a registered pail only when no other
+        /// registered pail already references that lot. Production callers
+        /// should use this directory-mediated path rather than invoking the
+        /// lower-level authority directly.
+        /// </summary>
+        public HandOperationResult TransferHandToContainer(
+            HandOccupancyAuthority hands, HandSlot hand, HandheldContainer destination,
+            HandCustodyContext context = null, PerishableLotState.SaveDto? saveDto = null)
+        {
+            if (hands == null || destination == null
+                || !byId.TryGetValue(destination.ContainerId, out HandheldContainer registered)
+                || !ReferenceEquals(registered, destination))
+            {
+                return HandOperationResult.Refused(
+                    "HandheldContainerRegistry: transfer refused — the hand authority and exact registered destination pail are required.");
+            }
+
+            HandOccupancy current = hands.Current;
+            LotKey candidate = hand == HandSlot.Left ? current.LeftLotKey : current.RightLotKey;
+            foreach (HandheldContainer other in byId.Values)
+            {
+                if (!ReferenceEquals(other, destination) && other.Contains(candidate))
+                {
+                    return HandOperationResult.Refused(
+                        "HandheldContainerRegistry: transfer refused — lot " + candidate + " is already inside pail '" + other.ContainerId + "'.");
+                }
+            }
+
+            return hands.TransferToHeldContainer(hand, destination, context, saveDto);
+        }
+
+        public IReadOnlyList<HandheldContainerSnapshot> CaptureSnapshots()
+        {
+            var result = new List<HandheldContainerSnapshot>(byId.Count);
+            foreach (HandheldContainer container in byId.Values) result.Add(container.Current);
+            result.Sort((left, right) => string.CompareOrdinal(left.ContainerId, right.ContainerId));
+            return result.AsReadOnly();
+        }
+
+        public bool RestoreSnapshots(IEnumerable<HandheldContainerSnapshot> snapshots, out string refusal)
+        {
+            refusal = string.Empty;
+            var replacement = new Dictionary<string, HandheldContainer>(StringComparer.Ordinal);
+            var containedLots = new HashSet<LotKey>();
+            if (snapshots != null)
+            {
+                foreach (HandheldContainerSnapshot snapshot in snapshots)
+                {
+                    if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.ContainerId)
+                        || snapshot.Kind != HandheldContainerKind.Pail
+                        || replacement.ContainsKey(snapshot.ContainerId))
+                    {
+                        refusal = "HandheldContainerRegistry: restore refused — null, invalid, unsupported, or duplicate container entry.";
+                        return false;
+                    }
+
+                    var container = new HandheldContainer(snapshot.ContainerId, snapshot.Kind, snapshot.Capacity);
+                    if (!container.RestorePlacement(snapshot.HeldByPersonId, snapshot.HeldHand, snapshot.LocationId, out refusal)
+                        || !container.RestoreEntries(snapshot.Entries, out refusal)) return false;
+                    foreach (WornContainerEntry entry in container.Entries)
+                    {
+                        if (!containedLots.Add(entry.LotKey))
+                        {
+                            refusal = "HandheldContainerRegistry: restore refused — lot " + entry.LotKey + " appears in more than one pail.";
+                            return false;
+                        }
+                    }
+                    replacement.Add(snapshot.ContainerId, container);
+                }
+            }
+
+            byId.Clear();
+            foreach (KeyValuePair<string, HandheldContainer> entry in replacement) byId.Add(entry.Key, entry.Value);
+            return true;
         }
     }
 }

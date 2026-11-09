@@ -595,6 +595,10 @@ namespace LandLedgers.FirstLedger
                 storePort = storeRuntime.BuildHouseholdTradingPort();
 #endif
                 simulationDrivers.RegisterGeneralStoreSupplier(storePort);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (developmentNpcStore != null)
+                    storeRuntime.ConfigureDevelopmentNpcRestock(developmentNpcStore, simulationDrivers.StoreFeedRegistry);
+#endif
                 // Priority 1 Slice 0 (log-only): name the registered port
                 // flavour, its stock, and its staffing, so the next Unity
                 // run can separate H1 (knowledge never seeded) from H2
@@ -1923,6 +1927,10 @@ namespace LandLedgers.FirstLedger
                 pass9 = new Series2Pass9SaveState();
                 saveLoadManager.Series2Pass9State = pass9;
             }
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub != null)
+                pass9.PersonHands = systemsHub.PersonHands;
+                pass9.HandheldContainers = systemsHub.HandheldContainers;
             // Reuse, never replace: Restore is clear-then-load into the live
             // holders, and the drivers cache references to them.
             if (pass9.FreightDriver == null)

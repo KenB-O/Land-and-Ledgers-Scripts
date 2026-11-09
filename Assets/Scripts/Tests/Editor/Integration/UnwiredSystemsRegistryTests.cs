@@ -33,8 +33,9 @@ namespace LandLedgers.EditorTests.Integration
             public readonly List<string> Allowlist = new List<string>();
         }
 
-        // The brief's enumerated candidate set: thirteen detailed business runtimes,
-        // the four staged-production types, and StoreRestockService.
+        // The brief's enumerated candidate set: thirteen detailed business runtimes
+        // and the four staged-production types. StoreRestockService now has an
+        // NPC development-store production caller and is no longer an unwired candidate.
         // Pass IX WS6: RealDemandSource added (A3-09) — registered unwired by
         // decision; the candidate list stays authoritative for hand-audited
         // entries, and Pass9RegistryAssemblyScanTests sweeps the rest.
@@ -56,7 +57,6 @@ namespace LandLedgers.EditorTests.Integration
             "ButcherRuntime", "BlacksmithRuntime", "TanneryRuntime",
             "StagedProductionProcess", "ProductionDueEventDriver",
             "BakeryStagedProductionChain", "ForgeRepairChain",
-            "StoreRestockService",
             "RealDemandSource",
         };
 

@@ -90,15 +90,19 @@ namespace LandLedgers.EditorTests.Economy
         public void WagonRegistryRoundTripsAssetIdentityAndTransportState()
         {
             var registry = new TransportAssetRegistry();
-            var wagon = new EquipmentAsset { AssetId = "WG-save-1", Kind = WagonAuthority.DefaultKind, OwnerKind = "business", OwnerId = "B-1", Condition01 = .8f };
+            var wagon = new EquipmentAsset { AssetId = "WG-save-1", Kind = WagonAuthority.DefaultKind, OwnerKind = "business", OwnerId = "B-1", Condition01 = .8f, CanvasMaterialVariantIndex = 2 };
             WagonAuthority.Configure(wagon, "GeneralFarmFreight", 450f, 4f, "yard-1");
             wagon.CurrentShipmentId = "S-1";
             Assert.That(registry.Register(wagon), Is.Null);
+            string saveJson = JsonUtility.ToJson(registry.CaptureSaveDto());
+            LandLedgers.Persistence.TransportAssetRegistrySaveDto loadedDto =
+                JsonUtility.FromJson<LandLedgers.Persistence.TransportAssetRegistrySaveDto>(saveJson);
             var restored = new TransportAssetRegistry();
-            restored.LoadFromSaveDto(registry.CaptureSaveDto());
+            restored.LoadFromSaveDto(loadedDto);
             Assert.That(restored.Get("WG-save-1"), Is.Not.Null);
             Assert.That(restored.Get("WG-save-1").CurrentShipmentId, Is.EqualTo("S-1"));
             Assert.That(restored.Get("WG-save-1").PayloadMassCapacityKg, Is.EqualTo(450f));
+            Assert.That(restored.Get("WG-save-1").CanvasMaterialVariantIndex, Is.EqualTo(2));
         }
 
         [Test]

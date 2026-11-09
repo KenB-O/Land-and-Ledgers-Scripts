@@ -335,6 +335,22 @@ namespace LandLedgers.Population
         }
 
         private PersonInventoryReadModel personInventory;
+        private Func<int, HandOccupancy> handOccupancySupplier;
+        private Func<int, IReadOnlyList<HandheldContainerSnapshot>> heldContainerSupplier;
+
+        /// <summary>Optional live hand-state read supplier supplied by the shared simulation hub.</summary>
+        public Func<int, HandOccupancy> HandOccupancySupplier
+        {
+            get => handOccupancySupplier;
+            set { handOccupancySupplier = value; personInventory = null; }
+        }
+
+        /// <summary>Optional snapshot supplier for containers held by real Persons.</summary>
+        public Func<int, IReadOnlyList<HandheldContainerSnapshot>> HeldContainerSupplier
+        {
+            get => heldContainerSupplier;
+            set { heldContainerSupplier = value; personInventory = null; }
+        }
 
         /// <summary>
         /// Priority V1: the Slice 3 person inventory read model as this
@@ -350,7 +366,11 @@ namespace LandLedgers.Population
         public PersonInventoryReadModel PersonInventory
         {
             get => personInventory ?? (personInventory =
-                new PersonInventoryReadModel(new HouseholdShoppingReadModel(this, scheduleTracker), inventories));
+                new PersonInventoryReadModel(
+                    new HouseholdShoppingReadModel(this, scheduleTracker), inventories,
+                    handOccupancySupplier: handOccupancySupplier,
+                    lotIdentityResolver: LotIdentityResolver,
+                    heldContainerSupplier: heldContainerSupplier));
             set => personInventory = value;
         }
 

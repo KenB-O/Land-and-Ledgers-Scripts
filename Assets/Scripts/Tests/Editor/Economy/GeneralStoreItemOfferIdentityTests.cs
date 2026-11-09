@@ -49,7 +49,7 @@ namespace LandLedgers.EditorTests.Economy
                 Assert.IsTrue(supplier.OffersItem("sugar"));
                 Assert.IsTrue(supplier.OffersItem("coffee"));
                 Assert.IsTrue(supplier.OffersItem("tea"));
-                Assert.IsFalse(supplier.OffersItem("flour"), "10 lb sacks cannot be advertised as household pounds without an authored conversion.");
+                Assert.IsTrue(supplier.OffersItem("flour"), "The authored 10 lb sack conversion permits selling a whole sack without presenting it as individual pounds.");
                 Assert.IsFalse(supplier.OffersItem("potatoes"), "Sacks cannot be advertised as pounds without an authored conversion.");
                 Assert.IsFalse(supplier.OffersItem("salt"), "Small bags cannot be advertised as pounds without a conversion.");
                 Assert.IsFalse(supplier.OffersItem("preserved_meat"));
@@ -140,6 +140,48 @@ namespace LandLedgers.EditorTests.Economy
 
                 manager.BuildHouseholdTradingPort(store);
                 manager.BuildHouseholdTradingPort(store);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void RuntimeFeedStockWarningIsRateLimitedUntilAvailabilityRecovers()
+        {
+            GeneralStoreBusinessDefinition definition = LoadDefinition();
+            GameObject host = new GameObject(nameof(RuntimeFeedStockWarningIsRateLimitedUntilAvailabilityRecovers));
+            try
+            {
+                GeneralStoreRuntimeManager manager = ConfigureManager(host, definition);
+                BusinessInstanceState store = CreateNpcStore(definition);
+                var registry = new Review2StoreFeedRegistry();
+                Assert.IsNull(Review2StoreHorseFeed.AddFeedItem(store.RuntimeState, registry,
+                    new Review2StoreFeedItem
+                    {
+                        BusinessInstanceId = store.InstanceId,
+                        FeedCategoryId = "staple_food",
+                        FeedItemId = "bread",
+                        DisplayName = "Bread",
+                        UnitLabel = "loaf",
+                        StoreUnitsPerFeedUnit = 1,
+                        RetailPriceCents = 1,
+                    }, new List<string>()));
+
+                LogAssert.Expect(LogType.Warning, new Regex("runtime SKU 'bread' is not offered: no available identified item lots back it"));
+                LogAssert.Expect(LogType.Warning, new Regex("General Store 'general_store_060' omits item offer\\(s\\):"));
+
+                manager.BuildHouseholdTradingPort(store, registry);
+                manager.BuildHouseholdTradingPort(store, registry);
+
+                AddLot(store, definition, "bread", 1);
+                manager.BuildHouseholdTradingPort(store, registry);
+                Assert.IsTrue(store.RuntimeState.TryConsumeRetailItemStockUnits("bread", "staple_food", 1, out int consumed));
+                Assert.AreEqual(1, consumed);
+
+                LogAssert.Expect(LogType.Warning, new Regex("runtime SKU 'bread' is not offered: no available identified item lots back it"));
+                manager.BuildHouseholdTradingPort(store, registry);
             }
             finally
             {

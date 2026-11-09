@@ -66,7 +66,6 @@ found, the test fails loudly rather than passing silently.
 | ProductionDueEventDriver | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
 | BakeryStagedProductionChain | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs | Domains/Economy/Businesses/Bakery | (none) |
 | ForgeRepairChain | Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs | Domains/Economy/Businesses/Blacksmith | (none) |
-| StoreRestockService | Domains/Economy/Businesses/GeneralStore/StoreProcurementChain.cs | Domains/Economy/Businesses/GeneralStore | Orchestration/HouseholdSlice/HouseholdVerticalSlicePhaseH.cs |
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
 | ScenarioFailureNoticeBoard | Orchestration/Scenarios/Generation/ScenarioFailureNoticeBoard.cs | Orchestration/Scenarios/Generation | (none) |
@@ -80,15 +79,15 @@ found, the test fails loudly rather than passing silently.
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
 | HandOccupancyAuthority | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
-| HandOccupancy | Domains/Population/HandOccupancy.cs | Domains/Population | Domains/Economy/Equipment/EquipmentTaskGate.cs |
+| HandOccupancy | Domains/Population/HandOccupancy.cs | Domains/Population | Domains/Economy/Equipment/EquipmentTaskGate.cs; Infrastructure/Persistence/Series2Pass9Save.cs |
 | HandCustodyContext | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
 | HandOperationResult | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
 | WornContainer | Domains/Population/WornContainer.cs | Domains/Population | (none) |
-| WornContainerEntry | Domains/Population/WornContainer.cs | Domains/Population | (none) |
+| WornContainerEntry | Domains/Population/WornContainer.cs | Domains/Population | Infrastructure/Persistence/Series2Pass9Save.cs |
 | WornContainerSnapshot | Domains/Population/WornContainer.cs | Domains/Population | (none) |
 | WornContainerOperationResult | Domains/Population/WornContainer.cs | Domains/Population | (none) |
 | HandheldContainer | Domains/Population/HandheldContainer.cs | Domains/Population | (none) |
-| HandheldContainerSnapshot | Domains/Population/HandheldContainer.cs | Domains/Population | (none) |
+| HandheldContainerSnapshot | Domains/Population/HandheldContainer.cs | Domains/Population | Infrastructure/Persistence/Series2Pass9Save.cs |
 | HandheldContainerOperationResult | Domains/Population/HandheldContainer.cs | Domains/Population | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
@@ -130,9 +129,11 @@ found, the test fails loudly rather than passing silently.
   double-count. Player-bank scene binding remains outstanding under
   gate G4 and must never be described as wired. BankRuntime itself
   remains UNWIRED.
-- `StoreRestockService` is instantiated only by the Phase H vertical-slice
-  test fixture (`HouseholdVerticalSlicePhaseH.cs`), which is allowlisted.
-  No production restock path calls it.
+- `StoreRestockService` is driven for the development-town NPC General Store
+  by `GeneralStoreRuntimeManager.DriveDailyRestock`. Its order queue is
+  separate from the player store's queue, while both drivers share the same
+  finite regional supplier adapters. NPC open orders and deliveries persist
+  through `GeneralStoreSaveDto.developmentNpcRestock`.
 - `RealDemandSource` (Pass IX WS6, A3-09) is registered honestly as
   UNWIRED, deliberately. It collects fully-provenanced `PurchaseIntent`s
   from real household needs and business input needs, but its intents have
@@ -638,6 +639,10 @@ note records their audited status so the question does not reopen:
   `PhysicalItemSpec`, `PersonInventoryReadModel`,
   `DemandObservation`, `ReserveProjection`, `SupplierComparison`,
   `ReplenishmentPlan`, and `ProductionPlan` rows stay.
+  `Series2Pass9Save` has serializers for the hand/container snapshot DTOs,
+  but no production authority currently creates or supplies those live
+  snapshots. Its registry allowlist entry records persistence-only type use;
+  it does not mark the gameplay system as wired.
 - Physical hands campaign P1b (2026-11-08):
   hand occupancy read view (`HandOccupancyView` and `HandSlotView`,
   nested inside `PersonInventoryReadModel`, which already has a

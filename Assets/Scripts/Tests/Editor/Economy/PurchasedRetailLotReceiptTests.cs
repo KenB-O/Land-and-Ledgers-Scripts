@@ -21,6 +21,25 @@ public sealed class PurchasedRetailLotReceiptTests
             availableFeedUnits, dailyRequired, targetDays, unitsPerSack));
     }
 
+    [TestCase(5, 3, 3)]
+    [TestCase(2, 8, 2)]
+    [TestCase(5, 0, 0)]
+    [TestCase(-2, 4, 0)]
+    public void BusinessFeedRestock_UsesOnlyPackagesActuallyAvailableAtSeller(
+        int requestedPackages, int sellerPackages, int expectedPurchase)
+    {
+        Assert.AreEqual(expectedPurchase, BusinessFeedPurchase.PackagesAvailableToPurchase(
+            requestedPackages, sellerPackages));
+    }
+
+    [TestCase("store_horse_feed_sack", true)]
+    [TestCase("bakery-notions", false)]
+    [TestCase("", false)]
+    public void StoreFeedReceipt_OnlyRoutesConfiguredHorseFeedSkuToAnimalFeed(string lotSkuId, bool expected)
+    {
+        Assert.AreEqual(expected, BusinessFeedPurchase.IsHorseFeedSku(lotSkuId, "store_horse_feed_sack"));
+    }
+
     [Test]
     public void BusinessFeedReceipt_PreservesNamedSourceAndRejectsDuplicateReceipt()
     {

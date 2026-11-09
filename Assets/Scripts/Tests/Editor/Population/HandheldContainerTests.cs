@@ -26,7 +26,7 @@
 // pail; retrieval back into the hand, from a set-down pail, and
 // two-handed; retrieval into an occupied hand refused; retrieval of a
 // lot not held refused; retrieval into the container hand refused; set
-// down keeping contents inside and invisible to the held view; pick up
+// down keeping contents inside and discoverable by placement location; pick up
 // again with contents intact; move between hands with contents intact;
 // move to an occupied hand, same-hand move, and two-handed move refused;
 // two-handed pail blocking a second action; over-capacity refusals on
@@ -45,6 +45,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
 using LandLedgers.Population;
+using LandLedgers.Persistence;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
@@ -477,7 +478,7 @@ namespace LandLedgers.EditorTests.Population
                 authority, PlayerId, "pail-1", StandardCapacity(),
                 HandRequirement.OneHanded, HandSlot.Left, "p2b-setdown-place-pickup-1");
             driver.AddPail(PlayerId, pail);
-            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail).Succeeded);
+            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail, "workshop:millbrook").Succeeded);
             authority.AllocateOneHanded(
                 TestItemLot(), "carry-12-1", HandRequirement.OneHanded, HandSlot.Left,
                 Context("test-pail-item", 2, "p2b-setdown-place-pickup-2"));
@@ -537,7 +538,7 @@ namespace LandLedgers.EditorTests.Population
                 Context("test-pail-item", 2, "p2b-setdown-retrieve-pickup-2"));
             Assert.IsTrue(authority.TransferToHeldContainer(
                 HandSlot.Right, pail, Context("test-pail-item", 2, "p2b-setdown-retrieve-place-1")).Succeeded);
-            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail).Succeeded);
+            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail, "workshop:millbrook").Succeeded);
 
             HandOperationResult retrieved = authority.TransferFromHeldContainer(
                 pail, TestItemLot(), HandSlot.Left, HandRequirement.OneHanded,
@@ -646,7 +647,7 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void SetDownPail_HandFreeContentsStayInsideAndInvisibleToHeldView()
+        public void SetDownPail_HandFreeContentsStayInsideAndRetainLocation()
         {
             RegisterTestSpecs();
             var driver = new Driver();
@@ -661,18 +662,248 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(authority.TransferToHeldContainer(
                 HandSlot.Right, pail, Context("test-pail-item", 2, "p2b-setdown-place-1")).Succeeded);
 
-            HandOperationResult setDown = authority.SetDownContainer(HandSlot.Left, pail);
+            HandOperationResult setDown = authority.SetDownContainer(HandSlot.Left, pail, "workshop:millbrook");
 
             Assert.IsTrue(setDown.Succeeded, setDown.Reason);
             Assert.IsTrue(authority.IsFree(HandSlot.Left));
             Assert.AreEqual(-1, pail.HeldByPersonId);
             Assert.IsTrue(!pail.HeldHand.HasValue);
+            Assert.AreEqual("workshop:millbrook", pail.LocationId);
+            Assert.AreEqual("workshop:millbrook", pail.Current.LocationId);
             Assert.IsTrue(pail.Contains(TestItemLot()));
             Assert.AreEqual(1, pail.Current.Entries.Count);
             PersonInventoryReadModel.HeldContainerContents contents =
                 driver.ReadModel().ItemsInHeldContainers(PlayerId);
             Assert.AreEqual(0, contents.Containers.Count);
             Assert.AreEqual(0, contents.Items.Count);
+        }
+
+        [Test]
+        public void SetDownPail_RequiresLocationAndRegistryKeepsItAccessible()
+        {
+            var placementLog = new CustodyTransferLog();
+            var authority = new HandOccupancyAuthority(PlayerId, placementLog);
+            HandheldContainer pail = HeldPail(
+                authority, PlayerId, "pail-located", StandardCapacity(),
+                HandRequirement.OneHanded, HandSlot.Left, "located-pickup");
+            var registry = new HandheldContainerRegistry();
+            Assert.IsTrue(registry.Register(pail, out string registrationRefusal), registrationRefusal);
+
+            HandOperationResult missingLocation = authority.SetDownContainer(HandSlot.Left, pail);
+            Assert.IsFalse(missingLocation.Succeeded);
+            Assert.AreEqual(PlayerId, pail.HeldByPersonId);
+            Assert.AreEqual(HandSlot.Left, pail.HeldHand);
+            Assert.AreEqual(0, registry.AtLocation("workshop:millbrook").Count);
+
+            HandOperationResult setDown = authority.SetDownContainer(
+                HandSlot.Left, pail, " workshop:millbrook ",
+                Context("test-pail-item", 1, "placed-pail-setdown"));
+            Assert.IsTrue(setDown.Succeeded, setDown.Reason);
+            Assert.IsTrue(authority.IsFree(HandSlot.Left));
+            Assert.AreEqual("workshop:millbrook", pail.LocationId);
+            Assert.AreEqual(1, registry.AtLocation("workshop:millbrook").Count);
+            Assert.AreEqual("pail-located", registry.AtLocation("workshop:millbrook")[0].ContainerId);
+            Assert.AreEqual(0, registry.HeldByPerson(PlayerId).Count);
+            CustodyTransferRecord setDownRecord = placementLog.LatestForCause(
+                CustodyTransferLog.CauseContainerSetDown, "placed-pail-setdown");
+            Assert.IsNotNull(setDownRecord);
+            Assert.IsTrue(setDownRecord.SourceLotKey.Equals(pail.OwnKey));
+            Assert.IsTrue(setDownRecord.DestinationLotKey.Equals(pail.OwnKey));
+            Assert.AreEqual("location:workshop:millbrook", setDownRecord.ToCustodian);
+
+            Assert.IsTrue(authority.PickUpContainer(
+                pail, HandRequirement.OneHanded, HandSlot.Right,
+                Context("test-pail-item", 1, "placed-pail-pickup")).Succeeded);
+            Assert.AreEqual(string.Empty, pail.LocationId);
+            Assert.AreEqual(0, registry.AtLocation("workshop:millbrook").Count);
+            Assert.AreEqual(1, registry.HeldByPerson(PlayerId).Count);
+            CustodyTransferRecord pickupRecord = placementLog.LatestForCause(
+                CustodyTransferLog.CauseContainerPickup, "placed-pail-pickup");
+            Assert.IsNotNull(pickupRecord);
+            Assert.AreEqual("location:workshop:millbrook", pickupRecord.FromCustodian);
+            Assert.AreEqual("person:101", pickupRecord.ToCustodian);
+        }
+
+        [Test]
+        public void HandheldContainerRegistry_RejectsDuplicateIdentityButAllowsSameRegistration()
+        {
+            var registry = new HandheldContainerRegistry();
+            var first = new HandheldContainer("pail-global-id", HandheldContainerKind.Pail);
+            var second = new HandheldContainer("pail-global-id", HandheldContainerKind.Pail);
+
+            Assert.IsTrue(registry.Register(first, out string firstRefusal), firstRefusal);
+            Assert.IsTrue(registry.Register(first, out string repeatRefusal), repeatRefusal);
+            Assert.IsFalse(registry.Register(second, out string duplicateRefusal));
+            Assert.IsTrue(duplicateRefusal.Contains("already assigned"), duplicateRefusal);
+            Assert.AreSame(first, registry.Find("pail-global-id"));
+            Assert.AreEqual(1, registry.Count);
+        }
+
+        [Test]
+        public void HandheldContainerRegistry_RestoreRejectsSameLotInTwoPailsAtomically()
+        {
+            LotKey duplicatedLot = TestItemLot();
+            var first = new HandheldContainer("pail-a", HandheldContainerKind.Pail);
+            var second = new HandheldContainer("pail-b", HandheldContainerKind.Pail);
+            var entry = new WornContainerEntry(
+                duplicatedLot, "batch-1", "test-pail-item", 1, PersonItemCondition.Fresh);
+            Assert.IsTrue(first.RestoreEntries(new[] { entry }, out string firstRefusal), firstRefusal);
+            Assert.IsTrue(second.RestoreEntries(new[] { entry }, out string secondRefusal), secondRefusal);
+            Assert.IsTrue(first.RestorePlacement(-1, null, "storage:first", out firstRefusal), firstRefusal);
+            Assert.IsTrue(second.RestorePlacement(-1, null, "storage:second", out secondRefusal), secondRefusal);
+
+            var registry = new HandheldContainerRegistry();
+            var existing = new HandheldContainer("pail-existing", HandheldContainerKind.Pail);
+            Assert.IsTrue(registry.Register(existing, out string registerRefusal), registerRefusal);
+            Assert.IsFalse(registry.RestoreSnapshots(
+                new[] { first.Current, second.Current }, out string restoreRefusal));
+
+            Assert.IsTrue(restoreRefusal.Contains("more than one pail"), restoreRefusal);
+            Assert.AreEqual(1, registry.Count);
+            Assert.AreSame(existing, registry.Find("pail-existing"));
+            Assert.IsNull(registry.Find("pail-a"));
+        }
+
+        [Test]
+        public void RegistryMediatedTransfer_RefusesLotAlreadyInAnotherPail()
+        {
+            RegisterTestSpecs();
+            var authority = new HandOccupancyAuthority(PlayerId);
+            HandheldContainer first = HeldPail(
+                authority, PlayerId, "pail-first", StandardCapacity(),
+                HandRequirement.OneHanded, HandSlot.Left, "registry-transfer-pickup-1");
+            var second = new HandheldContainer("pail-second", HandheldContainerKind.Pail, StandardCapacity());
+            Assert.IsTrue(second.RestorePlacement(-1, null, "workplace:bakery", out string placementRefusal), placementRefusal);
+            var registry = new HandheldContainerRegistry();
+            Assert.IsTrue(registry.Register(first, out string firstRefusal), firstRefusal);
+            Assert.IsTrue(registry.Register(second, out string secondRefusal), secondRefusal);
+
+            authority.AllocateOneHanded(
+                TestItemLot(), "batch-1", HandRequirement.OneHanded, HandSlot.Right,
+                Context("test-pail-item", 1, "registry-transfer-source"));
+            HandOperationResult firstTransfer = registry.TransferHandToContainer(
+                authority, HandSlot.Right, first,
+                Context("test-pail-item", 1, "registry-transfer-first"),
+                FreshDto(TestItemLot(), "test-pail-item", 1));
+            Assert.IsTrue(firstTransfer.Succeeded, firstTransfer.Reason);
+
+            authority.AllocateOneHanded(
+                TestItemLot(), "duplicate-batch", HandRequirement.OneHanded, HandSlot.Right,
+                Context("test-pail-item", 1, "registry-transfer-duplicate-source"));
+            HandOperationResult duplicate = registry.TransferHandToContainer(
+                authority, HandSlot.Right, second,
+                Context("test-pail-item", 1, "registry-transfer-duplicate"));
+
+            Assert.IsFalse(duplicate.Succeeded);
+            Assert.IsTrue(duplicate.Reason.Contains("already inside pail 'pail-first'"), duplicate.Reason);
+            Assert.IsTrue(authority.Current.RightLotKey.Equals(TestItemLot()));
+            Assert.IsTrue(first.Contains(TestItemLot()));
+            Assert.IsFalse(second.Contains(TestItemLot()));
+        }
+
+        [Test]
+        public void HandheldContainerSaveRestore_PreservesPlacementCapacityAndLotIdentityIdempotently()
+        {
+            RegisterTestSpecs();
+            var sourceHands = new HandOccupancyAuthority(PlayerId);
+            HandheldContainer sourcePail = HeldPail(
+                sourceHands, PlayerId, "pail-save", StandardCapacity(),
+                HandRequirement.OneHanded, HandSlot.Left, "pail-save-pickup-1");
+            sourceHands.AllocateOneHanded(
+                TestItemLot(), "batch-save", HandRequirement.OneHanded, HandSlot.Right);
+            Assert.IsTrue(sourceHands.TransferToHeldContainer(
+                HandSlot.Right, sourcePail, Context("test-pail-item", 2, "pail-save-place"),
+                FreshDto(TestItemLot(), "test-pail-item", 2)).Succeeded);
+            Assert.IsTrue(sourceHands.SetDownContainer(
+                HandSlot.Left, sourcePail, "workplace:bakery").Succeeded);
+
+            var sourceRegistry = new HandheldContainerRegistry();
+            Assert.IsTrue(sourceRegistry.Register(sourcePail, out string registerRefusal), registerRefusal);
+            var save = new Series2Pass9SaveState { HandheldContainers = sourceRegistry };
+            var captured = save.Capture(new List<string>());
+
+            var restoredRegistry = new HandheldContainerRegistry();
+            var restore = new Series2Pass9SaveState { HandheldContainers = restoredRegistry };
+            restore.Restore(captured, null, new List<string>());
+            restore.Restore(captured, null, new List<string>());
+
+            HandheldContainer restored = restoredRegistry.Find("pail-save");
+            Assert.IsNotNull(restored);
+            Assert.AreEqual("workplace:bakery", restored.LocationId);
+            Assert.AreEqual(-1, restored.HeldByPersonId);
+            Assert.AreEqual(1, restored.Entries.Count);
+            Assert.IsTrue(restored.Entries[0].LotKey.Equals(TestItemLot()));
+            Assert.AreEqual("batch-save", restored.Entries[0].BatchId);
+            Assert.AreEqual(PersonItemCondition.Fresh, restored.Entries[0].Condition);
+            Assert.AreEqual(1, restoredRegistry.AtLocation("workplace:bakery").Count);
+            Assert.AreEqual(1, restoredRegistry.Count);
+        }
+
+        [Test]
+        public void HandheldContainerSaveRestore_PreservesHeldContainerAndMatchingHand()
+        {
+            var sourceHands = new PersonHandOccupancyRegistry();
+            sourceHands.EnsurePerson(PlayerId);
+            var sourcePail = new HandheldContainer("pail-held-save", HandheldContainerKind.Pail);
+            Assert.IsTrue(sourceHands.AllocateOneHanded(
+                PlayerId, sourcePail.OwnKey, string.Empty, HandRequirement.OneHanded, HandSlot.Left).Succeeded);
+            Assert.IsTrue(sourcePail.PickUp(PlayerId, HandSlot.Left).Succeeded);
+            var sourceContainers = new HandheldContainerRegistry();
+            Assert.IsTrue(sourceContainers.Register(sourcePail, out string registerRefusal), registerRefusal);
+
+            var save = new Series2Pass9SaveState
+            {
+                PersonHands = sourceHands,
+                HandheldContainers = sourceContainers,
+            };
+            Series2Pass9SaveDto captured = save.Capture(new List<string>());
+            var restoredHands = new PersonHandOccupancyRegistry();
+            var restoredContainers = new HandheldContainerRegistry();
+            var restore = new Series2Pass9SaveState
+            {
+                PersonHands = restoredHands,
+                HandheldContainers = restoredContainers,
+            };
+            restore.Restore(captured, null, new List<string>());
+
+            HandOccupancy hand = restoredHands.SnapshotFor(PlayerId);
+            HandheldContainer restoredPail = restoredContainers.Find("pail-held-save");
+            Assert.IsNotNull(hand);
+            Assert.IsNotNull(restoredPail);
+            Assert.IsTrue(hand.LeftLotKey.Equals(restoredPail.OwnKey));
+            Assert.AreEqual(PlayerId, restoredPail.HeldByPersonId);
+            Assert.AreEqual(HandSlot.Left, restoredPail.HeldHand);
+            Assert.AreEqual(string.Empty, restoredPail.LocationId);
+        }
+
+        [Test]
+        public void ProductionShoppingLoop_ReadModelUsesHubHandheldContainerSupplier()
+        {
+            var inventories = new HouseholdInventoryRegistry();
+            var membership = new HouseholdMembershipRegistry();
+            var registry = new HandheldContainerRegistry();
+            var hands = new PersonHandOccupancyRegistry();
+            HandheldContainer pail = new HandheldContainer("pail-live-view", HandheldContainerKind.Pail);
+            Assert.IsTrue(registry.Register(pail, out string registerRefusal), registerRefusal);
+            hands.EnsurePerson(PlayerId);
+            Assert.IsTrue(hands.AllocateOneHanded(
+                PlayerId, pail.OwnKey, string.Empty, HandRequirement.OneHanded, HandSlot.Left).Succeeded);
+            Assert.IsTrue(pail.PickUp(PlayerId, HandSlot.Left).Succeeded);
+
+            var tracker = new PersonScheduleTracker();
+            var loop = new HouseholdShoppingLoop(
+                new PopulationState(), membership, new HouseholdLedgerRegistry(), inventories,
+                new HouseholdNeedRegistry(), new SupplierDirectory(), new JourneyModel(),
+                new TaskAuthority(), new WorkTimeBudgetStore(), tracker, new ShopperSellerKnowledge());
+            loop.HandOccupancySupplier = hands.SnapshotFor;
+            loop.HeldContainerSupplier = registry.HeldByPerson;
+
+            PersonInventoryReadModel.HeldContainerContents view =
+                loop.PersonInventory.ItemsInHeldContainers(PlayerId);
+
+            Assert.AreEqual(1, view.Containers.Count);
+            Assert.AreEqual("pail-live-view", view.Containers[0].ContainerId);
+            Assert.AreEqual(0, view.Items.Count);
         }
 
         [Test]
@@ -690,7 +921,7 @@ namespace LandLedgers.EditorTests.Population
                 Context("test-pail-item", 2, "p2b-again-pickup-2"));
             Assert.IsTrue(authority.TransferToHeldContainer(
                 HandSlot.Right, pail, Context("test-pail-item", 2, "p2b-again-place-1")).Succeeded);
-            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail).Succeeded);
+            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail, "workshop:millbrook").Succeeded);
 
             HandOperationResult pickedUp = authority.PickUpContainer(
                 pail, HandRequirement.OneHanded, HandSlot.Left,
@@ -733,6 +964,7 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(authority.IsFree(HandSlot.Left));
             Assert.IsTrue(authority.Current.RightLotKey.Equals(PailOwnKey("pail-1")));
             Assert.AreEqual(HandSlot.Right, pail.HeldHand);
+            Assert.AreEqual(string.Empty, pail.LocationId);
             Assert.AreEqual(PlayerId, pail.HeldByPersonId);
             Assert.AreEqual(1, pail.Entries.Count);
             Assert.IsTrue(pail.Contains(TestItemLot()));
@@ -1085,7 +1317,8 @@ namespace LandLedgers.EditorTests.Population
                 pail, TestItemLot(), HandSlot.Right, HandRequirement.OneHanded,
                 Context("test-pail-item", 2, "p2b-log-retrieve-1")).Succeeded);
             Assert.IsTrue(authority.SetDownContainer(
-                HandSlot.Left, pail, Context("test-pail-item", 2, "p2b-log-setdown-1")).Succeeded);
+                HandSlot.Left, pail, "workshop:millbrook",
+                Context("test-pail-item", 2, "p2b-log-setdown-1")).Succeeded);
 
             Assert.AreEqual(4, log.Count);
             Assert.AreEqual(CustodyTransferLog.CauseContainerPickup, log.Records[0].CauseKind);
@@ -1115,9 +1348,9 @@ namespace LandLedgers.EditorTests.Population
                 CustodyTransferLog.CauseContainerSetDown, "p2b-log-setdown-1");
             Assert.IsNotNull(setDown);
             Assert.IsTrue(setDown.SourceLotKey.Equals(PailOwnKey("pail-1")));
-            Assert.IsTrue(setDown.DestinationLotKey.IsEmpty);
+            Assert.IsTrue(setDown.DestinationLotKey.Equals(PailOwnKey("pail-1")));
             Assert.AreEqual("person:101", setDown.FromCustodian);
-            Assert.AreEqual("container:pail-1", setDown.ToCustodian);
+            Assert.AreEqual("location:workshop:millbrook", setDown.ToCustodian);
         }
 
         [Test]
@@ -1240,7 +1473,7 @@ namespace LandLedgers.EditorTests.Population
                 Context("test-pail-item", 2, "p2b-setdown-read-pickup-2"));
             Assert.IsTrue(authority.TransferToHeldContainer(
                 HandSlot.Right, pail, Context("test-pail-item", 2, "p2b-setdown-read-place-1")).Succeeded);
-            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail).Succeeded);
+            Assert.IsTrue(authority.SetDownContainer(HandSlot.Left, pail, "workshop:millbrook").Succeeded);
 
             PersonInventoryReadModel.HeldContainerContents contents =
                 driver.ReadModel().ItemsInHeldContainers(PlayerId);
@@ -1322,7 +1555,7 @@ namespace LandLedgers.EditorTests.Population
                 Assert.IsTrue(authority.Current.RightLotKey.Equals(TestItemLot()));
                 Assert.AreEqual(0, pail.Entries.Count);
 
-                HandOperationResult setDown = authority.SetDownContainer(HandSlot.Left, pail);
+                HandOperationResult setDown = authority.SetDownContainer(HandSlot.Left, pail, "workshop:millbrook");
                 Assert.IsTrue(setDown.Succeeded, setDown.Reason);
                 Assert.AreEqual(-1, pail.HeldByPersonId);
             }

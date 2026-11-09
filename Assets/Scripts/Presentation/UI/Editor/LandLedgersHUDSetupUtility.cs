@@ -224,12 +224,11 @@ namespace LandLedgers.Editor
             Button realTime = CreateSpeedButton("HUD_TimeSpeed_RealTime", controls.transform, "Real", 72f);
             Button speed1x = CreateSpeedButton("HUD_TimeSpeed_1x", controls.transform, "1x");
             Button speed2x = CreateSpeedButton("HUD_TimeSpeed_2x", controls.transform, "2x");
-            Button speed4x = CreateSpeedButton("HUD_TimeSpeed_4x", controls.transform, "4x");
-            Button speed6x = CreateSpeedButton("HUD_TimeSpeed_6x", controls.transform, "6x");
+            Button speed5x = CreateSpeedButton("HUD_TimeSpeed_5x", controls.transform, "5x");
             Button speed10x = CreateSpeedButton("HUD_TimeSpeed_10x", controls.transform, "10x");
-            Button speed25x = CreateSpeedButton("HUD_TimeSpeed_25x", controls.transform, "25x");
             Button speed50x = CreateSpeedButton("HUD_TimeSpeed_50x", controls.transform, "50x");
-            Button speed100x = CreateSpeedButton("HUD_TimeSpeed_250x", controls.transform, "250x");
+            Button speed100x = CreateSpeedButton("HUD_TimeSpeed_100x", controls.transform, "100x");
+            Button speed250x = CreateSpeedButton("HUD_TimeSpeed_250x", controls.transform, "250x");
 
             GameObject alertStrip = CreatePanel("HUD_AlertStrip", rootRect, new Color(0.095f, 0.105f, 0.1f, 0.82f));
             RectTransform alertRect = alertStrip.GetComponent<RectTransform>();
@@ -265,12 +264,12 @@ namespace LandLedgers.Editor
             serializedController.FindProperty("realTimeButton").objectReferenceValue = realTime;
             serializedController.FindProperty("speed1xButton").objectReferenceValue = speed1x;
             serializedController.FindProperty("speed2xButton").objectReferenceValue = speed2x;
-            serializedController.FindProperty("speed4xButton").objectReferenceValue = speed4x;
-            serializedController.FindProperty("speed6xButton").objectReferenceValue = speed6x;
+            serializedController.FindProperty("speed5xButton").objectReferenceValue = speed5x;
             serializedController.FindProperty("speed10xButton").objectReferenceValue = speed10x;
-            serializedController.FindProperty("speed25xButton").objectReferenceValue = speed25x;
             serializedController.FindProperty("speed50xButton").objectReferenceValue = speed50x;
             serializedController.FindProperty("speed100xButton").objectReferenceValue = speed100x;
+            serializedController.FindProperty("speed250xButton").objectReferenceValue = speed250x;
+            serializedController.FindProperty("obsoleteDuplicateSpeed250xButton").objectReferenceValue = null;
             serializedController.FindProperty("alertStrip").objectReferenceValue = alertRect;
             serializedController.FindProperty("townPulseAlertText").objectReferenceValue = alertPlaceholder;
             serializedController.FindProperty("firstSessionGuidanceStrip").objectReferenceValue = firstSessionGuidanceStrip;

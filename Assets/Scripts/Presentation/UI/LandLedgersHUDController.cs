@@ -4,6 +4,7 @@ using LandLedgers.Time;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
 namespace LandLedgers.UI
@@ -46,23 +47,25 @@ namespace LandLedgers.UI
         [SerializeField]
         private Button speed2xButton;
 
-        [SerializeField]
-        private Button speed4xButton;
+        [FormerlySerializedAs("speed4xButton"), SerializeField]
+        private Button speed5xButton;
 
-        [SerializeField]
-        private Button speed6xButton;
-
-        [SerializeField]
+        [FormerlySerializedAs("speed6xButton"), SerializeField]
         private Button speed10xButton;
 
-        [SerializeField]
-        private Button speed25xButton;
-
-        [SerializeField]
+        [FormerlySerializedAs("speed10xButton"), SerializeField]
         private Button speed50xButton;
 
-        [SerializeField]
+        [FormerlySerializedAs("speed25xButton"), SerializeField]
         private Button speed100xButton;
+
+        [FormerlySerializedAs("speed50xButton"), SerializeField]
+        private Button speed250xButton;
+
+        // Old HUDs serialized their final 250x button in this field. Keep the
+        // reference long enough to hide that duplicate after the migration.
+        [FormerlySerializedAs("speed100xButton"), SerializeField]
+        private Button obsoleteDuplicateSpeed250xButton;
 
         [SerializeField]
         private RectTransform alertStrip;
@@ -245,7 +248,9 @@ namespace LandLedgers.UI
             // instance still serializes the previous hint string.
             controlHintMessage = DefaultControlHintMessage;
             AutoWireFields();
+            ConfigureSpeedButtonsForCurrentHierarchy();
             EnsureCoreHudFields();
+            ApplySpeedButtonLabelsAndHideLegacyDuplicate();
             ApplyAlertStripLayout();
             ApplySystemStatusLayout();
             EnsureControlHintText();
@@ -259,7 +264,10 @@ namespace LandLedgers.UI
 
         private void OnEnable()
         {
+            AutoWireFields();
+            ConfigureSpeedButtonsForCurrentHierarchy();
             EnsureCoreHudFields();
+            ApplySpeedButtonLabelsAndHideLegacyDuplicate();
             AddButtonListeners();
             BindToTimeManager(timeManager != null ? timeManager : TimeManager.Instance);
             ConfigureTooltips();
@@ -533,12 +541,11 @@ namespace LandLedgers.UI
             speed1xButton?.onClick.AddListener(OnSpeed1xButtonClicked);
             realTimeButton?.onClick.AddListener(OnRealTimeButtonClicked);
             speed2xButton?.onClick.AddListener(OnSpeed2xButtonClicked);
-            speed4xButton?.onClick.AddListener(OnSpeed4xButtonClicked);
-            speed6xButton?.onClick.AddListener(OnSpeed6xButtonClicked);
+            speed5xButton?.onClick.AddListener(OnSpeed5xButtonClicked);
             speed10xButton?.onClick.AddListener(OnSpeed10xButtonClicked);
-            speed25xButton?.onClick.AddListener(OnSpeed25xButtonClicked);
             speed50xButton?.onClick.AddListener(OnSpeed50xButtonClicked);
             speed100xButton?.onClick.AddListener(OnSpeed100xButtonClicked);
+            speed250xButton?.onClick.AddListener(OnSpeed250xButtonClicked);
         }
 
         private void RemoveButtonListeners()
@@ -547,12 +554,11 @@ namespace LandLedgers.UI
             speed1xButton?.onClick.RemoveListener(OnSpeed1xButtonClicked);
             realTimeButton?.onClick.RemoveListener(OnRealTimeButtonClicked);
             speed2xButton?.onClick.RemoveListener(OnSpeed2xButtonClicked);
-            speed4xButton?.onClick.RemoveListener(OnSpeed4xButtonClicked);
-            speed6xButton?.onClick.RemoveListener(OnSpeed6xButtonClicked);
+            speed5xButton?.onClick.RemoveListener(OnSpeed5xButtonClicked);
             speed10xButton?.onClick.RemoveListener(OnSpeed10xButtonClicked);
-            speed25xButton?.onClick.RemoveListener(OnSpeed25xButtonClicked);
             speed50xButton?.onClick.RemoveListener(OnSpeed50xButtonClicked);
             speed100xButton?.onClick.RemoveListener(OnSpeed100xButtonClicked);
+            speed250xButton?.onClick.RemoveListener(OnSpeed250xButtonClicked);
         }
 
         private void ConfigureTooltips()
@@ -568,12 +574,11 @@ namespace LandLedgers.UI
             AttachSpeedTooltip(speed1xButton, "1x Speed", SimulationSpeed.Speed1x, "Run the town clock at normal speed.");
             AttachSpeedTooltip(realTimeButton, "Real Time", SimulationSpeed.RealTime, "Advance exactly one simulated second per real second.");
             AttachSpeedTooltip(speed2xButton, "2x Speed", SimulationSpeed.Speed2x, "Run the town clock at a steady fast pace.");
-            AttachSpeedTooltip(speed4xButton, "4x Speed", SimulationSpeed.Speed4x, "Fast-forward through short waits.");
-            AttachSpeedTooltip(speed6xButton, "6x Speed", SimulationSpeed.Speed6x, "Fast-forward through routine town activity.");
-            AttachSpeedTooltip(speed10xButton, "10x Speed", SimulationSpeed.Speed10x, "Fast-forward when you are waiting for sales, staffing, or construction.");
-            AttachSpeedTooltip(speed25xButton, "25x Speed", SimulationSpeed.Speed25x, "Fast-forward through longer waits.");
-            AttachSpeedTooltip(speed50xButton, "50x Speed", SimulationSpeed.Speed50x, "Very fast testing pace for long waits.");
-            AttachSpeedTooltip(speed100xButton, "250x Speed", SimulationSpeed.Speed250x,
+            AttachSpeedTooltip(speed5xButton, "5x Speed", SimulationSpeed.Speed5x, "Move through short waits at a measured pace.");
+            AttachSpeedTooltip(speed10xButton, "10x Speed", SimulationSpeed.Speed10x, "Fast-forward through routine town activity.");
+            AttachSpeedTooltip(speed50xButton, "50x Speed", SimulationSpeed.Speed50x, "Fast-forward through longer waits.");
+            AttachSpeedTooltip(speed100xButton, "100x Speed", SimulationSpeed.Speed100x, "Very fast testing pace for longer simulations.");
+            AttachSpeedTooltip(speed250xButton, "250x Speed", SimulationSpeed.Speed250x,
                 "Maximum testing pace for long waits. Press 9 for the preserved 100x test speed.");
             if (cashText != null)
             {
@@ -611,24 +616,14 @@ namespace LandLedgers.UI
             timeManager?.SetSpeed(SimulationSpeed.Speed2x);
         }
 
-        private void OnSpeed4xButtonClicked()
+        private void OnSpeed5xButtonClicked()
         {
-            timeManager?.SetSpeed(SimulationSpeed.Speed4x);
-        }
-
-        private void OnSpeed6xButtonClicked()
-        {
-            timeManager?.SetSpeed(SimulationSpeed.Speed6x);
+            timeManager?.SetSpeed(SimulationSpeed.Speed5x);
         }
 
         private void OnSpeed10xButtonClicked()
         {
             timeManager?.SetSpeed(SimulationSpeed.Speed10x);
-        }
-
-        private void OnSpeed25xButtonClicked()
-        {
-            timeManager?.SetSpeed(SimulationSpeed.Speed25x);
         }
 
         private void OnSpeed50xButtonClicked()
@@ -637,6 +632,11 @@ namespace LandLedgers.UI
         }
 
         private void OnSpeed100xButtonClicked()
+        {
+            timeManager?.SetSpeed(SimulationSpeed.Speed100x);
+        }
+
+        private void OnSpeed250xButtonClicked()
         {
             timeManager?.SetSpeed(SimulationSpeed.Speed250x);
         }
@@ -773,12 +773,11 @@ namespace LandLedgers.UI
             ApplyButtonState(speed1xButton, speed == SimulationSpeed.Speed1x);
             ApplyButtonState(realTimeButton, speed == SimulationSpeed.RealTime);
             ApplyButtonState(speed2xButton, speed == SimulationSpeed.Speed2x);
-            ApplyButtonState(speed4xButton, speed == SimulationSpeed.Speed4x);
-            ApplyButtonState(speed6xButton, speed == SimulationSpeed.Speed6x);
+            ApplyButtonState(speed5xButton, speed == SimulationSpeed.Speed5x);
             ApplyButtonState(speed10xButton, speed == SimulationSpeed.Speed10x);
-            ApplyButtonState(speed25xButton, speed == SimulationSpeed.Speed25x);
             ApplyButtonState(speed50xButton, speed == SimulationSpeed.Speed50x);
-            ApplyButtonState(speed100xButton, speed == SimulationSpeed.Speed250x);
+            ApplyButtonState(speed100xButton, speed == SimulationSpeed.Speed100x);
+            ApplyButtonState(speed250xButton, speed == SimulationSpeed.Speed250x);
         }
 
         private void RefreshPauseButtonLabel(SimulationSpeed speed)
@@ -840,12 +839,11 @@ namespace LandLedgers.UI
             ApplySpeedButtonTypography(speed1xButton);
             ApplySpeedButtonTypography(realTimeButton);
             ApplySpeedButtonTypography(speed2xButton);
-            ApplySpeedButtonTypography(speed4xButton);
-            ApplySpeedButtonTypography(speed6xButton);
+            ApplySpeedButtonTypography(speed5xButton);
             ApplySpeedButtonTypography(speed10xButton);
-            ApplySpeedButtonTypography(speed25xButton);
             ApplySpeedButtonTypography(speed50xButton);
             ApplySpeedButtonTypography(speed100xButton);
+            ApplySpeedButtonTypography(speed250xButton);
         }
 
         private static void ApplySpeedButtonTypography(Button button)
@@ -958,12 +956,11 @@ namespace LandLedgers.UI
             speed1xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_1x");
             realTimeButton ??= FindChildComponent<Button>("HUD_TimeSpeed_RealTime");
             speed2xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_2x");
-            speed4xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_4x");
-            speed6xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_6x");
-            speed10xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_10x");
-            speed25xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_25x");
-            speed50xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_50x");
-            speed100xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_250x");
+            speed5xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_5x") ?? FindChildComponent<Button>("HUD_TimeSpeed_4x");
+            speed10xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_10x") ?? FindChildComponent<Button>("HUD_TimeSpeed_6x");
+            speed50xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_50x") ?? FindChildComponent<Button>("HUD_TimeSpeed_10x");
+            speed100xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_100x") ?? FindChildComponent<Button>("HUD_TimeSpeed_25x");
+            speed250xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_250x") ?? FindChildComponent<Button>("HUD_TimeSpeed_50x");
             alertStrip ??= FindChildComponent<RectTransform>("HUD_AlertStrip");
             townPulseAlertText ??= FindChildComponent<TMP_Text>("HUD_TownPulseAlertText");
             townPulseAlertText ??= FindChildComponent<TMP_Text>("HUD_AlertStrip_Placeholder");
@@ -977,6 +974,53 @@ namespace LandLedgers.UI
             systemStatusStrip ??= FindChildComponent<RectTransform>("HUD_SystemStatusStrip");
             systemStatusTitleText ??= FindChildComponent<TMP_Text>("HUD_SystemStatusTitleText");
             systemStatusMessageText ??= FindChildComponent<TMP_Text>("HUD_SystemStatusMessageText");
+        }
+
+        private void ApplySpeedButtonLabelsAndHideLegacyDuplicate()
+        {
+            SetButtonLabel(speed5xButton, "5x");
+            SetButtonLabel(speed10xButton, "10x");
+            SetButtonLabel(speed50xButton, "50x");
+            SetButtonLabel(speed100xButton, "100x");
+            SetButtonLabel(speed250xButton, "250x");
+
+            if (obsoleteDuplicateSpeed250xButton != null
+                && obsoleteDuplicateSpeed250xButton != speed250xButton)
+            {
+                obsoleteDuplicateSpeed250xButton.gameObject.SetActive(false);
+            }
+        }
+
+        private void ConfigureSpeedButtonsForCurrentHierarchy()
+        {
+            Button newFive = FindChildComponent<Button>("HUD_TimeSpeed_5x");
+            Button newHundred = FindChildComponent<Button>("HUD_TimeSpeed_100x");
+            if (newFive != null && newHundred != null)
+            {
+                speed5xButton = newFive;
+                speed10xButton = FindChildComponent<Button>("HUD_TimeSpeed_10x");
+                speed50xButton = FindChildComponent<Button>("HUD_TimeSpeed_50x");
+                speed100xButton = newHundred;
+                speed250xButton = FindChildComponent<Button>("HUD_TimeSpeed_250x");
+                obsoleteDuplicateSpeed250xButton = null;
+                return;
+            }
+
+            // Existing authored HUDs predate the requested speed set. Reuse
+            // their buttons in order, preserving the serialized objects while
+            // displaying and selecting the current supported choices.
+            speed5xButton = FindChildComponent<Button>("HUD_TimeSpeed_4x") ?? speed5xButton;
+            speed10xButton = FindChildComponent<Button>("HUD_TimeSpeed_6x") ?? speed10xButton;
+            speed50xButton = FindChildComponent<Button>("HUD_TimeSpeed_10x") ?? speed50xButton;
+            speed100xButton = FindChildComponent<Button>("HUD_TimeSpeed_25x") ?? speed100xButton;
+            speed250xButton = FindChildComponent<Button>("HUD_TimeSpeed_50x") ?? speed250xButton;
+            obsoleteDuplicateSpeed250xButton = FindChildComponent<Button>("HUD_TimeSpeed_250x");
+        }
+
+        private static void SetButtonLabel(Button button, string labelText)
+        {
+            TMP_Text label = button != null ? button.GetComponentInChildren<TMP_Text>(true) : null;
+            if (label != null) label.text = labelText;
         }
 
         private void ApplyAlertStripLayout()

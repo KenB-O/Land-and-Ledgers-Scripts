@@ -60,6 +60,9 @@ namespace LandLedgers.Economy.Blacksmith
         public string HitchPreparationReservationId = string.Empty;
         public string HitchPreparationShipmentId = string.Empty;
         public bool HitchPreparationAttempted;
+        // Visual identity belongs to the durable wagon record so recreated views never reroll.
+        // -1 is reserved for saves created before canvas variants were introduced.
+        public int CanvasMaterialVariantIndex = -1;
         public bool IsWagon => !string.IsNullOrWhiteSpace(Kind) && Kind.IndexOf("wagon", StringComparison.OrdinalIgnoreCase) >= 0;
         public bool IsTransportAssigned => DraftAnimalIds.Count > 0 || !string.IsNullOrWhiteSpace(CurrentDriverPersonId) || !string.IsNullOrWhiteSpace(CurrentShipmentId);
 

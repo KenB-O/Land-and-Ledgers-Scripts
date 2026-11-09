@@ -122,6 +122,75 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void SeparateStores_RestoreIndependentOrders_WhileSharingFiniteSupplierStock()
+        {
+            var supplier = new FixtureSupplier();
+            supplier.Stock["staple_food"] = 80;
+            supplier.Quotes["staple_food"] = 20;
+            supplier.LeadDays["staple_food"] = 2;
+
+            StubStorePort npc = MakeRestockStore("general_store_000");
+            StubStorePort player = MakeRestockStore("player-general-store-1");
+            var npcDriver = new StoreRestockDriver();
+            var playerDriver = new StoreRestockDriver();
+            npcDriver.RegisterSupplier(supplier);
+            playerDriver.RegisterSupplier(supplier);
+
+            Assert.IsTrue(npcDriver.DriveDaily(npc, 0, 0.5f));
+            Assert.IsTrue(playerDriver.DriveDaily(player, 0, 0.5f));
+            Assert.AreEqual(40, npcDriver.Restock.Orders[0].UnitsOrdered);
+            Assert.AreEqual("general_store_000", npcDriver.Restock.Orders[0].StoreBusinessId);
+            Assert.AreEqual(40, playerDriver.Restock.Orders[0].UnitsOrdered);
+            Assert.AreEqual("player-general-store-1", playerDriver.Restock.Orders[0].StoreBusinessId);
+            Assert.AreEqual(80, supplier.AvailableUnits("staple_food"),
+                "The finite supplier stock is not deducted until the two-day shipments depart.");
+
+            var npcSave = new RegionalSupplySaveDto();
+            var playerSave = new RegionalSupplySaveDto();
+            npcDriver.CaptureInto(npcSave);
+            playerDriver.CaptureInto(playerSave);
+
+            var restoredNpcDriver = new StoreRestockDriver();
+            var restoredPlayerDriver = new StoreRestockDriver();
+            restoredNpcDriver.RegisterSupplier(supplier);
+            restoredPlayerDriver.RegisterSupplier(supplier);
+            restoredNpcDriver.RestoreFrom(npcSave, new List<string>());
+            restoredPlayerDriver.RestoreFrom(playerSave, new List<string>());
+
+            Assert.IsTrue(restoredNpcDriver.DriveDaily(npc, 2, 0.5f));
+            Assert.IsTrue(restoredPlayerDriver.DriveDaily(player, 2, 0.5f));
+            Assert.AreEqual(40, npc.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(40, player.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(9200, npc.CashBalance);
+            Assert.AreEqual(9200, player.CashBalance);
+            Assert.AreEqual(0, supplier.AvailableUnits("staple_food"),
+                "Both received orders draw from the same finite supplier inventory.");
+            Assert.AreEqual(StoreProcurementStage.Received, restoredNpcDriver.Restock.Orders[0].Stage);
+            Assert.AreEqual(StoreProcurementStage.Received, restoredPlayerDriver.Restock.Orders[0].Stage);
+            Assert.IsTrue(restoredNpcDriver.Restock.Deliveries[0].Received);
+            Assert.IsTrue(restoredPlayerDriver.Restock.Deliveries[0].Received);
+        }
+
+        private static StubStorePort MakeRestockStore(string businessId)
+        {
+            var port = new StubStorePort
+            {
+                StoreBusinessId = businessId,
+                CashBalance = 10000,
+            };
+            port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { "flour" },
+                StoreUnitsPerItemUnit = 1,
+            });
+            port.Stock["staple_food"] = 0;
+            port.Targets["staple_food"] = 40;
+            port.Prices["staple_food"] = 50;
+            return port;
+        }
+
+        [Test]
         public void DriveDaily_DoesNotDuplicateAnOpenOrder()
         {
             (StoreRestockDriver driver, StubStorePort port, FixtureSupplier _) =

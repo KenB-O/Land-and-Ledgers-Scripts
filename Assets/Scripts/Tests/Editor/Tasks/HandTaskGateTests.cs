@@ -12,6 +12,7 @@ using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Population;
+using LandLedgers.Persistence;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using NUnit.Framework;
@@ -430,6 +431,41 @@ namespace LandLedgers.EditorTests.Tasks
                 "Equipment refusal names the missing equipment: " + rejection);
             Assert.IsTrue(!rejection.Contains("free hand"),
                 "Hand check never ran after the equipment refusal: " + rejection);
+        }
+
+        [Test]
+        public void ProductionHandRegistry_RejectsCrossPersonDuplicateAndRoundTripsPass9()
+        {
+            var hands = new PersonHandOccupancyRegistry();
+            hands.EnsurePerson(PlayerId);
+            HandOperationResult pickup = hands.AllocateOneHanded(
+                PlayerId, BreadLot(), "bread-batch-1", HandRequirement.OneHanded, HandSlot.Left);
+            Assert.IsTrue(pickup.Succeeded, pickup.Reason);
+
+            HandOperationResult duplicate = hands.AllocateOneHanded(
+                NpcId, BreadLot(), "bread-batch-1", HandRequirement.OneHanded, HandSlot.Right);
+            Assert.IsFalse(duplicate.Succeeded, "A lot already in one person's custody cannot be allocated to another person.");
+            Assert.IsTrue(duplicate.Reason.Contains("already held by another person"), duplicate.Reason);
+
+            var save = new Series2Pass9SaveState { PersonHands = hands };
+            Series2Pass9SaveDto dto = save.Capture(new List<string>());
+            Series2Pass9SaveDto serializedRoundTrip = UnityEngine.JsonUtility.FromJson<Series2Pass9SaveDto>(
+                UnityEngine.JsonUtility.ToJson(dto));
+            Assert.IsNotNull(serializedRoundTrip);
+            Assert.AreEqual(1, serializedRoundTrip.PersonHands.Count,
+                "Unity JSON save data must retain the per-person hand section.");
+            var restoredHands = new PersonHandOccupancyRegistry();
+            var restored = new Series2Pass9SaveState { PersonHands = restoredHands };
+            var diagnostics = new List<string>();
+            restored.Restore(serializedRoundTrip, null, diagnostics);
+            restored.Restore(serializedRoundTrip, null, diagnostics);
+
+            HandOccupancy snapshot = restoredHands.SnapshotFor(PlayerId);
+            Assert.IsNotNull(snapshot);
+            Assert.AreEqual(BreadLot(), snapshot.LeftLotKey);
+            Assert.AreEqual("bread-batch-1", snapshot.LeftBatchId);
+            Assert.IsTrue(snapshot.IsRightFree);
+            Assert.AreEqual(1, restoredHands.PersonCount, "Repeated restore must clear then load without duplicating people.");
         }
     }
 }

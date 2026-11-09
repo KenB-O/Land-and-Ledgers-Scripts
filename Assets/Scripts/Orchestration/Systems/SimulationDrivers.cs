@@ -623,6 +623,27 @@ namespace LandLedgers.Orchestration.Systems
                     populationManager.State, householdMemberships, currentJourneys);
             }
 
+            // Pass 9 person-hand persistence shares the same live authority
+            // as task gating and inventory reads. Bind before any save or
+            // Continue operation; old saves restore as an empty hand state.
+            SaveLoadManager personHandSave = FindAnyObjectByType<SaveLoadManager>();
+            if (personHandSave != null)
+            {
+                personHandSave.Series2Pass9State ??= new Series2Pass9SaveState();
+                personHandSave.Series2Pass9State.PersonHands = hub.PersonHands;
+                personHandSave.Series2Pass9State.HandheldContainers = hub.HandheldContainers;
+            }
+
+            // Physical hands P4/P5: seed the hub-owned hand authority from
+            // the real population and expose its read-only snapshots to the
+            // production shopping/person-inventory read model. No capacity
+            // or item hand requirement is inferred here.
+            if (populationManager.State.people != null)
+                foreach (PersonState person in populationManager.State.people)
+                    if (person != null) hub.PersonHands.EnsurePerson(person.id);
+            householdShoppingLoop.HandOccupancySupplier = hub.PersonHands.SnapshotFor;
+            householdShoppingLoop.HeldContainerSupplier = hub.HandheldContainers.HeldByPerson;
+
             // Plan 08 Slice 4 (Q03, AUD-266): wire the live off-map journey
             // authority into the loop. Set once after the if/else so a rebind
             // does not matter; RebindPopulationAuthorities does not touch it.
@@ -3709,12 +3730,13 @@ namespace LandLedgers.Orchestration.Systems
                 hub.HouseholdInventories, hub.MealLog, null, populationMemberships,
                 populationManager != null && populationManager.ConditionDebuffsSuppressed,
                 OffMapJourneys);
-            if (report.MealsMissed > 0 || report.PurchasesMade > 0)
-            {
-                Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
-                    $"{report.MealsEaten} eaten, {report.MealsMissed} missed, " +
-                    $"{report.PurchasesMade} purchases ({report.SpendCents}c).");
-            }
+            // Emit one compact daily record even when the report is all-zero.
+            // The separate shopping summary can still run when no household
+            // meal was resolved, and suppressing this line made that gap look
+            // like a logging cutoff after the last non-zero meal day.
+            Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
+                $"{report.HouseholdsServed} households served, {report.MealsEaten} eaten, " +
+                $"{report.MealsMissed} missed, {report.PurchasesMade} purchases ({report.SpendCents}c).");
 
             // Keep missed meals auditable by resident. These are read-only
             // projections of the meal authority's persisted records; they do
@@ -3924,12 +3946,15 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             GeneralStoreTradingPort storePort = storeManager.BuildHouseholdTradingPort(store, storeFeedRegistry);
+            int storeFeedAvailable = storePort != null && storePort.UsesItemLevelInventory(HorseFeedSku)
+                ? Math.Max(0, storePort.ItemStockUnits(HorseFeedSku)) : 0;
+            int sacksToBuy = BusinessFeedPurchase.PackagesAvailableToPurchase(sacksNeeded, storeFeedAvailable);
             if (storePort == null || !storePort.UsesItemLevelInventory(HorseFeedSku)
                 || storePort.ItemPricePerUnitCents(HorseFeedSku) <= 0
-                || storePort.ItemStockUnits(HorseFeedSku) < sacksNeeded)
+                || sacksToBuy <= 0)
             {
-                string refusal = $"B0 cannot offer {sacksNeeded} '{HorseFeedSku}' sacks at a positive owner-set price " +
-                    $"(stock={storePort?.ItemStockUnits(HorseFeedSku) ?? 0}, price={storePort?.ItemPricePerUnitCents(HorseFeedSku) ?? 0}c); no cash or stock moved.";
+                string refusal = $"B0 cannot offer any of the {sacksNeeded} needed '{HorseFeedSku}' sacks at a positive owner-set price " +
+                    $"(stock={storeFeedAvailable}, price={storePort?.ItemPricePerUnitCents(HorseFeedSku) ?? 0}c); no cash or stock moved.";
                 if (!businessFeedLastStockRefusal.TryGetValue(freight.InstanceId, out string priorRefusal)
                     || !string.Equals(priorRefusal, refusal, StringComparison.Ordinal))
                 {
@@ -3977,7 +4002,7 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             int unitPrice = storePort.ItemPricePerUnitCents(HorseFeedSku);
-            int totalCost = checked(unitPrice * sacksNeeded);
+            int totalCost = checked(unitPrice * sacksToBuy);
             var buyerCash = new Series2BusinessRuntimeCashPort(freight.RuntimeState);
             if (buyerCash.BalanceCents < totalCost)
             {
@@ -3987,7 +4012,7 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             CategoryStockState businessFeed = freight.RuntimeState.GetCategoryStock(HorseFeedCategory);
-            int storageNeeded = (businessFeed?.CurrentStockUnits ?? 0) + sacksNeeded;
+            int storageNeeded = (businessFeed?.CurrentStockUnits ?? 0) + sacksToBuy;
             if ((businessFeed?.TargetStockUnits ?? 0) < storageNeeded)
             {
                 int previousCapacity = businessFeed?.TargetStockUnits ?? 0;
@@ -3995,7 +4020,7 @@ namespace LandLedgers.Orchestration.Systems
                 businessFeed = freight.RuntimeState.GetCategoryStock(HorseFeedCategory);
                 Debug.Log($"[BusinessFeed] B3 animal-feed storage capacity reserved for its finite seven-day horse-feed need: " +
                     $"{previousCapacity}->{capacity} sack(s), current={businessFeed?.CurrentStockUnits ?? 0}, " +
-                    $"purchase={sacksNeeded} sack(s). No inventory or cash was created.", this);
+                    $"purchase={sacksToBuy} sack(s). No inventory or cash was created.", this);
             }
 
             JourneyRoute outwardRoute = hub.Journeys.FindRoute(startLocation, storePort.LocationId, TravelMode.Foot);
@@ -4017,7 +4042,7 @@ namespace LandLedgers.Orchestration.Systems
                 StoreLocationId = storePort.LocationId,
                 StoreBuildingId = store.AssignedBuildingId,
                 HomeBuildingId = ethan.homeBuildingId,
-                Sacks = sacksNeeded,
+                Sacks = sacksToBuy,
                 DayIndex = absoluteDayIndex,
                 TransactionId = $"business-feed:{freight.InstanceId}:{absoluteDayIndex}",
             };
@@ -4034,7 +4059,7 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             Debug.Log($"[BusinessFeed] Procurement task assigned for B3 '{freight.InstanceId}': Ethan P{ethan.id} " +
-                $"is assigned to travel to B0 for {sacksNeeded} sacks; task='{outbound.TaskId}' remains open until confirmed arrival, B3={buyerCash.BalanceCents}c, " +
+                $"is assigned to travel to B0 for {sacksToBuy} of {sacksNeeded} needed sacks based on actual seller stock; task='{outbound.TaskId}' remains open until confirmed arrival, B3={buyerCash.BalanceCents}c, " +
                 $"B0 stock={storePort.ItemStockUnits(HorseFeedSku)} sack(s).", this);
         }
 
@@ -4233,7 +4258,10 @@ namespace LandLedgers.Orchestration.Systems
             {
                 LandLedgers.FirstLedger.PopulationPathingDirector presentation =
                     FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
-                PopulationScheduleState destinationState = PopulationScheduleState.AtWork;
+                // Arrival-driven business travel is a task-owned errand, not
+                // a completed work commute. Keep it in the transit state so
+                // the regular work-return scheduler cannot replace its route.
+                PopulationScheduleState destinationState = PopulationScheduleState.GoingShopping;
                 if (task.CustomerRef.StartsWith(BusinessFeedTaskPrefix, StringComparison.Ordinal))
                 {
                     BusinessFeedTripTaskData trip = JsonUtility.FromJson<BusinessFeedTripTaskData>(task.TermsRef);
@@ -4241,7 +4269,7 @@ namespace LandLedgers.Orchestration.Systems
                         ? PopulationScheduleState.ReturningHome : PopulationScheduleState.GoingShopping;
                 }
                 else if (task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal))
-                    destinationState = PopulationScheduleState.AtWork;
+                    destinationState = PopulationScheduleState.GoingShopping;
                 if (presentation == null || !presentation.TryStartExplicitRoute(ethan.id, destinationBuildingId, destinationState))
                 {
                     ReleaseTaskPersonSchedule(task, dayIndex);
@@ -4596,7 +4624,12 @@ namespace LandLedgers.Orchestration.Systems
                 || !string.Equals(horse.OwnerId, carrier.InstanceId, StringComparison.Ordinal)
                 || !HorseAuthority.IsWorkReady(horse))
             {
-                refusal = "A0 is unavailable or not work-ready for Freight Company B3.";
+                refusal = horse == null
+                    ? "A0 is unavailable: the assigned horse identity did not resolve."
+                    : $"A0 is unavailable or not work-ready for Freight Company B3 " +
+                        $"(active={horse.IsActive}, species={horse.Species}, owner={horse.OwnerKind}:{horse.OwnerId}, " +
+                        $"housing='{horse.HousingId}', health={horse.Health01:0.00}, nutrition={horse.Nutrition01:0.00}, " +
+                        $"hydration={horse.Hydration01:0.00}, fatigue={horse.Fatigue01:0.00}).";
                 refusalIsTransient = true;
             }
             else if (wagon == null || !wagon.IsWagon || wagon.OwnerKind != "business"
@@ -4946,15 +4979,22 @@ namespace LandLedgers.Orchestration.Systems
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
                 GeneralStoreTradingPort port = manager?.BuildHouseholdTradingPort(store, storeFeedRegistry);
                 trip.DayIndex = currentDay;
-                if (port == null || !port.UsesItemLevelInventory(HorseFeedSku)
-                    || port.ItemStockUnits(HorseFeedSku) < trip.Sacks)
+                int availableAtCheckout = port != null && port.UsesItemLevelInventory(HorseFeedSku)
+                    ? Math.Max(0, port.ItemStockUnits(HorseFeedSku)) : 0;
+                int purchaseSacks = BusinessFeedPurchase.PackagesAvailableToPurchase(trip.Sacks, availableAtCheckout);
+                if (port == null || !port.UsesItemLevelInventory(HorseFeedSku) || purchaseSacks <= 0)
                 {
                     Debug.LogWarning($"[BusinessFeed] Purchase refused for B3 '{trip.BusinessId}' at B0: requested {trip.Sacks} " +
-                        $"'{HorseFeedSku}' sacks, usable stock={port?.ItemStockUnits(HorseFeedSku) ?? 0}; need remains open.", this);
+                        $"'{HorseFeedSku}' sacks, usable stock={availableAtCheckout}; need remains open.", this);
                     trip.Batch = null;
                 }
                 else
                 {
+                    if (purchaseSacks < trip.Sacks)
+                        Debug.LogWarning($"[BusinessFeed] Partial checkout for B3 '{trip.BusinessId}': planned {trip.Sacks} " +
+                            $"sack(s), but B0 now has {availableAtCheckout}; Ethan will buy the {purchaseSacks} identified sack(s) " +
+                            "actually available, with the remaining need kept open.", this);
+                    trip.Sacks = purchaseSacks;
                     string tradeRefusal = port.TradingCapability?.CheckTradable(currentDay, 600);
                     if (tradeRefusal != null)
                     {
@@ -5557,6 +5597,7 @@ namespace LandLedgers.Orchestration.Systems
             PersonState ethan = trip != null ? populationManager?.State?.GetPerson(trip.OperatorPersonId) : null;
             if (trip == null || ethan == null || string.IsNullOrWhiteSpace(trip.StagingLocationId)) return;
             SetPersonJourneyLocation(ethan.id, trip.StagingLocationId);
+            ethan.scheduleState = PopulationScheduleState.AtWork;
             Debug.Log($"[FreightDispatch] Ethan P{ethan.id} reached staging after task '{task.TaskId}' " +
                 $"at game minute {Mathf.FloorToInt(AbsoluteNowGameSeconds() / 60f)}; dispatch may start on arrival.", this);
         }
@@ -5574,6 +5615,7 @@ namespace LandLedgers.Orchestration.Systems
                 AnimalState horse = FindOpeningFreightHorse(freight.InstanceId);
                 if (ethan == null || horse == null) return;
                 SetPersonJourneyLocation(ethan.id, trip.StagingLocationId);
+                ethan.scheduleState = PopulationScheduleState.AtWork;
                 horse.TransportState = HorseTransportState.AvailableUnsecured;
                 horse.SecuredFixtureId = string.Empty;
                 Debug.Log($"[Hitching] Ethan P{ethan.id} reached staging after task '{task.TaskId}' " +
@@ -5954,6 +5996,7 @@ namespace LandLedgers.Orchestration.Systems
             foreach (NamedSkuLot lot in storeFeedProcurement.Lots)
             {
                 if (lot == null || lot.RemainingUnits <= 0) continue;
+                if (!BusinessFeedPurchase.IsHorseFeedSku(lot.SkuId, HorseFeedSku)) continue;
                 int transferUnits = lot.RemainingUnits;
                 int cashBeforeReceipt = storeRuntime.CurrentCashCents;
                 int retailStockBefore = storeRuntime.GetRetailItemStockUnits(lot.SkuId, "animal_feed");

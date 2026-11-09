@@ -47,8 +47,28 @@ namespace LandLedgers.Pathing
 
         [Header("Visual Walk Fallback")]
         [SerializeField]
-        [Tooltip("Use the imported Animator blend tree for walking. Leave disabled for generated town agents; the procedural fallback is more reliable across mixed character rigs.")]
-        private bool useAnimatorLocomotion;
+        [Tooltip("Use imported locomotion when the Avatar, state and blend parameter validate. Invalid rigs retain the procedural fallback.")]
+        private bool useAnimatorLocomotion = true;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Distance travelled per second at clip speed 1, per unit of Humanoid scale. Calibrated from the imported walk's source stride.")]
+        private float walkMetresPerSecondPerHumanScale = 1.46f;
+
+        [SerializeField, Min(0f)]
+        [Tooltip("Pelvis clearance above the DriverSeat point in metres.")]
+        private float seatedPelvisClearance = 0.04f;
+        private Transform presentationSeat;
+        private Transform presentationHips;
+        [SerializeField]
+        [Tooltip("Ankle target relative to the pelvis seat, in metres: lateral spacing, step height, forward reach.")]
+        private Vector3 seatedFootOffsetMetres = new Vector3(0.08f, -0.23f, 0.33f);
+        private readonly Transform[] seatedThighs = new Transform[2];
+        private readonly Transform[] seatedKnees = new Transform[2];
+        private readonly Transform[] seatedFeet = new Transform[2];
+        private readonly Transform[] seatedToes = new Transform[2];
+        private int presentationAnimationStateId;
+        private bool proceduralPoseApplied;
+        private float measuredMovementSpeed;
 
         [SerializeField]
         [Tooltip("Applies a lightweight procedural bob and limb swing while the path root moves. This keeps street agents visibly walking even when imported clips retarget badly.")]
@@ -131,6 +151,56 @@ namespace LandLedgers.Pathing
         public bool IsArrivedVisible => state == AgentMoveState.ArrivedVisible;
         public int RemainingPathWaypointCount => Math.Max(0, currentPath.Count - waypointIndex);
         public event Action<AgentMover> ArrivedAtDestination;
+
+        public bool HasPresentationAnimation => presentationAnimationStateId != 0;
+
+        /// <summary>Claims animation only; person identity, routes and vehicle movement remain externally owned.</summary>
+        public bool TrySetPresentationAnimation(string stateName, Transform seat = null)
+        {
+            EnsureReferences();
+            int hash = Animator.StringToHash(stateName);
+            if (cachedAnimator == null || cachedAnimator.runtimeAnimatorController == null
+                || !cachedAnimator.HasState(0, hash)) return false;
+            presentationSeat = seat;
+            presentationHips = seat != null && cachedAnimator.isHuman
+                ? cachedAnimator.GetBoneTransform(HumanBodyBones.Hips) : null;
+            if (presentationHips != null)
+            {
+                seatedThighs[0] = cachedAnimator.GetBoneTransform(HumanBodyBones.LeftUpperLeg);
+                seatedThighs[1] = cachedAnimator.GetBoneTransform(HumanBodyBones.RightUpperLeg);
+                seatedKnees[0] = cachedAnimator.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
+                seatedKnees[1] = cachedAnimator.GetBoneTransform(HumanBodyBones.RightLowerLeg);
+                seatedFeet[0] = cachedAnimator.GetBoneTransform(HumanBodyBones.LeftFoot);
+                seatedFeet[1] = cachedAnimator.GetBoneTransform(HumanBodyBones.RightFoot);
+                seatedToes[0] = cachedAnimator.GetBoneTransform(HumanBodyBones.LeftToes);
+                seatedToes[1] = cachedAnimator.GetBoneTransform(HumanBodyBones.RightToes);
+            }
+            if (presentationAnimationStateId == hash) return true;
+            ResetProceduralVisualPose(true);
+            presentationAnimationStateId = hash;
+            currentLocomotionBlend = 0f;
+            locomotionBlendVelocity = 0f;
+            lastAnimatorWalking = false;
+            cachedAnimator.applyRootMotion = false;
+            cachedAnimator.speed = 1f;
+            cachedAnimator.CrossFadeInFixedTime(hash, walkBlendInSeconds);
+            return true;
+        }
+
+        public void ClearPresentationAnimation()
+        {
+            if (presentationAnimationStateId == 0) return;
+            presentationAnimationStateId = 0;
+            presentationSeat = null;
+            presentationHips = null;
+            if (visualMotionRoot != null && visualMotionRoot != transform && visualBasePoseCached)
+                visualMotionRoot.localPosition = visualBaseLocalPosition;
+            measuredMovementSpeed = 0f;
+            currentLocomotionBlend = 0f;
+            locomotionBlendVelocity = 0f;
+            if (cachedAnimator != null && cachedAnimator.runtimeAnimatorController != null)
+                cachedAnimator.CrossFadeInFixedTime(locomotionStateId, walkBlendOutSeconds);
+        }
 
         public void Configure(PathingManager newPathingManager)
         {
@@ -260,11 +330,62 @@ namespace LandLedgers.Pathing
 
         private void LateUpdate()
         {
+            if (state == AgentMoveState.ArrivedVisible || HasPresentationAnimation)
+                UpdateAnimatorState();
             UpdateProceduralVisualMotion(UnityEngine.Time.unscaledDeltaTime);
+            if (HasPresentationAnimation && presentationSeat != null && presentationHips != null
+                && visualMotionRoot != null && visualMotionRoot != transform)
+            {
+                Vector3 correction = presentationSeat.position + presentationSeat.up * seatedPelvisClearance
+                    - presentationHips.position;
+                float weight = cachedAnimator.IsInTransition(0)
+                    ? 1f - Mathf.Exp(-UnityEngine.Time.unscaledDeltaTime / walkBlendInSeconds) : 1f;
+                visualMotionRoot.position += correction * weight;
+                for (int i = 0; i < 2; i++)
+                {
+                    Vector3 footTarget = presentationSeat.position
+                        + transform.right * (i == 0 ? -seatedFootOffsetMetres.x : seatedFootOffsetMetres.x)
+                        + presentationSeat.up * seatedFootOffsetMetres.y
+                        + transform.forward * seatedFootOffsetMetres.z;
+                    AlignSeatedLeg(seatedThighs[i], seatedKnees[i], seatedFeet[i], seatedToes[i], footTarget, weight);
+                }
+            }
+        }
+
+        private void AlignSeatedLeg(Transform thigh, Transform knee, Transform foot, Transform toes, Vector3 target, float weight)
+        {
+            if (thigh == null || knee == null || foot == null) return;
+            Vector3 hip = thigh.position;
+            float upperLength = Vector3.Distance(hip, knee.position);
+            float lowerLength = Vector3.Distance(knee.position, foot.position);
+            Vector3 direction = target - hip;
+            float distance = Mathf.Clamp(direction.magnitude, Mathf.Abs(upperLength - lowerLength) + 0.001f,
+                upperLength + lowerLength - 0.001f);
+            direction.Normalize();
+            Vector3 pole = Vector3.ProjectOnPlane(transform.forward, direction).normalized;
+            float along = (upperLength * upperLength + distance * distance - lowerLength * lowerLength) / (2f * distance);
+            float height = Mathf.Sqrt(Mathf.Max(0f, upperLength * upperLength - along * along));
+            Vector3 desiredKnee = hip + direction * along + pole * height;
+            Quaternion ankleRotation = foot.rotation;
+            Quaternion thighTarget = Quaternion.FromToRotation(knee.position - hip, desiredKnee - hip) * thigh.rotation;
+            thigh.rotation = Quaternion.Slerp(thigh.rotation, thighTarget, weight);
+            Quaternion kneeTarget = Quaternion.FromToRotation(foot.position - knee.position,
+                hip + direction * distance - knee.position) * knee.rotation;
+            knee.rotation = Quaternion.Slerp(knee.rotation, kneeTarget, weight);
+            foot.rotation = ankleRotation;
+            if (toes != null)
+            {
+                Vector3 toeDirection = toes.position - foot.position;
+                Vector3 levelDirection = Vector3.ProjectOnPlane(toeDirection, presentationSeat.up);
+                if (levelDirection.sqrMagnitude > 0.0001f)
+                    foot.rotation = Quaternion.Slerp(foot.rotation,
+                        Quaternion.FromToRotation(toeDirection, levelDirection) * foot.rotation, weight);
+            }
         }
 
         private void TickMove(float simulationDeltaSeconds)
         {
+            Vector3 movementStart = transform.position;
             if (pathingManager == null || pathingManager.Settings == null || currentPath.Count == 0 || waypointIndex >= currentPath.Count)
             {
                 CompleteRouteArrival();
@@ -322,6 +443,10 @@ namespace LandLedgers.Pathing
                 break;
             }
 
+            Vector3 movementDelta = transform.position - movementStart;
+            movementDelta.y = 0f;
+            measuredMovementSpeed = simulationDeltaSeconds > 0f
+                ? movementDelta.magnitude / simulationDeltaSeconds : 0f;
             UpdateAnimatorState();
         }
 
@@ -490,18 +615,29 @@ namespace LandLedgers.Pathing
             }
 
             float timeScale = GetMovementTimeScale();
+            if (HasPresentationAnimation)
+            {
+                cachedAnimator.speed = timeScale <= 0f ? 0f : 1f;
+                return;
+            }
+            // Other activities may claim a different state directly. Only an explicit
+            // route/show reset may reclaim it, never an ordinary locomotion tick.
+            if (!instant && animatorHasBlendParameter
+                && cachedAnimator.GetCurrentAnimatorStateInfo(0).shortNameHash != locomotionStateId)
+                return;
+
             bool walking = state == AgentMoveState.Moving && timeScale > 0f;
             bool driveImportedWalk = useAnimatorLocomotion && animatorCanDriveLocomotion && walking;
             float targetBlend = driveImportedWalk ? 1f : 0f;
 
-            if (animatorHasBlendParameter)
+            if (animatorHasBlendParameter && instant && !HasPresentationAnimation)
             {
-                EnsureLocomotionState(driveImportedWalk ? 0f : cachedAnimator.GetCurrentAnimatorStateInfo(0).normalizedTime);
+                EnsureLocomotionState(0f);
             }
 
             if (animatorHasBlendParameter && instant)
             {
-                currentLocomotionBlend = targetBlend;
+                currentLocomotionBlend = driveImportedWalk ? 0f : targetBlend;
                 locomotionBlendVelocity = 0f;
                 cachedAnimator.SetFloat(locomotionBlendParameterId, currentLocomotionBlend);
                 cachedAnimator.Update(0f);
@@ -529,10 +665,16 @@ namespace LandLedgers.Pathing
             // Animator time is part of the simulated movement clock. Procedural
             // locomotion and imported locomotion both need to pause and scale
             // with the same simulation rate as the actor's route.
-            cachedAnimator.speed = LandLedgers.Time.SimulationAnimationScale.ResolveMovingActorSpeed(
-                baseWalkAnimationSpeed,
-                state == AgentMoveState.Moving,
-                timeScale);
+            float walkPlayback = baseWalkAnimationSpeed;
+            if (driveImportedWalk)
+            {
+                float strideSpeed = walkMetresPerSecondPerHumanScale * cachedAnimator.humanScale
+                    * Mathf.Abs(cachedAnimator.transform.lossyScale.y);
+                walkPlayback = measuredMovementSpeed / Mathf.Max(0.01f, strideSpeed);
+            }
+            cachedAnimator.speed = timeScale <= 0f ? 0f
+                : LandLedgers.Time.SimulationAnimationScale.ResolveMovingActorSpeed(
+                    walkPlayback, state == AgentMoveState.Moving, timeScale);
             lastAnimatorWalking = driveImportedWalk;
         }
 
@@ -544,7 +686,9 @@ namespace LandLedgers.Pathing
             }
 
             AnimatorStateInfo stateInfo = cachedAnimator.GetCurrentAnimatorStateInfo(0);
-            if (stateInfo.shortNameHash == locomotionStateId)
+            if (stateInfo.shortNameHash == locomotionStateId
+                || (cachedAnimator.IsInTransition(0)
+                    && cachedAnimator.GetNextAnimatorStateInfo(0).shortNameHash == locomotionStateId))
             {
                 return;
             }
@@ -556,7 +700,8 @@ namespace LandLedgers.Pathing
         {
             EnsureReferences();
             ResetProceduralVisualPose(true);
-            if (cachedAnimator == null || cachedAnimator.runtimeAnimatorController == null || !rebindAnimatorOnShow)
+            if (cachedAnimator == null || cachedAnimator.runtimeAnimatorController == null || !rebindAnimatorOnShow
+                || HasPresentationAnimation || cachedAnimator.IsInTransition(0))
             {
                 return;
             }
@@ -664,7 +809,7 @@ namespace LandLedgers.Pathing
                 return;
             }
 
-            animatorCanDriveLocomotion = useAnimatorLocomotion;
+            animatorCanDriveLocomotion = cachedAnimator.HasState(0, locomotionStateId);
         }
 
         private void EnsureVisualMotionRoot()
@@ -764,6 +909,11 @@ namespace LandLedgers.Pathing
             }
 
             EnsureReferences();
+            if (HasPresentationAnimation || (useAnimatorLocomotion && animatorCanDriveLocomotion))
+            {
+                // Do not reset bones here: Animator has already evaluated this frame.
+                return;
+            }
             if (visualMotionRoot == null)
             {
                 return;
@@ -777,6 +927,7 @@ namespace LandLedgers.Pathing
                 return;
             }
 
+            proceduralPoseApplied = true;
             proceduralWalkTime += deltaTime * proceduralWalkFrequency * timeScale;
             float cycle = proceduralWalkTime * Mathf.PI * 2f;
             float stride = Mathf.Sin(cycle);
@@ -809,7 +960,9 @@ namespace LandLedgers.Pathing
 
         private void ResetProceduralVisualPose(bool instant, float deltaTime)
         {
+            if (!proceduralPoseApplied) return;
             EnsureVisualMotionRoot();
+            if (instant) proceduralPoseApplied = false;
             proceduralWalkTime = instant ? 0f : proceduralWalkTime;
             float t = instant ? 1f : Mathf.Clamp01(deltaTime * proceduralIdleReturnSpeed);
 

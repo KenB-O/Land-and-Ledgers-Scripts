@@ -82,6 +82,10 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>Phase B: household purchasing needs (demand, never sales).</summary>
         private HouseholdNeedRegistry purchasingNeeds;
+        /// <summary>Authoritative person-to-hand state shared by task gating and inventory queries.</summary>
+        private PersonHandOccupancyRegistry personHands;
+        /// <summary>Runtime identity and location directory for instantiated handheld containers.</summary>
+        private HandheldContainerRegistry handheldContainers;
         [SerializeField]
         private TaskAuthority taskAuthority = new TaskAuthority();
 
@@ -149,6 +153,8 @@ namespace LandLedgers.Orchestration.Systems
         public HouseholdMealLogRegistry MealLog => mealLog ??= new HouseholdMealLogRegistry();
         /// <summary>Phase B: household purchasing needs.</summary>
         public HouseholdNeedRegistry PurchasingNeeds => purchasingNeeds ??= new HouseholdNeedRegistry();
+        public PersonHandOccupancyRegistry PersonHands => personHands ??= new PersonHandOccupancyRegistry();
+        public HandheldContainerRegistry HandheldContainers => handheldContainers ??= new HandheldContainerRegistry();
         public TaskAuthority Tasks => taskAuthority ??= new TaskAuthority();
 
         /// <summary>Priority 4 Slice 4 — the installed task-duration diagnostic, or null when not installed.</summary>
@@ -271,6 +277,7 @@ namespace LandLedgers.Orchestration.Systems
                 AccessResolver = new EquipmentAccessResolver(),
                 ReservationsSupplier = () => Reservations,
                 NowGameSecondsSupplier = nowGameSeconds,
+                HandOccupancySupplier = PersonHands.SnapshotFor,
             };
             Tasks.SetExecutionGate(gate);
         }

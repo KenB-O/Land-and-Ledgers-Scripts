@@ -263,6 +263,13 @@ namespace LandLedgers.FirstLedger
         // warning for every household/tick.
         private string lastHouseholdOfferDiagnosticSignature = string.Empty;
 
+        // Runtime, owner-added SKUs are checked on each daily restock and
+        // household-port build. Keep a missing-price/conversion/identified-lot
+        // warning visible without repeating an unchanged cause every day.
+        // A valid stock state clears the signature so a later stockout warns
+        // again.
+        private string lastRuntimeFeedDiagnosticSignature = string.Empty;
+
         [Header("Latest Customer Sale Provenance")]
         [SerializeField]
         private int lastCustomerHouseholdId = -1;
@@ -353,10 +360,18 @@ namespace LandLedgers.FirstLedger
         // list). The supplier list starts empty in production; P3 registers
         // regional businesses here. The weekly off-map reorder is untouched.
         private readonly StoreRestockDriver restockDriver = new StoreRestockDriver();
+        // The development town's NPC shop is a distinct business from the
+        // player-managed store. Keep its orders separate while sharing the
+        // same regional supplier inventory and production adapters.
+        private readonly StoreRestockDriver developmentNpcRestockDriver = new StoreRestockDriver();
         private List<RegionalSupplierAdapter> regionalSuppliers;
+        private string developmentNpcRestockBusinessId = string.Empty;
+        private BusinessInstanceState developmentNpcRestockBusiness;
+        private Review2StoreFeedRegistry developmentNpcFeedRegistry;
 
         [SerializeField, TextArea(2, 5)]
         private string lastDailyRestockSummary = "No daily restock review has run yet.";
+        private string lastDailyRestockLogKey = string.Empty;
 
         [SerializeField, TextArea(2, 5)]
         private string lastStaffingSummary = "No staffing changes yet.";
@@ -599,14 +614,16 @@ namespace LandLedgers.FirstLedger
                     runtimeFeed.FeedItemId, runtimeFeed.FeedCategoryId);
                 if (runtimeFeed.RetailPriceCents <= 0)
                 {
-                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: the owner has not supplied a positive retail price.", this);
+                    LogRuntimeFeedOfferWarning(npcBusiness.InstanceId, runtimeFeed.FeedItemId,
+                        "the owner has not supplied a positive retail price");
                 }
                 else if (!feedConvertible)
                 {
-                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: {feedReason}", this);
+                    LogRuntimeFeedOfferWarning(npcBusiness.InstanceId, runtimeFeed.FeedItemId, feedReason);
                 }
                 else if (identifiedUnits > 0)
                 {
+                    lastRuntimeFeedDiagnosticSignature = string.Empty;
                     bool alreadyOffered = false;
                     foreach (GeneralStoreCategoryOffer existingOffer in offers)
                     {
@@ -635,8 +652,13 @@ namespace LandLedgers.FirstLedger
                 }
                 else
                 {
-                    Debug.LogWarning($"General Store '{npcBusiness.InstanceId}' runtime SKU '{runtimeFeed.FeedItemId}' is not offered: no available identified item lots back it.", this);
+                    LogRuntimeFeedOfferWarning(npcBusiness.InstanceId, runtimeFeed.FeedItemId,
+                        "no available identified item lots back it");
                 }
+            }
+            else
+            {
+                lastRuntimeFeedDiagnosticSignature = string.Empty;
             }
 
             if (droppedReasons.Count > 0)
@@ -652,6 +674,19 @@ namespace LandLedgers.FirstLedger
 
             var capability = new StoreTradingCapability { Staffed = npcBusiness.RuntimeState.FilledWorkerCount > 0 };
             return new GeneralStoreTradingPort(this, npcBusiness, offers, capability);
+        }
+
+        private void LogRuntimeFeedOfferWarning(string businessId, string itemId, string reason)
+        {
+            string normalizedReason = string.IsNullOrWhiteSpace(reason) ? "unspecified offer validation failure" : reason.Trim();
+            string signature = (businessId ?? string.Empty) + "|" + (itemId ?? string.Empty) + "|" + normalizedReason;
+            if (string.Equals(signature, lastRuntimeFeedDiagnosticSignature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lastRuntimeFeedDiagnosticSignature = signature;
+            Debug.LogWarning($"General Store '{businessId}' runtime SKU '{itemId}' is not offered: {normalizedReason}.", this);
         }
 
         private ItemDefinition FindAuthoredStoreItem(string itemId)
@@ -883,8 +918,16 @@ namespace LandLedgers.FirstLedger
                 lastStaffingSummary = lastStaffingSummary,
                 lastCategoryDemandSummary = lastCategoryDemandSummary,
                 regionalSupply = CaptureRegionalSupplyDto(),
+                developmentNpcRestock = CaptureRestockDriverDto(developmentNpcRestockDriver),
                 currentBusiness = currentBusiness != null ? currentBusiness.CaptureSaveDto() : null
             };
+        }
+
+        private static RegionalSupplySaveDto CaptureRestockDriverDto(StoreRestockDriver driver)
+        {
+            var dto = new RegionalSupplySaveDto();
+            driver?.CaptureInto(dto);
+            return dto;
         }
 
         /// <summary>
@@ -927,6 +970,7 @@ namespace LandLedgers.FirstLedger
                     adapter.RestoreFrom(dto, diagnostics);
             }
             restockDriver.RestoreFrom(dto, diagnostics);
+            developmentNpcRestockDriver.RestoreFrom(null, diagnostics);
             foreach (string diagnostic in diagnostics)
                 Debug.LogWarning("[GeneralStore] " + diagnostic, this);
         }
@@ -989,7 +1033,60 @@ namespace LandLedgers.FirstLedger
             RefreshReorderState();
             RefreshCurrentBusinessCapacityState();
             RestoreRegionalSupply(dto.regionalSupply);
+            var npcRestockDiagnostics = new List<string>();
+            developmentNpcRestockDriver.RestoreFrom(dto.developmentNpcRestock, npcRestockDiagnostics);
+            foreach (string diagnostic in npcRestockDiagnostics)
+                Debug.LogWarning("[GeneralStore] " + diagnostic, this);
             PushCashToHud();
+        }
+
+        /// <summary>
+        /// Registers the authored development-town NPC store as a separate
+        /// daily restock target. It uses the existing regional supplier and
+        /// restock authorities without binding the NPC business as a player
+        /// business or sharing the player's order queue.
+        /// </summary>
+        public void ConfigureDevelopmentNpcRestock(
+            BusinessInstanceState npcBusiness,
+            Review2StoreFeedRegistry runtimeFeedRegistry)
+        {
+            if (npcBusiness?.RuntimeState == null || string.IsNullOrWhiteSpace(npcBusiness.InstanceId))
+            {
+                developmentNpcRestockBusiness = null;
+                developmentNpcRestockBusinessId = string.Empty;
+                developmentNpcFeedRegistry = null;
+                return;
+            }
+
+            if (npcBusiness.Owner != null && npcBusiness.Owner.OwnerKind == BusinessOwnerKind.Player)
+            {
+                Debug.LogWarning("[GeneralStore] Refusing to register the player-owned store as the development NPC restock target.", this);
+                return;
+            }
+
+            developmentNpcRestockBusiness = npcBusiness;
+            developmentNpcRestockBusinessId = npcBusiness.InstanceId;
+            developmentNpcFeedRegistry = runtimeFeedRegistry;
+            EnsureRegionalSuppliersExist();
+        }
+
+        private BusinessInstanceState ResolveDevelopmentNpcRestockBusiness()
+        {
+            if (string.IsNullOrWhiteSpace(developmentNpcRestockBusinessId)) return null;
+            if (sharedBusinessRuntime != null)
+            {
+                IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+                for (int i = 0; i < businesses.Count; i++)
+                {
+                    BusinessInstanceState candidate = businesses[i];
+                    if (candidate != null && string.Equals(candidate.InstanceId, developmentNpcRestockBusinessId, StringComparison.Ordinal))
+                        return candidate;
+                }
+            }
+            return developmentNpcRestockBusiness != null
+                && string.Equals(developmentNpcRestockBusiness.InstanceId, developmentNpcRestockBusinessId, StringComparison.Ordinal)
+                    ? developmentNpcRestockBusiness
+                    : null;
         }
 
         public int EvaluateHouseholdShoppingPriority(int householdId)
@@ -2355,14 +2452,59 @@ namespace LandLedgers.FirstLedger
         private void DriveDailyRestock()
         {
             if (!InitializeIfNeeded()) return;
-            if (currentBusiness == null || runtimeState == null) return;
             int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
             if (dayIndex < 0) return;
+            BusinessInstanceState npcBusiness = ResolveDevelopmentNpcRestockBusiness();
+            bool hasPlayerStore = currentBusiness != null && runtimeState != null;
+            bool hasNpcStore = npcBusiness?.RuntimeState != null && storeDefinition != null;
+            if (!hasPlayerStore && !hasNpcStore) return;
             EnsureRegionalSuppliers(dayIndex);
-            GeneralStoreTradingPort port = BuildHouseholdTradingPort(currentBusiness);
-            if (port == null) return;
-            if (restockDriver.DriveDaily(port, dayIndex, GetEffectiveReorderThreshold01()))
-                lastDailyRestockSummary = restockDriver.LastDailySummary;
+            if (hasPlayerStore)
+            {
+                GeneralStoreTradingPort playerPort = BuildHouseholdTradingPort(currentBusiness);
+                if (restockDriver.DriveDaily(playerPort, dayIndex, GetEffectiveReorderThreshold01()))
+                {
+                    lastDailyRestockSummary = restockDriver.LastDailySummary;
+                    LogDailyRestockSummary(dayIndex);
+                }
+            }
+
+            if (hasNpcStore && !string.Equals(npcBusiness.InstanceId, currentBusiness?.InstanceId, StringComparison.Ordinal))
+            {
+                GeneralStoreTradingPort npcPort = BuildHouseholdTradingPort(npcBusiness, developmentNpcFeedRegistry);
+                if (developmentNpcRestockDriver.DriveDaily(npcPort, dayIndex, GetEffectiveReorderThreshold01()))
+                {
+                    lastDailyRestockSummary = "NPC " + developmentNpcRestockDriver.LastDailySummary;
+                    LogDailyRestockSummary(dayIndex);
+                }
+            }
+        }
+
+        private void LogDailyRestockSummary(int dayIndex)
+        {
+            string summary = lastDailyRestockSummary;
+            if (string.IsNullOrWhiteSpace(summary)
+                || summary.IndexOf("no new orders, shipments, or receipts", StringComparison.OrdinalIgnoreCase) >= 0)
+                return;
+
+            // Restock diagnostics include the simulation day in both the
+            // driver prefix and the service detail. Normalize every day
+            // token so a persistent shortage is reported once until its
+            // cause or outcome changes (including across day 9 -> day 10).
+            string key = System.Text.RegularExpressions.Regex.Replace(
+                summary, @"(?i)\bday\s+\d+\b", "day");
+            if (string.Equals(lastDailyRestockLogKey, key, StringComparison.Ordinal)) return;
+            lastDailyRestockLogKey = key;
+
+            bool blocked = summary.IndexOf("no upstream supplier can quote", StringComparison.OrdinalIgnoreCase) >= 0
+                || summary.IndexOf("no upstream suppliers registered", StringComparison.OrdinalIgnoreCase) >= 0
+                || summary.IndexOf("no restock for", StringComparison.OrdinalIgnoreCase) >= 0
+                || summary.IndexOf("WAITING", StringComparison.OrdinalIgnoreCase) >= 0
+                || summary.IndexOf("cancelled", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (blocked)
+                Debug.LogWarning("[StoreRestock] " + summary, this);
+            else
+                Debug.Log("[StoreRestock] " + summary, this);
         }
 
         /// <summary>
@@ -2392,13 +2534,18 @@ namespace LandLedgers.FirstLedger
             if (regionalSuppliers != null) return;
             regionalSuppliers = RegionalSupplierSet.CreateAll();
             foreach (RegionalSupplierAdapter adapter in regionalSuppliers)
+            {
                 restockDriver.RegisterSupplier(adapter);
-            restockDriver.DeliveredCostPerUnitCents = (supplier, categoryId, itemId, units) =>
+                developmentNpcRestockDriver.RegisterSupplier(adapter);
+            }
+            Func<IUpstreamGoodsSupplier, string, string, int, int> deliveredCost = (supplier, categoryId, itemId, units) =>
                 string.IsNullOrWhiteSpace(itemId)
                     ? RegionalDeliveredCost.DeliveredCentsPerUnit(supplier, categoryId, units,
                         RegionalFreightRateCard.OpeningCompany)
                     : RegionalDeliveredCost.DeliveredCentsPerUnitForItem(supplier, itemId, units,
                         RegionalFreightRateCard.OpeningCompany);
+            restockDriver.DeliveredCostPerUnitCents = deliveredCost;
+            developmentNpcRestockDriver.DeliveredCostPerUnitCents = deliveredCost;
         }
 
         private void OnWeekChanged(SimulationDateChangedContext context)

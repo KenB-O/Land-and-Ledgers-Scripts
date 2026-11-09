@@ -703,3 +703,29 @@ note records their audited status so the question does not reopen:
   it needs no row. `HeldContainerView` and `HeldContainerContents`
   are nested inside `PersonInventoryReadModel`, which already has a
   registry row, so no new row is needed for them.
+- Physical hands campaign P3 (2026-11-08)
+  individual physical capability as a safe integration contract (new
+  `PhysicalCapabilityDemand` and `PhysicalCapabilityVerdict` structs
+  plus `EvaluateCapability` on `PhysicalCapacityEvaluator`, all in
+  `Domains/Economy/Storage/PhysicalCapacityContracts.cs`, and
+  `AllocateOneHandedWithCapability` plus
+  `AllocateTwoHandedWithCapability` on `HandOccupancyAuthority` in
+  `Domains/Population/HandOccupancy.cs`). Every threshold is
+  caller-supplied per operation, the consult checks its demand axes in
+  one fixed order and returns the first failure, Unknown names the
+  missing input or rule, DoesNotFit names the demand that failed, a
+  demand with nothing demanded passes, a null evaluator refuses loudly,
+  and a passed consult that then fails a hand rule is re-recorded under
+  the wrapper operation name. No strength formula, no fatigue curve, no
+  body-size table, no assistance factor, and no Durability mapping is
+  authored anywhere, and isFemale is never read. Category B, no
+  production caller consults capability yet, so the consult and the
+  wrappers are reachable only from tests until P4 wires a live
+  capability-gated operation. The two new types are structs and get no
+  registry rows, because the registry test resolves a row only through
+  a `class` declaration and both would fail that check as written, and
+  the assembly scan only sweeps classes, so neither needs a row. The
+  evaluator method adds no type, and the `HandOccupancyAuthority`
+  reference to `PhysicalCapacityEvaluator` needs no allowlist, because
+  the evaluator is already wired in production through the shopping
+  loop and holds no registry row.

@@ -105,7 +105,7 @@ namespace LandLedgers.Population
         /// <summary>Verbatim reason of the most recent refused operation, empty when the last operation succeeded (or none ran).</summary>
         public string LastRefusalReason { get; }
 
-        /// <summary>Operation that produced <see cref="LastRefusalReason"/> (AllocateOneHanded, AllocateTwoHanded, Release, TransferToContainer, TransferFromContainer, PickUpContainer, SetDownContainer, MoveHeldContainer, TransferToHeldContainer, or TransferFromHeldContainer), empty when none.</summary>
+        /// <summary>Operation that produced <see cref="LastRefusalReason"/> (AllocateOneHanded, AllocateTwoHanded, AllocateOneHandedWithCapability, AllocateTwoHandedWithCapability, Release, TransferToContainer, TransferFromContainer, PickUpContainer, SetDownContainer, MoveHeldContainer, TransferToHeldContainer, or TransferFromHeldContainer), empty when none.</summary>
         public string LastRefusalOperation { get; }
 
         public bool IsLeftFree => LeftLotKey.IsEmpty;
@@ -377,6 +377,82 @@ namespace LandLedgers.Population
             return HandOperationResult.Ok(
                 "HandOccupancy: person " + PersonId + " holds " + DescribeLot(lotKey, batchId) + " in both hands.",
                 lotKey, batchId ?? string.Empty);
+        }
+
+        /// <summary>
+        /// P3 capability-gated one-handed allocate. Consults the
+        /// supplied evaluator first through EvaluateCapability and
+        /// refuses with the verdict reason verbatim when the verdict
+        /// is not Fits. A null evaluator refuses loudly, never
+        /// silently passes. On a Fits verdict it delegates to
+        /// AllocateOneHanded with the same lot, batch, requirement,
+        /// hand, and context. When the delegated allocate refuses, the
+        /// refusal is re-recorded under this wrapper operation name
+        /// with the inner reason verbatim. The authority stores no
+        /// capability value and no threshold.
+        /// </summary>
+        public HandOperationResult AllocateOneHandedWithCapability(
+            LotKey lotKey, string batchId, HandRequirement? requirement, HandSlot hand,
+            PhysicalCapacityEvaluator evaluator, PersonCarryInputs inputs, PhysicalCapabilityDemand demand,
+            HandCustodyContext context = null)
+        {
+            if (evaluator == null)
+            {
+                return Refuse("AllocateOneHandedWithCapability",
+                    "HandOccupancy - person " + PersonId + " capability allocate refused - no capability evaluator was supplied, so no capability verdict could be rendered.");
+            }
+
+            PhysicalCapabilityVerdict verdict = evaluator.EvaluateCapability(inputs, demand);
+            if (!verdict.Fits)
+            {
+                return Refuse("AllocateOneHandedWithCapability", verdict.Reason);
+            }
+
+            HandOperationResult inner = AllocateOneHanded(lotKey, batchId, requirement, hand, context);
+            if (!inner.Succeeded)
+            {
+                return Refuse("AllocateOneHandedWithCapability", inner.Reason);
+            }
+
+            return inner;
+        }
+
+        /// <summary>
+        /// P3 capability-gated two-handed allocate. Consults the
+        /// supplied evaluator first through EvaluateCapability and
+        /// refuses with the verdict reason verbatim when the verdict
+        /// is not Fits. A null evaluator refuses loudly, never
+        /// silently passes. On a Fits verdict it delegates to
+        /// AllocateTwoHanded with the same lot, batch, requirement,
+        /// and context. When the delegated allocate refuses, the
+        /// refusal is re-recorded under this wrapper operation name
+        /// with the inner reason verbatim. The authority stores no
+        /// capability value and no threshold.
+        /// </summary>
+        public HandOperationResult AllocateTwoHandedWithCapability(
+            LotKey lotKey, string batchId, HandRequirement? requirement,
+            PhysicalCapacityEvaluator evaluator, PersonCarryInputs inputs, PhysicalCapabilityDemand demand,
+            HandCustodyContext context = null)
+        {
+            if (evaluator == null)
+            {
+                return Refuse("AllocateTwoHandedWithCapability",
+                    "HandOccupancy - person " + PersonId + " capability allocate refused - no capability evaluator was supplied, so no capability verdict could be rendered.");
+            }
+
+            PhysicalCapabilityVerdict verdict = evaluator.EvaluateCapability(inputs, demand);
+            if (!verdict.Fits)
+            {
+                return Refuse("AllocateTwoHandedWithCapability", verdict.Reason);
+            }
+
+            HandOperationResult inner = AllocateTwoHanded(lotKey, batchId, requirement, context);
+            if (!inner.Succeeded)
+            {
+                return Refuse("AllocateTwoHandedWithCapability", inner.Reason);
+            }
+
+            return inner;
         }
 
         /// <summary>

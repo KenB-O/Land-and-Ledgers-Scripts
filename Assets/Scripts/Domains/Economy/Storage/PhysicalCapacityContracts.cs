@@ -344,6 +344,105 @@ namespace LandLedgers.Economy.Storage
         }
     }
 
+    /// <summary>
+    /// The caller-supplied demand for one capability operation in P3.
+    /// Every field is supplied by the caller for that one operation.
+    /// No demand value is read from any table, registry, or item spec.
+    /// An Unknown measure means that axis is not demanded. A zero
+    /// carry duration means duration is not demanded. An empty
+    /// equipment kind means no equipment is demanded. A demand with
+    /// nothing demanded always passes the consult, so the wrappers
+    /// stay usable as a plain allocate path with an explicit empty
+    /// demand.
+    /// </summary>
+    public struct PhysicalCapabilityDemand
+    {
+        public PhysicalMeasure MinimumLiftStrength { get; }
+        public PhysicalMeasure MinimumCarryStrength { get; }
+        public PhysicalMeasure MinimumBodySize { get; }
+        public PhysicalMeasure MaximumFatigue { get; }
+        public int CarryDurationMinutes { get; }
+        public bool NeedsSizeAndHandlingVerdict { get; }
+        public string RequiredEquipmentKind { get; }
+
+        public PhysicalCapabilityDemand(
+            PhysicalMeasure minimumLiftStrength,
+            PhysicalMeasure minimumCarryStrength,
+            PhysicalMeasure minimumBodySize,
+            PhysicalMeasure maximumFatigue,
+            int carryDurationMinutes,
+            bool needsSizeAndHandlingVerdict,
+            string requiredEquipmentKind)
+        {
+            MinimumLiftStrength = minimumLiftStrength;
+            MinimumCarryStrength = minimumCarryStrength;
+            MinimumBodySize = minimumBodySize;
+            MaximumFatigue = maximumFatigue;
+            CarryDurationMinutes = carryDurationMinutes;
+            NeedsSizeAndHandlingVerdict = needsSizeAndHandlingVerdict;
+            RequiredEquipmentKind = requiredEquipmentKind ?? string.Empty;
+        }
+
+        public static PhysicalCapabilityDemand None =>
+            new PhysicalCapabilityDemand(
+                PhysicalMeasure.Unknown,
+                PhysicalMeasure.Unknown,
+                PhysicalMeasure.Unknown,
+                PhysicalMeasure.Unknown,
+                0,
+                false,
+                string.Empty);
+    }
+
+    /// <summary>
+    /// The outcome of one capability consult in P3. Reason names the
+    /// person, the demand that was asked for, and each missing input
+    /// or the demand that failed. MissingInputs lists the demanded
+    /// but missing names in consult order, namely carry duration,
+    /// object size and handling, body size, strength, and fatigue.
+    /// The person context fields echo the inputs the consult ran
+    /// with. Age, labor capacity, and nutrition gate nothing in P3.
+    /// They are echoed only so a future owner decision can see them.
+    /// </summary>
+    public struct PhysicalCapabilityVerdict
+    {
+        public PhysicalCapacityOutcome Outcome { get; }
+        public string Reason { get; }
+        public IReadOnlyList<string> MissingInputs { get; }
+        public int PersonId { get; }
+        public int AgeYears { get; }
+        public int LaborCapacityPercent { get; }
+        public float Nutrition01 { get; }
+
+        public bool Fits => Outcome == PhysicalCapacityOutcome.Fits;
+
+        public PhysicalCapabilityVerdict(
+            PhysicalCapacityOutcome outcome,
+            string reason,
+            IReadOnlyList<string> missingInputs,
+            int personId,
+            int ageYears,
+            int laborCapacityPercent,
+            float nutrition01)
+        {
+            Outcome = outcome;
+            Reason = reason ?? string.Empty;
+            if (missingInputs != null)
+            {
+                MissingInputs = new List<string>(missingInputs).AsReadOnly();
+            }
+            else
+            {
+                MissingInputs = new List<string>().AsReadOnly();
+            }
+
+            PersonId = personId;
+            AgeYears = ageYears;
+            LaborCapacityPercent = laborCapacityPercent;
+            Nutrition01 = nutrition01;
+        }
+    }
+
     /// <summary>The four answers a capacity query can return.</summary>
     public enum PhysicalCapacityOutcome
     {
@@ -524,6 +623,9 @@ namespace LandLedgers.Economy.Storage
     /// - HandheldPail (P2b): the same caller-supplied container capacity
     ///   check as WornSatchel, with the kind and wording changed to the
     ///   handheld pail and every other rule identical.
+    /// - Capability consult (P3), see EvaluateCapability, answers one
+    ///   caller-supplied demand per operation and adds no leg to the
+    ///   Evaluate switch above.
     ///
     /// Priority V1: the shopping loop consults this evaluator at settle
     /// time (HouseholdShoppingLoop, before InHand custody is assigned)
@@ -576,6 +678,206 @@ namespace LandLedgers.Economy.Storage
                         query.ContainerKind, resolved,
                         "HorsePack has no authority: no horse-pack capacity exists in source.");
             }
+        }
+
+        /// <summary>
+        /// P3 capability consult. One consult for one operation, with
+        /// the demand supplied by the caller for that operation. Axes
+        /// are checked in one fixed order and the first failure is
+        /// returned. Duration demanded refuses Unknown, because no
+        /// fatigue accumulation rule exists. Size and handling demanded
+        /// refuses Unknown, because no size class or handling rule
+        /// exists. A demanded lift or carry minimum with Unknown
+        /// strength refuses Unknown naming strength. A demanded body
+        /// size minimum with Unknown body size refuses Unknown naming
+        /// body size. A demanded fatigue maximum with Unknown fatigue
+        /// refuses Unknown naming fatigue. A demanded equipment kind
+        /// the person does not hold refuses DoesNotFit naming the kind.
+        /// Known strength below a demanded minimum, Known body size
+        /// below a demanded minimum, and Known fatigue above a demanded
+        /// maximum each refuse DoesNotFit naming the demand that
+        /// failed. Otherwise the consult returns Fits. Holding the
+        /// demanded equipment kind never changes a number. Age, labor
+        /// capacity, and nutrition gate nothing and are echoed on the
+        /// verdict only. The consult reads no demographic field and no
+        /// hidden trait. It adds no field to the evaluator.
+        /// </summary>
+        public PhysicalCapabilityVerdict EvaluateCapability(
+            PersonCarryInputs inputs, PhysicalCapabilityDemand demand)
+        {
+            var missing = new List<string>();
+            if (demand.CarryDurationMinutes > 0)
+            {
+                missing.Add("carry duration");
+            }
+
+            if (demand.NeedsSizeAndHandlingVerdict)
+            {
+                missing.Add("object size and handling");
+            }
+
+            if (demand.MinimumBodySize.IsKnown && !inputs.BodySize.IsKnown)
+            {
+                missing.Add("body size");
+            }
+
+            bool strengthDemanded = demand.MinimumLiftStrength.IsKnown || demand.MinimumCarryStrength.IsKnown;
+            if (strengthDemanded && !inputs.Strength.IsKnown)
+            {
+                missing.Add("strength");
+            }
+
+            if (demand.MaximumFatigue.IsKnown && !inputs.Fatigue.IsKnown)
+            {
+                missing.Add("fatigue");
+            }
+
+            string demanded = DemandedCapabilityDescription(demand);
+            string person = "Person " + inputs.PersonId + " capability";
+
+            if (missing.Count > 0)
+            {
+                return new PhysicalCapabilityVerdict(
+                    PhysicalCapacityOutcome.Unknown,
+                    person + " is unknown - missing " + string.Join(", ", missing) + " for the demanded " + demanded + ".",
+                    missing,
+                    inputs.PersonId,
+                    inputs.AgeYears,
+                    inputs.LaborCapacityPercent,
+                    inputs.Nutrition01);
+            }
+
+            if (!string.IsNullOrWhiteSpace(demand.RequiredEquipmentKind) && !EquipmentHeldContains(inputs, demand.RequiredEquipmentKind))
+            {
+                return new PhysicalCapabilityVerdict(
+                    PhysicalCapacityOutcome.DoesNotFit,
+                    person + " does not fit - required equipment " + demand.RequiredEquipmentKind + " is not held.",
+                    missing,
+                    inputs.PersonId,
+                    inputs.AgeYears,
+                    inputs.LaborCapacityPercent,
+                    inputs.Nutrition01);
+            }
+
+            if (demand.MinimumLiftStrength.IsKnown && inputs.Strength.Value < demand.MinimumLiftStrength.Value)
+            {
+                return new PhysicalCapabilityVerdict(
+                    PhysicalCapacityOutcome.DoesNotFit,
+                    person + " does not fit - strength " + inputs.Strength.Value + " is below the demanded lift minimum " + demand.MinimumLiftStrength.Value + ".",
+                    missing,
+                    inputs.PersonId,
+                    inputs.AgeYears,
+                    inputs.LaborCapacityPercent,
+                    inputs.Nutrition01);
+            }
+
+            if (demand.MinimumCarryStrength.IsKnown && inputs.Strength.Value < demand.MinimumCarryStrength.Value)
+            {
+                return new PhysicalCapabilityVerdict(
+                    PhysicalCapacityOutcome.DoesNotFit,
+                    person + " does not fit - strength " + inputs.Strength.Value + " is below the demanded carry minimum " + demand.MinimumCarryStrength.Value + ".",
+                    missing,
+                    inputs.PersonId,
+                    inputs.AgeYears,
+                    inputs.LaborCapacityPercent,
+                    inputs.Nutrition01);
+            }
+
+            if (demand.MinimumBodySize.IsKnown && inputs.BodySize.Value < demand.MinimumBodySize.Value)
+            {
+                return new PhysicalCapabilityVerdict(
+                    PhysicalCapacityOutcome.DoesNotFit,
+                    person + " does not fit - body size " + inputs.BodySize.Value + " is below the demanded body size minimum " + demand.MinimumBodySize.Value + ".",
+                    missing,
+                    inputs.PersonId,
+                    inputs.AgeYears,
+                    inputs.LaborCapacityPercent,
+                    inputs.Nutrition01);
+            }
+
+            if (demand.MaximumFatigue.IsKnown && inputs.Fatigue.Value > demand.MaximumFatigue.Value)
+            {
+                return new PhysicalCapabilityVerdict(
+                    PhysicalCapacityOutcome.DoesNotFit,
+                    person + " does not fit - fatigue " + inputs.Fatigue.Value + " is above the demanded fatigue maximum " + demand.MaximumFatigue.Value + ".",
+                    missing,
+                    inputs.PersonId,
+                    inputs.AgeYears,
+                    inputs.LaborCapacityPercent,
+                    inputs.Nutrition01);
+            }
+
+            string fitsReason;
+            if (demanded == "nothing")
+            {
+                fitsReason = person + " fits - no capability demand was made.";
+            }
+            else
+            {
+                fitsReason = person + " fits - demanded " + demanded + ".";
+            }
+
+            return new PhysicalCapabilityVerdict(
+                PhysicalCapacityOutcome.Fits,
+                fitsReason,
+                missing,
+                inputs.PersonId,
+                inputs.AgeYears,
+                inputs.LaborCapacityPercent,
+                inputs.Nutrition01);
+        }
+
+        private static bool EquipmentHeldContains(PersonCarryInputs inputs, string kind)
+        {
+            if (inputs.EquipmentHeld == null) return false;
+            foreach (string held in inputs.EquipmentHeld)
+            {
+                if (string.Equals(held, kind, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
+        }
+
+        private static string DemandedCapabilityDescription(PhysicalCapabilityDemand demand)
+        {
+            var demanded = new List<string>();
+            if (demand.MinimumLiftStrength.IsKnown)
+            {
+                demanded.Add("lift strength");
+            }
+
+            if (demand.MinimumCarryStrength.IsKnown)
+            {
+                demanded.Add("carry strength");
+            }
+
+            if (demand.MinimumBodySize.IsKnown)
+            {
+                demanded.Add("body size");
+            }
+
+            if (demand.MaximumFatigue.IsKnown)
+            {
+                demanded.Add("fatigue");
+            }
+
+            if (demand.CarryDurationMinutes > 0)
+            {
+                demanded.Add("carry duration");
+            }
+
+            if (demand.NeedsSizeAndHandlingVerdict)
+            {
+                demanded.Add("object size and handling");
+            }
+
+            if (!string.IsNullOrWhiteSpace(demand.RequiredEquipmentKind))
+            {
+                demanded.Add("equipment " + demand.RequiredEquipmentKind);
+            }
+
+            if (demanded.Count == 0) return "nothing";
+            return string.Join(", ", demanded);
         }
 
         /// <summary>

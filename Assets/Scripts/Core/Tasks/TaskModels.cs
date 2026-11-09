@@ -142,6 +142,17 @@ namespace LandLedgers.Tasks
         [SerializeField]
         private List<string> supportRequirementSpecs = new List<string>();
 
+        /// <summary>
+        /// Physical hands campaign P1c: hand requirement spec for this task,
+        /// parsed by EquipmentTaskGate. Empty = no hand requirement. "one-handed"
+        /// needs at least one free hand, "two-handed" needs both hands free.
+        /// Stored as a string so Core/Tasks keeps no dependency on the
+        /// Population domain; any other non-empty value refuses loudly.
+        /// No definition carries a spec until P5 authors one.
+        /// </summary>
+        [SerializeField]
+        private string handRequirementSpec = string.Empty;
+
         [SerializeField]
         private List<TaskMaterial> inputs = new List<TaskMaterial>();
 
@@ -169,6 +180,9 @@ namespace LandLedgers.Tasks
 
         /// <summary>NX-1A: Canon 5.2 supportability specs ("kind:detail:unitsPerDay").</summary>
         public List<string> SupportRequirementSpecs => supportRequirementSpecs;
+
+        /// <summary>Physical hands campaign P1c: hand requirement spec ("one-handed", "two-handed", or empty for none).</summary>
+        public string HandRequirementSpec => handRequirementSpec ?? string.Empty;
         public List<TaskMaterial> Inputs => inputs;
         public List<TaskMaterial> Outputs => outputs;
         public bool Interruptible => interruptible;
@@ -190,6 +204,12 @@ namespace LandLedgers.Tasks
         public void SetDefaultPriority(TaskPriority priority)
         {
             defaultPriority = priority;
+        }
+
+        /// <summary>Authoring-time configuration: hand requirement spec ("one-handed", "two-handed", or empty for none).</summary>
+        public void SetHandRequirementSpec(string spec)
+        {
+            handRequirementSpec = spec ?? string.Empty;
         }
 
         /// <summary>Authoring-time configuration: which skill scales this task's duration.</summary>
@@ -216,6 +236,7 @@ namespace LandLedgers.Tasks
             copy.compatibleLocations.AddRange(compatibleLocations);
             copy.equipmentClasses.AddRange(equipmentClasses);
             copy.supportRequirementSpecs.AddRange(supportRequirementSpecs);
+            copy.handRequirementSpec = handRequirementSpec;
             foreach (TaskMaterial m in inputs) copy.inputs.Add(new TaskMaterial(m.ItemId, m.Quantity));
             foreach (TaskMaterial m in outputs) copy.outputs.Add(new TaskMaterial(m.ItemId, m.Quantity));
             copy.interruptible = interruptible;

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment.Workstations;
+using LandLedgers.Population;
 using LandLedgers.Tasks;
 
 namespace LandLedgers.Economy.Equipment
@@ -63,6 +64,15 @@ namespace LandLedgers.Economy.Equipment
 
         /// <summary>TaskAuthority (or any definition lookup) for resolving ids. May be null if definitions are passed directly.</summary>
         public Func<string, TaskDefinition> FindDefinition;
+
+        /// <summary>
+        /// Physical hands campaign P1c: hand occupancy snapshots by assignee
+        /// person id, from HandOccupancyAuthority.Current, or null for an
+        /// unknown person. May be null — without it the hand check is skipped
+        /// entirely, never a refusal. The gate reads snapshots only; it never
+        /// allocates or releases a hand.
+        /// </summary>
+        public Func<int, HandOccupancy> HandOccupancySupplier;
 
         public EquipmentTaskGate() { }
 
@@ -203,7 +213,80 @@ namespace LandLedgers.Economy.Equipment
             string holderKind = task.OwnerId.Kind.ToString().ToLowerInvariant();
             string holderId = task.OwnerId.Id.ToString();
             var diagnostics = new List<string>();
-            return CheckExecution(task.DefinitionId, definition, holderKind, holderId, dayIndex, diagnostics);
+            string equipmentRefusal = CheckExecution(task.DefinitionId, definition, holderKind, holderId, dayIndex, diagnostics);
+            if (equipmentRefusal != null) return equipmentRefusal;
+            return CheckHands(task, definition);
+        }
+
+        /// <summary>
+        /// Freight prefix covering the freight load and unload definition ids
+        /// ("freight:load:" / "freight:unload:") plus the freight-service
+        /// meeting and freight-dispatch assignment ids.
+        /// </summary>
+        private const string FreightDefinitionPrefix = "freight";
+
+        /// <summary>
+        /// General store unload-freight definition id
+        /// (GeneralStoreTaskCatalog.UnloadFreightId), named here as a literal
+        /// so this gate takes no dependency on the FirstLedger catalog.
+        /// </summary>
+        private const string UnloadFreightDefinitionId = "gs.unload-freight";
+
+        /// <summary>
+        /// Physical hands campaign P1c: check-only hand gate, run second after
+        /// the equipment check. Reads the definition hand requirement spec and
+        /// the assignee hand snapshot, and refuses loudly when the needed free
+        /// hands are not available. Never allocates, never releases, never
+        /// mutates hand state. Freight definitions are excluded outright, so a
+        /// later P5 authoring cannot accidentally gate freight.
+        /// </summary>
+        private string CheckHands(WorkTask task, TaskDefinition definition)
+        {
+            if (definition == null) return null;
+            string spec = definition.HandRequirementSpec;
+            if (string.IsNullOrWhiteSpace(spec)) return null;
+            if (IsFreightDefinition(definition)) return null;
+            if (!task.HasAssignee) return null;
+            if (HandOccupancySupplier == null) return null;
+            HandOccupancy occupancy = HandOccupancySupplier(task.AssigneeId.Id);
+            if (occupancy == null) return null;
+
+            string trimmed = spec.Trim();
+            int neededFreeHands;
+            if (trimmed == "one-handed") neededFreeHands = 1;
+            else if (trimmed == "two-handed") neededFreeHands = 2;
+            else return "EquipmentTaskGate: task '" + definition.DefinitionId +
+                "' has unknown hand requirement spec '" + spec +
+                "' — refused, never assumed.";
+            if (occupancy.FreeHandCount >= neededFreeHands) return null;
+
+            string need = neededFreeHands == 1
+                ? "needs one free hand — no hand is free"
+                : "needs both hands free";
+            return "EquipmentTaskGate: task '" + definition.DefinitionId +
+                "' for person " + task.AssigneeId.Id + " " + need +
+                ": " + DescribeOccupiedHands(occupancy) + " — refused.";
+        }
+
+        private static bool IsFreightDefinition(TaskDefinition definition)
+        {
+            string id = definition.DefinitionId ?? string.Empty;
+            if (id.StartsWith(FreightDefinitionPrefix, StringComparison.Ordinal)) return true;
+            if (id == UnloadFreightDefinitionId) return true;
+            if (definition.DomainTags != null && definition.DomainTags.Contains("freight")) return true;
+            return false;
+        }
+
+        private static string DescribeOccupiedHands(HandOccupancy occupancy)
+        {
+            var parts = new List<string>();
+            if (!occupancy.IsLeftFree)
+                parts.Add("left hand holds lot " + occupancy.LeftLotKey +
+                    (string.IsNullOrEmpty(occupancy.LeftBatchId) ? string.Empty : " (batch " + occupancy.LeftBatchId + ")"));
+            if (!occupancy.IsRightFree)
+                parts.Add("right hand holds lot " + occupancy.RightLotKey +
+                    (string.IsNullOrEmpty(occupancy.RightBatchId) ? string.Empty : " (batch " + occupancy.RightBatchId + ")"));
+            return string.Join("; ", parts.ToArray());
         }
     }
 }

@@ -80,7 +80,7 @@ found, the test fails loudly rather than passing silently.
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
 | HandOccupancyAuthority | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
-| HandOccupancy | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
+| HandOccupancy | Domains/Population/HandOccupancy.cs | Domains/Population | Domains/Economy/Equipment/EquipmentTaskGate.cs |
 | HandCustodyContext | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
 | HandOperationResult | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
@@ -639,3 +639,16 @@ note records their audited status so the question does not reopen:
   `HandOccupancyAuthority` onto `CustodyTransferLog`. Category B:
   no production caller passes the new hand supplier yet, so the view
   is reachable only from tests until P4 wires it.
+- Physical hands campaign P1c (2026-11-08):
+  hand gate in task start (`EquipmentTaskGate` reads the new
+  `TaskDefinition.HandRequirementSpec` string at `CheckStart`, after
+  the equipment check, through the optional `HandOccupancySupplier`;
+  freight definitions are excluded outright). Category B: no
+  production caller supplies hand state and no definition carries a
+  hand requirement yet, so the gate is installed but dormant until
+  P4 wires the supplier and P5 authors a requirement. Check-only:
+  starting, completing, interrupting, or cancelling a task never
+  changes hand state, so no release hook lands here. The gate's
+  optional `HandOccupancy` reference is allowlisted on that type's
+  registry row above: the supplier stays null in production, so the
+  type is still unwired and the row stays.

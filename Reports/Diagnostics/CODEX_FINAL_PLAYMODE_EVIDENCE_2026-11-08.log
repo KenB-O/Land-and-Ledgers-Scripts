@@ -1,0 +1,31 @@
+Land & Ledgers — final overnight PlayMode evidence extract
+Unity 6000.4.2f1 | Open Frontier | World seed 79117392 | Market seed 1248589546
+Fresh Main Scene PlayMode startup; 1x initial, then TimeManager.Speed100x; daily needs summaries through day 90.
+The full bounded raw log is local at C:\Users\kenne\Downloads\LandLedgers-overnight-test\CODEX_FINAL_PLAYMODE_CONSOLE_2026-11-08.log
+
+[Startup evidence from Editor.log]
+[TownWorld] Runtime regional terrain generation: SKIPPED (pre-authored terrain mode).
+[SimulationDrivers] Town journey network: 10 locations, 9 road routes, 9 road-accessible buildings across 1 connected road component(s); 0 building(s) lack connected road access.
+[SimulationDrivers] Registered 20 authored regional journey locations (Ashford and Redfield) on the hub JourneyModel.
+[RegionalTowns] Installed 2 authored physical regional towns and 16 business arrival triggers (1 world unit = 1 metre).
+[OpeningTransportPresentation] startup: freight='Ethan Boniecki Livery & Freight' (livery_freight_003), operator='Ethan Boniecki' person=7 workplaceBuilding=-1 assignedBusinessBuilding=-1 stagingLocation='operator home frontage, building 7'; horse='A0' owner='livery_freight_003' position=(-65.00, 0.62, -8.25) visualActive=True work=idle; wagon='opening-freight-wagon' owner='livery_freight_003' position=(-67.37, 0.62, -6.80) visualActive=True work=idle. Owned horse records=1; registered opening wagon records=1; wagon remains separate from horse.
+[AcquisitionMarket] Market Seed Source: World Seed Authority | World Seed: 79117392 | Market Seed: 1248589546.
+Game slice ready. Buildings=9, People=63, Store=No player General Store has been formed yet. Use Businesses > Create Business..
+[ScenarioDirector] Scenario 'open-frontier' active. 1 diagnostic(s).
+[ScenarioDirector] Player household 'Development Household' declared for scenario 'open-frontier' with 1 founder(s) (GHOST-DEF-006).
+BoxCollider does not support negative scale or size.
+
+[Daily outcomes and repeated blockers]
+Captured daily summary count: 46
+First: [SimulationDrivers] daily needs day 45: 0 eaten, 4 missed, 0 purchases (0c).
+Last:  [SimulationDrivers] daily needs day 90: 0 eaten, 4 missed, 0 purchases (0c).
+No-journey-location warning occurrences in raw bounded log: 61
+[SimulationDrivers] household needs day 30: [FoodEconomy] shopping summary day 30: 0 purchase(s), 0c spent; still open: none | [SimulationDrivers] H1 will not raise a 'bread' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'preserved_meat' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'meat_unspecified' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'preserved_food' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'potatoes' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'flour' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'staple_food_unspecified' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'fuel_wood' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'bread' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'preserved_meat' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'meat_unspecified' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'preserved_food' need: no known seller offers it | ... 39 additional diagnostic(s) omitted
+[SimulationDrivers] household needs day 31: [FoodEconomy] shopping summary day 31: 0 purchase(s), 0c spent; still open: none | [SimulationDrivers] H1 will not raise a 'bread' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'preserved_meat' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'meat_unspecified' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'preserved_food' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'potatoes' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'flour' need: no known seller offers it | [SimulationDrivers] H1 will not raise a 'staple_food_unspecified' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'bread' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'preserved_meat' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'meat_unspecified' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'preserved_food' need: no known seller offers it | [SimulationDrivers] H2 will not raise a 'potatoes' need: no known seller offers it | ... 34 additional diagnostic(s) omitted
+[FoodEconomy] meals missed: person='Glen Pierce', household=H0, missed=2 slot(s) [Morning, Evening], reason='no food available in household inventory', food stock at meal resolution=0 units, household cash=0c. Shopping is a separate later step; cash alone does not prove a valid seller or stock.
+[FoodEconomy] meals missed: person='Tia Boniecki', household=H0, missed=2 slot(s) [Morning, Evening], reason='no food available in household inventory', food stock at meal resolution=0 units, household cash=0c. Shopping is a separate later step; cash alone does not prove a valid seller or stock.
+Repeated music recovery warning occurrences in bounded raw log: 13423
+[LLMainMusicPlayer] Active source stopped unexpectedly. Attempting recovery.
+LLMainMusicPlayer:Update () (at Assets/Scripts/Presentation/Audio/LLMainMusicPlayer.cs:156)
+
+No matching production, sale, freight pickup/delivery or payment-settlement event appears in the bounded log.

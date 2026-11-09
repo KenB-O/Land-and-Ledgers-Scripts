@@ -79,6 +79,10 @@ found, the test fails loudly rather than passing silently.
 | PersonInspectionReadModel | ReadModels/Person/PersonInspectionReadModel.cs | ReadModels/Person | (none) |
 | PhysicalItemSpec | Domains/Economy/Storage/PhysicalItemSpec.cs | Domains/Economy/Storage | (none) |
 | PersonInventoryReadModel | Domains/Population/PersonInventoryReadModel.cs | Domains/Population | (none) |
+| HandOccupancyAuthority | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
+| HandOccupancy | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
+| HandCustodyContext | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
+| HandOperationResult | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
 | SupplierComparison | Domains/Economy/Logistics/SupplierComparison.cs | Domains/Economy/Logistics | (none) |
@@ -198,6 +202,26 @@ found, the test fails loudly rather than passing silently.
   stays accurate and stays in place. (The `PhysicalCapacityEvaluator`
   row the Slice 3 note named here was removed by Priority V1 — see the
   change log — so it no longer appears above.)
+- `HandOccupancyAuthority` with `HandOccupancy`, `HandCustodyContext`,
+  and `HandOperationResult` (physical hands campaign P1a, 2026-11-08)
+  is the per-person hand authority core: two hand slots, left and
+  right, each holding at most one LotKey plus its BatchId, with
+  one-handed allocate, two-handed allocate, release, and a
+  hand-to-container transfer refused until P2 supplies a container
+  type. Hand requirement is a caller-supplied parameter, refused when
+  none is supplied; nothing is derived from mass, name, or category.
+  The four types are registered here honestly as UNWIRED by design, not
+  oversight: the P1a brief wires nothing into live flows — the
+  authority is constructed in tests only and no flow calls it yet. Its
+  sibling types need no row: `HandSlot` and `HandRequirement` are enums
+  (the scan enumerates concrete public top-level classes only). Remove
+  these rows the day a production flow outside `Domains/Population`
+  calls the authority (P1c task gating and the P4 vertical slice are
+  the first expected callers); do not wire it merely to clear the
+  entries. The authority records `CustodyTransferLog` entries with the
+  new `hand-pickup` and `hand-release` causes only when a log and a
+  custody context are both supplied, but that reference is to the log,
+  not from any production flow to the authority, so these rows stay.
 - `PerishableLotState` (Priority E Slice 5, 2026-11-08) is the
   perishable condition of one lot: separate physical-condition,
   food-safety, remaining-life, handling-history, and perceived-vs-known
@@ -600,3 +624,10 @@ note records their audited status so the question does not reopen:
   and `ReplenishmentPlan` rows stay: the plan reads the Slice 5
   states, the Slice 6 types, and the P5 option only from inside its
   own owning directory, and references the F1/F2 types nowhere.
+- Physical hands campaign P1a (2026-11-08):
+  `HandOccupancyAuthority`, `HandOccupancy`, `HandCustodyContext`,
+  and `HandOperationResult` registered as UNWIRED by design — per-person
+  hand authority core, no production caller yet. The
+  `PhysicalItemSpec`, `PersonInventoryReadModel`,
+  `DemandObservation`, `ReserveProjection`, `SupplierComparison`,
+  `ReplenishmentPlan`, and `ProductionPlan` rows stay.

@@ -87,6 +87,9 @@ found, the test fails loudly rather than passing silently.
 | WornContainerEntry | Domains/Population/WornContainer.cs | Domains/Population | (none) |
 | WornContainerSnapshot | Domains/Population/WornContainer.cs | Domains/Population | (none) |
 | WornContainerOperationResult | Domains/Population/WornContainer.cs | Domains/Population | (none) |
+| HandheldContainer | Domains/Population/HandheldContainer.cs | Domains/Population | (none) |
+| HandheldContainerSnapshot | Domains/Population/HandheldContainer.cs | Domains/Population | (none) |
+| HandheldContainerOperationResult | Domains/Population/HandheldContainer.cs | Domains/Population | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
 | SupplierComparison | Domains/Economy/Logistics/SupplierComparison.cs | Domains/Economy/Logistics | (none) |
@@ -676,3 +679,27 @@ note records their audited status so the question does not reopen:
   the assembly scan only sweeps classes, so neither needs a row. The
   evaluator's `WornContainerCapacity` reference needs no allowlist
   for the same reason: it is a struct, not a registered class.
+- Physical hands campaign P2b (2026-11-08):
+  one handheld container kind, a pail (`HandheldContainer` with
+  `HandheldContainerKind`, `HandheldContainerSnapshot`, and
+  `HandheldContainerOperationResult`, all in
+  `Domains/Population/HandheldContainer.cs`, reusing the P2a
+  `WornContainerCapacity` capacity struct and `WornContainerEntry`
+  entry class): held as its own key in a hand slot, PickUp and SetDown
+  recording the holder and the held hand, Place and Take mirroring the
+  satchel with the held-by check replacing the worn-by check, pick up
+  and set down and move-between-hands and hand-to-held-container and
+  held-container-to-hand transfer on `HandOccupancyAuthority`, fit
+  through the new `HandheldPail` leg of `PhysicalCapacityEvaluator`,
+  held-container contents in the read model through an optional
+  held-container supplier, and the three container causes
+  (`container-pickup`, `container-setdown`, `container-move`) on
+  `CustodyTransferLog`. Category B: no production caller owns
+  containers yet, so the container is reachable only from tests until
+  P4 wires it. The three class types get registry rows above; the
+  `HandheldContainerKind` enum gets no row, because the registry test
+  resolves a row only through a `class` declaration and it would fail
+  that check as written, and the assembly scan only sweeps classes, so
+  it needs no row. `HeldContainerView` and `HeldContainerContents`
+  are nested inside `PersonInventoryReadModel`, which already has a
+  registry row, so no new row is needed for them.

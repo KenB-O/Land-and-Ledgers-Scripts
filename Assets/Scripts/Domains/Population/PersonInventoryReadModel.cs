@@ -299,6 +299,59 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// One handheld container a person holds, as a read-only snapshot:
+        /// which container, of which kind, held by whom, in which hand,
+        /// and the items it holds. HeldHand null means the container is
+        /// set down; a set-down container is never listed here, because
+        /// ItemsInHeldContainers only builds views for snapshots whose
+        /// holder equals the person id. All values are get-only snapshot
+        /// data, built fresh on every call.
+        /// </summary>
+        public sealed class HeldContainerView
+        {
+            public string ContainerId { get; }
+            public HandheldContainerKind Kind { get; }
+            public int HeldByPersonId { get; }
+            public HandSlot? HeldHand { get; }
+            public IReadOnlyList<ContainedItemView> Items { get; }
+
+            public HeldContainerView(
+                string containerId, HandheldContainerKind kind, int heldByPersonId,
+                HandSlot? heldHand, IReadOnlyList<ContainedItemView> items)
+            {
+                ContainerId = containerId ?? string.Empty;
+                Kind = kind;
+                HeldByPersonId = heldByPersonId;
+                HeldHand = heldHand;
+                Items = items ?? new List<ContainedItemView>().AsReadOnly();
+            }
+        }
+
+        /// <summary>
+        /// The contents of a person's held containers, as reported by the
+        /// optional held-container supplier. Items is the flattened list
+        /// of every contained item across held containers; Containers is
+        /// the per-container view. Without a supplier this is always
+        /// empty and <see cref="Reason"/> names that instead of inventing
+        /// one.
+        /// </summary>
+        public sealed class HeldContainerContents
+        {
+            public IReadOnlyList<CarriedItem> Items { get; }
+            public IReadOnlyList<HeldContainerView> Containers { get; }
+            public string Reason { get; }
+
+            public HeldContainerContents(
+                IReadOnlyList<CarriedItem> items, string reason,
+                IReadOnlyList<HeldContainerView> containers = null)
+            {
+                Items = items ?? new List<CarriedItem>().AsReadOnly();
+                Containers = containers ?? new List<HeldContainerView>().AsReadOnly();
+                Reason = reason ?? string.Empty;
+            }
+        }
+
+        /// <summary>
         /// One hand's occupancy as a read-only snapshot: which lot (by
         /// LotKey plus BatchId) sits in the hand, the resolved item id
         /// (empty when the lot cannot be resolved — see
@@ -377,12 +430,17 @@ namespace LandLedgers.Population
             "No portable containers exist in the tree: no bags, baskets, pockets, " +
             "lunch pails, or saddlebags are represented, so no item can be in a carried container.";
 
+        /// <summary>The reason ItemsInHeldContainers is always empty: no held-container supplier was supplied, so no held container contents are reported.</summary>
+        public const string NoHeldContainersReason =
+            "No held containers are reported: no held-container supplier was supplied, so no item can be in a held container.";
+
         private readonly HouseholdShoppingReadModel shoppingReadModel;
         private readonly HouseholdInventoryRegistry inventoryRegistry;
         private readonly EquipmentAccessResolver equipmentResolver;
         private readonly int carryCapacityUnits;
         private readonly Func<int, global::LandLedgers.Population.HandOccupancy> handOccupancySupplier;
         private readonly Func<int, IReadOnlyList<WornContainerSnapshot>> wornContainerSupplier;
+        private readonly Func<int, IReadOnlyList<HandheldContainerSnapshot>> heldContainerSupplier;
         private readonly ILotIdentityResolver lotIdentityResolver;
 
         /// <param name="shoppingReadModel">Custody authority (required).</param>
@@ -392,6 +450,7 @@ namespace LandLedgers.Population
         /// <param name="handOccupancySupplier">Hand-state supplier; null means no hand answers (an empty hand view, never an error). The supplier returns the plain HandOccupancy DTO snapshot from HandOccupancyAuthority.Current, never the authority itself, so this read model cannot become a hand-state writer.</param>
         /// <param name="lotIdentityResolver">Resolves a held LotKey to an item id; null means held lots report an empty item id with the gap named, never an error.</param>
         /// <param name="wornContainerSupplier">Container-state supplier; null means no container answers (an empty answer with NoCarriedContainersReason, never an error). The supplier returns plain WornContainerSnapshot copies keyed by person id, never a container itself, so this read model cannot become a container-state writer.</param>
+        /// <param name="heldContainerSupplier">Held-container-state supplier; null means no held-container answers (an empty answer with NoHeldContainersReason, never an error). The supplier returns plain HandheldContainerSnapshot copies keyed by person id, never a container itself, so this read model cannot become a container-state writer.</param>
         public PersonInventoryReadModel(
             HouseholdShoppingReadModel shoppingReadModel,
             HouseholdInventoryRegistry inventoryRegistry,
@@ -399,7 +458,8 @@ namespace LandLedgers.Population
             ShoppingLoopOptions carryOptions = null,
             Func<int, global::LandLedgers.Population.HandOccupancy> handOccupancySupplier = null,
             ILotIdentityResolver lotIdentityResolver = null,
-            Func<int, IReadOnlyList<WornContainerSnapshot>> wornContainerSupplier = null)
+            Func<int, IReadOnlyList<WornContainerSnapshot>> wornContainerSupplier = null,
+            Func<int, IReadOnlyList<HandheldContainerSnapshot>> heldContainerSupplier = null)
         {
             this.shoppingReadModel = shoppingReadModel ?? throw new ArgumentNullException(nameof(shoppingReadModel));
             this.inventoryRegistry = inventoryRegistry ?? throw new ArgumentNullException(nameof(inventoryRegistry));
@@ -410,6 +470,7 @@ namespace LandLedgers.Population
             this.handOccupancySupplier = handOccupancySupplier;
             this.lotIdentityResolver = lotIdentityResolver;
             this.wornContainerSupplier = wornContainerSupplier;
+            this.heldContainerSupplier = heldContainerSupplier;
         }
 
         /// <summary>The live shopping carry cap this read model answers against (units).</summary>
@@ -646,6 +707,87 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// The items in the person's held containers, re-read from the
+        /// held-container supplier on every call, so two reads of the same
+        /// state agree. No supplier means the existing empty answer with
+        /// NoHeldContainersReason; a supplier that returns null for the
+        /// person means an empty answer naming the person as unknown to
+        /// the supplier. Neither is an error. Otherwise one
+        /// HeldContainerView is built per snapshot whose HeldByPersonId
+        /// equals the person id, each contained entry becoming one
+        /// ContainedItemView with HeldHand copied from the snapshot, and
+        /// the flattened Items list is built from the same entries as
+        /// CarriedItem values with Custody InHand in the batch-custody
+        /// sense, HolderPersonId the holder, and empty or unknown values
+        /// for the fields the container does not carry (ReceiptId empty,
+        /// Provenance empty, PurchaseDayIndex -1, OwningHouseholdId -1,
+        /// UnitPriceCents 0). Container contents are reported only here,
+        /// never merged into CarriedItems, so no lot is counted twice.
+        /// Reason is empty on a clean report and names a gap only when
+        /// containers cannot be reported or an item id cannot be
+        /// resolved. A set-down container is invisible here: its
+        /// snapshots carry no holder, so none of its entries are listed.
+        /// </summary>
+        public HeldContainerContents ItemsInHeldContainers(int personId)
+        {
+            if (heldContainerSupplier == null)
+            {
+                return new HeldContainerContents(
+                    new List<CarriedItem>().AsReadOnly(), NoHeldContainersReason);
+            }
+
+            IReadOnlyList<HandheldContainerSnapshot> snapshots = heldContainerSupplier(personId);
+            if (snapshots == null)
+            {
+                return new HeldContainerContents(
+                    new List<CarriedItem>().AsReadOnly(),
+                    "Person " + personId + " is unknown to the held-container supplier, so no held container contents are reported.");
+            }
+
+            var items = new List<CarriedItem>();
+            var containers = new List<HeldContainerView>();
+            var reasons = new List<string>();
+            foreach (HandheldContainerSnapshot snapshot in snapshots)
+            {
+                if (snapshot == null || snapshot.HeldByPersonId != personId) continue;
+                var contained = new List<ContainedItemView>();
+                foreach (WornContainerEntry entry in snapshot.Entries)
+                {
+                    if (entry == null) continue;
+                    string itemId = entry.ItemId;
+                    if (string.IsNullOrEmpty(itemId))
+                    {
+                        if (lotIdentityResolver == null)
+                        {
+                            reasons.Add("No lot identity resolver was supplied, so the contained lot " + entry.LotKey + " cannot be resolved to an item id.");
+                        }
+                        else
+                        {
+                            LotIdentity identity = lotIdentityResolver.Resolve(entry.LotKey);
+                            if (identity == null || string.IsNullOrEmpty(identity.ItemId))
+                            {
+                                reasons.Add("The contained lot " + entry.LotKey + " cannot be resolved to an item id: no lot identity record exists for that key.");
+                            }
+                            else
+                            {
+                                itemId = identity.ItemId;
+                            }
+                        }
+                    }
+
+                    contained.Add(new ContainedItemView(entry.LotKey, entry.BatchId, itemId, entry.Units, entry.Condition));
+                    items.Add(new CarriedItem(
+                        itemId, entry.Units, entry.BatchId, string.Empty, string.Empty, -1,
+                        GoodsCustodyState.InHand, personId, -1, 0, entry.Condition));
+                }
+
+                containers.Add(new HeldContainerView(snapshot.ContainerId, snapshot.Kind, snapshot.HeldByPersonId, snapshot.HeldHand, contained));
+            }
+
+            return new HeldContainerContents(items, string.Join("; ", reasons.ToArray()), containers);
+        }
+
+        /// <summary>
         /// What the person's hands hold, as a read-only snapshot re-read
         /// from the hand supplier on every call, so two reads of the same
         /// state agree. No supplier means an empty view with
@@ -704,7 +846,11 @@ namespace LandLedgers.Population
             if (!lotKey.IsEmpty)
             {
                 string handName = hand == HandSlot.Left ? "left" : "right";
-                if (lotIdentityResolver == null)
+                if (lotKey.AuthorityId == CustodyTransferLog.ContainerAuthority)
+                {
+                    reasons.Add("The " + handName + " hand holds a container, not a stock lot: container '" + lotKey.LotId + "' is held in the hand, so no item id is reported for it.");
+                }
+                else if (lotIdentityResolver == null)
                 {
                     reasons.Add("No lot identity resolver was supplied, so the " + handName
                         + " hand lot " + lotKey + " cannot be resolved to an item id.");

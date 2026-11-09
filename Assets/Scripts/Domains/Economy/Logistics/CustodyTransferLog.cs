@@ -182,6 +182,11 @@ namespace LandLedgers.Economy.Logistics
         public const string CauseHandToContainer = "hand-to-container";
         public const string CauseContainerToHand = "container-to-hand";
 
+        /// <summary>Handheld container causes (physical hands campaign P2b, 2026-11-08): picking a container up, setting it down, and moving it between hands.</summary>
+        public const string CauseContainerPickup = "container-pickup";
+        public const string CauseContainerSetDown = "container-setdown";
+        public const string CauseContainerMove = "container-move";
+
         /// <summary>Authority id for household lots and carried batches.</summary>
         public const string HouseholdInventoryAuthority = "household-inventory";
 

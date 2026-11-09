@@ -1,7 +1,7 @@
 Land & Ledgers — final overnight PlayMode evidence extract
 Unity 6000.4.2f1 | Open Frontier | World seed 79117392 | Market seed 1248589546
 Fresh Main Scene PlayMode startup; 1x initial, then TimeManager.Speed100x; daily needs summaries through day 90.
-The full bounded raw log is local at C:\Users\kenne\Downloads\LandLedgers-overnight-test\CODEX_FINAL_PLAYMODE_CONSOLE_2026-11-08.log
+The full bounded raw log is retained locally and was not published because of repeated warning volume.
 
 [Startup evidence from Editor.log]
 [TownWorld] Runtime regional terrain generation: SKIPPED (pre-authored terrain mode).

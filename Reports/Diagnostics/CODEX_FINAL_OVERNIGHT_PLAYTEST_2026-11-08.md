@@ -28,7 +28,7 @@ The initial world seed and derived market seed were read from the running scene 
 
 The test began at 1x and was advanced at 100x. No 250x run was performed. Save/Continue was not tested.
 
-The complete Editor-wide source remains at `%LOCALAPPDATA%\Unity\Editor\Editor.log`. The playtest-bounded raw segment after the Console was cleared mid-run is `C:\Users\kenne\Downloads\LandLedgers-overnight-test\CODEX_FINAL_PLAYMODE_CONSOLE_2026-11-08.log` (9,570,908 bytes). It contains 13,423 repeats of one music warning, so the raw file was not added to Git. A retained Console tail is at `C:\Users\kenne\Downloads\LandLedgers-overnight-test\console-retained-tail.json`. The bounded segment begins during the accelerated run, not at initial startup; the initial startup evidence is in the global Editor.log and is excerpted in the companion evidence file. No claim is made that one bounded export covers every Editor Console entry from PlayMode entry through exit.
+The full Editor log remains on the local development machine. The playtest-bounded raw segment after the Console was cleared mid-run is retained locally as `CODEX_FINAL_PLAYMODE_CONSOLE_2026-11-08.log` (9,570,908 bytes); the retained Console tail is `console-retained-tail.json`. The raw file contains 13,423 repeats of one music warning, so neither raw output was added to Git. The bounded segment begins during the accelerated run, not at initial startup; the initial startup evidence is in the global Editor.log and is excerpted in the companion evidence file. No claim is made that one bounded export covers every Editor Console entry from PlayMode entry through exit.
 
 ## Observed startup and environment
 

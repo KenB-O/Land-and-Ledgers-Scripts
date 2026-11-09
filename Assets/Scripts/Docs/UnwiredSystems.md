@@ -83,6 +83,10 @@ found, the test fails loudly rather than passing silently.
 | HandOccupancy | Domains/Population/HandOccupancy.cs | Domains/Population | Domains/Economy/Equipment/EquipmentTaskGate.cs |
 | HandCustodyContext | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
 | HandOperationResult | Domains/Population/HandOccupancy.cs | Domains/Population | (none) |
+| WornContainer | Domains/Population/WornContainer.cs | Domains/Population | (none) |
+| WornContainerEntry | Domains/Population/WornContainer.cs | Domains/Population | (none) |
+| WornContainerSnapshot | Domains/Population/WornContainer.cs | Domains/Population | (none) |
+| WornContainerOperationResult | Domains/Population/WornContainer.cs | Domains/Population | (none) |
 | DemandObservation | Domains/Economy/Logistics/DemandObservation.cs | Domains/Economy/Logistics | (none) |
 | ReserveProjection | Domains/Economy/Logistics/ReserveProjection.cs | Domains/Economy/Logistics | (none) |
 | SupplierComparison | Domains/Economy/Logistics/SupplierComparison.cs | Domains/Economy/Logistics | (none) |
@@ -652,3 +656,23 @@ note records their audited status so the question does not reopen:
   optional `HandOccupancy` reference is allowlisted on that type's
   registry row above: the supplier stays null in production, so the
   type is still unwired and the row stays.
+- Physical hands campaign P2a (2026-11-08):
+  one worn container kind, a satchel (`WornContainer` with
+  `WornContainerKind`, `WornContainerCapacity`, `WornContainerEntry`,
+  `WornContainerSnapshot`, and `WornContainerOperationResult`, all in
+  `Domains/Population/WornContainer.cs`): caller-supplied capacity on
+  four axes, Wear and Remove recording the wearer, Place and Take
+  holding lot references only, hand-to-container and container-to-hand
+  transfer on `HandOccupancyAuthority`, fit through the new
+  `WornSatchel` leg of `PhysicalCapacityEvaluator`, container contents
+  in the read model through an optional container supplier, and the
+  `ContainerCustodian` helper plus `ContainerAuthority` on
+  `CustodyTransferLog`. Category B: no production caller owns
+  containers yet, so the container is reachable only from tests until
+  P4 wires it. The four class types get registry rows above; the
+  `WornContainerKind` enum and the `WornContainerCapacity` struct get
+  no rows, because the registry test resolves a row only through a
+  `class` declaration and both would fail that check as written, and
+  the assembly scan only sweeps classes, so neither needs a row. The
+  evaluator's `WornContainerCapacity` reference needs no allowlist
+  for the same reason: it is a struct, not a registered class.

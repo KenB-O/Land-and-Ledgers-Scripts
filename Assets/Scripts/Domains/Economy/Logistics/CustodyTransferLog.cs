@@ -185,6 +185,9 @@ namespace LandLedgers.Economy.Logistics
         /// <summary>Authority id for household lots and carried batches.</summary>
         public const string HouseholdInventoryAuthority = "household-inventory";
 
+        /// <summary>Authority id for the container lot-id space (P2a): a container's own key is built from this word and the container id. It names the container itself; it creates no stock and no lot.</summary>
+        public const string ContainerAuthority = "container";
+
         public static string BusinessAuthority(string businessId) => "business:" + (businessId ?? string.Empty);
         public static string BakeryAuthority(string businessInstanceId) => "bakery:" + (businessInstanceId ?? string.Empty);
         public static string MillbrookAuthority(string businessId) => "millbrook:" + (businessId ?? string.Empty);
@@ -198,6 +201,7 @@ namespace LandLedgers.Economy.Logistics
         public static string WagonCustodian(string assetId) => "wagon:" + (assetId ?? string.Empty);
         public static string BatchCustodian(string batchId) => "batch:" + (batchId ?? string.Empty);
         public static string SupplierCustodian(string supplierId) => "supplier:" + (supplierId ?? string.Empty);
+        public static string ContainerCustodian(string containerId) => "container:" + (containerId ?? string.Empty);
 
         private readonly List<CustodyTransferRecord> records = new List<CustodyTransferRecord>();
         private readonly List<string> diagnostics = new List<string>();

@@ -12,9 +12,10 @@
 // hands allowed; the same lot in both hands through two one-handed
 // allocates refused; player and NPC parity; lot identity preserved through
 // allocate and release by LotKey; missing hand requirement refused;
-// mismatched requirement refused; hand-to-container transfer refused with
-// the missing-container gap named; log recording only when a log and a
-// custody context are both supplied.
+// mismatched requirement refused; hand-to-container transfer into an
+// unworn satchel refused with the unworn gap named (P2a rewrite of the
+// P1a missing-container-type refusal, which no longer exists); log
+// recording only when a log and a custody context are both supplied.
 
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Population;
@@ -294,15 +295,16 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void TransferToContainer_RefusedNamingMissingContainerType()
+        public void TransferToContainer_UnwornSatchel_RefusedNamingUnworn()
         {
             var authority = new HandOccupancyAuthority(PlayerId);
+            var satchel = new WornContainer("satchel-1", WornContainerKind.Satchel);
             authority.AllocateOneHanded(BreadLot(), "carry-12-1", HandRequirement.OneHanded, HandSlot.Left);
 
-            HandOperationResult result = authority.TransferToContainer(HandSlot.Left, "satchel-1");
+            HandOperationResult result = authority.TransferToContainer(HandSlot.Left, satchel);
 
             Assert.IsTrue(!result.Succeeded);
-            Assert.IsTrue(result.Reason.Contains("no container type exists yet"), result.Reason);
+            Assert.IsTrue(result.Reason.Contains("unworn"), result.Reason);
             Assert.IsTrue(result.Reason.Contains("satchel-1"), result.Reason);
             Assert.IsTrue(authority.Current.LeftLotKey.Equals(BreadLot()));
         }
@@ -311,8 +313,9 @@ namespace LandLedgers.EditorTests.Population
         public void TransferToContainer_EmptyHand_RefusedNamingEmptyHand()
         {
             var authority = new HandOccupancyAuthority(PlayerId);
+            var satchel = new WornContainer("satchel-1", WornContainerKind.Satchel);
 
-            HandOperationResult result = authority.TransferToContainer(HandSlot.Right, "satchel-1");
+            HandOperationResult result = authority.TransferToContainer(HandSlot.Right, satchel);
 
             Assert.IsTrue(!result.Succeeded);
             Assert.IsTrue(result.Reason.Contains("right hand is empty"), result.Reason);

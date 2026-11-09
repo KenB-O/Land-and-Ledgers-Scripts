@@ -62,6 +62,8 @@ namespace LandLedgers.Economy.Storage
         OnFootPerson = 4,
         /// <summary>Reserved: no horse-pack capacity exists in source; queries return "no authority".</summary>
         HorsePack = 5,
+        /// <summary>P2a: a worn satchel, caller-supplied capacity on four axes; see EvaluateWornSatchel.</summary>
+        WornSatchel = 6,
     }
 
     /// <summary>
@@ -475,6 +477,14 @@ namespace LandLedgers.Economy.Storage
         /// </summary>
         public int? OnFootCarryCapUnits { get; set; }
 
+        /// <summary>
+        /// P2a: the caller-supplied worn-container capacity for a WornSatchel
+        /// query. Null (the default) means no capacity was supplied and the
+        /// leg returns Unknown naming the missing container capacity. The
+        /// evaluator still authors no container measurement of its own.
+        /// </summary>
+        public WornContainerCapacity? ContainerCapacity { get; set; }
+
         public static PhysicalCapacityEvaluationContext Default => new PhysicalCapacityEvaluationContext();
     }
 
@@ -506,6 +516,9 @@ namespace LandLedgers.Economy.Storage
     ///   carry cap (PhysicalCapacityEvaluationContext.OnFootCarryCapUnits),
     ///   the leg answers on the units axis only against that cap.
     /// - HorsePack: "no authority" — no horse-pack capacity exists in source.
+    /// - WornSatchel (P2a): the caller-supplied container capacity in the
+    ///   evaluation context, checked per axis (units, mass, volume,
+    ///   dimensions) with Unknown refusing, naming the missing axis.
     ///
     /// Priority V1: the shopping loop consults this evaluator at settle
     /// time (HouseholdShoppingLoop, before InHand custody is assigned)
@@ -548,6 +561,8 @@ namespace LandLedgers.Economy.Storage
                     return EvaluateWagon(query, context, resolved);
                 case PhysicalContainerKind.OnFootPerson:
                     return EvaluateOnFootPerson(query, context, resolved);
+                case PhysicalContainerKind.WornSatchel:
+                    return EvaluateWornSatchel(query, context, resolved);
                 case PhysicalContainerKind.HorsePack:
                 default:
                     return PhysicalCapacityVerdict.NoAuthority(
@@ -804,6 +819,122 @@ namespace LandLedgers.Economy.Storage
                     $"Wagon '{query.ContainerKey}' cannot haul the load per WagonAuthority.CanCarry " +
                     $"({resolved.TotalMassKg.Value} kg of {wagon.PayloadMassCapacityKg} kg, " +
                     $"{resolved.TotalVolumeCubicMeters.Value} m3 of {wagon.CargoVolumeCapacityM3} m3).");
+        }
+
+        /// <summary>
+        /// Worn satchel leg (P2a): the caller-supplied capacity in the
+        /// evaluation context is the whole authority — the leg reads
+        /// capacity only from there and needs none of the four authorities
+        /// the evaluator constructor takes. Axes are checked in order
+        /// (units, mass, volume, dimensions) and the first failure is
+        /// returned, mirroring PhysicalStorageZone CanFit. Unknown on any
+        /// axis refuses, naming the missing axis or the first unknown
+        /// item; dimensions are checked per item against the interior box,
+        /// never summed across contents. No capacity supplied in the
+        /// context returns Unknown naming the missing container capacity.
+        /// </summary>
+        public PhysicalCapacityVerdict EvaluateWornSatchel(
+            PhysicalCapacityQuery query, PhysicalCapacityEvaluationContext context, PhysicalLoadResolution resolved)
+        {
+            const PhysicalContainerKind kind = PhysicalContainerKind.WornSatchel;
+            if (!context.ContainerCapacity.HasValue)
+            {
+                return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                    "Worn satchel '" + query.ContainerKey + "' has no container capacity: no capacity was supplied in the evaluation context.");
+            }
+
+            WornContainerCapacity capacity = context.ContainerCapacity.Value;
+
+            if (!capacity.MaxUnits.HasValue)
+            {
+                return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                    "Worn satchel '" + query.ContainerKey + "' units capacity is unknown: no units capacity was supplied for the satchel.");
+            }
+
+            if (resolved.TotalUnits > capacity.MaxUnits.Value)
+            {
+                return PhysicalCapacityVerdict.Refused(kind, resolved,
+                    $"Worn satchel '{query.ContainerKey}' refuses the load: {resolved.TotalUnits} units requested, {capacity.MaxUnits.Value} units allowed (units capacity).");
+            }
+
+            if (!capacity.MaxMassKg.IsKnown)
+            {
+                return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                    "Worn satchel '" + query.ContainerKey + "' mass capacity is unknown: no mass capacity was supplied for the satchel.");
+            }
+
+            if (!resolved.IsMassKnown)
+            {
+                return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                    $"Cannot verify worn satchel mass capacity: item '{resolved.FirstUnknownMassItemId}' mass is unknown.");
+            }
+
+            if (resolved.TotalMassKg.Value > capacity.MaxMassKg.Value + 0.0001f)
+            {
+                return PhysicalCapacityVerdict.Refused(kind, resolved,
+                    $"Worn satchel '{query.ContainerKey}' refuses the load: {resolved.TotalMassKg.Value} kg requested, {capacity.MaxMassKg.Value} kg allowed (mass capacity).");
+            }
+
+            if (!capacity.MaxVolumeLiters.IsKnown)
+            {
+                return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                    "Worn satchel '" + query.ContainerKey + "' volume capacity is unknown: no volume capacity was supplied for the satchel.");
+            }
+
+            if (!resolved.IsVolumeKnown)
+            {
+                return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                    $"Cannot verify worn satchel volume capacity: item '{resolved.FirstUnknownVolumeItemId}' volume is unknown.");
+            }
+
+            if (resolved.TotalVolumeLiters.Value > capacity.MaxVolumeLiters.Value + 0.0001f)
+            {
+                return PhysicalCapacityVerdict.Refused(kind, resolved,
+                    $"Worn satchel '{query.ContainerKey}' refuses the load: {resolved.TotalVolumeLiters.Value} liters requested, {capacity.MaxVolumeLiters.Value} liters allowed (volume capacity).");
+            }
+
+            if (!capacity.InteriorDimensions.IsKnown)
+            {
+                return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                    "Worn satchel '" + query.ContainerKey + "' dimensions are unknown: no interior dimensions were supplied for the satchel.");
+            }
+
+            PhysicalDimensions interior = capacity.InteriorDimensions;
+            if (query.Load.Lines != null)
+            {
+                foreach ((string ItemId, int Units) line in query.Load.Lines)
+                {
+                    if (line.Units <= 0) continue;
+                    if (!PhysicalItemSpecRegistry.TryGet(line.ItemId, out PhysicalItemSpec spec)
+                        || !spec.DimensionsMeters.IsKnown)
+                    {
+                        return PhysicalCapacityVerdict.Unknown(kind, resolved,
+                            $"Cannot verify worn satchel dimensions: item '{line.ItemId}' dimensions are unknown.");
+                    }
+
+                    PhysicalDimensions item = spec.DimensionsMeters;
+                    if (item.Length.Value > interior.Length.Value + 0.0001f)
+                    {
+                        return PhysicalCapacityVerdict.Refused(kind, resolved,
+                            $"Worn satchel '{query.ContainerKey}' refuses the load: item '{line.ItemId}' is {item.Length.Value} m long, longer than the {interior.Length.Value} m interior length (dimensions capacity).");
+                    }
+
+                    if (item.Width.Value > interior.Width.Value + 0.0001f)
+                    {
+                        return PhysicalCapacityVerdict.Refused(kind, resolved,
+                            $"Worn satchel '{query.ContainerKey}' refuses the load: item '{line.ItemId}' is {item.Width.Value} m wide, wider than the {interior.Width.Value} m interior width (dimensions capacity).");
+                    }
+
+                    if (item.Height.Value > interior.Height.Value + 0.0001f)
+                    {
+                        return PhysicalCapacityVerdict.Refused(kind, resolved,
+                            $"Worn satchel '{query.ContainerKey}' refuses the load: item '{line.ItemId}' is {item.Height.Value} m tall, taller than the {interior.Height.Value} m interior height (dimensions capacity).");
+                    }
+                }
+            }
+
+            return PhysicalCapacityVerdict.Accepted(kind, resolved,
+                $"Worn satchel '{query.ContainerKey}' accepts the load ({resolved.TotalUnits} units, {resolved.TotalMassKg.Value} kg, {resolved.TotalVolumeLiters.Value} liters) within its caller-supplied capacity.");
         }
 
         /// <summary>

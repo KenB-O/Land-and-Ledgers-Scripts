@@ -28,9 +28,10 @@
 //     carry cap, ShoppingLoopOptions.CarryCapacityUnits) and reports
 //     mass and volume remaining as Unknown — the same Unknown the F2
 //     OnFootPerson capacity query returns for the same reason.
-//   - No portable containers (bags, baskets, pockets, lunch pails,
-//     saddlebags) exist anywhere in the tree, so ItemsInCarriedContainers
-//     always returns empty with that reason named. No container is
+//   - Portable containers exist only as the P2a worn satchel, reported
+//     through the optional container supplier: ItemsInCarriedContainers
+//     lists what the person's worn containers hold, and without a supplier
+//     it still returns empty with that reason named. No container is
 //     invented here.
 //   - A HouseholdItemLot carries an attached perishable condition
 //     state only when its deposit carried one (Priority spoilage
@@ -226,19 +227,74 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
-        /// The contents of a person's carried containers. Always empty in
-        /// this slice: no portable containers exist in the tree, so
+        /// The contents of a person's carried containers, as reported by
+        /// the optional container supplier. Items is the flattened list of
+        /// every contained item across containers; Containers is the
+        /// per-container view. Without a supplier this is always empty and
         /// <see cref="Reason"/> names that instead of inventing one.
         /// </summary>
         public sealed class CarriedContainerContents
         {
             public IReadOnlyList<CarriedItem> Items { get; }
+            public IReadOnlyList<CarriedContainerView> Containers { get; }
             public string Reason { get; }
 
-            public CarriedContainerContents(IReadOnlyList<CarriedItem> items, string reason)
+            public CarriedContainerContents(
+                IReadOnlyList<CarriedItem> items, string reason,
+                IReadOnlyList<CarriedContainerView> containers = null)
             {
                 Items = items ?? new List<CarriedItem>().AsReadOnly();
+                Containers = containers ?? new List<CarriedContainerView>().AsReadOnly();
                 Reason = reason ?? string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// One worn container a person carries, as a read-only snapshot:
+        /// which container, of which kind, worn by whom, and the items it
+        /// holds. All values are get-only snapshot data, built fresh on
+        /// every call.
+        /// </summary>
+        public sealed class CarriedContainerView
+        {
+            public string ContainerId { get; }
+            public WornContainerKind Kind { get; }
+            public int WornByPersonId { get; }
+            public IReadOnlyList<ContainedItemView> Items { get; }
+
+            public CarriedContainerView(
+                string containerId, WornContainerKind kind, int wornByPersonId,
+                IReadOnlyList<ContainedItemView> items)
+            {
+                ContainerId = containerId ?? string.Empty;
+                Kind = kind;
+                WornByPersonId = wornByPersonId;
+                Items = items ?? new List<ContainedItemView>().AsReadOnly();
+            }
+        }
+
+        /// <summary>
+        /// One item inside a carried container: the lot it references, the
+        /// item id, the units, and the condition it carried when placed.
+        /// It exists because CarriedItem carries no LotKey, and the view
+        /// must report the lot key per contained item.
+        /// </summary>
+        public sealed class ContainedItemView
+        {
+            public LotKey LotKey { get; }
+            public string BatchId { get; }
+            public string ItemId { get; }
+            public int Units { get; }
+            public PersonItemCondition Condition { get; }
+
+            public ContainedItemView(
+                LotKey lotKey, string batchId, string itemId, int units, PersonItemCondition condition)
+            {
+                LotKey = lotKey;
+                BatchId = batchId ?? string.Empty;
+                ItemId = itemId ?? string.Empty;
+                Units = units;
+                Condition = condition;
             }
         }
 
@@ -326,6 +382,7 @@ namespace LandLedgers.Population
         private readonly EquipmentAccessResolver equipmentResolver;
         private readonly int carryCapacityUnits;
         private readonly Func<int, global::LandLedgers.Population.HandOccupancy> handOccupancySupplier;
+        private readonly Func<int, IReadOnlyList<WornContainerSnapshot>> wornContainerSupplier;
         private readonly ILotIdentityResolver lotIdentityResolver;
 
         /// <param name="shoppingReadModel">Custody authority (required).</param>
@@ -334,13 +391,15 @@ namespace LandLedgers.Population
         /// <param name="carryOptions">The live shopping-loop options carrying the carry cap; null means the live default cap (a fresh ShoppingLoopOptions).</param>
         /// <param name="handOccupancySupplier">Hand-state supplier; null means no hand answers (an empty hand view, never an error). The supplier returns the plain HandOccupancy DTO snapshot from HandOccupancyAuthority.Current, never the authority itself, so this read model cannot become a hand-state writer.</param>
         /// <param name="lotIdentityResolver">Resolves a held LotKey to an item id; null means held lots report an empty item id with the gap named, never an error.</param>
+        /// <param name="wornContainerSupplier">Container-state supplier; null means no container answers (an empty answer with NoCarriedContainersReason, never an error). The supplier returns plain WornContainerSnapshot copies keyed by person id, never a container itself, so this read model cannot become a container-state writer.</param>
         public PersonInventoryReadModel(
             HouseholdShoppingReadModel shoppingReadModel,
             HouseholdInventoryRegistry inventoryRegistry,
             EquipmentAccessResolver equipmentResolver = null,
             ShoppingLoopOptions carryOptions = null,
             Func<int, global::LandLedgers.Population.HandOccupancy> handOccupancySupplier = null,
-            ILotIdentityResolver lotIdentityResolver = null)
+            ILotIdentityResolver lotIdentityResolver = null,
+            Func<int, IReadOnlyList<WornContainerSnapshot>> wornContainerSupplier = null)
         {
             this.shoppingReadModel = shoppingReadModel ?? throw new ArgumentNullException(nameof(shoppingReadModel));
             this.inventoryRegistry = inventoryRegistry ?? throw new ArgumentNullException(nameof(inventoryRegistry));
@@ -350,6 +409,7 @@ namespace LandLedgers.Population
                 : new ShoppingLoopOptions().CarryCapacityUnits;
             this.handOccupancySupplier = handOccupancySupplier;
             this.lotIdentityResolver = lotIdentityResolver;
+            this.wornContainerSupplier = wornContainerSupplier;
         }
 
         /// <summary>The live shopping carry cap this read model answers against (units).</summary>
@@ -506,16 +566,83 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
-        /// The items in the person's carried containers. Always empty:
-        /// no portable containers exist in the tree, so there is nothing
-        /// to list and <see cref="CarriedContainerContents.Reason"/> names
-        /// that. No container is invented. An unknown person id gets the
-        /// same empty answer, never an error.
+        /// The items in the person's carried containers, re-read from the
+        /// container supplier on every call, so two reads of the same state
+        /// agree. No supplier means the existing empty answer with
+        /// NoCarriedContainersReason; a supplier that returns null for the
+        /// person means an empty answer naming the person as unknown to
+        /// the supplier. Neither is an error. Otherwise one
+        /// CarriedContainerView is built per snapshot whose WornByPersonId
+        /// equals the person id, each contained entry becoming one
+        /// ContainedItemView, and the flattened Items list is built from
+        /// the same entries as CarriedItem values with Custody InHand in
+        /// the batch-custody sense, HolderPersonId the wearer, and empty
+        /// or unknown values for the fields the container does not carry
+        /// (ReceiptId empty, Provenance empty, PurchaseDayIndex -1,
+        /// OwningHouseholdId -1, UnitPriceCents 0). Container contents are
+        /// reported only here, never merged into CarriedItems, so no lot
+        /// is counted twice. Reason is empty on a clean report and names
+        /// a gap only when containers cannot be reported or an item id
+        /// cannot be resolved. An unworn container is invisible here: its
+        /// snapshots carry no wearer, so none of its entries are listed.
         /// </summary>
         public CarriedContainerContents ItemsInCarriedContainers(int personId)
         {
-            return new CarriedContainerContents(
-                new List<CarriedItem>().AsReadOnly(), NoCarriedContainersReason);
+            if (wornContainerSupplier == null)
+            {
+                return new CarriedContainerContents(
+                    new List<CarriedItem>().AsReadOnly(), NoCarriedContainersReason);
+            }
+
+            IReadOnlyList<WornContainerSnapshot> snapshots = wornContainerSupplier(personId);
+            if (snapshots == null)
+            {
+                return new CarriedContainerContents(
+                    new List<CarriedItem>().AsReadOnly(),
+                    "Person " + personId + " is unknown to the container supplier, so no carried container contents are reported.");
+            }
+
+            var items = new List<CarriedItem>();
+            var containers = new List<CarriedContainerView>();
+            var reasons = new List<string>();
+            foreach (WornContainerSnapshot snapshot in snapshots)
+            {
+                if (snapshot == null || snapshot.WornByPersonId != personId) continue;
+                var contained = new List<ContainedItemView>();
+                foreach (WornContainerEntry entry in snapshot.Entries)
+                {
+                    if (entry == null) continue;
+                    string itemId = entry.ItemId;
+                    if (string.IsNullOrEmpty(itemId))
+                    {
+                        if (lotIdentityResolver == null)
+                        {
+                            reasons.Add("No lot identity resolver was supplied, so the contained lot " + entry.LotKey + " cannot be resolved to an item id.");
+                        }
+                        else
+                        {
+                            LotIdentity identity = lotIdentityResolver.Resolve(entry.LotKey);
+                            if (identity == null || string.IsNullOrEmpty(identity.ItemId))
+                            {
+                                reasons.Add("The contained lot " + entry.LotKey + " cannot be resolved to an item id: no lot identity record exists for that key.");
+                            }
+                            else
+                            {
+                                itemId = identity.ItemId;
+                            }
+                        }
+                    }
+
+                    contained.Add(new ContainedItemView(entry.LotKey, entry.BatchId, itemId, entry.Units, entry.Condition));
+                    items.Add(new CarriedItem(
+                        itemId, entry.Units, entry.BatchId, string.Empty, string.Empty, -1,
+                        GoodsCustodyState.InHand, personId, -1, 0, entry.Condition));
+                }
+
+                containers.Add(new CarriedContainerView(snapshot.ContainerId, snapshot.Kind, snapshot.WornByPersonId, contained));
+            }
+
+            return new CarriedContainerContents(items, string.Join("; ", reasons.ToArray()), containers);
         }
 
         /// <summary>

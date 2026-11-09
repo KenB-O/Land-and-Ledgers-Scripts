@@ -461,6 +461,49 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void SettledWholesale_RecordsDeliveryBeforeLivePoolStocking_AndRetryDoesNotSettleAgain()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 12, 1, 1);
+            BakeryWholesaleAccount account = BookAccount(s, 24, 1, 2, 2);
+            s.StorePort.Cap = 10; // live pool cannot accept the full 24-loaf lot today
+
+            BakeryWholesaleDailyResult first = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+
+            Assert.AreEqual(1, first.BatchesBaked);
+            Assert.AreEqual(1, first.TransfersCompleted,
+                "wholesale completion is the settled receipt into store receiving stock");
+            Assert.AreEqual(0, first.UnitsStocked,
+                "live category stock refuses atomically while only 10u can fit");
+            Assert.AreEqual(3, account.NextDeliveryDayIndex,
+                "the account must advance after its cash-settled goods reach store back stock");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count);
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents);
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents);
+            Assert.AreEqual(24, s.Catalog.Find("bread").ShelfUnits,
+                "all 24 settled loaves remain in the store receiving shelf");
+            Assert.AreEqual(0, s.StorePort.CategoryStockUnits("staple_food"));
+
+            // Once capacity is available, retry only the receiving-shelf
+            // stock step. There is no second settlement for the same lot.
+            s.StorePort.Cap = 24;
+            BakeryWholesaleDailyResult retry = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 3), s.Diag);
+
+            Assert.AreEqual(24, retry.UnitsStocked);
+            Assert.AreEqual(0, retry.TransfersCompleted,
+                "the retry stocks previously settled goods; it is not a second wholesale transfer");
+            Assert.AreEqual(3, account.NextDeliveryDayIndex,
+                "the next delivery remains due until new bread is actually transferred");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count,
+                "the retry must not duplicate the delivery record");
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents);
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents);
+            Assert.AreEqual(24, s.StorePort.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(0, s.Catalog.Find("bread").ShelfUnits);
+        }
+
+        [Test]
         public void IdempotentRepeatedDriverCalls_SecondCallBakesAndTransfersNothing()
         {
             // One batch of inputs only: the lead-window plan on the

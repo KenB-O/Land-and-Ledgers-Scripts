@@ -180,11 +180,11 @@ namespace LandLedgers.Economy.BreadDrivers
     /// before transferring new units, so an interrupted day never
     /// double-buys; (d) for each due General Store account, transfer
     /// through Review2BakeryToStoreWholesaleDriver and stock to live —
-    /// a refusal leaves the account due (it retries tomorrow), moves no
-    /// cash, and loses no bread; (e) on a successful transfer +
-    /// stocking, record it on the account via
-    /// BakeryShopRuntime.RecordWholesaleTransfer (schedule advance only;
-    /// no shelf, no cash).
+    /// a refusal before transfer leaves the account due. Once intake,
+    /// settlement, and receipt into the store catalog's receiving shelf
+    /// succeed, record the account even if live category stocking must wait
+    /// for capacity. Step (c) retries that stocking tomorrow. Account
+    /// recording advances schedule only; it moves no shelf units or cash.
     ///
     /// The store path never calls FulfillWholesale: that would take the
     /// same units a second time (the pantry delivery-run path, which has
@@ -672,29 +672,34 @@ namespace LandLedgers.Economy.BreadDrivers
                     continue;
                 }
 
-                Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                    inputs.StoreCatalog, transfer.StoreProductId, transfer.Units, StoreCategoryId, inputs.StorePort, diag,
-                    "loaf", transfer.BakeryLotId, dayIndex);
-                if (!stocked.Stocked)
-                {
-                    // Stocking refusal leaves the units on the catalog
-                    // shelf for step (c) tomorrow; the account stays due.
-                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} stays due — stocking refused, units remain on the catalog shelf.");
-                    continue;
-                }
-                result.UnitsStocked += stocked.Units;
-
-                // (e) Record it on the account (schedule advance only).
+                // TransferToShelf has completed intake, moved this bread
+                // lot into the store's receiving catalog, and settled the
+                // cash. That is the wholesale delivery boundary. A full
+                // live category pool may defer stocking, but must not leave
+                // this paid delivery due for another settlement attempt.
                 string recordRefusal = bakery.RecordWholesaleTransfer(
                     account.AccountId, sourceLotId, transfer.Units,
                     account.PricePerUnitCents, dayIndex, provenance, diag);
                 if (!string.IsNullOrWhiteSpace(recordRefusal))
                 {
-                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} transfer stocked but the delivery record refused — {recordRefusal}");
+                    diag.Add($"BakeryWholesaleDailyDriver: transfer settled and received into catalog back stock, but the account record refused — {recordRefusal}");
                     continue;
                 }
                 result.TransfersCompleted++;
                 wholesaleRevenueTodayCents += account.UnitsPerDelivery * account.PricePerUnitCents;
+
+                Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
+                    inputs.StoreCatalog, transfer.StoreProductId, transfer.Units, StoreCategoryId, inputs.StorePort, diag,
+                    "loaf", transfer.BakeryLotId, dayIndex);
+                if (!stocked.Stocked)
+                {
+                    // The settled delivery and schedule are already
+                    // recorded. Units remain in store receiving stock and
+                    // step (c) retries live stocking tomorrow.
+                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} delivery recorded; live stocking refused, units remain on the catalog receiving shelf.");
+                    continue;
+                }
+                result.UnitsStocked += stocked.Units;
             }
 
             return FinishWithActualsLine(inputs, result, wholesaleRevenueTodayCents, diag);

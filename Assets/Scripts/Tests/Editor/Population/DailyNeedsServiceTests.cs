@@ -188,13 +188,32 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void NoActingAdultMeansUnmetNeeds()
+        public void NoHouseholdMembers_NoMealsCanBeAccounted()
         {
             population.people.Clear(); // nobody home
             var report = service.ExecuteDay(population, planner, executor, 0, diag);
 
             Assert.AreEqual(0, report.HouseholdsServed);
             Assert.AreEqual(0, report.MealsEaten);
+        }
+
+        [Test]
+        public void NoEligibleShopper_StillConsumesHouseholdFoodAndAccountsMeals()
+        {
+            population.people[0].laborAccessLevel = LaborAccessLevel.None;
+            population.people[1].laborAccessLevel = LaborAccessLevel.None;
+            population.households[0].reserves[0].currentUnits = 100;
+
+            var report = service.ExecuteDay(population, planner, executor, 0, diag);
+
+            Assert.AreEqual(0, report.HouseholdsServed,
+                "no acting adult is available to shop for the household");
+            Assert.AreEqual(4, report.MealsEaten,
+                "meal accounting still processes the two residents against real household stock");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.AreEqual(96, population.households[0].reserves[0].currentUnits);
+            Assert.AreEqual(0, report.PurchasesMade,
+                "the no-shopper household must not purchase through an invalid person id");
         }
 
         [Test]
@@ -254,7 +273,8 @@ namespace LandLedgers.EditorTests.Population
                 population, planner, capturing, 0, diag, offMapJourneys: authority);
 
             Assert.AreEqual(0, report.HouseholdsServed, "No household is served without an on-map acting adult.");
-            Assert.AreEqual(0, report.MealsEaten);
+            Assert.AreEqual(4, report.MealsMissed,
+                "resident meal opportunities remain visible when both adults are away and no external meal is recorded");
             Assert.AreEqual(0, capturing.ActingPersonIds.Count, "The executor must never be called without an acting adult.");
             Assert.IsTrue(diag.Exists(m => m.Contains("no acting adult")),
                 "The unmet needs must be logged honestly, not faked.");

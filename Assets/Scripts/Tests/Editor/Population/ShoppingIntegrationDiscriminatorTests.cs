@@ -352,7 +352,7 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void Monitor_WithEmptyKnowledge_OpensNoNeeds_AndLogsSuppression()
+        public void Monitor_WithEmptyKnowledge_KeepsFoodNeedOpen_AndLogsSellerBlocker()
         {
             var f = new MonitorFixture();
             GeneralStoreSupplierAdapter.RegisterIn(f.Directory, FallbackPort(SeededStoreState()));
@@ -360,17 +360,17 @@ namespace LandLedgers.EditorTests.Population
 
             f.Evaluate(monitor, dayIndex: 0);
 
-            Assert.IsNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId),
-                "with no known seller, zero-stock bread must not open a need");
-            bool suppressionLogged = false;
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId),
+                "a real bread shortage stays visible even before the household knows a seller");
+            bool blockerLogged = false;
             foreach (string line in monitor.Diagnostics)
             {
-                if (line != null && line.Contains("H7 will not raise a 'bread' need: no known seller offers it"))
-                    suppressionLogged = true;
+                if (line != null && line.Contains("H7 has an open 'bread' shortage, but no known seller currently offers it"))
+                    blockerLogged = true;
             }
 
-            Assert.IsTrue(suppressionLogged,
-                "suppression must be logged loudly; diagnostics: " + string.Join(" | ", monitor.Diagnostics));
+            Assert.IsTrue(blockerLogged,
+                "the seller blocker must remain visible beside the open need; diagnostics: " + string.Join(" | ", monitor.Diagnostics));
         }
 
         [Test]

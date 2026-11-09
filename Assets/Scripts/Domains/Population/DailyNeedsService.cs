@@ -149,10 +149,12 @@ namespace LandLedgers.Population
             int actingPersonId = FindActingAdult(population, household, memberships, offMapJourneys, diag);
             if (actingPersonId < 0)
             {
-                diag.Add($"DailyNeedsService: H{household.id} has no acting adult — needs unmet, nothing faked.");
-                return;
+                diag.Add($"DailyNeedsService: H{household.id} has no acting adult — meal accounting still runs; no household purchase can be attempted.");
             }
-            report.HouseholdsServed++;
+            else
+            {
+                report.HouseholdsServed++;
+            }
 
             // Member states for per-person allocation (NX-1B).
             var members = new List<PersonState>();
@@ -183,6 +185,11 @@ namespace LandLedgers.Population
                     dayIndex, report, diag, budgetStore,
                     restaurantMeals, boardingMeals, hotelMeals, conditionDebuffsSuppressed);
             }
+
+            // Eating from household stores and recording a shortage do not
+            // require a shopper. The shopping loop remains gated by a real
+            // acting adult; never pass -1 into planning or purchase execution.
+            if (actingPersonId < 0) return;
 
             // 2. The planner's remaining needs, executed through the same
             //    embodied channel (built on post-meal reserve levels, so the
@@ -268,7 +275,7 @@ namespace LandLedgers.Population
                 mealsAvailable += fromStores;
 
                 int shortfall = mealsNeeded - fromStores;
-                if (shortfall > 0)
+                if (shortfall > 0 && actingPersonId >= 0)
                 {
                     // The shortfall is shopped for by the acting member, like
                     // any other need — an embodied purchase, not conjured food.

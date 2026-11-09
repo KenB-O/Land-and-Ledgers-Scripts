@@ -274,6 +274,25 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void QueuedContactTravel_IsEligibleForNextNegotiationTickRetry()
+        {
+            WorkTask queued = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                EntityId.For(EntityKind.Business, 3), Day, 12,
+                "freight-meeting:travel:request-retry", "{}");
+
+            MethodInfo retryPolicy = typeof(SimulationDrivers).GetMethod("IsQueuedFreightContactTravel",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(retryPolicy);
+            Assert.IsTrue((bool)retryPolicy.Invoke(null, new object[] { queued }),
+                "a task left queued after a no-window refusal must be reused and retried");
+
+            Assert.IsTrue(hub.Tasks.AssignTask(queued.TaskId, EntityId.For(EntityKind.Person, EthanId),
+                hub.WorkTimeBudgets, Day, out string refusal), refusal);
+            Assert.IsFalse((bool)retryPolicy.Invoke(null, new object[] { queued }),
+                "already assigned travel remains owned by the existing schedule and must not be duplicated");
+        }
+
+        [Test]
         public void CompletedDispatchTravelTask_SetsEthanJourneyLocationToStaging()
         {
             PersonState ethan = population.State.GetPerson(EthanId);

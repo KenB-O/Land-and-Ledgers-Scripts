@@ -3414,11 +3414,27 @@ namespace LandLedgers.Orchestration.Systems
                     Debug.Log($"[FreightAgreement] Request '{request.RequestId}' remains open; Glen's contact is deferred until B3 has capacity: {temporaryCapacityBlocker}", this);
                 return;
             }
+            WorkTask queuedContactTravel = null;
             if (!string.IsNullOrWhiteSpace(request.ContactTravelTaskId))
             {
                 WorkTask existingTravel = hub.Tasks.FindTaskByIdString(request.ContactTravelTaskId);
-                if (existingTravel != null && existingTravel.IsOpen) return;
-                request.ContactTravelTaskId = string.Empty;
+                if (existingTravel != null && existingTravel.IsOpen)
+                {
+                    // A failed schedule attempt leaves the task Queued. Reuse
+                    // that same authoritative task on the next negotiation
+                    // tick so a newly available work window can start it.
+                    // Returning for every open task made a transient no-window
+                    // refusal permanent: the request kept its task ID forever
+                    // and never retried assignment.
+                    if (IsQueuedFreightContactTravel(existingTravel))
+                        queuedContactTravel = existingTravel;
+                    else
+                        return;
+                }
+                else
+                {
+                    request.ContactTravelTaskId = string.Empty;
+                }
             }
 
             PersonState glen = populationManager.State.GetPerson(request.RequestingPersonId);
@@ -3451,11 +3467,15 @@ namespace LandLedgers.Orchestration.Systems
                 MeetingBuildingId = ethan.homeBuildingId,
                 MeetingLocationId = meetingLocation
             };
-            WorkTask travel = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
-                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(bakery.InstanceId)), dayIndex,
-                Math.Max(1, route.TotalMinutes), customerRef: FreightMeetingTaskPrefix + "travel:" + requestId,
-                termsRef: JsonUtility.ToJson(trip));
-            request.ContactTravelTaskId = travel.TaskId.ToString();
+            WorkTask travel = queuedContactTravel;
+            if (travel == null)
+            {
+                travel = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                    EntityId.For(EntityKind.Business, StableBusinessRuntimeId(bakery.InstanceId)), dayIndex,
+                    Math.Max(1, route.TotalMinutes), customerRef: FreightMeetingTaskPrefix + "travel:" + requestId,
+                    termsRef: JsonUtility.ToJson(trip));
+                request.ContactTravelTaskId = travel.TaskId.ToString();
+            }
             if (!TryStartBusinessPersonTask(travel, glen, dayIndex, PersonActivityKind.Travel,
                     ethan.homeBuildingId, out string assignmentRefusal))
             {
@@ -3473,6 +3493,11 @@ namespace LandLedgers.Orchestration.Systems
             return reason.IndexOf("already bound to live shipment", StringComparison.OrdinalIgnoreCase) >= 0
                 || reason.IndexOf("equipment reservation", StringComparison.OrdinalIgnoreCase) >= 0
                 || reason.IndexOf("incompatible assigned or in-progress task", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal static bool IsQueuedFreightContactTravel(WorkTask task)
+        {
+            return task != null && task.IsOpen && task.Status == TaskStatus.Queued;
         }
 
         private void LogFreightAgreementBlockerOnce(string key, string message)

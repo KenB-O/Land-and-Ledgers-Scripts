@@ -13,7 +13,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// authorities (stock, cash, settlement). Scene wiring constructs this
     /// and registers the adapter in the SupplierDirectory (Codex integrates).
     /// </summary>
-    public sealed class GeneralStoreTradingPort : IItemLevelGeneralStoreTradingPort, IIdentifiedRetailStockReceivingPort
+    public sealed class GeneralStoreTradingPort : IItemLevelRestockTradingPort, IIdentifiedRetailStockReceivingPort
     {
         private readonly GeneralStoreRuntimeManager manager;
         private readonly BusinessInstanceState business;
@@ -108,6 +108,22 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         }
 
         public bool UsesItemLevelInventory(string itemId) => FindOffer(itemId)?.UsesItemLevelInventory == true;
+
+        public int ItemRestockStockUnits(string itemId)
+        {
+            GeneralStoreCategoryOffer offer = FindOffer(itemId);
+            return offer != null && offer.UsesItemLevelInventory
+                ? ActiveState?.GetRetailItemStockUnits(itemId, offer.CategoryId) ?? 0
+                : 0;
+        }
+
+        public int ItemRetailPricePerStoreUnitCents(string itemId) => Math.Max(0, manager.GetItemSellingPriceCents(itemId));
+
+        public int ItemReorderTargetUnits(string itemId) => manager.StoreDefinition?.FindItem(itemId)?.ReorderTargetUnits ?? 0;
+
+        public int ItemReorderLotSize(string itemId) => manager.StoreDefinition?.FindItem(itemId)?.ReorderLotSize ?? 0;
+
+        public string ItemUnitLabel(string itemId) => manager.StoreDefinition?.FindItem(itemId)?.Unit ?? string.Empty;
 
         public int ItemStockUnits(string itemId)
         {

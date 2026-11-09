@@ -16,7 +16,7 @@ namespace LandLedgers.EditorTests.Economy
     [TestFixture]
     public sealed class StoreRestockServiceTests
     {
-        private sealed class FakeStorePort : IGeneralStoreTradingPort
+        private class FakeStorePort : IGeneralStoreTradingPort
         {
             public string StoreBusinessId { get; set; } = "store-1";
             public string StoreName => "General Store";
@@ -99,6 +99,64 @@ namespace LandLedgers.EditorTests.Economy
             }
         }
 
+        private sealed class FakeIdentifiedSkuStore : FakeStorePort, IItemLevelRestockTradingPort, IIdentifiedRetailStockReceivingPort
+        {
+            public readonly Dictionary<string, int> ItemStock = new Dictionary<string, int>();
+            public readonly Dictionary<string, int> ItemTargets = new Dictionary<string, int>();
+            public readonly Dictionary<string, int> ItemLots = new Dictionary<string, int>();
+            public readonly Dictionary<string, string> ItemUnits = new Dictionary<string, string>();
+            public readonly List<string> ReceivedLotIds = new List<string>();
+
+            public bool UsesItemLevelInventory(string itemId) => true;
+            public int ItemStockUnits(string itemId) => ItemStock.TryGetValue(itemId, out int units) ? units : 0;
+            public int ItemPricePerUnitCents(string itemId) => Prices.TryGetValue(itemId, out int price) ? price : 0;
+            public int ItemRestockStockUnits(string itemId) => ItemStockUnits(itemId);
+            public int ItemRetailPricePerStoreUnitCents(string itemId) => ItemPricePerUnitCents(itemId);
+            public int ItemReorderTargetUnits(string itemId) => ItemTargets.TryGetValue(itemId, out int target) ? target : 0;
+            public int ItemReorderLotSize(string itemId) => ItemLots.TryGetValue(itemId, out int lot) ? lot : 1;
+            public string ItemUnitLabel(string itemId) => ItemUnits.TryGetValue(itemId, out string unit) ? unit : string.Empty;
+            public bool TryConsumeItemStockUnits(string itemId, int units, out int consumedUnits)
+            {
+                consumedUnits = 0;
+                int have = ItemStockUnits(itemId);
+                if (units <= 0 || have < units) return false;
+                ItemStock[itemId] = have - units;
+                Stock["staple_food"] = CategoryStockUnits("staple_food") - units;
+                consumedUnits = units;
+                return true;
+            }
+            public void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents) { }
+            public string ReceiveRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, string provenance, int dayIndex)
+            {
+                if (ReceivedLotIds.Contains(lotId)) return "duplicate lot";
+                ReceivedLotIds.Add(lotId);
+                ItemStock[itemId] = ItemStockUnits(itemId) + units;
+                Stock[categoryId] = CategoryStockUnits(categoryId) + units;
+                return null;
+            }
+        }
+
+        private sealed class FakeIdentifiedItemSupplier : IItemLevelUpstreamGoodsSupplier
+        {
+            public string SupplierId => "regional-food";
+            public string SupplierName => "Regional Food Supplier";
+            public int LeadTimeDays(string categoryId) => 0;
+            public int QuoteUnitCostCents(string categoryId) => 0;
+            public int AvailableUnits(string categoryId) => 0;
+            public int Ship(string categoryId, int units, int dayIndex, List<string> diagnostics) => 0;
+            public IReadOnlyList<string> OfferedItemsInCategory(string categoryId) => new[] { "bread" };
+            public Dictionary<string, int> Stock = new Dictionary<string, int> { ["bread"] = 100 };
+            public int QuoteItemUnitCostCents(string itemId) => itemId == "bread" ? 2 : 0;
+            public int AvailableItemUnits(string itemId) => Stock.TryGetValue(itemId, out int units) ? units : 0;
+            public int ShipItem(string itemId, int units, int dayIndex, List<string> diagnostics)
+            {
+                int shipped = System.Math.Min(System.Math.Max(0, units), AvailableItemUnits(itemId));
+                Stock[itemId] -= shipped;
+                return shipped;
+            }
+        }
+
         private static FakeStorePort StoreWith(string categoryId, int stock, int target, int price)
         {
             var port = new FakeStorePort();
@@ -135,6 +193,45 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(100, port.CategoryStockUnits("staple_food"));
             Assert.AreEqual(50000 - 80 * 80, port.CashBalance, "Receipt pays real cash before stock books.");
             Assert.AreEqual(500 - 80, upstream.AvailableUnits("staple_food"), "Supplier stock is finite and debited.");
+        }
+
+        [Test]
+        public void IdentifiedSkuRestock_UsesItemTargetAndReceivesSameSkuLot_WhenCategoryPoolIsHealthy()
+        {
+            var port = new FakeIdentifiedSkuStore();
+            port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { "bread", "sugar" },
+                UsesItemLevelInventory = true,
+            });
+            port.Stock["staple_food"] = 120; // unrelated SKU stock keeps the category above its reorder threshold.
+            port.Targets["staple_food"] = 200;
+            port.Prices["bread"] = 5;
+            port.ItemStock["bread"] = 0;
+            port.ItemTargets["bread"] = 30;
+            port.ItemLots["bread"] = 6;
+            port.ItemUnits["bread"] = "loaf";
+            var supplier = new FakeIdentifiedItemSupplier();
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { supplier }, 0, 0.5f);
+
+            Assert.AreEqual(1, service.Orders.Count, "The bread SKU needs a reorder even though other staple stock keeps the category healthy.");
+            Assert.AreEqual("bread", service.Orders[0].ItemId);
+            Assert.AreEqual(30, service.Orders[0].UnitsOrdered, "The authored item target and order lot size determine the shipment.");
+            Assert.AreEqual(120, port.CategoryStockUnits("staple_food"), "Ordering does not book stock before shipment receipt.");
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { supplier }, 1, 0.5f);
+            Assert.AreEqual(1, service.Orders.Count, "A pending order for the exact SKU must prevent duplicate procurement.");
+
+            service.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { supplier }, 0, new List<string>());
+
+            Assert.AreEqual(StoreProcurementStage.Received, service.Orders[0].Stage);
+            Assert.AreEqual(30, port.ItemStockUnits("bread"));
+            Assert.AreEqual(150, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(1, port.ReceivedLotIds.Count);
+            Assert.AreEqual(70, supplier.AvailableItemUnits("bread"));
+            Assert.AreEqual(50000 - 60, port.CashBalance, "The identified goods were paid for exactly once.");
         }
 
         [Test]

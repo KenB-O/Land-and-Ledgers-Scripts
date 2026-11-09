@@ -74,6 +74,18 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents);
     }
 
+    /// <summary>Optional authored SKU reorder policy for stores with identified item lots.</summary>
+    public interface IItemLevelRestockTradingPort : IItemLevelGeneralStoreTradingPort
+    {
+        /// <summary>Identified inventory quantity in the authored store's own unit.</summary>
+        int ItemRestockStockUnits(string itemId);
+        /// <summary>Retail price per authored store unit, matching supplier and reorder quantities.</summary>
+        int ItemRetailPricePerStoreUnitCents(string itemId);
+        int ItemReorderTargetUnits(string itemId);
+        int ItemReorderLotSize(string itemId);
+        string ItemUnitLabel(string itemId);
+    }
+
     /// <summary>Optional receiving seam for wholesale receipts that must back an exact retail SKU offer.</summary>
     public interface IIdentifiedRetailStockReceivingPort
     {

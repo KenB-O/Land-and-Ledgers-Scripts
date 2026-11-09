@@ -655,6 +655,17 @@ namespace LandLedgers.Population
             IEnumerable<MissedMealRecord> missed,
             IEnumerable<MealPreparationRecord> preparations)
         {
+            // Save/Continue restores a snapshot, not an append operation.
+            // Loading another save (or the same save twice in one session)
+            // must replace the current history instead of duplicating meals,
+            // missed slots, and preparation records. A null section is
+            // treated as empty when any import section is supplied; three
+            // null arguments mean the caller has no meal-log data to import.
+            if (meals == null && missed == null && preparations == null) return;
+            mealsByHousehold.Clear();
+            missedByHousehold.Clear();
+            preparationsByHousehold.Clear();
+
             if (meals != null)
             {
                 foreach (HouseholdMealRecord record in meals)

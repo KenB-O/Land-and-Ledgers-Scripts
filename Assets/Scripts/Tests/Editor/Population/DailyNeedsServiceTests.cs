@@ -217,6 +217,52 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void MealLogImport_ReplacesHistoryOnRepeatedSaveRestore()
+        {
+            var registry = new HouseholdMealLogRegistry();
+            var savedMeal = new HouseholdMealRecord
+            {
+                PersonId = 1, HouseholdId = 7, DayIndex = 3,
+                Slot = MealSlot.Evening, SourceKind = MealSourceKind.HouseholdInventory,
+            };
+            var savedMissed = new MissedMealRecord
+            {
+                PersonId = 2, HouseholdId = 7, DayIndex = 3,
+                Slot = MealSlot.Morning, Reason = "empty larder",
+            };
+            var savedPreparation = new MealPreparationRecord
+            {
+                HouseholdId = 7, DayIndex = 3, RawItemId = HouseholdItemCatalog.FlourId,
+                RawUnitsConsumed = 2, PreparedItemId = HouseholdItemCatalog.BreadId,
+                PreparedUnitsProduced = 1, EquipmentLabel = "household oven", LaborMinutes = 30,
+            };
+            var meals = new List<HouseholdMealRecord> { savedMeal };
+            var missed = new List<MissedMealRecord> { savedMissed };
+            var preparations = new List<MealPreparationRecord> { savedPreparation };
+
+            registry.ImportState(meals, missed, preparations);
+            Assert.AreEqual(1, registry.GetMeals(7).Count);
+            Assert.AreEqual(1, registry.GetMissedMeals(7).Count);
+            Assert.AreEqual(1, registry.GetPreparations(7).Count);
+
+            // Import a different snapshot first to prove replacement also
+            // removes stale household history, then restore the same DTO
+            // again and prove that the records do not append twice.
+            registry.ImportState(
+                new[] { new HouseholdMealRecord { PersonId = 8, HouseholdId = 9, DayIndex = 4 } },
+                null, null);
+            Assert.AreEqual(0, registry.GetMeals(7).Count);
+            registry.ImportState(meals, missed, preparations);
+            registry.ImportState(meals, missed, preparations);
+
+            Assert.AreEqual(1, registry.GetMeals(7).Count);
+            Assert.AreEqual(1, registry.GetMissedMeals(7).Count);
+            Assert.AreEqual(1, registry.GetPreparations(7).Count);
+            Assert.AreEqual(0, registry.GetMeals(9).Count,
+                "restoring the prior snapshot replaces records from another loaded save");
+        }
+
+        [Test]
         public void OffMapFirstAdultSkipped_FallsBackToSecondAdult()
         {
             // Plan 08 Slice 2 (Q03, AUD-266): REWRITE of the Slice 0

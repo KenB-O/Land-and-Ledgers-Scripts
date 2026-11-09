@@ -201,6 +201,28 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void PlannedRouteTravelReservationAdvancesItsTaskProgress()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+
+            PlannedShoppingTrip trip = f.Loop.PlanTrip(need, Fixture.Day, f.LoopOptions);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, trip.State, trip.FailureReason);
+            WorkTask outbound = trip.Legs.Outbound;
+            Assert.IsNotNull(outbound);
+            Assert.IsTrue(f.Tasks.StartTask(outbound.TaskId, Fixture.Day, out string reason), reason);
+
+            var reservations = f.Tracker.ActiveFor(Fixture.ShopperId, Fixture.Day);
+            int progressMinutes = AutonomousTaskProgress.ScheduledMinutes(
+                outbound, reservations, Fixture.Day, 600,
+                600 + trip.Legs.OutboundMinutes,
+                $"task:{outbound.TaskId}|{outbound.DefinitionId}");
+
+            Assert.AreEqual(trip.Legs.OutboundMinutes, progressMinutes,
+                "the real-time progress authority must recognize the travel reservation booked by shopping");
+        }
+
+        [Test]
         public void FullTripThroughRealTime_SettlesAndReceives()
         {
             var f = new Fixture();

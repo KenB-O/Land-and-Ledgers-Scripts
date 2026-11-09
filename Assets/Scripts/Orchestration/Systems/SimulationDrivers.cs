@@ -6395,37 +6395,33 @@ namespace LandLedgers.Orchestration.Systems
         /// refusal the Work reservation is released and the task stays
         /// Assigned, exactly as the composed StartAssignedTasks behaved.
         /// </summary>
-        private void StartPreAssignedBusinessWork(BusinessInstanceState business, int absoluteDayIndex, List<string> diagnostics)
+        private void StartPreAssignedBusinessWork(int absoluteDayIndex, int tickStartMinute,
+            int tickEndMinute, List<string> diagnostics)
         {
-            EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
-            List<WorkTask> openTasks = hub.Tasks.GetOpenTasks(businessId);
-            if (openTasks == null || openTasks.Count == 0)
+            if (hub == null || sharedBusinessRuntime == null) return;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
-                return;
-            }
+                if (business == null || string.IsNullOrWhiteSpace(business.InstanceId)) continue;
+                EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
+                List<WorkTask> openTasks = hub.Tasks.GetOpenTasks(businessId);
+                if (openTasks == null || openTasks.Count == 0) continue;
 
-            var assigned = new List<WorkTask>();
-            foreach (WorkTask task in openTasks)
-            {
-                if (task != null && task.Status == TaskStatus.Assigned)
+                var assigned = new List<WorkTask>();
+                foreach (WorkTask task in openTasks)
                 {
-                    assigned.Add(task);
+                    if (task != null && task.Status == TaskStatus.Assigned
+                        && !IsArrivalDrivenTravelTask(task))
+                    {
+                        assigned.Add(task);
+                    }
                 }
-            }
+                if (assigned.Count == 0) continue;
 
-            if (assigned.Count == 0)
-            {
-                return;
+                ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                    assigned, hub.Tasks, hub.PersonSchedules, hub.WorkTimeBudgets,
+                    absoluteDayIndex, tickStartMinute, tickEndMinute, diagnostics,
+                    (task, reservationId) => autonomousTaskReservations[task.TaskId] = reservationId);
             }
-
-            var reservationByTaskId = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (KeyValuePair<EntityId, string> entry in autonomousTaskReservations)
-            {
-                reservationByTaskId[entry.Key.ToString()] = entry.Value;
-            }
-
-            ManagerWorkSchedulerDrive.StartReservedTasks(
-                assigned, reservationByTaskId, hub.Tasks, hub.PersonSchedules, absoluteDayIndex, diagnostics);
         }
 
         private void DriveAutonomousLabor(int absoluteDayIndex)
@@ -6579,11 +6575,11 @@ namespace LandLedgers.Orchestration.Systems
                     break;
                 }
 
-                // Plan 05 Slice 4 — SPLIT half 2: start the work reserved +
-                // assigned before shopping, in this per-business position
-                // (where the blanket pass used to run). The trip legs have
-                // executed and completed by now, so the shopper is free.
-                StartPreAssignedBusinessWork(business, absoluteDayIndex, diagnostics);
+                // Reserved work starts from OnShortTick when its actual
+                // schedule window is reached. Starting here at the day-drive
+                // boundary can precede an 08:00 reservation (notably when a
+                // NewGame begins later in the day), leaving an InProgress task
+                // with no time window from which it can ever accrue progress.
             }
 
             // G-06: NPC-owner auto-resolution for escalated manager requests —
@@ -8535,12 +8531,19 @@ namespace LandLedgers.Orchestration.Systems
             int activityWindowEndMinute = Mathf.FloorToInt(context.TimeOfDay01 * 1440f);
             int activityWindowMinutes = Mathf.Max(1,
                 Mathf.CeilToInt(context.TickIntervalGameSeconds / DurationConventions.SecondsPerMinute));
+            int activityWindowStartMinute = Math.Max(0, activityWindowEndMinute - activityWindowMinutes);
+            var scheduledStartDiagnostics = new List<string>();
+            StartPreAssignedBusinessWork(context.Date.AbsoluteDayIndex,
+                activityWindowStartMinute, activityWindowEndMinute, scheduledStartDiagnostics);
+            foreach (string line in scheduledStartDiagnostics)
+                LogRefusalDayKeyed("scheduled-task-start:" + line, context.Date.AbsoluteDayIndex,
+                    "[TaskSchedule] " + line);
             StartQueuedBusinessFeedTasks(context.Date.AbsoluteDayIndex,
-                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+                activityWindowStartMinute, activityWindowEndMinute);
             StartQueuedFreightMeetingTasks(context.Date.AbsoluteDayIndex,
-                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+                activityWindowStartMinute, activityWindowEndMinute);
             StartQueuedOpeningHitchTask(context.Date.AbsoluteDayIndex,
-                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+                activityWindowStartMinute, activityWindowEndMinute);
             ResolveArrivalDrivenTravelTasks(context.Date.AbsoluteDayIndex);
             MonitorOpeningHitchCancellation(context.Date.AbsoluteDayIndex);
 
@@ -8569,7 +8572,7 @@ namespace LandLedgers.Orchestration.Systems
             // newly-started one-minute assignment cannot be consumed by the
             // time window that made it eligible.
             StartQueuedFreightDispatchTasks(context.Date.AbsoluteDayIndex,
-                Math.Max(0, activityWindowEndMinute - activityWindowMinutes), activityWindowEndMinute);
+                activityWindowStartMinute, activityWindowEndMinute);
             ReconcileCompletedFreightDispatchTasks();
 
             // Pass IV (Worker 1): player-issued tasks progress in real time instead of

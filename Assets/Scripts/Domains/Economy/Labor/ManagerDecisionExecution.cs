@@ -34,6 +34,7 @@ using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 using UnityEngine;
 using EntityId = LandLedgers.Primitives.EntityId;
 
@@ -1518,8 +1519,15 @@ namespace LandLedgers.Economy.Labor
                 // seam. Only Resting is released, never Work/Sleeping/
                 // Building/Cooking/JobSeeking/Managing/Eating, and a
                 // released rest is named in diagnostics, never silent.
+                // Route-time travel tasks progress only inside reserved Travel
+                // time. Reserving every scheduled task as Work leaves these
+                // tasks InProgress forever because AutonomousTaskProgress
+                // correctly rejects non-Travel reservations.
+                PersonActivityKind activity = task.DefinitionId == JourneyTravel.TravelTaskId
+                    ? PersonActivityKind.Travel
+                    : PersonActivityKind.Work;
                 string reservation = schedules.TryReservePreemptingRest(
-                    assignment.PersonId, PersonActivityKind.Work, dayIndex, startMinute,
+                    assignment.PersonId, activity, dayIndex, startMinute,
                     assignment.MinutesCommitted, label, out string releasedRest);
                 if (reservation != null)
                 {
@@ -1542,7 +1550,7 @@ namespace LandLedgers.Economy.Labor
                 {
                     PersonActivityReservation candidate = activeReservations[i];
                     if (candidate != null &&
-                        candidate.Activity == PersonActivityKind.Work &&
+                        candidate.Activity == activity &&
                         string.Equals(candidate.Label, label, StringComparison.Ordinal))
                     {
                         reservationId = candidate.ReservationId;
@@ -1616,6 +1624,120 @@ namespace LandLedgers.Economy.Labor
                     continue;
                 }
 
+                started++;
+            }
+
+            return started;
+        }
+
+        /// <summary>
+        /// Starts day-assigned work only when its reserved window is reached.
+        /// If startup or a large simulation tick passes the reservation before
+        /// it can start, the task receives a new exclusive window from the
+        /// current clock time. Assignment and its committed budget are kept;
+        /// no work is recorded before the replacement reservation.
+        /// </summary>
+        public static int StartReservedTasksInTickWindow(
+            List<WorkTask> assignedTasks,
+            TaskAuthority tasks,
+            PersonScheduleTracker schedules,
+            WorkTimeBudgetStore budgets,
+            int dayIndex,
+            int tickStartMinute,
+            int tickEndMinute,
+            List<string> diagnostics,
+            Action<WorkTask, string> onStarted)
+        {
+            diagnostics ??= new List<string>();
+            if (assignedTasks == null || tasks == null || schedules == null || budgets == null
+                || tickEndMinute <= tickStartMinute)
+            {
+                return 0;
+            }
+
+            int started = 0;
+            foreach (WorkTask task in assignedTasks)
+            {
+                if (task == null || task.Status != TaskStatus.Assigned || !task.HasAssignee)
+                    continue;
+
+                string label = DefaultTaskLabel(task);
+                PersonActivityKind activity = task.DefinitionId == JourneyTravel.TravelTaskId
+                    ? PersonActivityKind.Travel : PersonActivityKind.Work;
+                List<PersonActivityReservation> personReservations =
+                    schedules.ActiveFor(task.AssigneeId.Id, dayIndex);
+                PersonActivityReservation reservation = null;
+                for (int i = personReservations.Count - 1; i >= 0; i--)
+                {
+                    PersonActivityReservation candidate = personReservations[i];
+                    if (candidate != null && !candidate.Released
+                        && candidate.PersonId == task.AssigneeId.Id
+                        && candidate.DayIndex == dayIndex
+                        && candidate.Activity == activity
+                        && string.Equals(candidate.Label, label, StringComparison.Ordinal))
+                    {
+                        reservation = candidate;
+                        break;
+                    }
+                }
+
+                BusinessTaskStartDecision decision = reservation == null
+                    ? BusinessTaskStartDecision.CatchUp
+                    : BusinessTaskStartWindow.Resolve(reservation.StartMinuteOfDay,
+                        reservation.EndMinuteOfDay, tickStartMinute, tickEndMinute);
+                if (decision == BusinessTaskStartDecision.Wait)
+                    continue;
+
+                if (decision == BusinessTaskStartDecision.CatchUp)
+                {
+                    if (reservation != null)
+                        schedules.Release(reservation.ReservationId);
+
+                    int startMinute = Math.Max(0, tickEndMinute);
+                    int remainingDay = 1440 - startMinute;
+                    if (remainingDay <= 0)
+                        continue;
+
+                    int duration = Math.Min(Math.Max(1, task.MinutesRemaining), remainingDay);
+                    string refusal = schedules.TryReservePreemptingRest(
+                        task.AssigneeId.Id, activity, dayIndex, startMinute, duration,
+                        label, out string releasedRest);
+                    if (refusal != null)
+                    {
+                        diagnostics.Add($"task {task.TaskId}: missed-window re-reservation refused ({refusal})");
+                        continue;
+                    }
+
+                    if (!string.IsNullOrEmpty(releasedRest))
+                        diagnostics.Add($"Day {dayIndex}: P{task.AssigneeId.Id} work released rest {releasedRest} for the missed-window catch-up.");
+
+                    personReservations = schedules.ActiveFor(task.AssigneeId.Id, dayIndex);
+                    reservation = null;
+                    for (int i = personReservations.Count - 1; i >= 0; i--)
+                    {
+                        PersonActivityReservation candidate = personReservations[i];
+                        if (candidate != null && candidate.Activity == activity
+                            && string.Equals(candidate.Label, label, StringComparison.Ordinal))
+                        {
+                            reservation = candidate;
+                            break;
+                        }
+                    }
+                    if (reservation == null)
+                    {
+                        diagnostics.Add($"task {task.TaskId}: missed-window reservation was not materialized");
+                        continue;
+                    }
+                }
+
+                if (!tasks.StartTask(task.TaskId, dayIndex, out string startReason))
+                {
+                    schedules.Release(reservation.ReservationId);
+                    diagnostics.Add($"task {task.TaskId}: start refused ({startReason})");
+                    continue;
+                }
+
+                onStarted?.Invoke(task, reservation.ReservationId);
                 started++;
             }
 

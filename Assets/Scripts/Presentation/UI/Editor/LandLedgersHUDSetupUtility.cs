@@ -229,7 +229,7 @@ namespace LandLedgers.Editor
             Button speed10x = CreateSpeedButton("HUD_TimeSpeed_10x", controls.transform, "10x");
             Button speed25x = CreateSpeedButton("HUD_TimeSpeed_25x", controls.transform, "25x");
             Button speed50x = CreateSpeedButton("HUD_TimeSpeed_50x", controls.transform, "50x");
-            Button speed100x = CreateSpeedButton("HUD_TimeSpeed_100x", controls.transform, "100x");
+            Button speed100x = CreateSpeedButton("HUD_TimeSpeed_250x", controls.transform, "250x");
 
             GameObject alertStrip = CreatePanel("HUD_AlertStrip", rootRect, new Color(0.095f, 0.105f, 0.1f, 0.82f));
             RectTransform alertRect = alertStrip.GetComponent<RectTransform>();

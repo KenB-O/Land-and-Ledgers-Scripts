@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Primitives;
+using EntityId = LandLedgers.Primitives.EntityId;
 using UnityEngine;
 
 namespace LandLedgers.Tasks

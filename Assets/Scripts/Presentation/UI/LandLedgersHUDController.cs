@@ -137,6 +137,13 @@ namespace LandLedgers.UI
         private Key speed10xKey = Key.Digit0;
 
         [SerializeField]
+        private Key speed5xKey = Key.Digit5;
+
+        [SerializeField]
+        [Tooltip("Retains the existing 100x test speed when the HUD's maximum-speed button is set to 250x.")]
+        private Key speed100xKey = Key.Digit9;
+
+        [SerializeField]
         private Key speed25xKey = Key.Minus;
 
         [SerializeField]
@@ -566,7 +573,8 @@ namespace LandLedgers.UI
             AttachSpeedTooltip(speed10xButton, "10x Speed", SimulationSpeed.Speed10x, "Fast-forward when you are waiting for sales, staffing, or construction.");
             AttachSpeedTooltip(speed25xButton, "25x Speed", SimulationSpeed.Speed25x, "Fast-forward through longer waits.");
             AttachSpeedTooltip(speed50xButton, "50x Speed", SimulationSpeed.Speed50x, "Very fast testing pace for long waits.");
-            AttachSpeedTooltip(speed100xButton, "100x Speed", SimulationSpeed.Speed100x, "Maximum testing pace for long waits.");
+            AttachSpeedTooltip(speed100xButton, "250x Speed", SimulationSpeed.Speed250x,
+                "Maximum testing pace for long waits. Press 9 for the preserved 100x test speed.");
             if (cashText != null)
             {
                 EnsureCashTooltipRaycastTarget();
@@ -630,7 +638,7 @@ namespace LandLedgers.UI
 
         private void OnSpeed100xButtonClicked()
         {
-            timeManager?.SetSpeed(SimulationSpeed.Speed100x);
+            timeManager?.SetSpeed(SimulationSpeed.Speed250x);
         }
 
         private void OnDayChanged(SimulationDateChangedContext context)
@@ -770,7 +778,7 @@ namespace LandLedgers.UI
             ApplyButtonState(speed10xButton, speed == SimulationSpeed.Speed10x);
             ApplyButtonState(speed25xButton, speed == SimulationSpeed.Speed25x);
             ApplyButtonState(speed50xButton, speed == SimulationSpeed.Speed50x);
-            ApplyButtonState(speed100xButton, speed == SimulationSpeed.Speed100x);
+            ApplyButtonState(speed100xButton, speed == SimulationSpeed.Speed250x);
         }
 
         private void RefreshPauseButtonLabel(SimulationSpeed speed)
@@ -955,7 +963,7 @@ namespace LandLedgers.UI
             speed10xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_10x");
             speed25xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_25x");
             speed50xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_50x");
-            speed100xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_100x");
+            speed100xButton ??= FindChildComponent<Button>("HUD_TimeSpeed_250x");
             alertStrip ??= FindChildComponent<RectTransform>("HUD_AlertStrip");
             townPulseAlertText ??= FindChildComponent<TMP_Text>("HUD_TownPulseAlertText");
             townPulseAlertText ??= FindChildComponent<TMP_Text>("HUD_AlertStrip_Placeholder");
@@ -1033,6 +1041,14 @@ namespace LandLedgers.UI
             if (WasKeyPressed(keyboard, speed10xKey))
             {
                 timeManager.SetSpeed(SimulationSpeed.Speed10x);
+            }
+            else if (WasKeyPressed(keyboard, speed5xKey))
+            {
+                timeManager.SetSpeed(SimulationSpeed.Speed5x);
+            }
+            else if (WasKeyPressed(keyboard, speed100xKey))
+            {
+                timeManager.SetSpeed(SimulationSpeed.Speed100x);
             }
             else if (WasKeyPressed(keyboard, speed25xKey))
             {

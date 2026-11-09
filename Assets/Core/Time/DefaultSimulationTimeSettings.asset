@@ -41,16 +41,18 @@ MonoBehaviour:
   startingWeekOfMonth: 1
   startingDayOfWeek: 1
   startingTimeOfDay01: 0.25
-  realSecondsPerGameDayAt1x: 120
+  realSecondsPerGameDayAt1x: 300
   shortTickIntervalGameMinutes: 15
   speed1xMultiplier: 1
   speed2xMultiplier: 2
   speed4xMultiplier: 4
+  speed5xMultiplier: 5
   speed6xMultiplier: 6
   speed10xMultiplier: 10
   speed25xMultiplier: 25
   speed50xMultiplier: 50
   speed100xMultiplier: 100
+  speed250xMultiplier: 250
   startingSpeed: 1
   maxShortTicksPerFrame: 64
   maxDayRolloversPerFrame: 7

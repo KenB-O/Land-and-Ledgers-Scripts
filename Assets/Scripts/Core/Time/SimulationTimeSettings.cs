@@ -8,6 +8,8 @@ namespace LandLedgers.Time
         order = 120)]
     public sealed class SimulationTimeSettings : ScriptableObject
     {
+        public const float MaximumSpeedMultiplier = 250f;
+
         [Header("Calendar")]
         [Min(1)]
         public int daysPerWeek = 7;
@@ -111,7 +113,7 @@ namespace LandLedgers.Time
         [Header("Progression")]
         [Tooltip("Real seconds needed for one full in-game day at 1x speed.")]
         [Min(1f)]
-        public float realSecondsPerGameDayAt1x = 120f;
+        public float realSecondsPerGameDayAt1x = 300f;
 
         [Tooltip("Short simulation tick interval in in-game minutes. Used for schedules, economy sampling, and other small-step systems.")]
         [Min(1f)]
@@ -126,6 +128,9 @@ namespace LandLedgers.Time
 
         [Min(0f)]
         public float speed4xMultiplier = 4f;
+
+        [Min(0f)]
+        public float speed5xMultiplier = 5f;
 
         [Min(0f)]
         public float speed6xMultiplier = 6f;
@@ -145,6 +150,10 @@ namespace LandLedgers.Time
         [Tooltip("Fast-forward multiplier.")]
         [Min(0f)]
         public float speed100xMultiplier = 100f;
+
+        [Tooltip("Maximum fast-forward multiplier.")]
+        [Min(0f)]
+        public float speed250xMultiplier = 250f;
 
         [Tooltip("Speed applied when the TimeManager starts.")]
         public SimulationSpeed startingSpeed = SimulationSpeed.Speed1x;
@@ -182,25 +191,27 @@ namespace LandLedgers.Time
 
         public float GetMultiplier(SimulationSpeed speed)
         {
-            return speed switch
+            float multiplier = speed switch
             {
                 SimulationSpeed.Paused => 0f,
                 // TimeManager's standard conversion multiplies the selected
                 // speed by GameSecondsPerDay / realSecondsPerGameDayAt1x.
                 // This inverse makes one real second advance exactly one game
-                // second, regardless of whether an accelerated day is 120 or
-                // 60 real seconds.
+                // second, regardless of the configured 1x day duration.
                 SimulationSpeed.RealTime => Mathf.Max(1f, realSecondsPerGameDayAt1x) / GameSecondsPerDay,
                 SimulationSpeed.Speed1x => speed1xMultiplier,
                 SimulationSpeed.Speed2x => speed2xMultiplier,
                 SimulationSpeed.Speed4x => speed4xMultiplier,
+                SimulationSpeed.Speed5x => speed5xMultiplier,
                 SimulationSpeed.Speed6x => speed6xMultiplier,
                 SimulationSpeed.Speed10x => speed10xMultiplier,
                 SimulationSpeed.Speed25x => speed25xMultiplier,
                 SimulationSpeed.Speed50x => speed50xMultiplier,
                 SimulationSpeed.Speed100x => speed100xMultiplier,
+                SimulationSpeed.Speed250x => speed250xMultiplier,
                 _ => speed1xMultiplier
             };
+            return Mathf.Clamp(multiplier, 0f, MaximumSpeedMultiplier);
         }
 
         public string GetDayName(int zeroBasedDayOfWeekIndex)
@@ -321,14 +332,16 @@ namespace LandLedgers.Time
             startingTimeOfDay01 = Mathf.Clamp(startingTimeOfDay01, 0f, 0.999f);
             realSecondsPerGameDayAt1x = Mathf.Max(1f, realSecondsPerGameDayAt1x);
             shortTickIntervalGameMinutes = Mathf.Max(1f, shortTickIntervalGameMinutes);
-            speed1xMultiplier = Mathf.Max(0f, speed1xMultiplier);
-            speed2xMultiplier = Mathf.Max(0f, speed2xMultiplier);
-            speed4xMultiplier = Mathf.Max(0f, speed4xMultiplier);
-            speed6xMultiplier = Mathf.Max(0f, speed6xMultiplier);
-            speed10xMultiplier = Mathf.Max(0f, speed10xMultiplier);
-            speed25xMultiplier = Mathf.Max(0f, speed25xMultiplier);
-            speed50xMultiplier = Mathf.Max(0f, speed50xMultiplier);
-            speed100xMultiplier = Mathf.Max(0f, speed100xMultiplier);
+            speed1xMultiplier = Mathf.Clamp(speed1xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed2xMultiplier = Mathf.Clamp(speed2xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed4xMultiplier = Mathf.Clamp(speed4xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed5xMultiplier = Mathf.Clamp(speed5xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed6xMultiplier = Mathf.Clamp(speed6xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed10xMultiplier = Mathf.Clamp(speed10xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed25xMultiplier = Mathf.Clamp(speed25xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed50xMultiplier = Mathf.Clamp(speed50xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed100xMultiplier = Mathf.Clamp(speed100xMultiplier, 0f, MaximumSpeedMultiplier);
+            speed250xMultiplier = Mathf.Clamp(speed250xMultiplier, 0f, MaximumSpeedMultiplier);
             maxShortTicksPerFrame = Mathf.Max(1, maxShortTicksPerFrame);
             maxDayRolloversPerFrame = Mathf.Max(1, maxDayRolloversPerFrame);
         }

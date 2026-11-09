@@ -30,6 +30,36 @@ namespace LandLedgers.Editor.Time
         }
 
         [Test]
+        public void GetMultiplierReturnsConfigured250xSpeed()
+        {
+            SimulationTimeSettings settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            try
+            {
+                settings.speed250xMultiplier = 250f;
+                Assert.AreEqual(250f, settings.GetMultiplier(SimulationSpeed.Speed250x));
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void GetMultiplierReturnsConfigured5xSpeed()
+        {
+            SimulationTimeSettings settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            try
+            {
+                settings.speed5xMultiplier = 5f;
+                Assert.AreEqual(5f, settings.GetMultiplier(SimulationSpeed.Speed5x));
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
         public void SanitizeClamps100xSpeedToNonNegative()
         {
             SimulationTimeSettings settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
@@ -40,6 +70,39 @@ namespace LandLedgers.Editor.Time
                 settings.Sanitize();
 
                 Assert.AreEqual(0f, settings.speed100xMultiplier);
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void SanitizeClamps250xSpeedToNonNegative()
+        {
+            SimulationTimeSettings settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            try
+            {
+                settings.speed250xMultiplier = -25f;
+                settings.Sanitize();
+                Assert.AreEqual(0f, settings.speed250xMultiplier);
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void GetMultiplierCapsConfiguredSpeedsAt250x()
+        {
+            SimulationTimeSettings settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            try
+            {
+                settings.speed250xMultiplier = 500f;
+                settings.Sanitize();
+                Assert.AreEqual(250f, settings.GetMultiplier(SimulationSpeed.Speed250x));
+                Assert.AreEqual(250f, settings.speed250xMultiplier);
             }
             finally
             {
@@ -102,8 +165,10 @@ namespace LandLedgers.Editor.Time
         {
             Assert.AreEqual(0, (int)SimulationSpeed.Paused);
             Assert.AreEqual(1, (int)SimulationSpeed.Speed1x);
+            Assert.AreEqual(5, (int)SimulationSpeed.Speed5x);
             Assert.AreEqual(100, (int)SimulationSpeed.Speed100x);
             Assert.AreEqual(101, (int)SimulationSpeed.RealTime);
+            Assert.AreEqual(102, (int)SimulationSpeed.Speed250x);
         }
     }
 }

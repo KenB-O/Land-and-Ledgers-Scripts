@@ -6,6 +6,7 @@ namespace LandLedgers.Time
         Speed1x = 1,
         Speed2x = 2,
         Speed4x = 4,
+        Speed5x = 5,
         Speed6x = 6,
         Speed10x = 10,
         Speed25x = 25,
@@ -14,6 +15,7 @@ namespace LandLedgers.Time
         // Keep existing serialized speed values unchanged. RealTime is an
         // explicit clock mode whose multiplier is derived from the configured
         // accelerated-day length, not from this enum's numeric value.
-        RealTime = 101
+        RealTime = 101,
+        Speed250x = 102
     }
 }

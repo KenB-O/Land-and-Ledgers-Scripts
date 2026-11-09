@@ -8,14 +8,13 @@ using UnityEngine;
 namespace LandLedgers.EditorTests.Time
 {
     /// <summary>
-    /// Plan 01 (economy campaign 2026-11-07): the game day at 1x is 120 real
-    /// seconds. Slice 0 discriminator first (must fail on the 60-second
+    /// The configured game day at 1x is five real minutes. Slice 0 discriminator first (must fail on the old
     /// baseline), then Slice 1 rate/rollover/pause/save coverage. Drives the
     /// clock through AdvanceForValidation / AdvanceGameSeconds via the
     /// reflection pattern already used in TimeCorrectnessTests.cs.
     /// </summary>
     [TestFixture]
-    public sealed class DayLength120SecondsTests
+    public sealed class DayLength300SecondsTests
     {
         private static void SetField(object target, string name, object value)
         {
@@ -81,13 +80,13 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DefaultDayLength_Is120RealSecondsAt1x()
+        public void DefaultDayLength_Is300RealSecondsAt1x()
         {
             SimulationTimeSettings settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
             try
             {
-                Assert.AreEqual(120f, settings.realSecondsPerGameDayAt1x,
-                    "a fresh SimulationTimeSettings must default to a 120-real-second day at 1x");
+                Assert.AreEqual(300f, settings.realSecondsPerGameDayAt1x,
+                    "a fresh SimulationTimeSettings must default to a 300-real-second day at 1x");
             }
             finally
             {
@@ -96,14 +95,14 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_OneX_Advances720GameSecondsPerRealSecond()
+        public void DayLength300Seconds_OneX_Advances288GameSecondsPerRealSecond()
         {
             TimeManager manager = CreateTimeManager();
             try
             {
                 manager.SetSpeed(SimulationSpeed.Speed1x);
-                Assert.AreEqual(720f, manager.CurrentGameSecondsPerRealSecond, 0.001f,
-                    "at 120 real seconds per day, 1x advances 86400 / 120 = 720 game-seconds per real second");
+                Assert.AreEqual(288f, manager.CurrentGameSecondsPerRealSecond, 0.001f,
+                    "at 300 real seconds per day, 1x advances 86400 / 300 = 288 game-seconds per real second");
             }
             finally
             {
@@ -112,14 +111,14 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_TenX_Advances7200GameSecondsPerRealSecond()
+        public void DayLength300Seconds_TenX_Advances2880GameSecondsPerRealSecond()
         {
             TimeManager manager = CreateTimeManager();
             try
             {
                 manager.SetSpeed(SimulationSpeed.Speed10x);
-                Assert.AreEqual(7200f, manager.CurrentGameSecondsPerRealSecond, 0.001f,
-                    "at 10x a day takes 86400 / 7200 = 12 real seconds");
+                Assert.AreEqual(2880f, manager.CurrentGameSecondsPerRealSecond, 0.001f,
+                    "at 10x a day takes 300 / 10 = 30 real seconds");
             }
             finally
             {
@@ -128,14 +127,14 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_TwentyFiveX_Advances18000GameSecondsPerRealSecond()
+        public void DayLength300Seconds_TwentyFiveX_Advances7200GameSecondsPerRealSecond()
         {
             TimeManager manager = CreateTimeManager();
             try
             {
                 manager.SetSpeed(SimulationSpeed.Speed25x);
-                Assert.AreEqual(18000f, manager.CurrentGameSecondsPerRealSecond, 0.001f,
-                    "at 25x a day takes 86400 / 18000 = 4.8 real seconds");
+                Assert.AreEqual(7200f, manager.CurrentGameSecondsPerRealSecond, 0.001f,
+                    "at 25x a day takes 300 / 25 = 12 real seconds");
             }
             finally
             {
@@ -144,18 +143,20 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_MultiplierRelationshipPreserved()
+        public void DayLength300Seconds_MultiplierRelationshipPreserved()
         {
             var cases = new (SimulationSpeed speed, float multiplier)[]
             {
                 (SimulationSpeed.Speed1x, 1f),
                 (SimulationSpeed.Speed2x, 2f),
                 (SimulationSpeed.Speed4x, 4f),
+                (SimulationSpeed.Speed5x, 5f),
                 (SimulationSpeed.Speed6x, 6f),
                 (SimulationSpeed.Speed10x, 10f),
                 (SimulationSpeed.Speed25x, 25f),
                 (SimulationSpeed.Speed50x, 50f),
                 (SimulationSpeed.Speed100x, 100f),
+                (SimulationSpeed.Speed250x, 250f),
             };
 
             TimeManager manager = CreateTimeManager();
@@ -165,10 +166,10 @@ namespace LandLedgers.EditorTests.Time
                 {
                     manager.SetSpeed(speed);
                     float rate = manager.CurrentGameSecondsPerRealSecond;
-                    Assert.AreEqual(multiplier, rate / 720f, 0.001f,
-                        "rate at " + speed + " must be the configured multiplier times the 1x rate of 720");
-                    Assert.AreEqual(120f / multiplier, 86400f / rate, 0.01f,
-                        "a day at " + speed + " must take 120 / multiplier real seconds");
+                    Assert.AreEqual(multiplier, rate / 288f, 0.001f,
+                        "rate at " + speed + " must be the configured multiplier times the 1x rate of 288");
+                    Assert.AreEqual(300f / multiplier, 86400f / rate, 0.01f,
+                        "a day at " + speed + " must take 300 / multiplier real seconds");
                 }
             }
             finally
@@ -178,7 +179,7 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_DayStillHas1440InGameMinutes()
+        public void DayLength300Seconds_DayStillHas1440InGameMinutes()
         {
             TimeManager manager = CreateInitializedTimeManager();
             try
@@ -208,7 +209,7 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_DayRolloverFiresExactlyOncePerDay()
+        public void DayLength300Seconds_DayRolloverFiresExactlyOncePerDay()
         {
             TimeManager manager = CreateTimeManager();
             try
@@ -237,7 +238,7 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_ShortTicksAndDueEventsStayOrdered()
+        public void DayLength300Seconds_ShortTicksAndDueEventsStayOrdered()
         {
             TimeManager manager = CreateInitializedTimeManager();
             try
@@ -275,7 +276,7 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_PauseFreezesProgression()
+        public void DayLength300Seconds_PauseFreezesProgression()
         {
             TimeManager manager = CreateTimeManager();
             try
@@ -292,7 +293,7 @@ namespace LandLedgers.EditorTests.Time
                 Assert.AreEqual(SimulationSpeed.Speed1x, manager.CurrentSpeed,
                     "unpausing must restore the previous non-paused speed");
                 Assert.IsTrue(!manager.IsPaused);
-                Assert.AreEqual(720f, manager.CurrentGameSecondsPerRealSecond, 0.001f);
+                Assert.AreEqual(288f, manager.CurrentGameSecondsPerRealSecond, 0.001f);
 
                 // Separately: pausing from RealTime resumes to RealTime.
                 manager.SetSpeed(SimulationSpeed.RealTime);
@@ -310,7 +311,7 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void DayLength120Seconds_SaveLoadPreservesSimulationTime()
+        public void DayLength300Seconds_SaveLoadPreservesSimulationTime()
         {
             TimeManager manager = CreateTimeManager();
             try
@@ -351,9 +352,9 @@ namespace LandLedgers.EditorTests.Time
                     Assert.AreEqual(SimulationSpeed.Speed10x, loaded.CurrentSpeed);
 
                     // Day length comes from settings, not the save: at 1x the loaded
-                    // manager still runs a 120-second day.
+                    // manager still runs a 300-second day.
                     loaded.SetSpeed(SimulationSpeed.Speed1x);
-                    Assert.AreEqual(720f, loaded.CurrentGameSecondsPerRealSecond, 0.001f);
+                    Assert.AreEqual(288f, loaded.CurrentGameSecondsPerRealSecond, 0.001f);
                 }
                 finally
                 {

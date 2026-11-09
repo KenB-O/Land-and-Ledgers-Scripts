@@ -1931,17 +1931,17 @@ namespace LandLedgers.Population
             int leaveStore = arrival + inStore;
 
             string refusal = TryReserveWindow(shopperId, PersonActivityKind.Travel, dayIndex,
-                departure, legs.OutboundMinutes, $"shopping trip {trip.TripId} outbound", ids);
+                departure, legs.OutboundMinutes, TaskReservationLabel(legs.Outbound), ids);
             if (refusal == null && legs.InStore != null)
             {
                 refusal = TryReserveWindow(shopperId, PersonActivityKind.Shopping, dayIndex,
-                    arrival, inStore, $"shopping trip {trip.TripId} in-store", ids);
+                    arrival, inStore, TaskReservationLabel(legs.InStore), ids);
             }
 
             if (refusal == null && legs.Return != null)
             {
                 refusal = TryReserveWindow(shopperId, PersonActivityKind.Travel, dayIndex,
-                    leaveStore, legs.ReturnMinutes, $"shopping trip {trip.TripId} return", ids);
+                    leaveStore, legs.ReturnMinutes, TaskReservationLabel(legs.Return), ids);
             }
 
             if (refusal != null)
@@ -1961,6 +1961,13 @@ namespace LandLedgers.Population
 
             trip.WindowReservationIds = ids;
             return true;
+        }
+
+        private static string TaskReservationLabel(WorkTask task)
+        {
+            return task == null
+                ? string.Empty
+                : $"task:{task.TaskId}|{task.DefinitionId}";
         }
 
         private string TryReserveWindow(

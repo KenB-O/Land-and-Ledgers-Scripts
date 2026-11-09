@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using LandLedgers.Economy.Labor;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -84,6 +85,118 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 1, budgets));
             Assert.AreEqual(TaskStatus.Complete, task.Status);
             Assert.AreEqual(1, budgets.GetOrCreate(Worker).MinutesWorked);
+        }
+
+        [Test]
+        public void ProductionSchedulerReservesRouteTimeTravelAsTravelAndItCompletes()
+        {
+            var authority = new TaskAuthority();
+            JourneyTravel.RegisterTaskDefinitions(authority);
+            WorkTask task = authority.CreateTaskWithPlannedMinutes(
+                JourneyTravel.TravelTaskId, Owner, 1, 1);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            var schedules = new PersonScheduleTracker();
+            var taskById = new Dictionary<string, WorkTask>
+            {
+                [task.TaskId.ToString()] = task,
+            };
+            var report = new WorkAssignmentReport
+            {
+                DayIndex = 1,
+                Assignments = new List<WorkAssignment>
+                {
+                    new WorkAssignment
+                    {
+                        TaskId = task.TaskId.ToString(),
+                        PersonId = Worker.Id,
+                        MinutesCommitted = 1,
+                    },
+                },
+            };
+
+            int assigned = ManagerWorkSchedulerDrive.ReserveAndAssignTasks(
+                report, taskById, authority, schedules, budgets, 1, new List<string>(),
+                ReservationLabel, null, out List<WorkTask> assignedTasks,
+                out Dictionary<string, string> reservations);
+
+            Assert.AreEqual(1, assigned);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status);
+            Assert.AreEqual(PersonActivityKind.Travel,
+                schedules.ActiveFor(Worker.Id, 1)[0].Activity);
+            Assert.AreEqual(1, ManagerWorkSchedulerDrive.StartReservedTasks(
+                assignedTasks, reservations, authority, schedules, 1, new List<string>()));
+
+            int workMinutes = AutonomousTaskProgress.ScheduledMinutes(task,
+                schedules.ActiveFor(Worker.Id, 1), 1, 480, 481, ReservationLabel(task));
+            Assert.AreEqual(1, workMinutes);
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, workMinutes, budgets, 1,
+                out bool complete, out string reason), reason);
+            Assert.IsTrue(complete);
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 1, budgets));
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+        }
+
+        [Test]
+        public void MissedStartupTravelWindowIsReReservedAtCurrentTimeBeforeStarting()
+        {
+            var authority = new TaskAuthority();
+            JourneyTravel.RegisterTaskDefinitions(authority);
+            WorkTask task = authority.CreateTaskWithPlannedMinutes(
+                JourneyTravel.TravelTaskId, Owner, 1, 2, customerRef: "travel:home->work");
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Worker, budgets, 1, out string reason), reason);
+            var schedules = new PersonScheduleTracker();
+            Assert.IsNull(schedules.TryReserve(Worker.Id, PersonActivityKind.Travel, 1,
+                480, 2, ReservationLabel(task)));
+            PersonActivityReservation original = schedules.ActiveFor(Worker.Id, 1)[0];
+
+            int started = ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                new List<WorkTask> { task }, authority, schedules, budgets,
+                1, 1058, 1059, new List<string>(), null);
+
+            Assert.AreEqual(1, started, "A NewGame after the reserved 08:00 window must catch up without teleporting or crediting early work.");
+            Assert.IsTrue(original.Released, "The stale reservation must not remain active.");
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.AreEqual(0, task.MinutesWorked, "Starting at the current clock does not credit the missed window.");
+            PersonActivityReservation current = schedules.ActiveFor(Worker.Id, 1)[0];
+            Assert.AreEqual(PersonActivityKind.Travel, current.Activity);
+            Assert.AreEqual(1059, current.StartMinuteOfDay);
+
+            int progress = AutonomousTaskProgress.ScheduledMinutes(
+                task, schedules.ActiveFor(Worker.Id, 1), 1, 1059, 1061, ReservationLabel(task));
+            Assert.AreEqual(2, progress);
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, progress, budgets, 1,
+                out bool complete, out reason), reason);
+            Assert.IsTrue(complete);
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 1, budgets));
+            schedules.Release(current.ReservationId);
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+            Assert.AreEqual(2, budgets.GetOrCreate(Worker).MinutesWorked);
+        }
+
+        [Test]
+        public void AssignedTaskWaitsUntilItsReservedWindowBegins()
+        {
+            var authority = new TaskAuthority();
+            JourneyTravel.RegisterTaskDefinitions(authority);
+            WorkTask task = authority.CreateTaskWithPlannedMinutes(
+                JourneyTravel.TravelTaskId, Owner, 1, 1, customerRef: "travel:home->work");
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Worker, budgets, 1, out string reason), reason);
+            var schedules = new PersonScheduleTracker();
+            Assert.IsNull(schedules.TryReserve(Worker.Id, PersonActivityKind.Travel, 1,
+                480, 1, ReservationLabel(task)));
+
+            int started = ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                new List<WorkTask> { task }, authority, schedules, budgets,
+                1, 420, 435, new List<string>(), null);
+
+            Assert.AreEqual(0, started);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status);
+            Assert.AreEqual(0, task.MinutesWorked);
         }
 
         [Test]

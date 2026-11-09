@@ -39,6 +39,7 @@ using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;

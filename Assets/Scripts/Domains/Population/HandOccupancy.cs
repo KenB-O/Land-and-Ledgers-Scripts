@@ -16,7 +16,8 @@
 // and no authored hand-requirement table exists yet.
 //
 // Every refusal names the missing hand, the occupying lot, or the missing
-// hand requirement, never a bare false. Every successful operation records
+// hand requirement, never a bare false. The hand causes live on
+// CustodyTransferLog (moved there in P1b). Every successful operation records
 // a CustodyTransferLog entry with a new hand cause ONLY when a log
 // instance was supplied to the constructor AND a custody context was
 // supplied to the call, so the authority stays usable in tests without a
@@ -66,7 +67,11 @@ namespace LandLedgers.Population
             int personId,
             LotKey leftLotKey, string leftBatchId,
             LotKey rightLotKey, string rightBatchId,
-            bool isTwoHandedHold)
+            bool isTwoHandedHold,
+            HandRequirement leftRequirement = HandRequirement.Unknown,
+            HandRequirement rightRequirement = HandRequirement.Unknown,
+            string lastRefusalReason = "",
+            string lastRefusalOperation = "")
         {
             PersonId = personId;
             LeftLotKey = leftLotKey;
@@ -74,6 +79,10 @@ namespace LandLedgers.Population
             RightLotKey = rightLotKey;
             RightBatchId = rightBatchId ?? string.Empty;
             IsTwoHandedHold = isTwoHandedHold;
+            LeftRequirement = leftRequirement;
+            RightRequirement = rightRequirement;
+            LastRefusalReason = lastRefusalReason ?? string.Empty;
+            LastRefusalOperation = lastRefusalOperation ?? string.Empty;
         }
 
         public static HandOccupancy Empty(int personId) =>
@@ -85,6 +94,18 @@ namespace LandLedgers.Population
         public LotKey RightLotKey { get; }
         public string RightBatchId { get; }
         public bool IsTwoHandedHold { get; }
+
+        /// <summary>The hand requirement retained for the left hand's hold, Unknown when free.</summary>
+        public HandRequirement LeftRequirement { get; }
+
+        /// <summary>The hand requirement retained for the right hand's hold, Unknown when free.</summary>
+        public HandRequirement RightRequirement { get; }
+
+        /// <summary>Verbatim reason of the most recent refused operation, empty when the last operation succeeded (or none ran).</summary>
+        public string LastRefusalReason { get; }
+
+        /// <summary>Operation that produced <see cref="LastRefusalReason"/> (AllocateOneHanded, AllocateTwoHanded, Release, or TransferToContainer), empty when none.</summary>
+        public string LastRefusalOperation { get; }
 
         public bool IsLeftFree => LeftLotKey.IsEmpty;
         public bool IsRightFree => RightLotKey.IsEmpty;
@@ -162,12 +183,6 @@ namespace LandLedgers.Population
     /// </summary>
     public sealed class HandOccupancyAuthority
     {
-        /// <summary>Hand causes for CustodyTransferLog entries. Additive; no existing cause is renamed.</summary>
-        public const string CauseHandPickup = "hand-pickup";
-        public const string CauseHandRelease = "hand-release";
-        public const string CauseHandToContainer = "hand-to-container";
-        public const string CauseContainerToHand = "container-to-hand";
-
         private readonly CustodyTransferLog log;
 
         private LotKey leftLotKey = LotKey.Empty;
@@ -175,6 +190,10 @@ namespace LandLedgers.Population
         private LotKey rightLotKey = LotKey.Empty;
         private string rightBatchId = string.Empty;
         private bool isTwoHandedHold;
+        private HandRequirement leftRequirement = HandRequirement.Unknown;
+        private HandRequirement rightRequirement = HandRequirement.Unknown;
+        private string lastRefusalReason = string.Empty;
+        private string lastRefusalOperation = string.Empty;
 
         /// <summary>
         /// Creates the hand authority for one person. The log is optional:
@@ -190,7 +209,8 @@ namespace LandLedgers.Population
 
         /// <summary>A copy of the current hand state. The snapshot is plain data; mutating it changes nothing.</summary>
         public HandOccupancy Current =>
-            new HandOccupancy(PersonId, leftLotKey, leftBatchId, rightLotKey, rightBatchId, isTwoHandedHold);
+            new HandOccupancy(PersonId, leftLotKey, leftBatchId, rightLotKey, rightBatchId, isTwoHandedHold,
+                leftRequirement, rightRequirement, lastRefusalReason, lastRefusalOperation);
 
         public bool IsFree(HandSlot hand) => hand == HandSlot.Left ? leftLotKey.IsEmpty : rightLotKey.IsEmpty;
 
@@ -206,6 +226,26 @@ namespace LandLedgers.Population
             "lot " + lotKey + (string.IsNullOrEmpty(batchId) ? string.Empty : " (batch " + batchId + ")");
 
         /// <summary>
+        /// Records the most recent refusal only (TaskDurationDiagnostics
+        /// LastRefusal precedent: verbatim reason plus the operation that
+        /// produced it, no history list) and returns the refused result.
+        /// Every refusal in this authority is routed through here.
+        /// </summary>
+        private HandOperationResult Refuse(string operation, string reason)
+        {
+            lastRefusalReason = reason ?? string.Empty;
+            lastRefusalOperation = operation ?? string.Empty;
+            return HandOperationResult.Refused(reason);
+        }
+
+        /// <summary>Clears the last refusal: a stale refusal never survives a later success.</summary>
+        private void ClearRefusal()
+        {
+            lastRefusalReason = string.Empty;
+            lastRefusalOperation = string.Empty;
+        }
+
+        /// <summary>
         /// Fills one named free hand with one lot. Refuses when no lot is
         /// supplied, when no hand requirement is supplied, when the lot
         /// cannot be carried in a hand, when the lot needs two hands, when
@@ -218,32 +258,32 @@ namespace LandLedgers.Population
         {
             if (lotKey.IsEmpty)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateOneHanded", 
                     "HandOccupancy: person " + PersonId + " allocate refused — no lot was supplied, so no hand can hold it.");
             }
 
             if (!requirement.HasValue || requirement.Value == HandRequirement.Unknown)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateOneHanded", 
                     "HandOccupancy: person " + PersonId + " allocate of " + DescribeLot(lotKey, batchId) + " refused — no hand requirement was supplied; the hand requirement is a caller-supplied parameter and is never derived from mass, name, or item category.");
             }
 
             if (requirement.Value == HandRequirement.NoHandCarryable)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateOneHanded", 
                     "HandOccupancy: person " + PersonId + " allocate of " + DescribeLot(lotKey, batchId) + " refused — the lot cannot be carried in a hand.");
             }
 
             if (requirement.Value == HandRequirement.TwoHanded)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateOneHanded", 
                     "HandOccupancy: person " + PersonId + " one-handed allocate of " + DescribeLot(lotKey, batchId) + " refused — the lot requires two hands; use a two-handed allocate.");
             }
 
             if (HoldsLot(lotKey))
             {
                 HandSlot heldHand = leftLotKey.Equals(lotKey) ? HandSlot.Left : HandSlot.Right;
-                return HandOperationResult.Refused(
+                return Refuse("AllocateOneHanded", 
                     "HandOccupancy: person " + PersonId + " allocate of " + DescribeLot(lotKey, batchId) + " refused — the same lot is already held in the " + HandName(heldHand) + " hand; one lot cannot occupy both hands through separate one-handed allocates.");
             }
 
@@ -251,7 +291,7 @@ namespace LandLedgers.Population
             {
                 LotKey occupying = hand == HandSlot.Left ? leftLotKey : rightLotKey;
                 string occupyingBatch = hand == HandSlot.Left ? leftBatchId : rightBatchId;
-                return HandOperationResult.Refused(
+                return Refuse("AllocateOneHanded", 
                     "HandOccupancy: person " + PersonId + " allocate of " + DescribeLot(lotKey, batchId) + " to the " + HandName(hand) + " hand refused — the " + HandName(hand) + " hand is occupied by " + DescribeLot(occupying, occupyingBatch) + ".");
             }
 
@@ -259,13 +299,16 @@ namespace LandLedgers.Population
             {
                 leftLotKey = lotKey;
                 leftBatchId = batchId ?? string.Empty;
+                leftRequirement = requirement.Value;
             }
             else
             {
                 rightLotKey = lotKey;
                 rightBatchId = batchId ?? string.Empty;
+                rightRequirement = requirement.Value;
             }
 
+            ClearRefusal();
             RecordPickup(lotKey, context);
             return HandOperationResult.Ok(
                 "HandOccupancy: person " + PersonId + " holds " + DescribeLot(lotKey, batchId) + " in the " + HandName(hand) + " hand.",
@@ -284,37 +327,37 @@ namespace LandLedgers.Population
         {
             if (lotKey.IsEmpty)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateTwoHanded", 
                     "HandOccupancy: person " + PersonId + " allocate refused — no lot was supplied, so no hand can hold it.");
             }
 
             if (!requirement.HasValue || requirement.Value == HandRequirement.Unknown)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateTwoHanded", 
                     "HandOccupancy: person " + PersonId + " allocate of " + DescribeLot(lotKey, batchId) + " refused — no hand requirement was supplied; the hand requirement is a caller-supplied parameter and is never derived from mass, name, or item category.");
             }
 
             if (requirement.Value == HandRequirement.NoHandCarryable)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateTwoHanded", 
                     "HandOccupancy: person " + PersonId + " allocate of " + DescribeLot(lotKey, batchId) + " refused — the lot cannot be carried in a hand.");
             }
 
             if (requirement.Value == HandRequirement.OneHanded)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateTwoHanded", 
                     "HandOccupancy: person " + PersonId + " two-handed allocate of " + DescribeLot(lotKey, batchId) + " refused — the lot requires one hand; use a one-handed allocate.");
             }
 
             if (!leftLotKey.IsEmpty)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateTwoHanded", 
                     "HandOccupancy: person " + PersonId + " two-handed allocate of " + DescribeLot(lotKey, batchId) + " refused — the left hand is occupied by " + DescribeLot(leftLotKey, leftBatchId) + "; a two-handed hold requires both hands free.");
             }
 
             if (!rightLotKey.IsEmpty)
             {
-                return HandOperationResult.Refused(
+                return Refuse("AllocateTwoHanded", 
                     "HandOccupancy: person " + PersonId + " two-handed allocate of " + DescribeLot(lotKey, batchId) + " refused — the right hand is occupied by " + DescribeLot(rightLotKey, rightBatchId) + "; a two-handed hold requires both hands free.");
             }
 
@@ -323,7 +366,10 @@ namespace LandLedgers.Population
             rightLotKey = lotKey;
             rightBatchId = batchId ?? string.Empty;
             isTwoHandedHold = true;
+            leftRequirement = requirement.Value;
+            rightRequirement = requirement.Value;
 
+            ClearRefusal();
             RecordPickup(lotKey, context);
             return HandOperationResult.Ok(
                 "HandOccupancy: person " + PersonId + " holds " + DescribeLot(lotKey, batchId) + " in both hands.",
@@ -339,7 +385,7 @@ namespace LandLedgers.Population
         {
             if (IsFree(hand))
             {
-                return HandOperationResult.Refused(
+                return Refuse("Release", 
                     "HandOccupancy: person " + PersonId + " release refused — the " + HandName(hand) + " hand is already empty; there is nothing to release.");
             }
 
@@ -354,18 +400,23 @@ namespace LandLedgers.Population
                 rightLotKey = LotKey.Empty;
                 rightBatchId = string.Empty;
                 isTwoHandedHold = false;
+                leftRequirement = HandRequirement.Unknown;
+                rightRequirement = HandRequirement.Unknown;
             }
             else if (hand == HandSlot.Left)
             {
                 leftLotKey = LotKey.Empty;
                 leftBatchId = string.Empty;
+                leftRequirement = HandRequirement.Unknown;
             }
             else
             {
                 rightLotKey = LotKey.Empty;
                 rightBatchId = string.Empty;
+                rightRequirement = HandRequirement.Unknown;
             }
 
+            ClearRefusal();
             RecordRelease(releasedLot, context);
             return HandOperationResult.Ok(
                 wasTwoHanded
@@ -383,13 +434,13 @@ namespace LandLedgers.Population
         {
             if (IsFree(hand))
             {
-                return HandOperationResult.Refused(
+                return Refuse("TransferToContainer", 
                     "HandOccupancy: person " + PersonId + " hand-to-container transfer refused — the " + HandName(hand) + " hand is empty; there is nothing to transfer.");
             }
 
             LotKey heldLot = hand == HandSlot.Left ? leftLotKey : rightLotKey;
             string heldBatch = hand == HandSlot.Left ? leftBatchId : rightBatchId;
-            return HandOperationResult.Refused(
+            return Refuse("TransferToContainer", 
                 "HandOccupancy: person " + PersonId + " hand-to-container transfer of " + DescribeLot(heldLot, heldBatch) + " from the " + HandName(hand) + " hand refused — no container type exists yet, so "
                 + (string.IsNullOrEmpty(containerId) ? "no container can be named as a destination" : "container '" + containerId + "' cannot be a destination")
                 + "; hand-to-container transfers arrive with P2.");
@@ -403,7 +454,7 @@ namespace LandLedgers.Population
                 LotKey.Empty, lotKey,
                 CustodyTransferLog.PersonCustodian(PersonId),
                 CustodyTransferLog.PersonCustodian(PersonId),
-                context.CauseId, CauseHandPickup);
+                context.CauseId, CustodyTransferLog.CauseHandPickup);
             string diagnostic;
             log.Record(record, out diagnostic);
             log.Note("HandOccupancy: hand-pickup for " + lotKey + " recorded with an empty source key — the lot's prior custody is not a hand and is not named by this authority.");
@@ -417,7 +468,7 @@ namespace LandLedgers.Population
                 lotKey, LotKey.Empty,
                 CustodyTransferLog.PersonCustodian(PersonId),
                 CustodyTransferLog.PersonCustodian(PersonId),
-                context.CauseId, CauseHandRelease);
+                context.CauseId, CustodyTransferLog.CauseHandRelease);
             string diagnostic;
             log.Record(record, out diagnostic);
             log.Note("HandOccupancy: hand-release for " + lotKey + " recorded with an empty destination key — no placement surface exists yet in P1a; the lot stays in the person's custody outside any hand.");

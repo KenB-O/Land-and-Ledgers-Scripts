@@ -631,3 +631,11 @@ note records their audited status so the question does not reopen:
   `PhysicalItemSpec`, `PersonInventoryReadModel`,
   `DemandObservation`, `ReserveProjection`, `SupplierComparison`,
   `ReplenishmentPlan`, and `ProductionPlan` rows stay.
+- Physical hands campaign P1b (2026-11-08):
+  hand occupancy read view (`HandOccupancyView` and `HandSlotView`,
+  nested inside `PersonInventoryReadModel`, which already has a
+  registry row, so no new row is needed) plus last-refusal
+  diagnostics on the authority and the four hand causes moved from
+  `HandOccupancyAuthority` onto `CustodyTransferLog`. Category B:
+  no production caller passes the new hand supplier yet, so the view
+  is reachable only from tests until P4 wires it.

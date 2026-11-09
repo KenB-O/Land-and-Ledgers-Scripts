@@ -49,6 +49,11 @@
 // test-side driver pattern). No new transfer mechanism lives here —
 // transfers are Slice 4 (F3/F4). The purchase-to-household-storage
 // sequence is driven through the existing shopping-loop receipt path.
+//
+// Physical hands campaign P1b (2026-11-08): HandOccupancy read view over
+// an optional hand supplier (plain HandOccupancy DTO snapshots only — the
+// read model holds no hand authority and mutates nothing) plus the last
+// refusal diagnostics the authority records.
 
 using System;
 using System.Collections.Generic;
@@ -237,6 +242,80 @@ namespace LandLedgers.Population
             }
         }
 
+        /// <summary>
+        /// One hand's occupancy as a read-only snapshot: which lot (by
+        /// LotKey plus BatchId) sits in the hand, the resolved item id
+        /// (empty when the lot cannot be resolved — see
+        /// <see cref="HandOccupancyView.Reason"/>), and the hand
+        /// requirement the allocate call supplied (Unknown when free).
+        /// IsFree follows LotKey.IsEmpty.
+        /// </summary>
+        public sealed class HandSlotView
+        {
+            public HandSlot Hand { get; }
+            public LotKey LotKey { get; }
+            public string BatchId { get; }
+            public string ItemId { get; }
+            public HandRequirement Requirement { get; }
+            public bool IsFree { get; }
+            public bool IsPartOfTwoHandedHold { get; }
+
+            public HandSlotView(
+                HandSlot hand, LotKey lotKey, string batchId, string itemId,
+                HandRequirement requirement, bool isPartOfTwoHandedHold)
+            {
+                Hand = hand;
+                LotKey = lotKey;
+                BatchId = batchId ?? string.Empty;
+                ItemId = itemId ?? string.Empty;
+                Requirement = requirement;
+                IsFree = lotKey.IsEmpty;
+                IsPartOfTwoHandedHold = isPartOfTwoHandedHold;
+            }
+        }
+
+        /// <summary>
+        /// Both hands' occupancy as a read-only snapshot, copied from the
+        /// HandOccupancy DTO the hand supplier returns on every call.
+        /// IsTwoHandedHold is true only when both slots hold the same
+        /// non-empty lot as one two-handed hold; two different lots in two
+        /// hands is not a two-handed hold. Reason is empty on a clean
+        /// report and names a gap only when hands cannot be reported or an
+        /// item id cannot be resolved. This view makes no hand decision,
+        /// records nothing, and refuses nothing.
+        /// </summary>
+        public sealed class HandOccupancyView
+        {
+            public int PersonId { get; }
+            public HandSlotView Left { get; }
+            public HandSlotView Right { get; }
+            public bool IsTwoHandedHold { get; }
+            public int FreeHandCount { get; }
+            public string LastRefusalReason { get; }
+            public string LastRefusalOperation { get; }
+            public bool HasRefusal { get; }
+            public bool HasHandAuthority { get; }
+            public string Reason { get; }
+
+            public HandOccupancyView(
+                int personId, HandSlotView left, HandSlotView right,
+                bool isTwoHandedHold, int freeHandCount,
+                string lastRefusalReason, string lastRefusalOperation,
+                bool hasHandAuthority, string reason)
+            {
+                PersonId = personId;
+                Left = left;
+                Right = right;
+                IsTwoHandedHold = isTwoHandedHold;
+                FreeHandCount = freeHandCount;
+                LastRefusalReason = lastRefusalReason ?? string.Empty;
+                LastRefusalOperation = lastRefusalOperation ?? string.Empty;
+                HasRefusal = !string.IsNullOrEmpty(lastRefusalReason);
+                HasHandAuthority = hasHandAuthority;
+                Reason = reason ?? string.Empty;
+            }
+        }
+
         /// <summary>The reason ItemsInCarriedContainers is always empty.</summary>
         public const string NoCarriedContainersReason =
             "No portable containers exist in the tree: no bags, baskets, pockets, " +
@@ -246,16 +325,22 @@ namespace LandLedgers.Population
         private readonly HouseholdInventoryRegistry inventoryRegistry;
         private readonly EquipmentAccessResolver equipmentResolver;
         private readonly int carryCapacityUnits;
+        private readonly Func<int, global::LandLedgers.Population.HandOccupancy> handOccupancySupplier;
+        private readonly ILotIdentityResolver lotIdentityResolver;
 
         /// <param name="shoppingReadModel">Custody authority (required).</param>
         /// <param name="inventoryRegistry">Household-lot authority (required).</param>
         /// <param name="equipmentResolver">Equipment-grant authority; null means no equipment answers (empty lists, never an error).</param>
         /// <param name="carryOptions">The live shopping-loop options carrying the carry cap; null means the live default cap (a fresh ShoppingLoopOptions).</param>
+        /// <param name="handOccupancySupplier">Hand-state supplier; null means no hand answers (an empty hand view, never an error). The supplier returns the plain HandOccupancy DTO snapshot from HandOccupancyAuthority.Current, never the authority itself, so this read model cannot become a hand-state writer.</param>
+        /// <param name="lotIdentityResolver">Resolves a held LotKey to an item id; null means held lots report an empty item id with the gap named, never an error.</param>
         public PersonInventoryReadModel(
             HouseholdShoppingReadModel shoppingReadModel,
             HouseholdInventoryRegistry inventoryRegistry,
             EquipmentAccessResolver equipmentResolver = null,
-            ShoppingLoopOptions carryOptions = null)
+            ShoppingLoopOptions carryOptions = null,
+            Func<int, global::LandLedgers.Population.HandOccupancy> handOccupancySupplier = null,
+            ILotIdentityResolver lotIdentityResolver = null)
         {
             this.shoppingReadModel = shoppingReadModel ?? throw new ArgumentNullException(nameof(shoppingReadModel));
             this.inventoryRegistry = inventoryRegistry ?? throw new ArgumentNullException(nameof(inventoryRegistry));
@@ -263,6 +348,8 @@ namespace LandLedgers.Population
             carryCapacityUnits = carryOptions != null
                 ? carryOptions.CarryCapacityUnits
                 : new ShoppingLoopOptions().CarryCapacityUnits;
+            this.handOccupancySupplier = handOccupancySupplier;
+            this.lotIdentityResolver = lotIdentityResolver;
         }
 
         /// <summary>The live shopping carry cap this read model answers against (units).</summary>
@@ -429,6 +516,88 @@ namespace LandLedgers.Population
         {
             return new CarriedContainerContents(
                 new List<CarriedItem>().AsReadOnly(), NoCarriedContainersReason);
+        }
+
+        /// <summary>
+        /// What the person's hands hold, as a read-only snapshot re-read
+        /// from the hand supplier on every call, so two reads of the same
+        /// state agree. No supplier means an empty view with
+        /// HasHandAuthority false; a supplier that returns null for the
+        /// person means an empty view naming the person as unknown to the
+        /// supplier. Neither is an error. A two-handed hold is reported
+        /// only when both slots hold the same non-empty lot and the DTO
+        /// IsTwoHandedHold flag is true. Item ids resolve through the lot
+        /// identity resolver; a carried batch key never resolves and the
+        /// view names that gap in Reason instead of guessing.
+        /// </summary>
+        public HandOccupancyView HandOccupancy(int personId)
+        {
+            if (handOccupancySupplier == null)
+            {
+                return EmptyHandOccupancyView(personId, false,
+                    "No hand authority was supplied to this read model, so no hand occupancy is reported.");
+            }
+
+            global::LandLedgers.Population.HandOccupancy snapshot = handOccupancySupplier(personId);
+            if (snapshot == null)
+            {
+                return EmptyHandOccupancyView(personId, true,
+                    "Person " + personId + " is unknown to the hand supplier, so no hand occupancy is reported.");
+            }
+
+            bool isTwoHandedHold = snapshot.IsTwoHandedHold
+                && !snapshot.LeftLotKey.IsEmpty
+                && snapshot.LeftLotKey.Equals(snapshot.RightLotKey);
+            var reasons = new List<string>();
+            HandSlotView left = BuildHandSlotView(
+                HandSlot.Left, snapshot.LeftLotKey, snapshot.LeftBatchId,
+                snapshot.LeftRequirement, isTwoHandedHold, reasons);
+            HandSlotView right = BuildHandSlotView(
+                HandSlot.Right, snapshot.RightLotKey, snapshot.RightBatchId,
+                snapshot.RightRequirement, isTwoHandedHold, reasons);
+            return new HandOccupancyView(
+                personId, left, right, isTwoHandedHold, snapshot.FreeHandCount,
+                snapshot.LastRefusalReason, snapshot.LastRefusalOperation,
+                true, string.Join("; ", reasons.ToArray()));
+        }
+
+        private static HandOccupancyView EmptyHandOccupancyView(int personId, bool hasHandAuthority, string reason)
+        {
+            var left = new HandSlotView(HandSlot.Left, LotKey.Empty, string.Empty, string.Empty, HandRequirement.Unknown, false);
+            var right = new HandSlotView(HandSlot.Right, LotKey.Empty, string.Empty, string.Empty, HandRequirement.Unknown, false);
+            return new HandOccupancyView(
+                personId, left, right, false, 2, string.Empty, string.Empty, hasHandAuthority, reason);
+        }
+
+        private HandSlotView BuildHandSlotView(
+            HandSlot hand, LotKey lotKey, string batchId, HandRequirement requirement,
+            bool isPartOfTwoHandedHold, List<string> reasons)
+        {
+            string itemId = string.Empty;
+            if (!lotKey.IsEmpty)
+            {
+                string handName = hand == HandSlot.Left ? "left" : "right";
+                if (lotIdentityResolver == null)
+                {
+                    reasons.Add("No lot identity resolver was supplied, so the " + handName
+                        + " hand lot " + lotKey + " cannot be resolved to an item id.");
+                }
+                else
+                {
+                    LotIdentity identity = lotIdentityResolver.Resolve(lotKey);
+                    if (identity == null || string.IsNullOrEmpty(identity.ItemId))
+                    {
+                        reasons.Add("The " + handName + " hand lot " + lotKey
+                            + " cannot be resolved to an item id: no lot identity record exists for that key.");
+                    }
+                    else
+                    {
+                        itemId = identity.ItemId;
+                    }
+                }
+            }
+
+            return new HandSlotView(hand, lotKey, batchId, itemId, requirement, isPartOfTwoHandedHold);
         }
 
         /// <summary>

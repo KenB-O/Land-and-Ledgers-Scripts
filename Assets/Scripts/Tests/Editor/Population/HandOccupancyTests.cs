@@ -332,11 +332,11 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(held.Succeeded, held.Reason);
             Assert.IsTrue(released.Succeeded, released.Reason);
             Assert.AreEqual(2, log.Count);
-            CustodyTransferRecord pickup = log.LatestForCause(HandOccupancyAuthority.CauseHandPickup, "hand-test-pickup-1");
+            CustodyTransferRecord pickup = log.LatestForCause(CustodyTransferLog.CauseHandPickup, "hand-test-pickup-1");
             Assert.IsNotNull(pickup);
             Assert.IsTrue(pickup.DestinationLotKey.Equals(BreadLot()));
             Assert.AreEqual("person:101", pickup.ToCustodian);
-            CustodyTransferRecord release = log.LatestForCause(HandOccupancyAuthority.CauseHandRelease, "hand-test-release-1");
+            CustodyTransferRecord release = log.LatestForCause(CustodyTransferLog.CauseHandRelease, "hand-test-release-1");
             Assert.IsNotNull(release);
             Assert.IsTrue(release.SourceLotKey.Equals(BreadLot()));
         }

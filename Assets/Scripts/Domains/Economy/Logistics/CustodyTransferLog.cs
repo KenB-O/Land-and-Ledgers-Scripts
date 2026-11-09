@@ -35,6 +35,10 @@
 // destination — HouseholdInventory.AddLot returns no lot id). An empty side
 // is recorded as Empty and the missing key is named in diagnostics; the
 // site is never restructured to fetch it.
+//
+// Physical hands campaign P1b (2026-11-08): the four hand causes
+// (hand-pickup, hand-release, hand-to-container, container-to-hand) live
+// here, moved from HandOccupancyAuthority.
 
 using System;
 using System.Collections.Generic;
@@ -171,6 +175,12 @@ namespace LandLedgers.Economy.Logistics
         public const string CauseBakeryBake = "bakery-bake";
         public const string CauseMillbrookOrder = "millbrook-order";
         public const string CauseRetailReceipt = "retail-receipt";
+
+        /// <summary>Hand causes (physical hands campaign P1b, 2026-11-08): moved here from HandOccupancyAuthority so all hand causes live in one place.</summary>
+        public const string CauseHandPickup = "hand-pickup";
+        public const string CauseHandRelease = "hand-release";
+        public const string CauseHandToContainer = "hand-to-container";
+        public const string CauseContainerToHand = "container-to-hand";
 
         /// <summary>Authority id for household lots and carried batches.</summary>
         public const string HouseholdInventoryAuthority = "household-inventory";

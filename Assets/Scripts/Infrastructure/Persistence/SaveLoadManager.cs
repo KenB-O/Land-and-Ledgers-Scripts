@@ -241,6 +241,12 @@ namespace LandLedgers.Persistence
 
         public bool SaveDefaultSlot(out string message)
         {
+            return SaveSlotAtPath(DefaultSlotPath, out message);
+        }
+
+        // Keep capture, validation and disk IO shared with disposable Editor verification.
+        private bool SaveSlotAtPath(string path, out string message)
+        {
             AutoWire();
             if (!CanSave(out message))
             {
@@ -265,7 +271,6 @@ namespace LandLedgers.Persistence
                 return ReportOperationFailure(message, "Save Blocked", "Captured save state failed integrity checks.", "Save integrity failed", true, 6.5f);
             }
 
-            string path = DefaultSlotPath;
             try
             {
                 string json = JsonUtility.ToJson(save, true);
@@ -294,8 +299,12 @@ namespace LandLedgers.Persistence
         }
         public bool LoadDefaultSlot(out string message)
         {
+            return LoadSlotAtPath(DefaultSlotPath, out message);
+        }
+
+        private bool LoadSlotAtPath(string path, out string message)
+        {
             AutoWire();
-            string path = DefaultSlotPath;
             string backupPath = BuildBackupSlotPath(path);
 
             if (townWorld == null)

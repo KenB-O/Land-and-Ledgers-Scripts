@@ -19,6 +19,32 @@ namespace LandLedgers.EditorTests.Animals
         }
 
         [Test]
+        public void RestoreReplacesOpeningAnimalsAndPreservesDailyCareMarkerOnRepeatedLoad()
+        {
+            AnimalRegistry registry = CreateRegistry();
+            AnimalState opening = registry.RegisterAnimal(AnimalSpecies.Horse, "Morgan", AnimalSex.Male,
+                AnimalOwnerKind.Person, "P7", 0, "opening");
+            AnimalState restored = new AnimalState
+            {
+                AnimalId = opening.AnimalId, Species = AnimalSpecies.Horse,
+                LastCareDayIndex = 3, Nutrition01 = 0.85f, OwnerId = "saved-owner"
+            };
+            registry.RegisterAnimal(AnimalSpecies.Cattle, "", AnimalSex.Female,
+                AnimalOwnerKind.Household, "H1", 0, "not in save");
+
+            for (int i = 0; i < 2; i++)
+            {
+                registry.RestoreState(new[] { restored }, null, null, null);
+                Assert.AreEqual(1, registry.ActiveAnimals.Count);
+                Assert.AreEqual(3, registry.GetAnimal(opening.AnimalId).LastCareDayIndex);
+                Assert.AreEqual(0.85f, registry.GetAnimal(opening.AnimalId).Nutrition01);
+                Assert.AreEqual("saved-owner", registry.GetAnimal(opening.AnimalId).OwnerId);
+            }
+            registry.RestoreState(registry.ActiveAnimals, null, null, null);
+            Assert.AreEqual(1, registry.ActiveAnimals.Count, "Restoring a live enumeration must snapshot before clearing.");
+        }
+
+        [Test]
         public void RegisterAnimal_AllocatesStableTypedId()
         {
             AnimalRegistry registry = CreateRegistry();

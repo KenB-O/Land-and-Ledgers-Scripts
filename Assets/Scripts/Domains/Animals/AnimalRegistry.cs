@@ -592,8 +592,28 @@ namespace LandLedgers.Animals
             outEggBatches?.AddRange(eggBatches.Values);
         }
 
+        /// <summary>Replaces persistent registry state without changing the registry instance.</summary>
+        public void RestoreState(
+            IEnumerable<AnimalState> inAnimals,
+            IEnumerable<HistoricalAnimalRecord> inHistorical,
+            IEnumerable<LivestockCohort> inCohorts,
+            IEnumerable<EggBatchState> inEggBatches)
+        {
+            // Snapshot enumerables first: callers may be restoring an exported registry view.
+            var savedAnimals = inAnimals != null ? new List<AnimalState>(inAnimals) : null;
+            var savedHistorical = inHistorical != null ? new List<HistoricalAnimalRecord>(inHistorical) : null;
+            var savedCohorts = inCohorts != null ? new List<LivestockCohort>(inCohorts) : null;
+            var savedEggBatches = inEggBatches != null ? new List<EggBatchState>(inEggBatches) : null;
+            animals.Clear();
+            historical.Clear();
+            cohorts.Clear();
+            eggBatches.Clear();
+            diagnostics.Clear();
+            ImportState(savedAnimals, savedHistorical, savedCohorts, savedEggBatches);
+        }
+
         /// <summary>
-        /// Load path: imports registry state. Duplicate IDs are rejected with diagnostics;
+        /// Additive import: duplicate IDs are rejected with diagnostics;
         /// the ID registry cursors must already be restored via <c>EntityIdSaveAdapter</c>.
         /// </summary>
         public void ImportState(

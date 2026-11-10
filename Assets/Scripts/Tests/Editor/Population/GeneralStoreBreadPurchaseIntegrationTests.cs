@@ -61,9 +61,11 @@ namespace LandLedgers.EditorTests.Population
                     {
                         ProductId = bread.ItemId,
                         DisplayName = "Test received bread",
-                        ShelfUnits = 2,
                         PriceCents = supplier.ItemPricePerUnitCents("bread"),
                     }, stockingDiagnostics));
+                    // AddProduct intentionally starts stock-free; install the
+                    // explicitly declared receipt fixture after registration.
+                    catalog.Find(bread.ItemId).ShelfUnits = 2;
                     Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
                         catalog, bread.ItemId, 2, bread.CategoryId, port, stockingDiagnostics,
                         bread.Unit, "test-settled-bakery-lot", 0);

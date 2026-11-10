@@ -128,11 +128,16 @@ namespace LandLedgers.Economy.Transport
             GameObject prefab,
             TownWorldController townWorld)
         {
-            if (townInstances.TryGetValue(town.TownId, out GameObject existing) && existing != null)
-                return existing;
-
             Vector3 centre = RegionalMilesToWorldPoint(townWorld,
                 town.CentreEastMiles, town.CentreNorthMiles, 0f);
+            if (townInstances.TryGetValue(town.TownId, out GameObject existing) && existing != null)
+            {
+                // A restored world may have a different regional-to-scene offset
+                // from the temporary NewGame that created this runtime instance.
+                if (existing.transform.position != centre) existing.transform.position = centre;
+                return existing;
+            }
+
             var townObject = Instantiate(prefab, centre, Quaternion.identity);
             townObject.name = $"{town.DisplayName} — Physical Regional Town";
             townInstances[town.TownId] = townObject;

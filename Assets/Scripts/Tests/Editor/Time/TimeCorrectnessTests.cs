@@ -131,6 +131,78 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
+        public void ShortTickBurst_ReportsEachReservedWorkWindowOnce()
+        {
+            TimeManager manager = CreateTimeManager();
+            const float interval = 900f;
+            SetField(manager, "gameSecondsIntoDay", 3f * interval);
+            SetField(manager, "shortTickAccumulatorGameSeconds", 3f * interval);
+            InvokePrivate(manager, "RefreshTimeOfDay01FromCurrentSeconds");
+            var ticks = new List<SimulationTickContext>();
+            manager.ShortTick += ticks.Add;
+
+            InvokePrivate(manager, "ProcessShortTicks");
+
+            Assert.AreEqual(3, ticks.Count);
+            Assert.AreEqual(15f / 1440f, ticks[0].TimeOfDay01, 0.000001f);
+            Assert.AreEqual(30f / 1440f, ticks[1].TimeOfDay01, 0.000001f);
+            Assert.AreEqual(45f / 1440f, ticks[2].TimeOfDay01, 0.000001f);
+            Assert.AreEqual(15f * 60f, ticks[0].GameSecondsIntoDay, 0.001f);
+            Assert.AreEqual(30f * 60f, ticks[1].GameSecondsIntoDay, 0.001f);
+            Assert.AreEqual(45f * 60f, ticks[2].GameSecondsIntoDay, 0.001f);
+            Assert.AreEqual(1, ticks[0].TickIndex);
+            Assert.AreEqual(2, ticks[1].TickIndex);
+            Assert.AreEqual(3, ticks[2].TickIndex);
+            Assert.AreEqual(0, ticks[0].Date.AbsoluteDayIndex);
+            Assert.AreEqual(0, ticks[1].Date.AbsoluteDayIndex);
+            Assert.AreEqual(0, ticks[2].Date.AbsoluteDayIndex);
+        }
+
+        [Test]
+        public void ShortTickAtMidnight_BelongsToDayWhoseIntervalItCompletes()
+        {
+            TimeManager manager = CreateTimeManager();
+            float secondsPerDay = GetField<SimulationTimeSettings>(manager, "settings").GameSecondsPerDay;
+            float interval = GetField<SimulationTimeSettings>(manager, "settings").ShortTickIntervalGameSeconds;
+            SetField(manager, "gameSecondsIntoDay", secondsPerDay);
+            SetField(manager, "shortTickAccumulatorGameSeconds", interval);
+            var ticks = new List<SimulationTickContext>();
+            manager.ShortTick += ticks.Add;
+
+            InvokePrivate(manager, "ProcessShortTicks");
+
+            Assert.AreEqual(1, ticks.Count);
+            Assert.AreEqual(0, ticks[0].Date.AbsoluteDayIndex,
+                "the final interval ending at midnight belongs to the day it completes");
+            Assert.AreEqual(secondsPerDay, ticks[0].GameSecondsIntoDay, 0.001f);
+            Assert.AreEqual(1f, ticks[0].TimeOfDay01, 0.000001f);
+        }
+
+        [Test]
+        public void DeferredShortTickBurst_PreservesTheDateAcrossMidnight()
+        {
+            TimeManager manager = CreateTimeManager();
+            float secondsPerDay = GetField<SimulationTimeSettings>(manager, "settings").GameSecondsPerDay;
+            float interval = GetField<SimulationTimeSettings>(manager, "settings").ShortTickIntervalGameSeconds;
+            SetField(manager, "absoluteDayIndex", 1);
+            SetField(manager, "gameSecondsIntoDay", interval);
+            SetField(manager, "shortTickAccumulatorGameSeconds", 2f * interval);
+            var ticks = new List<SimulationTickContext>();
+            manager.ShortTick += ticks.Add;
+
+            InvokePrivate(manager, "ProcessShortTicks");
+
+            Assert.AreEqual(2, ticks.Count);
+            Assert.AreEqual(0, ticks[0].Date.AbsoluteDayIndex,
+                "the deferred interval ending at midnight still belongs to the preceding day");
+            Assert.AreEqual(secondsPerDay, ticks[0].GameSecondsIntoDay, 0.001f);
+            Assert.AreEqual(1f, ticks[0].TimeOfDay01, 0.000001f);
+            Assert.AreEqual(1, ticks[1].Date.AbsoluteDayIndex);
+            Assert.AreEqual(interval, ticks[1].GameSecondsIntoDay, 0.001f);
+            Assert.AreEqual(interval / secondsPerDay, ticks[1].TimeOfDay01, 0.000001f);
+        }
+
+        [Test]
         public void DayCollapse_ProcessesEveryCrossedDay()
         {
             // One rollover per frame forces the collapse path on the second boundary.

@@ -524,19 +524,34 @@ namespace LandLedgers.Time
         {
             float interval = settings.ShortTickIntervalGameSeconds;
             int ticksProcessed = 0;
+            double secondsPerDay = settings.GameSecondsPerDay;
+            double absoluteSecondsAtEnd = (double)absoluteDayIndex * secondsPerDay + gameSecondsIntoDay;
 
             while (shortTickAccumulatorGameSeconds >= interval && ticksProcessed < settings.maxShortTicksPerFrame)
             {
                 shortTickAccumulatorGameSeconds -= interval;
-                shortTickIndex++;
                 ticksProcessed++;
 
+                // A high-speed frame may accumulate several ShortTicks before
+                // this method runs. Give each callback the time at the end of
+                // its own interval, not the final clock time for the frame.
+                // Otherwise scheduled-work consumers can count the same
+                // reservation overlap once for every tick in the burst.
+                double tickEndAbsoluteSeconds = absoluteSecondsAtEnd - shortTickAccumulatorGameSeconds;
+                int tickDayIndex = AbsoluteDayIndexForTick(tickEndAbsoluteSeconds, secondsPerDay);
+                double tickSecondsIntoDay = tickEndAbsoluteSeconds - (double)tickDayIndex * secondsPerDay;
+                tickSecondsIntoDay = Math.Max(0d, Math.Min(secondsPerDay, tickSecondsIntoDay));
+                int tickIndex = Math.Max(0, (int)Math.Floor(tickSecondsIntoDay / interval + 0.000001d));
+                shortTickIndex = tickIndex;
+                SimulationDate tickDate = BuildTimelineDate(tickDayIndex);
+                float tickTimeOfDay01 = (float)(tickSecondsIntoDay / secondsPerDay);
+
                 ShortTick?.Invoke(new SimulationTickContext(
-                    currentDate,
+                    tickDate,
                     shortTickIndex,
                     interval,
-                    timeOfDay01,
-                    gameSecondsIntoDay));
+                    tickTimeOfDay01,
+                    (float)tickSecondsIntoDay));
             }
 
             if (ticksProcessed >= settings.maxShortTicksPerFrame)
@@ -615,23 +630,36 @@ namespace LandLedgers.Time
 
         private SimulationDate BuildTimelineDate()
         {
+            return BuildTimelineDate(absoluteDayIndex);
+        }
+
+        private SimulationDate BuildTimelineDate(int dayIndex)
+        {
             if (settings == null)
             {
                 return currentDate;
             }
 
-            settings.Anchor.FromAbsoluteDay(calendarDayOffset + absoluteDayIndex,
+            settings.Anchor.FromAbsoluteDay(calendarDayOffset + dayIndex,
                 out int year, out int month, out int day);
             int weekday = GregorianDateMath.DayOfWeekMondayZero(year, month, day);
-            int week = absoluteDayIndex / 7 + 1;
+            int week = dayIndex / 7 + 1;
             return new SimulationDate(
-                absoluteDayIndex,
+                dayIndex,
                 weekday,
                 day,
                 week,
                 (day - 1) / 7 + 1,
                 month,
                 year);
+        }
+
+        private static int AbsoluteDayIndexForTick(double tickEndAbsoluteSeconds, double secondsPerDay)
+        {
+            if (secondsPerDay <= 0d || tickEndAbsoluteSeconds <= 0d) return 0;
+            // An interval ending exactly at midnight belongs to the day it
+            // just completed. The next interval belongs to the new day.
+            return Math.Max(0, (int)Math.Ceiling(tickEndAbsoluteSeconds / secondsPerDay - 0.0000001d) - 1);
         }
 
         private void ApplyTimeOfDay(float newGameSecondsIntoDay)

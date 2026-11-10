@@ -8770,10 +8770,8 @@ namespace LandLedgers.World
             // rectangle of same-type road cells instead of one visual per
             // cell, consuming the grid through the (previously dead)
             // FindUnconsumedRoadRect/RoadRowCanExtend/MarkConsumed helpers.
-            // Blocked (suppressed) road cells keep their per-cell visual
-            // exactly as before and are consumed up front so the merger
-            // never swallows them; the terrain overlay pass is separate
-            // and untouched, as is the non-road decor pass.
+            // Suppressed cells retain logical road data but have no playable
+            // road presentation. Consume them so the merger cannot include them.
             bool[,] consumed = new bool[grid.Width, grid.Depth];
             for (int z = 0; z < grid.Depth; z++)
             {
@@ -8787,16 +8785,6 @@ namespace LandLedgers.World
                     }
 
                     consumed[x, z] = true;
-                    GridRect cellRect = new(x, z, 1, 1);
-                    GameObject cellVisual = CreateRectVisual(
-                        root,
-                        $"Road Cell {x}_{z}",
-                        cellRect,
-                        RoadVisualYOffset,
-                        RoadVisualHeight,
-                        settings.roadColor,
-                        roadMaterial);
-                    ApplyRoadTextureTiling(cellVisual, cellRect);
                 }
             }
 

@@ -61,12 +61,15 @@ namespace LandLedgers.EditorTests.Time
             float interval = 900f;
 
             // 100 ticks of accumulated time; the per-frame cap is 64.
+            SetField(manager, "absoluteDayIndex", 1);
+            SetField(manager, "gameSecondsIntoDay", 3600f);
             SetField(manager, "shortTickAccumulatorGameSeconds", 100f * interval);
-            int ticksBefore = manager.ShortTickIndex;
+            int emitted = 0;
+            manager.ShortTick += _ => emitted++;
 
             InvokePrivate(manager, "ProcessShortTicks");
 
-            Assert.AreEqual(ticksBefore + 64, manager.ShortTickIndex);
+            Assert.AreEqual(64, emitted, "The cap limits emitted intervals, not a per-day index.");
             Assert.AreEqual(36f * interval, GetField<float>(manager, "shortTickAccumulatorGameSeconds"), 0.001f,
                 "overflow seconds must be deferred to later frames, never discarded");
             Assert.AreEqual(36, manager.CompressedShortTicksLastFrame);
@@ -122,11 +125,16 @@ namespace LandLedgers.EditorTests.Time
             TimeManager manager = CreateTimeManager();
             float interval = 900f;
 
+            SetField(manager, "absoluteDayIndex", 1);
+            SetField(manager, "gameSecondsIntoDay", 3600f);
             SetField(manager, "shortTickAccumulatorGameSeconds", 100f * interval);
+            int emitted = 0;
+            manager.ShortTick += _ => emitted++;
             InvokePrivate(manager, "ProcessShortTicks"); // 64 processed, 36 deferred
             InvokePrivate(manager, "ProcessShortTicks"); // 36 processed, 0 deferred
 
-            Assert.AreEqual(100, manager.ShortTickIndex);
+            Assert.AreEqual(100, emitted, "All deferred intervals must eventually be emitted.");
+            Assert.AreEqual(4, manager.ShortTickIndex, "The last interval ends at 01:00 on day 1.");
             Assert.AreEqual(0f, GetField<float>(manager, "shortTickAccumulatorGameSeconds"), 0.001f);
         }
 

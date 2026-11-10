@@ -1929,8 +1929,10 @@ namespace LandLedgers.FirstLedger
             }
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
             if (systemsHub != null)
+            {
                 pass9.PersonHands = systemsHub.PersonHands;
                 pass9.HandheldContainers = systemsHub.HandheldContainers;
+            }
             // Reuse, never replace: Restore is clear-then-load into the live
             // holders, and the drivers cache references to them.
             if (pass9.FreightDriver == null)

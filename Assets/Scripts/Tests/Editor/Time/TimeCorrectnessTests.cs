@@ -294,7 +294,7 @@ namespace LandLedgers.EditorTests.Time
             InvokePrivate(manager, "QueueAndAdvanceGameSeconds", 3f * 86400f + 900f);
             Assert.AreEqual(64, emitted);
             Assert.Greater(manager.PendingGameSeconds, 0d);
-            TimeSaveDto saved = manager.CaptureSaveDto();
+            TimeSaveDto saved = JsonUtility.FromJson<TimeSaveDto>(JsonUtility.ToJson(manager.CaptureSaveDto()));
             manager.LoadFromSaveDto(saved);
             Assert.AreEqual(saved.pendingGameSeconds, manager.PendingGameSeconds,
                 "Save restoration preserves queued elapsed time.");
@@ -305,6 +305,21 @@ namespace LandLedgers.EditorTests.Time
             CollectionAssert.AreEqual(new[] { 96, 192, 288 }, atReset);
             Assert.AreEqual(3, manager.CurrentAbsoluteDayIndex);
             Assert.AreEqual(900f, manager.GameSecondsIntoDay, 0.01f);
+        }
+
+        [Test]
+        public void TinyRealTimeAdvances_ConserveSecondsLateInTheDayAcrossSaveRestore()
+        {
+            TimeManager manager = CreateTimeManager();
+            SetField(manager, "gameSecondsIntoDay", 80000f);
+            for (int frame = 0; frame < 1000; frame++)
+            {
+                InvokePrivate(manager, "QueueAndAdvanceGameSeconds", 0.01f);
+                if (frame == 499)
+                    manager.LoadFromSaveDto(JsonUtility.FromJson<TimeSaveDto>(JsonUtility.ToJson(manager.CaptureSaveDto())));
+            }
+            Assert.AreEqual(80010f, manager.GameSecondsIntoDay, 0.01f,
+                "Low-speed frame fractions must not disappear into float rounding.");
         }
     }
 }

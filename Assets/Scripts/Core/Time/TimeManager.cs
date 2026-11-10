@@ -69,6 +69,8 @@ namespace LandLedgers.Time
         private int calendarDayOffset;
         private float shortTickAccumulatorGameSeconds;
         [SerializeField] private double pendingGameSeconds;
+        private double gameSecondsRemainder;
+        private double shortTickRemainder;
         public double PendingGameSeconds => pendingGameSeconds;
         public float LastAchievedGameSecondsPerRealSecond { get; private set; }
         private bool initialized;
@@ -259,6 +261,8 @@ namespace LandLedgers.Time
                 shortTickIndex = shortTickIndex,
                 shortTickAccumulatorGameSeconds = shortTickAccumulatorGameSeconds,
                 pendingGameSeconds = pendingGameSeconds,
+                gameSecondsRemainder = gameSecondsRemainder,
+                shortTickRemainder = shortTickRemainder,
                 currentSpeed = currentSpeed,
                 lastNonPausedSpeed = lastNonPausedSpeed,
                 isPaused = isPaused
@@ -294,6 +298,8 @@ namespace LandLedgers.Time
             shortTickIndex = Mathf.Max(0, dto.shortTickIndex);
             shortTickAccumulatorGameSeconds = Mathf.Max(0f, dto.shortTickAccumulatorGameSeconds);
             pendingGameSeconds = Math.Max(0d, dto.pendingGameSeconds);
+            gameSecondsRemainder = dto.gameSecondsRemainder;
+            shortTickRemainder = dto.shortTickRemainder;
             currentSpeed = dto.currentSpeed;
             lastNonPausedSpeed = dto.lastNonPausedSpeed == SimulationSpeed.Paused ? SimulationSpeed.Speed1x : dto.lastNonPausedSpeed;
             isPaused = dto.isPaused || currentSpeed == SimulationSpeed.Paused || ResolveSpeedMultiplier(currentSpeed) <= 0f;
@@ -436,6 +442,8 @@ namespace LandLedgers.Time
             // remains the persisted truth; the start is an anchor offset now.
             calendarDayOffset = 0;
             pendingGameSeconds = 0d;
+            gameSecondsRemainder = 0d;
+            shortTickRemainder = 0d;
             absoluteDayIndex = settings.GetScenarioStartAbsoluteDayIndex();
             currentDate = BuildTimelineDate();
             ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
@@ -478,8 +486,14 @@ namespace LandLedgers.Time
             {
                 float secondsUntilTomorrow = Mathf.Max(0f, settings.GameSecondsPerDay - gameSecondsIntoDay);
                 float step = Mathf.Min(remainingGameSeconds, secondsUntilTomorrow);
-                gameSecondsIntoDay += step;
-                shortTickAccumulatorGameSeconds += step;
+                // Preserve sub-float increments at slow actual-time speeds,
+                // while retaining the serialized float clock fields.
+                double preciseSeconds = (double)gameSecondsIntoDay + gameSecondsRemainder + step;
+                gameSecondsIntoDay = (float)preciseSeconds;
+                gameSecondsRemainder = preciseSeconds - gameSecondsIntoDay;
+                double preciseTickSeconds = (double)shortTickAccumulatorGameSeconds + shortTickRemainder + step;
+                shortTickAccumulatorGameSeconds = (float)preciseTickSeconds;
+                shortTickRemainder = preciseTickSeconds - shortTickAccumulatorGameSeconds;
                 remainingGameSeconds -= step;
 
                 RefreshTimeOfDay01FromCurrentSeconds();

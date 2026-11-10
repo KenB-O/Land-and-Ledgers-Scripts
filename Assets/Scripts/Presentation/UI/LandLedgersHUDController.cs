@@ -1035,10 +1035,10 @@ namespace LandLedgers.UI
                 rect.anchorMax = source.anchorMax;
                 rect.pivot = source.pivot;
                 rect.anchoredPosition = source.anchoredPosition;
-                rect.sizeDelta = new Vector2(340f, 28f);
+                rect.sizeDelta = new Vector2(440f, 32f);
                 LayoutElement layout = dropdownObject.AddComponent<LayoutElement>();
-                layout.preferredWidth = 340f;
-                layout.preferredHeight = 28f;
+                layout.preferredWidth = 440f;
+                layout.preferredHeight = 32f;
                 speedSelector = dropdownObject.GetComponent<TMP_Dropdown>();
                 speedSelector.ClearOptions();
                 speedSelector.AddOptions(new System.Collections.Generic.List<string>(SpeedOptions));
@@ -1046,7 +1046,7 @@ namespace LandLedgers.UI
                 foreach (TMP_Text label in dropdownObject.GetComponentsInChildren<TMP_Text>(true))
                 {
                     if (sourceLabel != null) label.font = sourceLabel.font;
-                    label.fontSize = 13f;
+                    label.fontSize = 22f;
                 }
                 speedSelector.onValueChanged.AddListener(index => timeManager?.SetSpeed(selectableSpeeds[index]));
             }

@@ -3,6 +3,7 @@ using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Ordering;
 using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -24,8 +25,9 @@ namespace LandLedgers.EditorTests.Population
     {
         private const string DefinitionPath = "Assets/Core/Economy/GeneralStoreBusinessDefinition.asset";
 
-        [Test]
-        public void KnownHouseholdPurchasesB60BreadAndConsumesTheReceivedLotOnce()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void KnownHouseholdPurchasesB60BreadAndConsumesTheReceivedLotOnce(bool receiveWholesaleStock)
         {
             GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
             Assert.IsNotNull(definition);
@@ -45,12 +47,39 @@ namespace LandLedgers.EditorTests.Population
                     "A staffed store is required for a real counter sale.");
                 ItemDefinition bread = FindItem(definition, "bread");
                 Assert.IsNotNull(bread);
-                Assert.IsNull(store.RuntimeState.TryAddRetailItemLot(
-                    "lot:B60:bread:opening", bread.ItemId, bread.CategoryId, bread.Unit, 2,
-                    store.InstanceId, store.InstanceId, "scenario-opening-endowment:test", 0));
-
                 GeneralStoreTradingPort port = manager.BuildHouseholdTradingPort(store);
                 var supplier = new GeneralStoreSupplierAdapter(port);
+                Assert.AreEqual(0, supplier.ItemStockUnits("bread"));
+                if (receiveWholesaleStock)
+                {
+                    // Test input represents an already settled wholesale receipt.
+                    // Exercise production stocking into the actual live Store port,
+                    // then purchase and consume through the same chain as opening stock.
+                    var catalog = new Pass3StoreCatalog();
+                    var stockingDiagnostics = new List<string>();
+                    Assert.IsTrue(catalog.AddProduct(new Pass3ProductLine
+                    {
+                        ProductId = bread.ItemId,
+                        DisplayName = "Test received bread",
+                        ShelfUnits = 2,
+                        PriceCents = supplier.ItemPricePerUnitCents("bread"),
+                    }, stockingDiagnostics));
+                    Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
+                        catalog, bread.ItemId, 2, bread.CategoryId, port, stockingDiagnostics,
+                        bread.Unit, "test-settled-bakery-lot", 0);
+                    Assert.IsTrue(stocked.Stocked, stocked.Refusal + " " + string.Join(" | ", stockingDiagnostics));
+                    Assert.AreEqual(0, catalog.Find(bread.ItemId).ShelfUnits);
+                }
+                else
+                {
+                    Assert.IsNull(store.RuntimeState.TryAddRetailItemLot(
+                        "lot:B60:bread:opening", bread.ItemId, bread.CategoryId, bread.Unit, 2,
+                        store.InstanceId, store.InstanceId, "scenario-opening-endowment:test", 0));
+                }
+                Assert.AreEqual(2, supplier.ItemStockUnits("bread"),
+                    "The existing adapter must see received stock without rebuilding offers.");
+                Assert.AreEqual(1, store.RuntimeState.RetailItemLots.Count,
+                    "Receiving must create one identified lot rather than parallel stock.");
                 Assert.IsTrue(supplier.OffersItem("bread"));
                 int breadPrice = supplier.ItemPricePerUnitCents("bread");
                 Assert.Greater(breadPrice, 0);

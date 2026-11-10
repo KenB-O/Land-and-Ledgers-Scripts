@@ -744,6 +744,8 @@ namespace LandLedgers.FirstLedger
             storeRuntime?.SetCreatePlayerBusinessOnInitialize(false);
             ConfigureSharedBusinessRuntime();
             ConfigurePopulationPathingDirector();
+            // Refresh derived destinations before restored journeys bind to their physical targets.
+            GetComponent<PhysicalRegionalTownRuntime>()?.RefreshWorldFrame(townWorld);
             ConfigureAcquisitionMarket();
             acquisitionMarket?.RebuildMarket();
             ConfigurePlayerDebtManager();

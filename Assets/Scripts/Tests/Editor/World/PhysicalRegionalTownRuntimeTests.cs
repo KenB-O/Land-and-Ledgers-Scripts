@@ -10,8 +10,9 @@ namespace LandLedgers.Tests.Editor.World
 {
     public sealed class PhysicalRegionalTownRuntimeTests
     {
-        [Test]
-        public void ReinitializationMovesExistingDestinationsIntoTheRestoredWorldFrame()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ReinitializationMovesExistingDestinationsIntoTheRestoredWorldFrame(bool restoreRefresh)
         {
             var host = new GameObject("Regional restore test");
             var worldObject = new GameObject("Regional world frame test");
@@ -37,7 +38,8 @@ namespace LandLedgers.Tests.Editor.World
                 Vector3 shift = new Vector3(120f, 0f, -40f);
                 settings.openingTownSceneCenter += shift;
 
-                Assert.IsTrue(runtime.Initialize(assets.RegionalTownPrefab, world));
+                if (restoreRefresh) runtime.RefreshWorldFrame(world);
+                else Assert.IsTrue(runtime.Initialize(assets.RegionalTownPrefab, world));
                 Assert.IsTrue(runtime.TryGetDestination(location, out Transform after, out string restoredBusiness));
                 Assert.AreSame(before, after, "Restore must retain runtime destination identity.");
                 Assert.AreEqual(business, restoredBusiness);

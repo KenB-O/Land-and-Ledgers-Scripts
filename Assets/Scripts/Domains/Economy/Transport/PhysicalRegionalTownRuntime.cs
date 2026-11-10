@@ -78,6 +78,18 @@ namespace LandLedgers.Economy.Transport
             return true;
         }
 
+        /// <summary>Repositions existing views after world restore without recreating transport or destinations.</summary>
+        public void RefreshWorldFrame(TownWorldController townWorld)
+        {
+            if (townWorld == null) return;
+            foreach (var town in RegionalTownRegistry.All)
+            {
+                if (town == null || !townInstances.TryGetValue(town.TownId, out var instance) || instance == null) continue;
+                Vector3 centre = RegionalMilesToWorldPoint(townWorld, town.CentreEastMiles, town.CentreNorthMiles);
+                if (instance.transform.position != centre) instance.transform.position = centre;
+            }
+        }
+
         public bool TryGetDestination(string locationId, out Transform destination, out string businessId)
         {
             businessId = string.Empty;

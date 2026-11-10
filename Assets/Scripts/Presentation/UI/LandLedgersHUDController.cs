@@ -14,6 +14,20 @@ namespace LandLedgers.UI
     {
         public const string DefaultControlHintMessage = "Manage C | Pause Space | Move WASD | Raise R | Lower F | Rotate RMB/QE | Zoom Wheel";
 
+        private TMP_Dropdown speedSelector;
+        private readonly System.Collections.Generic.List<SimulationSpeed> selectableSpeeds =
+            new System.Collections.Generic.List<SimulationSpeed> {
+                SimulationSpeed.RealTime, SimulationSpeed.Observe, SimulationSpeed.Speed1x,
+                SimulationSpeed.Speed2x, SimulationSpeed.Speed5x, SimulationSpeed.Speed10x,
+                SimulationSpeed.Speed50x, SimulationSpeed.Speed100x, SimulationSpeed.Speed250x,
+                SimulationSpeed.Speed500x };
+        private static readonly string[] SpeedOptions = {
+            "Real Time · 1× actual · 24h/day", "Observe · 10× actual · 2h 24m/day",
+            "Normal · 60× actual · 24m/day", "Fast · 2× Normal · 12m/day",
+            "Very Fast · 5× Normal · 4m 48s/day", "Rapid · 10× Normal · 2m 24s/day",
+            "Warp · 50× Normal · 28.8s/day", "Turbo · 100× Normal · 14.4s/day",
+            "Extreme · 250× Normal · 5.76s/day", "Experimental · 500× Normal · 2.88s/day" };
+
         private const float TopBarHeight = 72f;
         private const float AlertStripHeight = 52f;
         private const float FirstSessionGuidanceTopGap = 14f;
@@ -768,6 +782,20 @@ namespace LandLedgers.UI
 
         private void RefreshSpeedState(SimulationSpeed speed)
         {
+            if (speedSelector != null && speed != SimulationSpeed.Paused)
+            {
+                int selected = selectableSpeeds.IndexOf(speed);
+                if (selected < 0)
+                {
+                    // Retain legacy saved modes without putting them in the
+                    // ordinary selector or silently changing a restored speed.
+                    selectableSpeeds.Add(speed);
+                    speedSelector.options.Add(new TMP_Dropdown.OptionData($"Legacy {(int)speed}× Normal"));
+                    selected = selectableSpeeds.Count - 1;
+                }
+                speedSelector.SetValueWithoutNotify(selected);
+                speedSelector.RefreshShownValue();
+            }
             RefreshPauseButtonLabel(speed);
             ApplyButtonState(pauseButton, speed == SimulationSpeed.Paused);
             ApplyButtonState(speed1xButton, speed == SimulationSpeed.Speed1x);
@@ -978,6 +1006,7 @@ namespace LandLedgers.UI
 
         private void ApplySpeedButtonLabelsAndHideLegacyDuplicate()
         {
+            EnsureHybridSpeedSelector();
             SetButtonLabel(speed5xButton, "5x");
             SetButtonLabel(speed10xButton, "10x");
             SetButtonLabel(speed50xButton, "50x");
@@ -989,6 +1018,41 @@ namespace LandLedgers.UI
             {
                 obsoleteDuplicateSpeed250xButton.gameObject.SetActive(false);
             }
+        }
+
+        private void EnsureHybridSpeedSelector()
+        {
+            if (!Application.isPlaying || speed1xButton == null) return;
+            if (speedSelector == null)
+            {
+                RectTransform source = speed1xButton.transform as RectTransform;
+                GameObject dropdownObject = TMP_DefaultControls.CreateDropdown(new TMP_DefaultControls.Resources());
+                dropdownObject.name = "HUD_HybridSpeedSelector";
+                dropdownObject.transform.SetParent(source.parent, false);
+                dropdownObject.transform.SetSiblingIndex(source.GetSiblingIndex());
+                RectTransform rect = dropdownObject.GetComponent<RectTransform>();
+                rect.anchorMin = source.anchorMin;
+                rect.anchorMax = source.anchorMax;
+                rect.pivot = source.pivot;
+                rect.anchoredPosition = source.anchoredPosition;
+                rect.sizeDelta = new Vector2(340f, 28f);
+                LayoutElement layout = dropdownObject.AddComponent<LayoutElement>();
+                layout.preferredWidth = 340f;
+                layout.preferredHeight = 28f;
+                speedSelector = dropdownObject.GetComponent<TMP_Dropdown>();
+                speedSelector.ClearOptions();
+                speedSelector.AddOptions(new System.Collections.Generic.List<string>(SpeedOptions));
+                TMP_Text sourceLabel = speed1xButton.GetComponentInChildren<TMP_Text>(true);
+                foreach (TMP_Text label in dropdownObject.GetComponentsInChildren<TMP_Text>(true))
+                {
+                    if (sourceLabel != null) label.font = sourceLabel.font;
+                    label.fontSize = 13f;
+                }
+                speedSelector.onValueChanged.AddListener(index => timeManager?.SetSpeed(selectableSpeeds[index]));
+            }
+            foreach (Button legacy in new[] { realTimeButton, speed1xButton, speed2xButton, speed5xButton,
+                speed10xButton, speed50xButton, speed100xButton, speed250xButton })
+                if (legacy != null) legacy.gameObject.SetActive(false);
         }
 
         private void ConfigureSpeedButtonsForCurrentHierarchy()

@@ -16,6 +16,8 @@ namespace LandLedgers.Time
         // explicit clock mode whose multiplier is derived from the configured
         // accelerated-day length, not from this enum's numeric value.
         RealTime = 101,
-        Speed250x = 102
+        Speed250x = 102,
+        Observe = 103,
+        Speed500x = 104
     }
 }

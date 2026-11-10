@@ -68,6 +68,9 @@ namespace LandLedgers.Time
         // Gregorian calendar to begin before the shared calendar epoch.
         private int calendarDayOffset;
         private float shortTickAccumulatorGameSeconds;
+        [SerializeField] private double pendingGameSeconds;
+        public double PendingGameSeconds => pendingGameSeconds;
+        public float LastAchievedGameSecondsPerRealSecond { get; private set; }
         private bool initialized;
         private bool shortTickCapHitThisFrame;
 
@@ -255,6 +258,7 @@ namespace LandLedgers.Time
                 gameSecondsIntoDay = gameSecondsIntoDay,
                 shortTickIndex = shortTickIndex,
                 shortTickAccumulatorGameSeconds = shortTickAccumulatorGameSeconds,
+                pendingGameSeconds = pendingGameSeconds,
                 currentSpeed = currentSpeed,
                 lastNonPausedSpeed = lastNonPausedSpeed,
                 isPaused = isPaused
@@ -289,6 +293,7 @@ namespace LandLedgers.Time
 
             shortTickIndex = Mathf.Max(0, dto.shortTickIndex);
             shortTickAccumulatorGameSeconds = Mathf.Max(0f, dto.shortTickAccumulatorGameSeconds);
+            pendingGameSeconds = Math.Max(0d, dto.pendingGameSeconds);
             currentSpeed = dto.currentSpeed;
             lastNonPausedSpeed = dto.lastNonPausedSpeed == SimulationSpeed.Paused ? SimulationSpeed.Speed1x : dto.lastNonPausedSpeed;
             isPaused = dto.isPaused || currentSpeed == SimulationSpeed.Paused || ResolveSpeedMultiplier(currentSpeed) <= 0f;
@@ -367,6 +372,7 @@ namespace LandLedgers.Time
 
             if (realDeltaSeconds <= 0f || isPaused)
             {
+                LastAchievedGameSecondsPerRealSecond = 0f;
                 VisualFrameUpdated?.Invoke(new SimulationFrameContext(
                     currentDate,
                     currentSpeed,
@@ -379,7 +385,8 @@ namespace LandLedgers.Time
             }
 
             float gameDeltaSeconds = realDeltaSeconds * speedMultiplier * (settings.GameSecondsPerDay / settings.realSecondsPerGameDayAt1x);
-            AdvanceGameSeconds(gameDeltaSeconds);
+            gameDeltaSeconds = QueueAndAdvanceGameSeconds(gameDeltaSeconds);
+            LastAchievedGameSecondsPerRealSecond = gameDeltaSeconds / realDeltaSeconds;
 
             VisualFrameUpdated?.Invoke(new SimulationFrameContext(
                 currentDate,
@@ -404,6 +411,8 @@ namespace LandLedgers.Time
             {
                 SimulationSpeed.Paused => 0f,
                 SimulationSpeed.RealTime => 1f,
+                SimulationSpeed.Observe => 1f / 6f,
+                SimulationSpeed.Speed500x => 500f,
                 _ => Mathf.Max(0f, (float)(int)speed)
             };
         }
@@ -426,6 +435,7 @@ namespace LandLedgers.Time
             // from the Gregorian anchor (default 1892-03-01). absoluteDayIndex
             // remains the persisted truth; the start is an anchor offset now.
             calendarDayOffset = 0;
+            pendingGameSeconds = 0d;
             absoluteDayIndex = settings.GetScenarioStartAbsoluteDayIndex();
             currentDate = BuildTimelineDate();
             ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
@@ -436,6 +446,21 @@ namespace LandLedgers.Time
             ResetFrameDiagnostics();
             initialized = true;
             RefreshDebugState();
+        }
+
+        private float QueueAndAdvanceGameSeconds(float requestedGameSeconds)
+        {
+            pendingGameSeconds += Math.Max(0f, requestedGameSeconds);
+            // Bound chronological catch-up instead of dropping elapsed game
+            // time when the requested speed exceeds this frame's capacity.
+            double budget = Math.Min(
+                (double)settings.ShortTickIntervalGameSeconds * settings.maxShortTicksPerFrame,
+                (double)settings.GameSecondsPerDay * settings.maxDayRolloversPerFrame);
+            float processed = (float)Math.Min(pendingGameSeconds, budget);
+            if (processed <= 0f) return 0f;
+            pendingGameSeconds -= processed;
+            AdvanceGameSeconds(processed);
+            return processed;
         }
 
         private void AdvanceGameSeconds(float gameDeltaSeconds)

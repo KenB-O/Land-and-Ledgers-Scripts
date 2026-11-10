@@ -303,6 +303,8 @@ namespace LandLedgers.Persistence
         public float gameSecondsIntoDay;
         public int shortTickIndex;
         public float shortTickAccumulatorGameSeconds;
+        // Additive catch-up queue; absent in older saves means no pending time.
+        public double pendingGameSeconds;
         public SimulationSpeed currentSpeed;
         public SimulationSpeed lastNonPausedSpeed;
         public bool isPaused;

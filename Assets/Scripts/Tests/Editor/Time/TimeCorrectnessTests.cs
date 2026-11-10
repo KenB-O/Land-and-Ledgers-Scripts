@@ -282,5 +282,29 @@ namespace LandLedgers.EditorTests.Time
             Assert.AreEqual(3, manager.CurrentAbsoluteDayIndex);
             Assert.AreEqual(900f, manager.GameSecondsIntoDay, 0.01f);
         }
+
+        [Test]
+        public void FrameBudget_DefersTimeAndEventuallyProcessesEveryInterval()
+        {
+            TimeManager manager = CreateTimeManager(maxShortTicksPerFrame: 64, maxDayRolloversPerFrame: 1);
+            int emitted = 0;
+            var atReset = new List<int>();
+            manager.ShortTick += _ => emitted++;
+            manager.DayChanged += _ => atReset.Add(emitted);
+            InvokePrivate(manager, "QueueAndAdvanceGameSeconds", 3f * 86400f + 900f);
+            Assert.AreEqual(64, emitted);
+            Assert.Greater(manager.PendingGameSeconds, 0d);
+            TimeSaveDto saved = manager.CaptureSaveDto();
+            manager.LoadFromSaveDto(saved);
+            Assert.AreEqual(saved.pendingGameSeconds, manager.PendingGameSeconds,
+                "Save restoration preserves queued elapsed time.");
+            for (int frame = 0; frame < 8 && manager.PendingGameSeconds > 0d; frame++)
+                InvokePrivate(manager, "QueueAndAdvanceGameSeconds", 0f);
+            Assert.AreEqual(0d, manager.PendingGameSeconds);
+            Assert.AreEqual(289, emitted);
+            CollectionAssert.AreEqual(new[] { 96, 192, 288 }, atReset);
+            Assert.AreEqual(3, manager.CurrentAbsoluteDayIndex);
+            Assert.AreEqual(900f, manager.GameSecondsIntoDay, 0.01f);
+        }
     }
 }

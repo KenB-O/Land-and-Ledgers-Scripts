@@ -1749,15 +1749,15 @@ namespace LandLedgers.FirstLedger
                 return 0;
             }
 
-            int acceptedUnits = runtimeState.ApplyDeliveredShipment(categoryId, requestedUnits);
+            int acceptedUnits = StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                runtimeState, categoryId, requestedUnits, unitCostCents,
+                out int spendCents, out string receiptRefusal);
             if (acceptedUnits <= 0)
             {
-                status = $"Blocked off-map reorder intake for {GetCategoryDisplayName(categoryId)}.";
+                status = $"Blocked off-map reorder intake for {GetCategoryDisplayName(categoryId)}: {receiptRefusal}.";
                 return 0;
             }
 
-            int spendCents = acceptedUnits * Mathf.Max(0, unitCostCents);
-            runtimeState.SpendCents(spendCents);
             lastWeeklyReorderSpendCents += spendCents;
             lastWeeklyReorderUnitsReceived += acceptedUnits;
             lastWeeklyReorderUnitsRemaining = GetPendingReorderUnits();

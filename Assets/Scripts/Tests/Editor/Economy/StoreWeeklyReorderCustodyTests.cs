@@ -159,12 +159,35 @@ namespace LandLedgers.EditorTests.Economy
             state.GetCategoryStock("staple_food").QueueReorderToTarget();
             Assert.AreEqual(50, state.GetCategoryStock("staple_food").PendingReorderUnits);
 
-            int accepted = state.ApplyDeliveredShipment("staple_food", 30);
-            state.SpendCents(accepted * 20);
+            int accepted = StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                state, "staple_food", 30, 20, out int spend, out string refusal);
 
             Assert.AreEqual(30, accepted);
+            Assert.AreEqual(600, spend);
+            Assert.IsEmpty(refusal);
             Assert.AreEqual(80, state.GetCategoryStock("staple_food").CurrentStockUnits);
             Assert.AreEqual(10000 - 600, state.CurrentCashCents);
+        }
+
+        [Test]
+        public void OffMapReceipt_InsufficientCashDefersWithoutStockOrExpense_ThenCanRetry()
+        {
+            var state = new BusinessRuntimeState();
+            state.EnsureCategoryStock("staple_food", 50, 100);
+            state.SetCurrentCashCents(599);
+            Assert.AreEqual(0, StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                state, "staple_food", 30, 20, out int spend, out string refusal));
+            Assert.AreEqual(0, spend);
+            Assert.IsNotEmpty(refusal);
+            Assert.AreEqual(50, state.GetCategoryStock("staple_food").CurrentStockUnits);
+            Assert.AreEqual(599, state.CurrentCashCents);
+
+            state.AddCashCents(1);
+            Assert.AreEqual(30, StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                state, "staple_food", 30, 20, out spend, out refusal));
+            Assert.AreEqual(600, spend);
+            Assert.AreEqual(80, state.GetCategoryStock("staple_food").CurrentStockUnits);
+            Assert.AreEqual(0, state.CurrentCashCents);
         }
 
         // 2. THE SHARED OUTSTANDING-ORDER CHECK (W1, Obj 47 — flipped from

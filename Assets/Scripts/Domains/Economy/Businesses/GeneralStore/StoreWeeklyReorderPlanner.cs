@@ -219,6 +219,36 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 $"weekly reorder refused for '{category}'; no anonymous off-map shipment was created.";
         }
 
+        /// <summary>Receives already transported off-map cargo only when the accepted quantity can be paid in full.</summary>
+        public static int ReceivePaidOffMapShipment(
+            BusinessRuntimeState storeState, string categoryId, int units, int unitCostCents,
+            out int spendCents, out string refusal)
+        {
+            spendCents = 0;
+            refusal = string.Empty;
+            CategoryStockState stock = storeState?.GetCategoryStock(categoryId);
+            if (stock == null || units <= 0 || unitCostCents <= 0)
+            {
+                refusal = "missing destination, cargo, or positive purchase cost";
+                return 0;
+            }
+
+            int capacity = stock.TargetStockUnits > 0
+                ? Math.Max(0, stock.TargetStockUnits - stock.CurrentStockUnits) : units;
+            int receivable = Math.Min(units, capacity);
+            long cost = (long)receivable * unitCostCents;
+            if (receivable <= 0 || cost > int.MaxValue || !storeState.TrySpendCents((int)cost))
+            {
+                refusal = "destination full or insufficient cash to settle the delivery in full";
+                return 0;
+            }
+
+            int accepted = storeState.ApplyDeliveredShipment(categoryId, receivable);
+            spendCents = accepted * unitCostCents;
+            if (accepted < receivable) storeState.AddCashCents((receivable - accepted) * unitCostCents);
+            return accepted;
+        }
+
         /// <summary>W1: the outcome of receiving one named-supplier weekly shipment.</summary>
         public sealed class NamedSupplierReceiptResult
         {

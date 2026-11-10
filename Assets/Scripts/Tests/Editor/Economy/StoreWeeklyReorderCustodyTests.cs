@@ -451,6 +451,41 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(StoreWeeklyReorderPlanner.BuildShipmentTerms(null, "staple_food", 20, 50, 25, 30) == null);
         }
 
+        [Test]
+        public void NamedSupplierReceipt_UnaffordableDeliveryRefusesBeforeSourceOrStoreMutation()
+        {
+            var supplier = SupplierWith("up-1", "staple_food", 20, 50);
+            var state = new BusinessRuntimeState();
+            state.EnsureCategoryStock("staple_food", 50, 100);
+            state.SetCurrentCashCents(499);
+            int supplierBefore = supplier.AvailableUnits("staple_food");
+            int stockBefore = state.GetCategoryStock("staple_food").CurrentStockUnits;
+            var diagnostics = new List<string>();
+
+            StoreWeeklyReorderPlanner.NamedSupplierReceiptResult receipt =
+                StoreWeeklyReorderPlanner.ReceiveNamedSupplierShipment(
+                    supplier, state, "staple_food", 20, 25, 3, diagnostics);
+
+            Assert.AreEqual(0, receipt.ShippedUnits);
+            Assert.AreEqual(0, receipt.AcceptedUnits);
+            Assert.AreEqual(0, receipt.BuyerSpendCents);
+            Assert.AreEqual(supplierBefore, supplier.AvailableUnits("staple_food"),
+                "An unaffordable delivery must be refused before the upstream lot is decremented.");
+            Assert.AreEqual(stockBefore, state.GetCategoryStock("staple_food").CurrentStockUnits);
+            Assert.AreEqual(499, state.CurrentCashCents);
+            StringAssert.Contains("deferred", receipt.RefusalReason);
+            StringAssert.Contains("500c", receipt.RefusalReason);
+            Assert.IsTrue(diagnostics.Count > 0);
+
+            StoreWeeklyReorderPlanner.NamedSupplierReceiptResult unpriced =
+                StoreWeeklyReorderPlanner.ReceiveNamedSupplierShipment(
+                    supplier, state, "staple_food", 20, 0, 3, new List<string>());
+            Assert.AreEqual(0, unpriced.AcceptedUnits,
+                "A missing/non-positive buyer price is not permission to receive free goods.");
+            Assert.AreEqual(supplierBefore, supplier.AvailableUnits("staple_food"));
+            Assert.AreEqual(stockBefore, state.GetCategoryStock("staple_food").CurrentStockUnits);
+        }
+
         // 12. (Plan 06 Slice 0 companion) The named-supplier seam the
         // reserve repair will reuse, with REAL adapters and the REAL
         // delivered-cost delegate: for a 5u meat need the cheapest

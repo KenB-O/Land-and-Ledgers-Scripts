@@ -280,6 +280,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return result;
             }
 
+            if (buyerUnitCostCents <= 0)
+            {
+                result.RefusalReason = $"named-supplier receipt refused: no positive buyer cost is recorded for '{categoryId}'; no goods or cash moved.";
+                result.StatusLine = result.RefusalReason;
+                return result;
+            }
+
             int receivable = stock.TargetStockUnits > 0
                 ? Math.Max(0, stock.TargetStockUnits - stock.CurrentStockUnits)
                 : Math.Max(0, units);
@@ -291,10 +298,28 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             }
 
             int toShip = Math.Min(Math.Max(0, units), receivable);
+            int maxShippable = Math.Min(toShip, Math.Max(0, supplier.AvailableUnits(categoryId)));
+            if (maxShippable <= 0)
+            {
+                result.RefusalReason = $"named-supplier receipt refused: '{supplier.SupplierName}' has no '{categoryId}' stock to ship.";
+                result.StatusLine = result.RefusalReason;
+                return result;
+            }
+
+            long requiredCash = (long)maxShippable * buyerUnitCostCents;
+            if (storeState.CurrentCashCents < requiredCash)
+            {
+                result.RefusalReason = $"named-supplier receipt deferred: store has {storeState.CurrentCashCents}c, " +
+                    $"but the available {maxShippable}u '{categoryId}' delivery requires {requiredCash}c; no supplier stock, inventory, or cash moved.";
+                result.StatusLine = result.RefusalReason;
+                if (diagnostics != null) diagnostics.Add(result.RefusalReason);
+                return result;
+            }
+
             // Capture the goods quote BEFORE shipping: the quote names the
             // cheapest in-stock item, and shipping can exhaust it.
             int goodsQuoteCents = Math.Max(0, supplier.QuoteUnitCostCents(categoryId));
-            int shipped = Math.Max(0, supplier.Ship(categoryId, toShip, Math.Max(0, dayIndex), diagnostics ?? new List<string>()));
+            int shipped = Math.Max(0, supplier.Ship(categoryId, maxShippable, Math.Max(0, dayIndex), diagnostics ?? new List<string>()));
             result.ShippedUnits = shipped;
             if (shipped <= 0)
             {
@@ -303,13 +328,26 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return result;
             }
 
+            int spend = checked(shipped * buyerUnitCostCents);
+            // Cash was preflighted before the irreversible supplier decrement.
+            // TrySpend remains the final guard; unlike SpendCents it cannot
+            // silently accept a partial payment.
+            if (!storeState.TrySpendCents(spend))
+            {
+                result.RefusalReason = $"named-supplier receipt refused: buyer cash changed before settling {spend}c; no destination inventory was accepted.";
+                result.StatusLine = result.RefusalReason;
+                if (diagnostics != null) diagnostics.Add(result.RefusalReason);
+                return result;
+            }
+
             int accepted = Math.Max(0, storeState.ApplyDeliveredShipment(categoryId, shipped));
             result.AcceptedUnits = accepted;
-            int spend = accepted * Math.Max(0, buyerUnitCostCents);
             result.BuyerSpendCents = spend;
-            if (spend > 0)
+            if (accepted < shipped)
             {
-                storeState.SpendCents(spend);
+                int unacceptedSpend = (shipped - accepted) * buyerUnitCostCents;
+                storeState.AddCashCents(unacceptedSpend);
+                result.BuyerSpendCents -= unacceptedSpend;
             }
 
             result.ShortfallUnits = Math.Max(0, units - shipped);

@@ -328,6 +328,7 @@ namespace LandLedgers.Economy.Freight
                 return 0;
             }
 
+            payerRuntime.RecordWeeklyInputProcurement(0, shipment.FreightChargeCents);
             shipment.freightRevenueCollected = true;
             diagnostics.Add($"Collected {shipment.FreightChargeCents}c freight charge for '{shipmentId}' " +
                 $"from {shipment.FreightPayerBusinessInstanceId} (payer debited first, verified).");
@@ -434,6 +435,14 @@ namespace LandLedgers.Economy.Freight
             List<string> diagnostics)
         {
             diagnostics ??= new List<string>();
+            // Resolve the receiving authority before collecting from anyone.
+            // Otherwise a missing till consumes the payment without crediting a carrier.
+            if (businessRuntime == null
+                || !string.Equals(businessRuntime.BusinessId, businessInstanceId, StringComparison.Ordinal))
+            {
+                diagnostics.Add($"FreightCompanyRuntime: carrier till for '{businessInstanceId}' is missing or mismatched; no charges collected.");
+                return 0;
+            }
             if (payerRuntimeResolver == null)
             {
                 diagnostics.Add("FreightCompanyRuntime: no payer resolver — verified collection cannot run; nothing posted.");
@@ -448,7 +457,7 @@ namespace LandLedgers.Economy.Freight
                     continue;
                 BusinessRuntimeState payerRuntime = payerRuntimeResolver(shipment.FreightPayerBusinessInstanceId);
                 int cents = CollectFreightCharge(shipmentId, payerRuntime, diagnostics);
-                if (cents <= 0 || businessRuntime == null)
+                if (cents <= 0)
                     continue;
                 businessRuntime.RecordDailyServiceRevenue(FreightRevenueCategoryId, 1, cents);
                 posted += cents;

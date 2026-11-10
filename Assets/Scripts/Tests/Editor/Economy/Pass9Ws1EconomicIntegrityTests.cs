@@ -273,6 +273,28 @@ namespace LandLedgers.EditorTests.Economy
                 "The shipment stays uncollected for a later retry.");
         }
 
+        [TestCase(null)]
+        [TestCase("wrong-carrier")]
+        public void FreightCollect_MissingOrWrongCarrierPreservesPaymentForRetry(string carrierId)
+        {
+            var company = FreightCompanyWithCompletedShipment("biz_store_001", 500);
+            var diag = new List<string>();
+            var payer = NewBusiness("biz_store_001", 600);
+            var invalidCarrier = carrierId == null ? null : NewBusiness(carrierId, 0);
+            Assert.AreEqual(0, company.CollectAndPostUncollectedRevenue(invalidCarrier, _ => payer, diag));
+            Assert.AreEqual(600, payer.CurrentCashCents);
+            Assert.AreEqual(0, payer.LastWeeklyInputProcurementSpendCents);
+            Assert.IsFalse(company.ActiveShipments[0].freightRevenueCollected);
+            if (invalidCarrier != null) Assert.AreEqual(0, invalidCarrier.CurrentCashCents);
+
+            var carrier = NewBusiness("biz_freight_001", 0);
+            Assert.AreEqual(500, company.CollectAndPostUncollectedRevenue(carrier, _ => payer, diag));
+            Assert.AreEqual(600, payer.CurrentCashCents + carrier.CurrentCashCents);
+            Assert.AreEqual(500, payer.LastWeeklyInputProcurementSpendCents);
+            Assert.AreEqual(0, company.CollectAndPostUncollectedRevenue(carrier, _ => payer, diag));
+            Assert.AreEqual(500, payer.LastWeeklyInputProcurementSpendCents);
+        }
+
         [Test]
         public void FreightCollect_VerifiedDebit_CarrierCreditEqualsPayerDebit_ExactlyOnce()
         {
@@ -287,6 +309,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(500, posted);
             Assert.AreEqual(100, payer.CurrentCashCents, "Payer debited the charge.");
             Assert.AreEqual(500, carrier.CurrentCashCents, "Carrier credited exactly the debit.");
+            Assert.AreEqual(500, payer.LastWeeklyInputProcurementSpendCents);
             Assert.AreEqual(0, company.CollectFreightCharge("ws1-ship", payer, diag),
                 "Already-collected charges never collect twice.");
             Assert.AreEqual(100, payer.CurrentCashCents);

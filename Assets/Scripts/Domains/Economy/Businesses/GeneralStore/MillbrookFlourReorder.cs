@@ -34,10 +34,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// Guards: sacks &gt; 0; sacks are clamped to live available sacks
         /// (supplier stock in pounds / 10) and refused only when none
         /// are available; single-outstanding-order rule —
-        /// if uncommitted, unreceived lots for this buyer already cover the
+        /// if unreceived flour lots for this buyer already cover the
         /// requested sacks, refuse naming the oldest outstanding lot instead
         /// of double-ordering (Obj 47's hazard, same shape as the notions
-        /// one-order-per-day guard).
+        /// one-order-per-day guard). A caller that has already deducted
+        /// outstanding supply passes outstandingAlreadyCounted=true.
         /// </summary>
         public static string PlaceReorder(
             OffMapAidBusinessRuntime supplier,
@@ -47,7 +48,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             int sacks,
             int dayIndex,
             List<string> diag,
-            out OffMapAidCargoLot lot)
+            out OffMapAidCargoLot lot,
+            bool outstandingAlreadyCounted = false)
         {
             lot = null;
             diag = diag ?? new List<string>();
@@ -73,18 +75,24 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 sacks = availableSacks;
             }
 
-            OffMapAidCargoLot outstanding = FindShippableLot(supplier, buyerBusinessId);
-            if (outstanding != null)
+            // The daily planner passes a net uncovered quantity. Other callers
+            // retain the duplicate guard, including goods already aboard freight.
+            if (!outstandingAlreadyCounted)
             {
+                OffMapAidCargoLot outstanding = null;
                 int outstandingSacks = 0;
                 foreach (var candidate in supplier.Lots)
                 {
                     if (candidate != null
                         && string.Equals(candidate.BuyerBusinessId, buyerBusinessId, StringComparison.Ordinal)
-                        && !candidate.SourceCommitted && !candidate.Received)
+                        && string.Equals(candidate.SkuId, FlourSkuId, StringComparison.Ordinal)
+                        && !candidate.Received)
+                    {
+                        outstanding = outstanding ?? candidate;
                         outstandingSacks += Math.Max(0, candidate.PackageUnits);
+                    }
                 }
-                if (outstandingSacks >= sacks)
+                if (outstanding != null && outstandingSacks >= sacks)
                     return Refuse(diag, $"Millbrook flour reorder refused: outstanding lot '{outstanding.LotId}' already covers {outstandingSacks} sack(s) for {buyerBusinessId}; no duplicate order placed.");
             }
 

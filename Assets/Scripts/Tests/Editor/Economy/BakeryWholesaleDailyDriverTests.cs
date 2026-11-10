@@ -302,6 +302,47 @@ namespace LandLedgers.Editor.Economy
                 ImportOrderPathExists = false,
             };
 
+        [TestCase(false, 0, 0)]
+        [TestCase(true, 0, 0)]
+        [TestCase(true, 2, 2)]
+        public void PaidIncomingFlourCoversProcurementButCannotBakeBeforeReceipt(bool committed, int depth, int expectedLocalSacks)
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+            var supplier = new OffMapAidBusinessRuntime(new OffMapAidBusinessDefinition
+            {
+                BusinessId = "millbrook_grain_co", DisplayName = "Millbrook Grain Co.",
+                Inventory = new List<OffMapAidInventoryRow>
+                {
+                    new OffMapAidInventoryRow
+                    {
+                        ItemId = "bakery_flour_sack", InventoryUnit = "lb", StartingUnits = 230,
+                        OrderUnit = "10 lb sack", InventoryUnitsPerOrderUnit = 10,
+                        BakeryUnitsPerOrderUnit = 18, OrderPriceCents = 48
+                    }
+                }
+            });
+            var inputs = InputsFor(s, 2);
+            inputs.MillbrookSupplier = supplier;
+            inputs.FlourPipelineDepthDays = depth;
+            Assert.IsNull(supplier.TryPlaceOrder("paid-flour", BakeryInstanceId, BakeryInstanceId,
+                2, inputs.BakeryCashPort, 1, out OffMapAidCargoLot lot));
+            if (committed) Assert.IsNull(supplier.CommitFreightPickup(lot.LotId, "real-shipment", 2));
+            int cashBefore = s.BakeryRuntime.CurrentCashCents;
+
+            var result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+            Assert.AreEqual(expectedLocalSacks, result.FlourSacksPurchased);
+            Assert.AreEqual(cashBefore - expectedLocalSacks * 29 + (expectedLocalSacks > 0 ? 48 : 0),
+                s.BakeryRuntime.CurrentCashCents, "Only actual flour purchases and actual wholesale may move cash.");
+            Assert.AreEqual(expectedLocalSacks > 0 ? 1 : 0, result.BatchesBaked,
+                "Paid in-transit flour covers ordering, never physical bake inputs.");
+            Assert.AreEqual(1, supplier.Lots.Count);
+            Assert.IsFalse(lot.Received);
+        }
+
         [Test]
         public void MissingAccount_NamesTheBlocker_PlansNothing()
         {

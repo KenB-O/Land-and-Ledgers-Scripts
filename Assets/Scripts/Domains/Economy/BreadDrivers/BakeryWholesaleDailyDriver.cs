@@ -261,12 +261,8 @@ namespace LandLedgers.Economy.BreadDrivers
         /// Millbrook lots for this buyer — committed (in freight) and
         /// uncommitted (awaiting pickup) alike, since both are future
         /// flour the forward target must not order twice. Received lots
-        /// are already in the bin (on-hand), never counted here. This
-        /// is the depth computation's in-transit figure; it is wider
-        /// than the single-outstanding-order guard's filter (which
-        /// counts uncommitted lots only), and the two are not confused:
-        /// the guard still refuses a duplicate reorder on its own
-        /// terms inside PlaceReorder.</summary>
+        /// are already in the bin (on-hand), never counted here. The
+        /// reorder receives a net quantity with this cover already deducted.</summary>
         private static int OutstandingMillbrookLb(BakeryWholesaleDailyInputs inputs)
         {
             int total = 0;
@@ -276,6 +272,7 @@ namespace LandLedgers.Economy.BreadDrivers
                 if (lot == null) continue;
                 if (lot.Received) continue;
                 if (!string.Equals(lot.BuyerBusinessId, inputs.BakeryBusinessId, StringComparison.Ordinal)) continue;
+                if (!string.Equals(lot.SkuId, MillbrookFlourReorder.FlourSkuId, StringComparison.Ordinal)) continue;
                 total += Math.Max(0, lot.InventoryUnits);
             }
             return total;
@@ -328,8 +325,8 @@ namespace LandLedgers.Economy.BreadDrivers
             int batchesToday = inputs.ProductionDriver.PlannedBatchIds.Count;
             int flourOnHandLb = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
             int needLb = batchesToday * BakeryBreadCatalog.BreadFlourPerBatch - flourOnHandLb;
-            // Priority 3 Slice 4: forward cover. At depth 0 orderLb ==
-            // needLb, so today's behaviour is unchanged. At depth D > 0
+            // Priority 3 Slice 4: forward cover. Depth 0 covers today's
+            // need without buying again for paid pending goods. At depth D > 0
             // the procurement step seeks (D + 1) x one day's flour need
             // — today plus D future days — net of bin on-hand and
             // outstanding in-transit Millbrook lb. The shortfall itself
@@ -341,13 +338,13 @@ namespace LandLedgers.Economy.BreadDrivers
             // short" diagnostic; orderLb tracks the remaining forward
             // need for the purchase/reorder decisions.
             int flourDepthDays = Math.Max(0, inputs.FlourPipelineDepthDays);
-            int inTransitFlourLb = flourDepthDays > 0 ? OutstandingMillbrookLb(inputs) : 0;
+            // Paid flour remains procurement cover after freight commitment, at
+            // every depth. Only physically received bin stock can pass Precheck.
+            int inTransitFlourLb = OutstandingMillbrookLb(inputs);
             int forwardTargetLb = (flourDepthDays + 1) * batchesToday * BakeryBreadCatalog.BreadFlourPerBatch;
-            int orderLb = flourDepthDays > 0
-                ? Math.Max(0, forwardTargetLb - flourOnHandLb - inTransitFlourLb)
-                : needLb;
+            int orderLb = Math.Max(0, forwardTargetLb - flourOnHandLb - inTransitFlourLb);
             int? flourCostPerBatchCents = null;
-            if (batchesToday > 0 && (needLb > 0 || orderLb > 0))
+            if (batchesToday > 0 && orderLb > 0)
             {
                 int sacksNeeded = (orderLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
                 int storeSacks = inputs.StoreRuntimeState != null
@@ -445,7 +442,8 @@ namespace LandLedgers.Economy.BreadDrivers
                     int sacksRemaining = (orderLb + BakeryFlourLocalPurchase.LbPerSack - 1) / BakeryFlourLocalPurchase.LbPerSack;
                     string reorderRefusal = MillbrookFlourReorder.PlaceReorder(
                         inputs.MillbrookSupplier, inputs.BakeryCashPort, inputs.BakeryBusinessId,
-                        inputs.BakeryBusinessId, sacksRemaining, dayIndex, diag, out OffMapAidCargoLot reorderLot);
+                        inputs.BakeryBusinessId, sacksRemaining, dayIndex, diag, out OffMapAidCargoLot reorderLot,
+                        outstandingAlreadyCounted: true);
                     if (reorderRefusal == null && reorderLot != null)
                     {
                         result.MillbrookReorderLotId = reorderLot.LotId;
@@ -479,7 +477,9 @@ namespace LandLedgers.Economy.BreadDrivers
             }
             else if (batchesToday > 0)
             {
-                diag.Add($"BakeryWholesaleDailyDriver: flour sufficient — {flourOnHandLb} lb on hand for {batchesToday} batch(es); no purchase, no comparison.");
+                diag.Add(needLb > 0
+                    ? $"BakeryWholesaleDailyDriver: flour procurement covered — {flourOnHandLb} lb on hand + {inTransitFlourLb} lb paid and awaiting receipt cover the {forwardTargetLb} lb target; baking still requires physical receipt."
+                    : $"BakeryWholesaleDailyDriver: flour sufficient — {flourOnHandLb} lb on hand for {batchesToday} batch(es); no purchase, no comparison.");
                 if (inputs.StoreFlourUnitPriceCents > 0)
                     flourCostPerBatchCents = BakeryFlourSupplierComparison.SacksPerBatch * inputs.StoreFlourUnitPriceCents;
             }

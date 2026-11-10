@@ -291,6 +291,34 @@ namespace LandLedgers.Editor.Civic
         }
 
         [Test]
+        public void SchoolhouseDoesNotAssignOffMapRelativeAsLocalTeacher()
+        {
+            var schoolhouse = new SchoolhouseState();
+            schoolhouse.MarkBuilt(6, 2);
+            var population = new PopulationState();
+            population.people.Add(new PersonState
+            {
+                id = 800,
+                firstName = "OffMap",
+                lastName = "Relative",
+                age = 35,
+                ageBand = AgeBand.Adult18Plus,
+                laborAccessLevel = LaborAccessLevel.FullLaborMarket,
+                isOffMap = true,
+                householdId = -1,
+                homeBuildingId = -1,
+                workplaceBuildingId = -1,
+            });
+
+            Assert.IsFalse(SchoolhouseEvaluator.HasAvailableTeacherCandidate(population, SchoolhouseThresholds.Default),
+                "Genealogy-only residents cannot make the local schoolhouse operational.");
+            Assert.IsFalse(SchoolhouseEvaluator.TryAssignTeacher(
+                schoolhouse, population, SchoolhouseThresholds.Default, out PersonState teacher, out _));
+            Assert.IsNull(teacher);
+            Assert.IsFalse(schoolhouse.HasTeacher);
+        }
+
+        [Test]
         public void SchoolhouseSaveRoundTrips()
         {
             CivicSaveDto dto = new()

@@ -144,6 +144,40 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void OffMapFamilyRecordsAreNotRecruitmentCandidatesOrReferrals()
+        {
+            population.people.Clear();
+            population.people.Add(Person(1, "Local", "Ems", 1, "merchant"));
+            PersonState offMapRelative = Person(40, "Relative", "Ems", 1);
+            offMapRelative.isOffMap = true;
+            population.people.Add(offMapRelative);
+            employment.Register(new EmploymentRelationship
+            {
+                Id = "emp-local-contact",
+                EmployeePersonId = 1,
+                EmployerBusinessId = "biz-other",
+                RoleDisplayName = "merchant",
+                LifecycleState = EmploymentLifecycleState.Active,
+                Compensation = CompensationTerms.FromWeeklyWage(500, "test"),
+                Source = EmploymentSource.Manual,
+            });
+
+            var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.NewspaperAd, 0, 7, diag, TestMarket());
+            for (int day = 0; day < 90; day++) service.AdvanceDay(population, employment, day, diag);
+            Assert.AreEqual(0, service.Inquiries.Count,
+                "Generated off-map relatives remain in genealogy and cannot appear as local applicants.");
+
+            var referral = service.OpenEffort("biz-2", "hand", RecruitmentChannel.EmployeeReferral, 0, 99, diag);
+            for (int day = 0; day < 20; day++)
+            {
+                Assert.IsNull(service.AskForReferral(referral.EffortId, 1, population, employment, day, diag),
+                    "A family relationship does not make an off-map relative locally available for hire.");
+            }
+            Assert.IsNull(service.AskForReferral(referral.EffortId, 40, population, employment, 21, diag),
+                "An off-map relative cannot act as a local referral contact.");
+        }
+
+        [Test]
         public void ReferralCanProduceALeadOrHonestlyNone()
         {
             var effort = service.OpenEffort("biz-1", "clerk", RecruitmentChannel.EmployeeReferral, 0, 99, diag);

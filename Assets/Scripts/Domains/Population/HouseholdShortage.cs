@@ -417,7 +417,10 @@ namespace LandLedgers.Population
                 return;
             }
 
-            outNeeds.AddRange(all);
+            foreach (HouseholdPurchasingNeed need in all)
+            {
+                if (need != null) outNeeds.Add(CopyNeed(need));
+            }
         }
 
         public void ImportState(IEnumerable<HouseholdPurchasingNeed> inNeeds)
@@ -427,6 +430,13 @@ namespace LandLedgers.Population
                 return;
             }
 
+            // Save/Continue imports a snapshot, not an append operation.
+            // Clear prior runtime state and copy each record so subsequent
+            // shortage evaluation cannot mutate the caller's saved DTO.
+            openByKey.Clear();
+            all.Clear();
+            nextSequence = 0;
+
             foreach (HouseholdPurchasingNeed need in inNeeds)
             {
                 if (need == null || need.HouseholdId < 0 || string.IsNullOrWhiteSpace(need.ItemId))
@@ -434,21 +444,42 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                nextSequence = Math.Max(nextSequence, need.NeedSequence + 1);
-                if (need.Status == PurchasingNeedStatus.Open)
+                HouseholdPurchasingNeed restored = CopyNeed(need);
+                nextSequence = Math.Max(nextSequence, restored.NeedSequence + 1);
+                if (restored.Status == PurchasingNeedStatus.Open)
                 {
-                    string key = Key(need.HouseholdId, need.ItemId);
+                    string key = Key(restored.HouseholdId, restored.ItemId);
                     if (openByKey.ContainsKey(key))
                     {
                         diagnostics.Add($"ImportState: duplicate open need {key} skipped.");
                         continue;
                     }
 
-                    openByKey[key] = need;
+                    openByKey[key] = restored;
                 }
 
-                all.Add(need);
+                all.Add(restored);
             }
+        }
+
+        private static HouseholdPurchasingNeed CopyNeed(HouseholdPurchasingNeed need)
+        {
+            return new HouseholdPurchasingNeed
+            {
+                NeedSequence = need.NeedSequence,
+                HouseholdId = need.HouseholdId,
+                ItemId = need.ItemId,
+                UnitsNeeded = need.UnitsNeeded,
+                IsNecessity = need.IsNecessity,
+                Urgency01 = need.Urgency01,
+                ReasonSummary = need.ReasonSummary,
+                CreatedDayIndex = need.CreatedDayIndex,
+                LastEvaluatedDayIndex = need.LastEvaluatedDayIndex,
+                Status = need.Status,
+                SuggestedResponses = need.SuggestedResponses != null
+                    ? new List<string>(need.SuggestedResponses)
+                    : new List<string>(),
+            };
         }
     }
 }

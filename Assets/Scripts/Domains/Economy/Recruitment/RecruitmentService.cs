@@ -301,10 +301,8 @@ namespace LandLedgers.Economy.Recruitment
             var pool = new List<PersonState>();
             foreach (PersonState p in population.people)
             {
-                if (p == null || p.ageBand != AgeBand.Adult18Plus) continue;
+                if (p == null || p.isOffMap || p.deathDayIndex >= 0 || p.ageBand != AgeBand.Adult18Plus) continue;
                 if (p.laborAccessLevel == LaborAccessLevel.None) continue;
-                // Pass VI cohesion fix: the dead are not hireable.
-                if (p.deathDayIndex >= 0) continue;
                 bool employed = false;
                 if (employment != null)
                 {
@@ -335,16 +333,17 @@ namespace LandLedgers.Economy.Recruitment
                 return null;
             }
             PersonState contact = population?.GetPerson(contactPersonId);
-            if (contact == null)
+            if (contact == null || contact.isOffMap || contact.deathDayIndex >= 0)
             {
-                diag.Add($"RecruitmentService.AskForReferral: P{contactPersonId} is not a known person.");
+                diag.Add($"RecruitmentService.AskForReferral: P{contactPersonId} is not an available local contact.");
                 return null;
             }
 
             var leads = new List<PersonState>();
             foreach (PersonState p in population.people)
             {
-                if (p == null || p.id == contactPersonId || p.ageBand != AgeBand.Adult18Plus) continue;
+                if (p == null || p.id == contactPersonId || p.isOffMap || p.deathDayIndex >= 0 ||
+                    p.ageBand != AgeBand.Adult18Plus) continue;
                 if (p.laborAccessLevel == LaborAccessLevel.None) continue;
                 bool isFamily = p.householdId == contact.householdId && p.householdId >= 0;
                 bool isFormerCoworker = !string.IsNullOrEmpty(p.professionId) && p.professionId == contact.professionId;

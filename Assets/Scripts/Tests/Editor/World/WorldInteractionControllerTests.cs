@@ -38,6 +38,56 @@ namespace LandLedgers.Tests.World
             }
         }
 
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        public void VisiblePersonBeatsFootprintProxyButNotSolidWall(bool wall, bool crowded)
+        {
+            GameObject controllerObject = new("Selection Controller");
+            GameObject proxy = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            GameObject person = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            GameObject obstruction = null;
+            var extras = new System.Collections.Generic.List<GameObject>();
+            try
+            {
+                proxy.transform.position = new Vector3(0, 0, 2);
+                proxy.GetComponent<Collider>().isTrigger = true;
+                var building = proxy.AddComponent<WorldInspectableTarget>();
+                building.Configure(WorldInspectableTargetKind.Building, 1, 2);
+                person.transform.position = new Vector3(0, 0, 4);
+                person.GetComponent<Collider>().isTrigger = true;
+                var npc = person.AddComponent<WorldInspectableTarget>();
+                npc.ConfigurePerson(3);
+                if (wall)
+                {
+                    obstruction = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    obstruction.transform.position = new Vector3(0, 0, 3);
+                }
+                if (crowded)
+                {
+                    for (int i = 0; i < 40; i++)
+                    {
+                        var extra = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                        extra.transform.position = new Vector3(0, 0, 6 + i);
+                        extra.GetComponent<Collider>().isTrigger = true;
+                        extras.Add(extra);
+                    }
+                }
+                var controller = controllerObject.AddComponent<WorldInteractionController>();
+                Physics.SyncTransforms();
+                Assert.IsTrue(controller.TryResolveTarget(new Ray(Vector3.zero, Vector3.forward), out var selected));
+                Assert.AreSame(wall ? building : npc, selected);
+            }
+            finally
+            {
+                foreach (var extra in extras) Object.DestroyImmediate(extra);
+                if (obstruction != null) Object.DestroyImmediate(obstruction);
+                Object.DestroyImmediate(person);
+                Object.DestroyImmediate(proxy);
+                Object.DestroyImmediate(controllerObject);
+            }
+        }
+
         [Test]
         public void PersonInspectableTargetRetainsStablePersonIdAndClearsItForOtherKinds()
         {

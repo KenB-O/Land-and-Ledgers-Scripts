@@ -124,11 +124,26 @@ namespace LandLedgers.World
             lastSelectedTargetSummary = string.Empty;
             lastRouteSummary = "No target resolved.";
 
+            // NonAlloc results are unordered and may omit a person when the buffer fills.
+            RaycastHit[] resolvedHits = lastRaycastHitCount == hits.Length
+                ? Physics.RaycastAll(ray, raycastDistance, raycastMask, QueryTriggerInteraction.Collide)
+                : hits;
+            if (resolvedHits != hits) lastRaycastHitCount = resolvedHits.Length;
+            float nearestSolidDistance = float.PositiveInfinity;
+            for (int i = 0; i < lastRaycastHitCount; i++)
+            {
+                Collider blocker = resolvedHits[i].collider;
+                if (blocker == null || blocker.isTrigger) continue;
+                WorldInspectableTarget owner = blocker.GetComponentInParent<WorldInspectableTarget>();
+                if (owner != null && owner.Kind == WorldInspectableTargetKind.Person) continue;
+                nearestSolidDistance = Mathf.Min(nearestSolidDistance, resolvedHits[i].distance);
+            }
+
             float bestDistance = float.PositiveInfinity;
             int bestPriority = int.MinValue;
             for (int i = 0; i < lastRaycastHitCount; i++)
             {
-                Collider collider = hits[i].collider;
+                Collider collider = resolvedHits[i].collider;
                 WorldInspectableTarget candidate = collider != null ? collider.GetComponentInParent<WorldInspectableTarget>() : null;
                 if (candidate == null)
                 {
@@ -142,11 +157,16 @@ namespace LandLedgers.World
                 }
 
                 lastInspectableCandidateCount++;
-                float distance = hits[i].distance;
+                float distance = resolvedHits[i].distance;
+                bool person = candidate.Kind == WorldInspectableTargetKind.Person;
+                if (person && distance > nearestSolidDistance + TargetDistanceTieTolerance) continue;
+                bool currentPerson = target != null && target.Kind == WorldInspectableTargetKind.Person;
                 int priority = GetTargetPriority(candidate);
                 bool closer = distance + TargetDistanceTieTolerance < bestDistance;
                 bool nearTie = Mathf.Abs(distance - bestDistance) <= TargetDistanceTieTolerance;
-                if (target == null || closer || (nearTie && priority > bestPriority))
+                // Invisible footprint triggers must not steal clicks from visible people.
+                if (target == null || (person && !currentPerson)
+                    || (person == currentPerson && (closer || (nearTie && priority > bestPriority))))
                 {
                     bestDistance = distance;
                     bestPriority = priority;

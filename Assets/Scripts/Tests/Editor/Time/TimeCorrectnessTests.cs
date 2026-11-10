@@ -256,5 +256,23 @@ namespace LandLedgers.EditorTests.Time
 
             Assert.AreEqual(5f * 86400f + 3600f, manager.AbsoluteGameSeconds, 0.01f);
         }
+
+        [Test]
+        public void DayCollapse_PreservesWorkTicksBeforeEachDailyReset()
+        {
+            TimeManager manager = CreateTimeManager(maxShortTicksPerFrame: 64, maxDayRolloversPerFrame: 1);
+            int ticks = 0;
+            var ticksAtDailyReset = new List<int>();
+            manager.ShortTick += _ => ticks++;
+            manager.DayChanged += _ => ticksAtDailyReset.Add(ticks);
+
+            InvokePrivate(manager, "AdvanceGameSeconds", 3f * 86400f + 900f);
+
+            CollectionAssert.AreEqual(new[] { 96, 192, 288 }, ticksAtDailyReset,
+                "Every closing day's work must run before its daily budget/reservation reset.");
+            Assert.AreEqual(289, ticks, "The final partial day must retain its completed interval too.");
+            Assert.AreEqual(3, manager.CurrentAbsoluteDayIndex);
+            Assert.AreEqual(900f, manager.GameSecondsIntoDay, 0.01f);
+        }
     }
 }

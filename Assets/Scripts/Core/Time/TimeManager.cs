@@ -496,7 +496,6 @@ namespace LandLedgers.Time
 
             collapsedDayRolloversLastFrame = daysToAdvance;
             cappedDayRolloverFrames++;
-            RecordCollapsedShortTickCompression(remainingGameSeconds);
 
             // Pass IV (Worker 1): every crossed day runs its daily drivers. DayChanged
             // (and WeekChanged/MonthChanged as crossed) fires PER DAY through
@@ -504,12 +503,18 @@ namespace LandLedgers.Time
             // silently skipped by a collapsed rollover.
             for (int day = 0; day < daysToAdvance; day++)
             {
+                // The first boundary was already accumulated by AdvanceGameSeconds.
+                // Later days must accrue their own work intervals before rollover.
+                if (day > 0) shortTickAccumulatorGameSeconds += settings.GameSecondsPerDay;
                 // Normalize: each iteration rolls exactly one pending day.
                 gameSecondsIntoDay = settings.GameSecondsPerDay;
                 ProcessDayRollover();
             }
 
-            ApplyTimeOfDay((float)(totalSecondsToPlace - daysToAdvance * secondsPerDay));
+            float remainder = (float)(totalSecondsToPlace - daysToAdvance * secondsPerDay);
+            ApplyTimeOfDay(remainder);
+            shortTickAccumulatorGameSeconds += remainder;
+            ProcessShortTicks();
 
             if (logMajorTicks)
             {
@@ -603,6 +608,13 @@ namespace LandLedgers.Time
 
         private void ProcessDayRollover()
         {
+            // Complete the closing day's work before daily drivers reset its
+            // reservations, budgets, or needs. Ordinary intraday frames still
+            // defer excess ticks; crossing midnight must preserve event order.
+            while (shortTickAccumulatorGameSeconds >= settings.ShortTickIntervalGameSeconds)
+            {
+                ProcessShortTicks();
+            }
             gameSecondsIntoDay -= settings.GameSecondsPerDay;
             SimulationDate previousDate = currentDate;
             absoluteDayIndex++;

@@ -42,6 +42,30 @@ namespace LandLedgers.EditorTests.Core
             Assert.IsNotNull(reason);
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RestoredTasksKeepTheirIdentitiesWhenNewTasksAreCreated(bool usedAuthority)
+        {
+            var source = CreateAuthorityWithSweeping();
+            WorkTask first = source.CreateTask("test.sweep", Business(1), 1);
+            WorkTask second = source.CreateTask("test.sweep", Business(1), 1);
+            var save = source.CaptureSaveDto();
+            var restored = CreateAuthorityWithSweeping();
+            if (usedAuthority)
+                for (int i = 0; i < 5; i++) restored.CreateTask("test.sweep", Business(2), 1);
+
+            restored.LoadFromSaveDto(save);
+            WorkTask next = restored.CreateTask("test.sweep", Business(3), 2);
+            Assert.Greater(next.TaskId.Id, second.TaskId.Id);
+            if (usedAuthority) Assert.GreaterOrEqual(next.TaskId.Id, 5);
+            Assert.AreEqual(Business(1), restored.FindTask(first.TaskId).OwnerId);
+            Assert.AreEqual(Business(3), restored.FindTask(next.TaskId).OwnerId);
+
+            restored.LoadFromSaveDto(save);
+            WorkTask later = restored.CreateTask("test.sweep", Business(3), 2);
+            Assert.Greater(later.TaskId.Id, next.TaskId.Id, "Repeated loads must not rewind a live allocator.");
+        }
+
         [Test]
         public void Lifecycle_CreateAssignStartWork_CompletesAtPlan()
         {

@@ -204,11 +204,51 @@ namespace LandLedgers.Economy.Businesses.Logging
                 }
             }
 
-            LogHaul haul = LogHaul.PlanHaul(idRegistry, lot, millBusinessId,
+            // A landing lot may contain several tree-length logs. Load only
+            // the largest finite portion that fits this wagon; the balance
+            // remains in the landing under its original lot identity.
+            LogLot cargoLot = lot;
+            bool splitLot = false;
+            if (lot.MassKg > LogHaul.WagonCargoCapacityKg)
+            {
+                float kgPerLog = lot.MassKg / lot.LogUnits;
+                int unitsThatFit = kgPerLog <= 0f
+                    ? 0
+                    : (int)Math.Floor(LogHaul.WagonCargoCapacityKg / kgPerLog);
+                if (unitsThatFit <= 0)
+                {
+                    diag.Add($"LoggingOperationRuntime: DISPATCH REFUSED — one log from lot {lot.LotId} exceeds the wagon's {LogHaul.WagonCargoCapacityKg:0.##} kg cargo limit.");
+                    return null;
+                }
+
+                cargoLot = new LogLot
+                {
+                    LotId = lot.LotId,
+                    LogUnits = unitsThatFit,
+                    MassKg = kgPerLog * unitsThatFit,
+                    StandId = lot.StandId,
+                    Species = lot.Species,
+                    FelledBy = lot.FelledBy,
+                    FelledDayIndex = lot.FelledDayIndex,
+                };
+                splitLot = unitsThatFit < lot.LogUnits;
+            }
+
+            LogHaul haul = LogHaul.PlanHaul(idRegistry, cargoLot, millBusinessId,
                 millLocationId, journeyModel, originLocationId, diag);
             if (haul == null) return null; // refused loudly inside PlanHaul — lot stays at the landing
 
             landingStock.Remove(lot);
+            if (splitLot)
+            {
+                int hauledUnits = cargoLot.LogUnits;
+                float hauledMass = cargoLot.MassKg;
+                lot.LogUnits -= hauledUnits;
+                lot.MassKg -= hauledMass;
+                haul.Lot.LotId = idRegistry.Allocate(EntityKind.Lot);
+                landingStock.Add(lot);
+                diag.Add($"LoggingOperationRuntime: lot {haul.Lot.LotId} carries {hauledUnits} log unit(s) ({hauledMass:0.##} kg); {lot.LogUnits} unit(s) remain at the landing within the wagon's {LogHaul.WagonCargoCapacityKg:0.##} kg limit.");
+            }
             hauls.Add(haul);
             diag.Add($"LoggingOperationRuntime: lot {lot.LotId} dispatched — the haul holds it now, " +
                 "not the landing.");
@@ -266,6 +306,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                 {
                     LotId = lot.LotId,
                     LogUnits = lot.LogUnits,
+                    MassKg = lot.MassKg,
                     StandId = lot.StandId,
                     Species = lot.Species,
                     FelledBy = lot.FelledBy,

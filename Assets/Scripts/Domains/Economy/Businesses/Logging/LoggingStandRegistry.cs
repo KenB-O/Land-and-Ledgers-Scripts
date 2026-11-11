@@ -224,6 +224,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                     LocationId = stand.LocationId,
                     TimberRightsHolderId = stand.TimberRightsHolderId,
                     Species = stand.Species,
+                    KilogramsPerLog = stand.KilogramsPerLog,
                     StandingTimberUnits = stand.StandingTimberUnits,
                     LastFelledDayIndex = stand.LastFelledDayIndex,
                 });

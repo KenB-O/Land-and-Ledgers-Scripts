@@ -23,6 +23,7 @@ namespace LandLedgers.Economy.Farming.Timber
         public string LocationId = string.Empty; // JRN-1 location
         public string TimberRightsHolderId = string.Empty; // business/household/town that may fell here
         public string Species = string.Empty; // e.g. "white pine"
+        public float KilogramsPerLog = 300f; // provisional mature-tree usable yield; authored variation is permitted
         public int StandingTimberUnits; // logs still standing
         public int LastFelledDayIndex = -1;
 
@@ -38,6 +39,7 @@ namespace LandLedgers.Economy.Farming.Timber
     {
         public EntityId LotId = EntityId.Invalid; // EntityKind.Lot (HF-1)
         public int LogUnits;
+        public float MassKg;
         public string StandId = string.Empty;
         public string Species = string.Empty;
         public EntityId FelledBy = EntityId.Invalid; // worker person id (labor provenance)
@@ -138,6 +140,12 @@ namespace LandLedgers.Economy.Farming.Timber
                 return null;
             }
 
+            if (float.IsNaN(stand.KilogramsPerLog) || float.IsInfinity(stand.KilogramsPerLog) || stand.KilogramsPerLog <= 0f)
+            {
+                diagnostics.Add($"TimberHarvest: stand '{stand.StandId}' has an invalid per-log mass; no timber was felled.");
+                return null;
+            }
+
             if (!string.Equals(stand.TimberRightsHolderId, fellerRightsHolderId, StringComparison.Ordinal))
             {
                 diagnostics.Add($"TimberHarvest: {fellerRightsHolderId} holds no timber rights on stand '{stand.StandId}' — felling refused.");
@@ -158,6 +166,7 @@ namespace LandLedgers.Economy.Farming.Timber
             {
                 LotId = idRegistry.Allocate(EntityKind.Lot),
                 LogUnits = felled,
+                MassKg = felled * Mathf.Max(0f, stand.KilogramsPerLog),
                 StandId = stand.StandId,
                 Species = stand.Species,
                 FelledBy = worker,

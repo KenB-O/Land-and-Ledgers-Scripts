@@ -48,6 +48,8 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 return "SawmillLogStock.ReceiveLogLot: a log lot needs an EntityId — anonymous stock is refused.";
             if (lot.LogUnits <= 0)
                 return "SawmillLogStock.ReceiveLogLot: a log lot needs positive log units.";
+            if (float.IsNaN(lot.MassKg) || float.IsInfinity(lot.MassKg) || lot.MassKg < 0f)
+                return "SawmillLogStock.ReceiveLogLot: a log lot needs a finite non-negative mass.";
             if (string.IsNullOrWhiteSpace(lot.StandId))
             {
                 diag.Add($"SawmillLogStock: REFUSED log lot {lot.LotId} — no timber stand named. "
@@ -68,7 +70,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
         /// runs are refused rather than blending lots, so every lumber lot
         /// traces to exactly one log lot and one stand.
         /// </summary>
-        public LogLot TryTakeOldestLot(int logsWanted, List<string> diag)
+        public LogLot TryTakeOldestLot(int logsWanted, EntityIdRegistry idRegistry, List<string> diag)
         {
             diag = diag ?? diagnostics;
             if (logsWanted <= 0)
@@ -97,9 +99,37 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 return null;
             }
 
+            if (oldest.LogUnits == logsWanted)
+            {
+                lots.Remove(oldest);
+                return oldest;
+            }
+
+            if (idRegistry == null)
+            {
+                diag.Add("SawmillLogStock: partial lot consumption requires an EntityIdRegistry so the remaining physical lot keeps a unique identity.");
+                return null;
+            }
+
+            int originalUnits = oldest.LogUnits;
+            float consumedMassKg = originalUnits > 0
+                ? oldest.MassKg * (logsWanted / (float)originalUnits)
+                : 0f;
+            var consumed = new LogLot
+            {
+                LotId = oldest.LotId,
+                LogUnits = logsWanted,
+                MassKg = consumedMassKg,
+                StandId = oldest.StandId,
+                Species = oldest.Species,
+                FelledBy = oldest.FelledBy,
+                FelledDayIndex = oldest.FelledDayIndex,
+            };
+
             oldest.LogUnits -= logsWanted;
-            if (oldest.LogUnits <= 0) lots.Remove(oldest);
-            return oldest;
+            oldest.MassKg -= consumedMassKg;
+            oldest.LotId = idRegistry.Allocate(EntityKind.Lot);
+            return consumed;
         }
 
         /// <summary>W4A save contract: lives inside the owning stock class.</summary>
@@ -118,6 +148,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 {
                     LotId = lot.LotId,
                     LogUnits = lot.LogUnits,
+                    MassKg = lot.MassKg,
                     StandId = lot.StandId,
                     Species = lot.Species,
                     FelledBy = lot.FelledBy,

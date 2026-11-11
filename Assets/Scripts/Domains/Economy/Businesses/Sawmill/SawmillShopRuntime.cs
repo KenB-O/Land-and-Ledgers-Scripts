@@ -22,6 +22,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
     public sealed class SawmillSawingResult
     {
         public int LogsSawn;
+        public float LogMassKgConsumed;
         public string SourceLogLotId = string.Empty;
         public SawmillLumberLot LumberLot;
         public SlabOffcutFuelLot ByproductLot;
@@ -147,7 +148,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             // Tech X §3.9: a dull/broken saw gates ALL output until the filer works.
             if (blade.CheckSawGate(dayIndex, diag) != null) return null;
 
-            LogLot sourceLot = logStock.TryTakeOldestLot(logsToSaw, diag);
+            LogLot sourceLot = logStock.TryTakeOldestLot(logsToSaw, idRegistry, diag);
             if (sourceLot == null) return null;
 
             string sourceLogLotId = sourceLot.LotId.ToString();
@@ -199,6 +200,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             return new SawmillSawingResult
             {
                 LogsSawn = logsToSaw,
+                LogMassKgConsumed = sourceLot.MassKg,
                 SourceLogLotId = sourceLogLotId,
                 LumberLot = lumberLot,
                 ByproductLot = byproductLot,

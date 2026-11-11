@@ -217,6 +217,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     {
                         LotId = entry.Lot.LotId,
                         LogUnits = entry.Lot.LogUnits,
+                        MassKg = entry.Lot.MassKg,
                         StandId = entry.Lot.StandId,
                         Species = entry.Lot.Species,
                         FelledBy = entry.Lot.FelledBy,

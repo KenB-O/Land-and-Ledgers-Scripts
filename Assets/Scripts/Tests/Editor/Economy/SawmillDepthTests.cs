@@ -25,6 +25,7 @@ namespace LandLedgers.Editor.Economy
             {
                 LotId = EntityId.For(EntityKind.Lot, lotNumber),
                 LogUnits = logs,
+                MassKg = logs * 300f,
                 StandId = standId,
                 Species = species,
                 FelledBy = EntityId.For(EntityKind.Person, 5001),
@@ -226,6 +227,24 @@ namespace LandLedgers.Editor.Economy
             var hard = hardMill.RunSawing(4, EntityId.For(EntityKind.Person, 5002), 210, diag);
             Assert.NotNull(hard);
             Assert.AreEqual(180, hard.SawMinutes, "4 logs x 45 saw-minutes/log (oak data).");
+        }
+
+        [Test]
+        public void PartialSawing_SplitsPhysicalLogLotWithoutDuplicatingIdentityOrMass()
+        {
+            var mill = MillWithLogs(10);
+            var diag = new List<string>();
+
+            var result = mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 210, diag);
+
+            Assert.NotNull(result);
+            Assert.AreEqual(2, result.LogsSawn);
+            Assert.AreEqual(600f, result.LogMassKgConsumed, 0.01f);
+            Assert.AreEqual(8, mill.LogStock.TotalLogUnits);
+            Assert.AreEqual(2400f, mill.LogStock.Lots[0].MassKg, 0.01f);
+            Assert.AreEqual(EntityId.For(EntityKind.Lot, 9101).ToString(), result.SourceLogLotId);
+            Assert.AreNotEqual(EntityId.For(EntityKind.Lot, 9101), mill.LogStock.Lots[0].LotId,
+                "The consumed lot identity belongs to lumber provenance; remaining logs receive a new identity.");
         }
 
         [Test]

@@ -48,6 +48,7 @@ namespace LandLedgers.Economy.Businesses.Logging
     {
         /// <summary>Calibration: minutes of loading work per log at the landing.</summary>
         public const int LoadingMinutesPerLog = 2;
+        public const float WagonCargoCapacityKg = 450f;
 
         public EntityId HaulId = EntityId.Invalid;
         public LogLot Lot; // the physical lot in transit — held here, nowhere else
@@ -94,6 +95,16 @@ namespace LandLedgers.Economy.Businesses.Logging
             if (lot.LogUnits <= 0)
             {
                 diag.Add($"LogHaul: lot {lot.LotId} carries no logs — nothing to haul.");
+                return null;
+            }
+            if (float.IsNaN(lot.MassKg) || float.IsInfinity(lot.MassKg) || lot.MassKg < 0f)
+            {
+                diag.Add($"LogHaul: REFUSED lot {lot.LotId} — invalid cargo mass.");
+                return null;
+            }
+            if (lot.MassKg > WagonCargoCapacityKg)
+            {
+                diag.Add($"LogHaul: REFUSED lot {lot.LotId} at {lot.MassKg:0.##} kg — wagon capacity is {WagonCargoCapacityKg:0.##} kg. Split the physical lot before loading.");
                 return null;
             }
             if (string.IsNullOrWhiteSpace(lot.StandId))
@@ -232,6 +243,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                 {
                     LotId = Lot.LotId,
                     LogUnits = Lot.LogUnits,
+                    MassKg = Lot.MassKg,
                     StandId = Lot.StandId,
                     Species = Lot.Species,
                     FelledBy = Lot.FelledBy,

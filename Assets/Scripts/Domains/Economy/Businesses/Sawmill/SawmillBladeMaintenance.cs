@@ -83,10 +83,18 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             if (string.IsNullOrWhiteSpace(BladeId))
                 return "SawmillBladeState.RecordFiling: no blade id — nothing to file.";
             if (IsRetired)
-                return $"SawmillBladeState.RecordFiling: blade '{BladeId}' is retired scrap ({RetiredReason}) — it is never filed.";
+            {
+                string refusal = $"SawmillBladeState.RecordFiling: blade '{BladeId}' is retired scrap ({RetiredReason}) — it is never filed.";
+                diag.Add(refusal);
+                return refusal;
+            }
             if (IsBroken)
-                return $"SawmillBladeState.RecordFiling: blade '{BladeId}' is BROKEN (condition {Condition01:0.00}) — "
+            {
+                string refusal = $"SawmillBladeState.RecordFiling: blade '{BladeId}' is BROKEN (condition {Condition01:0.00}) — "
                     + "filing cannot fix a broken saw. The filer must re-set it (re-set-saw) or the mill must fit a spare blade.";
+                diag.Add(refusal);
+                return refusal;
+            }
             if (Condition01 >= 1f)
             {
                 diag.Add($"SawmillBladeState: blade '{BladeId}' is already keen — filing skipped, no labor burned.");
@@ -157,9 +165,17 @@ namespace LandLedgers.Economy.Businesses.Sawmill
         {
             diag = diag ?? new List<string>();
             if (string.IsNullOrWhiteSpace(BladeId))
-                return "SawmillBladeState: no blade fitted — the saw line cannot run without its blade.";
+            {
+                string refusal = "SawmillBladeState: no blade fitted — the saw line cannot run without its blade.";
+                diag.Add(refusal);
+                return refusal;
+            }
             if (IsRetired)
-                return $"SawmillBladeState: blade '{BladeId}' is retired scrap ({RetiredReason}) — fit a spare blade before sawing.";
+            {
+                string refusal = $"SawmillBladeState: blade '{BladeId}' is retired scrap ({RetiredReason}) — fit a spare blade before sawing.";
+                diag.Add(refusal);
+                return refusal;
+            }
             if (IsBroken)
             {
                 string refusal = $"SawmillBladeState: blade '{BladeId}' is BROKEN (condition {Condition01:0.00}) — "

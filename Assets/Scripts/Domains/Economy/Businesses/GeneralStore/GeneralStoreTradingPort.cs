@@ -13,12 +13,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// authorities (stock, cash, settlement). Scene wiring constructs this
     /// and registers the adapter in the SupplierDirectory (Codex integrates).
     /// </summary>
-    public sealed class GeneralStoreTradingPort : IItemLevelRestockTradingPort, IIdentifiedRetailStockReceivingPort
+    public sealed class GeneralStoreTradingPort : IItemLevelRestockTradingPort, ICostedRetailStockReceivingPort, IPaidStoreReceivingPort, IRetailReceiptIdentityPort
     {
         private readonly GeneralStoreRuntimeManager manager;
         private readonly BusinessInstanceState business;
         private readonly List<GeneralStoreCategoryOffer> offers;
         private readonly StoreTradingCapability capability;
+        private BusinessInstanceState projectedPlayerBusiness;
+        private IReadOnlyList<GeneralStoreCategoryOffer> projectedPlayerOffers;
 
         public GeneralStoreTradingPort(
             GeneralStoreRuntimeManager manager,
@@ -39,14 +41,33 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             this.capability = tradingCapability ?? new StoreTradingCapability();
         }
 
-        private BusinessInstanceState ActiveBusiness => business ?? manager.CurrentBusiness;
+        private BusinessInstanceState ActiveBusiness => manager.CurrentBusiness != null
+            && (business == null || string.Equals(manager.CurrentBusiness.InstanceId, business.InstanceId, StringComparison.Ordinal))
+                ? manager.CurrentBusiness : business;
         private BusinessRuntimeState ActiveState => ActiveBusiness?.RuntimeState ?? manager.RuntimeState;
+        public string AllocateRetailReceiptId(int dayIndex) => ActiveState?.AllocateRetailReceiptId(dayIndex) ?? string.Empty;
         public string StoreBusinessId => ActiveBusiness != null ? ActiveBusiness.InstanceId : "general-store";
         public string StoreName => ActiveBusiness != null ? ActiveBusiness.RuntimeDisplayName : "General Store";
         public string LocationId => ActiveBusiness != null && ActiveBusiness.AssignedBuildingId >= 0
             ? $"building:{ActiveBusiness.AssignedBuildingId}"
             : manager.StoreBuildingId >= 0 ? $"building:{manager.StoreBuildingId}" : "general-store";
-        public IReadOnlyList<GeneralStoreCategoryOffer> CategoryOffers => offers;
+        public IReadOnlyList<GeneralStoreCategoryOffer> CategoryOffers
+        {
+            get
+            {
+                // Bootstrap may register this port before a player forms a
+                // business. Once formed (or restored as a new instance), use
+                // the same identified assortment as an explicit business port.
+                BusinessInstanceState current = ActiveBusiness;
+                if (current == null || ReferenceEquals(business, current)) return offers;
+                if (!ReferenceEquals(projectedPlayerBusiness, current))
+                {
+                    projectedPlayerOffers = manager.BuildHouseholdTradingPort(current).CategoryOffers;
+                    projectedPlayerBusiness = current;
+                }
+                return projectedPlayerOffers;
+            }
+        }
         public StoreTradingCapability TradingCapability
         {
             get
@@ -57,9 +78,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 // clerk exist; registration itself never opens the business.
                 if (manager != null && capability != null)
                 {
-                    capability.Staffed = business != null
-                        ? business.RuntimeState != null && business.RuntimeState.FilledWorkerCount > 0
-                        : manager.CurrentBusiness != null && manager.FilledWorkerSlotCount > 0;
+                    capability.Staffed = ActiveBusiness?.RuntimeState != null
+                        && ActiveBusiness.RuntimeState.FilledWorkerCount > 0;
                 }
 
                 return capability;
@@ -96,10 +116,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         private GeneralStoreCategoryOffer FindOffer(string itemId)
         {
-            if (string.IsNullOrWhiteSpace(itemId) || offers == null) return null;
-            for (int i = 0; i < offers.Count; i++)
+            IReadOnlyList<GeneralStoreCategoryOffer> activeOffers = CategoryOffers;
+            if (string.IsNullOrWhiteSpace(itemId) || activeOffers == null) return null;
+            for (int i = 0; i < activeOffers.Count; i++)
             {
-                GeneralStoreCategoryOffer offer = offers[i];
+                GeneralStoreCategoryOffer offer = activeOffers[i];
                 if (offer?.OfferedItemIds == null) continue;
                 for (int j = 0; j < offer.OfferedItemIds.Count; j++)
                     if (string.Equals(offer.OfferedItemIds[j], itemId, StringComparison.OrdinalIgnoreCase)) return offer;
@@ -117,7 +138,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 : 0;
         }
 
-        public int ItemRetailPricePerStoreUnitCents(string itemId) => Math.Max(0, manager.GetItemSellingPriceCents(itemId));
+        public int ItemRetailPricePerStoreUnitCents(string itemId)
+        {
+            GeneralStoreCategoryOffer offer = FindOffer(itemId);
+            return Math.Max(0, offer != null && offer.ItemPriceOverrideCents > 0
+                ? offer.ItemPriceOverrideCents
+                : manager.GetItemSellingPriceCents(itemId));
+        }
 
         public int ItemReorderTargetUnits(string itemId) => manager.StoreDefinition?.FindItem(itemId)?.ReorderTargetUnits ?? 0;
 
@@ -146,7 +173,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             // prices per HOUSEHOLD unit, so the offer factor multiplies it,
             // the same as the category path already does. Factor 1 is a no-op.
             int storeUnitPrice = offer.UsesItemLevelInventory
-                ? offer.ItemPriceOverrideCents > 0 ? offer.ItemPriceOverrideCents : manager.GetItemSellingPriceCents(itemId)
+                ? ItemRetailPricePerStoreUnitCents(itemId)
                 : CategoryPricePerUnitCents(offer.CategoryId);
             return storeUnitPrice * Math.Max(1, offer.StoreUnitsPerItemUnit);
         }
@@ -160,7 +187,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             // store units, so the factor converts before the all-or-nothing
             // lot consumption. What comes back is household units sold.
             int factor = Math.Max(1, offer.StoreUnitsPerItemUnit);
-            if (!ActiveState.TryConsumeRetailItemStockUnits(itemId, offer.CategoryId, units * factor, out int consumedStoreUnits))
+            if (!ActiveState.TryConsumeRetailItemStockUnits(itemId, offer.CategoryId, units * factor,
+                    out int consumedStoreUnits, retailSale: true))
                 return false;
             consumedUnits = consumedStoreUnits / factor;
             return consumedUnits > 0;
@@ -174,9 +202,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public bool TryConsumeStoreUnits(string categoryId, int units, out int consumedUnits)
         {
             consumedUnits = 0;
-            for (int i = 0; i < offers.Count; i++)
-                if (offers[i] != null && offers[i].UsesItemLevelInventory
-                    && string.Equals(offers[i].CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
+            IReadOnlyList<GeneralStoreCategoryOffer> activeOffers = CategoryOffers;
+            for (int i = 0; i < activeOffers.Count; i++)
+                if (activeOffers[i] != null && activeOffers[i].UsesItemLevelInventory
+                    && string.Equals(activeOffers[i].CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
                     return false;
             BusinessRuntimeState state = ActiveState;
             return state != null && state.TryConsumeCategoryStockUnits(categoryId, units, out consumedUnits);
@@ -228,6 +257,32 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             return null;
         }
 
+        public string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+            int units, int costCents, string provenance, int dayIndex)
+        {
+            BusinessRuntimeState state = ActiveState;
+            if (state == null) return "Store runtime unavailable.";
+            if (units <= 0 || costCents < 0) return "Invalid paid receipt quantity or cost.";
+            if (state.CurrentCashCents < costCents) return $"Store cannot afford {costCents}c for the receipt.";
+            CategoryStockState category = state.GetCategoryStock(categoryId);
+            if (category == null) return $"Destination category missing: {categoryId}.";
+            if (category.TargetStockUnits > 0 && units > category.TargetStockUnits - category.CurrentStockUnits)
+                return $"Category '{categoryId}' cannot accept the full receipt.";
+
+            // No external callbacks or awaits between validation, receipt and
+            // debit. A refused identified lot has not changed stock or cash.
+            if (!string.IsNullOrWhiteSpace(itemId))
+            {
+                string problem = state.TryAddRetailItemLot(lotId, itemId, categoryId, unitLabel,
+                    units, StoreBusinessId, StoreBusinessId, provenance, dayIndex, costCents);
+                if (problem != null) return problem;
+            }
+            else state.AddCategoryStockUnits(categoryId, units);
+            state.SpendCents(costCents);
+            state.RecordWeeklyInputProcurement(units, costCents);
+            return null;
+        }
+
         public string ReceiveStock(string categoryId, int units, string provenanceLabel)
         {
             BusinessRuntimeState state = ActiveState;
@@ -252,11 +307,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         public string ReceiveRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
             int units, string provenance, int dayIndex)
+            => ReceiveCostedRetailItemLot(lotId, itemId, categoryId, unitLabel, units, provenance, dayIndex, -1);
+
+        public string ReceiveCostedRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+            int units, string provenance, int dayIndex, int acquisitionCostCents)
         {
             BusinessRuntimeState state = ActiveState;
             if (state == null) return "Store runtime unavailable.";
             return state.TryAddRetailItemLot(lotId, itemId, categoryId, unitLabel, units,
-                StoreBusinessId, StoreBusinessId, provenance, dayIndex);
+                StoreBusinessId, StoreBusinessId, provenance, dayIndex, acquisitionCostCents);
         }
 
         public int CategoryReceivableUnits(string categoryId)

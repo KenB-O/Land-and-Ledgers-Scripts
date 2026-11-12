@@ -166,6 +166,14 @@ namespace LandLedgers.Economy.Creation
             {
                 if (need == null || need.Status != PurchasingNeedStatus.Open) continue;
                 if (recorded >= 5) break; // bounded: a person notices so much per week
+                if (!IsExecutableProductIdentity(need.ItemId))
+                {
+                    // Category-level reserve needs preserve household need,
+                    // but are not a product or a purchasable business offer.
+                    // Keep the observation available to household services;
+                    // do not let it justify a fictional retailer.
+                    continue;
+                }
                 // Only needs old enough to be genuinely "unfulfilled", not
                 // needs opened this week that shopping may still serve.
                 if (dayIndex - need.CreatedDayIndex < 7) continue;
@@ -184,6 +192,21 @@ namespace LandLedgers.Economy.Creation
 
             if (recorded > 0)
                 diag.Add($"Entrepreneurship: P{person.id} recorded {recorded} unfulfilled-demand observation(s).");
+        }
+
+        private static bool IsExecutableProductIdentity(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId)) return false;
+            if (string.Equals(itemId, HouseholdItemCatalog.UnspecifiedStapleFoodId, StringComparison.Ordinal)
+                || string.Equals(itemId, HouseholdItemCatalog.UnspecifiedMeatId, StringComparison.Ordinal)
+                || string.Equals(itemId, HouseholdItemCatalog.UnspecifiedHouseholdGoodsId, StringComparison.Ordinal)
+                || string.Equals(itemId, HouseholdItemCatalog.UnspecifiedClothingId, StringComparison.Ordinal))
+                return false;
+
+            // This observation source is household goods demand. Only exact,
+            // authored item ids can become candidates; broad category labels
+            // remain unmet household needs without creating an unsupported SKU.
+            return HouseholdItemCatalog.Get(itemId) != null;
         }
 
         private bool HasActiveInvestigation(string opportunityId)

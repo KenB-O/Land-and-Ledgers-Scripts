@@ -1,28 +1,8 @@
-// Slice 10 (2026-11-05): explicit retail package definitions for the
-// General Store. When the store sells a good in a different unit than
-// households request, the offer is convertible only when an entry here
-// declares the package size as a NUMBER with its basis. The authored unit
-// label (for example "10 lb sack") is never parsed for its number: the
-// label is display text, and the number lives here, visibly, so Kennedy
-// can see it and correct it. When no entry exists, the item stays
-// unoffered and the reason names the missing definition, instead of the
-// old bare "unit does not match" drop.
-//
-// Only the SUBDIVISION shape is convertible here: the store unit is smaller
-// than the household unit, so a whole number of store units makes one
-// household unit (lamp oil: 4 quarts = 1 gallon). The existing offer field
-// StoreUnitsPerItemUnit (int, >= 1) expresses exactly that shape, and the
-// category and item-level port math already applies it.
-//
-// The PACKAGE shape (store unit bigger than the household unit) is
-// convertible only through TryGetHouseholdUnitsPerStoreUnit below: buying
-// needs whole packages, and the receipt must multiply packages into
-// household units. Flour converts that way (1 sack bought = 10 lb
-// received, W5); potatoes and salt have no authored package weight
-// anywhere (D-5 open), so they stay dropped with the reason naming the
-// missing D-5 weight. Nothing here invents a sack weight: the potato sack
-// weight and the salt small-bag weight are unauthored anywhere, so they
-// have no entry either.
+// Explicit General Store package definitions. Store package labels are
+// display-only; SKU-specific conversion numbers here drive finite purchases
+// and receipts. Lamp oil uses four quarts per gallon, flour one 10 lb sack
+// is 10 lb, development-town potatoes use a 50 lb sack, and salt a 5 lb
+// small bag. Unsupported unit pairs remain unavailable with a clear reason.
 using System;
 
 namespace LandLedgers.Economy
@@ -84,20 +64,6 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            if (id == "potatoes")
-            {
-                reason = "potatoes are sold by the sack and no D-5 sack weight is authored anywhere, " +
-                    "so no conversion is invented and the offer stays dropped.";
-                return false;
-            }
-
-            if (id == "salt")
-            {
-                reason = "salt is sold in small bags and no D-5 bag weight is authored anywhere, " +
-                    "so no conversion is invented and the offer stays dropped.";
-                return false;
-            }
-
             reason = $"no package definition for '{itemId.Trim()}' sold as '{store}' against household '{household}': " +
                 "the package size is not authored, so no conversion is invented and the offer stays dropped.";
             return false;
@@ -110,8 +76,8 @@ namespace LandLedgers.Economy
         /// that count (flour: 1 sack = 10 lb). The shopping loop buys whole
         /// packages (ceil(need / package size)) and multiplies the receipt
         /// (packages sold × package size). Returns false with
-        /// <paramref name="reason"/> naming the missing D-5 weight when the
-        /// package size is unauthored (potatoes, salt) — loud, not silent.
+        /// <paramref name="reason"/> naming the missing package definition
+        /// when no supported SKU-specific conversion exists — loud, not silent.
         /// Identical units resolve to 1: one store unit is one household unit.
         /// </summary>
         public static bool TryGetHouseholdUnitsPerStoreUnit(
@@ -152,18 +118,18 @@ namespace LandLedgers.Economy
                 return true;
             }
 
-            if (id == "potatoes")
+            // Development-town package calibration, explicit by SKU and
+            // authored display unit. Inventory remains whole finite packages.
+            if (id == "potatoes" && storeLower == "sack" && householdLower == "lb")
             {
-                reason = "potatoes are sold by the sack and no D-5 sack weight is authored anywhere, " +
-                    "so no whole-package purchase is possible and the offer stays dropped.";
-                return false;
+                householdUnitsPerStoreUnit = 50;
+                return true;
             }
 
-            if (id == "salt")
+            if (id == "salt" && storeLower == "small bag" && householdLower == "lb")
             {
-                reason = "salt is sold in small bags and no D-5 bag weight is authored anywhere, " +
-                    "so no whole-package purchase is possible and the offer stays dropped.";
-                return false;
+                householdUnitsPerStoreUnit = 5;
+                return true;
             }
 
             reason = $"no package definition for '{itemId.Trim()}' sold as '{store}' against household '{household}': " +

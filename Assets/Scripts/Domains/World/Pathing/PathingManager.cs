@@ -62,9 +62,21 @@ namespace LandLedgers.Pathing
             settings = newSettings;
         }
 
-        public bool TryFindPath(GridCoord start, GridCoord target, out PathingResult result, UnityEngine.Object requester = null, string label = null, PathingProfile profile = PathingProfile.Pedestrian)
+        public bool TryFindPath(
+            GridCoord start,
+            GridCoord target,
+            out PathingResult result,
+            UnityEngine.Object requester = null,
+            string label = null,
+            PathingProfile profile = PathingProfile.Pedestrian,
+            int floorIndex = 0,
+            string functionalSpaceId = null,
+            int startInteriorBuildingId = -1,
+            int targetInteriorBuildingId = -1)
         {
-            return TryFindPath(new PathingRequest(start, target, requester, label, profile), out result);
+            return TryFindPath(new PathingRequest(start, target, requester, label, profile, floorIndex: floorIndex,
+                functionalSpaceId: functionalSpaceId, startInteriorBuildingId: startInteriorBuildingId,
+                targetInteriorBuildingId: targetInteriorBuildingId), out result);
         }
 
         public bool TryFindPath(BuildingAnchor start, BuildingAnchor target, out PathingResult result, UnityEngine.Object requester = null, string label = null, PathingProfile profile = PathingProfile.Pedestrian)
@@ -107,14 +119,34 @@ namespace LandLedgers.Pathing
                 return Fail(result, $"Target cell {request.Target} is outside the grid.", PathingFailureCategory.TargetOutsideGrid);
             }
 
+            // Some authored door/anchor cells also carry a general walkable
+            // base cost. Check the building's floor geometry first so an
+            // exclusion area cannot be accepted as a valid endpoint merely
+            // because that cell also has the Anchor occupancy bit.
+            if (TryGetInteriorPointFailure(request.Start, request, out string blockedStartReason))
+            {
+                return Fail(result, blockedStartReason, PathingFailureCategory.StartNotWalkable);
+            }
+
+            if (TryGetInteriorPointFailure(request.Target, request, out string blockedTargetReason))
+            {
+                return Fail(result, blockedTargetReason, PathingFailureCategory.TargetNotWalkable);
+            }
+
             if (!TryGetTraversalCost(request.Start, request, out _))
             {
-                return Fail(result, $"Start cell {request.Start} is not walkable.", PathingFailureCategory.StartNotWalkable);
+                string reason = TryGetInteriorPointFailure(request.Start, request, out string interiorReason)
+                    ? interiorReason
+                    : $"Start cell {request.Start} is not walkable.";
+                return Fail(result, reason, PathingFailureCategory.StartNotWalkable);
             }
 
             if (!TryGetTraversalCost(request.Target, request, out _))
             {
-                return Fail(result, $"Target cell {request.Target} is not walkable.", PathingFailureCategory.TargetNotWalkable);
+                string reason = TryGetInteriorPointFailure(request.Target, request, out string interiorReason)
+                    ? interiorReason
+                    : $"Target cell {request.Target} is not walkable.";
+                return Fail(result, reason, PathingFailureCategory.TargetNotWalkable);
             }
 
             if (request.Start.Equals(request.Target))
@@ -377,6 +409,7 @@ namespace LandLedgers.Pathing
                     GridCoord offset = offsets[i];
                     GridCoord neighbor = current + offset;
                     if (!grid.IsInBounds(neighbor)
+                        || !CanCrossBuildingBoundary(current, neighbor, request)
                         || !CanTraverseHeightChange(current, neighbor)
                         || !TryGetTraversalCost(neighbor, request, out int stepCost))
                     {
@@ -416,6 +449,39 @@ namespace LandLedgers.Pathing
             return false;
         }
 
+        private bool CanCrossBuildingBoundary(GridCoord from, GridCoord to, PathingRequest request)
+        {
+            TownGrid grid = Grid;
+            if (grid == null || worldController == null) return false;
+            TownCell fromCell = grid.GetCell(from);
+            TownCell toCell = grid.GetCell(to);
+            if (fromCell.HasBuilding == toCell.HasBuilding
+                && (!fromCell.HasBuilding || fromCell.buildingId == toCell.buildingId)) return true;
+
+            int buildingId = toCell.HasBuilding ? toCell.buildingId : fromCell.buildingId;
+            if (buildingId < 0 || !worldController.TryGetBuildingById(buildingId, out PlacedBuilding building))
+                return false;
+
+            BuildingFootprintAuthority authority = building.runtimeFootprintAuthority;
+            if (authority != null && authority.EntrancePairs != null && authority.EntrancePairs.Count > 0)
+                return authority.AllowsDoorwayBoundaryTransition(CoordToPathWorld(from), CoordToPathWorld(to));
+
+            // Legacy buildings without an entrance pair can still be reached through
+            // the exact authored access anchor that terminates this request. Never
+            // treat every cell in the footprint as a doorway.
+            GridCoord buildingEndpoint = toCell.HasBuilding ? to : from;
+            if (!buildingEndpoint.Equals(request.Start) && !buildingEndpoint.Equals(request.Target)) return false;
+            foreach (BuildingAnchor anchor in building.anchors)
+            {
+                if (!anchor.coord.Equals(buildingEndpoint)) continue;
+                if (anchor.type == AnchorType.FrontDoor
+                    || request.Profile == PathingProfile.LogisticsWagon
+                    && (anchor.type == AnchorType.Service || anchor.type == AnchorType.DropOff))
+                    return true;
+            }
+            return false;
+        }
+
         private bool CanTraverseHeightChange(GridCoord from, GridCoord to)
         {
             TownGrid grid = Grid;
@@ -448,26 +514,103 @@ namespace LandLedgers.Pathing
 
         private bool TryGetTraversalCost(GridCoord coord, PathingRequest request, out int cost)
         {
-            if (TryGetTraversalCost(coord, request.Profile, out cost))
-            {
-                return true;
-            }
-
-            cost = int.MaxValue;
             TownGrid grid = Grid;
             if (settings == null || grid == null || !grid.IsInBounds(coord))
             {
+                cost = int.MaxValue;
                 return false;
             }
 
             TownCell cell = grid.GetCell(coord);
-            if (!IsRequestBuildingInteriorTraversalCell(grid, cell, request))
+            if (!IsPlotCellAccessibleForRequest(cell, request))
             {
+                cost = int.MaxValue;
                 return false;
             }
 
-            cost = ApplyProfileCost(settings.yardCost, PathingSurfaceKind.Yard, request.Profile);
-            return true;
+            bool interiorTraversal = IsRequestBuildingInteriorTraversalCell(grid, cell, request);
+            if (interiorTraversal)
+            {
+                if (!TryEvaluateInteriorCell(request, coord, cell.buildingId, out _))
+                {
+                    cost = int.MaxValue;
+                    return false;
+                }
+
+                cost = ApplyProfileCost(settings.yardCost, PathingSurfaceKind.Yard, request.Profile);
+                return true;
+            }
+
+            if (TryGetBaseTraversalCost(coord, out int baseCost, out PathingSurfaceKind surfaceKind))
+            {
+                cost = ApplyProfileCost(baseCost, surfaceKind, request.Profile);
+                return true;
+            }
+
+            cost = int.MaxValue;
+            return false;
+        }
+
+        private bool TryEvaluateInteriorCell(PathingRequest request, GridCoord coord, int buildingId, out string reason)
+        {
+            reason = string.Empty;
+            if (worldController == null
+                || !worldController.TryGetBuildingById(buildingId, out PlacedBuilding building)
+                || building?.runtimeFootprintAuthority == null
+                || !building.runtimeFootprintAuthority.HasInteriorWalkableArea(request.FloorIndex, request.FunctionalSpaceId))
+            {
+                reason = $"Building {buildingId} has no authored walkable interior for floor {request.FloorIndex} and space '{request.FunctionalSpaceId ?? "shared"}'.";
+                return false;
+            }
+
+            return building.runtimeFootprintAuthority.TryEvaluateInteriorWorldPoint(
+                CoordToPathWorld(coord), request.FloorIndex, request.FunctionalSpaceId, out reason);
+        }
+
+        private bool IsPlotCellAccessibleForRequest(TownCell cell, PathingRequest request)
+        {
+            if ((cell.occupancy & CellOccupancy.Plot) == 0 || cell.IsRoad) return true;
+            if (cell.plotId < 0) return false;
+            int startPlotId = ResolveEndpointPlotId(request.Start);
+            int targetPlotId = ResolveEndpointPlotId(request.Target);
+            if (cell.plotId == startPlotId || cell.plotId == targetPlotId) return true;
+            return worldController != null
+                && worldController.TryGetPlotById(cell.plotId, out TownPlot plot)
+                && plot != null
+                && plot.publicSiteRole != PublicSiteRole.None;
+        }
+
+        private int ResolveEndpointPlotId(GridCoord coord)
+        {
+            TownGrid grid = Grid;
+            if (grid == null || !grid.IsInBounds(coord)) return -1;
+            TownCell cell = grid.GetCell(coord);
+            if (cell.plotId >= 0) return cell.plotId;
+            if (cell.HasBuilding && worldController != null
+                && worldController.TryGetBuildingById(cell.buildingId, out PlacedBuilding building))
+                return building.plotId;
+            return -1;
+        }
+
+        private bool TryGetInteriorPointFailure(GridCoord coord, PathingRequest request, out string reason)
+        {
+            reason = string.Empty;
+            TownGrid grid = Grid;
+            if (grid == null || !grid.IsInBounds(coord)) return false;
+            TownCell cell = grid.GetCell(coord);
+            // A Building cell is still not implicitly traversable: endpoint IDs
+            // remain the access authority. When an endpoint is rejected, however,
+            // report an authored floor/exclusion reason if the cell belongs to a
+            // building with interior data. This keeps blocked furniture destinations
+            // distinguishable from a generic disconnected route without granting entry.
+            if (!cell.HasBuilding || cell.buildingId < 0
+                || worldController == null
+                || !worldController.TryGetBuildingById(cell.buildingId, out PlacedBuilding building)
+                || building?.runtimeFootprintAuthority == null
+                || !building.runtimeFootprintAuthority.HasInteriorWalkableArea(request.FloorIndex, request.FunctionalSpaceId))
+                return false;
+
+            return !TryEvaluateInteriorCell(request, coord, cell.buildingId, out reason);
         }
 
         private static bool IsDiagonalOffset(GridCoord offset)
@@ -516,6 +659,10 @@ namespace LandLedgers.Pathing
                 surfaceKind = PathingSurfaceKind.Road;
                 return true;
             }
+
+            if ((cell.blocked || (cell.occupancy & CellOccupancy.Blocked) != 0)
+                && (cell.occupancy & CellOccupancy.Anchor) == 0)
+                return false;
 
             if ((cell.occupancy & CellOccupancy.Anchor) != 0)
             {
@@ -580,21 +727,8 @@ namespace LandLedgers.Pathing
                 return false;
             }
 
-            return EndpointAllowsInteriorTraversal(grid, request.Start, cell.buildingId)
-                || EndpointAllowsInteriorTraversal(grid, request.Target, cell.buildingId);
-        }
-
-        private static bool EndpointAllowsInteriorTraversal(TownGrid grid, GridCoord endpoint, int buildingId)
-        {
-            if (grid == null || !grid.IsInBounds(endpoint))
-            {
-                return false;
-            }
-
-            TownCell endpointCell = grid.GetCell(endpoint);
-            return endpointCell.HasBuilding
-                && endpointCell.buildingId == buildingId
-                && (endpointCell.occupancy & CellOccupancy.Anchor) != 0;
+            return cell.buildingId == request.StartInteriorBuildingId
+                || cell.buildingId == request.TargetInteriorBuildingId;
         }
 
         private bool TryGetPlot(int plotId, out TownPlot plot)

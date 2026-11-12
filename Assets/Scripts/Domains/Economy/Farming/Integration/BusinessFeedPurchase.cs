@@ -261,9 +261,16 @@ namespace LandLedgers.Economy.Farming.Integration
                 }
             }
 
+            int allocatedUnits = 0;
             foreach (SourceLotPart part in batch.SourceLots)
             {
                 if (part == null || part.Units <= 0) continue;
+                int beforeUnits = allocatedUnits;
+                allocatedUnits += part.Units;
+                int acquisitionCost = batch.TotalPriceCents > 0
+                    ? (int)((long)batch.TotalPriceCents * allocatedUnits / batch.Units
+                        - (long)batch.TotalPriceCents * beforeUnits / batch.Units)
+                    : -1;
                 string lotId = BuildDestinationLotId(batch, part);
                 if (destination.FindRetailItemLot(lotId) != null) continue;
                 string refusal = destination.TryAddRetailItemLot(
@@ -271,7 +278,7 @@ namespace LandLedgers.Economy.Farming.Integration
                     destination.BusinessId, destination.BusinessId,
                     $"Purchased by {batch.BuyerBusinessId} from {batch.SellerBusinessId}; " +
                     $"source lot '{part.LotId}': {part.Provenance}; transaction '{batch.TransactionId}'.",
-                    batch.DayIndex);
+                    batch.DayIndex, acquisitionCost);
                 if (refusal != null)
                 {
                     result.Refusal = refusal;

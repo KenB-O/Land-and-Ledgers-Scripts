@@ -7,6 +7,8 @@ using LandLedgers.World.Journeys;
 
 namespace LandLedgers.Population
 {
+    public enum DomesticActivityMovementResult { Traveling, Arrived, Unsupported }
+
     /// <summary>
     /// Pass IV (Worker 4): the LIVE driver for <see cref="DomesticLaborService"/>.
     /// The service previously had tests but no live driver — domestic work only
@@ -41,8 +43,14 @@ namespace LandLedgers.Population
             public int HouseholdId = -1;
             public List<int> MemberIds = new List<int>();
             public Func<int, AgeBand> AgeBandFor;
+            /// <summary>Optional external hard-commitment query, e.g. an authored paid-work window.</summary>
+            public Func<int, int, int, bool> IsWindowUnavailable;
             /// <summary>Meals the household eats at home today (meal-prep trigger).</summary>
             public int MealsAtHomeCount;
+            /// <summary>True only when an actual household need requires compatible fuel to be handled.</summary>
+            public bool FuelHandlingNeeded;
+            /// <summary>True only when a supported household cleanliness need exists.</summary>
+            public bool CleaningNeeded;
             public bool ColdSeason;
             public bool HasAnimals;
         }
@@ -72,6 +80,9 @@ namespace LandLedgers.Population
             public string DefinitionId = string.Empty;
             public int DayIndex;
             public string DueEventId = string.Empty;
+            public bool RequiresPhysicalArrival;
+            public string ActivityLocationId = string.Empty;
+            public int BuildingId = -1;
         }
 
         private readonly List<PendingDomesticTask> pending = new List<PendingDomesticTask>();
@@ -129,7 +140,7 @@ namespace LandLedgers.Population
             // First: requeue anything a start-failure orphaned, then adopt the
             // requeued domestic tasks for this household as today's pending work.
             ReconcileStalled(inputs.HouseholdId, tasks, budgets, schedules, domestic, diag);
-            AdoptRequeued(inputs, dayIndex, tasks, budgets, schedules, diag);
+            AdoptRequeued(inputs, dayIndex, tasks, budgets, schedules, domestic, diag);
 
             var wanted = new List<(string definitionId, int startMinute, string why)>();
             if (inputs.MealsAtHomeCount > 0)
@@ -137,9 +148,9 @@ namespace LandLedgers.Population
                 wanted.Add((DomesticTaskCatalog.MealPrepId, 990, inputs.MealsAtHomeCount + " home meal(s) today"));
             }
 
-            if (inputs.ColdSeason)
+            if (inputs.FuelHandlingNeeded)
             {
-                wanted.Add((DomesticTaskCatalog.FuelHandlingId, 540, "cold season fuel handling"));
+                wanted.Add((DomesticTaskCatalog.FuelHandlingId, 540, "household fuel-handling need"));
             }
 
             if (inputs.HasAnimals)
@@ -147,7 +158,10 @@ namespace LandLedgers.Population
                 wanted.Add((DomesticTaskCatalog.AnimalCareId, 480, "household animals need tending"));
             }
 
-            wanted.Add((DomesticTaskCatalog.ChoresId, 660, "baseline daily chores"));
+            if (inputs.CleaningNeeded)
+            {
+                wanted.Add((DomesticTaskCatalog.ChoresId, 660, "household cleaning need"));
+            }
 
             foreach (var want in wanted)
             {
@@ -164,8 +178,9 @@ namespace LandLedgers.Population
                 }
 
                 string reason;
+                int selectedStartMinute;
                 int personId = FindFreeMemberForTaskWindow(inputs, want.definitionId, dayIndex,
-                    want.startMinute, tasks, schedules, budgets, diag, out reason);
+                    want.startMinute, tasks, schedules, budgets, domestic, diag, out selectedStartMinute, out reason);
                 if (personId < 0)
                 {
                     diag.Add("DomesticLaborDriver: no free member for '" + want.definitionId +
@@ -179,7 +194,7 @@ namespace LandLedgers.Population
                     PersonId = personId,
                     DefinitionId = want.definitionId,
                     DayIndex = dayIndex,
-                    StartMinuteOfDay = want.startMinute,
+                    StartMinuteOfDay = selectedStartMinute,
                     Status = "Pending",
                     Note = want.why,
                 });
@@ -203,7 +218,8 @@ namespace LandLedgers.Population
             PersonScheduleTracker schedules,
             DomesticLaborService domestic,
             IDueEventScheduler dueEvents,
-            List<string> diag)
+            List<string> diag,
+            Func<InFlightDomesticTask, float, DomesticActivityMovementResult> physicalActivity = null)
         {
             diag = diag ?? diagnostics;
             if (tasks == null || budgets == null || schedules == null || domestic == null || dueEvents == null)
@@ -275,9 +291,11 @@ namespace LandLedgers.Population
                 WorkTask task = tasks.FindTask(assignment.TaskId);
                 int plannedMinutes = task != null ? task.PlannedMinutes : 30;
                 string taskIdString = assignment.TaskId.ToString();
-                string dueEventId;
-                dueEvents.Schedule(DueEventKind.TaskCompletionDue,
-                    currentGameSeconds + plannedMinutes * 60f, taskIdString, out dueEventId);
+                string dueEventId = string.Empty;
+                bool requiresPhysicalArrival = physicalActivity != null;
+                if (!requiresPhysicalArrival)
+                    dueEvents.Schedule(DueEventKind.TaskCompletionDue,
+                        currentGameSeconds + plannedMinutes * 60f, taskIdString, out dueEventId);
                 inFlight.Add(new InFlightDomesticTask
                 {
                     TaskId = assignment.TaskId,
@@ -287,15 +305,66 @@ namespace LandLedgers.Population
                     DefinitionId = item.DefinitionId,
                     DayIndex = dayIndex,
                     DueEventId = dueEventId ?? string.Empty,
+                    RequiresPhysicalArrival = requiresPhysicalArrival,
                 });
                 diag.Add("DomesticLaborDriver: P" + item.PersonId + " started '" + item.DefinitionId +
-                    "' (" + plannedMinutes + " min); completion due at +" + plannedMinutes + " min.");
+                    "' (" + plannedMinutes + " min)" + (requiresPhysicalArrival
+                        ? "; waiting for a real activity arrival before work time starts."
+                        : "; completion due at +" + plannedMinutes + " min."));
             }
+
+            if (physicalActivity != null)
+                AdvancePhysicalActivities(currentGameSeconds, tasks, budgets, schedules, domestic,
+                    dueEvents, physicalActivity, diag);
 
             // Terminal entries (Started/Failed) have done their job in this
             // list — the in-flight record tracks started work to completion.
             pending.RemoveAll(item => item == null
                 || !string.Equals(item.Status, "Pending", StringComparison.Ordinal));
+        }
+
+        private void AdvancePhysicalActivities(float currentGameSeconds, TaskAuthority tasks,
+            WorkTimeBudgetStore budgets, PersonScheduleTracker schedules, DomesticLaborService domestic,
+            IDueEventScheduler dueEvents,
+            Func<InFlightDomesticTask, float, DomesticActivityMovementResult> physicalActivity,
+            List<string> diag)
+        {
+            for (int i = inFlight.Count - 1; i >= 0; i--)
+            {
+                InFlightDomesticTask flight = inFlight[i];
+                if (flight == null || !flight.RequiresPhysicalArrival || !string.IsNullOrEmpty(flight.DueEventId)) continue;
+                DomesticActivityMovementResult result = physicalActivity(flight, currentGameSeconds);
+                if (result == DomesticActivityMovementResult.Traveling) continue;
+                if (result == DomesticActivityMovementResult.Unsupported)
+                {
+                    if (tasks.InterruptTask(flight.TaskId, budgets, out string rejection))
+                    {
+                        dueEvents.Cancel(flight.DueEventId);
+                        ReleaseAssignmentReservation(domestic, schedules, flight);
+                        inFlight.RemoveAt(i);
+                        diag.Add("DomesticLaborDriver: deferred '" + flight.DefinitionId + "' for P" + flight.PersonId
+                            + "; no valid residential activity location or route ('" + flight.ActivityLocationId
+                            + "'). Task was requeued without completion or family-labor credit.");
+                    }
+                    else diag.Add("DomesticLaborDriver: could not defer '" + flight.DefinitionId + "' for P"
+                        + flight.PersonId + ": " + rejection + ".");
+                    continue;
+                }
+
+                WorkTask task = tasks.FindTask(flight.TaskId);
+                if (task == null || !task.IsOpen)
+                {
+                    ReleaseAssignmentReservation(domestic, schedules, flight);
+                    inFlight.RemoveAt(i);
+                    continue;
+                }
+                float dueAt = currentGameSeconds + Math.Max(1, task.MinutesRemaining) * 60f;
+                dueEvents.Schedule(DueEventKind.TaskCompletionDue, dueAt, flight.TaskIdString, out string eventId);
+                flight.DueEventId = eventId ?? string.Empty;
+                diag.Add("DomesticLaborDriver: P" + flight.PersonId + " reached '" + flight.ActivityLocationId
+                    + "' in building " + flight.BuildingId + "; " + task.MinutesRemaining
+                    + " minutes of household work now run until " + dueAt + ".");
+            }
         }
 
         /// <summary>
@@ -496,7 +565,8 @@ namespace LandLedgers.Population
         // ---------- internals ----------
 
         private void AdoptRequeued(DomesticDayInputs inputs, int dayIndex, TaskAuthority tasks,
-            WorkTimeBudgetStore budgets, PersonScheduleTracker schedules, List<string> diag)
+            WorkTimeBudgetStore budgets, PersonScheduleTracker schedules,
+            DomesticLaborService domestic, List<string> diag)
         {
             int householdId = inputs.HouseholdId;
             EntityId owner = EntityId.For(EntityKind.Household, householdId);
@@ -519,8 +589,9 @@ namespace LandLedgers.Population
                         tasks, null, task.TaskId, ignoreOtherOpenTasks: true)) continue;
                 int startMinute = StartMinuteFor(task.DefinitionId);
                 string reason;
+                int selectedStartMinute;
                 int personId = FindFreeMemberForTaskWindow(inputs, task.DefinitionId, dayIndex,
-                    startMinute, tasks, schedules, budgets, diag, out reason);
+                    startMinute, tasks, schedules, budgets, domestic, diag, out selectedStartMinute, out reason);
                 if (personId < 0)
                 {
                     diag.Add("DomesticLaborDriver: retained requeued task " + task.TaskId +
@@ -534,7 +605,7 @@ namespace LandLedgers.Population
                     ExistingTaskId = task.TaskId,
                     DefinitionId = task.DefinitionId,
                     DayIndex = dayIndex,
-                    StartMinuteOfDay = startMinute,
+                    StartMinuteOfDay = selectedStartMinute,
                     Status = "Pending",
                     Note = "resumed existing task identity after a start refusal",
                 });
@@ -613,41 +684,130 @@ namespace LandLedgers.Population
 
         private int FindFreeMemberForTaskWindow(DomesticDayInputs inputs, string definitionId,
             int dayIndex, int startMinute, TaskAuthority tasks, PersonScheduleTracker schedules,
-            WorkTimeBudgetStore budgets, List<string> diag, out string reason)
+            WorkTimeBudgetStore budgets, DomesticLaborService domestic,
+            List<string> diag, out int selectedStartMinute, out string reason)
         {
+            selectedStartMinute = startMinute;
             reason = null;
             if (inputs?.MemberIds == null || tasks == null)
             {
                 reason = "No household members or task authority.";
                 return -1;
             }
-            int fallback = -1;
             var rejections = new List<string>();
             List<int> ordered = new List<int>(inputs.MemberIds);
             ordered.Sort();
-            foreach (int id in ordered)
+            // Domestic responsibilities are opportunities within a useful part of the day,
+            // not appointments at one exact minute. Search forward in deterministic
+            // 15-minute steps for up to three hours, keeping hard obligations exclusive.
+            for (int offset = 0; offset <= 180; offset += 15)
             {
-                // W2: an off-map member is never free for domestic work.
-                if (IsOffMapPerson(id, dayIndex, diag))
+                int candidateStart = startMinute + offset;
+                if (candidateStart < 0 || candidateStart > 1439) continue;
+                int bestAdult = -1;
+                int bestAdultLoad = int.MaxValue;
+                int fallback = -1;
+                foreach (int id in ordered)
                 {
-                    rejections.Add("P" + id + ": off-map (freight journey).");
-                    continue;
-                }
+                    // W2: an off-map member is never free for domestic work.
+                    if (IsOffMapPerson(id, dayIndex, diag))
+                    {
+                        rejections.Add("P" + id + ": off-map (freight journey).");
+                        continue;
+                    }
 
-                AgeBand age = inputs.AgeBandFor != null ? inputs.AgeBandFor(id) : AgeBand.Adult18Plus;
-                if (age < AgeBand.YoungWorker16To17) { rejections.Add("P" + id + ": too young."); continue; }
-                EntityId worker = EntityId.For(EntityKind.Person, id);
-                int duration = tasks.EstimateMinutesForWorker(definitionId, worker);
-                if (schedules != null && !schedules.IsFree(id, dayIndex, startMinute, duration))
-                { rejections.Add("P" + id + ": not free for estimated " + duration + " min."); continue; }
-                if (budgets != null && budgets.GetOrCreate(worker).MinutesRemaining < duration)
-                { rejections.Add("P" + id + ": budget short for estimated " + duration + " min."); continue; }
-                if (age >= AgeBand.Adult18Plus) return id;
-                if (fallback < 0) fallback = id;
+                    AgeBand age = inputs.AgeBandFor != null ? inputs.AgeBandFor(id) : AgeBand.Adult18Plus;
+                    if (age < AgeBand.YoungWorker16To17) { rejections.Add("P" + id + ": too young."); continue; }
+                    EntityId worker = EntityId.For(EntityKind.Person, id);
+                    int duration = tasks.EstimateMinutesForWorker(definitionId, worker);
+                    if (inputs.IsWindowUnavailable != null
+                        && inputs.IsWindowUnavailable(id, candidateStart, duration))
+                    { rejections.Add("P" + id + ": committed to scheduled work at " + candidateStart + " for " + duration + " min."); continue; }
+                    bool conflictsWithHardActivity = false;
+                    if (schedules != null)
+                    {
+                        foreach (PersonActivityReservation reservation in schedules.Overlapping(id, dayIndex, candidateStart, duration))
+                            if (reservation.Activity != PersonActivityKind.Resting) { conflictsWithHardActivity = true; break; }
+                    }
+                    if (conflictsWithHardActivity)
+                    { rejections.Add("P" + id + ": occupied at " + candidateStart + " for estimated " + duration + " min."); continue; }
+                    if (budgets != null && budgets.GetOrCreate(worker).MinutesRemaining < duration)
+                    { rejections.Add("P" + id + ": budget short for estimated " + duration + " min."); continue; }
+                    if (HasPlannedDomesticWindowOverlap(inputs.HouseholdId, id, dayIndex,
+                            candidateStart, duration, tasks))
+                    { rejections.Add("P" + id + ": another household task already uses this window."); continue; }
+                    if (age >= AgeBand.Adult18Plus)
+                    {
+                        int resultingLoad = GetDomesticMinutesAlreadyPlanned(
+                            inputs.HouseholdId, id, dayIndex, tasks, domestic) + duration;
+                        if (resultingLoad < bestAdultLoad)
+                        {
+                            bestAdult = id;
+                            bestAdultLoad = resultingLoad;
+                        }
+                        continue;
+                    }
+                    if (fallback < 0) fallback = id;
+                }
+                if (bestAdult >= 0) { selectedStartMinute = candidateStart; return bestAdult; }
+                if (fallback >= 0) { selectedStartMinute = candidateStart; return fallback; }
             }
-            if (fallback >= 0) return fallback;
-            reason = "Nobody free for the skill-scaled task duration: " + string.Join(" ", rejections);
+            reason = "Nobody has a hard-obligation-free window within three hours for the skill-scaled task duration: " + string.Join(" ", rejections);
             return -1;
+        }
+
+        private bool HasPlannedDomesticWindowOverlap(int householdId, int personId, int dayIndex,
+            int startMinute, int durationMinutes, TaskAuthority tasks)
+        {
+            int endMinute = startMinute + durationMinutes;
+            foreach (PendingDomesticTask item in pending)
+            {
+                if (item == null || item.HouseholdId != householdId || item.PersonId != personId
+                    || item.DayIndex != dayIndex || !string.Equals(item.Status, "Pending", StringComparison.Ordinal))
+                    continue;
+                WorkTask pendingTask = item.ExistingTaskId.IsValid ? tasks.FindTask(item.ExistingTaskId) : null;
+                int pendingDuration = pendingTask != null
+                    ? Math.Max(1, pendingTask.PlannedMinutes)
+                    : Math.Max(1, tasks.EstimateMinutesForWorker(item.DefinitionId,
+                        EntityId.For(EntityKind.Person, personId)));
+                if (startMinute < item.StartMinuteOfDay + pendingDuration
+                    && item.StartMinuteOfDay < endMinute) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Shares same-day household work across available adults. The score
+        /// is actual TaskAuthority planned minutes (skill-scaled by the task
+        /// estimator), not sex, age-order preference, or a fabricated role.
+        /// Hard paid-work and other commitments remain governed by the shared
+        /// PersonScheduleTracker above.
+        /// </summary>
+        private int GetDomesticMinutesAlreadyPlanned(
+            int householdId, int personId, int dayIndex, TaskAuthority tasks, DomesticLaborService domestic)
+        {
+            int minutes = 0;
+            var countedTasks = new HashSet<EntityId>();
+            foreach (PendingDomesticTask item in pending)
+            {
+                if (item == null || item.HouseholdId != householdId || item.PersonId != personId
+                    || item.DayIndex != dayIndex || !string.Equals(item.Status, "Pending", StringComparison.Ordinal))
+                    continue;
+                WorkTask task = item.ExistingTaskId.IsValid ? tasks.FindTask(item.ExistingTaskId) : null;
+                minutes += task != null
+                    ? Math.Max(1, task.PlannedMinutes)
+                    : Math.Max(1, tasks.EstimateMinutesForWorker(item.DefinitionId, EntityId.For(EntityKind.Person, personId)));
+                if (item.ExistingTaskId.IsValid) countedTasks.Add(item.ExistingTaskId);
+            }
+
+            foreach (DomesticAssignment assignment in domestic.Assignments)
+            {
+                if (assignment == null || assignment.PersonId != personId || assignment.DayIndex != dayIndex
+                    || !countedTasks.Add(assignment.TaskId)) continue;
+                WorkTask task = tasks.FindTask(assignment.TaskId);
+                if (task != null) minutes += Math.Max(1, task.PlannedMinutes);
+            }
+            return minutes;
         }
 
         private static DomesticAssignment FindOpenAssignment(

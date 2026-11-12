@@ -470,7 +470,6 @@ namespace LandLedgers.Economy
                 if (business?.RuntimeState?.WorkerSlots == null
                     || business.Owner?.OwnerKind != BusinessOwnerKind.Npc
                     || business.Owner.PersonId < 0
-                    || business.AssignedBuildingId < 0
                     || !HasOwnerOperatorSlot(business, business.Owner.PersonId))
                 {
                     continue;
@@ -484,6 +483,10 @@ namespace LandLedgers.Economy
                 }
 
                 string typeName = business.BusinessType.ToString();
+                // An owner-operator role exists independently of whether the
+                // business has dedicated premises (for example, a route
+                // freight operator). Keep the workplace mirror at -1 when the
+                // business is intentionally site-free.
                 person.workplaceBuildingId = business.AssignedBuildingId;
                 person.professionId = $"owner_operator_{typeName.ToLowerInvariant()}";
                 person.professionName = $"Owner-operator, {BusinessRuntimeNaming.GetBusinessTypeDisplayName(business.BusinessType)}";

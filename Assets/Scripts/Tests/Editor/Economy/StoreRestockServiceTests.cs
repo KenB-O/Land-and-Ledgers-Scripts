@@ -16,7 +16,7 @@ namespace LandLedgers.EditorTests.Economy
     [TestFixture]
     public sealed class StoreRestockServiceTests
     {
-        private class FakeStorePort : IGeneralStoreTradingPort
+        private class FakeStorePort : IGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
             public string StoreBusinessId { get; set; } = "store-1";
             public string StoreName => "General Store";
@@ -62,6 +62,15 @@ namespace LandLedgers.EditorTests.Economy
                 return null;
             }
 
+            public string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, int costCents, string provenance, int dayIndex)
+            {
+                if (CurrentCashCents < costCents) return "cannot afford";
+                string problem = !string.IsNullOrWhiteSpace(itemId) && this is IIdentifiedRetailStockReceivingPort identified
+                    ? identified.ReceiveRetailItemLot(lotId, itemId, categoryId, unitLabel, units, provenance, dayIndex)
+                    : ReceiveStock(categoryId, units, provenance);
+                return problem ?? SpendCash(costCents, provenance);
+            }
             public string ReceiveStock(string categoryId, int units, string provenanceLabel)
             {
                 if (units <= 0) return "nothing to receive";

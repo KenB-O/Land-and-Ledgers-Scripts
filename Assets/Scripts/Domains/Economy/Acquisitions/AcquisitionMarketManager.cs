@@ -7272,10 +7272,13 @@ namespace LandLedgers.Economy
 
             int released = 0;
             IReadOnlyList<TownPlot> plots = townWorld.Plots;
+            // Before clock wiring GetCurrentWeekKey returns -1. It is not a
+            // valid collection offset; use a stable initial ordering instead.
+            int weekOffset = Mathf.Max(0, GetCurrentWeekKey());
             for (int i = 0; i < plots.Count && developmentInventoryPressure > 0 && released < 3; i++)
             {
-                TownPlot plot = plots[(i + GetCurrentWeekKey()) % plots.Count];
-                if (plot == null || plot.playerOwned || plot.buildingId >= 0 || plot.reservedForLandSale)
+                TownPlot plot = plots[(i + weekOffset) % plots.Count];
+                if (!townWorld.IsPlotEligibleForLandMarket(plot) || plot.reservedForLandSale)
                 {
                     continue;
                 }
@@ -7292,7 +7295,7 @@ namespace LandLedgers.Economy
 
             if (allowWorldExpansion && released == 0 && plots.Count > 0)
             {
-                int seedPlotId = Mathf.Clamp(GetCurrentWeekKey() % plots.Count, 0, plots.Count - 1);
+                int seedPlotId = Mathf.Clamp(weekOffset % plots.Count, 0, plots.Count - 1);
                 if (townWorld.TrySurfaceExpansionPlotsAfterLandPurchase(seedPlotId, out int created) && created > 0)
                 {
                     developmentInventoryPressure = Mathf.Max(0, developmentInventoryPressure - created);
@@ -7501,7 +7504,7 @@ namespace LandLedgers.Economy
             for (int i = 0; i < townWorld.Plots.Count; i++)
             {
                 TownPlot plot = townWorld.Plots[i];
-                if (plot == null || IsPlayerOwnedPlot(plot) || plot.buildingId >= 0)
+                if (!townWorld.IsPlotEligibleForLandMarket(plot) || IsPlayerOwnedPlot(plot))
                 {
                     continue;
                 }

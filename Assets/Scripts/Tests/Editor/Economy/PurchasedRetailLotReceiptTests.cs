@@ -146,6 +146,8 @@ public sealed class PurchasedRetailLotReceiptTests
         Assert.AreEqual(20, store.RuntimeState.GetRetailItemStockUnits("store_horse_feed_sack", "animal_feed"));
         Assert.AreEqual(1, store.RuntimeState.RetailItemLots.Count);
         Assert.IsTrue(store.RuntimeState.RetailItemLots[0].Provenance.Contains(supplier.CounterpartyId));
+        Assert.IsTrue(store.RuntimeState.RetailItemLots[0].AcquisitionCostKnown);
+        Assert.AreEqual(300, store.RuntimeState.RetailItemLots[0].RemainingAcquisitionCostCents);
         Assert.AreEqual(19700, store.RuntimeState.CurrentCashCents);
 
         PurchasedRetailLotReceipt.Result duplicate = PurchasedRetailLotReceipt.Transfer(

@@ -705,6 +705,12 @@ namespace LandLedgers.Population
                 Pregnancies = pregnancies,
                 Diagnostics = demographicDiagnostics,
                 GameSecondsPerDay = secondsPerDay,
+                // Routine legacy migration-out is an instant off-map flag flip,
+                // not an authorized departure journey. Keep residents in the
+                // playable town until the role/destination/journey outmigration
+                // path is the one performing the transition. This is separate
+                // from the arrivals switch above.
+                AllowDepartures = false,
                 AllowNewArrivals = !SuppressMigrantArrivals,
                 EnableMortality = MortalityEnabled,
                 EnableFertility = FertilityEnabled,

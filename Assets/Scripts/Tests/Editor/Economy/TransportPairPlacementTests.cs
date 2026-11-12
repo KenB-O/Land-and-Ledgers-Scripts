@@ -31,7 +31,7 @@ namespace LandLedgers.EditorTests.Economy
             TransportPairPlacement.Resolve(accessPoint, pairLateral, travelAxis,
                 out Vector3 horsePosition, out _, out _);
 
-            Vector3 expected = accessPoint - pairLateral * 1.8f;
+            Vector3 expected = accessPoint + pairLateral * 1.8f;
             Assert.That(horsePosition.x, Is.EqualTo(expected.x).Within(Tolerance));
             Assert.That(horsePosition.y, Is.EqualTo(expected.y).Within(Tolerance));
             Assert.That(horsePosition.z, Is.EqualTo(expected.z).Within(Tolerance));
@@ -81,7 +81,7 @@ namespace LandLedgers.EditorTests.Economy
             TransportPairPlacement.Resolve(accessPoint, pairLateral, travelAxis,
                 out Vector3 horsePosition, out Vector3 wagonPosition, out _);
 
-            Assert.That(horsePosition.x, Is.EqualTo(8.2f).Within(Tolerance));
+            Assert.That(horsePosition.x, Is.EqualTo(11.8f).Within(Tolerance));
             Assert.That(horsePosition.z, Is.EqualTo(5f).Within(Tolerance));
             Assert.That(Vector3.Distance(horsePosition, wagonPosition),
                 Is.EqualTo(2.3736f).Within(Tolerance));
@@ -100,7 +100,7 @@ namespace LandLedgers.EditorTests.Economy
             TransportPairPlacement.Resolve(accessPoint, pairLateral, travelAxis,
                 out Vector3 horsePosition, out Vector3 wagonPosition, out Vector3 hitchPostQuery);
 
-            Vector3 expected = horsePosition - pairLateral * 1.1f;
+            Vector3 expected = horsePosition + pairLateral * 1.1f;
             Assert.That(hitchPostQuery.x, Is.EqualTo(expected.x).Within(Tolerance));
             Assert.That(hitchPostQuery.y, Is.EqualTo(expected.y).Within(Tolerance));
             Assert.That(hitchPostQuery.z, Is.EqualTo(expected.z).Within(Tolerance));

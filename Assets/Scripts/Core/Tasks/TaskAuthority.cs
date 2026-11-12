@@ -742,7 +742,12 @@ namespace LandLedgers.Tasks
             {
                 foreach (WorkTask t in dto.tasks)
                 {
-                    if (t != null) tasks.Add(t.Copy());
+                    if (t == null) continue;
+                    tasks.Add(t.Copy());
+                    // This authority owns its own allocator; hub cursor restoration
+                    // cannot advance it. Never mint an ID already present in the save.
+                    if (t.TaskId.IsValid && t.TaskId.Kind == EntityKind.WorkTask)
+                        idRegistry.SeedKind(EntityKind.WorkTask, checked(t.TaskId.Id + 1));
                 }
             }
 

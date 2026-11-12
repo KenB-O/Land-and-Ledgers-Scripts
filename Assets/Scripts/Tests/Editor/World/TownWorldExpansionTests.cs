@@ -12,6 +12,50 @@ namespace LandLedgers.Editor.World
     public sealed class TownWorldExpansionTests
     {
         [Test]
+        public void PassiveMarketPressureDoesNotOfferProtectedPlotsForSale()
+        {
+            using TestTown town = TestTown.CreateFromDefaultSettings();
+            Assert.Greater(town.Controller.Plots.Count, 3);
+            // Exercise the actual market release driver, not a copied predicate.
+            // Make vacant candidates available while retaining their real geometry.
+            foreach (TownPlot plot in town.Controller.Plots)
+            {
+                plot.buildingId = -1;
+                plot.reservedForLandSale = false;
+            }
+            TownPlot civic = town.Controller.Plots[0];
+            civic.publicSiteRole = PublicSiteRole.Schoolhouse;
+            TownPlot owned = town.Controller.Plots[1];
+            owned.playerOwned = true;
+            var host = new GameObject("passive-land-market-test");
+            host.SetActive(false);
+            try
+            {
+                var market = host.AddComponent<LandLedgers.Economy.AcquisitionMarketManager>();
+                var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                typeof(LandLedgers.Economy.AcquisitionMarketManager).GetField("townWorld", flags)
+                    .SetValue(market, town.Controller);
+                typeof(LandLedgers.Economy.AcquisitionMarketManager).GetField("developmentInventoryPressure", flags)
+                    .SetValue(market, town.Controller.Plots.Count * 2);
+                var release = typeof(LandLedgers.Economy.AcquisitionMarketManager)
+                    .GetMethod("ResolvePassiveDevelopmentInventory", flags);
+                for (int i = 0; i < town.Controller.Plots.Count; i++)
+                    release.Invoke(market, new object[] { false });
+
+                Assert.IsFalse(civic.reservedForLandSale, "Civic land must not become private sale stock.");
+                Assert.IsFalse(owned.reservedForLandSale, "Pressure must not release another owner's parcel.");
+                Assert.IsTrue(town.Controller.Plots.Any(p => p.reservedForLandSale),
+                    "Legitimate eligible offers must still be released.");
+                foreach (TownPlot plot in town.Controller.Plots.Where(p => p.reservedForLandSale))
+                    Assert.IsTrue(town.Controller.IsPlotEligibleForLandMarket(plot), $"Plot {plot.id} bypassed world eligibility.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
         public void DefaultTownShellUsesLargerFrontierFootprintAndMoreRoads()
         {
             using TestTown town = TestTown.CreateFromDefaultSettings();

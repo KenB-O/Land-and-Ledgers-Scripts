@@ -540,8 +540,8 @@ namespace LandLedgers.Population
             }
 
             var rejections = new List<string>();
-            int preferredWoman = -1;
-            int adultFallback = -1;
+            int preferredAdult = -1;
+            int preferredAdultScore = int.MaxValue;
             int youngWorkerFallback = -1;
 
             for (int i = 0; i < memberIds.Count; i++)
@@ -597,19 +597,13 @@ namespace LandLedgers.Population
                     }
                 }
 
-                // The current settlement household-shopping rule assigns
-                // errands to an available adult woman first. If none is free,
-                // another adult can still keep the household supplied; a
-                // young worker remains the last fallback.
                 if (person.ageBand >= AgeBand.Adult18Plus)
                 {
-                    if (person.isFemale)
+                    int score = HouseholdAvailabilityScore(scheduleTracker, personId, dayIndex);
+                    if (preferredAdult < 0 || score < preferredAdultScore)
                     {
-                        if (preferredWoman < 0) preferredWoman = personId;
-                    }
-                    else if (adultFallback < 0)
-                    {
-                        adultFallback = personId;
+                        preferredAdult = personId;
+                        preferredAdultScore = score;
                     }
                 }
                 else if (youngWorkerFallback < 0)
@@ -618,14 +612,9 @@ namespace LandLedgers.Population
                 }
             }
 
-            if (preferredWoman >= 0)
+            if (preferredAdult >= 0)
             {
-                return preferredWoman;
-            }
-
-            if (adultFallback >= 0)
-            {
-                return adultFallback;
+                return preferredAdult;
             }
 
             if (youngWorkerFallback >= 0)
@@ -720,8 +709,8 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                int preferredWoman = -1;
-                int adultFallback = -1;
+                int preferredAdult = -1;
+                int preferredAdultScore = int.MaxValue;
                 int youngWorkerFallback = -1;
                 for (int i = 0; i < memberIds.Count; i++)
                 {
@@ -798,13 +787,11 @@ namespace LandLedgers.Population
 
                     if (person.ageBand >= AgeBand.Adult18Plus)
                     {
-                        if (person.isFemale)
+                        int score = HouseholdAvailabilityScore(scheduleTracker, personId, dayIndex);
+                        if (preferredAdult < 0 || score < preferredAdultScore)
                         {
-                            if (preferredWoman < 0) preferredWoman = personId;
-                        }
-                        else if (adultFallback < 0)
-                        {
-                            adultFallback = personId;
+                            preferredAdult = personId;
+                            preferredAdultScore = score;
                         }
                     }
                     else if (youngWorkerFallback < 0)
@@ -813,8 +800,7 @@ namespace LandLedgers.Population
                     }
                 }
 
-                int chosen = preferredWoman >= 0 ? preferredWoman
-                    : adultFallback >= 0 ? adultFallback
+                int chosen = preferredAdult >= 0 ? preferredAdult
                     : youngWorkerFallback;
                 if (chosen >= 0)
                 {
@@ -830,6 +816,26 @@ namespace LandLedgers.Population
                 reason += " (Off-map guard not installed: no OffMapJourneyAuthority was provided.)";
             }
             return -1;
+        }
+
+        private static int HouseholdAvailabilityScore(PersonScheduleTracker scheduleTracker, int personId, int dayIndex)
+        {
+            if (scheduleTracker == null) return 0;
+            int score = 0;
+            List<PersonActivityReservation> reservations = scheduleTracker.ActiveFor(personId, dayIndex);
+            foreach (PersonActivityReservation reservation in reservations)
+            {
+                if (reservation == null) continue;
+                // Household supply work should fall first to adults without
+                // an active job-search or livelihood commitment when both
+                // are otherwise available. This is derived from the existing
+                // reservation authority and applies without sex-based rules.
+                if (reservation.Activity == PersonActivityKind.JobSeeking) score += 100;
+                else if (reservation.Activity == PersonActivityKind.Work
+                    || reservation.Activity == PersonActivityKind.Managing) score += 20;
+                else score += 1;
+            }
+            return score;
         }
     }
 }

@@ -103,7 +103,7 @@ MonoBehaviour:
     - base:2
     - base:3
     homeBuildingOrdinal: 1
-    openingCashCents: 6500
+    openingCashCents: 0
   - key: base-household:2
     displayName: Boniecki Household
     surname: Boniecki
@@ -111,7 +111,7 @@ MonoBehaviour:
     - base:4
     - base:5
     homeBuildingOrdinal: 2
-    openingCashCents: 7500
+    openingCashCents: 0
   - key: ethan-tia
     displayName: ethan-tia Household
     surname: Boniecki
@@ -119,14 +119,14 @@ MonoBehaviour:
     - ethan
     - tia
     homeBuildingOrdinal: 3
-    openingCashCents: 6000
+    openingCashCents: 0
   - key: shane
     displayName: Shane Bryan Household
     surname: Bryan
     memberPersonKeys:
     - shane
     homeBuildingOrdinal: 4
-    openingCashCents: 12500
+    openingCashCents: 0
   relationships:
   - firstPersonKey: base:0
     secondPersonKey: base:1
@@ -150,7 +150,7 @@ MonoBehaviour:
     businessId: 
     premisesId: 
     premisesRequired: 1
-    openingCashCents: 25000
+    openingCashCents: 50000
     freightRateCard:
       baseServiceFeeCents: 0
       ratePerMileCents: 0
@@ -161,7 +161,7 @@ MonoBehaviour:
     businessId: 
     premisesId: 
     premisesRequired: 1
-    openingCashCents: 17500
+    openingCashCents: 35000
     freightRateCard:
       baseServiceFeeCents: 0
       ratePerMileCents: 0
@@ -190,9 +190,9 @@ MonoBehaviour:
       chargeRoundTrip: 1
   businessCashTargets:
   - businessKey: general-store
-    targetCashCents: 20000
+    targetCashCents: 50000
   - businessKey: bakery
-    targetCashCents: 20000
+    targetCashCents: 35000
   - businessKey: fuel-dealer
     targetCashCents: 20000
   - businessKey: freight-company
@@ -200,36 +200,62 @@ MonoBehaviour:
   householdCashTargets:
   - anchorPersonKey: base:2
     targetCashCents: 40000
+  - anchorPersonKey: base:0
+    targetCashCents: 40000
   - anchorPersonKey: base:4
     targetCashCents: 40000
   - anchorPersonKey: ethan
     targetCashCents: 40000
   - anchorPersonKey: shane
-    targetCashCents: 20000
+    targetCashCents: 40000
   openingInventory:
   - businessKey: general-store
     items:
     - itemId: bread
-      minimumUnits: 12
-      maximumUnits: 24
+      minimumUnits: 24
+      maximumUnits: 48
     - itemId: flour
-      minimumUnits: 4
-      maximumUnits: 8
+      minimumUnits: 8
+      maximumUnits: 16
     - itemId: potatoes
+      minimumUnits: 8
+      maximumUnits: 16
+    - itemId: sugar
+      minimumUnits: 10
+      maximumUnits: 20
+    - itemId: coffee
+      minimumUnits: 6
+      maximumUnits: 12
+    - itemId: tea
       minimumUnits: 4
       maximumUnits: 8
-    - itemId: sugar
-      minimumUnits: 5
-      maximumUnits: 10
-    - itemId: coffee
+    - itemId: salt
+      minimumUnits: 8
+      maximumUnits: 16
+    - itemId: beef
+      minimumUnits: 4
+      maximumUnits: 8
+    - itemId: bacon
+      minimumUnits: 4
+      maximumUnits: 8
+    - itemId: cheese
       minimumUnits: 3
       maximumUnits: 6
-    - itemId: tea
-      minimumUnits: 2
-      maximumUnits: 4
-    - itemId: salt
+    - itemId: soap
       minimumUnits: 4
       maximumUnits: 8
+    - itemId: candles
+      minimumUnits: 4
+      maximumUnits: 8
+    - itemId: hand_tool
+      minimumUnits: 2
+      maximumUnits: 4
+    - itemId: patent_remedy
+      minimumUnits: 2
+      maximumUnits: 4
+    - itemId: basic_cloth
+      minimumUnits: 3
+      maximumUnits: 6
   openingEquipment:
   - businessKey: bakery
     ovens:
@@ -240,7 +266,18 @@ MonoBehaviour:
       - bake-peels-1
     kitIds:
     - baker-hand-kit
+  wholesaleAccounts:
+  - sellerBusinessKey: bakery
+    buyerBusinessKey: general-store
+    productId: bake.bread-loaf
+    unitsPerDelivery: 24
+    deliveryCadenceDays: 1
+    pricePerUnitCents: 4
+    freshness: 0
+    firstDeliveryDayIndex: 0
   openingBakeryFuelUnits: 40
+  openingBakeryFlourPounds: 120
+  openingBakeryNotionsUnits: 30
   freightBusinessKey: freight-company
   openingHorseId: A0
   openingWagonId: opening-freight-wagon

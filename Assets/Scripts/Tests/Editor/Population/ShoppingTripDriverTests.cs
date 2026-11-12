@@ -201,6 +201,35 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void PlanTrip_SearchesLaterFreeWindowInsteadOfRejectingTheNeed()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            Assert.IsNull(f.Tracker.TryReserve(Fixture.ShopperId, PersonActivityKind.Work,
+                Fixture.Day, 600, 120, "existing work commitment"));
+
+            PlannedShoppingTrip trip = f.Loop.PlanTrip(need, Fixture.Day, f.LoopOptions);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, trip.State, trip.FailureReason);
+            Assert.GreaterOrEqual(trip.DepartureMinuteOfDay, 720,
+                "The trip should wait for the actual committed window to end.");
+            Assert.IsFalse(f.Tracker.IsFree(Fixture.ShopperId, Fixture.Day, 600, 120),
+                "The search must preserve the pre-existing work reservation.");
+            List<PersonActivityReservation> tripReservations = f.Tracker.Overlapping(
+                Fixture.ShopperId, Fixture.Day, trip.DepartureMinuteOfDay,
+                trip.Legs.OutboundMinutes + 15 + trip.Legs.ReturnMinutes);
+            Assert.AreEqual(3, tripReservations.Count,
+                "The selected window should contain only the three reservations owned by this trip.");
+            foreach (PersonActivityReservation reservation in tripReservations)
+            {
+                Assert.AreNotEqual(PersonActivityKind.Work, reservation.Activity,
+                    "The existing work commitment must not overlap the selected trip.");
+            }
+            Assert.AreEqual(100, f.Store.Stock[HouseholdItemCatalog.FlourId],
+                "Planning must not settle a sale or create household goods.");
+        }
+
+        [Test]
         public void PlannedRouteTravelReservationAdvancesItsTaskProgress()
         {
             var f = new Fixture();
@@ -249,6 +278,91 @@ namespace LandLedgers.Editor.Population
             // Shopper is home and free again.
             Assert.AreEqual("home", f.Locations[Fixture.ShopperId]);
             Assert.AreEqual(0, f.Loop.ActiveCustodyBatches.Count);
+        }
+
+        [Test]
+        public void PhysicalArrivalGate_PreventsCounterSettlementUntilStoreArrival()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            string target = string.Empty;
+            bool physicallyArrived = false;
+            var driver = new ShoppingTripDriver(f.Loop,
+                (personId, location) => { target = location; physicallyArrived = false; return true; },
+                (personId, location) => physicallyArrived && target == location);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+
+            float now = Fixture.Day * 86400f + 600 * 60f;
+            driver.AdvanceTick(now, Fixture.Day, f.DueEvents, f.Diag);
+            DueEvent outboundDue = f.DueEvents.PopDue(now + 86400f)[0];
+            driver.HandleDueEvent(outboundDue, Fixture.Day, outboundDue.DueGameSeconds,
+                f.DueEvents, f.Diag);
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents(),
+                "elapsed estimate without physical arrival cannot settle the counter");
+            Assert.AreEqual(100, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+
+            physicallyArrived = true;
+            DueEvent retry = f.DueEvents.PopDue(outboundDue.DueGameSeconds + 60f)[0];
+            driver.HandleDueEvent(retry, Fixture.Day, retry.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(48800, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents(),
+                "settlement occurs once the actual store arrival predicate succeeds");
+            Assert.AreEqual(90, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+
+            // Finish the in-store action and allow the physical return arrival.
+            DueEvent inStore = f.DueEvents.PopDue(retry.DueGameSeconds + 86400f)[0];
+            driver.HandleDueEvent(inStore, Fixture.Day, inStore.DueGameSeconds, f.DueEvents, f.Diag);
+            physicallyArrived = true;
+            DueEvent returning = f.DueEvents.PopDue(inStore.DueGameSeconds + 86400f)[0];
+            driver.HandleDueEvent(returning, Fixture.Day, returning.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+            Assert.AreEqual(10, f.Inventories.GetOrCreate(Fixture.HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.FlourId));
+        }
+
+        [Test]
+        public void ZeroDurationRoute_WaitsForPhysicalArrivalBeforePurchase()
+        {
+            var f = new Fixture();
+            f.Store.LocationId = "home";
+            bool arrived = false;
+            bool routeStarted = false;
+            var driver = new ShoppingTripDriver(f.Loop,
+                (personId, locationId) => { routeStarted = true; return true; },
+                (personId, locationId) => arrived);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, driver.ActiveTrips.Count);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            Assert.IsNull(trip.Legs.Outbound, "the logical model treats identical locations as zero duration");
+
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.IsTrue(routeStarted);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, trip.State);
+            Assert.AreEqual(0, f.Store.CashReceived, "no counter settlement before physical arrival");
+            Assert.AreEqual(100, f.Store.ItemStockUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, f.Inventories.GetOrCreate(Fixture.HouseholdId).GetTotalUnits(HouseholdItemCatalog.FlourId));
+
+            arrived = true;
+            foreach (DueEvent ev in f.DueEvents.PopDue(departure + 60f))
+                driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+
+            Assert.Greater(f.Store.CashReceived, 0, "settlement proceeds after physical arrival is confirmed");
+            Assert.AreEqual(90, f.Store.ItemStockUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, f.Inventories.GetOrCreate(Fixture.HouseholdId).GetTotalUnits(HouseholdItemCatalog.FlourId),
+                "purchased goods remain in trip custody until home receipt");
+
+            foreach (DueEvent ev in f.DueEvents.PopDue(departure + 1200f))
+                driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+            foreach (DueEvent ev in f.DueEvents.PopDue(departure + 1260f))
+                driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Done, trip.State);
+            Assert.AreEqual(10, f.Inventories.GetOrCreate(Fixture.HouseholdId).GetTotalUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, driver.ActiveTrips.Count);
         }
 
         [Test]

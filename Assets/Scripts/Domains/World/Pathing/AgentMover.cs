@@ -33,6 +33,10 @@ namespace LandLedgers.Pathing
         [Tooltip("Animation playback multiplier when walking at 1x simulation speed.")]
         private float baseWalkAnimationSpeed = 1.25f;
 
+        [SerializeField, Min(0.25f)]
+        [Tooltip("Maximum animation presentation rate while the route follows authoritative simulated time. At extreme speeds the visual may advance across several valid waypoints in one frame.")]
+        private float maximumPresentationTimeScale = 1.5f;
+
         [SerializeField]
         [Tooltip("Seconds used to blend from idle into walk. Keeps the simple Man/Woman locomotion tree from popping on route start.")]
         private float walkBlendInSeconds = 0.14f;
@@ -58,6 +62,8 @@ namespace LandLedgers.Pathing
         [Tooltip("Pelvis clearance above the DriverSeat point in metres.")]
         private float seatedPelvisClearance = 0.04f;
         private Transform presentationSeat;
+        private Transform freightPackageVisual;
+        private Transform legacyCrateVisual;
         private Transform presentationHips;
         [SerializeField]
         [Tooltip("Ankle target relative to the pelvis seat, in metres: lateral spacing, step height, forward reach.")]
@@ -110,6 +116,10 @@ namespace LandLedgers.Pathing
         private bool hideOnArrival = true;
 
         private readonly List<GridCoord> currentPath = new();
+        private readonly List<Vector3> currentWorldPath = new();
+        private Vector3 routeDestinationWorld;
+        private double lastAuthoritativeRouteTimeSeconds;
+        private bool hasAuthoritativeRouteTimeSample;
         private BuildingAnchor currentTargetAnchor;
         private Renderer[] cachedRenderers;
         private Collider[] cachedColliders;
@@ -149,10 +159,64 @@ namespace LandLedgers.Pathing
         public bool IsMoving => state == AgentMoveState.Moving;
         public bool IsRouteActive => state == AgentMoveState.Moving || state == AgentMoveState.DoorPause;
         public bool IsArrivedVisible => state == AgentMoveState.ArrivedVisible;
+        public float MeasuredMovementSpeed => measuredMovementSpeed;
+        public float CurrentPresentationTimeScale => GetMovementTimeScale();
+        public static float ResolvePresentationTimeScale(float authoritativeTimeScale, float maximumTimeScale, bool paused)
+        {
+            return paused ? 0f : Mathf.Min(Mathf.Max(0f, maximumTimeScale), Mathf.Max(0f, authoritativeTimeScale));
+        }
+        public float RemainingWorldRouteDistance
+        {
+            get
+            {
+                if (state != AgentMoveState.Moving || currentWorldPath.Count == 0) return 0f;
+                float distance = Vector3.Distance(transform.position, currentWorldPath[Mathf.Clamp(waypointIndex, 0, currentWorldPath.Count - 1)]);
+                for (int i = waypointIndex; i < currentWorldPath.Count - 1; i++)
+                    distance += Vector3.Distance(currentWorldPath[i], currentWorldPath[i + 1]);
+                return distance;
+            }
+        }
+
+        /// <summary>Shows the existing packaged-crate attachment only while this actor physically carries freight.</summary>
+        public bool SetFreightCargoVisible(bool visible)
+        {
+            EnsureFreightCargoVisuals();
+            if (legacyCrateVisual != null) legacyCrateVisual.gameObject.SetActive(false);
+            if (freightPackageVisual == null) return false;
+            freightPackageVisual.gameObject.SetActive(visible);
+            return true;
+        }
+
+        public void HideFreightCargoVisual() => SetFreightCargoVisible(false);
+
+        private void EnsureFreightCargoVisuals()
+        {
+            if (freightPackageVisual != null || legacyCrateVisual != null) return;
+            Transform[] descendants = GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < descendants.Length; i++)
+            {
+                Transform child = descendants[i];
+                if (child == transform) continue;
+                string childName = child.name;
+                if (freightPackageVisual == null
+                    && (string.Equals(childName, "Crate With Packages", System.StringComparison.Ordinal)
+                        || string.Equals(childName, "Crate With Packages (1)", System.StringComparison.Ordinal)))
+                    freightPackageVisual = child;
+                else if (legacyCrateVisual == null
+                    && (string.Equals(childName, "Crate04", System.StringComparison.Ordinal)
+                        || string.Equals(childName, "Crate04 (1)", System.StringComparison.Ordinal)))
+                    legacyCrateVisual = child;
+            }
+            if (legacyCrateVisual != null) legacyCrateVisual.gameObject.SetActive(false);
+            if (freightPackageVisual != null) freightPackageVisual.gameObject.SetActive(false);
+        }
         public int RemainingPathWaypointCount => Math.Max(0, currentPath.Count - waypointIndex);
         public event Action<AgentMover> ArrivedAtDestination;
 
         public bool HasPresentationAnimation => presentationAnimationStateId != 0;
+
+        /// <summary>Measured world movement emitted after the mover has physically advanced.</summary>
+        public static event Action<Vector3, Vector3> ActualMovementSegment;
 
         /// <summary>Claims animation only; person identity, routes and vehicle movement remain externally owned.</summary>
         public bool TrySetPresentationAnimation(string stateName, Transform seat = null)
@@ -223,6 +287,7 @@ namespace LandLedgers.Pathing
             doorPauseTimer = 0f;
             hideOnArrival = true;
             currentPath.Clear();
+            currentWorldPath.Clear();
             currentTargetAnchor = default;
             currentStartDoorAnimator = null;
             currentTargetDoorAnimator = null;
@@ -249,6 +314,7 @@ namespace LandLedgers.Pathing
             doorPauseTimer = 0f;
             hideOnArrival = false;
             currentPath.Clear();
+            currentWorldPath.Clear();
             waypointIndex = 0;
             currentTargetAnchor = default;
             currentStartDoorAnimator = null;
@@ -273,13 +339,260 @@ namespace LandLedgers.Pathing
                 return false;
             }
 
-            if (!pathingManager.TryFindPath(start, target, out PathingResult result, this, $"{name} door-to-door"))
+            TownGrid grid = pathingManager.Grid;
+            if (grid == null) return false;
+            GridCoord actualStart = grid.WorldToCoord(transform.position);
+            if (!grid.IsInBounds(actualStart)
+                || !pathingManager.TryFindPath(actualStart, target.coord, out PathingResult result, this, $"{name} door-to-door"))
             {
                 return false;
             }
 
-            StartRoute(result.Path, start.coord, target, hideWhenArrived, startDoorAnimator, targetDoorAnimator);
+            StartRoute(result.Path, actualStart, target, hideWhenArrived, startDoorAnimator, targetDoorAnimator);
             return true;
+        }
+
+        /// <summary>
+        /// Leaves an authorized interior point through an authored entrance, then
+        /// follows the ordinary exterior path graph to the target. A building cell
+        /// is accepted only as the resident's real indoor origin and only after the
+        /// building's floor and furniture-exclusion authority validates it.
+        /// </summary>
+        public bool BeginInteriorDoorToDoor(BuildingFootprintAuthority sourceAuthority,
+            BuildingAnchor target, out string reason)
+        {
+            EnsureReferences();
+            reason = string.Empty;
+            if (sourceAuthority == null || pathingManager == null || IsRouteActive || IsHidden)
+            {
+                reason = "The resident or pathing authority is unavailable for an interior departure.";
+                return false;
+            }
+
+            TownGrid grid = pathingManager.Grid;
+            if (grid == null)
+            {
+                reason = "The town pathing grid is unavailable.";
+                return false;
+            }
+
+            string lastInteriorFailure = "No authored entrance has a valid interior route from the resident.";
+            foreach (BuildingEntrancePairAuthoring entranceCandidate in sourceAuthority.EntrancePairs)
+            {
+                if (entranceCandidate == null) continue;
+                if (!sourceAuthority.TryGetEntrancePair(entranceCandidate.id,
+                    out BuildingEntrancePairAuthoring entrance, out string entranceFailure))
+                {
+                    if (!string.IsNullOrWhiteSpace(entranceFailure)) lastInteriorFailure = entranceFailure;
+                    continue;
+                }
+
+                Vector3 indoor = sourceAuthority.transform.TransformPoint(entrance.indoorPositionLocal);
+                if (!sourceAuthority.TryBuildInteriorPath(transform.position, indoor,
+                    entrance.floorIndex, entrance.functionalSpaceId,
+                    out List<Vector3> interiorPath, out string interiorFailure))
+                {
+                    lastInteriorFailure = interiorFailure;
+                    continue;
+                }
+
+                Vector3 authoredOutdoor = sourceAuthority.transform.TransformPoint(entrance.outdoorApproachLocal);
+                Vector3 outward = authoredOutdoor - indoor;
+                outward.y = 0f;
+                if (outward.sqrMagnitude < 0.0001f) continue;
+                outward.Normalize();
+
+                float step = Mathf.Max(0.2f, grid.CellSizeMeters * 0.25f);
+                int maxSteps = Mathf.CeilToInt(grid.CellSizeMeters * 8f / step);
+                for (int stepIndex = 0; stepIndex <= maxSteps; stepIndex++)
+                {
+                    Vector3 exterior = authoredOutdoor + outward * (stepIndex * step);
+                    GridCoord exteriorCoord = grid.WorldToCoord(exterior);
+                    if (!grid.IsInBounds(exteriorCoord)) continue;
+                    TownCell exteriorCell = grid.GetCell(exteriorCoord);
+                    if (exteriorCell.HasBuilding || !pathingManager.TryGetMovementCost(exteriorCoord, out _))
+                        continue;
+
+                    PathingRequest probe = PathingRequest.CreateProbe(exteriorCoord, target.coord,
+                        this, $"{name} interior departure", PathingProfile.Pedestrian);
+                    if (!pathingManager.TryFindPath(probe, out PathingResult exteriorPath)) continue;
+
+                    List<Vector3> completeRoute = new(interiorPath.Count + exteriorPath.Path.Count + 2);
+                    completeRoute.AddRange(interiorPath);
+                    // Preserve the authored threshold as a physical waypoint before
+                    // stepping outward to the first navigable exterior cell.
+                    if (Vector3.Distance(completeRoute[^1], authoredOutdoor) > 0.01f)
+                        completeRoute.Add(authoredOutdoor);
+                    if (Vector3.Distance(completeRoute[^1], exterior) > 0.01f)
+                        completeRoute.Add(exterior);
+                    for (int i = 1; i < exteriorPath.Path.Count; i++)
+                        completeRoute.Add(pathingManager.CoordToPathWorld(exteriorPath.Path[i]));
+                    if (target.hasAuthoredWorldPosition
+                        && Vector3.Distance(completeRoute[^1], target.authoredWorldPosition) > 0.01f)
+                        completeRoute.Add(target.authoredWorldPosition);
+
+                    StartWorldRoute(completeRoute, target);
+                    return true;
+                }
+            }
+
+            reason = lastInteriorFailure;
+            return false;
+        }
+
+        /// <summary>Routes an already visible actor between two navigable world cells.</summary>
+        public bool BeginGridRoute(GridCoord start, GridCoord target, bool hideWhenArrived = false)
+        {
+            EnsureReferences();
+            if (pathingManager == null || IsRouteActive || IsHidden) return false;
+            TownGrid grid = pathingManager.Grid;
+            GridCoord actualStart = grid != null ? grid.WorldToCoord(transform.position) : default;
+            if (grid == null || !grid.IsInBounds(actualStart) || !actualStart.Equals(start)
+                || !pathingManager.TryFindPath(actualStart, target, out PathingResult result, this, $"{name} staging route"))
+                return false;
+            var targetAnchor = new BuildingAnchor { type = AnchorType.FrontDoor, coord = target };
+            StartRoute(result.Path, actualStart, targetAnchor, hideWhenArrived, null, null);
+            return true;
+        }
+
+        /// <summary>
+        /// Follows the exterior grid to a valid approach cell, then follows
+        /// explicitly authorized short world-space waypoints such as a porch
+        /// point that shares a coarse grid cell with its building.
+        /// </summary>
+        public bool BeginGridRouteWithFinalWaypoints(GridCoord start, GridCoord target,
+            IReadOnlyList<Vector3> finalWaypoints)
+        {
+            EnsureReferences();
+            if (pathingManager == null || IsRouteActive || IsHidden || finalWaypoints == null
+                || finalWaypoints.Count == 0) return false;
+            TownGrid grid = pathingManager.Grid;
+            GridCoord actualStart = grid != null ? grid.WorldToCoord(transform.position) : default;
+            if (grid == null || !grid.IsInBounds(actualStart) || !actualStart.Equals(start)
+                || !pathingManager.TryFindPath(actualStart, target, out PathingResult result,
+                    this, $"{name} doorway activity approach")) return false;
+
+            List<Vector3> route = new(result.Path.Count + finalWaypoints.Count);
+            foreach (GridCoord coord in result.Path)
+                route.Add(pathingManager.CoordToPathWorld(coord));
+            foreach (Vector3 point in finalWaypoints)
+            {
+                if (!float.IsFinite(point.x) || !float.IsFinite(point.y) || !float.IsFinite(point.z))
+                    return false;
+                if (route.Count == 0 || Vector3.Distance(route[^1], point) > 0.01f)
+                    route.Add(point);
+            }
+
+            StartWorldRoute(route, new BuildingAnchor { type = AnchorType.FrontDoor, coord = target });
+            return true;
+        }
+
+        /// <summary>Routes to or from an authored building interior endpoint while preserving the building's doorway gate.</summary>
+        public bool BeginBuildingRoute(GridCoord start, GridCoord target, int startInteriorBuildingId,
+            int targetInteriorBuildingId, int floorIndex = 0, string functionalSpaceId = null,
+            bool hideWhenArrived = false)
+        {
+            EnsureReferences();
+            if (pathingManager == null || IsRouteActive || IsHidden) return false;
+            TownGrid grid = pathingManager.Grid;
+            GridCoord actualStart = grid != null ? grid.WorldToCoord(transform.position) : default;
+            if (grid == null || !grid.IsInBounds(actualStart)
+                || !pathingManager.TryFindPath(actualStart, target, out PathingResult result, this,
+                    $"{name} building activity route", PathingProfile.Pedestrian, floorIndex,
+                    functionalSpaceId, startInteriorBuildingId, targetInteriorBuildingId)) return false;
+            var targetAnchor = new BuildingAnchor { type = AnchorType.FrontDoor, coord = target };
+            StartRoute(result.Path, actualStart, targetAnchor, hideWhenArrived, null, null);
+            return true;
+        }
+
+        public bool BeginBuildingActivityRoute(BuildingFootprintAuthority authority, string entranceId, string activityId)
+        {
+            EnsureReferences();
+            if (authority == null || pathingManager == null || IsRouteActive || IsHidden) return false;
+            if (!authority.TryGetEntrancePair(entranceId, out BuildingEntrancePairAuthoring entrance, out _)
+                || !authority.TryBuildInteriorActivityRoute(entranceId, activityId, out List<Vector3> interiorPath, out _)) return false;
+            Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
+            float stagingRadius = Mathf.Max(1.25f, entrance.clearWidthMeters * 1.5f);
+            if (Vector3.Distance(transform.position, outdoor) > stagingRadius) return false;
+            List<Vector3> route = new() { outdoor };
+            route.AddRange(interiorPath);
+            StartWorldRoute(route, new BuildingAnchor { type = AnchorType.FrontDoor,
+                coord = pathingManager.Grid.WorldToCoord(interiorPath[^1]) });
+            return true;
+        }
+
+        public bool BeginBuildingInteriorRoute(BuildingFootprintAuthority authority, string activityId,
+            out string reason)
+        {
+            EnsureReferences();
+            reason = string.Empty;
+            if (authority == null || pathingManager == null || IsRouteActive || IsHidden
+                || !authority.TryGetActivityLocation(activityId, 0, out ResolvedBuildingActivityLocation activity, out reason)
+                || !activity.RequiresWalkableInterior) return false;
+            if (!authority.TryBuildInteriorPath(transform.position, activity.WorldPosition, activity.FloorIndex,
+                    activity.FunctionalSpaceId, out List<Vector3> route, out reason)) return false;
+            StartWorldRoute(route, new BuildingAnchor { type = AnchorType.FrontDoor,
+                coord = pathingManager.Grid.WorldToCoord(activity.WorldPosition) });
+            return true;
+        }
+
+        public bool BeginBuildingInteriorExitRoute(BuildingFootprintAuthority authority, string entranceId,
+            out string reason)
+        {
+            EnsureReferences();
+            reason = string.Empty;
+            if (authority == null || pathingManager == null || IsRouteActive || IsHidden
+                || !authority.TryGetEntrancePair(entranceId, out BuildingEntrancePairAuthoring entrance, out reason)) return false;
+            Vector3 indoor = authority.transform.TransformPoint(entrance.indoorPositionLocal);
+            if (!authority.TryBuildInteriorPath(transform.position, indoor, entrance.floorIndex,
+                    entrance.functionalSpaceId, out List<Vector3> route, out reason)) return false;
+            // TryBuildInteriorPath returns waypoints in start-to-target order;
+            // the actor is already at the first point, so preserve that order
+            // when continuing from the indoor threshold to the exterior.
+            route.Add(authority.transform.TransformPoint(entrance.outdoorApproachLocal));
+            StartWorldRoute(route, new BuildingAnchor { type = AnchorType.FrontDoor,
+                coord = pathingManager.Grid.WorldToCoord(route[^1]) });
+            return true;
+        }
+
+        public bool BeginBuildingExitRoute(BuildingFootprintAuthority authority, string entranceId, string activityId)
+        {
+            EnsureReferences();
+            if (authority == null || pathingManager == null || IsRouteActive || IsHidden) return false;
+            if (!authority.TryGetEntrancePair(entranceId, out BuildingEntrancePairAuthoring entrance, out _)
+                || !authority.TryBuildInteriorActivityRoute(entranceId, activityId, out List<Vector3> interiorPath, out _)) return false;
+            if (Vector3.Distance(transform.position, interiorPath[^1]) > Mathf.Max(1.25f, entrance.clearWidthMeters * 1.5f)) return false;
+            interiorPath.Reverse();
+            interiorPath.Add(authority.transform.TransformPoint(entrance.outdoorApproachLocal));
+            StartWorldRoute(interiorPath, new BuildingAnchor { type = AnchorType.FrontDoor,
+                coord = pathingManager.Grid.WorldToCoord(interiorPath[^1]) });
+            return true;
+        }
+
+        private void StartWorldRoute(IReadOnlyList<Vector3> worldPath, BuildingAnchor targetAnchor)
+        {
+            currentTargetAnchor = targetAnchor;
+            currentStartDoorAnimator = null;
+            currentTargetDoorAnimator = null;
+            targetDoorActionTriggeredForRoute = false;
+            arrivalEventRaisedForRoute = false;
+            hideOnArrival = false;
+            currentPath.Clear();
+            currentWorldPath.Clear();
+            if (worldPath != null) currentWorldPath.AddRange(worldPath);
+            if (currentWorldPath.Count == 0) return;
+            if (pathingManager?.Grid != null)
+                foreach (Vector3 point in currentWorldPath) currentPath.Add(pathingManager.Grid.WorldToCoord(point));
+            routeDestinationWorld = currentWorldPath[^1];
+            waypointIndex = 0;
+            doorPauseTimer = 0f;
+            ResetAuthoritativeRouteClock();
+            currentLocomotionBlend = 0f;
+            locomotionBlendVelocity = 0f;
+            lastAnimatorWalking = false;
+            SetVisible(true);
+            state = AgentMoveState.Moving;
+            UpdateAnimatorState(true);
         }
 
         private void StartRoute(IReadOnlyList<GridCoord> path, GridCoord startCoord, BuildingAnchor targetAnchor, bool hideWhenArrived, BuildingDoorAnimator startDoorAnimator, BuildingDoorAnimator targetDoorAnimator)
@@ -297,12 +610,17 @@ namespace LandLedgers.Pathing
                 currentPath.AddRange(path);
             }
 
-            waypointIndex = currentPath.Count > 1 ? 1 : 0;
+            currentWorldPath.Clear();
+            if (path != null)
+                foreach (GridCoord coord in path) currentWorldPath.Add(pathingManager.CoordToPathWorld(coord));
+            routeDestinationWorld = currentWorldPath.Count > 0 ? currentWorldPath[^1] : transform.position;
+
+            waypointIndex = 0;
             doorPauseTimer = 0f;
+            ResetAuthoritativeRouteClock();
             currentLocomotionBlend = 0f;
             locomotionBlendVelocity = 0f;
             lastAnimatorWalking = false;
-            transform.position = pathingManager != null ? pathingManager.CoordToPathWorld(startCoord) : transform.position;
             SetVisible(true);
             state = currentPath.Count <= 1 ? AgentMoveState.DoorPause : AgentMoveState.Moving;
             TriggerDoorActionIfAlive(ref currentStartDoorAnimator);
@@ -316,11 +634,23 @@ namespace LandLedgers.Pathing
 
         private void Update()
         {
-            float realDeltaSeconds = UnityEngine.Time.unscaledDeltaTime;
-            float simulationDeltaSeconds = realDeltaSeconds * GetMovementTimeScale();
+            TimeManager timeManager = TimeManager.Instance;
+            AdvanceAuthoritativeRouteTo(timeManager != null
+                ? timeManager.PreciseAbsoluteGameSeconds
+                : double.NaN);
+        }
+
+        /// <summary>Advances the route against the existing authoritative game clock.</summary>
+        public void AdvanceAuthoritativeRouteTo(double absoluteGameSeconds)
+        {
+            // Simulation ticks invoke this before task/deadline consumers. The
+            // renderer may miss intermediate poses, but cannot hold up arrival.
+            float simulationDeltaSeconds = GetAuthoritativeRouteDeltaSeconds(absoluteGameSeconds);
             if (state == AgentMoveState.Moving)
             {
-                TickMove(simulationDeltaSeconds);
+                float remainingSeconds = TickMove(simulationDeltaSeconds);
+                if (state == AgentMoveState.DoorPause && remainingSeconds > 0f)
+                    TickDoorPause(remainingSeconds);
             }
             else if (state == AgentMoveState.DoorPause)
             {
@@ -383,38 +713,43 @@ namespace LandLedgers.Pathing
             }
         }
 
-        private void TickMove(float simulationDeltaSeconds)
+        private float TickMove(float simulationDeltaSeconds)
         {
-            Vector3 movementStart = transform.position;
-            if (pathingManager == null || pathingManager.Settings == null || currentPath.Count == 0 || waypointIndex >= currentPath.Count)
+            if (pathingManager == null || pathingManager.Settings == null || currentWorldPath.Count == 0 || waypointIndex >= currentWorldPath.Count)
             {
                 CompleteRouteArrival();
-                return;
+                return 0f;
             }
 
             PathingSettings settings = pathingManager.Settings;
             if (simulationDeltaSeconds <= 0f)
             {
                 UpdateAnimatorState();
-                return;
+                return 0f;
             }
 
-            float remainingDistance = settings.pedestrianSpeedMetersPerSecond * simulationDeltaSeconds;
+            float speed = Mathf.Max(0.01f, settings.pedestrianSpeedMetersPerSecond);
+            float remainingDistance = speed * simulationDeltaSeconds;
+            float initialDistanceBudget = remainingDistance;
+            float distanceTravelled = 0f;
             float arrivalDistance = settings.waypointArrivalDistance;
-            while (waypointIndex < currentPath.Count)
+            while (waypointIndex < currentWorldPath.Count)
             {
-                Vector3 target = pathingManager.CoordToPathWorld(currentPath[waypointIndex]);
+                Vector3 target = currentWorldPath[waypointIndex];
                 Vector3 toTarget = target - transform.position;
                 toTarget.y = 0f;
                 float distance = toTarget.magnitude;
 
                 if (distance <= arrivalDistance)
                 {
+                    Vector3 segmentStart = transform.position;
                     transform.position = target;
+                    distanceTravelled += distance;
+                    EmitActualMovementSegment(segmentStart, target);
                     waypointIndex++;
-                    if (waypointIndex >= currentPath.Count)
+                    if (waypointIndex >= currentWorldPath.Count)
                     {
-                        transform.position = pathingManager.CoordToPathWorld(currentTargetAnchor.coord);
+                        transform.position = routeDestinationWorld;
                         BeginDoorPause();
                         break;
                     }
@@ -426,28 +761,41 @@ namespace LandLedgers.Pathing
                 transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, turnDegrees);
                 if (remainingDistance >= distance)
                 {
+                    Vector3 segmentStart = transform.position;
                     transform.position = target;
+                    distanceTravelled += distance;
+                    EmitActualMovementSegment(segmentStart, target);
                     remainingDistance -= distance;
                     waypointIndex++;
-                    if (waypointIndex >= currentPath.Count)
+                    if (waypointIndex >= currentWorldPath.Count)
                     {
-                        transform.position = pathingManager.CoordToPathWorld(currentTargetAnchor.coord);
+                        transform.position = routeDestinationWorld;
                         BeginDoorPause();
                         break;
                     }
                     continue;
                 }
 
+                Vector3 partialSegmentStart = transform.position;
                 transform.position = Vector3.MoveTowards(transform.position, target, remainingDistance);
+                float partialDistance = Vector3.Distance(partialSegmentStart, transform.position);
+                distanceTravelled += partialDistance;
+                EmitActualMovementSegment(partialSegmentStart, transform.position);
                 remainingDistance = 0f;
                 break;
             }
 
-            Vector3 movementDelta = transform.position - movementStart;
-            movementDelta.y = 0f;
-            measuredMovementSpeed = simulationDeltaSeconds > 0f
-                ? movementDelta.magnitude / simulationDeltaSeconds : 0f;
+            float usedSeconds = (initialDistanceBudget - remainingDistance) / speed;
+            measuredMovementSpeed = usedSeconds > 0f ? distanceTravelled / usedSeconds : 0f;
             UpdateAnimatorState();
+            return state == AgentMoveState.DoorPause ? remainingDistance / speed : 0f;
+        }
+
+        private static void EmitActualMovementSegment(Vector3 from, Vector3 to)
+        {
+            Vector3 delta = to - from;
+            delta.y = 0f;
+            if (delta.sqrMagnitude > 0.0001f) ActualMovementSegment?.Invoke(from, to);
         }
 
         private void TickDoorPause(float simulationDeltaSeconds)
@@ -603,7 +951,49 @@ namespace LandLedgers.Pathing
                 return 0f;
             }
 
-            return Mathf.Max(0f, timeManager.CurrentGameSecondsPerRealSecond);
+            return ResolvePresentationTimeScale(timeManager.CurrentGameSecondsPerRealSecond,
+                maximumPresentationTimeScale, false);
+        }
+
+        private void ResetAuthoritativeRouteClock()
+        {
+            TimeManager timeManager = TimeManager.Instance;
+            hasAuthoritativeRouteTimeSample = timeManager != null;
+            lastAuthoritativeRouteTimeSeconds = timeManager != null
+                ? timeManager.PreciseAbsoluteGameSeconds
+                : 0d;
+        }
+
+        private float GetAuthoritativeRouteDeltaSeconds(double suppliedAbsoluteGameSeconds)
+        {
+            TimeManager timeManager = TimeManager.Instance;
+            if (timeManager == null || double.IsNaN(suppliedAbsoluteGameSeconds))
+            {
+                hasAuthoritativeRouteTimeSample = false;
+                return UnityEngine.Time.unscaledDeltaTime;
+            }
+
+            double now = suppliedAbsoluteGameSeconds;
+            if (!hasAuthoritativeRouteTimeSample)
+            {
+                lastAuthoritativeRouteTimeSeconds = now;
+                hasAuthoritativeRouteTimeSample = true;
+                return 0f;
+            }
+
+            float elapsed = ResolveAuthoritativeRouteDelta(lastAuthoritativeRouteTimeSeconds, now);
+            lastAuthoritativeRouteTimeSeconds = now;
+            return elapsed;
+        }
+
+        public static float ResolveAuthoritativeRouteDelta(double previousGameSeconds, double currentGameSeconds)
+        {
+            if (double.IsNaN(previousGameSeconds) || double.IsInfinity(previousGameSeconds)
+                || double.IsNaN(currentGameSeconds) || double.IsInfinity(currentGameSeconds))
+                return 0f;
+            double elapsed = currentGameSeconds - previousGameSeconds;
+            if (elapsed <= 0d) return 0f;
+            return elapsed >= float.MaxValue ? float.MaxValue : (float)elapsed;
         }
 
         private void UpdateAnimatorState(bool instant = false)

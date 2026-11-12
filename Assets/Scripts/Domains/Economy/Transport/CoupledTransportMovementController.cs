@@ -49,6 +49,7 @@
 // arrival cell centre, standing idle) before logging arrival; on
 // dismount failure he stays aboard rather than being placed wrong.
 using System.Collections.Generic;
+using System;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
@@ -59,9 +60,12 @@ namespace LandLedgers.Economy.Transport
 {
     public sealed class CoupledTransportMovementController : MonoBehaviour
     {
+        /// <summary>Measured movement of the visible wagon body, emitted after a route step.</summary>
+        public static event Action<Vector3, Vector3> ActualWagonMovementSegment;
         private IReadOnlyList<GridCoord> path;
         private float cellSizeMetres;
         private Vector3 gridOrigin;
+        private Terrain[] groundTerrains;
         private float wagonSpeedMetresPerSecond;
         private float pairSeparationMetres;
         private float turnSpeedDegreesPerSecond;
@@ -75,6 +79,10 @@ namespace LandLedgers.Economy.Transport
         private bool regionalLegActive;
         private Transform regionalDestination;
         private Vector3 regionalTargetPosition;
+        private float regionalTravelElapsedSeconds;
+        private float regionalTravelDurationSeconds;
+        private Renderer[] regionalPresentationRenderers;
+        private bool[] regionalRendererWasEnabled;
         private string physicalJourneyId = string.Empty;
         private string physicalDestinationLocationId = string.Empty;
         private string physicalDestinationBusinessId = string.Empty;
@@ -149,6 +157,7 @@ namespace LandLedgers.Economy.Transport
             this.path = path;
             this.cellSizeMetres = cellSizeMetres;
             this.gridOrigin = gridOrigin;
+            groundTerrains = Terrain.activeTerrains;
             this.wagonSpeedMetresPerSecond = wagonSpeedMetresPerSecond;
             this.pairSeparationMetres = pairSeparationMetres;
             this.turnSpeedDegreesPerSecond = Mathf.Max(1f, turnSpeedDegreesPerSecond);
@@ -228,7 +237,11 @@ namespace LandLedgers.Economy.Transport
             regionalDestination = null;
             regionalTargetPosition = WagonRiderPlacement.CellCenter(reversedPath[0], cellSizeMetres, gridOrigin);
             regionalTargetPosition.y = horseView.transform.position.y;
+            regionalTravelElapsedSeconds = 0f;
+            regionalTravelDurationSeconds = Vector3.Distance(horseView.transform.position, regionalTargetPosition)
+                / wagonSpeedMetresPerSecond;
             regionalReturnToTownPath = true;
+            SetRegionalPresentationVisible(false);
             distanceTravelledMetres = 0f;
             lastHeading = Quaternion.identity;
             regionalLegActive = true;
@@ -265,10 +278,13 @@ namespace LandLedgers.Economy.Transport
                 return;
             }
 
+            Vector3 wagonMovementStart = wagonView.transform.position;
+
             // Move the group by the world delta that lands the horse on the
             // path position; the group is a neutral root (world-zero, never
             // rotated), so the horse keeps its S6 placement relative to it
             // while the pair advances as one.
+            horsePosition = GroundPosition(horsePosition);
             transform.position += horsePosition - horseView.transform.position;
 
             // The wagon trails ALONG THE PATH (not rigidly behind the
@@ -277,8 +293,11 @@ namespace LandLedgers.Economy.Transport
             if (CoupledTransportProgress.TrailingPosition(path, distanceTravelledMetres, pairSeparationMetres,
                     cellSizeMetres, gridOrigin, out Vector3 wagonPosition))
             {
-                wagonView.transform.position = wagonPosition;
+                wagonView.transform.position = GroundPosition(wagonPosition);
             }
+            Vector3 wagonMovementEnd = wagonView.transform.position;
+            if ((wagonMovementEnd - wagonMovementStart).sqrMagnitude > 0.0001f)
+                ActualWagonMovementSegment?.Invoke(wagonMovementStart, wagonMovementEnd);
 
             // Face both views to the path heading (AgentMover.TickMove
             // pattern: RotateTowards at the authored turn rate). The
@@ -332,6 +351,10 @@ namespace LandLedgers.Economy.Transport
                         SetDriving(true);
                         Vector3 regionalTarget = regionalDestination.position;
                         regionalTarget.y = horseView.transform.position.y;
+                        regionalTravelElapsedSeconds = 0f;
+                        regionalTravelDurationSeconds = Vector3.Distance(horseView.transform.position, regionalTarget)
+                            / wagonSpeedMetresPerSecond;
+                        SetRegionalPresentationVisible(false);
                         float remainingRegionalMetres = Vector3.Distance(horseView.transform.position, regionalTarget);
                         Debug.Log($"[CoupledTransport] continuing physically beyond the town boundary for {legLabel}: " +
                             $"horse={FormatWorld(horseView.transform.position)}, destination={FormatWorld(regionalTarget)}, " +
@@ -357,7 +380,7 @@ namespace LandLedgers.Economy.Transport
                     // already fired at leg start.
                     if (director != null && ethanPersonId >= 0
                         && !director.TryDismountRider(ethanPersonId,
-                            WagonRiderPlacement.CellCenter(path[path.Count - 1], cellSizeMetres, gridOrigin),
+                            GroundPosition(WagonRiderPlacement.CellCenter(path[path.Count - 1], cellSizeMetres, gridOrigin)),
                             lastHeading))
                     {
                         Debug.LogWarning($"[CoupledTransport] rider dismount failed for {legLabel}; Ethan stays aboard the wagon.", this);
@@ -376,30 +399,26 @@ namespace LandLedgers.Economy.Transport
                 return;
             }
 
+            regionalTravelElapsedSeconds += simulationDeltaSeconds;
+            if (regionalTravelElapsedSeconds < regionalTravelDurationSeconds) return;
+
             Vector3 currentHorsePosition = horseView.transform.position;
             Vector3 target = regionalReturnToTownPath ? regionalTargetPosition : regionalDestination.position;
             target.y = currentHorsePosition.y;
-            Vector3 offset = target - currentHorsePosition;
-            float distanceRemaining = offset.magnitude;
-            if (distanceRemaining > 0.001f)
+            Vector3 heading = target - currentHorsePosition;
+            if (heading.sqrMagnitude > 1e-6f)
             {
-                float step = Mathf.Min(distanceRemaining,
-                    wagonSpeedMetresPerSecond * simulationDeltaSeconds);
-                Vector3 delta = offset * (step / distanceRemaining);
-                transform.position += delta;
-                Vector3 heading = offset.normalized;
-                if (heading.sqrMagnitude > 1e-6f)
-                {
-                    lastHeading = Quaternion.LookRotation(heading, Vector3.up);
-                    Quaternion wagonFacing = lastHeading * Quaternion.Euler(0f, -90f, 0f);
-                    Quaternion horseFacing = wagonFacing * Quaternion.Euler(0f, 90f, 0f);
-                    float turnDegrees = turnSpeedDegreesPerSecond * simulationDeltaSeconds;
-                    wagonView.transform.rotation = Quaternion.RotateTowards(wagonView.transform.rotation, wagonFacing, turnDegrees);
-                    horseView.transform.rotation = Quaternion.RotateTowards(horseView.transform.rotation, horseFacing, turnDegrees);
-                }
+                lastHeading = Quaternion.LookRotation(heading, Vector3.up);
+                wagonView.transform.rotation = lastHeading * Quaternion.Euler(0f, -90f, 0f);
+                horseView.transform.rotation = lastHeading;
             }
+            // Regional transit still consumes its full distance/speed duration
+            // in simulation time, but the player does not watch a presentation
+            // object cross tens of kilometres of empty Unity space.
+            transform.position += target - currentHorsePosition;
+            SetRegionalPresentationVisible(true);
 
-            if (regionalReturnToTownPath && distanceRemaining <= 0.001f)
+            if (regionalReturnToTownPath)
             {
                 regionalLegActive = false;
                 regionalReturnToTownPath = false;
@@ -409,26 +428,27 @@ namespace LandLedgers.Economy.Transport
                 Debug.Log($"[CoupledTransport] {legLabel} reached the town gateway at {FormatWorld(horseView.transform.position)} and continues along the authored road path.", this);
                 return;
             }
+            // A successful destination binding was resolved when the journey
+            // began. Arrival is emitted only after the simulated regional
+            // distance/speed duration above has elapsed; shipment authority
+            // still validates the vehicle, driver, journey and location.
+            OnRegionalDestinationTrigger(physicalDestinationLocationId, physicalDestinationBusinessId);
+        }
 
-            // The sensor is a real kinematic rigidbody/collider and the
-            // destination is the authored trigger. Synchronize transform
-            // movement before asking physics for actual overlap, which also
-            // covers a large accelerated frame that crosses a thin trigger.
-            Physics.SyncTransforms();
-            Collider[] overlaps = Physics.OverlapSphere(horseView.transform.position, 0.5f,
-                Physics.AllLayers, QueryTriggerInteraction.Collide);
-            for (int i = 0; i < overlaps.Length; i++)
+        private void SetRegionalPresentationVisible(bool visible)
+        {
+            if (regionalPresentationRenderers == null)
             {
-                PhysicalRegionalDestinationTrigger trigger = overlaps[i] != null
-                    ? overlaps[i].GetComponent<PhysicalRegionalDestinationTrigger>()
-                    : null;
-                if (trigger != null
-                    && string.Equals(trigger.LocationId, physicalDestinationLocationId, System.StringComparison.Ordinal)
-                    && string.Equals(trigger.BusinessId, physicalDestinationBusinessId, System.StringComparison.Ordinal))
-                {
-                    OnRegionalDestinationTrigger(trigger.LocationId, trigger.BusinessId);
-                    return;
-                }
+                regionalPresentationRenderers = GetComponentsInChildren<Renderer>(true);
+                regionalRendererWasEnabled = new bool[regionalPresentationRenderers.Length];
+                for (int i = 0; i < regionalPresentationRenderers.Length; i++)
+                    regionalRendererWasEnabled[i] = regionalPresentationRenderers[i] != null
+                        && regionalPresentationRenderers[i].enabled;
+            }
+            for (int i = 0; i < regionalPresentationRenderers.Length; i++)
+            {
+                Renderer renderer = regionalPresentationRenderers[i];
+                if (renderer != null) renderer.enabled = visible && regionalRendererWasEnabled[i];
             }
         }
 
@@ -452,6 +472,25 @@ namespace LandLedgers.Economy.Transport
             SetDriving(false);
             Debug.Log($"[CoupledTransport] physically arrived at business '{businessId}' location '{locationId}' for journey '{physicalJourneyId}'; Ethan, horse, and wagon remain active at the destination.", this);
             return true;
+        }
+
+        private Vector3 GroundPosition(Vector3 position)
+        {
+            if (groundTerrains == null) groundTerrains = Terrain.activeTerrains;
+            foreach (Terrain terrain in groundTerrains)
+            {
+                if (terrain == null || terrain.terrainData == null) continue;
+                Vector3 origin = terrain.transform.position;
+                Vector3 size = terrain.terrainData.size;
+                if (position.x < origin.x || position.x > origin.x + size.x
+                    || position.z < origin.z || position.z > origin.z + size.z) continue;
+                position.y = origin.y + terrain.SampleHeight(position);
+                return position;
+            }
+            // Outside authored terrain, retain the last supported ground
+            // elevation rather than reverting to the flat debug-road height.
+            if (horseView != null) position.y = horseView.transform.position.y;
+            return position;
         }
 
         private static string FormatWorld(Vector3 position)

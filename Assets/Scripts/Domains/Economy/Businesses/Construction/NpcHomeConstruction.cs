@@ -107,6 +107,9 @@ namespace LandLedgers.Economy
         public int Units;
         public string UnitLabel = string.Empty;
         public string Provenance = string.Empty;
+        // Cancellation may be retried after a later line is refused. Persist
+        // per-line progress so already-returned stock is never returned twice.
+        public bool ReturnedToSource;
 
         public ConsumedMaterialLine() { }
     }
@@ -749,34 +752,22 @@ namespace LandLedgers.Economy
                 if (package == null) continue;
                 if (package.Status == WorkPackageStatus.Complete) continue;
                 if (package.StagedMaterialsReturned) continue;
-                if (package.StagedMaterialLines.Count == 0) continue;
-                packagesToMark.Add(package);
-                stagedLineCount += package.StagedMaterialLines.Count;
-            }
-            // Drain the site stockpile exactly once — drained lines are real
-            // units that must go back through the restock port below.
-            List<ConsumedMaterialLine> drainedStockpile = stockpile != null
-                ? stockpile.DrainAll($"project '{project.ProjectId}'", dayIndex)
-                : new List<ConsumedMaterialLine>();
-            if (stagedLineCount + drainedStockpile.Count > 0 && restock == null)
-            {
-                // The drain already happened — put the units back so the
-                // refusal leaves the project exactly where it was.
-                if (stockpile != null)
+                bool hasUnreturnedLine = false;
+                foreach (ConsumedMaterialLine line in package.StagedMaterialLines)
                 {
-                    foreach (ConsumedMaterialLine line in drainedStockpile)
-                    {
-                        if (line == null || line.Units <= 0) continue;
-                        stockpile.Lines.Add(new ConstructionSiteStockpile.StockpileLine
-                        {
-                            DisplayName = line.DisplayName,
-                            UnitLabel = line.UnitLabel,
-                            Units = line.Units,
-                            Provenance = line.Provenance,
-                        });
-                    }
+                    if (line == null || line.ReturnedToSource) continue;
+                    stagedLineCount++;
+                    hasUnreturnedLine = true;
                 }
-                return $"ConstructionProjectExecutor.CancelProject: {stagedLineCount + drainedStockpile.Count} staged line(s) must be accounted for, but no restock port was supplied — refusing rather than losing them.";
+                if (hasUnreturnedLine) packagesToMark.Add(package);
+            }
+            int stockpileLineCount = 0;
+            if (stockpile != null)
+                foreach (ConstructionSiteStockpile.StockpileLine line in stockpile.Lines)
+                    if (line != null && line.Units > 0) stockpileLineCount++;
+            if (stagedLineCount + stockpileLineCount > 0 && restock == null)
+            {
+                return $"ConstructionProjectExecutor.CancelProject: {stagedLineCount + stockpileLineCount} staged line(s) must be accounted for, but no restock port was supplied — refusing rather than losing them.";
             }
 
             // All-or-nothing per package: a package is marked returned only
@@ -786,7 +777,7 @@ namespace LandLedgers.Economy
                 bool allReturned = true;
                 foreach (ConsumedMaterialLine line in package.StagedMaterialLines)
                 {
-                    if (line == null) continue;
+                    if (line == null || line.ReturnedToSource) continue;
                     string returnProblem = restock.TryReturn(line, $"project '{project.ProjectId}'", dayIndex, diag);
                     if (returnProblem != null)
                     {
@@ -794,20 +785,37 @@ namespace LandLedgers.Economy
                         allReturned = false;
                         break;
                     }
+                    line.ReturnedToSource = true;
                     diag.Add($"ConstructionProjectExecutor.CancelProject: returned '{line.DisplayName}' x{line.Units} to the source (package '{package.PackageId}').");
                 }
-                if (allReturned)
+                if (allReturned && package.StagedMaterialLines.TrueForAll(line => line == null || line.ReturnedToSource))
                     package.StagedMaterialsReturned = true;
                 else
                     return $"ConstructionProjectExecutor.CancelProject: restock incomplete for package '{package.PackageId}' — nothing else touched; retry.";
             }
-            foreach (ConsumedMaterialLine line in drainedStockpile)
+
+            // Return directly from the stockpile and remove each line only
+            // after a successful transfer. A refusal leaves the remaining
+            // physical lines in place for a safe retry.
+            if (stockpile != null)
             {
-                if (line == null) continue;
-                string returnProblem = restock.TryReturn(line, $"project '{project.ProjectId}'", dayIndex, diag);
-                if (returnProblem != null)
-                    return $"ConstructionProjectExecutor.CancelProject: restock refused for stockpile line '{line.DisplayName}' x{line.Units}: {returnProblem}.";
-                diag.Add($"ConstructionProjectExecutor.CancelProject: returned stockpile '{line.DisplayName}' x{line.Units} to the source.");
+                var stockpileSnapshot = new List<ConstructionSiteStockpile.StockpileLine>(stockpile.Lines);
+                foreach (ConstructionSiteStockpile.StockpileLine stockLine in stockpileSnapshot)
+                {
+                    if (stockLine == null || stockLine.Units <= 0) continue;
+                    var line = new ConsumedMaterialLine
+                    {
+                        DisplayName = stockLine.DisplayName,
+                        Units = stockLine.Units,
+                        UnitLabel = stockLine.UnitLabel,
+                        Provenance = stockLine.Provenance,
+                    };
+                    string returnProblem = restock.TryReturn(line, $"project '{project.ProjectId}'", dayIndex, diag);
+                    if (returnProblem != null)
+                        return $"ConstructionProjectExecutor.CancelProject: restock refused for stockpile line '{line.DisplayName}' x{line.Units}: {returnProblem}.";
+                    stockpile.Lines.Remove(stockLine);
+                    diag.Add($"ConstructionProjectExecutor.CancelProject: returned stockpile '{line.DisplayName}' x{line.Units} to the source.");
+                }
             }
 
             // Release person-time.
@@ -1091,6 +1099,7 @@ namespace LandLedgers.Economy
                     {
                         DisplayName = l.DisplayName, Units = l.Units,
                         UnitLabel = l.UnitLabel, Provenance = l.Provenance,
+                        ReturnedToSource = l.ReturnedToSource,
                     });
             return copy;
         }

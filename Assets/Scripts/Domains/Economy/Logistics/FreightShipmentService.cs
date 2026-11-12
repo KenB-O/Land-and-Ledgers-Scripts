@@ -66,6 +66,15 @@ namespace LandLedgers.Economy.Logistics
         public ReceiveFreightCargoLotHandler ReceiveCargoLot;
 
         /// <summary>
+        /// Optional physical presentation gate for source-lot freight. When wired,
+        /// the assigned handler must physically reach the destination receiving
+        /// point before the receiving authority can transfer lot custody. A false
+        /// result keeps the completed handling task open and the lot in wagon custody.
+        /// </summary>
+        public ConfirmFreightPhysicalHandlingHandler ConfirmPhysicalReceiving;
+        public Action<LogisticsShipmentState, EntityId> OnPhysicalReceivingComplete;
+
+        /// <summary>
         /// Pass IX WS3 (A4-13): the existing unified reservation authority
         /// (EquipmentReservationService via the hub). When wired, Dispatch
         /// atomically reserves the wagon, driver and draft animals through
@@ -98,6 +107,9 @@ namespace LandLedgers.Economy.Logistics
 
     public delegate bool ReceiveFreightCargoLotHandler(
         LogisticsShipmentState shipment, int quantityUnits, out string reason);
+
+    public delegate bool ConfirmFreightPhysicalHandlingHandler(
+        LogisticsShipmentState shipment, EntityId handlerId, out bool physicallyReceived, out string reason);
 
     /// <summary>
     /// Drives freight shipments. The wagon, driver, and animals are real;
@@ -414,6 +426,7 @@ namespace LandLedgers.Economy.Logistics
                 || !hooks.Tasks.StartTask(task.TaskId, hooks.DayIndex, out reason))
             {
                 reason = "FreightShipmentService: load task could not start: " + reason;
+                hooks.Tasks.CancelTask(task.TaskId, hooks.Budgets);
                 return false;
             }
             loadTasks[shipment.ShipmentId] = task.TaskId;
@@ -646,6 +659,7 @@ namespace LandLedgers.Economy.Logistics
                 || !hooks.Tasks.StartTask(task.TaskId, hooks.DayIndex, out reason))
             {
                 reason = "FreightShipmentService: unload task could not start: " + reason;
+                hooks.Tasks.CancelTask(task.TaskId, hooks.Budgets);
                 return false;
             }
             unloadTasks[shipment.ShipmentId] = task.TaskId;
@@ -684,6 +698,22 @@ namespace LandLedgers.Economy.Logistics
                 Math.Min(WorkTimeMath.ClampToWholeMinutes(minutes), unloadTask.MinutesRemaining),
                 hooks.Budgets, hooks.DayIndex, out done, out reason)) return false;
             if (!done) return true;
+
+            // Physical presentation may take longer than the simulated unload
+            // work itself. Keep the same reserved task and wagon custody until
+            // the assigned handler reaches the receiving point; never let a
+            // day-sized simulation tick turn a planned route into receipt.
+            if (shipment.requiresSourceLotCustody && hooks.ConfirmPhysicalReceiving != null)
+            {
+                bool routeAvailable = hooks.ConfirmPhysicalReceiving(shipment, unloadTask.AssigneeId,
+                    out bool physicallyReceived, out reason);
+                if (!routeAvailable || !physicallyReceived)
+                {
+                    if (routeAvailable && reason.StartsWith("Carrying:", StringComparison.Ordinal))
+                        shipment.physicalLocationId = "person:" + unloadTask.AssigneeId.Id;
+                    return true;
+                }
+            }
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
             unloadTasks.Remove(shipment.ShipmentId);
 
@@ -728,6 +758,7 @@ namespace LandLedgers.Economy.Logistics
                 shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
                 shipment.physicalTransportBound = false;
                 shipment.state = LogisticsShipmentStatus.Completed;
+                hooks.OnPhysicalReceivingComplete?.Invoke(shipment, unloadTask.AssigneeId);
                 ReleaseShipmentReservations(shipment);
                 Log(hooks, $"shipment '{shipment.ShipmentId}': lot '{shipment.cargoLotId}' credited once to '{shipment.destinationBusinessInstanceId}' ({remaining}u).");
                 return true;

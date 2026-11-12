@@ -57,6 +57,7 @@ namespace LandLedgers.CameraSystem
         private float terrainHeightVelocity;
         private bool cursorLockedByCamera;
         private bool stateInitialized;
+        private Transform followTarget;
 
         public StrategyCameraSettings Settings => settings;
         public StrategyCameraBounds BoundsSource => boundsSource;
@@ -69,6 +70,18 @@ namespace LandLedgers.CameraSystem
         public float ManualPitchOffset => targetManualPitchOffset;
         public bool SuppressArrowKeyPan { get; set; }
         public bool SuppressWheelZoomUnlessRotating { get; set; }
+
+        public Transform FollowTarget => followTarget;
+
+        public bool Follow(Transform target)
+        {
+            if (target == null || !target.gameObject.activeInHierarchy) return false;
+            followTarget = target;
+            targetFocusPosition = target.position;
+            return true;
+        }
+
+        public void StopFollowing() => followTarget = null;
 
         public void ConfigureRigReferences(
             StrategyCameraSettings newSettings,
@@ -204,6 +217,11 @@ namespace LandLedgers.CameraSystem
             }
 
             ReadInput(dt);
+            if (followTarget != null)
+            {
+                if (!followTarget.gameObject.activeInHierarchy) followTarget = null;
+                else targetFocusPosition = followTarget.position;
+            }
             ApplyBounds(dt);
             ApplyTerrainTargetHeight(dt);
             SmoothAndApplyRig(dt);
@@ -258,6 +276,12 @@ namespace LandLedgers.CameraSystem
 
         private void ReadInput(float dt)
         {
+            if (UnityEngine.EventSystems.EventSystem.current != null
+                && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
+            {
+                UpdateCursorLock(false);
+                return;
+            }
             Keyboard keyboard = Keyboard.current;
             Mouse mouse = Mouse.current;
 

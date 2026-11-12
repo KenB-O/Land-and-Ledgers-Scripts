@@ -7,9 +7,14 @@ using LandLedgers.FirstLedger;
 using LandLedgers.Economy;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Pathing;
 using LandLedgers.Primitives;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace LandLedgers.World
@@ -286,13 +291,28 @@ namespace LandLedgers.World
 
         private Coroutine deferredRegionalTerrainRefreshCoroutine;
 
-        [Header("Property Access Evidence")]
-        [Tooltip("Draws lightweight visual path evidence from the public frontage/lot approach cell to authored door, service, and drop-off anchors. Visual-only: it does not change grid/pathing authority.")]
+        [Header("Scene View Road and Access Gizmos")]
+        [Tooltip("Show authoritative road cells, centerlines, and parcel connections when this controller is selected in the Scene view.")]
         [SerializeField]
-        private bool buildPropertyAccessPathEvidence = true;
+        private bool showRoadAccessGizmosWhenSelected = true;
+
+        [Tooltip("Show road and parcel access gizmos for this town even when the controller is not selected. Disable for large towns when not inspecting roads.")]
+        [SerializeField]
+        private bool showRoadAccessGizmosGlobally;
+
+        [Tooltip("Draw frontage, parcel, door, service, and drop-off connections in the Scene view. These are gizmos only and never appear in Game view.")]
+        [FormerlySerializedAs("buildPropertyAccessPathEvidence")]
+        [SerializeField]
+        private bool showPropertyAccessGizmos = true;
 
         [SerializeField]
-        private bool logPropertyAccessPathEvidence;
+        private bool showRoadBoundaryGizmos;
+
+        [SerializeField]
+        private bool showRoadClassificationLabels;
+
+        [SerializeField]
+        private bool showNavigationDebugRouteGizmos;
 
         [SerializeField, Min(0.05f)]
         private float propertyAccessPathWidthMeters = 0.55f;
@@ -445,7 +465,11 @@ namespace LandLedgers.World
                         bool standaloneStorefront = definition.PrimaryUse == BuildingUseType.Commercial
                             && definition.CanHostWorkplace
                             && !string.IsNullOrEmpty(definition.BuildingId)
-                            && !definition.BuildingId.Contains("saloon", StringComparison.OrdinalIgnoreCase);
+                            && !definition.BuildingId.Contains("saloon", StringComparison.OrdinalIgnoreCase)
+                            // Keep the owner's Small fixture unchanged: the Large Livery is
+                            // enabled for generated town presets, but is not an ordinary
+                            // storefront candidate in the authored separate-use fixture.
+                            && !string.Equals(definition.BuildingId, "large_livery", StringComparison.OrdinalIgnoreCase);
                         if (standaloneHouse || standaloneStorefront)
                         {
                             eligibleDefinitions.Add(definition);
@@ -774,7 +798,23 @@ namespace LandLedgers.World
 
             StringBuilder builder = new();
             builder.AppendLine($"{displayName} | {holding}{roleLine}");
-            builder.AppendLine($"{site} | {frontage}");
+            builder.AppendLine($"Building {building.id:000} | Plot {building.plotId:000} | {site} | {frontage}");
+            builder.AppendLine($"Property title: {(IsPlayerHeldSite(building, plot) ? "Player" : "Town/NPC-held; named holder is not available in this town readout")}");
+            builder.AppendLine($"Current use: {(building.definition != null ? building.definition.BuildUseSummary() : "Not recorded")}");
+
+            // Put the resident and operating-business authorities before placement diagnostics so the compact
+            // property panel shows who occupies or operates this site without implying title from use.
+            if (TryResolvePopulationManager(out PopulationManager compactPopulation))
+            {
+                string compactHousehold = ExtractFirstInspectionLine(compactPopulation.BuildHouseholdInspectionSummaryByHomeBuildingId(buildingId));
+                if (!string.IsNullOrWhiteSpace(compactHousehold) && !compactHousehold.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
+                    builder.AppendLine($"Residential household: {compactHousehold}");
+            }
+            if (TryResolveSharedBusinessRuntime(out SharedBusinessRuntimeManager compactBusinesses))
+            {
+                string compactBusiness = ExtractFirstInspectionLine(compactBusinesses.BuildBusinessInspectionSummaryByBuildingId(buildingId));
+                if (!string.IsNullOrWhiteSpace(compactBusiness)) builder.AppendLine($"Operating business: {compactBusiness}");
+            }
 
             string linkageRead = BuildBuildingPlotLinkInspectionSummary(building, out plot);
             if (!string.IsNullOrWhiteSpace(linkageRead))
@@ -1294,7 +1334,10 @@ namespace LandLedgers.World
             }
 
             settings.Sanitize();
-            ResolveSeedForFreshGeneration(Application.isPlaying, CreateFreshRuntimeSeed());
+            bool needsRandomSeed = Application.isPlaying
+                && !settings.useManualSeedOverride
+                && settings.startupMode == WorldGenerationStartupMode.RandomFreshRuntimeWorld;
+            ResolveSeedForFreshGeneration(Application.isPlaying, needsRandomSeed ? CreateFreshRuntimeSeed() : 0);
             AppendGenerationTiming(timing, stepTimer, "settings");
 
             if (currentStartupMode == WorldStartupMode.UsePreAuthoredTerrain
@@ -4631,9 +4674,10 @@ namespace LandLedgers.World
             return true;
         }
 
-        private bool IsPlotEligibleForLandMarket(TownPlot plot)
+        public bool IsPlotEligibleForLandMarket(TownPlot plot)
         {
-            if (plot == null || plot.buildingId >= 0 || plot.playerOwned || plot.zone == PlotZone.Agricultural)
+            if (plot == null || plot.buildingId >= 0 || plot.playerOwned
+                || IsCivicParcel(plot) || plot.zone == PlotZone.Agricultural)
             {
                 return false;
             }
@@ -5494,7 +5538,8 @@ namespace LandLedgers.World
                     continue;
                 }
 
-                if (hasPrefabMarkers)
+                bool anchorExpected = building.definition.GetAnchorExpectation(rule.type) != BuildingAnchorExpectation.Optional;
+                if (hasPrefabMarkers && anchorExpected)
                 {
                     AddAnchorIssue(
                         building,
@@ -5502,7 +5547,7 @@ namespace LandLedgers.World
                         $"Building '{building.definition.DisplayName}' prefab is missing a {GetAnchorAuthoringName(rule.type)} marker. Falling back to its legacy BuildingDefinition anchor rule for this anchor.",
                         false);
                 }
-                else if (building.definition.VisualPrefab != null)
+                else if (building.definition.VisualPrefab != null && anchorExpected)
                 {
                     AddAnchorIssue(
                         building,
@@ -6040,6 +6085,9 @@ namespace LandLedgers.World
             Transform root = EnsureVisualRoot();
             AppendGenerationTiming(timing, stepTimer, "ensure visual root");
 
+            foreach (PlacedBuilding building in buildings)
+                if (building != null) building.runtimeFootprintAuthority = null;
+
             ClearVisualChildren(root);
             HashSet<int> authoredChildIds = CaptureRootChildIds(root);
             AppendGenerationTiming(timing, stepTimer, "clear visuals");
@@ -6090,9 +6138,6 @@ namespace LandLedgers.World
 
                 BuildDetailPropVisuals(root);
                 AppendGenerationTiming(timing, stepTimer, "detail props");
-
-                BuildPropertyAccessPathEvidence(root);
-                AppendGenerationTiming(timing, stepTimer, "property access evidence");
 
                 if (ShouldRunAutomaticBuildingVisualRepair())
                 {
@@ -6489,63 +6534,6 @@ namespace LandLedgers.World
             return checkedRoots;
         }
 
-        private void BuildPropertyAccessPathEvidence(Transform root)
-        {
-            if (!buildPropertyAccessPathEvidence || root == null || grid == null || buildings.Count == 0)
-            {
-                return;
-            }
-
-            int built = 0;
-            for (int i = 0; i < buildings.Count; i++)
-            {
-                PlacedBuilding building = buildings[i];
-                if (building == null || !building.footprint.IsValid || building.anchors.Count == 0)
-                {
-                    continue;
-                }
-
-                for (int a = 0; a < building.anchors.Count; a++)
-                {
-                    BuildingAnchor anchor = building.anchors[a];
-                    if (!AnchorShouldReceivePropertyPath(building, anchor))
-                    {
-                        continue;
-                    }
-
-                    GridDirection approachDirection = anchor.type == AnchorType.FrontDoor
-                        ? building.frontageDirection
-                        : GetNearestFootprintEdgeDirection(building.footprint, anchor.coord);
-
-                    if (!TryFindExteriorAnchorAccessCell(building.footprint, approachDirection, anchor.coord, anchor.type, out GridCoord approachCoord))
-                    {
-                        continue;
-                    }
-
-                    if (approachCoord.Equals(anchor.coord))
-                    {
-                        continue;
-                    }
-
-                    Vector3 start = grid.CoordToWorldCenter(approachCoord, settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters);
-                    Vector3 end = anchor.hasAuthoredWorldPosition
-                        ? anchor.authoredWorldPosition
-                        : grid.CoordToWorldCenter(anchor.coord, settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters);
-                    end.y = settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters;
-
-                    if (CreatePropertyAccessPathSegment(root, building.id, anchor.type, start, end))
-                    {
-                        built++;
-                    }
-                }
-            }
-
-            if (logPropertyAccessPathEvidence && built > 0)
-            {
-                Debug.Log($"[TownWorld] Built {built} property access path evidence segment(s) from frontage approach cells to authored building anchors.", this);
-            }
-        }
-
         private static bool AnchorShouldReceivePropertyPath(PlacedBuilding building, BuildingAnchor anchor)
         {
             if (building == null || !building.footprint.IsValid || !anchor.fromAuthoredMarker)
@@ -6561,40 +6549,284 @@ namespace LandLedgers.World
             return building.footprint.Contains(anchor.coord);
         }
 
-        private bool CreatePropertyAccessPathSegment(Transform root, int buildingId, AnchorType anchorType, Vector3 start, Vector3 end)
+#if UNITY_EDITOR
+        private void OnDrawGizmos()
         {
-            Vector3 delta = end - start;
-            delta.y = 0f;
-            float length = delta.magnitude;
-            if (length < 0.25f)
-            {
-                return false;
-            }
-
-            GameObject visual = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            visual.name = $"Property Path {buildingId:000} {anchorType}";
-            visual.transform.SetParent(root, true);
-            visual.transform.position = (start + end) * 0.5f;
-            visual.transform.rotation = Quaternion.LookRotation(delta.normalized, Vector3.up);
-            visual.transform.localScale = new Vector3(
-                Mathf.Max(0.05f, propertyAccessPathWidthMeters),
-                0.045f,
-                length);
-
-            Collider collider = visual.GetComponent<Collider>();
-            if (collider != null)
-            {
-                DestroyUnityObject(collider);
-            }
-
-            Renderer renderer = visual.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                renderer.sharedMaterial = CreateDebugMaterial(propertyAccessPathColor);
-            }
-
-            return true;
+            if (showRoadAccessGizmosGlobally)
+                DrawRoadAndAccessGizmos(drawAccess: showPropertyAccessGizmos);
         }
+
+        private void OnDrawGizmosSelected()
+        {
+            if (!showRoadAccessGizmosWhenSelected || showRoadAccessGizmosGlobally) return;
+            DrawRoadAndAccessGizmos(drawAccess: showPropertyAccessGizmos);
+        }
+
+        private void DrawRoadAndAccessGizmos(bool drawAccess)
+        {
+            if (settings == null) return;
+            if (grid != null)
+                DrawActualRoadGizmos();
+            else
+                DrawPlannedRoadGizmos();
+
+            if (drawAccess && grid != null)
+                DrawPropertyAccessGizmos();
+            if (showNavigationDebugRouteGizmos)
+                DrawLastNavigationRouteGizmo();
+        }
+
+        private void DrawActualRoadGizmos()
+        {
+            Dictionary<GridCoord, RoadType> roads = new();
+            HashSet<GridCoord> blocked = new();
+            for (int z = 0; z < grid.Depth; z++)
+            for (int x = 0; x < grid.Width; x++)
+            {
+                GridCoord coord = new(x, z);
+                TownCell cell = grid.GetCell(coord);
+                if (!cell.IsRoad) continue;
+                roads[coord] = cell.roadType;
+                if (cell.blocked || (cell.occupancy & CellOccupancy.Blocked) != 0) blocked.Add(coord);
+            }
+
+            DrawRoadCellLayout(roads, blocked, grid.Width, grid.Depth, grid.CellSizeMeters, grid.Origin,
+                useRuntimeCellHeights: true);
+        }
+
+        private void DrawPlannedRoadGizmos()
+        {
+            if (settings == null) return;
+            Dictionary<GridCoord, RoadType> planned = BuildRequiredRoadLayout();
+            DrawRoadCellLayout(planned, null, Mathf.Max(1, settings.gridWidthCells),
+                Mathf.Max(1, settings.gridDepthCells), Mathf.Max(0.1f, settings.cellSizeMeters),
+                settings.GridOrigin, useRuntimeCellHeights: false);
+            Handles.color = new Color(1f, 1f, 1f, 0.75f);
+            Handles.Label(settings.GridOrigin + Vector3.up * 0.5f, "Planned roads (settings preview)");
+        }
+
+        private void DrawRoadCellLayout(Dictionary<GridCoord, RoadType> roads, HashSet<GridCoord> blocked,
+            int width, int depth, float cellSize, Vector3 origin, bool useRuntimeCellHeights)
+        {
+            bool[,] consumed = new bool[width, depth];
+            for (int z = 0; z < depth; z++)
+            for (int x = 0; x < width; x++)
+            {
+                GridCoord coord = new(x, z);
+                if (!roads.TryGetValue(coord, out RoadType type)) continue;
+                if (blocked != null && blocked.Contains(coord))
+                {
+                    DrawRoadCellBounds(coord, type, cellSize, origin, useRuntimeCellHeights, blockedCell: true);
+                    consumed[x, z] = true;
+                    continue;
+                }
+                if (consumed[x, z]) continue;
+
+                int rectWidth = 1;
+                while (x + rectWidth < width && !consumed[x + rectWidth, z]
+                    && IsRoadGizmoCell(roads, blocked, x + rectWidth, z, type)) rectWidth++;
+                int rectDepth = 1;
+                while (z + rectDepth < depth)
+                {
+                    bool rowMatches = true;
+                    for (int dx = 0; dx < rectWidth; dx++)
+                        if (consumed[x + dx, z + rectDepth] || !IsRoadGizmoCell(roads, blocked, x + dx, z + rectDepth, type))
+                        { rowMatches = false; break; }
+                    if (!rowMatches) break;
+                    rectDepth++;
+                }
+                for (int rz = z; rz < z + rectDepth; rz++)
+                for (int rx = x; rx < x + rectWidth; rx++) consumed[rx, rz] = true;
+                DrawRoadRectangleGizmo(x, z, rectWidth, rectDepth, type, cellSize, origin, useRuntimeCellHeights);
+            }
+
+            DrawRoadIntersections(roads, blocked, cellSize, origin, useRuntimeCellHeights);
+        }
+
+        private static bool IsRoadGizmoCell(Dictionary<GridCoord, RoadType> roads, HashSet<GridCoord> blocked,
+            int x, int z, RoadType type)
+        {
+            GridCoord coord = new(x, z);
+            return (blocked == null || !blocked.Contains(coord)) && roads.TryGetValue(coord, out RoadType found) && found == type;
+        }
+
+        private void DrawRoadRectangleGizmo(int x, int z, int width, int depth, RoadType type,
+            float cellSize, Vector3 origin, bool useRuntimeCellHeights)
+        {
+            float y = settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters;
+            if (useRuntimeCellHeights && grid != null)
+            {
+                int centerX = x + width / 2, centerZ = z + depth / 2;
+                TownCell cell = grid.GetCell(new GridCoord(centerX, centerZ));
+                if (cell.terrainZone != TerrainZone.Unknown) y = cell.height + propertyAccessPathSurfaceOffsetMeters;
+            }
+            Vector3 center = new(origin.x + (x + width * 0.5f) * cellSize, y,
+                origin.z + (z + depth * 0.5f) * cellSize);
+            float worldWidth = width * cellSize, worldDepth = depth * cellSize;
+            Color color = RoadGizmoColor(type);
+            Gizmos.color = color;
+
+            // Rectangles share the same cell runs used by road mesh batching. Their centerline is
+            // therefore a view of the road authority, while the bounds remain optional.
+            if (worldWidth >= worldDepth)
+            {
+                Vector3 left = center + Vector3.left * (worldWidth * 0.5f);
+                Vector3 right = center + Vector3.right * (worldWidth * 0.5f);
+                Gizmos.DrawLine(left, right);
+                if (showRoadBoundaryGizmos)
+                {
+                    Gizmos.DrawLine(left + Vector3.forward * (worldDepth * 0.5f), right + Vector3.forward * (worldDepth * 0.5f));
+                    Gizmos.DrawLine(left + Vector3.back * (worldDepth * 0.5f), right + Vector3.back * (worldDepth * 0.5f));
+                }
+            }
+            if (worldDepth >= worldWidth)
+            {
+                Vector3 near = center + Vector3.back * (worldDepth * 0.5f);
+                Vector3 far = center + Vector3.forward * (worldDepth * 0.5f);
+                Gizmos.DrawLine(near, far);
+                if (showRoadBoundaryGizmos)
+                {
+                    Gizmos.DrawLine(near + Vector3.left * (worldWidth * 0.5f), far + Vector3.left * (worldWidth * 0.5f));
+                    Gizmos.DrawLine(near + Vector3.right * (worldWidth * 0.5f), far + Vector3.right * (worldWidth * 0.5f));
+                }
+            }
+            if (showRoadBoundaryGizmos)
+                Gizmos.DrawWireCube(center, new Vector3(worldWidth, 0.025f, worldDepth));
+            if (showRoadClassificationLabels)
+            {
+                Handles.color = color;
+                Handles.Label(center + Vector3.up * 0.08f, $"{type} · {width}×{depth}");
+            }
+        }
+
+        private void DrawRoadCellBounds(GridCoord coord, RoadType type, float cellSize, Vector3 origin,
+            bool useRuntimeCellHeights, bool blockedCell)
+        {
+            float y = settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters;
+            if (useRuntimeCellHeights && grid != null)
+            {
+                TownCell cell = grid.GetCell(coord);
+                if (cell.terrainZone != TerrainZone.Unknown) y = cell.height + propertyAccessPathSurfaceOffsetMeters;
+            }
+            Vector3 center = new(origin.x + (coord.x + 0.5f) * cellSize, y,
+                origin.z + (coord.z + 0.5f) * cellSize);
+            Gizmos.color = blockedCell ? new Color(0.95f, 0.22f, 0.16f, 0.95f) : RoadGizmoColor(type);
+            Gizmos.DrawWireCube(center, new Vector3(cellSize, 0.03f, cellSize));
+            if (blockedCell)
+            {
+                Gizmos.DrawLine(center - Vector3.right * cellSize * 0.4f, center + Vector3.right * cellSize * 0.4f);
+                Gizmos.DrawLine(center - Vector3.forward * cellSize * 0.4f, center + Vector3.forward * cellSize * 0.4f);
+            }
+        }
+
+        private void DrawRoadIntersections(Dictionary<GridCoord, RoadType> roads, HashSet<GridCoord> blocked,
+            float cellSize, Vector3 origin, bool useRuntimeCellHeights)
+        {
+            foreach (KeyValuePair<GridCoord, RoadType> road in roads)
+            {
+                if (blocked != null && blocked.Contains(road.Key)) continue;
+                int degree = 0;
+                GridCoord[] offsets = { new(1,0), new(-1,0), new(0,1), new(0,-1) };
+                foreach (GridCoord offset in offsets)
+                    if (roads.ContainsKey(road.Key + offset) && (blocked == null || !blocked.Contains(road.Key + offset))) degree++;
+                if (degree < 3) continue;
+                float y = settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters;
+                if (useRuntimeCellHeights && grid != null)
+                {
+                    TownCell cell = grid.GetCell(road.Key);
+                    if (cell.terrainZone != TerrainZone.Unknown) y = cell.height + propertyAccessPathSurfaceOffsetMeters;
+                }
+                Vector3 point = new(origin.x + (road.Key.x + 0.5f) * cellSize, y + 0.04f,
+                    origin.z + (road.Key.z + 0.5f) * cellSize);
+                Gizmos.color = Color.white;
+                Gizmos.DrawSphere(point, cellSize * 0.075f);
+            }
+        }
+
+        private static Color RoadGizmoColor(RoadType type) => type switch
+        {
+            RoadType.MainStreet => new Color(1f, 0.66f, 0.22f, 0.95f),
+            RoadType.CrossStreet => new Color(0.3f, 0.82f, 1f, 0.95f),
+            RoadType.Spur => new Color(0.55f, 1f, 0.42f, 0.95f),
+            RoadType.RegionalExit => new Color(0.91f, 0.53f, 1f, 0.95f),
+            _ => Color.gray
+        };
+
+        private void DrawPropertyAccessGizmos()
+        {
+            if (grid == null || buildings == null || plots == null) return;
+            PathingManager pathing = FindAnyObjectByType<PathingManager>();
+            foreach (PlacedBuilding building in buildings)
+            {
+                if (building == null || !building.footprint.IsValid || building.anchors == null) continue;
+                TownPlot plot = null;
+                for (int p = 0; p < plots.Count; p++)
+                    if (plots[p] != null && plots[p].id == building.plotId) { plot = plots[p]; break; }
+                foreach (BuildingAnchor anchor in building.anchors)
+                {
+                    if (!AnchorShouldReceivePropertyPath(building, anchor)) continue;
+                    GridDirection direction = anchor.type == AnchorType.FrontDoor
+                        ? building.frontageDirection : GetNearestFootprintEdgeDirection(building.footprint, anchor.coord);
+                    if (!TryFindExteriorAnchorAccessCell(building.footprint, direction, anchor.coord, anchor.type, out GridCoord approach)) continue;
+                    Color color = anchor.type switch
+                    {
+                        AnchorType.FrontDoor => settings.doorAnchorColor,
+                        AnchorType.Service => settings.serviceAnchorColor,
+                        _ => settings.dropOffAnchorColor
+                    };
+                    Vector3 approachPoint = grid.CoordToWorldCenter(approach, settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters);
+                    Vector3 anchorCellPoint = grid.CoordToWorldCenter(anchor.coord, settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters);
+                    Vector3 authoredPoint = anchor.hasAuthoredWorldPosition ? anchor.authoredWorldPosition : anchorCellPoint;
+                    authoredPoint.y = Mathf.Max(authoredPoint.y, settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters);
+                    Gizmos.color = color;
+                    Gizmos.DrawLine(approachPoint, anchorCellPoint);
+                    if (Vector3.Distance(anchorCellPoint, authoredPoint) > 0.1f) Gizmos.DrawLine(anchorCellPoint, authoredPoint);
+                    Gizmos.DrawSphere(authoredPoint, Mathf.Max(0.12f, propertyAccessPathWidthMeters * 0.24f));
+
+                    if (plot == null || !grid.IsInBounds(plot.roadAccessCell)) continue;
+                    Vector3 frontage = grid.CoordToWorldCenter(plot.roadAccessCell,
+                        settings.worldCenter.y + propertyAccessPathSurfaceOffsetMeters);
+                    Gizmos.color = new Color(color.r, color.g, color.b, 0.75f);
+                    if (pathing != null && pathing.Grid == grid
+                        && pathing.TryFindPath(PathingRequest.CreateProbe(plot.roadAccessCell, approach,
+                            this, $"Scene gizmo property access {building.id}"), out PathingResult result))
+                    {
+                        for (int i = 1; i < result.Path.Count; i++)
+                            Gizmos.DrawLine(pathing.CoordToPathWorld(result.Path[i - 1]), pathing.CoordToPathWorld(result.Path[i]));
+                    }
+                    else if (pathing == null || pathing.Grid != grid)
+                    {
+                        // No pathing runtime is available in Edit Mode; this is a frontage-to-approach
+                        // relationship cue and is intentionally dashed to distinguish it from a route.
+                        Handles.color = new Color(color.r, color.g, color.b, 0.7f);
+                        Handles.DrawDottedLine(frontage, approachPoint, 4f);
+                    }
+                    else
+                    {
+                        Handles.color = new Color(1f, 0.25f, 0.18f, 0.95f);
+                        Handles.DrawDottedLine(frontage, approachPoint, 3f);
+                        Handles.Label((frontage + approachPoint) * 0.5f, "No valid road-to-building path");
+                    }
+                    Gizmos.color = color;
+                    Gizmos.DrawSphere(frontage, Mathf.Max(0.14f, propertyAccessPathWidthMeters * 0.3f));
+                    if (showRoadClassificationLabels)
+                    {
+                        Handles.color = color;
+                        Handles.Label(authoredPoint + Vector3.up * 0.18f, $"{building.id:000} {anchor.type}");
+                    }
+                }
+            }
+        }
+
+        private void DrawLastNavigationRouteGizmo()
+        {
+            PathingManager pathing = FindAnyObjectByType<PathingManager>();
+            if (pathing == null || pathing.Grid != grid || pathing.LastPath == null || pathing.LastPath.Count < 2) return;
+            Gizmos.color = new Color(1f, 0.2f, 0.85f, 0.95f);
+            for (int i = 1; i < pathing.LastPath.Count; i++)
+                Gizmos.DrawLine(pathing.CoordToPathWorld(pathing.LastPath[i - 1]), pathing.CoordToPathWorld(pathing.LastPath[i]));
+        }
+#endif
 
         private void BuildRegionalResourceVisuals(Transform root)
         {
@@ -8625,7 +8857,7 @@ namespace LandLedgers.World
             return false;
         }
 
-        private static void DisablePrefabColliders(GameObject visual)
+        private static void DisablePrefabColliders(GameObject visual, bool removeAll = false)
         {
             Collider[] colliders = visual.GetComponentsInChildren<Collider>(true);
             for (int i = 0; i < colliders.Length; i++)
@@ -8635,7 +8867,7 @@ namespace LandLedgers.World
                     continue;
                 }
 
-                if (colliders[i] is BoxCollider)
+                if (removeAll || colliders[i] is BoxCollider)
                 {
                     DestroyUnityObject(colliders[i]);
                     continue;
@@ -8770,10 +9002,8 @@ namespace LandLedgers.World
             // rectangle of same-type road cells instead of one visual per
             // cell, consuming the grid through the (previously dead)
             // FindUnconsumedRoadRect/RoadRowCanExtend/MarkConsumed helpers.
-            // Blocked (suppressed) road cells keep their per-cell visual
-            // exactly as before and are consumed up front so the merger
-            // never swallows them; the terrain overlay pass is separate
-            // and untouched, as is the non-road decor pass.
+            // Suppressed cells retain logical road data but have no playable
+            // road presentation. Consume them so the merger cannot include them.
             bool[,] consumed = new bool[grid.Width, grid.Depth];
             for (int z = 0; z < grid.Depth; z++)
             {
@@ -8787,16 +9017,6 @@ namespace LandLedgers.World
                     }
 
                     consumed[x, z] = true;
-                    GridRect cellRect = new(x, z, 1, 1);
-                    GameObject cellVisual = CreateRectVisual(
-                        root,
-                        $"Road Cell {x}_{z}",
-                        cellRect,
-                        RoadVisualYOffset,
-                        RoadVisualHeight,
-                        settings.roadColor,
-                        roadMaterial);
-                    ApplyRoadTextureTiling(cellVisual, cellRect);
                 }
             }
 
@@ -8964,9 +9184,10 @@ namespace LandLedgers.World
             }
 
             // Generated building interaction is handled by authored anchors and proxies;
-            // disabling prefab colliders prevents nested/negative-scale art colliders from
-            // fighting the generated terrain collider or spamming BoxCollider warnings.
-            DisablePrefabColliders(visual);
+            // grid occupancy is the navigation authority. Remove prefab art colliders from
+            // this runtime-only visual instance so they cannot conflict with selection or
+            // terrain and do not remain as inactive physics components.
+            DisablePrefabColliders(visual, removeAll: true);
             visual.name = $"Building {building.id:000} {definition.DisplayName}";
 
             if (!TryResolvePrefabPlacementPose(building, visual, out PrefabPlacementPose pose))
@@ -8986,6 +9207,7 @@ namespace LandLedgers.World
             }
 
             building.doorAnimator = EnsureBuildingDoorAnimator(visual);
+            building.runtimeFootprintAuthority = visual.GetComponent<BuildingFootprintAuthority>();
             ActivateAuthoredExteriorProps(visual, building);
             if (ShouldRunAutomaticBuildingVisualRepair())
             {
@@ -9001,8 +9223,7 @@ namespace LandLedgers.World
         {
             if (visual == null
                 || building == null
-                || !TryResolveFootprintGroundHeight(building.footprint, true, out float groundHeight, out _)
-                || !TryResolveVisualBottomOffsetFromRoot(visual.transform, out float bottomOffset))
+                || !TryResolveFootprintGroundHeight(building.footprint, true, out float groundHeight, out _))
             {
                 return;
             }
@@ -9011,10 +9232,53 @@ namespace LandLedgers.World
                 ? (visual.transform.rotation * building.definition.VisualPositionOffset).y
                 : 0f;
             Vector3 position = visual.transform.position;
-            visual.transform.position = new Vector3(
-                position.x,
-                groundHeight - bottomOffset + authoredVerticalOffset + Mathf.Max(0f, runtimeTerrainVisualSurfaceOffsetMeters),
-                position.z);
+            float contactY = groundHeight + authoredVerticalOffset + Mathf.Max(0f, runtimeTerrainVisualSurfaceOffsetMeters);
+            visual.transform.position = new Vector3(position.x, contactY, position.z);
+
+            // Some authored building stairs cross below the prefab's y=0 footprint
+            // contact plane. They must not lift the complete building shell to the
+            // stair renderer's lowest bound. Trim only that below-grade portion on
+            // the generated instance; MeshFilter.mesh gives this instance its own
+            // mesh so the authored prefab and shared model asset remain untouched.
+            TrimGroundLevelStairGeometry(visual.transform, contactY);
+        }
+
+        private static int TrimGroundLevelStairGeometry(Transform visualRoot, float contactY)
+        {
+            if (visualRoot == null) return 0;
+
+            MeshFilter[] filters = visualRoot.GetComponentsInChildren<MeshFilter>(true);
+            int changedMeshes = 0;
+            for (int i = 0; i < filters.Length; i++)
+            {
+                MeshFilter filter = filters[i];
+                if (filter == null || filter.sharedMesh == null
+                    || !filter.transform.name.StartsWith("Stair", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                Mesh mesh = UnityEngine.Object.Instantiate(filter.sharedMesh);
+                mesh.name = filter.sharedMesh.name + " (Runtime Grounded)";
+                mesh.hideFlags = HideFlags.DontSave;
+                filter.sharedMesh = mesh;
+                Vector3[] vertices = mesh.vertices;
+                bool changed = false;
+                for (int vertexIndex = 0; vertexIndex < vertices.Length; vertexIndex++)
+                {
+                    Vector3 world = filter.transform.TransformPoint(vertices[vertexIndex]);
+                    if (world.y >= contactY - 0.0005f) continue;
+                    world.y = contactY;
+                    vertices[vertexIndex] = filter.transform.InverseTransformPoint(world);
+                    changed = true;
+                }
+
+                if (!changed) continue;
+                mesh.vertices = vertices;
+                mesh.RecalculateBounds();
+                mesh.RecalculateNormals();
+                changedMeshes++;
+            }
+
+            return changedMeshes;
         }
 
         private bool EnsurePrefabBuildingVisualMeshesVisible(GameObject visual, PlacedBuilding building)
@@ -12881,6 +13145,22 @@ namespace LandLedgers.World
             if (obj == null)
             {
                 return;
+            }
+
+            if (obj is GameObject gameObject)
+            {
+                MeshFilter[] meshFilters = gameObject.GetComponentsInChildren<MeshFilter>(true);
+                for (int i = 0; i < meshFilters.Length; i++)
+                {
+                    Mesh mesh = meshFilters[i] != null ? meshFilters[i].sharedMesh : null;
+                    if (mesh != null
+                        && mesh.name.EndsWith(" (Runtime Grounded)", StringComparison.Ordinal)
+                        && (mesh.hideFlags & HideFlags.DontSave) != 0)
+                    {
+                        if (Application.isPlaying) Destroy(mesh);
+                        else DestroyImmediate(mesh);
+                    }
+                }
             }
 
             if (Application.isPlaying)

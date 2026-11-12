@@ -5,12 +5,9 @@ using NUnit.Framework;
 namespace LandLedgers.EditorTests.Population
 {
     /// <summary>
-    /// Plan 02 Slice 2 — the shortage monitor must stop raising needs no
-    /// seller can ever offer. The filter is on recognition (a legitimately
-    /// known supplier recognizes the item), never on current stock: a
-    /// recognized-but-out-of-stock item is real demand and still raises a
-    /// need. No substitution is invented; the suppression is logged loudly
-    /// once per household per day so the hunger signal stays visible.
+    /// Seller recognition controls shopping feasibility, not whether a real
+    /// household shortage exists. Unservable needs stay visible and are
+    /// updated in place rather than duplicated each day.
     /// </summary>
     [TestFixture]
     public sealed class HouseholdShoppingUnservableNeedsTests
@@ -89,7 +86,7 @@ namespace LandLedgers.EditorTests.Population
             public int SuppressionCount(HouseholdShortageMonitor monitor, string itemId)
             {
                 int count = 0;
-                string needle = $"will not raise a '{itemId}' need";
+                string needle = $"has an open '{itemId}' shortage";
                 foreach (string line in monitor.Diagnostics)
                 {
                     if (line != null && line.Contains(needle))
@@ -112,7 +109,7 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void PreservedMeat_NeedNeverOpens_WithBreadOnlyStore()
+        public void PreservedMeat_NeedRemainsVisible_WithBreadOnlyStore()
         {
             Fixture f = new Fixture();
             f.Directory.Register(BreadFlourPotatoStore());
@@ -123,11 +120,11 @@ namespace LandLedgers.EditorTests.Population
             // Empty inventory: every meal item is at zero days of supply.
             f.Evaluate(monitor, 0);
 
-            Assert.IsNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId),
-                "no seller recognizes preserved_meat, so its need must never open");
-            Assert.IsNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.UnspecifiedMeatId));
-            Assert.IsNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedFoodId));
-            Assert.IsNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.UnspecifiedStapleFoodId));
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId),
+                "a genuine shortage remains visible when no seller recognizes it");
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.UnspecifiedMeatId));
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedFoodId));
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.UnspecifiedStapleFoodId));
             Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId),
                 "bread is recognized and short, so its need must open normally");
             Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.FlourId));
@@ -156,17 +153,19 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void SellerLearnedLater_NeedOpensNextDay()
+        public void SellerLearnedLater_ExistingNeedUpdatesWithoutDuplication()
         {
             Fixture f = new Fixture();
             HouseholdShortageMonitor monitor = f.Monitor();
 
-            // Day 0: no known seller at all — nothing is recognized.
+            // Day 0: the actual shortages remain visible even though no
+            // seller is known yet.
             f.Evaluate(monitor, 0);
-            Assert.IsNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId),
-                "with no known seller, the meat need must not open");
-            Assert.IsNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId),
-                "with no known seller, even the bread need must not open");
+            HouseholdPurchasingNeed originalMeatNeed = f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId);
+            Assert.IsNotNull(originalMeatNeed,
+                "with no known seller, the meat shortage still remains visible");
+            Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId),
+                "with no known seller, the bread shortage also remains visible");
 
             // A supplier recognizing preserved_meat is registered and learned.
             var butcher = new FakeRecognizingSupplier
@@ -179,14 +178,18 @@ namespace LandLedgers.EditorTests.Population
             f.Directory.Register(butcher);
             f.Knowledge.LearnSupplier(1, "butcher-1", "lives in the same town", 1);
 
-            // Day 1: the need opens.
+            // Day 1: the existing need stays open and its seller blocker
+            // disappears from the explanation.
             f.Evaluate(monitor, 1);
             Assert.IsNotNull(f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId),
-                "once a known seller recognizes preserved_meat, the need must open the next day");
+                "the shortage remains open after seller knowledge changes");
+            Assert.AreSame(originalMeatNeed, f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId),
+                "daily reevaluation must update the existing need rather than duplicate it");
+            Assert.IsFalse(originalMeatNeed.ReasonSummary.Contains("no known seller"));
         }
 
         [Test]
-        public void Suppression_IsLogged()
+        public void UnservableShortage_IsLoggedAndRemainsOpenWithoutDuplicates()
         {
             Fixture f = new Fixture();
             f.Directory.Register(BreadFlourPotatoStore());
@@ -198,20 +201,24 @@ namespace LandLedgers.EditorTests.Population
             bool found = false;
             foreach (string line in monitor.Diagnostics)
             {
-                if (line != null && line.Contains("H7 will not raise a 'preserved_meat' need: no known seller offers it"))
+                if (line != null && line.Contains("H7 has an open 'preserved_meat' shortage, but no known seller currently offers it"))
                 {
                     found = true;
                 }
             }
 
-            Assert.IsTrue(found, "the suppression diagnostic must name the household and the item; diagnostics: "
+            Assert.IsTrue(found, "the shortage diagnostic must name the household and the item; diagnostics: "
                 + string.Join(" | ", monitor.Diagnostics));
             Assert.AreEqual(1, f.SuppressionCount(monitor, HouseholdItemCatalog.PreservedMeatId),
-                "suppression is logged once per household per day");
+                "the shortage is logged once per household per day");
+            HouseholdPurchasingNeed need = f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId);
+            Assert.IsNotNull(need);
+            Assert.IsTrue(need.ReasonSummary.Contains("no known seller"));
 
             // The next day logs it once more — the signal is not hidden.
             f.Evaluate(monitor, 1);
             Assert.AreEqual(2, f.SuppressionCount(monitor, HouseholdItemCatalog.PreservedMeatId));
+            Assert.AreSame(need, f.Needs.GetOpenNeed(7, HouseholdItemCatalog.PreservedMeatId));
         }
     }
 }

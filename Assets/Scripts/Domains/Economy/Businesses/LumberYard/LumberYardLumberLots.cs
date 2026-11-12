@@ -281,6 +281,11 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             if (refusal != null) return refusal;
             if (yardLotId == EntityId.Invalid)
                 return "LumberYardLumberStock.ReceiveFromSawmill: the yard lot needs an EntityId — anonymous custody is refused.";
+            if (FindLot(yardLotId) != null)
+                return "LumberYardLumberStock.ReceiveFromSawmill: duplicate yard lot identity; nothing moved.";
+            foreach (LumberYardLumberLot existing in lots)
+                if (existing != null && string.Equals(existing.SourceSawmillLotId, millLot.LotId.ToString(), StringComparison.Ordinal))
+                    return "LumberYardLumberStock.ReceiveFromSawmill: this source mill lot was already received; nothing moved.";
 
             string grade = AssignGrade(yardGradeId, diag);
             if (grade == null)
@@ -297,6 +302,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             yardLot.ConversionProfileId = millLot.ConversionProfileId;
 
             lots.Add(yardLot);
+            // This operation hands over the whole identified source lot.
+            // Validation/refusal above leaves it untouched; acceptance must
+            // remove the same units from the mill's live lot, not copy stock.
+            millLot.LumberUnits = 0;
             diag.Add($"LumberYardLumberStock ({yardBusinessId}): received {yardLot.LumberUnits} lumber units "
                 + $"(yard lot {yardLot.LotId}, grade '{grade}') from mill '{millLot.MillBusinessId}' — {yardLot.ProvenanceChain()}.");
             return null;

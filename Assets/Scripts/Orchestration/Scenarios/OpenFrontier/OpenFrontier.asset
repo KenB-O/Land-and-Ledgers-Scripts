@@ -28,7 +28,7 @@ MonoBehaviour:
   startingWorld:
     scenarioId: open-frontier
     definitionVersion: 1.0.0
-    startYear: 1897
+    startYear: 1870
     startMonth: 3
     startDay: 1
     minResidents: 55

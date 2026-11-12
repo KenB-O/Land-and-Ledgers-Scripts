@@ -17,12 +17,12 @@ MonoBehaviour:
   cellSizeMeters: 2
   worldCenter: {x: 0, y: 0, z: 0}
   seed: 1886
-  startupMode: 0
+  startupMode: 1
   fixedTestingProfileName: Default QA Town
   fixedTestingWorldSeed: 1886
   useManualSeedOverride: 0
   manualSeedOverride: 1886
-  randomizeSeedOnFreshRuntimeGeneration: 1
+  randomizeSeedOnFreshRuntimeGeneration: 0
   useFixedDebugSeed: 0
   fixedDebugSeed: 1886
   seedAuthorityLegacyMigrationApplied: 1

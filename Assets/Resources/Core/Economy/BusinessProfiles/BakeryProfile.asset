@@ -88,7 +88,7 @@ MonoBehaviour:
         maxCents: 90
       markupMultiplier: 1
       supplyDemandSensitivity: 0.35
-    startingStockUnits: 18
+    startingStockUnits: 36
     reorderTargetUnits: 42
     reorderLotSize: 8
     coreStock: 1
@@ -110,7 +110,7 @@ MonoBehaviour:
         maxCents: 48
       markupMultiplier: 1
       supplyDemandSensitivity: 0.3
-    startingStockUnits: 6
+    startingStockUnits: 12
     reorderTargetUnits: 18
     reorderLotSize: 4
     coreStock: 1

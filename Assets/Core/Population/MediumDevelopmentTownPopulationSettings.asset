@@ -1,0 +1,80 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc426602f4ab6642bc0c81fd7ecc471, type: 3}
+  m_Name: MediumDevelopmentTownPopulationSettings
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Population.PopulationGenerationSettings
+  seedOffset: 73017
+  householdOccupancyRate: 1
+  minHouseholdSize: 1
+  maxHouseholdSize: 6
+  minimumStartingHouseholds: 18
+  maximumStartingHouseholds: 18
+  minimumStartingResidents: 45
+  targetStartingResidents: 45
+  maximumStartingResidents: 45
+  adultWorkerChance: 0.82
+  juniorWorkerChance: 0.35
+  youngWorkerChance: 0.65
+  newcomerArrivalRate: 0
+  minimumNewcomerArrivalHouseholds: 0
+  residentialBoardingBaseCapacity: 1
+  mixedUseBoardingBaseCapacity: 2
+  boarderStableMoveMinWeeks: 4
+  departureHousingPressureThreshold: 0.78
+  pressuredArrivalDepartureChance: 0.22
+  loneLaborerArrivalWeight: 18
+  kinLinkedArrivalWeight: 14
+  boarderSeekingWorkerArrivalWeight: 24
+  renterReadyHouseholdArrivalWeight: 14
+  skilledCapitalizedArrivalWeight: 10
+  distressedRelocationArrivalWeight: 14
+  widowElderRelocationArrivalWeight: 6
+  professionDefinitions: []
+  maleFirstNames:
+  - Thomas
+  - Samuel
+  - Edwin
+  - Caleb
+  - Silas
+  - Jonah
+  - Nathaniel
+  - Isaac
+  - Walter
+  - Henry
+  femaleFirstNames:
+  - Clara
+  - Martha
+  - Ada
+  - Eleanor
+  - Josephine
+  - Rose
+  - Lydia
+  - Nora
+  - Abigail
+  - Mae
+  surnames:
+  - Bennett
+  - Whitaker
+  - Hale
+  - Carver
+  - Mercer
+  - Dawson
+  - Reed
+  - Bell
+  - Sutter
+  - Cole
+  - Fletcher
+  - Hobbs
+  - Wainwright
+  - Marsh
+  - Beckett
+  - Quinn

@@ -338,6 +338,45 @@ namespace LandLedgers.Economy.Businesses.Bakery
         }
     }
 
+    /// <summary>Applies finite, scenario-authored Bakery inputs once for a NewGame.</summary>
+    public static class ScenarioOpeningBakeryInputEndowment
+    {
+        public static bool TryApply(BakeryShopRuntime bakery, LandLedgers.Economy.BusinessRuntimeState businessRuntime,
+            EntityIdRegistry ids, string configurationId, string businessKey, int scenarioSeed,
+            int flourPounds, int notionsUnits, int dayIndex, List<string> diagnostics,
+            out string report, out string error)
+        {
+            diagnostics ??= new List<string>(); report = string.Empty; error = string.Empty;
+            if (bakery == null || businessRuntime == null || ids == null || string.IsNullOrWhiteSpace(configurationId)
+                || string.IsNullOrWhiteSpace(businessKey)
+                || !string.Equals(bakery.BusinessInstanceId, businessRuntime.BusinessId, StringComparison.Ordinal))
+            { error = "Opening Bakery inputs require matching bakery/business runtimes and scenario/lot identity."; return false; }
+            if (flourPounds < 0 || notionsUnits < 0)
+            { error = "Opening Bakery inputs cannot be negative."; return false; }
+            string marker = $"development-town-opening-bakery-inputs:{configurationId}:{businessKey}:{businessRuntime.BusinessId}:{scenarioSeed}";
+            if (businessRuntime.HasAppliedScenarioEndowment(marker))
+            { report = "Opening Bakery inputs already recorded; no stock recreated."; return true; }
+            if (flourPounds == 0 && notionsUnits == 0)
+            { report = "No opening Bakery inputs configured."; return true; }
+            string note = $"Finite one-time DevelopmentTownConfiguration '{configurationId}' opening stock for '{businessKey}' (seed {scenarioSeed}).";
+            foreach (var entry in new[] { (BakeryBreadCatalog.FlourItemId, flourPounds), (BakeryBreadCatalog.NotionsItemId, notionsUnits) })
+            {
+                if (entry.Item2 == 0) continue;
+                string refusal = bakery.FlourStock.ReceiveLot(new BakeryFlourLot
+                {
+                    LotId = ids.Allocate(EntityKind.Lot), FlourName = entry.Item1, Units = entry.Item2,
+                    AcquiredDayIndex = Math.Max(0, dayIndex), IsBootstrapEndowment = true, SupplierNote = note,
+                }, diagnostics);
+                if (!string.IsNullOrWhiteSpace(refusal))
+                { error = $"Opening Bakery input '{entry.Item1}' refused: {refusal}"; return false; }
+            }
+            if (!businessRuntime.RecordAppliedScenarioEndowment(marker))
+            { error = "Could not record the opening Bakery input endowment marker."; return false; }
+            report = $"Applied finite Bakery opening inputs: flour={flourPounds} lb, notions={notionsUnits} units.";
+            return true;
+        }
+    }
+
     /// <summary>
     /// W2A: the flour/notions supply link. Survey result: the CRP-3 grain chain
     /// (farm → dealer → miller) is the primary honest path — the miller's

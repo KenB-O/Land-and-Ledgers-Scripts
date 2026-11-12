@@ -29,6 +29,17 @@ namespace LandLedgers.Population
     /// </summary>
     public sealed class DailyActivityPlanner
     {
+        /// <summary>
+        /// Routine job-search time is for adults without work. A current
+        /// business operator has management and opportunity duties instead;
+        /// owners still may seek work through a separately justified decision
+        /// (for example business closure or genuine income distress).
+        /// </summary>
+        public static bool ShouldPlanRoutineJobSeeking(AgeBand ageBand, bool hasActiveEmployment, bool managesBusiness)
+        {
+            return ageBand == AgeBand.Adult18Plus && !hasActiveEmployment && !managesBusiness;
+        }
+
         /// <summary>Default sleep window: 22:00 → 07:00 (540 min across midnight).</summary>
         public const int DefaultSleepStartMinute = 1320;
         public const int DefaultSleepEndMinute = 420;
@@ -36,6 +47,8 @@ namespace LandLedgers.Population
         /// <summary>Default meals: 07:30 and 18:30, 30 min each.</summary>
         public static readonly int[] DefaultMealMinutes = { 450, 1110 };
         public const int DefaultMealDurationMinutes = 30;
+        public const int MealWindowFlexMinutes = 60;
+        private static readonly int[] MealSearchOffsets = { 0, 15, -15, 30, -30, 45, -45, 60, -60 };
 
         /// <summary>Per-person inputs for one day's plan. All minutes are minute-of-day.</summary>
         [Serializable]
@@ -119,9 +132,20 @@ namespace LandLedgers.Population
                 : new List<int>(DefaultMealMinutes);
             foreach (int mealStart in meals)
             {
-                ReserveActivity(inputs.PersonId, PersonActivityKind.Eating, dayIndex,
-                    mealStart, Math.Max(1, inputs.MealDurationMinutes), "meal",
-                    schedules, budgets, plan, diag, commitBudget: false);
+                int duration = Math.Max(1, inputs.MealDurationMinutes);
+                bool reserved = false;
+                foreach (int offset in MealSearchOffsets)
+                {
+                    int candidate = mealStart + offset;
+                    if (candidate < 0 || candidate + duration > 1440
+                        || !schedules.IsFree(inputs.PersonId, dayIndex, candidate, duration)) continue;
+                    ReserveActivity(inputs.PersonId, PersonActivityKind.Eating, dayIndex,
+                        candidate, duration, "meal window", schedules, budgets, plan, diag, commitBudget: false);
+                    reserved = true;
+                    break;
+                }
+                if (!reserved)
+                    plan.Conflicts.Add($"DailyActivityPlanner: no free {duration}-min meal opportunity within ±{MealWindowFlexMinutes} min of {mealStart} for P{inputs.PersonId}.");
             }
 
             // 3. Productive blocks (budget-consuming): job-seeking, managing.

@@ -16,6 +16,41 @@ namespace LandLedgers.EditorTests.Population
         private static readonly EntityId Worker = EntityId.For(EntityKind.Person, 7);
         private static string ReservationLabel(WorkTask task) => $"task:{task.TaskId}|{task.DefinitionId}";
 
+        [TestCase("business-feed-shopping", "business-feed-trip:shop:purchase-1", true)]
+        [TestCase("freight-service-meeting", "freight-meeting:session:request-1", true)]
+        [TestCase("opening-wagon-hitch-preparation", "development-preparation:wagon", true)]
+        [TestCase("freight-dispatch-assignment", "freight-dispatch:agreement-1:shipment-1", true)]
+        [TestCase("travel", "business-feed-trip:outbound:purchase-1", true)]
+        [TestCase("ordinary-work", "", false)]
+        [TestCase("travel", "travel:home->store", false)]
+        public void BlanketStarterLeavesSpecializedTaskGatesToTheirProductionDriver(
+            string definitionId, string customerRef, bool specialized)
+        {
+            var authority = new TaskAuthority();
+            Assert.IsTrue(authority.RegisterDefinition(new TaskDefinition(
+                definitionId, definitionId, 15), out string reason), reason);
+            WorkTask task = authority.CreateTaskWithPlannedMinutes(
+                definitionId, Owner, 1, 15, customerRef: customerRef);
+            var host = new UnityEngine.GameObject("starter-gate-test");
+            host.SetActive(false); // Do not initialize a second live composition.
+            try
+            {
+                var driver = host.AddComponent<LandLedgers.Orchestration.Systems.SimulationDrivers>();
+                var gate = typeof(LandLedgers.Orchestration.Systems.SimulationDrivers).GetMethod(
+                    "HasSpecializedBusinessTaskStarter",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                Assert.IsNotNull(gate);
+                Assert.AreEqual(specialized, gate.Invoke(driver, new object[] { task }),
+                    "Dedicated task starts must retain their physical gates and activity-state updates.");
+                Assert.AreEqual(TaskStatus.Queued, task.Status);
+                Assert.AreEqual(0, task.MinutesWorked);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
         private static (TaskAuthority Authority, WorkTimeBudgetStore Budgets, WorkTask Task) StartTask(
             string definitionId, int plannedMinutes)
         {

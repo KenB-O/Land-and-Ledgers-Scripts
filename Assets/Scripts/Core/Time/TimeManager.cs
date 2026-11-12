@@ -68,10 +68,19 @@ namespace LandLedgers.Time
         // Gregorian calendar to begin before the shared calendar epoch.
         private int calendarDayOffset;
         private float shortTickAccumulatorGameSeconds;
+        [SerializeField] private double pendingGameSeconds;
+        private double gameSecondsRemainder;
+        private double shortTickRemainder;
+        public double PendingGameSeconds => pendingGameSeconds;
+        public float LastAchievedGameSecondsPerRealSecond { get; private set; }
         private bool initialized;
         private bool shortTickCapHitThisFrame;
+        private bool dispatchingShortTick;
+        private SimulationTickContext dispatchTickContext;
 
         public event Action<SimulationFrameContext> VisualFrameUpdated;
+        /// <summary>Raised at each chronological simulation boundary before its ordinary consumers run.</summary>
+        public event Action<SimulationTickContext> BeforeShortTick;
         public event Action<SimulationTickContext> ShortTick;
         public event Action<SimulationDateChangedContext> DayChanged;
         public event Action<SimulationDateChangedContext> WeekChanged;
@@ -83,7 +92,7 @@ namespace LandLedgers.Time
 
         public SimulationTimeSettings Settings => settings;
         public SimulationSpeed CurrentSpeed => currentSpeed;
-        public SimulationDate CurrentDate => currentDate;
+        public SimulationDate CurrentDate => dispatchingShortTick ? dispatchTickContext.Date : currentDate;
         /// <summary>
         /// Calendar epoch for the current campaign timeline. A new scenario can
         /// begin before the shared serialized settings epoch; keeping its own
@@ -100,27 +109,31 @@ namespace LandLedgers.Time
                 return new CalendarAnchor(year, month, day);
             }
         }
-        public int CurrentDayIndex => currentDate.DayOfWeekIndex;
-        public int CurrentAbsoluteDayIndex => absoluteDayIndex;
+        public int CurrentDayIndex => CurrentDate.DayOfWeekIndex;
+        public int CurrentAbsoluteDayIndex => dispatchingShortTick
+            ? dispatchTickContext.Date.AbsoluteDayIndex
+            : absoluteDayIndex;
         public string CurrentDayName => currentDayName;
-        public int CurrentWeek => currentDate.Week;
-        public int CurrentMonth => currentDate.Month;
+        public int CurrentWeek => CurrentDate.Week;
+        public int CurrentMonth => CurrentDate.Month;
         public string CurrentMonthName => currentMonthName;
-        public int CurrentSeasonIndex => settings != null ? settings.GetSeasonIndex(currentDate) : 0;
+        public int CurrentSeasonIndex => settings != null ? settings.GetSeasonIndex(CurrentDate) : 0;
         public string CurrentSeasonName => currentSeasonName;
-        public int CurrentYear => currentDate.Year;
-        public float TimeOfDay01 => timeOfDay01;
-        public float GameSecondsIntoDay => gameSecondsIntoDay;
+        public int CurrentYear => CurrentDate.Year;
+        public float TimeOfDay01 => dispatchingShortTick ? dispatchTickContext.TimeOfDay01 : timeOfDay01;
+        public float GameSecondsIntoDay => dispatchingShortTick ? dispatchTickContext.GameSecondsIntoDay : gameSecondsIntoDay;
 
         /// <summary>
         /// Pass IV (Worker 1): absolute game seconds on the authoritative timeline —
         /// the time base for the due-event schedule. Never a second clock.
         /// </summary>
-        public float AbsoluteGameSeconds =>
+        public double PreciseAbsoluteGameSeconds =>
             settings != null
-                ? (float)((double)absoluteDayIndex * settings.GameSecondsPerDay + gameSecondsIntoDay)
-                : gameSecondsIntoDay;
-        public int ShortTickIndex => shortTickIndex;
+                ? (double)CurrentAbsoluteDayIndex * settings.GameSecondsPerDay + GameSecondsIntoDay
+                : GameSecondsIntoDay;
+        /// <summary>Legacy float timeline retained for existing economy APIs.</summary>
+        public float AbsoluteGameSeconds => (float)PreciseAbsoluteGameSeconds;
+        public int ShortTickIndex => dispatchingShortTick ? dispatchTickContext.TickIndex : shortTickIndex;
         public bool IsPaused => isPaused;
         public float CurrentSpeedMultiplier => ResolveSpeedMultiplier(currentSpeed);
         /// <summary>Authoritative game seconds advanced per unscaled real second at the selected speed.</summary>
@@ -255,6 +268,9 @@ namespace LandLedgers.Time
                 gameSecondsIntoDay = gameSecondsIntoDay,
                 shortTickIndex = shortTickIndex,
                 shortTickAccumulatorGameSeconds = shortTickAccumulatorGameSeconds,
+                pendingGameSeconds = pendingGameSeconds,
+                gameSecondsRemainder = gameSecondsRemainder,
+                shortTickRemainder = shortTickRemainder,
                 currentSpeed = currentSpeed,
                 lastNonPausedSpeed = lastNonPausedSpeed,
                 isPaused = isPaused
@@ -289,6 +305,9 @@ namespace LandLedgers.Time
 
             shortTickIndex = Mathf.Max(0, dto.shortTickIndex);
             shortTickAccumulatorGameSeconds = Mathf.Max(0f, dto.shortTickAccumulatorGameSeconds);
+            pendingGameSeconds = Math.Max(0d, dto.pendingGameSeconds);
+            gameSecondsRemainder = dto.gameSecondsRemainder;
+            shortTickRemainder = dto.shortTickRemainder;
             currentSpeed = dto.currentSpeed;
             lastNonPausedSpeed = dto.lastNonPausedSpeed == SimulationSpeed.Paused ? SimulationSpeed.Speed1x : dto.lastNonPausedSpeed;
             isPaused = dto.isPaused || currentSpeed == SimulationSpeed.Paused || ResolveSpeedMultiplier(currentSpeed) <= 0f;
@@ -313,7 +332,6 @@ namespace LandLedgers.Time
 
             Instance = this;
             InitializeState(false);
-            LandLedgers.Presentation.DayNightVisualController.EnsureAttached(this);
         }
 
         private void OnEnable()
@@ -326,7 +344,6 @@ namespace LandLedgers.Time
             InitializeState(false);
             if (Instance == this)
             {
-                LandLedgers.Presentation.DayNightVisualController.EnsureAttached(this);
             }
         }
 
@@ -367,6 +384,7 @@ namespace LandLedgers.Time
 
             if (realDeltaSeconds <= 0f || isPaused)
             {
+                LastAchievedGameSecondsPerRealSecond = 0f;
                 VisualFrameUpdated?.Invoke(new SimulationFrameContext(
                     currentDate,
                     currentSpeed,
@@ -379,7 +397,8 @@ namespace LandLedgers.Time
             }
 
             float gameDeltaSeconds = realDeltaSeconds * speedMultiplier * (settings.GameSecondsPerDay / settings.realSecondsPerGameDayAt1x);
-            AdvanceGameSeconds(gameDeltaSeconds);
+            gameDeltaSeconds = QueueAndAdvanceGameSeconds(gameDeltaSeconds);
+            LastAchievedGameSecondsPerRealSecond = gameDeltaSeconds / realDeltaSeconds;
 
             VisualFrameUpdated?.Invoke(new SimulationFrameContext(
                 currentDate,
@@ -404,6 +423,8 @@ namespace LandLedgers.Time
             {
                 SimulationSpeed.Paused => 0f,
                 SimulationSpeed.RealTime => 1f,
+                SimulationSpeed.Observe => 1f / 6f,
+                SimulationSpeed.Speed500x => 500f,
                 _ => Mathf.Max(0f, (float)(int)speed)
             };
         }
@@ -426,6 +447,9 @@ namespace LandLedgers.Time
             // from the Gregorian anchor (default 1892-03-01). absoluteDayIndex
             // remains the persisted truth; the start is an anchor offset now.
             calendarDayOffset = 0;
+            pendingGameSeconds = 0d;
+            gameSecondsRemainder = 0d;
+            shortTickRemainder = 0d;
             absoluteDayIndex = settings.GetScenarioStartAbsoluteDayIndex();
             currentDate = BuildTimelineDate();
             ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
@@ -436,6 +460,21 @@ namespace LandLedgers.Time
             ResetFrameDiagnostics();
             initialized = true;
             RefreshDebugState();
+        }
+
+        private float QueueAndAdvanceGameSeconds(float requestedGameSeconds)
+        {
+            pendingGameSeconds += Math.Max(0f, requestedGameSeconds);
+            // Bound chronological catch-up instead of dropping elapsed game
+            // time when the requested speed exceeds this frame's capacity.
+            double budget = Math.Min(
+                (double)settings.ShortTickIntervalGameSeconds * settings.maxShortTicksPerFrame,
+                (double)settings.GameSecondsPerDay * settings.maxDayRolloversPerFrame);
+            float processed = (float)Math.Min(pendingGameSeconds, budget);
+            if (processed <= 0f) return 0f;
+            pendingGameSeconds -= processed;
+            AdvanceGameSeconds(processed);
+            return processed;
         }
 
         private void AdvanceGameSeconds(float gameDeltaSeconds)
@@ -453,8 +492,14 @@ namespace LandLedgers.Time
             {
                 float secondsUntilTomorrow = Mathf.Max(0f, settings.GameSecondsPerDay - gameSecondsIntoDay);
                 float step = Mathf.Min(remainingGameSeconds, secondsUntilTomorrow);
-                gameSecondsIntoDay += step;
-                shortTickAccumulatorGameSeconds += step;
+                // Preserve sub-float increments at slow actual-time speeds,
+                // while retaining the serialized float clock fields.
+                double preciseSeconds = (double)gameSecondsIntoDay + gameSecondsRemainder + step;
+                gameSecondsIntoDay = (float)preciseSeconds;
+                gameSecondsRemainder = preciseSeconds - gameSecondsIntoDay;
+                double preciseTickSeconds = (double)shortTickAccumulatorGameSeconds + shortTickRemainder + step;
+                shortTickAccumulatorGameSeconds = (float)preciseTickSeconds;
+                shortTickRemainder = preciseTickSeconds - shortTickAccumulatorGameSeconds;
                 remainingGameSeconds -= step;
 
                 RefreshTimeOfDay01FromCurrentSeconds();
@@ -496,7 +541,6 @@ namespace LandLedgers.Time
 
             collapsedDayRolloversLastFrame = daysToAdvance;
             cappedDayRolloverFrames++;
-            RecordCollapsedShortTickCompression(remainingGameSeconds);
 
             // Pass IV (Worker 1): every crossed day runs its daily drivers. DayChanged
             // (and WeekChanged/MonthChanged as crossed) fires PER DAY through
@@ -504,12 +548,18 @@ namespace LandLedgers.Time
             // silently skipped by a collapsed rollover.
             for (int day = 0; day < daysToAdvance; day++)
             {
+                // The first boundary was already accumulated by AdvanceGameSeconds.
+                // Later days must accrue their own work intervals before rollover.
+                if (day > 0) shortTickAccumulatorGameSeconds += settings.GameSecondsPerDay;
                 // Normalize: each iteration rolls exactly one pending day.
                 gameSecondsIntoDay = settings.GameSecondsPerDay;
                 ProcessDayRollover();
             }
 
-            ApplyTimeOfDay((float)(totalSecondsToPlace - daysToAdvance * secondsPerDay));
+            float remainder = (float)(totalSecondsToPlace - daysToAdvance * secondsPerDay);
+            ApplyTimeOfDay(remainder);
+            shortTickAccumulatorGameSeconds += remainder;
+            ProcessShortTicks();
 
             if (logMajorTicks)
             {
@@ -524,19 +574,35 @@ namespace LandLedgers.Time
         {
             float interval = settings.ShortTickIntervalGameSeconds;
             int ticksProcessed = 0;
+            double secondsPerDay = settings.GameSecondsPerDay;
+            double absoluteSecondsAtEnd = (double)absoluteDayIndex * secondsPerDay + gameSecondsIntoDay;
 
             while (shortTickAccumulatorGameSeconds >= interval && ticksProcessed < settings.maxShortTicksPerFrame)
             {
                 shortTickAccumulatorGameSeconds -= interval;
-                shortTickIndex++;
                 ticksProcessed++;
 
-                ShortTick?.Invoke(new SimulationTickContext(
-                    currentDate,
+                // A high-speed frame may accumulate several ShortTicks before
+                // this method runs. Give each callback the time at the end of
+                // its own interval, not the final clock time for the frame.
+                // Otherwise scheduled-work consumers can count the same
+                // reservation overlap once for every tick in the burst.
+                double tickEndAbsoluteSeconds = absoluteSecondsAtEnd - shortTickAccumulatorGameSeconds;
+                int tickDayIndex = AbsoluteDayIndexForTick(tickEndAbsoluteSeconds, secondsPerDay);
+                double tickSecondsIntoDay = tickEndAbsoluteSeconds - (double)tickDayIndex * secondsPerDay;
+                tickSecondsIntoDay = Math.Max(0d, Math.Min(secondsPerDay, tickSecondsIntoDay));
+                int tickIndex = Math.Max(0, (int)Math.Floor(tickSecondsIntoDay / interval + 0.000001d));
+                shortTickIndex = tickIndex;
+                SimulationDate tickDate = BuildTimelineDate(tickDayIndex);
+                float tickTimeOfDay01 = (float)(tickSecondsIntoDay / secondsPerDay);
+
+                SimulationTickContext context = new(
+                    tickDate,
                     shortTickIndex,
                     interval,
-                    timeOfDay01,
-                    gameSecondsIntoDay));
+                    tickTimeOfDay01,
+                    (float)tickSecondsIntoDay);
+                DispatchShortTick(context);
             }
 
             if (ticksProcessed >= settings.maxShortTicksPerFrame)
@@ -545,6 +611,24 @@ namespace LandLedgers.Time
                 // Pass IV (Worker 1): DEFERRAL, not discard. The leftover accumulator
                 // carries into later frames so accelerated time never loses simulated
                 // seconds; the per-frame cap still bounds work per frame.
+            }
+        }
+
+        private void DispatchShortTick(SimulationTickContext context)
+        {
+            bool previousDispatchState = dispatchingShortTick;
+            SimulationTickContext previousContext = dispatchTickContext;
+            dispatchingShortTick = true;
+            dispatchTickContext = context;
+            try
+            {
+                BeforeShortTick?.Invoke(context);
+                ShortTick?.Invoke(context);
+            }
+            finally
+            {
+                dispatchTickContext = previousContext;
+                dispatchingShortTick = previousDispatchState;
             }
         }
 
@@ -588,6 +672,13 @@ namespace LandLedgers.Time
 
         private void ProcessDayRollover()
         {
+            // Complete the closing day's work before daily drivers reset its
+            // reservations, budgets, or needs. Ordinary intraday frames still
+            // defer excess ticks; crossing midnight must preserve event order.
+            while (shortTickAccumulatorGameSeconds >= settings.ShortTickIntervalGameSeconds)
+            {
+                ProcessShortTicks();
+            }
             gameSecondsIntoDay -= settings.GameSecondsPerDay;
             SimulationDate previousDate = currentDate;
             absoluteDayIndex++;
@@ -615,23 +706,36 @@ namespace LandLedgers.Time
 
         private SimulationDate BuildTimelineDate()
         {
+            return BuildTimelineDate(absoluteDayIndex);
+        }
+
+        private SimulationDate BuildTimelineDate(int dayIndex)
+        {
             if (settings == null)
             {
                 return currentDate;
             }
 
-            settings.Anchor.FromAbsoluteDay(calendarDayOffset + absoluteDayIndex,
+            settings.Anchor.FromAbsoluteDay(calendarDayOffset + dayIndex,
                 out int year, out int month, out int day);
             int weekday = GregorianDateMath.DayOfWeekMondayZero(year, month, day);
-            int week = absoluteDayIndex / 7 + 1;
+            int week = dayIndex / 7 + 1;
             return new SimulationDate(
-                absoluteDayIndex,
+                dayIndex,
                 weekday,
                 day,
                 week,
                 (day - 1) / 7 + 1,
                 month,
                 year);
+        }
+
+        private static int AbsoluteDayIndexForTick(double tickEndAbsoluteSeconds, double secondsPerDay)
+        {
+            if (secondsPerDay <= 0d || tickEndAbsoluteSeconds <= 0d) return 0;
+            // An interval ending exactly at midnight belongs to the day it
+            // just completed. The next interval belongs to the new day.
+            return Math.Max(0, (int)Math.Ceiling(tickEndAbsoluteSeconds / secondsPerDay - 0.0000001d) - 1);
         }
 
         private void ApplyTimeOfDay(float newGameSecondsIntoDay)

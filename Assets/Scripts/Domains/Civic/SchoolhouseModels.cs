@@ -758,7 +758,8 @@ namespace LandLedgers.Civic
 
         private static bool CanServeAsTeacher(PersonState person, SchoolhouseThresholds thresholds)
         {
-            if (person == null || person.age < thresholds.teacherMinimumAge)
+            if (person == null || person.isOffMap || person.deathDayIndex >= 0 ||
+                person.age < thresholds.teacherMinimumAge)
             {
                 return false;
             }

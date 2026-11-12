@@ -651,27 +651,21 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
-                int cost = unitsToReceive * Math.Max(0, unitCost);
-                string payProblem = store.SpendCash(cost, $"restock {unitsToReceive}u {delivery.CategoryId} ({delivery.DeliveryId})");
-                if (payProblem != null)
+                long fullCost = (long)unitsToReceive * Math.Max(0, unitCost);
+                if (fullCost > int.MaxValue || !(store is IPaidStoreReceivingPort paidReceiver))
                 {
-                    outDiagnostics.Add($"Day {dayIndex}: {delivery.DeliveryId} WAITING — {payProblem} No stock booked without payment.");
+                    outDiagnostics.Add($"Day {dayIndex}: {delivery.DeliveryId} WAITING — cost exceeds supported cents or the store has no atomic paid-receipt port. No cash or stock moved.");
                     continue;
                 }
-
+                int cost = (int)fullCost;
                 string provenance = $"{delivery.Provenance} → received day {dayIndex} for {cost}c";
-                string receiveProblem;
-                if (identifiedItemDelivery)
-                {
-                    int receivedBefore = Math.Max(0, order.UnitsOrdered - delivery.Units);
-                    string lotId = $"store-procurement:{delivery.DeliveryId}:{receivedBefore}";
-                    receiveProblem = ((IIdentifiedRetailStockReceivingPort)store).ReceiveRetailItemLot(
-                        lotId, delivery.ItemId, delivery.CategoryId, itemUnitLabel, unitsToReceive, provenance, dayIndex);
-                }
-                else
-                {
-                    receiveProblem = store.ReceiveStock(delivery.CategoryId, unitsToReceive, provenance);
-                }
+                int receivedBefore = Math.Max(0, order.UnitsOrdered - delivery.Units);
+                string lotId = $"store-procurement:{delivery.DeliveryId}:{receivedBefore}";
+                int cashBeforeReceipt = store.CurrentCashCents;
+                int stockBeforeReceipt = store.CategoryStockUnits(delivery.CategoryId);
+                string receiveProblem = paidReceiver.ReceivePaidStock(lotId,
+                    identifiedItemDelivery ? delivery.ItemId : string.Empty,
+                    delivery.CategoryId, itemUnitLabel, unitsToReceive, cost, provenance, dayIndex);
                 if (receiveProblem != null)
                 {
                     outDiagnostics.Add($"Day {dayIndex}: {delivery.DeliveryId} receive issue — {receiveProblem}");
@@ -689,6 +683,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
 
                 outDiagnostics.Add($"Day {dayIndex}: received {unitsToReceive}u {delivery.CategoryId} ({provenance})." +
+                    $" [StoreReceipt] business='{store.StoreBusinessId}' item='{delivery.ItemId}' lot='{lotId}' " +
+                    $"paid={cost}c cash={cashBeforeReceipt}->{store.CurrentCashCents}c stock={stockBeforeReceipt}->{store.CategoryStockUnits(delivery.CategoryId)}u." +
                     (delivery.Units > 0 ? $" {delivery.Units}u still at the dock." : string.Empty));
             }
         }

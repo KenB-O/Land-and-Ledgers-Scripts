@@ -166,8 +166,8 @@ namespace LandLedgers.PlayMode
                 "The direct configuration must bind five distinct real homes before population generation.");
             Assert.AreEqual(4, commercialBuildings,
                 "The development town retains its four authored commercial premises.");
-            Assert.AreEqual(10, worldBuildingIds.Count,
-                "The development world retains five homes, four commercial buildings and the civic hall.");
+            Assert.AreEqual(9, worldBuildingIds.Count,
+                "The authored Small development profile uses five separate homes and four commercial buildings; its runtime separate-use profile disables the Town Hall.");
             Assert.IsTrue(businessBuildingIds.IsSubsetOf(worldBuildingIds),
                 "Every Business premises reference must resolve to one of the seven real town buildings.");
             Debug.Log($"[DevelopmentTown runtime] P001–P009; Households=5; Businesses=4 (General Store=P001, Bakery=P003, Fuel Dealer=P005, Freight Company=P007); houses={residentialHomes}; commercial buildings={commercialBuildings}; total buildings={worldBuildingIds.Count}: {string.Join(", ", buildingLabels)}.");
@@ -192,7 +192,7 @@ namespace LandLedgers.PlayMode
             Type formedStoreRuntimeType = RuntimeType("LandLedgers.FirstLedger.GeneralStoreRuntimeManager");
             Component formedStoreRuntime = FindComponent(formedStoreRuntimeType);
             Assert.NotNull(formedStoreRuntime, "The scene must own the household retail runtime.");
-            object registeredStorePort = formedStoreRuntimeType.GetMethod("BuildHouseholdTradingPort")
+            object registeredStorePort = formedStoreRuntimeType.GetMethod("BuildHouseholdTradingPort", Type.EmptyTypes)
                 .Invoke(formedStoreRuntime, null);
             Assert.NotNull(registeredStorePort);
             Assert.AreEqual("general-store", registeredStorePort.GetType().GetProperty("StoreBusinessId")?.GetValue(registeredStorePort),

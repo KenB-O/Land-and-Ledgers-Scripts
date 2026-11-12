@@ -372,6 +372,73 @@ public sealed class OffMapNamedSkuProcurementTests
     }
 
     [Test]
+    public void RestoredMarketPreservesPendingArrivalFiniteStockAndReceiptIdentity()
+    {
+        var cash = new FakeBusinessCash(10000);
+        var service = new OffMapNamedSkuProcurementService("store", MarketWithGrain(200, 14), cash);
+        NamedSkuOrder first = service.PlaceOrder("flour", 10, 10, 0, "test-grain", 1,
+            NamedSkuPaymentMode.CashOnArrival, null);
+        Assert.AreEqual(1, service.ReceiveArrivals(15, null).Count);
+        NamedSkuOrder pending = service.PlaceOrder("flour", 10, 10, 0, "test-grain", 16,
+            NamedSkuPaymentMode.CashOnArrival, null);
+        var dto = UnityEngine.JsonUtility.FromJson<NamedSkuProcurementSaveDto>(
+            UnityEngine.JsonUtility.ToJson(service.ExportState()));
+        var restoredMarket = MarketWithGrain(200, 14);
+        var restored = new OffMapNamedSkuProcurementService("store", restoredMarket, cash);
+        restored.ImportState(dto);
+        Assert.AreEqual(180, restoredMarket.GetCounterparty("test-grain").SupplyUnits["flour"],
+            "Loading must not reset finite stock already committed to purchases.");
+        Assert.AreEqual(0, restored.ReceiveArrivals(29, null).Count);
+        Assert.AreEqual(1, restored.ReceiveArrivals(30, null).Count);
+        Assert.AreEqual(9800, cash.Balance);
+        Assert.AreEqual(20, restored.SellableUnits("flour"));
+        Assert.AreEqual(0, restored.ReceiveArrivals(30, null).Count);
+        Assert.AreEqual(9800, cash.Balance, "Retry must not pay for the arrival twice.");
+        NamedSkuOrder next = restored.PlaceOrder("flour", 10, 10, 0, "test-grain", 31,
+            NamedSkuPaymentMode.CashOnArrival, null);
+        Assert.IsNotNull(next);
+        Assert.AreNotEqual(first.ReceiptId, next.ReceiptId);
+        Assert.AreNotEqual(pending.ReceiptId, next.ReceiptId);
+        Assert.AreEqual(170, restoredMarket.GetCounterparty("test-grain").SupplyUnits["flour"]);
+    }
+
+    [Test]
+    public void ReboundProcurementDebitsOnlyTheRestoredBusinessCash()
+    {
+        var oldCash = new FakeBusinessCash(1000);
+        var restoredCash = new FakeBusinessCash(1000);
+        var service = new OffMapNamedSkuProcurementService("store", MarketWithGrain(20, 1), oldCash);
+        service.PlaceOrder("flour", 10, 10, 0, "test-grain", 1, NamedSkuPaymentMode.CashOnArrival, null);
+        service.RebindBusinessCash(restoredCash);
+        Assert.AreEqual(1, service.ReceiveArrivals(2, null).Count);
+        Assert.AreEqual(1000, oldCash.Balance);
+        Assert.AreEqual(900, restoredCash.Balance);
+        Assert.AreEqual(0, service.ReceiveArrivals(2, null).Count);
+        Assert.AreEqual(900, restoredCash.Balance);
+    }
+
+    [Test]
+    public void LegacyOrderReservesReceiptWithoutInventingItsMissingMarketArrival()
+    {
+        var cash = new FakeBusinessCash(10000);
+        var service = new OffMapNamedSkuProcurementService("store", MarketWithGrain(200, 14), cash);
+        NamedSkuOrder old = service.PlaceOrder("flour", 10, 10, 0, "test-grain", 1,
+            NamedSkuPaymentMode.CashOnArrival, null);
+        NamedSkuProcurementSaveDto legacy = service.ExportState();
+        legacy.Market = null;
+        var restored = new OffMapNamedSkuProcurementService("store", MarketWithGrain(200, 14), cash);
+        restored.ImportState(legacy);
+        Assert.AreEqual(0, restored.ReceiveArrivals(15, null).Count);
+        Assert.AreEqual(10000, cash.Balance);
+        Assert.AreEqual(0, restored.SellableUnits("flour"));
+        NamedSkuOrder next = restored.PlaceOrder("flour", 10, 10, 0, "test-grain", 16,
+            NamedSkuPaymentMode.CashOnArrival, null);
+        Assert.IsNotNull(next);
+        Assert.AreNotEqual(old.ReceiptId, next.ReceiptId);
+        Assert.That(restored.Diagnostics, Has.Some.Contains("legacy procurement save"));
+    }
+
+    [Test]
     public void ExportImport_IsIdempotentAndPreservesLotsAndSales()
     {
         var market = MarketWithGrain(200, 1);

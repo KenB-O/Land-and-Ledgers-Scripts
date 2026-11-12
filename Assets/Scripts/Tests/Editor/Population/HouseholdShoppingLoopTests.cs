@@ -21,7 +21,21 @@ namespace LandLedgers.EditorTests.Population
     public sealed class HouseholdShoppingLoopTests
     {
         [Test]
-        public void ShopperAssignment_PrefersAvailableAdultWoman_ThenFallsBackToAdult()
+        public void SettledPurchaseAndDeliveryDiagnosticsAreRoutineInfo_NotWarnings()
+        {
+            const int day = 12;
+            Assert.IsTrue(HouseholdShoppingLoop.IsRoutineSuccessDiagnostic(
+                "[FoodEconomy] purchase settled: household=H4, item='bread', receipt='receipt-42', batch='carry-12-3'.", day));
+            Assert.IsTrue(HouseholdShoppingLoop.IsRoutineSuccessDiagnostic(
+                "Day 12: P7 delivered 2u bread to H4 from 'General Store' (batch carry-12-3).", day));
+            Assert.IsFalse(HouseholdShoppingLoop.IsRoutineSuccessDiagnostic(
+                "Day 12: shopping FAILED: no available stock.", day));
+            Assert.IsTrue(HouseholdShoppingLoop.IsRoutineSummaryDiagnostic(
+                "[FoodEconomy] shopping summary day 12: 1 purchase(s), 12c spent; still open: none"));
+        }
+
+        [Test]
+        public void ShopperAssignment_UsesActualScheduleLoadWithoutSexPreference()
         {
             var population = new PopulationState();
             population.people.Add(new PersonState
@@ -33,14 +47,17 @@ namespace LandLedgers.EditorTests.Population
                 id = 2, firstName = "Emma", ageBand = AgeBand.Adult18Plus, isFemale = true
             });
 
+            var schedules = new PersonScheduleTracker();
+            Assert.IsNull(schedules.TryReserve(1, PersonActivityKind.JobSeeking, 0, 700, 60,
+                "legitimate job search"));
             int chosen = ShopperAssignmentPolicy.ChooseShopper(
-                population, new List<int> { 1, 2 }, 0, 480, 60, null, null, null, out string reason);
+                population, new List<int> { 1, 2 }, 0, 480, 60, schedules, null, null, out string reason);
 
-            Assert.AreEqual(2, chosen, "An available adult woman is the household's preferred shopper.");
+            Assert.AreEqual(2, chosen, "The adult with fewer actual livelihood commitments is preferred, regardless of sex.");
             Assert.IsNull(reason);
         }
 
-        private sealed class FakeStorePort : IGeneralStoreTradingPort
+        private sealed class FakeStorePort : IGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
             public string StoreBusinessId { get; set; } = "store-1";
             public string StoreName { get; set; } = "General Store";
@@ -100,6 +117,14 @@ namespace LandLedgers.EditorTests.Population
                 if (CashBalance < spend) return $"cannot afford {spend}c: cash is {CashBalance}c";
                 CashBalance -= spend;
                 return null;
+            }
+
+            public string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, int costCents, string provenance, int dayIndex)
+            {
+                if (CurrentCashCents < costCents) return "cannot afford";
+                string problem = ReceiveStock(categoryId, units, provenance);
+                return problem ?? SpendCash(costCents, provenance);
             }
 
             public string ReceiveStock(string categoryId, int units, string provenanceLabel)
@@ -833,6 +858,7 @@ namespace LandLedgers.EditorTests.Population
             port.Stock["staple_food"] = 10;
             port.Targets["staple_food"] = 100;
             port.CashBalance = 50000;
+            port.Prices["staple_food"] = 120; // Explicit profitable retail fixture; zero is not an authored offer.
 
             var upstream = new FakeUpstreamSupplier();
             upstream.Stock["staple_food"] = 1000;
@@ -868,6 +894,7 @@ namespace LandLedgers.EditorTests.Population
         public void StoreRestock_UnaffordableDelivery_WaitsWithoutInvisibleStock()
         {
             var port = new FakeStorePort();
+            port.Prices["staple_food"] = 120;
             port.OfferList.Add(new GeneralStoreCategoryOffer
             {
                 CategoryId = "staple_food",

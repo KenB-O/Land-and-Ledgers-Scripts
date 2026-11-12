@@ -103,6 +103,27 @@ namespace LandLedgers.Population
             new(UnspecifiedMeatId, "Meat (category-level, composition unspecified)", "unit", "meat", 1, true),
             new(UnspecifiedHouseholdGoodsId, "Household Goods (category-level, item unspecified)", "unit", "household_goods", 0, false),
             new(UnspecifiedClothingId, "Clothing (category-level, item unspecified)", "unit", "clothing", 0, false),
+            // Exact General Store SKUs. These entries preserve the purchased
+            // item identity and allow finite lot receipts; they are not category
+            // counters or synthetic substitutes.
+            new("beef", "Beef", "lb", "meat", 1, true),
+            new("bacon", "Bacon", "lb", "meat", 1, true),
+            new("cheese", "Cheese", "lb", "meat", 1, true),
+            new("candles", "Candles", "each", "household_goods", 0, false),
+            new("lantern", "Lantern", "each", "household_goods", 0, false),
+            new("thread", "Thread", "spool", "household_goods", 0, false),
+            new("buttons", "Buttons", "card", "household_goods", 0, false),
+            new("nails_hardware_lot", "Nails / Hardware", "lot", "tools_hardware", 0, false),
+            new("hand_tool", "Hand Tool", "each", "tools_hardware", 0, false),
+            new("farm_tool", "Farm Tool", "each", "tools_hardware", 0, false),
+            new("patent_remedy", "Patent Remedy", "bottle", "medicine_remedies", 0, false),
+            new("medicine_bottle", "Medicine Bottle", "bottle", "medicine_remedies", 0, false),
+            new("basic_cloth", "Basic Cloth", "yd", "clothing", 0, false),
+            new("flannel", "Flannel", "yd", "clothing", 0, false),
+            new("workwear", "Workwear", "set", "clothing", 0, false),
+            new("boots", "Boots", "pair", "clothing", 0, false),
+            new("blanket", "Blanket", "each", "clothing", 0, false),
+            new("hat", "Hat", "each", "clothing", 0, false),
         };
 
         private static readonly Dictionary<string, HouseholdItemDefinition> ById = BuildIndex();

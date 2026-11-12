@@ -702,8 +702,8 @@ namespace LandLedgers.Population
             {
                 snapshot.severity = PopulationValidationSeverity.Notice;
                 snapshot.headline = "Population records are valid with operational notices.";
-                snapshot.detail = $"unassigned labor-ready workers {snapshot.unassignedLaborEligibleWorkers}";
-                snapshot.recommendedAction = "Use staffing or settlement systems to absorb available labor.";
+                snapshot.detail = $"labor-eligible residents without a workplace building assignment {snapshot.unassignedLaborEligibleWorkers}";
+                snapshot.recommendedAction = "Review actual employment relationships and workplace links before treating these residents as unemployed.";
             }
 
             return snapshot;

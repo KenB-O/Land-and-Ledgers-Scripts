@@ -546,6 +546,8 @@ namespace LandLedgers.Economy
 
             builder.AppendLine("Weekly Money");
             builder.AppendLine($"Cash now: {FormatMoney(runtime.CurrentCashCents)} | Last week net: {FormatSignedMoney(cashDelta)} | Total paid in: {FormatMoney(totalRevenue)}");
+            if (runtime.WeekToDateRetailCostOfGoodsSoldCents > 0 || runtime.WeekToDateUncostedRetailUnitsSold > 0)
+                builder.AppendLine($"Recorded merchandise cost: {FormatMoney(runtime.WeekToDateRetailCostOfGoodsSoldCents)} | Cost missing for {runtime.WeekToDateUncostedRetailUnitsSold} sold units");
             builder.AppendLine($"{descriptor.PrimaryRevenueLabel}: {FormatMoney(directRevenue)} | {descriptor.SecondaryRevenueLabel}: {FormatMoney(localWorkRevenue)}");
             builder.AppendLine($"Inputs / stock bought: {FormatMoney(inputSpend)} | Wages: {FormatMoney(payroll)} | Freight / upkeep: {FormatMoney(freight)} | Owner draw: {FormatMoney(ownerDraw)}");
         }

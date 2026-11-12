@@ -581,5 +581,62 @@ namespace LandLedgers.Editor.Population
                 "Off-map wages land in the household ledger with provenance.");
             Assert.AreEqual(HouseholdIncomeSource.OutsideEmployerPayment, ledger.Entries[0].Source);
         }
+
+        [Test]
+        public void PurchasingNeeds_RestoreReplacesSnapshotAndCopiesRecords()
+        {
+            var registry = new HouseholdNeedRegistry();
+            HouseholdPurchasingNeed stale = registry.CreateNeed(901, HouseholdItemCatalog.BreadId, 1);
+            stale.UnitsNeeded = 99;
+
+            var savedNeed = new HouseholdPurchasingNeed
+            {
+                NeedSequence = 4,
+                HouseholdId = 902,
+                ItemId = HouseholdItemCatalog.FlourId,
+                UnitsNeeded = 3,
+                Urgency01 = 0.5f,
+                ReasonSummary = "saved shortage",
+                CreatedDayIndex = 7,
+                LastEvaluatedDayIndex = 8,
+                Status = PurchasingNeedStatus.Open,
+                SuggestedResponses = new List<string> { "purchase" },
+            };
+            var snapshot = new List<HouseholdPurchasingNeed> { savedNeed };
+
+            registry.ImportState(snapshot);
+            registry.ImportState(snapshot);
+
+            Assert.IsNull(registry.GetOpenNeed(901, HouseholdItemCatalog.BreadId),
+                "Loading replaces the prior runtime save state.");
+            HouseholdPurchasingNeed restored = registry.GetOpenNeed(902, HouseholdItemCatalog.FlourId);
+            Assert.NotNull(restored);
+            Assert.AreNotSame(savedNeed, restored, "Restored state must not alias the saved DTO.");
+            Assert.AreNotSame(savedNeed.SuggestedResponses, restored.SuggestedResponses);
+            Assert.AreEqual(1, registry.GetOpenNeeds(902).Count,
+                "Repeated import restores one open need, not duplicate history.");
+
+            restored.UnitsNeeded = 6;
+            restored.SuggestedResponses.Add("produce");
+            Assert.AreEqual(3, savedNeed.UnitsNeeded, "Runtime evaluation must not mutate saved units.");
+            CollectionAssert.AreEqual(new[] { "purchase" }, savedNeed.SuggestedResponses,
+                "Runtime changes must not mutate saved response options.");
+
+            var exported = new List<HouseholdPurchasingNeed>();
+            registry.ExportState(exported);
+            Assert.AreNotSame(restored, exported[0], "Export also creates a stable snapshot.");
+        }
+
+        [Test]
+        public void PurchasingNeeds_NullImportLeavesCurrentStateUntouched()
+        {
+            var registry = new HouseholdNeedRegistry();
+            registry.CreateNeed(903, HouseholdItemCatalog.BreadId, 2);
+
+            registry.ImportState(null);
+
+            Assert.NotNull(registry.GetOpenNeed(903, HouseholdItemCatalog.BreadId),
+                "A missing optional save section is not an instruction to clear live state.");
+        }
     }
 }

@@ -23,6 +23,26 @@ namespace LandLedgers.Editor.Economy
     [TestFixture]
     public sealed class LumberYardRuntimeTests
     {
+        [Test]
+        public void MillHandoverConservesLiveStockAndRefusesRepeatedSourceIdentity()
+        {
+            var diag = new List<string>();
+            var mill = new SawmillLumberStock("mill-1");
+            SawmillLumberLot source = DocumentedMillLot(9301, 40, "mill-1", "stand-1");
+            Assert.IsNull(mill.ReceiveLot(source, diag));
+            var yard = new LumberYardShopRuntime("yard-1", new EntityIdRegistry());
+            Assert.IsNotNull(yard.ReceiveLumberFromSawmill(source, "invalid-test-grade", 220, 85, diag));
+            Assert.AreEqual(40, mill.TotalLumberUnits, "A refused receiving operation keeps source custody.");
+            Assert.IsNull(yard.ReceiveLumberFromSawmill(source, "merchantable", 220, 85, diag));
+            Assert.AreEqual(0, mill.TotalLumberUnits);
+            Assert.AreEqual(40, yard.LumberStock.TotalLumberUnits);
+            Assert.IsNotNull(yard.ReceiveLumberFromSawmill(source, "merchantable", 220, 85, diag));
+            SawmillLumberLot repeatedDescriptor = DocumentedMillLot(9301, 40, "mill-1", "stand-1");
+            Assert.IsNotNull(yard.ReceiveLumberFromSawmill(repeatedDescriptor, "merchantable", 220, 85, diag));
+            Assert.AreEqual(40, yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(40, repeatedDescriptor.LumberUnits, "A refused duplicate does not confiscate caller custody.");
+        }
+
         private static SawmillLumberLot DocumentedMillLot(int lotNumber, int units, string millId, string standId)
         {
             return new SawmillLumberLot

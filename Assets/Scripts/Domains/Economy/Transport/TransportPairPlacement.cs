@@ -38,9 +38,11 @@ namespace LandLedgers.Economy.Transport
             out Vector3 wagonPosition,
             out Vector3 hitchPostQuery)
         {
-            horsePosition = accessPoint - pairLateral * HorseRoadOffsetMetres;
+            // Frontage points out from the building. Subtracting it put the
+            // equipment back through the entrance and into the building.
+            horsePosition = accessPoint + pairLateral * HorseRoadOffsetMetres;
             wagonPosition = horsePosition - travelAxis * PairSeparationMetres;
-            hitchPostQuery = horsePosition - pairLateral * HitchPostOffsetMetres;
+            hitchPostQuery = horsePosition + pairLateral * HitchPostOffsetMetres;
         }
     }
 }

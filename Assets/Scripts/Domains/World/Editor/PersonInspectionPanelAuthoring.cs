@@ -15,6 +15,8 @@ namespace LandLedgers.EditorTools.World
         private const string TitleProperty = "personInspectionTitle";
         private const string BodyProperty = "personInspectionBody";
         private const string CloseProperty = "personInspectionCloseButton";
+        private const string FollowProperty = "personInspectionFollowButton";
+        private const string ObserveNextProperty = "personInspectionObserveNextButton";
 
         [MenuItem("Land Ledgers/Author Person Inspection Panel in Main Scene")]
         private static void AuthorMainScenePanel()
@@ -39,7 +41,9 @@ namespace LandLedgers.EditorTools.World
             SerializedProperty titleProperty = serializedController.FindProperty(TitleProperty);
             SerializedProperty bodyProperty = serializedController.FindProperty(BodyProperty);
             SerializedProperty closeProperty = serializedController.FindProperty(CloseProperty);
-            if (rootProperty == null || titleProperty == null || bodyProperty == null || closeProperty == null)
+            SerializedProperty followProperty = serializedController.FindProperty(FollowProperty);
+            SerializedProperty observeNextProperty = serializedController.FindProperty(ObserveNextProperty);
+            if (rootProperty == null || titleProperty == null || bodyProperty == null || closeProperty == null || followProperty == null || observeNextProperty == null)
             {
                 Debug.LogError("WorldInteractionController is missing serialized Person panel fields.");
                 return;
@@ -74,11 +78,15 @@ namespace LandLedgers.EditorTools.World
             ConfigureBody(body);
             Button close = EnsureCloseButton(root, font);
             close.onClick.RemoveAllListeners();
+            Button follow = EnsureFollowButton(root, font);
+            Button observeNext = EnsureObserveNextButton(root, font);
 
             rootProperty.objectReferenceValue = root;
             titleProperty.objectReferenceValue = title;
             bodyProperty.objectReferenceValue = body;
             closeProperty.objectReferenceValue = close;
+            followProperty.objectReferenceValue = follow;
+            observeNextProperty.objectReferenceValue = observeNext;
             serializedController.ApplyModifiedProperties();
             root.gameObject.SetActive(false);
 
@@ -200,6 +208,64 @@ namespace LandLedgers.EditorTools.World
             label.alignment = TextAlignmentOptions.Center;
             label.text = "CLOSE";
             return closeObject.GetComponent<Button>();
+        }
+
+        private static Button EnsureFollowButton(RectTransform root, TMP_FontAsset font)
+        {
+            Transform existing = root.Find("Follow");
+            GameObject followObject = existing != null
+                ? existing.gameObject
+                : new GameObject("Follow", typeof(RectTransform), typeof(Image), typeof(Button));
+            if (existing == null)
+            {
+                Undo.RegisterCreatedObjectUndo(followObject, "Create Person Inspection Follow Button");
+                followObject.transform.SetParent(root, false);
+            }
+            RectTransform rect = (RectTransform)followObject.transform;
+            rect.anchorMin = Vector2.one;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = Vector2.one;
+            rect.sizeDelta = new Vector2(90f, 34f);
+            rect.anchoredPosition = new Vector2(-108f, -16f);
+            followObject.GetComponent<Image>().color = new Color(0.37f, 0.26f, 0.17f, 1f);
+            TMP_Text label = EnsureText("Follow Label", followObject.transform, font, 16f, FontStyles.Bold);
+            RectTransform labelRect = (RectTransform)label.transform;
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(4f, 4f);
+            labelRect.offsetMax = new Vector2(-4f, -4f);
+            label.alignment = TextAlignmentOptions.Center;
+            label.text = "FOLLOW";
+            return followObject.GetComponent<Button>();
+        }
+
+        private static Button EnsureObserveNextButton(RectTransform root, TMP_FontAsset font)
+        {
+            Transform existing = root.Find("Observe Next");
+            GameObject buttonObject = existing != null
+                ? existing.gameObject
+                : new GameObject("Observe Next", typeof(RectTransform), typeof(Image), typeof(Button));
+            if (existing == null)
+            {
+                Undo.RegisterCreatedObjectUndo(buttonObject, "Create Observe Next Activity Button");
+                buttonObject.transform.SetParent(root, false);
+            }
+            RectTransform rect = (RectTransform)buttonObject.transform;
+            rect.anchorMin = Vector2.one;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = Vector2.one;
+            rect.sizeDelta = new Vector2(94f, 34f);
+            rect.anchoredPosition = new Vector2(-204f, -16f);
+            buttonObject.GetComponent<Image>().color = new Color(0.31f, 0.34f, 0.25f, 1f);
+            TMP_Text label = EnsureText("Observe Next Label", buttonObject.transform, font, 13f, FontStyles.Bold);
+            RectTransform labelRect = (RectTransform)label.transform;
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(3f, 4f);
+            labelRect.offsetMax = new Vector2(-3f, -4f);
+            label.alignment = TextAlignmentOptions.Center;
+            label.text = "WATCH NEXT";
+            return buttonObject.GetComponent<Button>();
         }
     }
 }

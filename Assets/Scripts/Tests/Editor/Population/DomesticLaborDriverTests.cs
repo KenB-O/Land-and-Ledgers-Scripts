@@ -9,8 +9,7 @@ namespace LandLedgers.Editor.Population
 {
     /// <summary>
     /// Pass IV (Worker 4): the domestic labor live driver. Proves:
-    /// - DriveDay plans need-driven domestic tasks (meals at home → meal prep,
-    ///   cold season → fuel, animals → care, baseline chores).
+    /// - DriveDay plans tasks only when an explicit household need is supplied.
     /// - Tasks progress through REAL time via due events: AdvanceTick starts a
     ///   task when its window arrives; HandleDueEvent completes it with a
     ///   family-labor credit (zero wages) — identical outcomes at any tick size.
@@ -46,6 +45,7 @@ namespace LandLedgers.Editor.Population
                     AgeBandFor = _ => AgeBand.Adult18Plus,
                     MealsAtHomeCount = 2,
                     ColdSeason = false,
+                    CleaningNeeded = true,
                     HasAnimals = false,
                 };
             }
@@ -59,7 +59,7 @@ namespace LandLedgers.Editor.Population
 
             f.Driver.DriveDay(f.Inputs(7, 3, 4), 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
 
-            // 2 home meals → meal prep + baseline chores = 2 pending tasks.
+            // A cooking need and an explicit cleaning need → two tasks.
             Assert.AreEqual(2, f.Driver.Pending.Count);
             bool hasMealPrep = false, hasChores = false;
             foreach (var p in f.Driver.Pending)
@@ -70,6 +70,54 @@ namespace LandLedgers.Editor.Population
             }
 
             Assert.IsTrue(hasMealPrep && hasChores, "expected meal-prep + chores planned");
+        }
+
+        [Test]
+        public void DriveDay_SharesHouseholdWorkAcrossAvailableAdults()
+        {
+            var f = new Fixture();
+            f.Driver.DriveDay(f.Inputs(7, 1, 2), 100, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, new List<string>());
+
+            Assert.AreEqual(2, f.Driver.Pending.Count);
+            Assert.AreNotEqual(f.Driver.Pending[0].PersonId, f.Driver.Pending[1].PersonId,
+                "the second suitable adult should take the next household task when both have real free time");
+        }
+
+        [Test]
+        public void DriveDay_ShiftsDomesticWorkIntoNearbyAvailableWindow()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            Assert.IsNull(f.Schedules.TryReserve(3, PersonActivityKind.Work, 100, 660, 45, "work obligation"));
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3);
+            inputs.MealsAtHomeCount = 0;
+
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+
+            Assert.AreEqual(1, f.Driver.Pending.Count);
+            Assert.GreaterOrEqual(f.Driver.Pending[0].StartMinuteOfDay, 705,
+                "chores should move beyond the existing hard reservation rather than defer on the exact 11:00 instant");
+            Assert.LessOrEqual(f.Driver.Pending[0].StartMinuteOfDay, 840);
+        }
+
+        [Test]
+        public void NecessaryDomesticWorkPreemptsRestButPreservesHardObligations()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            Assert.IsNull(f.Schedules.TryReserve(3, PersonActivityKind.Resting, 100, 660, 60, "voluntary rest"));
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3);
+            inputs.MealsAtHomeCount = 0;
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+            float start = 100 * 86400f + f.Driver.Pending[0].StartMinuteOfDay * 60f;
+
+            f.Driver.AdvanceTick(start, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+
+            Assert.IsTrue(f.Schedules.ActiveFor(3, 100).Exists(r => r.Activity == PersonActivityKind.Work));
+            Assert.IsFalse(f.Schedules.ActiveFor(3, 100).Exists(r => r.Activity == PersonActivityKind.Resting),
+                "overlapping voluntary rest yields to household work");
+            StringAssert.Contains("interrupted voluntary rest", string.Join("\n", diag));
         }
 
         [Test]
@@ -148,12 +196,13 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void DriveDay_ColdSeasonAndAnimals_AddFuelAndAnimalCare()
+        public void DriveDay_ExplicitFuelAndCleaningNeeds_AddOnlyThoseTasks()
         {
             var f = new Fixture();
             var inputs = f.Inputs(7, 3);
             inputs.ColdSeason = true;
-            inputs.HasAnimals = true;
+            inputs.FuelHandlingNeeded = true;
+            inputs.CleaningNeeded = true;
             inputs.MealsAtHomeCount = 0;
 
             f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, null);
@@ -164,9 +213,26 @@ namespace LandLedgers.Editor.Population
                 kinds.Add(p.DefinitionId);
             }
 
-            Assert.IsTrue(kinds.Contains(DomesticTaskCatalog.FuelHandlingId), "cold season → fuel handling");
-            Assert.IsTrue(kinds.Contains(DomesticTaskCatalog.AnimalCareId), "animals → animal care");
-            Assert.IsTrue(kinds.Contains(DomesticTaskCatalog.ChoresId), "baseline chores");
+            Assert.IsTrue(kinds.Contains(DomesticTaskCatalog.FuelHandlingId), "explicit household fuel need → fuel handling");
+            Assert.IsTrue(kinds.Contains(DomesticTaskCatalog.ChoresId), "explicit cleaning need → cleaning work");
+            Assert.IsFalse(kinds.Contains(DomesticTaskCatalog.AnimalCareId), "unowned animals are never inferred");
+        }
+
+        [Test]
+        public void DriveDay_DoesNotCreateMealFuelOrCleaningTasksFromCalendarOrHouseholdSize()
+        {
+            var f = new Fixture();
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.MealsAtHomeCount = 0;
+            inputs.ColdSeason = true;
+            inputs.CleaningNeeded = false;
+            inputs.FuelHandlingNeeded = false;
+
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, new List<string>());
+
+            Assert.AreEqual(0, f.Driver.Pending.Count,
+                "resident count and cold-season state alone do not create domestic appointments");
         }
 
         [Test]

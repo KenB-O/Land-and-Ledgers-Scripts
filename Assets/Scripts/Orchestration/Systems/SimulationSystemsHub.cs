@@ -1397,7 +1397,7 @@ namespace LandLedgers.Orchestration.Systems
             IEnumerable<LivestockCohort> inCohorts,
             IEnumerable<EggBatchState> inEggBatches)
         {
-            Animals.ImportState(inAnimals, inHistorical, inCohorts, inEggBatches);
+            Animals.RestoreState(inAnimals, inHistorical, inCohorts, inEggBatches);
         }
 
         /// <summary>CLN-1: exports household ledgers for the PopulationSaveDto section.</summary>

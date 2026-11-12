@@ -66,6 +66,7 @@
 // behaviour; it only calls them, in the order above.
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
 
@@ -112,6 +113,8 @@ namespace LandLedgers.Economy.Ordering
         public bool Stocked;
         public int Units;
         public int LivePoolUnitsAfter;
+        public List<string> SourceLotIds = new List<string>();
+        public int SourceBakedDayIndex = -1;
         public string Refusal = string.Empty;
     }
 
@@ -302,7 +305,7 @@ namespace LandLedgers.Economy.Ordering
         public static Review2StockingResult StockShelfToLive(
             Pass3StoreCatalog catalog, string productId, int units, string categoryId,
             IGeneralStoreTradingPort storePort, List<string> diag,
-            string itemUnitLabel = null, string sourceBakeryLotId = null, int dayIndex = 0)
+            string itemUnitLabel = null, string sourceBakeryLotId = null, int dayIndex = 0, int acquisitionCostCents = -1)
         {
             var result = new Review2StockingResult { Units = units };
             if (catalog == null || string.IsNullOrWhiteSpace(productId) || units <= 0
@@ -319,52 +322,83 @@ namespace LandLedgers.Economy.Ordering
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }
-            if (line.ShelfUnits < units)
+            if (line.ShelfUnits <= 0)
             {
-                result.Refusal = $"Review2Wholesale: catalog shelf holds {line.ShelfUnits}u '{productId}', asked {units}u — nothing stocked, never partial.";
+                result.Refusal = $"Review2Wholesale: catalog shelf holds no '{productId}' units to stock.";
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }
-            if (storePort.CategoryReceivableUnits(categoryId) < units)
+            int availableShelf = Math.Min(units, line.ShelfUnits);
+            int categoryCapacity = Math.Max(0, storePort.CategoryReceivableUnits(categoryId));
+            int stockUnits = Math.Min(availableShelf, categoryCapacity);
+            if (stockUnits <= 0)
             {
-                result.Refusal = $"Review2Wholesale: live category '{categoryId}' can receive {storePort.CategoryReceivableUnits(categoryId)}u, asked {units}u — nothing stocked; shelf units remain for a later stocking.";
+                result.Refusal = $"Review2Wholesale: live category '{categoryId}' has no receiving capacity; {line.ShelfUnits}u remain on the catalog shelf.";
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }
-            if (!line.ConsumeShelfUnits(units, diag))
+            int shelfBalanceBefore = line.ShelfUnits;
+            if (!line.ConsumeShelfUnits(stockUnits, diag, out List<Pass3WholesaleShelfLot> consumedWholesaleLots))
             {
-                result.Refusal = $"Review2Wholesale: could not consume {units}u '{productId}' from the catalog shelf — nothing stocked.";
+                result.Refusal = $"Review2Wholesale: could not consume {stockUnits}u '{productId}' from the catalog shelf — nothing stocked.";
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }
             string stockProblem;
+            string trackedSources = consumedWholesaleLots != null && consumedWholesaleLots.Count > 0
+                ? string.Join(",", consumedWholesaleLots.Select(l => l.BakeryLotId).Distinct(StringComparer.OrdinalIgnoreCase))
+                : string.Empty;
+            string provenance = trackedSources.Length > 0
+                ? "Bakery wholesale; source lot(s) " + string.Join("; ", consumedWholesaleLots.Select(l =>
+                    $"{l.BakeryLotId} baked day {l.BakedDayIndex} received day {l.ReceivedDayIndex} ({l.Condition})"))
+                : $"Bakery wholesale; source lot {sourceBakeryLotId ?? "pending-shelf-retry"}";
+            int sourceBakedDay = consumedWholesaleLots != null && consumedWholesaleLots.Count > 0
+                ? consumedWholesaleLots.Min(l => l.BakedDayIndex)
+                : -1;
+            int trackedSourceCost = consumedWholesaleLots?.Sum(l => l.UnitWholesaleCostCents * l.ShelfUnits) ?? 0;
+            int trackedSourceUnits = consumedWholesaleLots?.Sum(l => l.ShelfUnits) ?? 0;
+            int calculatedCost = trackedSourceCost + Math.Max(0, stockUnits - trackedSourceUnits) * Math.Max(0, line.CostCents);
             if (storePort is IIdentifiedRetailStockReceivingPort identifiedPort
                 && storePort is IItemLevelGeneralStoreTradingPort itemPort
                 && itemPort.UsesItemLevelInventory(productId))
             {
                 string stableSource = !string.IsNullOrWhiteSpace(sourceBakeryLotId)
-                    ? sourceBakeryLotId.Trim()
-                    : $"day-{dayIndex}-units-{units}";
-                string retailLotId = $"bakery-wholesale:{storePort.StoreBusinessId}:{productId}:{stableSource}";
+                    ? (trackedSources.Length > 0 ? trackedSources : sourceBakeryLotId.Trim())
+                    : (trackedSources.Length > 0 ? trackedSources : $"receiving-day-{dayIndex}");
+                // The pre-transfer balance gives each partial shelf transfer
+                // a stable, distinct tranche key. Replaying a refused receipt
+                // uses the same key; a later successful tranche has a lower
+                // balance and cannot collide with it.
+                string retailLotId = $"bakery-wholesale:{storePort.StoreBusinessId}:{productId}:{stableSource}:balance-{shelfBalanceBefore}:units-{stockUnits}";
                 string unit = string.IsNullOrWhiteSpace(itemUnitLabel) ? "loaf" : itemUnitLabel.Trim();
-                stockProblem = identifiedPort.ReceiveRetailItemLot(retailLotId, productId, categoryId, unit,
-                    units, $"Bakery wholesale; source lot {sourceBakeryLotId ?? "pending-shelf-retry"}", dayIndex);
+                int trancheCostCents = acquisitionCostCents >= 0
+                    ? (int)((long)acquisitionCostCents * stockUnits / Math.Max(1, units))
+                    : calculatedCost;
+                stockProblem = storePort is ICostedRetailStockReceivingPort costed
+                    ? costed.ReceiveCostedRetailItemLot(retailLotId, productId, categoryId, unit,
+                        stockUnits, provenance, dayIndex, trancheCostCents)
+                    : identifiedPort.ReceiveRetailItemLot(retailLotId, productId, categoryId, unit,
+                        stockUnits, provenance, dayIndex);
             }
             else
             {
-                stockProblem = storePort.ReceiveStock(categoryId, units,
+                stockProblem = storePort.ReceiveStock(categoryId, stockUnits,
                     $"wholesale bakery lot, {productId}");
             }
             if (stockProblem != null)
             {
-                line.ShelfUnits += units;
+                line.ShelfUnits += stockUnits;
+                line.RestoreConsumedWholesaleLots(consumedWholesaleLots);
                 result.Refusal = $"Review2Wholesale: live stocking refused ({stockProblem}) — catalog shelf restored, nothing stocked.";
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }
             result.Stocked = true;
+            result.Units = stockUnits;
+            if (!string.IsNullOrWhiteSpace(trackedSources)) result.SourceLotIds.AddRange(trackedSources.Split(','));
+            result.SourceBakedDayIndex = sourceBakedDay;
             result.LivePoolUnitsAfter = storePort.CategoryStockUnits(categoryId);
-            if (diag != null) diag.Add($"Review2Wholesale: stocked {units}u '{productId}' into live category '{categoryId}' (pool now {result.LivePoolUnitsAfter}u); catalog shelf no longer holds them.");
+            if (diag != null) diag.Add($"Review2Wholesale: stocked {stockUnits}u '{productId}' into live category '{categoryId}' (pool now {result.LivePoolUnitsAfter}u); {line.ShelfUnits}u remain on catalog shelf.");
             return result;
         }
 

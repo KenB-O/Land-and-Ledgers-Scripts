@@ -13,6 +13,7 @@
 // source, off-map receipt); the driver stays as unwired as it is.
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using LandLedgers.Economy;
 using LandLedgers.Economy.BreadDrivers;
@@ -25,6 +26,7 @@ using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Ordering;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Persistence;
 
 namespace LandLedgers.EditorTests.Economy
 {
@@ -39,7 +41,7 @@ namespace LandLedgers.EditorTests.Economy
         // wholesale cash and retail cash reconcile in ONE runtime.
         // It is a test seam, not a second cash authority: every cash
         // move lands in the shared runtime.
-        private sealed class RuntimeStorePort : IGeneralStoreTradingPort, IItemLevelGeneralStoreTradingPort, IIdentifiedRetailStockReceivingPort
+        private sealed class RuntimeStorePort : IGeneralStoreTradingPort, IItemLevelGeneralStoreTradingPort, ICostedRetailStockReceivingPort
         {
             public BusinessRuntimeState Runtime;
             public Dictionary<string, int> Prices = new Dictionary<string, int>();
@@ -92,6 +94,12 @@ namespace LandLedgers.EditorTests.Economy
             {
                 return Runtime == null ? "no runtime" : Runtime.TryAddRetailItemLot(lotId, itemId, categoryId,
                     unitLabel, units, StoreBusinessId, StoreBusinessId, provenance, dayIndex);
+            }
+            public string ReceiveCostedRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, string provenance, int dayIndex, int acquisitionCostCents)
+            {
+                return Runtime == null ? "no runtime" : Runtime.TryAddRetailItemLot(lotId, itemId, categoryId,
+                    unitLabel, units, StoreBusinessId, StoreBusinessId, provenance, dayIndex, acquisitionCostCents);
             }
             public bool TryConsumeStoreUnits(string categoryId, int units, out int consumedUnits)
             {
@@ -280,7 +288,7 @@ namespace LandLedgers.EditorTests.Economy
             s.StorePort.OfferList[0].UsesItemLevelInventory = true;
 
             Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                s.Catalog, "bread", 24, "staple_food", s.StorePort, s.Diag, "loaf", transfer.BakeryLotId, 2);
+                s.Catalog, "bread", 24, "staple_food", s.StorePort, s.Diag, "loaf", transfer.BakeryLotId, 2, transfer.AmountCents);
             Assert.IsTrue(stocked.Stocked, stocked.Refusal);
             Assert.AreEqual(0, line.ShelfUnits, "stocking consumes the Pass 3 shelf exactly once");
             Assert.AreEqual(24, stocked.LivePoolUnitsAfter, "the live pool gains exactly the stocked units");
@@ -289,6 +297,9 @@ namespace LandLedgers.EditorTests.Economy
                 "the exact bread retail offer must be backed by the identified wholesale receipt lot");
             Assert.AreEqual(1, s.StoreRuntime.RetailItemLots.Count,
                 "one bakery lot creates one identified retail lot, not a second pooled copy");
+            Assert.IsTrue(s.StoreRuntime.RetailItemLots[0].AcquisitionCostKnown);
+            Assert.AreEqual(48, s.StoreRuntime.RetailItemLots[0].RemainingAcquisitionCostCents,
+                "The lot carries the actual settled wholesale amount, not its 5c retail price.");
             Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "stocking moves stock, never cash");
         }
 
@@ -382,24 +393,49 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void StockShelfToLive_CappedPort_Refuses_ThenRetrySucceeds()
+        public void StockShelfToLive_CappedPort_PartiallyTransfersThenRetriesRemainder()
         {
             Slice s = BakeAndFund(5000, 2000, 2);
             Review2WholesaleTransferResult transfer = Review2BakeryToStoreWholesaleDriver.TransferToShelf(
                 TransferOptions(s, 24, 2, 5, 2, ProductionPort(s.StoreRuntime), ProductionPort(s.BakeryRuntime)), s.Diag);
             Assert.IsTrue(transfer.Transferred, transfer.Refusal);
+            s.StorePort.OfferList[0].UsesItemLevelInventory = true;
             s.StorePort.Cap = 10;
-            Review2StockingResult refused = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                s.Catalog, "bread", 24, "staple_food", s.StorePort, s.Diag);
-            Assert.IsTrue(!refused.Stocked, "a live pool that can receive only 10u must refuse 24u, never partial");
-            Assert.AreEqual(24, s.Catalog.Find("bread").ShelfUnits, "refused stocking leaves the Pass 3 shelf intact");
-            Assert.AreEqual(0, s.StorePort.CategoryStockUnits("staple_food"));
+            Review2StockingResult partial = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
+                s.Catalog, "bread", 24, "staple_food", s.StorePort, s.Diag,
+                "loaf", transfer.BakeryLotId, 2, transfer.AmountCents);
+            Assert.IsTrue(partial.Stocked, partial.Refusal);
+            Assert.AreEqual(10, partial.Units, "the live pool's actual capacity bounds this transfer");
+            Assert.AreEqual(14, s.Catalog.Find("bread").ShelfUnits, "the unshelved balance remains in receiving custody");
+            Assert.AreEqual(10, s.StorePort.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(20, s.StoreRuntime.RetailItemLots[0].RemainingAcquisitionCostCents,
+                "partial retail lot receives only its proportional share of the already-settled wholesale cost");
+            Assert.IsTrue(s.StoreRuntime.RetailItemLots[0].Provenance.Contains(transfer.BakeryLotId),
+                "the retail lot retains the source bakery lot identity");
+            var saveState = new Series2Pass9SaveState { Catalog = s.Catalog, WholesaleIntake = s.Intake };
+            Series2Pass9SaveDto saved = saveState.Capture(s.Diag);
+            var restoredState = new Series2Pass9SaveState();
+            restoredState.Restore(saved, null, s.Diag);
+            Assert.AreEqual(14, restoredState.Catalog.Find("bread").ShelfUnits,
+                "the unshelved balance survives the existing Pass 9 catalog save path");
+            Assert.AreEqual(transfer.BakeryLotId,
+                restoredState.Catalog.Find("bread").WholesaleLots.Single(l => l.ShelfUnits > 0).BakeryLotId,
+                "the remaining receiving tranche keeps its source lot through save/restore");
             s.StorePort.Cap = int.MaxValue;
             Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                s.Catalog, "bread", 24, "staple_food", s.StorePort, s.Diag);
+                restoredState.Catalog, "bread", 14, "staple_food", s.StorePort, s.Diag,
+                "loaf", transfer.BakeryLotId, 3);
             Assert.IsTrue(stocked.Stocked, stocked.Refusal);
-            Assert.AreEqual(0, s.Catalog.Find("bread").ShelfUnits);
+            Assert.AreEqual(0, restoredState.Catalog.Find("bread").ShelfUnits);
+            Assert.AreEqual(14, stocked.Units);
             Assert.AreEqual(24, s.StorePort.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(28, s.StoreRuntime.RetailItemLots[1].RemainingAcquisitionCostCents,
+                "the delayed tranche retains the remaining unit cost without another wholesale payment");
+            Assert.IsTrue(s.StoreRuntime.RetailItemLots[1].Provenance.Contains(transfer.BakeryLotId),
+                "the next-day receiving retry carries forward the same bakery source lot identity");
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents,
+                "shelf transfers do not settle wholesale cash a second time");
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents);
         }
 
         [Test]

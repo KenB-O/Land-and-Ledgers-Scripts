@@ -69,7 +69,7 @@ namespace LandLedgers.Orchestration.HouseholdSlice
         /// instead of the Unity MonoBehaviour's books. Same seam the Phase C
         /// tests used; the adapter, loop, and restock service are production.
         /// </summary>
-        public sealed class PhaseHStorePort : IGeneralStoreTradingPort
+        public sealed class PhaseHStorePort : IGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
             public string StoreBusinessId { get; set; } = HouseholdVerticalSlice.StoreBusinessId;
             public string StoreName { get; set; } = "Hart General Store";
@@ -136,6 +136,18 @@ namespace LandLedgers.Orchestration.HouseholdSlice
                 int spend = Math.Max(0, amountCents);
                 if (spend <= 0) return null;
                 return cash.DebitCents(0, spend, purpose, "procurement");
+            }
+
+            public string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, int costCents, string provenance, int dayIndex)
+            {
+                if (units <= 0 || units > CategoryReceivableUnits(categoryId)
+                    || units > int.MaxValue - CategoryStockUnits(categoryId) || costCents < 0)
+                    return "PhaseHStorePort: invalid receipt quantity or cost.";
+                string problem = SpendCash(costCents, provenance);
+                if (problem != null) return problem;
+                // ReceiveStock cannot refuse after the quantity validation.
+                return ReceiveStock(categoryId, units, provenance);
             }
 
             public string ReceiveStock(string categoryId, int units, string provenanceLabel)

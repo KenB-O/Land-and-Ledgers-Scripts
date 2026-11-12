@@ -57,6 +57,9 @@ namespace LandLedgers.Population
         /// <summary>Days of supply below which a need opens (configurable).</summary>
         public float LowDaysThreshold { get; set; } = 7f;
 
+        /// <summary>Preferred reserve to buy toward once a shortage opens (configurable).</summary>
+        public float TargetDaysThreshold { get; set; } = 7f;
+
         /// <summary>Days of supply at/above which an open need is fulfilled (configurable).</summary>
         public float FulfilledDaysThreshold { get; set; } = 14f;
 
@@ -76,12 +79,12 @@ namespace LandLedgers.Population
         /// isColdSeason flags winter fuel pressure. upcomingObligationCents and
         /// expectedIncomeCents inform the suggested responses, never invent money.
         /// Plan 02 Slice 2: <paramref name="isRecognizedByKnownSeller"/>, when
-        /// supplied, suppresses need creation for an item no legitimately
-        /// known seller recognizes — never on current stock, so a
-        /// recognized-but-out-of-stock item still raises a need. A null
-        /// predicate keeps the old behaviour (no filtering) for callers with
-        /// no seller knowledge to consult. Suppression is logged loudly once
-        /// per household per day per item, so the hunger signal stays visible.
+        /// supplied, annotates a shortage with whether a legitimately known
+        /// seller recognizes the item. Seller knowledge controls whether a
+        /// shopping attempt can succeed; it must not erase an actual food or
+        /// fuel shortage. Recognition is never inferred from current stock,
+        /// so recognized-but-out-of-stock demand remains visible as well. A
+        /// null predicate leaves seller availability unknown.
         /// </summary>
         public void Evaluate(
             HouseholdState household,
@@ -229,23 +232,19 @@ namespace LandLedgers.Population
                 return;
             }
 
-            float shortfallDays = Mathf.Max(0f, LowDaysThreshold - daysCovered);
-            int unitsNeeded = Mathf.CeilToInt(shortfallDays * Mathf.Max(1, dailyUseUnits));
+            float targetDays = Mathf.Max(LowDaysThreshold, TargetDaysThreshold);
+            int unitsNeeded = Mathf.CeilToInt(
+                Mathf.Max(0f, targetDays - daysCovered) * Mathf.Max(1, dailyUseUnits));
 
-            // Plan 02 Slice 2: no known seller recognizes this item, so no
-            // purchasing need may open for it — an unservable need would sit
-            // open forever and masquerade as a shopping failure. This is a
-            // recognition filter only, never a stock filter: a recognized
-            // item raises its need even in a stockout. The hunger signal is
-            // preserved by the loud diagnostic (once per household per day
-            // per item) and by the needs the household raises for servable
-            // items from their own stock levels. No substitution is invented
-            // here: GetSubstitute stays response text only.
-            if (isRecognizedByKnownSeller != null && !isRecognizedByKnownSeller(itemId))
-            {
-                diagnostics.Add($"H{household.id} will not raise a '{itemId}' need: no known seller offers it");
-                return;
-            }
+            // Seller recognition determines whether the shopping loop has a
+            // legitimate route to a seller; it does not determine whether
+            // the household is short. Keep the need open so shortages remain
+            // observable while supply is unavailable. HouseholdShoppingLoop
+            // checks known suppliers before assigning a shopper or reserving
+            // travel time, and therefore fails this need without creating a
+            // fictitious trip or purchase.
+            bool hasKnownSeller = isRecognizedByKnownSeller == null
+                || isRecognizedByKnownSeller(itemId);
             float urgency = Mathf.Clamp01(1f - daysCovered / Mathf.Max(0.01f, LowDaysThreshold));
             if (isColdSeason && string.Equals(itemId, HouseholdItemCatalog.FuelWoodId, StringComparison.OrdinalIgnoreCase))
             {
@@ -254,7 +253,13 @@ namespace LandLedgers.Population
 
             string reason = $"{itemId}: {daysCovered:0.0} days of supply at {dailyUseUnits}/day " +
                 $"(threshold {LowDaysThreshold:0.0}d)" +
-                (isColdSeason ? ", cold season" : string.Empty);
+                (isColdSeason ? ", cold season" : string.Empty) +
+                (hasKnownSeller ? string.Empty : ", no known seller currently recognizes this item");
+
+            if (!hasKnownSeller)
+            {
+                diagnostics.Add($"H{household.id} has an open '{itemId}' shortage, but no known seller currently offers it");
+            }
 
             if (openNeed == null)
             {
@@ -416,7 +421,10 @@ namespace LandLedgers.Population
                 return;
             }
 
-            outNeeds.AddRange(all);
+            foreach (HouseholdPurchasingNeed need in all)
+            {
+                if (need != null) outNeeds.Add(CopyNeed(need));
+            }
         }
 
         public void ImportState(IEnumerable<HouseholdPurchasingNeed> inNeeds)
@@ -426,6 +434,13 @@ namespace LandLedgers.Population
                 return;
             }
 
+            // Save/Continue imports a snapshot, not an append operation.
+            // Clear prior runtime state and copy each record so subsequent
+            // shortage evaluation cannot mutate the caller's saved DTO.
+            openByKey.Clear();
+            all.Clear();
+            nextSequence = 0;
+
             foreach (HouseholdPurchasingNeed need in inNeeds)
             {
                 if (need == null || need.HouseholdId < 0 || string.IsNullOrWhiteSpace(need.ItemId))
@@ -433,21 +448,42 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                nextSequence = Math.Max(nextSequence, need.NeedSequence + 1);
-                if (need.Status == PurchasingNeedStatus.Open)
+                HouseholdPurchasingNeed restored = CopyNeed(need);
+                nextSequence = Math.Max(nextSequence, restored.NeedSequence + 1);
+                if (restored.Status == PurchasingNeedStatus.Open)
                 {
-                    string key = Key(need.HouseholdId, need.ItemId);
+                    string key = Key(restored.HouseholdId, restored.ItemId);
                     if (openByKey.ContainsKey(key))
                     {
                         diagnostics.Add($"ImportState: duplicate open need {key} skipped.");
                         continue;
                     }
 
-                    openByKey[key] = need;
+                    openByKey[key] = restored;
                 }
 
-                all.Add(need);
+                all.Add(restored);
             }
+        }
+
+        private static HouseholdPurchasingNeed CopyNeed(HouseholdPurchasingNeed need)
+        {
+            return new HouseholdPurchasingNeed
+            {
+                NeedSequence = need.NeedSequence,
+                HouseholdId = need.HouseholdId,
+                ItemId = need.ItemId,
+                UnitsNeeded = need.UnitsNeeded,
+                IsNecessity = need.IsNecessity,
+                Urgency01 = need.Urgency01,
+                ReasonSummary = need.ReasonSummary,
+                CreatedDayIndex = need.CreatedDayIndex,
+                LastEvaluatedDayIndex = need.LastEvaluatedDayIndex,
+                Status = need.Status,
+                SuggestedResponses = need.SuggestedResponses != null
+                    ? new List<string>(need.SuggestedResponses)
+                    : new List<string>(),
+            };
         }
     }
 }

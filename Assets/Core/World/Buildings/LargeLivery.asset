@@ -19,7 +19,7 @@ MonoBehaviour:
   allowedPlotZone: 1
   primaryUse: 2
   storeyCount: 1
-  workplaceEligible: 0
+  workplaceEligible: 1
   residentialMode: 0
   residentHouseholdCapacity: 0
   agriculturalSiteRole: 0
@@ -39,7 +39,7 @@ MonoBehaviour:
   - businessType: 6
     suitable: 0
   - businessType: 9
-    suitable: 0
+    suitable: 1
   anchorRules:
   - type: 0
     side: 0

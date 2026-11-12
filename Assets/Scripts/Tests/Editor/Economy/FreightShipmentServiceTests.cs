@@ -75,6 +75,73 @@ namespace LandLedgers.Editor.Economy
         private FreightCargoSpec GrainSpec() => new FreightCargoSpec { MassKgPerUnit = 2f, VolumeM3PerUnit = 0.01f };
 
         [Test]
+        public void SourceLotReceiptWaitsForPhysicalReceivingArrival()
+        {
+            LogisticsShipmentState shipment = service.CreateShipment("physical-receipt", "mill-1", "bakery-1",
+                10, GrainSpec(), "wagon-1", hooks, out string createReason);
+            Assert.IsNotNull(shipment, createReason);
+            Assert.IsTrue(service.TryBindSourceLot(shipment, "flour-lot-1", "flour", out string bindReason), bindReason);
+            shipment.sourceLotDebitApplied = true;
+            shipment.loadApplied = true;
+            shipment.remainingQuantityUnits = shipment.PlannedQuantityUnits;
+            shipment.state = LogisticsShipmentStatus.Arrived;
+            hooks.ReceiveCargoLot = (LogisticsShipmentState received, int quantity, out string reason) =>
+            {
+                reason = string.Empty;
+                recipientStock[received.destinationBusinessInstanceId] = quantity;
+                return true;
+            };
+            bool physicallyAtReceivingPoint = false;
+            hooks.ConfirmPhysicalReceiving = (LogisticsShipmentState received, EntityId handler,
+                out bool arrived, out string reason) =>
+            {
+                arrived = physicallyAtReceivingPoint;
+                reason = arrived ? string.Empty : "Carrying: route in progress.";
+                return true;
+            };
+
+            Assert.IsTrue(service.BeginUnloading(shipment, loader, hooks, out string beginReason), beginReason);
+            Assert.IsTrue(service.WorkUnloading(shipment, 60, hooks, out string firstReason), firstReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status);
+            Assert.AreEqual("person:701", shipment.physicalLocationId);
+            Assert.IsFalse(shipment.deliveryApplied);
+            Assert.IsFalse(recipientStock.ContainsKey("bakery-1"), "No stock receipt before physical arrival.");
+
+            physicallyAtReceivingPoint = true;
+            Assert.IsTrue(service.WorkUnloading(shipment, 1, hooks, out string secondReason), secondReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, shipment.Status);
+            Assert.AreEqual(10, recipientStock["bakery-1"]);
+            Assert.IsTrue(shipment.deliveryApplied);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RefusedHandlingStartReleasesItsAssignmentAndBudget(bool unloading)
+        {
+            tasks.RegisterDefinition(new TaskDefinition("already-working", "Existing legitimate job", 30), out _);
+            WorkTask busy = tasks.CreateTask("already-working", EntityId.For(EntityKind.Business, 999), 42);
+            Assert.IsTrue(tasks.AssignTask(busy.TaskId, loader, budgets, out _));
+            Assert.IsTrue(tasks.StartTask(busy.TaskId, 42, out _));
+            int availableBefore = budgets.GetOrCreate(loader).MinutesRemaining;
+            LogisticsShipmentState shipment = service.CreateShipment("refused-handling", "mill", "store",
+                10, GrainSpec(), "wagon-1", hooks, out _);
+            if (unloading) shipment.state = LogisticsShipmentStatus.Arrived;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                bool started = unloading
+                    ? service.BeginUnloading(shipment, loader, hooks, out _)
+                    : service.BeginLoading(shipment, loader, hooks, out _);
+                Assert.IsFalse(started);
+                Assert.AreEqual(0, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                    "A refused retry must not leave a second assigned freight job.");
+                Assert.AreEqual(availableBefore, budgets.GetOrCreate(loader).MinutesRemaining);
+                Assert.IsFalse(shipment.loadApplied);
+                Assert.IsFalse(shipment.deliveryApplied);
+                Assert.AreEqual(TaskStatus.InProgress, busy.Status);
+            }
+        }
+
+        [Test]
         public void FullShipment_LoadTravelUnload_RecipientCustody_Conserved()
         {
             LogisticsShipmentState shipment = service.CreateShipment("ship-1", "mill-1", "store-1",

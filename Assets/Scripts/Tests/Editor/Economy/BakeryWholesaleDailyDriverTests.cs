@@ -302,6 +302,47 @@ namespace LandLedgers.Editor.Economy
                 ImportOrderPathExists = false,
             };
 
+        [TestCase(false, 0, 0)]
+        [TestCase(true, 0, 0)]
+        [TestCase(true, 2, 2)]
+        public void PaidIncomingFlourCoversProcurementButCannotBakeBeforeReceipt(bool committed, int depth, int expectedLocalSacks)
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 1, 1);
+            SeedStoreFlour(s, 4);
+            BookAccount(s, 24, 1, 2, 2);
+            var supplier = new OffMapAidBusinessRuntime(new OffMapAidBusinessDefinition
+            {
+                BusinessId = "millbrook_grain_co", DisplayName = "Millbrook Grain Co.",
+                Inventory = new List<OffMapAidInventoryRow>
+                {
+                    new OffMapAidInventoryRow
+                    {
+                        ItemId = "bakery_flour_sack", InventoryUnit = "lb", StartingUnits = 230,
+                        OrderUnit = "10 lb sack", InventoryUnitsPerOrderUnit = 10,
+                        BakeryUnitsPerOrderUnit = 18, OrderPriceCents = 48
+                    }
+                }
+            });
+            var inputs = InputsFor(s, 2);
+            inputs.MillbrookSupplier = supplier;
+            inputs.FlourPipelineDepthDays = depth;
+            Assert.IsNull(supplier.TryPlaceOrder("paid-flour", BakeryInstanceId, BakeryInstanceId,
+                2, inputs.BakeryCashPort, 1, out OffMapAidCargoLot lot));
+            if (committed) Assert.IsNull(supplier.CommitFreightPickup(lot.LotId, "real-shipment", 2));
+            int cashBefore = s.BakeryRuntime.CurrentCashCents;
+
+            var result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+            Assert.AreEqual(expectedLocalSacks, result.FlourSacksPurchased);
+            Assert.AreEqual(cashBefore - expectedLocalSacks * 29 + (expectedLocalSacks > 0 ? 48 : 0),
+                s.BakeryRuntime.CurrentCashCents, "Only actual flour purchases and actual wholesale may move cash.");
+            Assert.AreEqual(expectedLocalSacks > 0 ? 1 : 0, result.BatchesBaked,
+                "Paid in-transit flour covers ordering, never physical bake inputs.");
+            Assert.AreEqual(1, supplier.Lots.Count);
+            Assert.IsFalse(lot.Received);
+        }
+
         [Test]
         public void MissingAccount_NamesTheBlocker_PlansNothing()
         {
@@ -458,6 +499,49 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(record.ProvenanceLines.Count > 0, "the delivery record keeps the upstream provenance chain");
             Assert.AreEqual(0, s.Bakery.BreadShelf.Count > 0 ? s.Bakery.BreadShelf[0].UnitCount : 0,
                 "the bakery shelf is empty after the transfer");
+        }
+
+        [Test]
+        public void SettledWholesale_RecordsDeliveryBeforeLivePoolStocking_AndRetryDoesNotSettleAgain()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 12, 1, 1);
+            BakeryWholesaleAccount account = BookAccount(s, 24, 1, 2, 2);
+            s.StorePort.Cap = 10; // live pool cannot accept the full 24-loaf lot today
+
+            BakeryWholesaleDailyResult first = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+
+            Assert.AreEqual(1, first.BatchesBaked);
+            Assert.AreEqual(1, first.TransfersCompleted,
+                "wholesale completion is the settled receipt into store receiving stock");
+            Assert.AreEqual(10, first.UnitsStocked,
+                "the live category pool accepts the portion that fits");
+            Assert.AreEqual(3, account.NextDeliveryDayIndex,
+                "the account must advance after its cash-settled goods reach store back stock");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count);
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents);
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents);
+            Assert.AreEqual(14, s.Catalog.Find("bread").ShelfUnits,
+                "the unstocked 14 settled loaves remain in the store receiving shelf");
+            Assert.AreEqual(10, s.StorePort.CategoryStockUnits("staple_food"));
+
+            // Once capacity is available, retry only the receiving-shelf
+            // stock step. There is no second settlement for the same lot.
+            s.StorePort.Cap = 24;
+            BakeryWholesaleDailyResult retry = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 3), s.Diag);
+
+            Assert.AreEqual(14, retry.UnitsStocked);
+            Assert.AreEqual(0, retry.TransfersCompleted,
+                "the retry stocks previously settled goods; it is not a second wholesale transfer");
+            Assert.AreEqual(3, account.NextDeliveryDayIndex,
+                "the next delivery remains due until new bread is actually transferred");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count,
+                "the retry must not duplicate the delivery record");
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents);
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents);
+            Assert.AreEqual(24, s.StorePort.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(0, s.Catalog.Find("bread").ShelfUnits);
         }
 
         [Test]

@@ -5,4 +5,5 @@
 *.prefab whitespace=-blank-at-eol
 *.mat whitespace=-blank-at-eol
 *.controller whitespace=-blank-at-eol
+*.unity whitespace=-blank-at-eol
 *.gitignore whitespace=-blank-at-eof

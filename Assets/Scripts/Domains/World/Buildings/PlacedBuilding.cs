@@ -109,6 +109,8 @@ namespace LandLedgers.World
         public PublicSiteRole publicSiteRole = PublicSiteRole.None;
         public bool playerOwned;
         public BuildingDoorAnimator doorAnimator;
+        [NonSerialized]
+        public BuildingFootprintAuthority runtimeFootprintAuthority;
         // Exterior authoring diagnostics are runtime inspection fields, not authored source data. They are filled by
         // TownWorldController after authoring activation so world inspection can explain what really happened.
         public bool hasExteriorPropAuthoring;

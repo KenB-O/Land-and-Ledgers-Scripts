@@ -1,6 +1,8 @@
 using System.Reflection;
 using LandLedgers.FirstLedger;
+using LandLedgers.Pathing;
 using LandLedgers.Population;
+using LandLedgers.World;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -30,6 +32,40 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void PopulationPathingWaitsForTheMatchingGeneratedWorldGrid()
+        {
+            GameObject worldObject = new("Population readiness world");
+            GameObject otherWorldObject = new("Other world");
+            GameObject pathingObject = new("Population readiness pathing");
+            PathingSettings settings = ScriptableObject.CreateInstance<PathingSettings>();
+            try
+            {
+                TownWorldController world = worldObject.AddComponent<TownWorldController>();
+                TownWorldController otherWorld = otherWorldObject.AddComponent<TownWorldController>();
+                PathingManager pathing = pathingObject.AddComponent<PathingManager>();
+                pathing.Configure(world, settings);
+
+                Assert.IsFalse(PopulationPathingDirector.IsGeneratedWorldReadyForPopulation(world, pathing),
+                    "An early tick before town generation must wait instead of attempting agent creation without door anchors.");
+
+                TownGrid generatedGrid = new(8, 8, 2f, Vector3.zero);
+                typeof(TownWorldController).GetField("grid", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .SetValue(world, generatedGrid);
+
+                Assert.IsTrue(PopulationPathingDirector.IsGeneratedWorldReadyForPopulation(world, pathing));
+                Assert.IsFalse(PopulationPathingDirector.IsGeneratedWorldReadyForPopulation(otherWorld, pathing),
+                    "A pathing manager bound to a different world must not be treated as ready for this population.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+                Object.DestroyImmediate(pathingObject);
+                Object.DestroyImmediate(otherWorldObject);
+                Object.DestroyImmediate(worldObject);
+            }
+        }
+
+        [Test]
         public void ProductionAndFarmWorkersLeaveBeforeRetailWorkers()
         {
             PersonState rancher = new() { professionId = "ranch_hand" };
@@ -39,6 +75,43 @@ namespace LandLedgers.EditorTests.Population
             float clerkDeparture = InvokeScheduleTime("GetWorkDepartureTime01", clerk);
 
             Assert.Less(ranchDeparture, clerkDeparture);
+        }
+
+        [Test]
+        public void WorkDepartureWindowClosesAfterScheduledReturn()
+        {
+            Assert.IsTrue(PopulationPathingDirector.IsWithinWorkDepartureWindow(0.40f, 0.30f, 0.74f));
+            Assert.IsFalse(PopulationPathingDirector.IsWithinWorkDepartureWindow(0.75f, 0.30f, 0.74f),
+                "A worker who returned home after the shift must not be sent back to work by a stale departure threshold.");
+        }
+
+        [Test]
+        public void DomesticWindowRejectsOverlapWithScheduledPaidWork()
+        {
+            Assert.IsTrue(PopulationPathingDirector.OverlapsScheduledWorkWindow(660, 41, 450, 1065));
+            Assert.IsFalse(PopulationPathingDirector.OverlapsScheduledWorkWindow(1080, 41, 450, 1065));
+        }
+
+        [Test]
+        public void RouteAwareDepartureLeavesBeforeScheduledArrivalForTravelPreparationAndBuffer()
+        {
+            float departure = PopulationPathingDirector.CalculateRouteAwareDepartureTime01(
+                465f / 1440f, routeMinutes: 15f, preparationMinutes: 10f, arrivalBufferMinutes: 5f);
+
+            Assert.AreEqual(435f / 1440f, departure, 0.00001f,
+                "a 7:45 start with a 15-minute route leaves by 7:15 after preparation and arrival buffer");
+        }
+
+        [Test]
+        public void WorkRouteWaitsUntilNonInterruptibleSleepReservationEnds()
+        {
+            PersonScheduleTracker schedules = new();
+            Assert.IsNull(schedules.TryReserve(3, PersonActivityKind.Sleeping, 12,
+                0, 420, "sleep (morning)"));
+
+            Assert.IsTrue(PopulationPathingDirector.IsReservedForSleepAt(schedules, 3, 12, 419));
+            Assert.IsFalse(PopulationPathingDirector.IsReservedForSleepAt(schedules, 3, 12, 420));
+            Assert.IsFalse(PopulationPathingDirector.IsReservedForSleepAt(schedules, 3, 13, 100));
         }
 
         [Test]

@@ -45,7 +45,7 @@ namespace LandLedgers.EditorTests.Economy
     [TestFixture]
     public sealed class StoreWeeklyReorderCustodyTests
     {
-        private sealed class FakeStorePort : IGeneralStoreTradingPort
+        private sealed class FakeStorePort : IGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
             public string StoreBusinessId { get; set; } = "store-1";
             public string StoreName => "General Store";
@@ -86,6 +86,13 @@ namespace LandLedgers.EditorTests.Economy
                 return null;
             }
 
+            public string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, int costCents, string provenance, int dayIndex)
+            {
+                if (CurrentCashCents < costCents) return "cannot afford";
+                string problem = ReceiveStock(categoryId, units, provenance);
+                return problem ?? SpendCash(costCents, provenance);
+            }
             public string ReceiveStock(string categoryId, int units, string provenanceLabel)
             {
                 if (units <= 0) return "nothing to receive";
@@ -159,12 +166,35 @@ namespace LandLedgers.EditorTests.Economy
             state.GetCategoryStock("staple_food").QueueReorderToTarget();
             Assert.AreEqual(50, state.GetCategoryStock("staple_food").PendingReorderUnits);
 
-            int accepted = state.ApplyDeliveredShipment("staple_food", 30);
-            state.SpendCents(accepted * 20);
+            int accepted = StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                state, "staple_food", 30, 20, out int spend, out string refusal);
 
             Assert.AreEqual(30, accepted);
+            Assert.AreEqual(600, spend);
+            Assert.IsEmpty(refusal);
             Assert.AreEqual(80, state.GetCategoryStock("staple_food").CurrentStockUnits);
             Assert.AreEqual(10000 - 600, state.CurrentCashCents);
+        }
+
+        [Test]
+        public void OffMapReceipt_InsufficientCashDefersWithoutStockOrExpense_ThenCanRetry()
+        {
+            var state = new BusinessRuntimeState();
+            state.EnsureCategoryStock("staple_food", 50, 100);
+            state.SetCurrentCashCents(599);
+            Assert.AreEqual(0, StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                state, "staple_food", 30, 20, out int spend, out string refusal));
+            Assert.AreEqual(0, spend);
+            Assert.IsNotEmpty(refusal);
+            Assert.AreEqual(50, state.GetCategoryStock("staple_food").CurrentStockUnits);
+            Assert.AreEqual(599, state.CurrentCashCents);
+
+            state.AddCashCents(1);
+            Assert.AreEqual(30, StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                state, "staple_food", 30, 20, out spend, out refusal));
+            Assert.AreEqual(600, spend);
+            Assert.AreEqual(80, state.GetCategoryStock("staple_food").CurrentStockUnits);
+            Assert.AreEqual(0, state.CurrentCashCents);
         }
 
         // 2. THE SHARED OUTSTANDING-ORDER CHECK (W1, Obj 47 — flipped from
@@ -449,6 +479,41 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(0, nullReceipt.AcceptedUnits);
             Assert.IsTrue(nullReceipt.RefusalReason.Length > 0);
             Assert.IsTrue(StoreWeeklyReorderPlanner.BuildShipmentTerms(null, "staple_food", 20, 50, 25, 30) == null);
+        }
+
+        [Test]
+        public void NamedSupplierReceipt_UnaffordableDeliveryRefusesBeforeSourceOrStoreMutation()
+        {
+            var supplier = SupplierWith("up-1", "staple_food", 20, 50);
+            var state = new BusinessRuntimeState();
+            state.EnsureCategoryStock("staple_food", 50, 100);
+            state.SetCurrentCashCents(499);
+            int supplierBefore = supplier.AvailableUnits("staple_food");
+            int stockBefore = state.GetCategoryStock("staple_food").CurrentStockUnits;
+            var diagnostics = new List<string>();
+
+            StoreWeeklyReorderPlanner.NamedSupplierReceiptResult receipt =
+                StoreWeeklyReorderPlanner.ReceiveNamedSupplierShipment(
+                    supplier, state, "staple_food", 20, 25, 3, diagnostics);
+
+            Assert.AreEqual(0, receipt.ShippedUnits);
+            Assert.AreEqual(0, receipt.AcceptedUnits);
+            Assert.AreEqual(0, receipt.BuyerSpendCents);
+            Assert.AreEqual(supplierBefore, supplier.AvailableUnits("staple_food"),
+                "An unaffordable delivery must be refused before the upstream lot is decremented.");
+            Assert.AreEqual(stockBefore, state.GetCategoryStock("staple_food").CurrentStockUnits);
+            Assert.AreEqual(499, state.CurrentCashCents);
+            StringAssert.Contains("deferred", receipt.RefusalReason);
+            StringAssert.Contains("500c", receipt.RefusalReason);
+            Assert.IsTrue(diagnostics.Count > 0);
+
+            StoreWeeklyReorderPlanner.NamedSupplierReceiptResult unpriced =
+                StoreWeeklyReorderPlanner.ReceiveNamedSupplierShipment(
+                    supplier, state, "staple_food", 20, 0, 3, new List<string>());
+            Assert.AreEqual(0, unpriced.AcceptedUnits,
+                "A missing/non-positive buyer price is not permission to receive free goods.");
+            Assert.AreEqual(supplierBefore, supplier.AvailableUnits("staple_food"));
+            Assert.AreEqual(stockBefore, state.GetCategoryStock("staple_food").CurrentStockUnits);
         }
 
         // 12. (Plan 06 Slice 0 companion) The named-supplier seam the

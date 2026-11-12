@@ -64,6 +64,22 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         int TradeCreditLimitCents { get; }
     }
 
+    /// <summary>
+    /// Receiving boundary for a paid procurement receipt. Refusal must leave
+    /// both cash and stock unchanged; success transfers both synchronously.
+    /// </summary>
+    public interface IPaidStoreReceivingPort
+    {
+        string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+            int units, int costCents, string provenance, int dayIndex);
+    }
+
+    /// <summary>Production receipt identities survive adapter replacement and Continue.</summary>
+    public interface IRetailReceiptIdentityPort
+    {
+        string AllocateRetailReceiptId(int dayIndex);
+    }
+
     /// <summary>Optional exact-SKU extension; legacy category-only ports remain source compatible.</summary>
     public interface IItemLevelGeneralStoreTradingPort : IGeneralStoreTradingPort
     {
@@ -91,6 +107,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     {
         string ReceiveRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
             int units, string provenance, int dayIndex);
+    }
+
+    /// <summary>Receipt of an identified lot whose acquisition payment is known.</summary>
+    public interface ICostedRetailStockReceivingPort : IIdentifiedRetailStockReceivingPort
+    {
+        string ReceiveCostedRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+            int units, string provenance, int dayIndex, int acquisitionCostCents);
     }
 
     /// <summary>
@@ -169,7 +192,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             int revenue = consumed * PricePerUnitCents(categoryId);
             port.RecordCashSettlement(categoryId, consumed, revenue);
-            lastReceiptId = $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
+            lastReceiptId = AllocateReceiptId(dayIndex);
             log.Add($"Day {dayIndex}: sold {consumed}u {categoryId} for {revenue}c ({lastReceiptId}).");
             return consumed;
         }
@@ -301,7 +324,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     exactPort.RecordItemCashSettlement(categoryId, storeUnitsSold, exactRevenue);
                 }
 
-                lastReceiptId = $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
+                lastReceiptId = AllocateReceiptId(dayIndex);
                 log.Add($"Day {dayIndex}: sold {exactUnits}u {itemId} for {exactRevenue}c using its identified lot stock.");
                 diagnostics?.Add($"'{SupplierName}' sold {exactUnits}u {itemId} ({lastReceiptId}).");
                 return exactUnits;
@@ -329,7 +352,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 log.Add($"Day {dayIndex}: sold {unitsSold}u {itemId} for {revenue}c cash.");
             }
 
-            lastReceiptId = $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
+            lastReceiptId = AllocateReceiptId(dayIndex);
             diagnostics?.Add($"'{SupplierName}' sold {unitsSold}u {itemId} ({lastReceiptId}).");
             return unitsSold;
         }
@@ -356,6 +379,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public bool OffersTradeCredit => port.OffersTradeCredit;
 
         public int TradeCreditLimitCents => Math.Max(0, port.TradeCreditLimitCents);
+
+        private string AllocateReceiptId(int dayIndex) => port is IRetailReceiptIdentityPort identities
+            ? identities.AllocateRetailReceiptId(dayIndex)
+            : $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
 
         private GeneralStoreCategoryOffer FindOffer(string categoryId)
         {

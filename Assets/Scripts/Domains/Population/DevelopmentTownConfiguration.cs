@@ -152,6 +152,9 @@ namespace LandLedgers.Population
         [SerializeField] private string configurationId = "millbrook-development-town";
         [SerializeField, Min(0), Tooltip("Deterministic development fixture calibration; not canonical world-generation policy.")]
         private int seedOffset = 9217;
+        [SerializeField, Tooltip("Uses the standard deterministic population generator with the authored population settings below instead of the personally authored Small-town roster.")]
+        private bool generatePopulationFromSettings;
+        [SerializeField] private PopulationGenerationSettings generatedPopulationSettings;
         [SerializeField] private PersonDefinition[] people = Array.Empty<PersonDefinition>();
         [SerializeField] private HouseholdDefinition[] households = Array.Empty<HouseholdDefinition>();
         [SerializeField] private RelationshipDefinition[] relationships = Array.Empty<RelationshipDefinition>();
@@ -164,6 +167,10 @@ namespace LandLedgers.Population
         [SerializeField] private string freightBusinessKey = "freight-company";
         [SerializeField, Min(0), Tooltip("Finite development-town opening fuel endowment for the configured Bakery. This is scenario stock, applied once and never replenished automatically.")]
         private int openingBakeryFuelUnits;
+        [SerializeField, Min(0), Tooltip("Finite development-town opening flour in pounds, received into the Bakery production bin on New Game only.")]
+        private int openingBakeryFlourPounds;
+        [SerializeField, Min(0), Tooltip("Finite development-town opening baker's notions in units, received into the Bakery production bin on New Game only.")]
+        private int openingBakeryNotionsUnits;
         /// <summary>
         /// Plan 10 E4 (Obj 8; D-2): the owner-supplied fuel-dealer
         /// conversion factor — intake units per bakery fuel unit
@@ -185,6 +192,8 @@ namespace LandLedgers.Population
 
         public string ConfigurationId => configurationId ?? string.Empty;
         public int SeedOffset => seedOffset;
+        public bool GeneratePopulationFromSettings => generatePopulationFromSettings;
+        public PopulationGenerationSettings GeneratedPopulationSettings => generatedPopulationSettings;
         public IReadOnlyList<PersonDefinition> People => people ?? Array.Empty<PersonDefinition>();
         public IReadOnlyList<HouseholdDefinition> Households => households ?? Array.Empty<HouseholdDefinition>();
         public IReadOnlyList<RelationshipDefinition> Relationships => relationships ?? Array.Empty<RelationshipDefinition>();
@@ -196,6 +205,8 @@ namespace LandLedgers.Population
         public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => wholesaleAccounts ?? Array.Empty<BakeryWholesaleAccountDefinition>();
         public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
         public int OpeningBakeryFuelUnits => openingBakeryFuelUnits;
+        public int OpeningBakeryFlourPounds => openingBakeryFlourPounds;
+        public int OpeningBakeryNotionsUnits => openingBakeryNotionsUnits;
         /// <summary>Plan 10 E4: the D-2 fuel-dealer conversion factor; 0 = unset (no dealer conversion).</summary>
         public int FuelDealerIntakeUnitsPerBakeryUnit => fuelDealerIntakeUnitsPerBakeryUnit;
         public string OpeningHorseId => openingHorseId ?? string.Empty;
@@ -216,6 +227,11 @@ namespace LandLedgers.Population
         public int ResolveRuntimePersonId(string personKey)
         {
             if (string.IsNullOrWhiteSpace(personKey)) return -1;
+            if (generatePopulationFromSettings
+                && personKey.StartsWith("generated-person-", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(personKey.Substring("generated-person-".Length), out int generatedPersonId)
+                && generatedPersonId >= 0)
+                return generatedPersonId;
             int id = 1;
             foreach (HouseholdDefinition household in Households)
                 foreach (string memberKey in household.memberPersonKeys ?? Array.Empty<string>())
@@ -263,6 +279,44 @@ namespace LandLedgers.Population
         {
             error = string.Empty;
             if (string.IsNullOrWhiteSpace(ConfigurationId)) { error = "Development town configuration needs a stable ID."; return false; }
+            if (generatePopulationFromSettings)
+            {
+                if (generatedPopulationSettings == null)
+                { error = "Generated development presets require PopulationGenerationSettings."; return false; }
+                if (People.Count != 0 || Households.Count != 0)
+                { error = "Generated development presets must not duplicate an authored person or household roster."; return false; }
+                var generatedBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var generatedPersonOwners = new HashSet<int>();
+                foreach (BusinessDefinition business in Businesses)
+                {
+                    int ownerId = business != null ? ResolveRuntimePersonId(business.ownerPersonKey) : -1;
+                    if (business == null || string.IsNullOrWhiteSpace(business.key) || string.IsNullOrWhiteSpace(business.operationId)
+                        || ownerId <= 0 || ownerId > generatedPopulationSettings.maximumStartingResidents
+                        || business.openingCashCents < 0 || !generatedBusinessKeys.Add(business.key)
+                        || !generatedPersonOwners.Add(ownerId))
+                    { error = "Generated opening businesses need unique keys and distinct owners within the generated starting population."; return false; }
+                    if (business.freightRateCard != null
+                        && (business.freightRateCard.baseServiceFeeCents < 0 || business.freightRateCard.ratePerMileCents < 0))
+                    { error = $"Development business '{business.key}' has a freight rate card with a negative fee."; return false; }
+                }
+                var generatedCashBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (BusinessCashTarget target in BusinessCashTargets)
+                    if (target == null || !TryGetBusiness(target.businessKey, out _)
+                        || target.targetCashCents < 0 || !generatedCashBusinessKeys.Add(target.businessKey))
+                    { error = "Generated business cash targets must reference unique configured businesses and non-negative balances."; return false; }
+                var generatedCashHouseholdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (HouseholdCashTarget target in HouseholdCashTargets)
+                {
+                    int anchorId = target != null ? ResolveRuntimePersonId(target.anchorPersonKey) : -1;
+                    if (target == null || anchorId < 0 || anchorId >= generatedPopulationSettings.maximumStartingResidents
+                        || target.targetCashCents < 0 || !generatedCashHouseholdKeys.Add(target.anchorPersonKey))
+                    { error = "Generated household cash targets must reference distinct starting residents and non-negative balances."; return false; }
+                }
+                if (Businesses.Count == 0 || !TryGetBusiness(FreightBusinessKey, out _)
+                    || string.IsNullOrWhiteSpace(OpeningHorseId) || string.IsNullOrWhiteSpace(OpeningWagonId))
+                { error = "Generated development presets must keep the configured freight business, horse, and wagon identities."; return false; }
+                return true;
+            }
             if (People.Count == 0 || Households.Count == 0 || Businesses.Count == 0) { error = "Development town must define people, households, and businesses directly."; return false; }
             var personKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (PersonDefinition person in People)

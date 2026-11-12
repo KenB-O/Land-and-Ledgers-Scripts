@@ -201,7 +201,7 @@ namespace LandLedgers.Economy.BreadDrivers
                 return result;
             }
             if (!inputs.StoreRuntime.TryConsumeRetailItemStockUnits(
-                    FlourItemId, FlourCategoryId, inputs.SacksRequested, out int consumed)
+                    FlourItemId, FlourCategoryId, inputs.SacksRequested, out int consumed, retailSale: true)
                 || consumed != inputs.SacksRequested)
             {
                 string refundRefusal = inputs.BakeryCashPort.Credit(totalCents,

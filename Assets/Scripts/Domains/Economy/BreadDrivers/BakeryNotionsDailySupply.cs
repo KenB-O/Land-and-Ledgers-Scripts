@@ -199,16 +199,20 @@ namespace LandLedgers.Economy.BreadDrivers
                 }
             }
 
-            // (c) Order for the pipeline. At depth 0 this is today's
-            // behaviour exactly: order the remaining shortfall after
-            // feeding. At depth D > 0 order up to the forward target
+            // (c) Order for the pipeline. At depth 0, active orders for
+            // this SKU already cover the current shortfall even when their
+            // legitimate transit time is longer than one day. Reordering
+            // that same shortfall every day would consume finite supplier
+            // stock without making the blocked batch bake sooner. At depth
+            // D > 0 order up to the forward target
             // (D + 1) x one day's need, net of bin on-hand after
             // feeding, sellable store lots remaining, and in-transit
             // units arriving within the depth window. One order per
             // day: an order for this SKU placed today already covers
             // today's shortfall, so a repeated same-day call orders
             // nothing twice.
-            int orderQty = shortfall;
+            int outstandingOrderCoverage = OutstandingNotionsOrderUnits(inputs, skuId);
+            int orderQty = Math.Max(0, shortfall - outstandingOrderCoverage);
             int forwardTarget = 0;
             int inTransitWithinDepth = 0;
             if (depthDays > 0)
@@ -260,8 +264,37 @@ namespace LandLedgers.Economy.BreadDrivers
             diag.Add($"BakeryNotionsDailySupply: notions quote {unitPrice}c/unit via {inputs.Registration.SupplierId} ('{skuId}'), quoted transit {Math.Max(1, inputs.Registration.TransitDays)}d; " +
                 $"day {inputs.DayIndex}: need {need}u, on hand {onHand}u, sellable {sellable}u, fed {result.NotionsFed}u, ordered {result.NotionsOrdered}u" +
                 (result.NotionsOrdered > 0 ? $" (arrives day {result.NotionsArrivalDayIndex})" : string.Empty) +
+                (outstandingOrderCoverage > 0 ? $", active orders cover {outstandingOrderCoverage}u" : string.Empty) +
                 (depthDays > 0 ? $" [pipeline depth {depthDays}d, forward target {forwardTarget}u, in transit within depth {inTransitWithinDepth}u]" : string.Empty) + ".");
             return result;
+        }
+
+        /// <summary>
+        /// Units in active procurement orders for this SKU. These are
+        /// already committed against the same business need and must not
+        /// be ordered again while transit, payment, or obligation handling
+        /// is still unresolved. Received units are represented in sellable
+        /// lots or Bakery custody; cancelled orders no longer cover demand.
+        /// </summary>
+        private static int OutstandingNotionsOrderUnits(BakeryNotionsDailySupplyInputs inputs, string skuId)
+        {
+            OffMapNamedSkuProcurementService service =
+                inputs?.NotionsSupply?.Procurement != null
+                    ? inputs.NotionsSupply.Procurement.Service
+                    : null;
+            if (service?.Orders == null) return 0;
+
+            int total = 0;
+            foreach (NamedSkuOrder existing in service.Orders)
+            {
+                if (existing == null
+                    || !string.Equals(existing.SkuId, skuId, StringComparison.Ordinal)
+                    || existing.Stage == NamedSkuOrderStage.Received
+                    || existing.Stage == NamedSkuOrderStage.Cancelled)
+                    continue;
+                total += Math.Max(0, existing.UnitsOrdered);
+            }
+            return total;
         }
 
         /// <summary>Priority 3 Slice 4: unreceived units of this SKU

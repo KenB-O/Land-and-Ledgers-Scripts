@@ -37,6 +37,17 @@ namespace LandLedgers.Editor.Population
             };
         }
 
+        [TestCase(AgeBand.Adult18Plus, false, false, true)]
+        [TestCase(AgeBand.Adult18Plus, true, false, false)]
+        [TestCase(AgeBand.Adult18Plus, false, true, false)]
+        [TestCase(AgeBand.Child0To9, false, false, false)]
+        public void RoutineJobSeeking_RequiresUnemployedAdultWithoutOperatingBusiness(
+            AgeBand ageBand, bool employed, bool managesBusiness, bool expected)
+        {
+            Assert.AreEqual(expected, DailyActivityPlanner.ShouldPlanRoutineJobSeeking(
+                ageBand, employed, managesBusiness));
+        }
+
         [Test]
         public void PlanPersonDay_ReservesSleepMealsAndRest()
         {
@@ -63,6 +74,20 @@ namespace LandLedgers.Editor.Population
             }
 
             Assert.IsTrue(anyRest, "expected at least one rest window");
+        }
+
+        [Test]
+        public void MealReservation_ShiftsWithinWindowAroundExistingCommitment()
+        {
+            var f = new Fixture();
+            Assert.IsNull(f.Schedules.TryReserve(3, PersonActivityKind.Work, 100, 420, 60, "early shift"));
+            DailyActivityPlanner.PersonDayPlan plan = f.Planner.PlanPersonDay(Inputs(3), 100,
+                f.Schedules, f.Budgets, null);
+            DailyActivityPlanner.PlannedActivity breakfast = plan.Activities.Find(activity =>
+                activity.Kind == PersonActivityKind.Eating && activity.Reserved && activity.StartMinuteOfDay >= 390 && activity.StartMinuteOfDay <= 510);
+            Assert.IsNotNull(breakfast);
+            Assert.AreEqual(480, breakfast.StartMinuteOfDay,
+                "breakfast should shift to the first free 15-minute boundary within its one-hour flexible window");
         }
 
         [Test]

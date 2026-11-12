@@ -212,6 +212,10 @@ namespace LandLedgers.Economy.Creation
     [Serializable]
     public sealed class NpcBusinessInvestigation
     {
+        private const int PreferredStartMinute = 600; // 10:00, retained as the preferred appointment.
+        private const int FlexibleWindowStartMinute = 480; // 08:00
+        private const int FlexibleWindowEndMinute = 1080; // 18:00
+        private const int FlexibleSearchStepMinutes = 15;
         [SerializeField]
         private string investigationId = string.Empty;
 
@@ -284,15 +288,26 @@ namespace LandLedgers.Economy.Creation
             startedDayIndex = dayIndex;
             verdict = NpcInvestigationVerdict.Underway;
 
-            // Investigation costs real Person time (Phase C time authority).
-            // Midday window 10:00-14:00 keeps clear of work/sleep by default;
-            // the tracker still refuses any overlap loudly.
+            // Investigation consumes actual person-time, but 10:00 is only
+            // the preferred appointment. Search nearby 15-minute starts for
+            // a free two-hour block so routine work/job-search reservations
+            // do not permanently starve this activity.
+            int duration = Math.Max(30, investigationMinutes);
+            int selectedStart = FindFlexibleStart(scheduleTracker, investigatorPersonId, dayIndex, duration);
+            if (selectedStart < 0)
+            {
+                verdict = NpcInvestigationVerdict.Unspecified;
+                string noWindow = $"no free {duration}-minute investigation window between 08:00 and 18:00 on day {dayIndex}";
+                diagnostics.Add($"Investigation refused: P{investigatorPersonId} has {noWindow}.");
+                return $"Investigation refused: P{investigatorPersonId} has {noWindow}.";
+            }
+
             string refusal = scheduleTracker.TryReserve(
                 investigatorPersonId,
                 PersonActivityKind.Investigation,
                 dayIndex,
-                600,
-                Math.Max(30, investigationMinutes),
+                selectedStart,
+                duration,
                 $"investigating opportunity '{opportunity.OpportunityId}' ({opportunity.ItemOrServiceId})");
             if (refusal != null)
             {
@@ -309,16 +324,36 @@ namespace LandLedgers.Economy.Creation
             opportunity.Status = NpcOpportunityStatus.Investigating;
             opportunity.StatusReason = $"under investigation '{this.investigationId}' by P{investigatorPersonId}.";
             diagnostics.Add($"P{investigatorPersonId} started investigating '{opportunity.OpportunityId}' " +
-                $"('{opportunity.ItemOrServiceId}'); {investigationMinutes} minutes of real Person time reserved.");
+                $"('{opportunity.ItemOrServiceId}'); {duration} minutes reserved at {selectedStart / 60:00}:{selectedStart % 60:00}.");
             events?.Record(dayIndex, NpcBusinessEventKind.InvestigationStarted, investigatorPersonId,
                 string.Empty,
                 $"P{investigatorPersonId} started investigation '{this.investigationId}' of opportunity " +
                 $"'{opportunity.OpportunityId}' ({opportunity.ItemOrServiceId}).");
             events?.Record(dayIndex, NpcBusinessEventKind.InvestigationTimeReserved, investigatorPersonId,
                 string.Empty,
-                $"P{investigatorPersonId} reserved {investigationMinutes} minutes for the investigation " +
+                $"P{investigatorPersonId} reserved {duration} minutes for the investigation " +
                 $"(reservation '{timeReservationId}'); Person time is real and cannot double-book.");
             return null;
+        }
+
+        private static int FindFlexibleStart(PersonScheduleTracker schedules, int personId, int dayIndex, int duration)
+        {
+            if (schedules == null || duration <= 0 || duration > FlexibleWindowEndMinute - FlexibleWindowStartMinute)
+                return -1;
+
+            int latestStart = FlexibleWindowEndMinute - duration;
+            for (int offset = 0; offset <= FlexibleWindowEndMinute - FlexibleWindowStartMinute; offset += FlexibleSearchStepMinutes)
+            {
+                int earlier = PreferredStartMinute - offset;
+                if (earlier >= FlexibleWindowStartMinute && earlier <= latestStart
+                    && schedules.IsFree(personId, dayIndex, earlier, duration)) return earlier;
+
+                if (offset == 0) continue;
+                int later = PreferredStartMinute + offset;
+                if (later >= FlexibleWindowStartMinute && later <= latestStart
+                    && schedules.IsFree(personId, dayIndex, later, duration)) return later;
+            }
+            return -1;
         }
 
         /// <summary>

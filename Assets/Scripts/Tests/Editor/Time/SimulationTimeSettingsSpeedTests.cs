@@ -94,15 +94,15 @@ namespace LandLedgers.Editor.Time
         }
 
         [Test]
-        public void GetMultiplierCapsConfiguredSpeedsAt250x()
+        public void GetMultiplierCapsConfiguredSpeedsAt500x()
         {
             SimulationTimeSettings settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
             try
             {
-                settings.speed250xMultiplier = 500f;
+                settings.speed250xMultiplier = 1000f;
                 settings.Sanitize();
-                Assert.AreEqual(250f, settings.GetMultiplier(SimulationSpeed.Speed250x));
-                Assert.AreEqual(250f, settings.speed250xMultiplier);
+                Assert.AreEqual(500f, settings.GetMultiplier(SimulationSpeed.Speed250x));
+                Assert.AreEqual(500f, settings.speed250xMultiplier);
             }
             finally
             {
@@ -169,6 +169,27 @@ namespace LandLedgers.Editor.Time
             Assert.AreEqual(100, (int)SimulationSpeed.Speed100x);
             Assert.AreEqual(101, (int)SimulationSpeed.RealTime);
             Assert.AreEqual(102, (int)SimulationSpeed.Speed250x);
+        }
+
+        [TestCase(SimulationSpeed.RealTime, 86400f)]
+        [TestCase(SimulationSpeed.Observe, 8640f)]
+        [TestCase(SimulationSpeed.Speed1x, 1440f)]
+        [TestCase(SimulationSpeed.Speed2x, 720f)]
+        [TestCase(SimulationSpeed.Speed5x, 288f)]
+        [TestCase(SimulationSpeed.Speed10x, 144f)]
+        [TestCase(SimulationSpeed.Speed50x, 28.8f)]
+        [TestCase(SimulationSpeed.Speed100x, 14.4f)]
+        [TestCase(SimulationSpeed.Speed250x, 5.76f)]
+        [TestCase(SimulationSpeed.Speed500x, 2.88f)]
+        public void HybridSpeedHasApprovedDayDuration(SimulationSpeed speed, float secondsPerDay)
+        {
+            var settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            try
+            {
+                Assert.AreEqual(1440f, settings.realSecondsPerGameDayAt1x);
+                Assert.AreEqual(secondsPerDay, settings.realSecondsPerGameDayAt1x / settings.GetMultiplier(speed), 0.01f);
+            }
+            finally { Object.DestroyImmediate(settings); }
         }
     }
 }

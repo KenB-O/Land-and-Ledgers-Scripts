@@ -80,6 +80,14 @@ namespace LandLedgers.Economy.Core
         public int TotalInflowCents => totalInflowCents;
         public int TotalOutflowCents => totalOutflowCents;
 
+        /// <summary>Prevents reuse of a historical receipt from a legacy save;
+        /// does not create a trade, inventory or financial settlement.</summary>
+        public void ReserveReceiptIdentity(string receiptId)
+        {
+            if (!string.IsNullOrWhiteSpace(receiptId))
+                nextSequence = Mathf.Max(nextSequence, ParseSequence(receiptId) + 1);
+        }
+
         /// <summary>Registers an external counterparty. Re-registering the same id is a no-op.</summary>
         public string RegisterCounterparty(ExternalCounterparty counterparty)
         {
@@ -398,7 +406,7 @@ namespace LandLedgers.Economy.Core
 
             tradesByReceipt.Clear();
             trades.Clear();
-            nextSequence = 0;
+            nextSequence = Mathf.Max(0, dto.nextSequence);
             if (dto.trades != null)
             {
                 foreach (ExternalTradeRecordSaveDto t in dto.trades)

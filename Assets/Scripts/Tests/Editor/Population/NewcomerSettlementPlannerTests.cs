@@ -33,6 +33,27 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void PopulationNoticeDescribesMissingWorkplaceLinkWithoutClaimingUnemployment()
+        {
+            PopulationState state = new();
+            state.people.Add(new PersonState
+            {
+                id = 1,
+                householdId = -1,
+                workplaceBuildingId = -1,
+                laborAccessLevel = LaborAccessLevel.FullLaborMarket,
+                settlementArrangement = SettlementArrangement.StableHousehold
+            });
+
+            PopulationValidationSnapshot snapshot = NewcomerSettlementPlanner.BuildPopulationValidationSnapshot(state);
+
+            Assert.AreEqual(1, snapshot.unassignedLaborEligibleWorkers);
+            StringAssert.Contains("without a workplace building assignment", snapshot.detail);
+            StringAssert.DoesNotContain("unassigned labor-ready workers", snapshot.detail);
+            StringAssert.Contains("Review actual employment relationships", snapshot.recommendedAction);
+        }
+
+        [Test]
         public void ProfileDefinitionsExposeGroundedArrivalVariation()
         {
             NewcomerProfileDefinition laborer = NewcomerSettlementPlanner.GetProfileDefinition(NewcomerArrivalProfile.LoneLaborer);

@@ -7,8 +7,7 @@ namespace LandLedgers.Presentation
 {
     /// <summary>
     /// Presentation-only lighting blend driven by the authoritative TimeManager.
-    /// This component is attached to the existing TimeManager GameObject at runtime;
-    /// it does not create or persist a separate scene authority.
+    /// Scene-authored presentation component driven by the authoritative TimeManager.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class DayNightVisualController : MonoBehaviour
@@ -17,42 +16,24 @@ namespace LandLedgers.Presentation
         private const float DawnEnd = 0.30f;
         private const float DuskStart = 0.70f;
         private const float DuskEnd = 0.78f;
-        private const float TransitionSeconds = 0.8f;
-        private const float MaximumSunDim01 = 0.78f;
-        private const float MaximumAmbientDim01 = 0.55f;
-        private const float MaximumNightExposureStops = 4f;
+        [SerializeField, Min(0.1f)] private float transitionSeconds = 2.5f;
+        [SerializeField, Range(0f, 0.8f)] private float maximumSunDim01 = 0.65f;
+        [SerializeField, Range(0f, 0.6f)] private float maximumAmbientDim01 = 0.45f;
+        [SerializeField, Range(0f, 4f)] private float maximumNightExposureStops = 3.5f;
 
         private TimeManager timeManager;
         private Light sun;
         private HDAdditionalLightData hdSun;
         private Volume globalVolume;
-        private ColorAdjustments colorAdjustments;
+        private Exposure exposure;
         private float authoredSunIntensity;
         private Color authoredSunColor;
         private float authoredSunDimmer;
         private float authoredAmbientIntensity;
-        private float authoredPostExposure;
-        private bool authoredPostExposureOverride;
-        private bool authoredColorAdjustmentsActive;
-        private bool createdColorAdjustments;
+        private float authoredFixedExposure;
+        private bool authoredFixedExposureOverride;
         private float currentNightLevel;
         private bool capturedLighting;
-
-        public static void EnsureAttached(TimeManager manager)
-        {
-            if (!Application.isPlaying || manager == null)
-            {
-                return;
-            }
-
-            DayNightVisualController controller = manager.GetComponent<DayNightVisualController>();
-            if (controller == null)
-            {
-                controller = manager.gameObject.AddComponent<DayNightVisualController>();
-            }
-
-            controller.Bind(manager);
-        }
 
         /// <summary>Returns the night envelope for a normalized authoritative time of day.</summary>
         public static float ResolveNightEnvelope(float timeOfDay01)
@@ -81,8 +62,7 @@ namespace LandLedgers.Presentation
         }
 
         /// <summary>
-        /// Real Time and pause retain the full visual night. Accelerated speeds
-        /// monotonically soften it so rapid simulation does not cause harsh flashes.
+        /// Higher simulation rates progressively stabilize lighting for observation.
         /// </summary>
         public static float ResolveSpeedAttenuation(SimulationSpeed speed, float speedMultiplier)
         {
@@ -90,13 +70,25 @@ namespace LandLedgers.Presentation
             {
                 return 1f;
             }
-
-            float normalizedSpeed = Mathf.Max(1f, speedMultiplier);
-            float softened = 1f / (1f + Mathf.Log(normalizedSpeed, 2f));
-            // Keep an unmistakable night presentation at every supported speed.
-            // Acceleration softens transitions, but no longer washes the 100x
-            // night effect down to less than one stop of exposure change.
-            return 0.5f + softened * 0.5f;
+            switch (speed)
+            {
+                // Accelerated time keeps the astronomical clock authoritative,
+                // while retaining a recognizable night presentation. This is
+                // a lighting floor, not a second or randomized lighting clock.
+                case SimulationSpeed.Speed1x: return 0.55f;
+                case SimulationSpeed.Speed2x: return 0.53f;
+                case SimulationSpeed.Speed4x: return 0.51f;
+                case SimulationSpeed.Speed5x:
+                case SimulationSpeed.Speed6x: return 0.49f;
+                case SimulationSpeed.Observe: return 0.55f;
+                case SimulationSpeed.Speed10x: return 0.47f;
+                case SimulationSpeed.Speed25x: return 0.45f;
+                case SimulationSpeed.Speed50x: return 0.43f;
+                case SimulationSpeed.Speed100x:
+                case SimulationSpeed.Speed250x:
+                case SimulationSpeed.Speed500x: return 0.40f;
+                default: return 0.40f;
+            }
         }
 
         public static float ResolveNightLevel(float timeOfDay01, SimulationSpeed speed, float speedMultiplier)
@@ -106,7 +98,9 @@ namespace LandLedgers.Presentation
 
         public static float ResolveNightExposureStops(float timeOfDay01, SimulationSpeed speed, float speedMultiplier)
         {
-            return -MaximumNightExposureStops * ResolveNightLevel(timeOfDay01, speed, speedMultiplier);
+            // HDRP Fixed Exposure is expressed as EV100: higher values reduce
+            // sensor exposure. Subtracting here brightened midnight instead.
+            return 3.5f * ResolveNightLevel(timeOfDay01, speed, speedMultiplier);
         }
 
         private void Awake()
@@ -145,27 +139,6 @@ namespace LandLedgers.Presentation
             RestoreAuthoredLighting();
         }
 
-        private void Bind(TimeManager manager)
-        {
-            if (timeManager == manager)
-            {
-                return;
-            }
-
-            if (timeManager != null)
-            {
-                timeManager.VisualFrameUpdated -= OnVisualFrameUpdated;
-            }
-
-            timeManager = manager;
-            CaptureAuthoredLighting();
-            if (isActiveAndEnabled)
-            {
-                timeManager.VisualFrameUpdated -= OnVisualFrameUpdated;
-                timeManager.VisualFrameUpdated += OnVisualFrameUpdated;
-            }
-        }
-
         private void CaptureAuthoredLighting()
         {
             if (capturedLighting)
@@ -196,15 +169,12 @@ namespace LandLedgers.Presentation
             if (globalVolume != null && globalVolume.sharedProfile != null)
             {
                 VolumeProfile runtimeProfile = globalVolume.profile;
-                if (!runtimeProfile.TryGet(out colorAdjustments))
+                runtimeProfile.TryGet(out exposure);
+                if (exposure != null)
                 {
-                    colorAdjustments = runtimeProfile.Add<ColorAdjustments>(false);
-                    createdColorAdjustments = true;
+                    authoredFixedExposure = exposure.fixedExposure.value;
+                    authoredFixedExposureOverride = exposure.fixedExposure.overrideState;
                 }
-
-                authoredColorAdjustmentsActive = colorAdjustments.active;
-                authoredPostExposure = colorAdjustments.postExposure.value;
-                authoredPostExposureOverride = colorAdjustments.postExposure.overrideState;
             }
         }
 
@@ -234,10 +204,10 @@ namespace LandLedgers.Presentation
             CaptureAuthoredLighting();
             float targetNightLevel = ResolveNightLevel(context.TimeOfDay01, context.Speed, context.SpeedMultiplier);
             float dt = Mathf.Max(0f, global::UnityEngine.Time.unscaledDeltaTime);
-            float blend = dt <= 0f ? 0f : 1f - Mathf.Exp(-dt / TransitionSeconds);
+            float blend = dt <= 0f ? 0f : 1f - Mathf.Exp(-dt / Mathf.Max(0.1f, transitionSeconds));
             currentNightLevel = Mathf.Lerp(currentNightLevel, targetNightLevel, blend);
 
-            float sunDim = currentNightLevel * MaximumSunDim01;
+            float sunDim = currentNightLevel * maximumSunDim01;
             if (sun != null)
             {
                 if (hdSun != null)
@@ -254,17 +224,13 @@ namespace LandLedgers.Presentation
             }
 
             RenderSettings.ambientIntensity = authoredAmbientIntensity
-                * (1f - currentNightLevel * MaximumAmbientDim01);
+                * (1f - currentNightLevel * maximumAmbientDim01);
 
-            if (colorAdjustments != null)
+            if (exposure != null)
             {
-                colorAdjustments.active = true;
-                colorAdjustments.postExposure.overrideState = true;
-                // Use the same smoothed envelope as the sun and ambient light.
-                // Applying the raw target here made exposure jump instantly
-                // when the player changed simulation speed at night.
-                colorAdjustments.postExposure.value = authoredPostExposure
-                    - MaximumNightExposureStops * currentNightLevel;
+                exposure.fixedExposure.overrideState = true;
+                exposure.fixedExposure.value = authoredFixedExposure
+                    + maximumNightExposureStops * currentNightLevel;
             }
         }
 
@@ -290,15 +256,10 @@ namespace LandLedgers.Presentation
             }
 
             RenderSettings.ambientIntensity = authoredAmbientIntensity;
-            if (colorAdjustments != null)
+            if (exposure != null)
             {
-                colorAdjustments.postExposure.value = authoredPostExposure;
-                colorAdjustments.postExposure.overrideState = createdColorAdjustments
-                    ? false
-                    : authoredPostExposureOverride;
-                colorAdjustments.active = createdColorAdjustments
-                    ? false
-                    : authoredColorAdjustmentsActive;
+                exposure.fixedExposure.value = authoredFixedExposure;
+                exposure.fixedExposure.overrideState = authoredFixedExposureOverride;
             }
 
             currentNightLevel = 0f;

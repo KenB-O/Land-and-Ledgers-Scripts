@@ -188,13 +188,91 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void NoActingAdultMeansUnmetNeeds()
+        public void MissedMealDiagnosticsDistinguishNoReceivedFoodFromShortServing()
+        {
+            var log = new HouseholdMealLogRegistry();
+            var mealService = new HouseholdMealService(log);
+            var inventory = new HouseholdInventory(7);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.FlourId, 1, 0, "test purchase receipt"));
+            mealService.ServeHouseholdDay(population.households[0], new[] { 1 }, inventory,
+                MealSchedulingPolicy.Default, 0, null);
+            Assert.IsNotEmpty(log.GetMissedMeals(7));
+            StringAssert.Contains("Flour 1/2 lb", log.GetMissedMeals(7)[0].Reason);
+        }
+
+        [Test]
+        public void NoHouseholdMembers_NoMealsCanBeAccounted()
         {
             population.people.Clear(); // nobody home
             var report = service.ExecuteDay(population, planner, executor, 0, diag);
 
             Assert.AreEqual(0, report.HouseholdsServed);
             Assert.AreEqual(0, report.MealsEaten);
+        }
+
+        [Test]
+        public void NoEligibleShopper_StillConsumesHouseholdFoodAndAccountsMeals()
+        {
+            population.people[0].laborAccessLevel = LaborAccessLevel.None;
+            population.people[1].laborAccessLevel = LaborAccessLevel.None;
+            population.households[0].reserves[0].currentUnits = 100;
+
+            var report = service.ExecuteDay(population, planner, executor, 0, diag);
+
+            Assert.AreEqual(0, report.HouseholdsServed,
+                "no acting adult is available to shop for the household");
+            Assert.AreEqual(4, report.MealsEaten,
+                "meal accounting still processes the two residents against real household stock");
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.AreEqual(96, population.households[0].reserves[0].currentUnits);
+            Assert.AreEqual(0, report.PurchasesMade,
+                "the no-shopper household must not purchase through an invalid person id");
+        }
+
+        [Test]
+        public void MealLogImport_ReplacesHistoryOnRepeatedSaveRestore()
+        {
+            var registry = new HouseholdMealLogRegistry();
+            var savedMeal = new HouseholdMealRecord
+            {
+                PersonId = 1, HouseholdId = 7, DayIndex = 3,
+                Slot = MealSlot.Evening, SourceKind = MealSourceKind.HouseholdInventory,
+            };
+            var savedMissed = new MissedMealRecord
+            {
+                PersonId = 2, HouseholdId = 7, DayIndex = 3,
+                Slot = MealSlot.Morning, Reason = "empty larder",
+            };
+            var savedPreparation = new MealPreparationRecord
+            {
+                HouseholdId = 7, DayIndex = 3, RawItemId = HouseholdItemCatalog.FlourId,
+                RawUnitsConsumed = 2, PreparedItemId = HouseholdItemCatalog.BreadId,
+                PreparedUnitsProduced = 1, EquipmentLabel = "household oven", LaborMinutes = 30,
+            };
+            var meals = new List<HouseholdMealRecord> { savedMeal };
+            var missed = new List<MissedMealRecord> { savedMissed };
+            var preparations = new List<MealPreparationRecord> { savedPreparation };
+
+            registry.ImportState(meals, missed, preparations);
+            Assert.AreEqual(1, registry.GetMeals(7).Count);
+            Assert.AreEqual(1, registry.GetMissedMeals(7).Count);
+            Assert.AreEqual(1, registry.GetPreparations(7).Count);
+
+            // Import a different snapshot first to prove replacement also
+            // removes stale household history, then restore the same DTO
+            // again and prove that the records do not append twice.
+            registry.ImportState(
+                new[] { new HouseholdMealRecord { PersonId = 8, HouseholdId = 9, DayIndex = 4 } },
+                null, null);
+            Assert.AreEqual(0, registry.GetMeals(7).Count);
+            registry.ImportState(meals, missed, preparations);
+            registry.ImportState(meals, missed, preparations);
+
+            Assert.AreEqual(1, registry.GetMeals(7).Count);
+            Assert.AreEqual(1, registry.GetMissedMeals(7).Count);
+            Assert.AreEqual(1, registry.GetPreparations(7).Count);
+            Assert.AreEqual(0, registry.GetMeals(9).Count,
+                "restoring the prior snapshot replaces records from another loaded save");
         }
 
         [Test]
@@ -254,7 +332,8 @@ namespace LandLedgers.EditorTests.Population
                 population, planner, capturing, 0, diag, offMapJourneys: authority);
 
             Assert.AreEqual(0, report.HouseholdsServed, "No household is served without an on-map acting adult.");
-            Assert.AreEqual(0, report.MealsEaten);
+            Assert.AreEqual(4, report.MealsMissed,
+                "resident meal opportunities remain visible when both adults are away and no external meal is recorded");
             Assert.AreEqual(0, capturing.ActingPersonIds.Count, "The executor must never be called without an acting adult.");
             Assert.IsTrue(diag.Exists(m => m.Contains("no acting adult")),
                 "The unmet needs must be logged honestly, not faked.");

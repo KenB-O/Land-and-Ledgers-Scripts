@@ -563,6 +563,21 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, s.Bakery.Batches.Count);
             Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage);
 
+            // The same batch remains blocked while its one legitimate order
+            // is in the 14-day transit pipeline. Do not spend finite supplier
+            // stock by repeating that unchanged shortage on each day.
+            for (int day = 2; day <= 14; day++)
+            {
+                BakeryWholesaleDailyResult waiting = BakeryWholesaleDailyDriver.RunDay(
+                    DriverInputsFor(s, reg, day), s.Diag);
+                Assert.AreEqual(0, waiting.NotionsOrdered,
+                    $"the active order already covers this batch's notions need on day {day}");
+                Assert.AreEqual(1, s.StoreService.Orders.Count,
+                    $"exactly one order remains active during transit on day {day}");
+                Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage,
+                    $"the batch stays planned until the real arrival on day {day}");
+            }
+
             // The existing planned batch already covers wholesale demand,
             // so the next day's planner creates no new ID. Its real import
             // arrival must still be received and fed to that active batch.

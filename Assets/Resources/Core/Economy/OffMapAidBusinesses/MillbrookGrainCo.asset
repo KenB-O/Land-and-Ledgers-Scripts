@@ -19,7 +19,7 @@ MonoBehaviour:
   - ItemId: bakery_flour_sack
     DisplayName: Flour
     InventoryUnit: lb
-    StartingUnits: 230
+    StartingUnits: 460
     OrderUnit: 10 lb sack
     InventoryUnitsPerOrderUnit: 10
     BakeryUnitsPerOrderUnit: 18
@@ -27,7 +27,7 @@ MonoBehaviour:
   - ItemId: wheat_grain
     DisplayName: Wheat grain
     InventoryUnit: lb
-    StartingUnits: 512
+    StartingUnits: 1024
     OrderUnit: 
     InventoryUnitsPerOrderUnit: 0
     BakeryUnitsPerOrderUnit: 0
@@ -35,7 +35,7 @@ MonoBehaviour:
   - ItemId: sugar
     DisplayName: Sugar
     InventoryUnit: lb
-    StartingUnits: 36
+    StartingUnits: 72
     OrderUnit: 
     InventoryUnitsPerOrderUnit: 0
     BakeryUnitsPerOrderUnit: 0
@@ -43,7 +43,7 @@ MonoBehaviour:
   - ItemId: yeast
     DisplayName: Yeast
     InventoryUnit: lb
-    StartingUnits: 23
+    StartingUnits: 46
     OrderUnit: 
     InventoryUnitsPerOrderUnit: 0
     BakeryUnitsPerOrderUnit: 0

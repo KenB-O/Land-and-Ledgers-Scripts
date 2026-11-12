@@ -43,21 +43,19 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Potatoes_SackWeight_IsRefusedWithoutInventingOne()
+        public void Potatoes_PackageWeightIsDefinedInPackageDirection()
         {
-            Assert.IsFalse(RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(
-                "potatoes", "sack", "lb", out int _, out string reason));
-            Assert.IsTrue(reason.Contains("D-5 sack weight"),
-                $"reason should name the missing D-5 weight, was: {reason}");
+            Assert.IsTrue(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "potatoes", "sack", "lb", out int factor, out string _));
+            Assert.AreEqual(50, factor);
         }
 
         [Test]
-        public void Salt_SmallBagWeight_IsRefusedWithoutInventingOne()
+        public void Salt_PackageWeightIsDefinedInPackageDirection()
         {
-            Assert.IsFalse(RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(
-                "salt", "small bag", "lb", out int _, out string reason));
-            Assert.IsTrue(reason.Contains("D-5 bag weight"),
-                $"reason should name the missing D-5 weight, was: {reason}");
+            Assert.IsTrue(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "salt", "small bag", "lb", out int factor, out string _));
+            Assert.AreEqual(5, factor);
         }
 
         [Test]
@@ -92,21 +90,19 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Potatoes_PackagePurchase_RefusesWithD5WeightNamed()
+        public void Potatoes_PackagePurchase_Is50PoundsPerSack()
         {
-            Assert.IsFalse(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
-                "potatoes", "sack", "lb", out int _, out string reason));
-            Assert.IsTrue(reason.Contains("D-5 sack weight"),
-                $"reason should name the missing D-5 weight, was: {reason}");
+            Assert.IsTrue(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "potatoes", "sack", "lb", out int factor, out string _));
+            Assert.AreEqual(50, factor);
         }
 
         [Test]
-        public void Salt_PackagePurchase_RefusesWithD5WeightNamed()
+        public void Salt_PackagePurchase_Is5PoundsPerSmallBag()
         {
-            Assert.IsFalse(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
-                "salt", "small bag", "lb", out int _, out string reason));
-            Assert.IsTrue(reason.Contains("D-5 bag weight"),
-                $"reason should name the missing D-5 weight, was: {reason}");
+            Assert.IsTrue(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "salt", "small bag", "lb", out int factor, out string _));
+            Assert.AreEqual(5, factor);
         }
 
         [Test]

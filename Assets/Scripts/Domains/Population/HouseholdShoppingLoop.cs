@@ -44,6 +44,24 @@ namespace LandLedgers.Population
     {
         public const string ShoppingTaskId = "shopping";
 
+        /// <summary>
+        /// Successful settlements and deliveries are routine information, not
+        /// warnings. Detail carries established receipt/batch identities and
+        /// is retained by the caller's bounded development trace.
+        /// </summary>
+        public static bool IsRoutineSuccessDiagnostic(string message, int dayIndex)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return false;
+            if (message.StartsWith("[FoodEconomy] purchase settled:", StringComparison.Ordinal)) return true;
+            return message.StartsWith($"Day {dayIndex}: P", StringComparison.Ordinal)
+                && message.IndexOf(" delivered ", StringComparison.Ordinal) >= 0
+                && message.IndexOf(" to H", StringComparison.Ordinal) >= 0;
+        }
+
+        public static bool IsRoutineSummaryDiagnostic(string message) =>
+            !string.IsNullOrWhiteSpace(message)
+            && message.StartsWith("[FoodEconomy] shopping summary day ", StringComparison.Ordinal);
+
         private PopulationState population;
         private HouseholdMembershipRegistry membership;
         private readonly HouseholdLedgerRegistry ledgers;
@@ -1833,15 +1851,49 @@ namespace LandLedgers.Population
             // ---- Step 2: a real member becomes responsible. ----
             int estimateMinutes = EstimateTripMinutes(homeLocation, knownOffering, options);
             string shopperReason = null;
-            int shopperId = options.ShopperPersonIdOverride >= 0
-                ? options.ShopperPersonIdOverride
-                : ShopperAssignmentPolicy.ChooseShopper(
-                    population, memberIds, dayIndex, options.DepartureMinuteOfDay, estimateMinutes,
-                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
+            int requestedDeparture = options.DepartureMinuteOfDay;
+            int selectedDeparture = requestedDeparture;
+            int shopperId = options.ShopperPersonIdOverride;
+            ShoppingCandidate chosen = null;
+            if (shopperId < 0)
+            {
+                // The physical-trip path previously attempted a single
+                // 08:00 reservation. Search later feasible windows using the
+                // same person-time authority instead of rejecting a real
+                // household need against one occupied slot. Existing work,
+                // sleep, job-seeking and other commitments are never
+                // preempted here.
+                int latestDeparture = Math.Min(17 * 60, 18 * 60 - Math.Max(1, estimateMinutes));
+                for (int departure = Math.Max(0, requestedDeparture); departure <= latestDeparture; departure += 15)
+                {
+                    int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
+                        population, memberIds, dayIndex, departure, estimateMinutes,
+                        scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
+                    if (candidateShopper < 0)
+                    {
+                        continue;
+                    }
+
+                    options.DepartureMinuteOfDay = departure;
+                    string candidateHome = ResolvePersonLocation(candidateShopper, options);
+                    ShoppingCandidate candidate = EvaluateCandidates(
+                        result, need, candidateShopper, candidateHome, knownOffering, dayIndex, options, diag);
+                    if (candidate == null)
+                    {
+                        continue;
+                    }
+
+                    shopperId = candidateShopper;
+                    selectedDeparture = departure;
+                    chosen = candidate;
+                    break;
+                }
+                options.DepartureMinuteOfDay = requestedDeparture;
+            }
             if (shopperId < 0)
             {
                 return FailPlan(trip, need, -1,
-                    $"Unavailable shopper: {shopperReason ?? "nobody can shop today."} Need stays open.", diag);
+                    $"Unavailable shopper or trip window: {shopperReason ?? "no legitimate seller and free household window were available today."} Need stays open.", diag);
             }
 
             PersonState shopper = population.GetPerson(shopperId);
@@ -1861,16 +1913,21 @@ namespace LandLedgers.Population
 
             result.ShopperPersonId = shopperId;
             trip.ShopperPersonId = shopperId;
-            trip.DepartureMinuteOfDay = options.DepartureMinuteOfDay;
+            trip.DepartureMinuteOfDay = selectedDeparture;
             string shopperHome = ResolvePersonLocation(shopperId, options);
             trip.HomeLocationId = shopperHome;
             AddEvent(result, dayIndex, ShoppingEventKind.ShopperAssignment, shopperId, need,
                 $"P{shopperId} ({shopper.DisplayName}) is responsible for shopping '{need.ItemId}' x{need.UnitsNeeded}.",
-                $"trip window ~{estimateMinutes} min from minute {options.DepartureMinuteOfDay}; Person time is authoritative.");
+                $"trip window ~{estimateMinutes} min from minute {selectedDeparture}; Person time is authoritative.");
 
             // ---- Step 4: weigh candidates. ----
-            ShoppingCandidate chosen = EvaluateCandidates(
-                result, need, shopperId, shopperHome, knownOffering, dayIndex, options, diag);
+            options.DepartureMinuteOfDay = selectedDeparture;
+            if (chosen == null)
+            {
+                chosen = EvaluateCandidates(
+                    result, need, shopperId, shopperHome, knownOffering, dayIndex, options, diag);
+            }
+            options.DepartureMinuteOfDay = requestedDeparture;
             if (chosen == null)
             {
                 trip.State = PlannedShoppingTrip.TripState.Failed;
@@ -1900,6 +1957,11 @@ namespace LandLedgers.Population
             trip.InStoreTaskId = legs.InStore != null ? legs.InStore.TaskId : default(EntityId);
             trip.ReturnTaskId = legs.Return != null ? legs.Return.TaskId : default(EntityId);
 
+            // All leg reservations and departure execution use the selected
+            // window, while the caller's reusable options object remains at
+            // its requested baseline after planning.
+            options.DepartureMinuteOfDay = selectedDeparture;
+
             // One person-time window per leg: the trip occupies real Travel +
             // Shopping time. A refusal rolls back the assigned legs (budget
             // commitments released) — never a half-planned trip.
@@ -1922,6 +1984,8 @@ namespace LandLedgers.Population
 
                 return trip;
             }
+
+            options.DepartureMinuteOfDay = requestedDeparture;
 
             trip.State = PlannedShoppingTrip.TripState.Planned;
             diag.Add($"Day {dayIndex}: shopping trip {trip.TripId} planned — P{shopperId} → " +
@@ -2600,7 +2664,7 @@ namespace LandLedgers.Population
                 int price = itemSupplier.ItemPricePerUnitCents(need.ItemId);
                 if (stock <= 0)
                 {
-                    Reject(result, need, supplier, dayIndex, "out of stock (real lots exhausted)", price, stock, 0, diag);
+                    Reject(result, need, supplier, dayIndex, "no available stock (real lots exhausted)", price, stock, 0, diag);
                     continue;
                 }
 
@@ -2765,26 +2829,31 @@ namespace LandLedgers.Population
                 AddEvent(result, dayIndex, ShoppingEventKind.Failure, shopperId, need,
                     $"No viable seller for '{need.ItemId}' x{need.UnitsNeeded} — {result.RejectedAlternatives.Count} alternatives rejected. Need stays open.",
                     "unfulfilled demand stays observable for §26 diagnostics and NPC opportunity detection.");
-                // Plan 02 Slice 5: when every candidate was rejected on
-                // money, the per-need reason must name the budget, not
-                // hide behind the generic "all candidates rejected" — the
-                // daily summary reports the first failure reason per open
-                // need. Mixed rejections keep the generic reason (the
-                // detail stays in RejectedAlternatives).
+                // Keep the first failure reason useful in the daily household
+                // summary: distinguish a real seller with an unavailable offer
+                // from no known seller, and preserve the actual rejected causes.
                 bool allUnaffordable = result.RejectedAlternatives.Count > 0;
+                bool knownSellerRejected = result.RejectedAlternatives.Count > 0;
                 foreach (RejectedShoppingAlternative alternative in result.RejectedAlternatives)
                 {
-                    if (alternative == null || string.IsNullOrEmpty(alternative.Reason)
-                        || !alternative.Reason.StartsWith("unaffordable", StringComparison.Ordinal))
+                    if (alternative == null || string.IsNullOrEmpty(alternative.Reason))
                     {
                         allUnaffordable = false;
+                        knownSellerRejected = false;
                         break;
                     }
+                    if (!alternative.Reason.StartsWith("unaffordable", StringComparison.Ordinal))
+                        allUnaffordable = false;
+                    if (string.IsNullOrWhiteSpace(alternative.SupplierBusinessId))
+                        knownSellerRejected = false;
                 }
 
+                string rejectionSummary = SummarizeRejectedAlternatives(result.RejectedAlternatives, 3);
                 result.FailureReason = allUnaffordable
-                    ? $"No viable seller for '{need.ItemId}': budget short — {result.RejectedAlternatives[0].Reason}. Need stays open."
-                    : $"No viable seller for '{need.ItemId}': all {result.RejectedAlternatives.Count} candidates rejected (see RejectedAlternatives).";
+                    ? $"Known seller(s) exist for '{need.ItemId}': budget short — {rejectionSummary}. Need stays open."
+                    : knownSellerRejected
+                        ? $"Known seller(s) exist for '{need.ItemId}', but no offer is currently executable: {rejectionSummary}. Need stays open."
+                        : $"No viable seller for '{need.ItemId}': {result.RejectedAlternatives.Count} candidate(s) rejected — {rejectionSummary}. Need stays open.";
                 return null;
             }
 
@@ -2827,6 +2896,23 @@ namespace LandLedgers.Population
                 $"Rejected '{supplier.SupplierName}': {reason}.",
                 $"price={price}c stock={stock}u travel={travelMinutes}min");
             diag.Add($"Day {dayIndex}: rejected '{supplier.SupplierName}' for '{need.ItemId}': {reason}.");
+        }
+
+        private static string SummarizeRejectedAlternatives(IReadOnlyList<RejectedShoppingAlternative> alternatives, int limit)
+        {
+            if (alternatives == null || alternatives.Count == 0) return "no item-resolving offer was found";
+            var details = new List<string>(Math.Min(limit, alternatives.Count));
+            for (int i = 0; i < alternatives.Count && details.Count < limit; i++)
+            {
+                RejectedShoppingAlternative alternative = alternatives[i];
+                if (alternative == null) continue;
+                string seller = string.IsNullOrWhiteSpace(alternative.SupplierName)
+                    ? alternative.SupplierBusinessId ?? "unknown seller"
+                    : alternative.SupplierName;
+                details.Add($"{seller}: {alternative.Reason ?? "unavailable"}");
+            }
+            int remaining = Math.Max(0, alternatives.Count - details.Count);
+            return string.Join("; ", details) + (remaining > 0 ? $"; and {remaining} more" : string.Empty);
         }
 
         public sealed class PlannedTrip

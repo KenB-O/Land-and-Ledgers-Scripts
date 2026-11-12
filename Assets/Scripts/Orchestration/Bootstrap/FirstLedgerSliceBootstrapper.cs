@@ -355,8 +355,14 @@ namespace LandLedgers.FirstLedger
             }
             if (useDevelopmentTownProfile && generateTownOnPlay && townWorld.Grid == null)
             {
+                int requiredHomes = townConfiguration.GeneratePopulationFromSettings
+                    ? townConfiguration.GeneratedPopulationSettings.maximumStartingHouseholds
+                    : townConfiguration.Households.Count;
+                int requiredBusinessBuildings = townConfiguration.GeneratePopulationFromSettings
+                    ? -1
+                    : townConfiguration.Businesses.Count;
                 if (!townWorld.TryApplyDevelopmentResidentialHomeCount(
-                    townConfiguration.Households.Count, out string developmentWorldReason, townConfiguration.Businesses.Count))
+                    requiredHomes, out string developmentWorldReason, requiredBusinessBuildings))
                 {
                     bootstrapStatus = $"Development fixture startup stopped before world generation: {developmentWorldReason}";
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
@@ -387,7 +393,9 @@ namespace LandLedgers.FirstLedger
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (useDevelopmentTownProfile)
             {
-                int requiredResidentialHomes = townConfiguration.Households.Count;
+                int requiredResidentialHomes = townConfiguration.GeneratePopulationFromSettings
+                    ? townConfiguration.GeneratedPopulationSettings.maximumStartingHouseholds
+                    : townConfiguration.Households.Count;
                 int requiredCommercialBuildings = townConfiguration.Businesses.Count;
                 int realResidentialHomes = 0;
                 int realCommercialBuildings = 0;
@@ -400,7 +408,8 @@ namespace LandLedgers.FirstLedger
                         continue;
                     }
 
-                    if (building.definition.CanHostHouseholds && !building.definition.CanHostWorkplace
+                    if (building.definition.CanHostHouseholds
+                        && (townConfiguration.GeneratePopulationFromSettings || !building.definition.CanHostWorkplace)
                         && townWorld.TryGetPlotById(building.plotId, out TownPlot plot)
                         && plot != null && plot.zone == PlotZone.Residential)
                     {
@@ -422,19 +431,25 @@ namespace LandLedgers.FirstLedger
                 }
 
                 int requiredTotalBuildings = requiredResidentialHomes + requiredCommercialBuildings;
-                if (realResidentialHomes != requiredResidentialHomes
-                    || realCommercialBuildings != requiredCommercialBuildings
-                    || realTotalBuildings != requiredTotalBuildings)
+                bool invalidRoster = townConfiguration.GeneratePopulationFromSettings
+                    ? realResidentialHomes < requiredResidentialHomes
+                    : realResidentialHomes != requiredResidentialHomes
+                        || realCommercialBuildings != requiredCommercialBuildings
+                        || realTotalBuildings != requiredTotalBuildings;
+                if (invalidRoster)
                 {
-                    bootstrapStatus = $"Development startup stopped: standalone homes={realResidentialHomes}/{requiredResidentialHomes}, storefronts={realCommercialBuildings}/{requiredCommercialBuildings}, total buildings={realTotalBuildings}/{requiredTotalBuildings}. No Businesses or Persons were initialized.";
+                    bootstrapStatus = townConfiguration.GeneratePopulationFromSettings
+                        ? $"Development startup stopped: physical residential household capacity={realResidentialHomes}/{requiredResidentialHomes}. No Businesses or Persons were initialized."
+                        : $"Development startup stopped: standalone homes={realResidentialHomes}/{requiredResidentialHomes}, storefronts={realCommercialBuildings}/{requiredCommercialBuildings}, total buildings={realTotalBuildings}/{requiredTotalBuildings}. No Businesses or Persons were initialized.";
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
                     CompleteStartupTiming(totalTimer, timing, "development homes unavailable");
                     initializing = false;
                     return;
                 }
 
-                Debug.Log($"[WorldStartup] Development profile verified: {realResidentialHomes} standalone homes, " +
-                          $"{realCommercialBuildings} storefronts. Buildings: {buildingRoster}.", this);
+                Debug.Log(townConfiguration.GeneratePopulationFromSettings
+                    ? $"[WorldStartup] Generated development profile has {realResidentialHomes} physical household spaces for a maximum of {requiredResidentialHomes} starting households. Buildings: {buildingRoster}."
+                    : $"[WorldStartup] Development profile verified: {realResidentialHomes} standalone homes, {realCommercialBuildings} storefronts. Buildings: {buildingRoster}.", this);
             }
 #endif
 
@@ -470,7 +485,10 @@ namespace LandLedgers.FirstLedger
                 {
                     systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
                     populationManager.HouseholdLedgers ??= systemsHub != null ? systemsHub.HouseholdLedgers : null;
-                    populationManager.GeneratePopulationSnapshot(townConfiguration);
+                    if (townConfiguration.GeneratePopulationFromSettings)
+                        populationManager.GeneratePopulationSnapshot();
+                    else
+                        populationManager.GeneratePopulationSnapshot(townConfiguration);
                 }
                 else
                 {
@@ -560,6 +578,8 @@ namespace LandLedgers.FirstLedger
                     SeedDevelopmentBusinessOpeningInventory();
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedDevelopmentBakeryOpeningFuel();
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    SeedDevelopmentBakeryOpeningInputs();
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedDevelopmentBusinessOpeningEquipment();
                 if (startupIntent == WorldStartupIntent.NewGame)
@@ -691,7 +711,21 @@ namespace LandLedgers.FirstLedger
 #endif
 
             initialized = true;
-            bootstrapStatus = $"Game slice ready. Buildings={townWorld.Buildings.Count}, People={(populationManager != null ? populationManager.GeneratedPersonCount : 0)}, Store={(storeRuntime != null ? storeRuntime.Status : "missing")}.";
+            int npcGeneralStoreCount = 0;
+            bool npcBusinessRosterKnown = sharedBusinessRuntime?.Businesses != null;
+            if (npcBusinessRosterKnown)
+            {
+                foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                {
+                    if (business?.BusinessType == BusinessType.GeneralStore
+                        && business.Owner?.OwnerKind == BusinessOwnerKind.Npc)
+                        npcGeneralStoreCount++;
+                }
+            }
+            bootstrapStatus = $"Game slice ready. Buildings={townWorld.Buildings.Count}, " +
+                $"Generated people={(populationManager != null ? populationManager.GeneratedPersonCount.ToString() : "unknown")}, " +
+                $"Player-owned General Store={(storeRuntime != null ? storeRuntime.Status : "not bound")}, " +
+                $"NPC-owned General Stores={(npcBusinessRosterKnown ? npcGeneralStoreCount.ToString() : "unknown")}.";
             if (logBootstrapSummary)
             {
                 Debug.Log(bootstrapStatus, this);
@@ -744,6 +778,8 @@ namespace LandLedgers.FirstLedger
             storeRuntime?.SetCreatePlayerBusinessOnInitialize(false);
             ConfigureSharedBusinessRuntime();
             ConfigurePopulationPathingDirector();
+            // Refresh derived destinations before restored journeys bind to their physical targets.
+            GetComponent<PhysicalRegionalTownRuntime>()?.RefreshWorldFrame(townWorld);
             ConfigureAcquisitionMarket();
             acquisitionMarket?.RebuildMarket();
             ConfigurePlayerDebtManager();
@@ -1090,7 +1126,12 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            populationManager.Configure(townWorld, populationSettings, false);
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            PopulationGenerationSettings selectedSettings = enableDevelopmentTownConfiguration
+                && configuration != null && configuration.GeneratePopulationFromSettings
+                ? configuration.GeneratedPopulationSettings
+                : populationSettings;
+            populationManager.Configure(townWorld, selectedSettings, false);
         }
 
         private void RunOpeningSettlementReconciliation()
@@ -1426,6 +1467,37 @@ namespace LandLedgers.FirstLedger
             foreach (string line in diagnostics) Debug.Log($"[WorldStartup] {line}", this);
         }
 
+        /// <summary>Finite NewGame-only production inputs authored by the development-town scenario.</summary>
+        private void SeedDevelopmentBakeryOpeningInputs()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null
+                || (configuration.OpeningBakeryFlourPounds <= 0 && configuration.OpeningBakeryNotionsUnits <= 0)) return;
+
+            string bakeryKey = null;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
+                if (slot != null && ToBusinessType(slot.operationId) == BusinessType.Bakery)
+                { bakeryKey = slot.key; break; }
+            BusinessInstanceState business = FindDevelopmentBusiness(BusinessType.Bakery);
+            Series2Pass9SaveState pass9 = saveLoadManager?.Series2Pass9State;
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (string.IsNullOrWhiteSpace(bakeryKey) || business?.RuntimeState == null || pass9?.BakeryRuntime == null || systemsHub == null)
+            {
+                Debug.LogError("[WorldStartup] Opening Bakery inputs refused: configured bakery, runtime, or lot-id authority is missing.", this);
+                return;
+            }
+            var diagnostics = new List<string>();
+            if (!LandLedgers.Economy.Businesses.Bakery.ScenarioOpeningBakeryInputEndowment.TryApply(
+                    pass9.BakeryRuntime, business.RuntimeState, systemsHub.Ids, configuration.ConfigurationId,
+                    bakeryKey, townWorld?.Settings != null ? townWorld.Settings.seed : configuration.SeedOffset,
+                    configuration.OpeningBakeryFlourPounds, configuration.OpeningBakeryNotionsUnits,
+                    timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0, diagnostics,
+                    out string report, out string error))
+            { Debug.LogError($"[WorldStartup] {error}", this); return; }
+            Debug.Log($"[WorldStartup] {report}", this);
+            foreach (string line in diagnostics) Debug.Log($"[WorldStartup] {line}", this);
+        }
+
         /// <summary>
         /// Slice S2 (2026-11-05, plan 02 §4): NewGame-only seeding of
         /// scenario-owned opening equipment for the Bakery, beside the
@@ -1583,6 +1655,14 @@ namespace LandLedgers.FirstLedger
         {
             "general-store" => BusinessType.GeneralStore,
             "bakery" => BusinessType.Bakery,
+            "blacksmith" => BusinessType.Blacksmith,
+            "butcher" => BusinessType.Butcher,
+            "doctor" => BusinessType.Doctor,
+            "sawmill" => BusinessType.Sawmill,
+            "lumber-yard" or "lumberyard" => BusinessType.LumberYard,
+            "boarding-house" or "boardinghouse" => BusinessType.BoardingHouse,
+            "ranch" => BusinessType.Ranch,
+            "crop-farm" or "cropfarm" => BusinessType.CropFarm,
             "fuel-dealer" => BusinessType.FuelDealer,
             "livery-freight" or "freight-company" => BusinessType.LiveryFreight,
             _ => throw new ArgumentException($"Unsupported configured business operation ID '{operationId}'.", nameof(operationId))
@@ -1606,12 +1686,31 @@ namespace LandLedgers.FirstLedger
                 BusinessType type = ToBusinessType(slot.operationId);
                 int ownerId = configuration.ResolveRuntimePersonId(slot.ownerPersonKey);
                 configuration.TryGetPerson(slot.ownerPersonKey, out DevelopmentTownConfiguration.PersonDefinition owner);
-                string ownerName = owner != null ? owner.firstName + " " + owner.lastName : "Development configuration";
-                var premises = type switch
+                string ownerName = owner != null
+                    ? owner.firstName + " " + owner.lastName
+                    : configuration.GeneratePopulationFromSettings
+                        ? "Generated resident " + ownerId
+                        : "Development configuration";
+                // The scenario's authored premisesRequired flag is the controlling
+                // configuration. In particular, a route freight operator may be
+                // registered without claiming a building; task-level site needs
+                // still gate any later physical operation.
+                PremisesRequirement premises = !slot.premisesRequired
+                    ? new PremisesRequirement()
+                    : type switch
                 {
                     BusinessType.GeneralStore => new PremisesRequirement(customerFacing: true, minAreaSqFt: 800),
                     BusinessType.Bakery => new PremisesRequirement(customerFacing: true, foodHandling: true, minAreaSqFt: 500),
                     BusinessType.FuelDealer => new PremisesRequirement(yardStorage: true, minAreaSqFt: 600),
+                    BusinessType.Blacksmith => new PremisesRequirement(workshop: true, yardStorage: true, minAreaSqFt: 600),
+                    BusinessType.Butcher => new PremisesRequirement(customerFacing: true, foodHandling: true, minAreaSqFt: 500),
+                    BusinessType.Doctor => new PremisesRequirement(customerFacing: true, minAreaSqFt: 400),
+                    BusinessType.Sawmill => new PremisesRequirement(workshop: true, yardStorage: true, minAreaSqFt: 3000),
+                    BusinessType.LumberYard => new PremisesRequirement(yardStorage: true, minAreaSqFt: 4000),
+                    BusinessType.BoardingHouse => new PremisesRequirement(customerFacing: true, minAreaSqFt: 1200),
+                    BusinessType.Ranch => new PremisesRequirement(animalHousing: true, minAreaSqFt: 10000),
+                    BusinessType.CropFarm => new PremisesRequirement(minAreaSqFt: 20000),
+                    BusinessType.LiveryFreight => new PremisesRequirement(animalHousing: true, yardStorage: true, minAreaSqFt: 2000),
                     _ => new PremisesRequirement()
                 };
                 string displayName = slot.operationId switch
@@ -1929,8 +2028,10 @@ namespace LandLedgers.FirstLedger
             }
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
             if (systemsHub != null)
+            {
                 pass9.PersonHands = systemsHub.PersonHands;
                 pass9.HandheldContainers = systemsHub.HandheldContainers;
+            }
             // Reuse, never replace: Restore is clear-then-load into the live
             // holders, and the drivers cache references to them.
             if (pass9.FreightDriver == null)
@@ -1963,7 +2064,24 @@ namespace LandLedgers.FirstLedger
         {
             BusinessInstanceState storeBusiness = FindDevelopmentNpcGeneralStore();
             SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
-            RegisterNotionsProcurement(storeBusiness, drivers);
+            if (drivers == null || storeBusiness?.RuntimeState == null)
+            {
+                RegisterNotionsProcurement(storeBusiness, drivers);
+                return;
+            }
+            OffMapNamedSkuProcurementService procurement = saveLoadManager?.PassXlProcurementService;
+            if (procurement != null)
+            {
+                procurement.RebindBusinessCash(new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState));
+                drivers.AttachStoreFeedProcurement(procurement, storeBusiness);
+            }
+            else RegisterNotionsProcurement(storeBusiness, drivers);
+
+            // SaveLoadManager has rebuilt the business instances. Supplier
+            // identity remains stable, but its old object is no longer live.
+            if (storeRuntime != null)
+                drivers.RegisterGeneralStoreSupplier(storeRuntime.BuildHouseholdTradingPort(
+                    storeBusiness, drivers.StoreFeedRegistry));
         }
 
         private void ConfigureLiveBakerySaveOwner()
@@ -2113,8 +2231,8 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            const string source = "DevelopmentTownConfiguration opening allocation";
-            const string reason = "$200 per business and $200 per NPC resident for development testing liquidity";
+            const string source = "DevelopmentTownConfiguration NewGame opening allocation";
+            const string reason = "One-time scenario-authored starting cash balance for development testing liquidity";
 
             foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
             {

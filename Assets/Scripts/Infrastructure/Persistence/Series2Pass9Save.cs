@@ -82,6 +82,7 @@
 //   to fill a gap.
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.BreadDrivers;
@@ -172,6 +173,18 @@ namespace LandLedgers.Persistence
     // ---- Pass 3 ----
 
     [Serializable]
+    public sealed class Pass9WholesaleShelfLotDto
+    {
+        public string BakeryLotId = string.Empty;
+        public int BakedDayIndex = -1;
+        public int ReceivedDayIndex = -1;
+        public string Condition = string.Empty;
+        public int UnitWholesaleCostCents;
+        public int BackUnits;
+        public int ShelfUnits;
+    }
+
+    [Serializable]
     public sealed class Pass9CatalogLineDto
     {
         public string ProductId = string.Empty;
@@ -182,6 +195,7 @@ namespace LandLedgers.Persistence
         public int BackUnits;
         public int ShelfCapacityUnits;
         public int BackCapacityUnits;
+        public List<Pass9WholesaleShelfLotDto> WholesaleLots = new List<Pass9WholesaleShelfLotDto>();
     }
 
     [Serializable]
@@ -829,6 +843,18 @@ namespace LandLedgers.Persistence
                 {
                     stored.ShelfUnits = saved.ShelfUnits;
                     stored.BackUnits = saved.BackUnits;
+                    stored.RestoreWholesaleLots((saved.WholesaleLots ?? new List<Pass9WholesaleShelfLotDto>())
+                        .Where(l => l != null)
+                        .Select(l => new Pass3WholesaleShelfLot
+                        {
+                            BakeryLotId = l.BakeryLotId ?? string.Empty,
+                            BakedDayIndex = l.BakedDayIndex,
+                            ReceivedDayIndex = l.ReceivedDayIndex,
+                            Condition = l.Condition ?? string.Empty,
+                            UnitWholesaleCostCents = l.UnitWholesaleCostCents,
+                            BackUnits = l.BackUnits,
+                            ShelfUnits = l.ShelfUnits,
+                        }));
                 }
             }
 
@@ -1234,7 +1260,7 @@ namespace LandLedgers.Persistence
 
         private static Pass9CatalogLineDto CopyLine(Pass3ProductLine line)
         {
-            return new Pass9CatalogLineDto
+            var dto = new Pass9CatalogLineDto
             {
                 ProductId = line.ProductId ?? string.Empty,
                 DisplayName = line.DisplayName ?? string.Empty,
@@ -1245,6 +1271,21 @@ namespace LandLedgers.Persistence
                 ShelfCapacityUnits = line.ShelfCapacityUnits,
                 BackCapacityUnits = line.BackCapacityUnits,
             };
+            foreach (Pass3WholesaleShelfLot lot in line.WholesaleLots ?? new List<Pass3WholesaleShelfLot>())
+            {
+                if (lot == null) continue;
+                dto.WholesaleLots.Add(new Pass9WholesaleShelfLotDto
+                {
+                    BakeryLotId = lot.BakeryLotId ?? string.Empty,
+                    BakedDayIndex = lot.BakedDayIndex,
+                    ReceivedDayIndex = lot.ReceivedDayIndex,
+                    Condition = lot.Condition ?? string.Empty,
+                    UnitWholesaleCostCents = lot.UnitWholesaleCostCents,
+                    BackUnits = lot.BackUnits,
+                    ShelfUnits = lot.ShelfUnits,
+                });
+            }
+            return dto;
         }
 
         private static Pass9SupplierOfferDto CopySupplier(Pass3SupplierOffer supplier)

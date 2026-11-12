@@ -33,13 +33,21 @@ namespace LandLedgers.Pathing
             string label = null,
             PathingProfile profile = PathingProfile.Pedestrian,
             bool publishDiagnostics = true,
-            bool suppressFailureLog = false)
+            bool suppressFailureLog = false,
+            int floorIndex = 0,
+            string functionalSpaceId = null,
+            int startInteriorBuildingId = -1,
+            int targetInteriorBuildingId = -1)
         {
             Start = start;
             Target = target;
             Requester = requester;
             Label = label;
             Profile = profile;
+            FloorIndex = floorIndex;
+            FunctionalSpaceId = functionalSpaceId;
+            StartInteriorBuildingId = startInteriorBuildingId;
+            TargetInteriorBuildingId = targetInteriorBuildingId;
             suppressDiagnostics = !publishDiagnostics;
             SuppressFailureLog = suppressFailureLog;
         }
@@ -49,6 +57,10 @@ namespace LandLedgers.Pathing
         public Object Requester { get; }
         public string Label { get; }
         public PathingProfile Profile { get; }
+        public int FloorIndex { get; }
+        public string FunctionalSpaceId { get; }
+        public int StartInteriorBuildingId { get; }
+        public int TargetInteriorBuildingId { get; }
         public bool PublishDiagnostics => !suppressDiagnostics;
         public bool SuppressFailureLog { get; }
 
@@ -57,7 +69,11 @@ namespace LandLedgers.Pathing
             GridCoord target,
             Object requester = null,
             string label = null,
-            PathingProfile profile = PathingProfile.Pedestrian)
+            PathingProfile profile = PathingProfile.Pedestrian,
+            int floorIndex = 0,
+            string functionalSpaceId = null,
+            int startInteriorBuildingId = -1,
+            int targetInteriorBuildingId = -1)
         {
             // Candidate probes return normal success/failure data without replacing the visible debug path or logging expected misses.
             return new PathingRequest(
@@ -67,7 +83,11 @@ namespace LandLedgers.Pathing
                 label,
                 profile,
                 publishDiagnostics: false,
-                suppressFailureLog: true);
+                suppressFailureLog: true,
+                floorIndex: floorIndex,
+                functionalSpaceId: functionalSpaceId,
+                startInteriorBuildingId: startInteriorBuildingId,
+                targetInteriorBuildingId: targetInteriorBuildingId);
         }
     }
 

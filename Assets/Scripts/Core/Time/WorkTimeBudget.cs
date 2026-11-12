@@ -185,6 +185,15 @@ namespace LandLedgers.Time
             minutesCommitted = 0;
             minutesWorked = 0;
         }
+
+        internal WorkTimeBudget CopyState() => new WorkTimeBudget
+        {
+            personId = personId,
+            dailyBudgetMinutes = dailyBudgetMinutes,
+            minutesCommitted = minutesCommitted,
+            minutesWorked = minutesWorked,
+            capacityMultiplier01 = capacityMultiplier01,
+        };
     }
 
     /// <summary>
@@ -283,20 +292,22 @@ namespace LandLedgers.Time
         /// </summary>
         public WorkTimeBudgetSaveDto CaptureSaveDto()
         {
-            return new WorkTimeBudgetSaveDto
-            {
-                budgets = new List<WorkTimeBudget>(budgets),
-            };
+            var snapshot = new WorkTimeBudgetSaveDto();
+            foreach (WorkTimeBudget budget in budgets)
+                if (budget != null) snapshot.budgets.Add(budget.CopyState());
+            return snapshot;
         }
 
         /// <summary>CLN-1: restores work-time budget state from the save pipeline.</summary>
         public void LoadFromSaveDto(WorkTimeBudgetSaveDto dto, int absoluteDayIndex)
         {
             budgets.Clear();
+            lookup.Clear();
             currentAbsoluteDayIndex = absoluteDayIndex;
             if (dto != null && dto.budgets != null)
             {
-                budgets.AddRange(dto.budgets);
+                foreach (WorkTimeBudget budget in dto.budgets)
+                    if (budget != null) budgets.Add(budget.CopyState());
             }
 
             RebuildLookupIfNeeded();

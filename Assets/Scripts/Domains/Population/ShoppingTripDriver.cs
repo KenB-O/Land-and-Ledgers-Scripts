@@ -154,6 +154,8 @@ namespace LandLedgers.Population
         }
 
         private readonly HouseholdShoppingLoop loop;
+        private readonly Func<int, string, bool> startPhysicalRoute;
+        private readonly Func<int, string, bool> hasPhysicallyArrived;
         private readonly List<PlannedShoppingTrip> activeTrips = new List<PlannedShoppingTrip>();
         private readonly Dictionary<string, InFlightLeg> legsByTaskIdString =
             new Dictionary<string, InFlightLeg>(StringComparer.Ordinal);
@@ -161,11 +163,31 @@ namespace LandLedgers.Population
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public IReadOnlyList<PlannedShoppingTrip> ActiveTrips => activeTrips;
+        public HouseholdShoppingLoop Loop => loop;
+        public bool HasActiveTripForNeed(int needSequence) => HasActiveTripFor(needSequence);
 
-        public ShoppingTripDriver(HouseholdShoppingLoop loop)
+        public ShoppingTripDriver(HouseholdShoppingLoop loop,
+            Func<int, string, bool> startPhysicalRoute = null,
+            Func<int, string, bool> hasPhysicallyArrived = null)
         {
             this.loop = loop ?? throw new ArgumentNullException(nameof(loop));
+            this.startPhysicalRoute = startPhysicalRoute;
+            this.hasPhysicallyArrived = hasPhysicallyArrived;
         }
+
+        public bool OwnsDueEvent(DueEvent ev)
+        {
+            if (ev == null) return false;
+            if (ev.Kind == DueEventKind.TaskCompletionDue)
+                return legsByTaskIdString.ContainsKey(ev.PayloadRef ?? string.Empty);
+            return ev.Kind == DueEventKind.JourneyStageDue
+                && !string.IsNullOrWhiteSpace(ev.PayloadRef)
+                && ev.PayloadRef.StartsWith("delivery:", StringComparison.Ordinal)
+                && FindTrip(ev.PayloadRef.Substring("delivery:".Length)) != null;
+        }
+
+        public bool OwnsOpenTask(WorkTask task) => task != null
+            && legsByTaskIdString.ContainsKey(task.TaskId.ToString());
 
         /// <summary>
         /// Day boundary: plans a real-time trip for every open need of the
@@ -239,7 +261,11 @@ namespace LandLedgers.Population
                     continue;
                 }
 
+                string storeLocation = trip.Candidate?.Supplier?.LocationId ?? string.Empty;
                 string error = loop.BeginOutboundLeg(trip, dayIndex, diag);
+                if (error == null && startPhysicalRoute != null
+                    && !startPhysicalRoute(trip.ShopperPersonId, storeLocation))
+                    error = $"No physical route reaches seller location '{storeLocation}'.";
                 if (error != null)
                 {
                     loop.AbortTrip(trip, error, dayIndex, diag);
@@ -253,7 +279,9 @@ namespace LandLedgers.Population
                 }
                 else
                 {
-                    // Zero travel: the shopper is already there — arrive now.
+                    // A zero-duration logical leg does not prove that the
+                    // visible actor is at the counter. Try the arrival gate;
+                    // if a route is still active, poll it on simulated time.
                     ArriveNow(trip, currentGameSeconds, dayIndex, dueEvents, diag);
                 }
             }
@@ -310,12 +338,24 @@ namespace LandLedgers.Population
                 return; // not one of ours
             }
 
-            legsByTaskIdString.Remove(ev.PayloadRef);
             PlannedShoppingTrip trip = FindTrip(leg.TripId);
             if (trip == null || !trip.IsActive)
             {
+                legsByTaskIdString.Remove(ev.PayloadRef);
                 return;
             }
+
+            string expectedLocation = leg.Kind == LegKind.Outbound
+                ? trip.Candidate?.Supplier?.LocationId
+                : leg.Kind == LegKind.Return ? trip.HomeLocationId : null;
+            if (!string.IsNullOrWhiteSpace(expectedLocation)
+                && hasPhysicallyArrived != null
+                && !hasPhysicallyArrived(trip.ShopperPersonId, expectedLocation))
+            {
+                ScheduleArrivalRetry(trip, leg.Kind, currentGameSeconds, dueEvents, diag);
+                return;
+            }
+            legsByTaskIdString.Remove(ev.PayloadRef);
 
             switch (leg.Kind)
             {
@@ -344,7 +384,11 @@ namespace LandLedgers.Population
                     }
 
                     {
+                        string homeLocation = trip.HomeLocationId ?? string.Empty;
                         string error = loop.BeginReturnLeg(trip, dayIndex, "return", diag);
+                        if (error == null && startPhysicalRoute != null
+                            && !startPhysicalRoute(trip.ShopperPersonId, homeLocation))
+                            error = $"No physical route reaches home '{homeLocation}'.";
                         if (error != null)
                         {
                             loop.AbortTrip(trip, error, dayIndex, diag);
@@ -380,6 +424,13 @@ namespace LandLedgers.Population
             PlannedShoppingTrip trip, float currentGameSeconds, int dayIndex,
             IDueEventScheduler dueEvents, List<string> diag)
         {
+            string storeLocation = trip.Candidate?.Supplier?.LocationId ?? string.Empty;
+            if (hasPhysicallyArrived != null
+                && !hasPhysicallyArrived(trip.ShopperPersonId, storeLocation))
+            {
+                ScheduleArrivalRetry(trip, LegKind.Outbound, currentGameSeconds, dueEvents, diag);
+                return;
+            }
             string error = loop.ArriveAtStoreAndSettle(trip, dayIndex, MinuteOfDay(currentGameSeconds), diag);
             if (error != null)
             {
@@ -425,6 +476,7 @@ namespace LandLedgers.Population
 
         private void CompleteLeg(WorkTask leg, PlannedShoppingTrip trip, int dayIndex, List<string> diag)
         {
+            if (leg == null) return; // Same-location legs have no task to complete.
             string error = loop.CompleteLegTask(leg, dayIndex, diag);
             if (error != null)
             {
@@ -438,7 +490,8 @@ namespace LandLedgers.Population
         {
             if (leg == null)
             {
-                return; // zero-travel leg: nothing scheduled.
+                ScheduleArrivalRetry(trip, kind, currentGameSeconds, dueEvents, diag);
+                return;
             }
 
             string taskIdString = leg.TaskId.ToString();
@@ -448,6 +501,19 @@ namespace LandLedgers.Population
                 taskIdString, out dueId);
             legsByTaskIdString[taskIdString] = new InFlightLeg { TripId = trip.TripId, Kind = kind };
             diag.Add($"ShoppingTripDriver: {kind} leg due in {leg.PlannedMinutes} min ({dueId}).");
+        }
+
+        private void ScheduleArrivalRetry(PlannedShoppingTrip trip, LegKind kind,
+            float currentGameSeconds, IDueEventScheduler dueEvents, List<string> diag)
+        {
+            WorkTask leg = kind == LegKind.Outbound ? trip.Legs?.Outbound : trip.Legs?.Return;
+            string taskIdString = leg != null
+                ? leg.TaskId.ToString()
+                : $"arrival-check:{trip.TripId}:{kind}";
+            dueEvents.Schedule(DueEventKind.TaskCompletionDue, currentGameSeconds + 60f,
+                taskIdString, out _);
+            legsByTaskIdString[taskIdString] = new InFlightLeg { TripId = trip.TripId, Kind = kind };
+            diag.Add($"ShoppingTripDriver: {kind} physical arrival is not confirmed; trip remains open and route is checked again in one game minute.");
         }
 
         private void RebuildInFlightLeg(PlannedShoppingTrip trip)

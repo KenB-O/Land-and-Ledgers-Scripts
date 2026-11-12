@@ -16,6 +16,8 @@ using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.BreadDrivers;
+using LandLedgers.Economy.Businesses.Bakery;
+using LandLedgers.Economy.Trade;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Recruitment;
@@ -87,6 +89,8 @@ namespace LandLedgers.Orchestration.Systems
         private const string FreightMeetingTaskId = "freight-service-meeting";
         private const string FreightDispatchTaskPrefix = "freight-dispatch:";
         private const string FreightDispatchTaskId = "freight-dispatch-assignment";
+        private const int HouseholdShoppingTraceLimit = 128;
+        private const int HouseholdShoppingTraceLogsPerDayLimit = 10;
         private readonly HashSet<string> businessFeedNeedsOpen = new HashSet<string>(StringComparer.Ordinal);
         // W4 (F-1): refused return-leg feed receipts, keyed by TransactionId
         // in the pure BusinessFeedCustodyLedger. The batch's cash already
@@ -112,6 +116,34 @@ namespace LandLedgers.Orchestration.Systems
         private readonly Dictionary<string, int> refusalLoggedDay = new Dictionary<string, int>(StringComparer.Ordinal);
         private int hitchStateLogDayIndex = -1;
         private readonly HashSet<string> freightAgreementBlockersLogged = new HashSet<string>(StringComparer.Ordinal);
+        [SerializeField, Tooltip("When enabled, write up to 10 detailed, receipt-linked household purchase traces per in-game day. A 128-entry recent trace buffer is retained either way.")]
+        private bool logDetailedHouseholdShoppingTraces;
+        private readonly Queue<string> recentHouseholdShoppingTraces = new Queue<string>();
+        private readonly HashSet<string> recentHouseholdShoppingTraceKeys = new HashSet<string>(StringComparer.Ordinal);
+        private string lastPhysicalShoppingRouteRefusal = string.Empty;
+        private int detailedShoppingTraceDay = -1;
+        private int detailedShoppingTraceLogsToday;
+        private sealed class HouseholdSupplyIncident
+        {
+            public string IncidentId;
+            public string LastCause;
+            public int FirstDay;
+            public int LastReportedDay;
+            public int Observations;
+        }
+        private readonly Dictionary<string, HouseholdSupplyIncident> householdSupplyIncidents =
+            new Dictionary<string, HouseholdSupplyIncident>(StringComparer.Ordinal);
+
+        [Header("Household Reserve Policy")]
+        [SerializeField, Min(0f), Tooltip("Open a physical food shopping need when the currently consumed food SKU falls below this many days of stock.")]
+        private float householdFoodReorderDays = 3f;
+        [SerializeField, Min(0f)]
+        private float householdFoodTargetDays = 7f;
+        [SerializeField, Min(0f)]
+        private float householdFoodSatisfiedDays = 7f;
+
+        /// <summary>Bounded, diagnostic-only detail for recent settled household purchases.</summary>
+        public IReadOnlyCollection<string> RecentHouseholdShoppingTraces => recentHouseholdShoppingTraces.ToArray();
 
         [Serializable]
         private sealed class BusinessFeedTripTaskData
@@ -322,6 +354,7 @@ namespace LandLedgers.Orchestration.Systems
             new Dictionary<string, LaborDemandReport>(StringComparer.Ordinal);
         private bool managerExecutionConfigured;
         private HouseholdShoppingLoop householdShoppingLoop;
+        private ShoppingTripDriver shoppingTripDriver;
         private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
@@ -666,6 +699,18 @@ namespace LandLedgers.Orchestration.Systems
             // save; a loop attached after the hub load leaves the custody
             // section unrestored for that load.
             hub.ShoppingLoop = householdShoppingLoop;
+
+            // Physical shopping is driven through the existing phased loop.
+            // The transaction driver may settle only after the visible person
+            // has reached the seller building and may deposit only after the
+            // visible return route reaches the home building.
+            if (shoppingTripDriver == null || shoppingTripDriver.Loop != householdShoppingLoop)
+            {
+                shoppingTripDriver = new ShoppingTripDriver(
+                    householdShoppingLoop,
+                    TryStartShoppingPhysicalRoute,
+                    HasPhysicallyArrivedAtShoppingLocation);
+            }
 
         }
 
@@ -1969,6 +2014,8 @@ namespace LandLedgers.Orchestration.Systems
             if (hub.Tasks.GetDefinition(DomesticTaskCatalog.MealPrepId) == null)
                 DomesticTaskCatalog.RegisterAll(hub.Tasks, diag);
             bool coldSeason = IsColdSeasonMonth();
+            LandLedgers.FirstLedger.PopulationPathingDirector pathingDirector =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null) continue;
@@ -1983,7 +2030,23 @@ namespace LandLedgers.Orchestration.Systems
                         PersonState person = populationManager.State.GetPerson(personId);
                         return person != null ? person.ageBand : AgeBand.Adult18Plus;
                     },
-                    MealsAtHomeCount = members.Count,
+                    IsWindowUnavailable = (personId, startMinute, durationMinutes) =>
+                        pathingDirector != null && pathingDirector.IsCommittedToScheduledWorkWindow(
+                            personId, absoluteDayIndex, startMinute, durationMinutes),
+                    // DailyNeedsService currently serves/consumes meals from
+                    // actual received lots, but no production authority reports
+                    // an unmet cooking requirement or supported recipe here.
+                    // Do not schedule a stove task merely because residents
+                    // exist; the existing daily meal accounting remains intact.
+                    MealsAtHomeCount = 0,
+                    // A month/season flag is not evidence that a household hearth
+                    // needs fuel handling. No installed-equipment/burn-state
+                    // authority is currently wired to this driver.
+                    FuelHandlingNeeded = false,
+                    // No household cleanliness state currently supplies this
+                    // need. Ordinary cleaning remains optional and unscheduled
+                    // until a real need source exists.
+                    CleaningNeeded = false,
                     ColdSeason = coldSeason,
                     HasAnimals = HouseholdOwnsAnimals(household.id, members),
                 };
@@ -1997,6 +2060,35 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.Log("[SimulationDrivers] domestic labor day " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
+        }
+
+        private DomesticActivityMovementResult ResolveDomesticActivityMovement(
+            DomesticLaborDriver.InFlightDomesticTask flight, float currentGameSeconds)
+        {
+            if (flight == null || populationManager?.State == null || townWorld == null)
+                return DomesticActivityMovementResult.Unsupported;
+            PersonState person = populationManager.State.GetPerson(flight.PersonId);
+            if (person == null || person.homeBuildingId < 0
+                || !townWorld.TryGetBuildingById(person.homeBuildingId, out PlacedBuilding home)
+                || home?.runtimeFootprintAuthority == null)
+                return DomesticActivityMovementResult.Unsupported;
+
+            string activityLocationId;
+            if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal))
+                activityLocationId = "stove";
+            else if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.ChoresId, StringComparison.Ordinal))
+                activityLocationId = (flight.DayIndex & 1) == 0 ? "cleaning" : "porch-dropoff";
+            else
+                return DomesticActivityMovementResult.Unsupported;
+
+            LandLedgers.FirstLedger.PopulationPathingDirector director =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            if (director == null) return DomesticActivityMovementResult.Unsupported;
+            DomesticActivityMovementResult result = director.TryReachDomesticActivity(
+                flight, activityLocationId, out string reason);
+            if (result == DomesticActivityMovementResult.Unsupported && !string.IsNullOrWhiteSpace(reason))
+                flight.ActivityLocationId = activityLocationId + ": " + reason;
+            return result;
         }
 
         private bool HouseholdOwnsAnimals(int householdId, List<int> memberIds)
@@ -2520,6 +2612,18 @@ namespace LandLedgers.Orchestration.Systems
                 if (record.ObligationIds != null && record.ObligationIds.Contains(agreement.AgreementId)) return false;
             }
 
+            // Driver staging is a visible, path-following action. Keep the
+            // agreement and shipment pending until the assigned operator is
+            // physically close enough to board; no journey or delivery is
+            // created by an unsuccessful approach.
+            if (!transportPresentation.TryPrepareDriverAtStaging(operatorId, out bool driverReadyToDepart)
+                || !driverReadyToDepart)
+            {
+                LogRefusalDayKeyed("departure-driver-staging:" + shipment.ShipmentId, dayIndex,
+                    $"[OffMapJourney] Shipment '{shipment.ShipmentId}' remains pending while its assigned driver walks to the wagon staging point.");
+                return false;
+            }
+
             // (6) Depart the wagon, empty: the flour is picked up at the
             // supplier (Objective 27), so no cargo and no callbacks.
             var diag = new List<string>();
@@ -2626,7 +2730,9 @@ namespace LandLedgers.Orchestration.Systems
                 int operatorId = agreement.AcceptingOperatorPersonId;
                 PersonState operatorPerson = operatorId >= 0 ? populationManager?.State?.GetPerson(operatorId) : null;
                 if (wagon == null || horse == null || operatorPerson == null) continue;
-                if (!IsPersonVisuallyAtBuilding(operatorId, operatorPerson.homeBuildingId)) continue;
+                OpeningTransportPresentationController presentation = FindAnyObjectByType<OpeningTransportPresentationController>();
+                if (!IsPersonVisuallyAtBuilding(operatorId, operatorPerson.homeBuildingId)
+                    && (presentation == null || !presentation.IsDriverApproachingOrStaged(operatorId))) continue;
                 TryDepartMillbrookShipment(agreement, shipment, absoluteDayIndex);
             }
         }
@@ -2723,7 +2829,8 @@ namespace LandLedgers.Orchestration.Systems
                             PersonId = personId,
                             HouseholdId = household.id,
                             AgeBand = person != null ? person.ageBand : AgeBand.Adult18Plus,
-                            IsJobSeeker = person != null && !employed && person.ageBand == AgeBand.Adult18Plus,
+                            IsJobSeeker = person != null && DailyActivityPlanner.ShouldPlanRoutineJobSeeking(
+                                person.ageBand, employed, manages),
                             IsManager = manages,
                         };
                     },
@@ -3194,6 +3301,41 @@ namespace LandLedgers.Orchestration.Systems
                 // authority method takes a vehicle id and returns bool.
                 IsVehicleOffMap = OffMapJourneys.IsOffMapVehicle,
             };
+            hooks.ConfirmPhysicalReceiving = (LogisticsShipmentState shipment, EntityId handlerId,
+                out bool physicallyReceived, out string reason) =>
+            {
+                physicallyReceived = false;
+                reason = string.Empty;
+                if (shipment == null || sharedBusinessRuntime == null
+                    || !sharedBusinessRuntime.TryFindByInstanceId(shipment.destinationBusinessInstanceId,
+                        out BusinessInstanceState destination)
+                    || destination == null || destination.AssignedBuildingId < 0)
+                {
+                    reason = "No assigned receiving premises resolve for this cargo lot.";
+                    return false;
+                }
+                LandLedgers.FirstLedger.PopulationPathingDirector pathing =
+                    FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+                if (pathing == null)
+                {
+                    reason = "No population presentation authority is available to carry this lot.";
+                    return false;
+                }
+                bool routeUsable = pathing.TryCarryFreightToActivity(handlerId.Id,
+                    destination.AssignedBuildingId, "receiving", out physicallyReceived, out reason);
+                if (!routeUsable) return false;
+                shipment.physicalLocationId = physicallyReceived
+                    ? "receiving:" + destination.InstanceId
+                    : "person:" + handlerId.Id;
+                if (!physicallyReceived) reason = "Carrying: handler is physically travelling to the receiving point.";
+                return true;
+            };
+            hooks.OnPhysicalReceivingComplete = (shipment, handlerId) =>
+            {
+                LandLedgers.FirstLedger.PopulationPathingDirector pathing =
+                    FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+                pathing?.HideFreightCargoVisual(handlerId.Id);
+            };
             if (millbrookCustody != null)
             {
                 hooks.CommitSourceLot = (LandLedgers.Economy.LogisticsShipmentState shipment,
@@ -3349,12 +3491,11 @@ namespace LandLedgers.Orchestration.Systems
             // the opening-order constant, so a second haul opens a
             // second request.
             OffMapAidCargoLot lot = MillbrookFlourReorder.FindShippableLot(millbrookAidRuntime, bakery.InstanceId);
-            if (lot == null || lot.SourceCommitted || lot.Received)
+            if (lot == null)
             {
-                string lotState = lot == null
-                    ? $"target paid lot absent; Millbrook='{millbrookAidRuntime.BusinessId}', lotCount={millbrookAidRuntime.Lots?.Count ?? 0}, candidates={string.Join(",", millbrookAidRuntime.Lots?.Where(item => item != null).Select(item => item.LotId + "/buyer=" + item.BuyerBusinessId) ?? Enumerable.Empty<string>())}"
-                    : $"lot='{lot.LotId}', sourceCommitted={lot.SourceCommitted}, received={lot.Received}, buyer='{lot.BuyerBusinessId}', SKU='{lot.SkuId}', quantity={lot.PackageUnits} {lot.OrderUnit}";
-                LogFreightAgreementBlockerOnce("lot", $"[FreightAgreement] Daily request driver cannot open a request on day {dayIndex}: {lotState}.");
+                // Already-committed and received lots are deliberately excluded
+                // by FindShippableLot. No new eligible cargo is a normal idle
+                // state, not evidence that an existing journey lost its cargo.
                 return;
             }
 
@@ -3734,9 +3875,10 @@ namespace LandLedgers.Orchestration.Systems
             // The separate shopping summary can still run when no household
             // meal was resolved, and suppressing this line made that gap look
             // like a logging cutoff after the last non-zero meal day.
-            Debug.Log($"[SimulationDrivers] daily needs day {absoluteDayIndex}: " +
-                $"{report.HouseholdsServed} households served, {report.MealsEaten} eaten, " +
-                $"{report.MealsMissed} missed, {report.PurchasesMade} purchases ({report.SpendCents}c).");
+            Debug.Log($"[FoodEconomy] meal resolution day {absoluteDayIndex}: " +
+                $"{report.HouseholdsServed} households served, {report.MealsEaten} meals eaten, " +
+                $"{report.MealsMissed} missed; direct meal-path purchases={report.PurchasesMade} " +
+                $"({report.SpendCents}c; excludes the separate physical shopping loop).");
 
             // Keep missed meals auditable by resident. These are read-only
             // projections of the meal authority's persisted records; they do
@@ -3782,6 +3924,7 @@ namespace LandLedgers.Orchestration.Systems
 
             DriveEmbodiedShopping(absoluteDayIndex, diag);
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
+            PublishHouseholdShoppingSummariesAndTraces(absoluteDayIndex, diag);
             if (diag.Count > 0)
             {
                 // Keep failed household needs observable in production logs.
@@ -3799,6 +3942,7 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     string message = diag[i];
                     if (!string.IsNullOrWhiteSpace(message)
+                        && !IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)
                         && message.StartsWith("[FoodEconomy] purchase", StringComparison.Ordinal)
                         && !visible.Contains(message))
                         visible.Add(message);
@@ -3806,7 +3950,8 @@ namespace LandLedgers.Orchestration.Systems
                 for (int i = 0; i < diag.Count && visible.Count < maxDiagnosticsPerDay; i++)
                 {
                     string message = diag[i];
-                    if (string.IsNullOrWhiteSpace(message) || visible.Contains(message)) continue;
+                    if (string.IsNullOrWhiteSpace(message) || visible.Contains(message)
+                        || IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)) continue;
                     if (message.StartsWith("Day " + absoluteDayIndex + ": batch ", StringComparison.Ordinal)
                         || message.StartsWith("Day " + absoluteDayIndex + ": shopping FAILED", StringComparison.Ordinal)
                         || message.StartsWith("[SimulationDrivers] household errands H", StringComparison.Ordinal))
@@ -3815,32 +3960,108 @@ namespace LandLedgers.Orchestration.Systems
                 for (int i = 0; i < diag.Count && visible.Count < maxDiagnosticsPerDay; i++)
                 {
                     string message = diag[i];
-                    if (!string.IsNullOrWhiteSpace(message) && !visible.Contains(message))
+                    if (!string.IsNullOrWhiteSpace(message) && !visible.Contains(message)
+                        && !IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex))
                         visible.Add(message);
                 }
 
-                // Priority 1 Slice 0: the daily shopping summary is the
-                // heartbeat line for the shopping investigation; exempt it
-                // from the 12-per-day cap so a bad day cannot hide it
-                // behind earlier diagnostics. Always emit it first.
-                for (int i = 0; i < diag.Count; i++)
+                int reportableCount = diag.Count(message => !string.IsNullOrWhiteSpace(message)
+                    && !IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)
+                    && !message.StartsWith("[FoodEconomy] shopping summary day ", StringComparison.Ordinal));
+                string omitted = reportableCount > visible.Count
+                    ? $" | ... {reportableCount - visible.Count} additional diagnostic(s) omitted"
+                    : string.Empty;
+                if (visible.Count > 0)
+                    Debug.LogWarning($"[SimulationDrivers] household needs day {absoluteDayIndex}: " +
+                        string.Join(" | ", visible) + omitted, this);
+            }
+        }
+
+        private void PublishHouseholdShoppingSummariesAndTraces(int dayIndex, List<string> diagnostics)
+        {
+            if (diagnostics == null) return;
+            foreach (string message in diagnostics)
+            {
+                if (string.IsNullOrWhiteSpace(message)) continue;
+                if (HouseholdShoppingLoop.IsRoutineSummaryDiagnostic(message))
                 {
-                    string message = diag[i];
-                    if (!string.IsNullOrWhiteSpace(message)
-                        && message.StartsWith("[FoodEconomy] shopping summary day ", StringComparison.Ordinal)
-                        && !visible.Contains(message))
-                    {
-                        visible.Insert(0, message);
-                        break;
-                    }
+                    Debug.Log(message, this);
+                    continue;
                 }
 
-                string omitted = diag.Count > visible.Count
-                    ? $" | ... {diag.Count - visible.Count} additional diagnostic(s) omitted"
-                    : string.Empty;
-                Debug.LogWarning($"[SimulationDrivers] household needs day {absoluteDayIndex}: " +
-                    string.Join(" | ", visible) + omitted, this);
+                if (!IsRoutineHouseholdShoppingSuccess(message, dayIndex)) continue;
+                if (!recentHouseholdShoppingTraceKeys.Add(message)) continue;
+                recentHouseholdShoppingTraces.Enqueue(message);
+                while (recentHouseholdShoppingTraces.Count > HouseholdShoppingTraceLimit)
+                    recentHouseholdShoppingTraceKeys.Remove(recentHouseholdShoppingTraces.Dequeue());
+
+                if (!logDetailedHouseholdShoppingTraces) continue;
+                if (detailedShoppingTraceDay != dayIndex)
+                {
+                    detailedShoppingTraceDay = dayIndex;
+                    detailedShoppingTraceLogsToday = 0;
+                }
+                if (detailedShoppingTraceLogsToday++ < HouseholdShoppingTraceLogsPerDayLimit)
+                    Debug.Log("[FoodTrace] " + message, this);
             }
+        }
+
+        private void ObserveHouseholdSupplyIncident(int householdId, string itemId, int dayIndex, string cause)
+        {
+            string key = householdId + ":" + (itemId ?? string.Empty);
+            cause = string.IsNullOrWhiteSpace(cause) ? "unspecified supply failure" : cause.Trim();
+            if (!householdSupplyIncidents.TryGetValue(key, out HouseholdSupplyIncident incident))
+            {
+                incident = new HouseholdSupplyIncident
+                {
+                    IncidentId = $"H{householdId}/need/{itemId}",
+                    LastCause = cause,
+                    FirstDay = dayIndex,
+                    LastReportedDay = dayIndex,
+                    Observations = 1,
+                };
+                householdSupplyIncidents[key] = incident;
+                Debug.LogWarning($"[Incident][OPEN] id='{incident.IncidentId}', first day={dayIndex}, cause='{cause}'.", this);
+                return;
+            }
+
+            incident.Observations++;
+            bool changedCause = !string.Equals(incident.LastCause, cause, StringComparison.Ordinal);
+            bool escalationDue = dayIndex - incident.LastReportedDay >= 7;
+            if (changedCause)
+            {
+                Debug.LogWarning($"[Incident][CAUSE-CHANGED] id='{incident.IncidentId}', day={dayIndex}, " +
+                    $"open {Math.Max(0, dayIndex - incident.FirstDay)}d, '{incident.LastCause}' -> '{cause}'.", this);
+                incident.LastCause = cause;
+                incident.LastReportedDay = dayIndex;
+            }
+            else if (escalationDue)
+            {
+                Debug.LogWarning($"[Incident][ESCALATED] id='{incident.IncidentId}', day={dayIndex}, " +
+                    $"open {Math.Max(0, dayIndex - incident.FirstDay)}d, repeated {incident.Observations} observed failure(s), cause='{cause}'.", this);
+                incident.LastReportedDay = dayIndex;
+            }
+        }
+
+        private void ResolveHouseholdSupplyIncidentsNotOpen(HashSet<string> openNeedKeys, int dayIndex)
+        {
+            if (householdSupplyIncidents.Count == 0) return;
+            var resolved = new List<string>();
+            foreach (KeyValuePair<string, HouseholdSupplyIncident> pair in householdSupplyIncidents)
+            {
+                if (openNeedKeys != null && openNeedKeys.Contains(pair.Key)) continue;
+                HouseholdSupplyIncident incident = pair.Value;
+                Debug.Log($"[Incident][RESOLVED] id='{incident.IncidentId}', day={dayIndex}, " +
+                    $"open {Math.Max(0, dayIndex - incident.FirstDay)}d, observed {incident.Observations} failure(s); " +
+                    "the corresponding purchasing need is no longer open.", this);
+                resolved.Add(pair.Key);
+            }
+            foreach (string key in resolved) householdSupplyIncidents.Remove(key);
+        }
+
+        private static bool IsRoutineHouseholdShoppingSuccess(string message, int dayIndex)
+        {
+            return HouseholdShoppingLoop.IsRoutineSuccessDiagnostic(message, dayIndex);
         }
 
         /// <summary>
@@ -6463,6 +6684,17 @@ namespace LandLedgers.Orchestration.Systems
         /// refusal the Work reservation is released and the task stays
         /// Assigned, exactly as the composed StartAssignedTasks behaved.
         /// </summary>
+        private bool HasSpecializedBusinessTaskStarter(WorkTask task)
+        {
+            // Dedicated drivers enforce physical start gates and update activity
+            // state. The blanket starter must not race or bypass those drivers.
+            return task != null && (IsArrivalDrivenTravelTask(task)
+                || task.DefinitionId == BusinessFeedShoppingTaskId
+                || task.DefinitionId == FreightMeetingTaskId
+                || task.DefinitionId == OpeningHitchTaskId
+                || task.DefinitionId == FreightDispatchTaskId);
+        }
+
         private void StartPreAssignedBusinessWork(int absoluteDayIndex, int tickStartMinute,
             int tickEndMinute, List<string> diagnostics)
         {
@@ -6478,7 +6710,7 @@ namespace LandLedgers.Orchestration.Systems
                 foreach (WorkTask task in openTasks)
                 {
                     if (task != null && task.Status == TaskStatus.Assigned
-                        && !IsArrivalDrivenTravelTask(task))
+                        && !HasSpecializedBusinessTaskStarter(task))
                     {
                         assigned.Add(task);
                     }
@@ -6910,6 +7142,14 @@ namespace LandLedgers.Orchestration.Systems
 
         private void DispatchDueEvent(DueEvent dueEvent, int dayIndex, List<string> diag)
         {
+            if (shoppingTripDriver != null && shoppingTripDriver.OwnsDueEvent(dueEvent))
+            {
+                shoppingTripDriver.HandleDueEvent(
+                    dueEvent, dayIndex, timeManager != null ? timeManager.AbsoluteGameSeconds : 0f,
+                    hub.DueEvents, diag);
+                return;
+            }
+
             switch (dueEvent.Kind)
             {
                 case DueEventKind.TaskCompletionDue:
@@ -6989,6 +7229,10 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     continue;
                 }
+
+                // ShoppingTripDriver owns both the due event and the physical
+                // arrival gate for these leg tasks.
+                if (shoppingTripDriver != null && shoppingTripDriver.OwnsOpenTask(task)) continue;
 
                 if (IsArrivalDrivenTravelTask(task)) continue;
 
@@ -7434,6 +7678,7 @@ namespace LandLedgers.Orchestration.Systems
                 ImportOrderPathExists = false,
                 NotionsSupply = notionsSupply,
                 NotionsRegistration = notionsRegistration,
+                NotionsPipelineDepthDays = ImportCatalog.Get(BakeryFlourSupply.NotionsMaterialId)?.TransitDays ?? 0,
                 CallerDailyBudgetMinutes = callerDailyBudgetMinutes,
                 // Plan 04 Slice 4: thread the running actuals in so the
                 // driver can log the cumulative reconciliation line.
@@ -7747,6 +7992,8 @@ namespace LandLedgers.Orchestration.Systems
                         task, activeReservations, dayIndex, tickStartMinute, minuteOfDay,
                         TaskReservationLabel(task));
                     if (scheduledMinutes <= 0) continue;
+                    if (!HasArrivedAtBusinessForReservedWork(task, business, activeReservations,
+                            dayIndex, tickStartMinute, minuteOfDay)) continue;
                     int workMinutes = scheduledMinutes;
                     if (workMinutes <= 0) continue;
                     if (hub.Tasks.RecordWorkProgress(task.TaskId, workMinutes, hub.WorkTimeBudgets,
@@ -7769,6 +8016,38 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+        }
+
+        private bool HasArrivedAtBusinessForReservedWork(WorkTask task, BusinessInstanceState business,
+            IReadOnlyList<PersonActivityReservation> reservations, int dayIndex, int tickStartMinute, int tickEndMinute)
+        {
+            if (task == null || business == null || business.AssignedBuildingId < 0 || reservations == null
+                || !string.IsNullOrWhiteSpace(task.CustomerRef)) return true;
+            string expectedLabel = TaskReservationLabel(task);
+            bool onSiteWorkWasReserved = false;
+            for (int i = 0; i < reservations.Count; i++)
+            {
+                PersonActivityReservation reservation = reservations[i];
+                if (reservation == null || reservation.Released || reservation.DayIndex != dayIndex
+                    || reservation.PersonId != task.AssigneeId.Id
+                    || reservation.Activity != PersonActivityKind.Work
+                    || !string.Equals(reservation.Label, expectedLabel, StringComparison.Ordinal)) continue;
+                if (Math.Max(tickStartMinute, reservation.StartMinuteOfDay)
+                    < Math.Min(tickEndMinute, reservation.EndMinuteOfDay))
+                {
+                    onSiteWorkWasReserved = true;
+                    break;
+                }
+            }
+            if (!onSiteWorkWasReserved) return true;
+
+            PersonState worker = populationManager != null && populationManager.State != null
+                ? populationManager.State.GetPerson(task.AssigneeId.Id) : null;
+            // A business work reservation earns progress only after the real resident
+            // has reached the business recorded as their workplace. The route driver
+            // changes AtHome -> GoingToWork -> AtWork on physical arrival.
+            return worker != null && worker.workplaceBuildingId == business.AssignedBuildingId
+                && worker.scheduleState == PopulationScheduleState.AtWork;
         }
 
         private bool IsArrivalDrivenTravelTask(WorkTask task)
@@ -7957,11 +8236,8 @@ namespace LandLedgers.Orchestration.Systems
                 diagnostics.Add("General Store holds no identified lots for any meal item; needs stay open until a reorder or bakery delivery lands");
             }
 
-            // Plan 02 Slice 5: accumulate the day's shopping totals for the
-            // single summary line below — purchases made, cents spent, and
-            // the first failure reason recorded per need that stays open.
-            int shoppingPurchasesMade = 0;
-            int shoppingCentsSpent = 0;
+            // This is a planning pass: physical trips settle later, only at
+            // confirmed Store arrival. Do not report plans as purchases.
             var shoppingFailureByNeed = new Dictionary<string, string>(StringComparer.Ordinal);
 
             foreach (HouseholdState household in populationManager.State.households)
@@ -7971,68 +8247,24 @@ namespace LandLedgers.Orchestration.Systems
                     continue;
                 }
 
-                // Pass V P2-1: batch the household's open needs into one
-                // planned errand through the hub-owned coordinator (one trip
-                // serving several needs, one shopper, one person-time window,
-                // claims so no need is ever bought twice). Needs the trip
-                // cannot serve stay open and unclaimed for a later day.
-                var errandCtx = new HouseholdErrandCoordinator.CoordinatorContext
+                if (shoppingTripDriver == null)
                 {
-                    Population = populationManager.State,
-                    Memberships = householdMemberships,
-                    Ledgers = hub.HouseholdLedgers,
-                    Inventories = hub.HouseholdInventories,
-                    Needs = hub.PurchasingNeeds,
-                    Schedules = hub.PersonSchedules,
-                    Tasks = hub.Tasks,
-                    Budgets = hub.WorkTimeBudgets,
-                    PersonEntityId = id => EntityId.For(EntityKind.Person, id),
-                    OffMapJourneys = OffMapJourneys,
-                };
-                List<HouseholdErrandPlan> plans = hub.HouseholdErrands.PlanDay(
-                    household.id, absoluteDayIndex, errandCtx, diagnostics);
-                foreach (HouseholdErrandPlan plan in plans)
-                {
-                    if (plan == null) continue;
-                    HouseholdShoppingLoop.BatchShoppingResult batch = hub.HouseholdErrands.ExecutePlan(
-                        plan,
-                        absoluteDayIndex,
-                        errandCtx,
-                        householdShoppingLoop,
-                        new ShoppingLoopOptions
-                        {
-                            DepartureMinuteOfDay = 8 * 60,
-                            Diagnostics = diagnostics,
-                            PersonLocationId = ResolvePersonJourneyLocation,
-                            SetPersonLocation = SetPersonJourneyLocation
-                        },
-                        diagnostics);
-                    if (batch != null && !batch.TripExecuted && !string.IsNullOrWhiteSpace(batch.FailureReason))
-                    {
-                        diagnostics.Add($"[SimulationDrivers] household errands H{household.id}: {batch.FailureReason}");
-                    }
-
-                    if (batch != null)
-                    {
-                        shoppingPurchasesMade += batch.ServedNeedCount;
-                        if (batch.NeedResults != null)
-                        {
-                            foreach (ShoppingTripResult needResult in batch.NeedResults)
-                            {
-                                if (needResult == null) continue;
-                                shoppingCentsSpent += Math.Max(0, needResult.BuyerOutflowCents);
-                                if (!needResult.Success && !string.IsNullOrWhiteSpace(needResult.FailureReason))
-                                {
-                                    string failureKey = household.id + ":" + needResult.ItemId;
-                                    if (!shoppingFailureByNeed.ContainsKey(failureKey))
-                                    {
-                                        shoppingFailureByNeed[failureKey] = needResult.FailureReason;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    diagnostics.Add($"[SimulationDrivers] household errands H{household.id}: physical shopping driver unavailable; no purchase settled.");
+                    continue;
                 }
+
+                shoppingTripDriver.PlanForHousehold(
+                    household.id,
+                    hub.PurchasingNeeds,
+                    absoluteDayIndex,
+                    new ShoppingLoopOptions
+                    {
+                        DepartureMinuteOfDay = 8 * 60,
+                        Diagnostics = diagnostics,
+                        PersonLocationId = ResolvePersonJourneyLocation,
+                        SetPersonLocation = SetPersonJourneyLocation
+                    },
+                    diagnostics);
             }
 
             // Plan 02 Slice 5: one daily shopping summary line (not one line
@@ -8063,6 +8295,7 @@ namespace LandLedgers.Orchestration.Systems
             // branch from Plan 02 Slice 5's cash-affordability 'budget
             // short' (HouseholdShoppingLoop.cs:2241).
             var stillOpenParts = new List<string>();
+            var openNeedKeys = new HashSet<string>(StringComparer.Ordinal);
             int stillOpenTotal = 0;
             HouseholdPurchasingNeed longestOpenNeed = null;
             int longestOpenHouseholdId = -1;
@@ -8075,6 +8308,10 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     if (openNeed == null) continue;
                     stillOpenTotal++;
+                    string failureKey = household.id + ":" + openNeed.ItemId;
+                    openNeedKeys.Add(failureKey);
+                    if (shoppingFailureByNeed.TryGetValue(failureKey, out string incidentCause))
+                        ObserveHouseholdSupplyIncident(household.id, openNeed.ItemId, absoluteDayIndex, incidentCause);
                     if (longestOpenNeed == null || openNeed.CreatedDayIndex < longestOpenNeed.CreatedDayIndex)
                     {
                         longestOpenNeed = openNeed;
@@ -8083,7 +8320,6 @@ namespace LandLedgers.Orchestration.Systems
 
                     if (stillOpenParts.Count < 8)
                     {
-                        string failureKey = household.id + ":" + openNeed.ItemId;
                         string reason = shoppingFailureByNeed.TryGetValue(failureKey, out string recorded)
                             ? recorded
                             : "no attempt today";
@@ -8091,6 +8327,8 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+
+            ResolveHouseholdSupplyIncidentsNotOpen(openNeedKeys, absoluteDayIndex);
 
             string longestOpenText = string.Empty;
             if (longestOpenNeed != null)
@@ -8107,7 +8345,8 @@ namespace LandLedgers.Orchestration.Systems
                 ? "none"
                 : string.Join("; ", stillOpenParts)
                     + (stillOpenTotal > stillOpenParts.Count ? $"; and {stillOpenTotal - stillOpenParts.Count} more" : string.Empty);
-            diagnostics.Add($"[FoodEconomy] shopping summary day {absoluteDayIndex}: {shoppingPurchasesMade} purchase(s), {shoppingCentsSpent}c spent{longestOpenText}; still open: {stillOpenText}");
+            int pendingPhysicalTrips = shoppingTripDriver?.ActiveTrips?.Count ?? 0;
+            diagnostics.Add($"[FoodEconomy] shopping plan day {absoluteDayIndex}: {pendingPhysicalTrips} physical trip(s) pending; no purchase is recorded until confirmed Store arrival{longestOpenText}; needs without a settled receipt remain open: {stillOpenText}");
         }
 
         /// <summary>
@@ -8332,6 +8571,50 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        private bool TryStartShoppingPhysicalRoute(int personId, string locationId)
+        {
+            lastPhysicalShoppingRouteRefusal = string.Empty;
+            if (!TryParseTownBuildingLocation(locationId, out int buildingId))
+            {
+                lastPhysicalShoppingRouteRefusal = $"Seller location '{locationId}' is not a town building location.";
+                return false;
+            }
+            LandLedgers.FirstLedger.PopulationPathingDirector presentation =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            if (presentation == null)
+            {
+                lastPhysicalShoppingRouteRefusal = "PopulationPathingDirector is unavailable.";
+                return false;
+            }
+
+            PersonState person = populationManager?.State?.GetPerson(personId);
+            bool returningHome = person != null && person.homeBuildingId == buildingId;
+            PopulationScheduleState state = returningHome
+                ? PopulationScheduleState.ReturningHome
+                : PopulationScheduleState.GoingShopping;
+            bool started = presentation.TryStartExplicitRoute(personId, buildingId, state, out string refusal);
+            if (!started) lastPhysicalShoppingRouteRefusal = refusal;
+            return started;
+        }
+
+        private bool HasPhysicallyArrivedAtShoppingLocation(int personId, string locationId)
+        {
+            if (!TryParseTownBuildingLocation(locationId, out int buildingId)) return false;
+            LandLedgers.FirstLedger.PopulationPathingDirector presentation =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            return presentation != null && presentation.IsPersonPhysicallyAtBuilding(personId, buildingId);
+        }
+
+        private static bool TryParseTownBuildingLocation(string locationId, out int buildingId)
+        {
+            const string prefix = "building:";
+            buildingId = -1;
+            return !string.IsNullOrWhiteSpace(locationId)
+                && locationId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(locationId.Substring(prefix.Length), out buildingId)
+                && buildingId >= 0;
+        }
+
         private string ResolvePersonJourneyLocation(int personId)
         {
             PersonState person = populationManager?.State?.GetPerson(personId);
@@ -8414,7 +8697,12 @@ namespace LandLedgers.Orchestration.Systems
             var policy = MealSchedulingPolicy.Default;
             var monitor = new HouseholdShortageMonitor(hub.PurchasingNeeds)
             {
-                LowDaysThreshold = 1f
+                // Reorder at a three-day remaining reserve. This is a serialized
+                // playtest policy, not a universal survival guarantee or a source
+                // of cash/stock.
+                LowDaysThreshold = Mathf.Max(0f, householdFoodReorderDays),
+                TargetDaysThreshold = Mathf.Max(householdFoodReorderDays, householdFoodTargetDays),
+                FulfilledDaysThreshold = Mathf.Max(0f, householdFoodSatisfiedDays),
             };
             bool isColdSeason = IsColdSeasonMonth();
             foreach (HouseholdState household in populationManager.State.households)
@@ -8562,6 +8850,31 @@ namespace LandLedgers.Orchestration.Systems
             ProcessDueEvents();
             SyncTaskCompletionDueEvents();
 
+            if (timeManager != null && shoppingTripDriver != null)
+            {
+                var shoppingDiag = new List<string>();
+                shoppingTripDriver.AdvanceTick(
+                    timeManager.AbsoluteGameSeconds,
+                    timeManager.CurrentAbsoluteDayIndex,
+                    hub.DueEvents,
+                    shoppingDiag);
+                foreach (string message in shoppingDiag)
+                {
+                    if (!string.IsNullOrWhiteSpace(message)
+                        && (message.IndexOf("failed", StringComparison.OrdinalIgnoreCase) >= 0
+                            || message.IndexOf("refused", StringComparison.OrdinalIgnoreCase) >= 0
+                            || message.IndexOf("No physical", StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        string routeDetail = message.IndexOf("No physical route", StringComparison.OrdinalIgnoreCase) >= 0
+                            && !string.IsNullOrWhiteSpace(lastPhysicalShoppingRouteRefusal)
+                            ? " Route refusal: " + lastPhysicalShoppingRouteRefusal
+                            : string.Empty;
+                        Debug.LogWarning("[ShoppingTrip] " + message + routeDetail);
+                        lastPhysicalShoppingRouteRefusal = string.Empty;
+                    }
+                }
+            }
+
             // Pass IX (A2-04): start planned domestic tasks whose window has
             // arrived. DriveDomesticLaborDay only PLANS (appends to the
             // pending list); without this tick call no meal-prep, fuel,
@@ -8576,7 +8889,7 @@ namespace LandLedgers.Orchestration.Systems
                 hub.DomesticLaborDriver.AdvanceTick(
                     timeManager.AbsoluteGameSeconds,
                     hub.Tasks, hub.WorkTimeBudgets, hub.PersonSchedules,
-                    hub.DomesticLabor, hub.DueEvents, domesticDiag);
+                    hub.DomesticLabor, hub.DueEvents, domesticDiag, ResolveDomesticActivityMovement);
                 // Overnight 2026-11-04: the tick log used to print every
                 // routine domestic event (planned, started, completed) on
                 // every advancing tick. Only genuine failures surface now;
@@ -8586,7 +8899,8 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     if (line != null && (line.Contains("failed") || line.Contains("INCONSISTENCY")
                         || line.Contains("UNRESOLVED") || line.Contains("missing")
-                        || line.Contains("not registered") || line.Contains("cancelled")))
+                        || line.Contains("not registered") || line.Contains("cancelled")
+                        || line.Contains("deferred") || line.Contains("could not defer")))
                         domesticFailures.Add(line);
                 }
                 if (domesticFailures.Count > 0)

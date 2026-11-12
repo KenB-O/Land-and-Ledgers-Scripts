@@ -13,6 +13,8 @@ using UnityEditor;
 [DisallowMultipleComponent]
 public sealed class LLMainMusicPlayer : MonoBehaviour
 {
+    private const string RejectedTrackPreferencePrefix = "LandLedgers.Audio.RejectedTrack.v1.";
+
     private enum PlaybackMode
     {
         IntelligentShuffle,
@@ -99,6 +101,8 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
     {
         if (instance != null && instance != this)
         {
+            StopDuplicateRuntimeMusic();
+            enabled = false;
             Destroy(gameObject);
             return;
         }
@@ -129,6 +133,8 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
 
     private void Update()
     {
+        HandleSkipTrackHotkey();
+
 #if UNITY_EDITOR
         HandleRemoveTrackHotkey();
 #endif
@@ -240,6 +246,68 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         double startTime = AudioSettings.dspTime + 0.05d;
         float fade = Mathf.Min(skipFadeDuration, GetSafeCrossfadeDuration(currentClip, next));
         PrepareQueuedTrack(next, startTime, fade, true);
+    }
+
+    /// <summary>Immediately discards the current track from this runtime playback queue.</summary>
+    public bool SkipCurrentTrack()
+    {
+        if (currentClip == null)
+        {
+            return false;
+        }
+
+        AudioClip skippedClip = currentClip;
+        AudioClip alreadyQueuedNext = queuedClip != skippedClip ? queuedClip : null;
+        int skippedIndex = sanitizedPlaylist.IndexOf(skippedClip);
+        sanitizedPlaylist.RemoveAll(clip => clip == skippedClip);
+        if (skippedIndex >= 0 && sequentialIndex >= skippedIndex)
+        {
+            sequentialIndex--;
+        }
+
+        RemoveFromRecentHistory(skippedClip);
+        StopAllInternalPlayback();
+        queuedClip = null;
+        currentClip = null;
+        nextQueued = false;
+        swapPending = false;
+        isTransitioning = false;
+        startupFadeActive = false;
+        currentTrackName = string.Empty;
+        nextTrackName = string.Empty;
+        hasBegun = false;
+        discoveredTrackCount = sanitizedPlaylist.Count;
+        isSystemReady = discoveredTrackCount > 0;
+
+        AudioClip next = alreadyQueuedNext != null
+            ? alreadyQueuedNext
+            : SelectNextClip(skippedClip);
+        if (next == null)
+        {
+            return true;
+        }
+
+        hasBegun = true;
+        StartFreshTrack(next, false);
+        return true;
+    }
+
+    /// <summary>
+    /// Permanently excludes the current song from this player's future rotation
+    /// without deleting the audio clip or modifying the curated playlist asset.
+    /// This preference is independent of campaign save data.
+    /// </summary>
+    public bool RejectCurrentTrackPermanently()
+    {
+        AudioClip rejectedClip = currentClip != null
+            ? currentClip
+            : activeSource != null ? activeSource.clip : null;
+        if (rejectedClip == null) return false;
+
+        PlayerPrefs.SetInt(RejectedTrackPreferencePrefix + rejectedClip.name, 1);
+        PlayerPrefs.Save();
+        RefreshPlaylistRuntime();
+        return SkipCurrentTrack();
     }
 
     /// <summary>
@@ -385,6 +453,15 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         RemoveCurrentTrackFromOrder();
     }
 #endif
+
+    private void HandleSkipTrackHotkey()
+    {
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard != null && keyboard.pKey.wasPressedThisFrame)
+        {
+            RejectCurrentTrackPermanently();
+        }
+    }
 
     private void RemoveFromRecentHistory(AudioClip removedClip)
     {
@@ -865,6 +942,8 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
                 continue;
             }
 
+            if (PlayerPrefs.GetInt(RejectedTrackPreferencePrefix + clip.name, 0) != 0) continue;
+
             if (seen.Add(clip))
             {
                 sanitizedPlaylist.Add(clip);
@@ -1030,6 +1109,29 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
             sourceB.Stop();
             sourceB.clip = null;
             sourceB.volume = 0f;
+        }
+    }
+
+    private void StopDuplicateRuntimeMusic()
+    {
+        Transform rig = transform.Find("Runtime Music Audio Rig");
+        if (rig == null)
+        {
+            return;
+        }
+
+        AudioSource[] musicSources = rig.GetComponentsInChildren<AudioSource>(true);
+        for (int i = 0; i < musicSources.Length; i++)
+        {
+            AudioSource source = musicSources[i];
+            if (source == null)
+            {
+                continue;
+            }
+
+            source.Stop();
+            source.clip = null;
+            source.volume = 0f;
         }
     }
 

@@ -478,6 +478,8 @@ namespace LandLedgers.Economy
         [SerializeField] private string custodianBusinessId = string.Empty;
         [SerializeField] private string provenance = string.Empty;
         [SerializeField] private int createdDayIndex = -1;
+        [SerializeField] private bool acquisitionCostKnown;
+        [SerializeField, Min(0)] private int remainingAcquisitionCostCents;
 
         public string LotId => lotId ?? string.Empty;
         public string ItemId => itemId ?? string.Empty;
@@ -490,11 +492,13 @@ namespace LandLedgers.Economy
         public string CustodianBusinessId => custodianBusinessId ?? string.Empty;
         public string Provenance => provenance ?? string.Empty;
         public int CreatedDayIndex => createdDayIndex;
+        public bool AcquisitionCostKnown => acquisitionCostKnown;
+        public int RemainingAcquisitionCostCents => Mathf.Max(0, remainingAcquisitionCostCents);
 
         public BusinessRetailItemLotState() { }
 
         public BusinessRetailItemLotState(string id, string sku, string category, string unit,
-            int quantity, string owner, string custodian, string source, int dayIndex)
+            int quantity, string owner, string custodian, string source, int dayIndex, int acquisitionCostCents = -1)
         {
             lotId = id ?? string.Empty;
             itemId = sku ?? string.Empty;
@@ -505,11 +509,25 @@ namespace LandLedgers.Economy
             custodianBusinessId = custodian ?? string.Empty;
             provenance = source ?? string.Empty;
             createdDayIndex = dayIndex;
+            acquisitionCostKnown = acquisitionCostCents >= 0;
+            remainingAcquisitionCostCents = Mathf.Max(0, acquisitionCostCents);
         }
 
         public bool TryConsume(int units)
+            => TryConsume(units, out _, out _);
+
+        public bool TryConsume(int units, out int costCents, out bool costKnown)
         {
+            costCents = 0;
+            costKnown = acquisitionCostKnown;
             if (units <= 0 || units > AvailableUnits) return false;
+            // Allocate from the remaining cost, preserving fractional-cent
+            // remainders until the final units leave this same physical lot.
+            if (acquisitionCostKnown)
+            {
+                costCents = (int)((long)remainingAcquisitionCostCents * units / quantityUnits);
+                remainingAcquisitionCostCents -= costCents;
+            }
             quantityUnits -= units;
             return true;
         }
@@ -519,7 +537,8 @@ namespace LandLedgers.Economy
             lotId = LotId, itemId = ItemId, categoryId = CategoryId, unitLabel = UnitLabel,
             quantityUnits = QuantityUnits, reservedUnits = ReservedUnits,
             ownerBusinessId = OwnerBusinessId, custodianBusinessId = CustodianBusinessId,
-            provenance = Provenance, createdDayIndex = CreatedDayIndex
+            provenance = Provenance, createdDayIndex = CreatedDayIndex,
+            acquisitionCostKnown = AcquisitionCostKnown, remainingAcquisitionCostCents = RemainingAcquisitionCostCents
         };
 
         public static BusinessRetailItemLotState FromSaveDto(BusinessRetailItemLotSaveDto dto)
@@ -529,6 +548,8 @@ namespace LandLedgers.Economy
                 dto.unitLabel, dto.quantityUnits, dto.ownerBusinessId, dto.custodianBusinessId,
                 dto.provenance, dto.createdDayIndex);
             lot.reservedUnits = Mathf.Clamp(dto.reservedUnits, 0, lot.quantityUnits);
+            lot.acquisitionCostKnown = dto.acquisitionCostKnown;
+            lot.remainingAcquisitionCostCents = dto.acquisitionCostKnown ? Mathf.Max(0, dto.remainingAcquisitionCostCents) : 0;
             return lot;
         }
     }
@@ -1248,6 +1269,16 @@ namespace LandLedgers.Economy
         [SerializeField, Min(0)]
         private int currentCashCents;
 
+        [SerializeField] private long nextRetailReceiptSequence;
+
+        public string AllocateRetailReceiptId(int dayIndex)
+            => $"retail-v2:{BusinessId}:{dayIndex}:{nextRetailReceiptSequence++}";
+
+        [SerializeField] private int lastDailyRetailCostOfGoodsSoldCents;
+        [SerializeField] private int weekToDateRetailCostOfGoodsSoldCents;
+        [SerializeField] private int lastDailyUncostedRetailUnitsSold;
+        [SerializeField] private int weekToDateUncostedRetailUnitsSold;
+
         [SerializeField]
         private int lastDailyRevenueCents;
 
@@ -1356,6 +1387,10 @@ namespace LandLedgers.Economy
         public string BusinessId => businessId ?? string.Empty;
         public BusinessType BusinessType => businessType;
         public int CurrentCashCents => Mathf.Max(0, currentCashCents);
+        public int LastDailyRetailCostOfGoodsSoldCents => lastDailyRetailCostOfGoodsSoldCents;
+        public int WeekToDateRetailCostOfGoodsSoldCents => weekToDateRetailCostOfGoodsSoldCents;
+        public int LastDailyUncostedRetailUnitsSold => lastDailyUncostedRetailUnitsSold;
+        public int WeekToDateUncostedRetailUnitsSold => weekToDateUncostedRetailUnitsSold;
 
         /// <summary>
         /// Binds runtime records to the owning BusinessInstanceState identity.
@@ -2005,6 +2040,11 @@ namespace LandLedgers.Economy
                 businessId = BusinessId,
                 businessType = BusinessType,
                 currentCashCents = CurrentCashCents,
+                nextRetailReceiptSequence = nextRetailReceiptSequence,
+                lastDailyRetailCostOfGoodsSoldCents = lastDailyRetailCostOfGoodsSoldCents,
+                weekToDateRetailCostOfGoodsSoldCents = weekToDateRetailCostOfGoodsSoldCents,
+                lastDailyUncostedRetailUnitsSold = lastDailyUncostedRetailUnitsSold,
+                weekToDateUncostedRetailUnitsSold = weekToDateUncostedRetailUnitsSold,
                 lastDailyRevenueCents = LastDailyRevenueCents,
                 lastWeeklyPayrollCents = LastWeeklyPayrollCents,
                 lastWeeklyReorderBudgetCents = LastWeeklyReorderBudgetCents,
@@ -2116,6 +2156,11 @@ namespace LandLedgers.Economy
                 businessId = dto.businessId ?? string.Empty,
                 businessType = dto.businessType,
                 currentCashCents = Mathf.Max(0, dto.currentCashCents),
+                nextRetailReceiptSequence = Math.Max(0L, dto.nextRetailReceiptSequence),
+                lastDailyRetailCostOfGoodsSoldCents = Mathf.Max(0, dto.lastDailyRetailCostOfGoodsSoldCents),
+                weekToDateRetailCostOfGoodsSoldCents = Mathf.Max(0, dto.weekToDateRetailCostOfGoodsSoldCents),
+                lastDailyUncostedRetailUnitsSold = Mathf.Max(0, dto.lastDailyUncostedRetailUnitsSold),
+                weekToDateUncostedRetailUnitsSold = Mathf.Max(0, dto.weekToDateUncostedRetailUnitsSold),
                 lastDailyRevenueCents = Mathf.Max(0, dto.lastDailyRevenueCents),
                 lastWeeklyPayrollCents = Mathf.Max(0, dto.lastWeeklyPayrollCents),
                 lastWeeklyReorderBudgetCents = Mathf.Max(0, dto.lastWeeklyReorderBudgetCents),
@@ -2388,6 +2433,8 @@ namespace LandLedgers.Economy
 
         public void BeginDailySalesCadence()
         {
+            lastDailyRetailCostOfGoodsSoldCents = 0;
+            lastDailyUncostedRetailUnitsSold = 0;
             lastDailyRevenueCents = 0;
             lastDailyNetCents = 0;
             for (int i = 0; i < categoryStock.Count; i++)
@@ -2398,6 +2445,8 @@ namespace LandLedgers.Economy
 
         public void ResetWeekToDateSales()
         {
+            weekToDateRetailCostOfGoodsSoldCents = 0;
+            weekToDateUncostedRetailUnitsSold = 0;
             weekToDateRevenueCents = 0;
             weekToDateUnitsSold = 0;
             weekToDateNetCents = 0;
@@ -3640,7 +3689,8 @@ namespace LandLedgers.Economy
         }
 
         public string TryAddRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
-            int quantityUnits, string ownerBusinessId, string custodianBusinessId, string provenance, int dayIndex)
+            int quantityUnits, string ownerBusinessId, string custodianBusinessId, string provenance, int dayIndex,
+            int acquisitionCostCents = -1)
         {
             if (string.IsNullOrWhiteSpace(BusinessId) || string.IsNullOrWhiteSpace(lotId)
                 || string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(categoryId)
@@ -3658,13 +3708,14 @@ namespace LandLedgers.Economy
             if (category.AddStockUnits(quantityUnits) != quantityUnits)
                 return $"Category '{categoryId}' rejected the full item-lot receipt.";
             retailItemLots.Add(new BusinessRetailItemLotState(lotId, itemId, categoryId, unitLabel,
-                quantityUnits, ownerBusinessId, custodianBusinessId, provenance, dayIndex));
+                quantityUnits, ownerBusinessId, custodianBusinessId, provenance, dayIndex, acquisitionCostCents));
             RefreshStockHealth();
             RefreshStoredCapacityOnly();
             return null;
         }
 
-        public bool TryConsumeRetailItemStockUnits(string itemId, string categoryId, int units, out int consumedUnits)
+        public bool TryConsumeRetailItemStockUnits(string itemId, string categoryId, int units, out int consumedUnits,
+            bool retailSale = false)
         {
             consumedUnits = 0;
             int requested = Mathf.Max(0, units);
@@ -3682,18 +3733,32 @@ namespace LandLedgers.Economy
             if (category == null || category.CurrentStockUnits < requested || !category.TryConsumeStockUnits(requested))
                 return false;
             int remaining = requested;
+            int knownCostCents = 0;
+            int uncostedUnits = 0;
             for (int i = 0; i < retailItemLots.Count && remaining > 0; i++)
             {
                 BusinessRetailItemLotState lot = retailItemLots[i];
                 if (!IsRetailLotHeldByThisBusiness(lot) || !string.Equals(lot.ItemId, itemId, StringComparison.OrdinalIgnoreCase)
                     || !string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)) continue;
                 int take = Mathf.Min(remaining, lot.AvailableUnits);
-                if (take > 0 && lot.TryConsume(take)) remaining -= take;
+                if (take > 0 && lot.TryConsume(take, out int costCents, out bool costKnown))
+                {
+                    remaining -= take;
+                    knownCostCents += costCents;
+                    if (!costKnown) uncostedUnits += take;
+                }
             }
             // Lots retain their stable IDs at zero quantity. Their identity
             // and provenance remain available for transaction/save audits.
             if (remaining != 0) throw new InvalidOperationException("Retail SKU availability changed during a single-writer stock settlement.");
             consumedUnits = requested;
+            if (retailSale)
+            {
+                lastDailyRetailCostOfGoodsSoldCents += knownCostCents;
+                weekToDateRetailCostOfGoodsSoldCents += knownCostCents;
+                lastDailyUncostedRetailUnitsSold += uncostedUnits;
+                weekToDateUncostedRetailUnitsSold += uncostedUnits;
+            }
             RefreshStockHealth();
             RefreshStoredCapacityOnly();
             return true;

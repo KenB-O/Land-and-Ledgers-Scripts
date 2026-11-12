@@ -101,6 +101,33 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void ScenarioOpeningInputEndowment_SeedsFlourAndNotionsOnce()
+        {
+            var bakery = new BakeryShopRuntime("bakery-biz-inputs");
+            var business = new BusinessRuntimeState();
+            business.BindBusinessIdentity("bakery-biz-inputs");
+            var ids = new EntityIdRegistry();
+            var diagnostics = new List<string>();
+
+            Assert.IsTrue(ScenarioOpeningBakeryInputEndowment.TryApply(bakery, business, ids,
+                "millbrook-development-town", "bakery", 9217, 120, 30, 0, diagnostics,
+                out string firstReport, out string firstError), firstError);
+            Assert.AreEqual(120, bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId));
+            Assert.AreEqual(30, bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId));
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count);
+            Assert.IsTrue(bakery.FlourStock.Lots[0].IsBootstrapEndowment);
+
+            Assert.IsTrue(ScenarioOpeningBakeryInputEndowment.TryApply(bakery, business, ids,
+                "millbrook-development-town", "bakery", 9217, 120, 30, 0, diagnostics,
+                out string secondReport, out string secondError), secondError);
+            Assert.AreEqual(120, bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId));
+            Assert.AreEqual(30, bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId));
+            Assert.AreEqual(2, bakery.FlourStock.Lots.Count);
+            StringAssert.Contains("already recorded", secondReport);
+            Assert.IsNotEmpty(firstReport);
+        }
+
+        [Test]
         public void ReceiveLot_RefusesOrphanFuel_Loudly()
         {
             var diag = new List<string>();

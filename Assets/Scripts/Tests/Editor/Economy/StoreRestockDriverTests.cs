@@ -12,8 +12,9 @@ namespace LandLedgers.EditorTests.Economy
 {
     public sealed class StoreRestockDriverTests
     {
-        private sealed class StubStorePort : IGeneralStoreTradingPort
+        private sealed class StubStorePort : IGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
+            public bool RefuseReceipt;
             public string StoreBusinessId { get; set; } = "general-store-1";
             public string StoreName { get; set; } = "General Store";
             public string LocationId { get; set; } = "general-store";
@@ -49,8 +50,16 @@ namespace LandLedgers.EditorTests.Economy
                 CashBalance -= amountCents;
                 return null;
             }
+            public string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, int costCents, string provenance, int dayIndex)
+            {
+                if (CurrentCashCents < costCents) return "cannot afford";
+                string problem = ReceiveStock(categoryId, units, provenance);
+                return problem ?? SpendCash(costCents, provenance);
+            }
             public string ReceiveStock(string categoryId, int units, string provenanceLabel)
             {
+                if (RefuseReceipt) return "Receiving refused by fixture.";
                 Stock[categoryId] = CategoryStockUnits(categoryId) + System.Math.Max(0, units);
                 return null;
             }
@@ -101,6 +110,25 @@ namespace LandLedgers.EditorTests.Economy
             var driver = new StoreRestockDriver();
             driver.RegisterSupplier(supplier);
             return (driver, port, supplier);
+        }
+
+        [Test]
+        public void RefusedReceiptAndRetryPreserveCashAndDeliveryUntilAcceptance()
+        {
+            var (driver, port, supplier) = Setup(0, 4, 20, 100, 20, 10, 0);
+            port.RefuseReceipt = true;
+            driver.DriveDaily(port, 0, 0.5f);
+            Assert.AreEqual(100, port.CashBalance, "A refused receipt must not debit the buyer.");
+            driver.DriveDaily(port, 1, 0.5f);
+            Assert.AreEqual(100, port.CashBalance, "Retry must not pay for the same refused delivery again.");
+            Assert.AreEqual(0, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(16, supplier.AvailableUnits("staple_food"), "Goods remain in delivery custody.");
+            port.RefuseReceipt = false;
+            driver.DriveDaily(port, 2, 0.5f);
+            driver.DriveDaily(port, 3, 0.5f);
+            Assert.AreEqual(60, port.CashBalance);
+            Assert.AreEqual(4, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(StoreProcurementStage.Received, driver.Restock.Orders[0].Stage);
         }
 
         [Test]

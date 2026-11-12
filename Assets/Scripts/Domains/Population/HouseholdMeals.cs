@@ -127,6 +127,9 @@ namespace LandLedgers.Population
         public List<string> MealItemPriority { get; set; } = new List<string>
         {
             HouseholdItemCatalog.BreadId,
+            "beef",
+            "bacon",
+            "cheese",
             HouseholdItemCatalog.PreservedMeatId,
             HouseholdItemCatalog.UnspecifiedMeatId,
             HouseholdItemCatalog.PreservedFoodId,
@@ -388,7 +391,7 @@ namespace LandLedgers.Population
                             HouseholdId = household.id,
                             DayIndex = Mathf.Max(0, dayIndex),
                             Slot = slot,
-                            Reason = "no food available in household inventory",
+                            Reason = DescribeMealInventoryFailure(inventory, policy),
                         });
                         result.MealsMissed++;
                     }
@@ -481,6 +484,27 @@ namespace LandLedgers.Population
             }
 
             return false;
+        }
+
+        private static string DescribeMealInventoryFailure(HouseholdInventory inventory, MealSchedulingPolicy policy)
+        {
+            if (inventory == null || policy?.MealItemPriority == null)
+                return "No household inventory or meal-item catalog was available at serving time; no food was consumed.";
+
+            var shortLots = new List<string>();
+            for (int i = 0; i < policy.MealItemPriority.Count; i++)
+            {
+                string itemId = policy.MealItemPriority[i];
+                HouseholdItemDefinition item = HouseholdItemCatalog.Get(itemId);
+                if (item == null || !item.IsFood) continue;
+                int available = inventory.GetAvailableUnits(itemId);
+                int required = policy.GetServingUnits(itemId);
+                if (available > 0 && available < required)
+                    shortLots.Add($"{item.DisplayName} {available}/{required} {item.UnitLabel}");
+            }
+            if (shortLots.Count > 0)
+                return "Food is received but no recognized item has a full serving: " + string.Join(", ", shortLots) + ". No food was consumed.";
+            return "No meal-sized recognized food lot is currently received in household inventory. Check the household shopping and delivery diagnostics for cash, supplier stock, scheduling, travel, or in-transit causes; no food was consumed.";
         }
 
         private static void SnapshotResultingInventory(HouseholdInventory inventory, HouseholdMealRecord record)
@@ -655,6 +679,17 @@ namespace LandLedgers.Population
             IEnumerable<MissedMealRecord> missed,
             IEnumerable<MealPreparationRecord> preparations)
         {
+            // Save/Continue restores a snapshot, not an append operation.
+            // Loading another save (or the same save twice in one session)
+            // must replace the current history instead of duplicating meals,
+            // missed slots, and preparation records. A null section is
+            // treated as empty when any import section is supplied; three
+            // null arguments mean the caller has no meal-log data to import.
+            if (meals == null && missed == null && preparations == null) return;
+            mealsByHousehold.Clear();
+            missedByHousehold.Clear();
+            preparationsByHousehold.Clear();
+
             if (meals != null)
             {
                 foreach (HouseholdMealRecord record in meals)

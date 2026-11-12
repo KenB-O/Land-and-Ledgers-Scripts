@@ -78,10 +78,16 @@ namespace LandLedgers.EditorTests.Economy
         {
             public readonly Dictionary<string, int> Returned = new Dictionary<string, int>();
             public readonly List<string> ReturnLog = new List<string>();
+            public string FailOnceOnDisplayName;
             public string TryReturn(ConsumedMaterialLine line, string projectLabel, int dayIndex,
                 List<string> diagnostics)
             {
                 if (line == null || line.Units <= 0) return "nothing to return.";
+                if (string.Equals(line.DisplayName, FailOnceOnDisplayName, System.StringComparison.Ordinal))
+                {
+                    FailOnceOnDisplayName = null;
+                    return "test refusal before transfer.";
+                }
                 if (!Returned.ContainsKey(line.DisplayName)) Returned[line.DisplayName] = 0;
                 Returned[line.DisplayName] += line.Units;
                 ReturnLog.Add($"{line.DisplayName} x{line.Units} from {projectLabel} (day {dayIndex})");
@@ -744,6 +750,69 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(WorkPackageStatus.MaterialsStaged, foundation.Status,
                 "the refusal leaves the project exactly where it was.");
             Assert.AreEqual(960, c.Source.Stock["fieldstone"]);
+        }
+
+        [Test]
+        public void Cancellation_RetryAfterLaterPackageLineRefusal_DoesNotReturnEarlierLineTwice()
+        {
+            var c = new Chain();
+            NpcConstructionRecord record;
+            ConstructionProject project = c.CommissionCabin(out record);
+            WorkPackage foundation = project.WorkPackages[0];
+            Assert.IsNull(c.Executor.StagePackageMaterials(project, foundation, c.Source, 11, c.Diag));
+            foundation.StagedMaterialLines.Add(new ConsumedMaterialLine
+            {
+                DisplayName = "lumber", Units = 3, UnitLabel = "board feet", Provenance = "yard lot test",
+            });
+            c.Restock.FailOnceOnDisplayName = "lumber";
+
+            string refusal = c.Executor.CancelProject(project, null, c.Restock, c.Tracker,
+                c.Tasks, c.Budgets, 12, c.Diag);
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(40, c.Restock.Returned["fieldstone"]);
+            Assert.IsFalse(foundation.StagedMaterialsReturned);
+
+            // The partial cancellation state is durable across an ordinary
+            // construction snapshot, then the refused line can be retried.
+            var snapshot = c.Executor.CaptureSaveDto(new List<ConstructionProject> { project });
+            project = c.Executor.LoadFromSaveDto(snapshot, c.Diag)[0];
+            foundation = project.WorkPackages[0];
+            Assert.IsTrue(foundation.StagedMaterialLines[0].ReturnedToSource);
+            Assert.IsNull(c.Executor.CancelProject(project, null, c.Restock, c.Tracker,
+                c.Tasks, c.Budgets, 13, c.Diag));
+            Assert.AreEqual(40, c.Restock.Returned["fieldstone"], "Previously returned stock is not repeated on retry.");
+            Assert.AreEqual(3, c.Restock.Returned["lumber"]);
+            Assert.AreEqual(2, c.Restock.ReturnLog.Count);
+        }
+
+        [Test]
+        public void Cancellation_StockpileRestockRefusal_LeavesUnreturnedLinesAvailableForRetry()
+        {
+            var c = new Chain();
+            NpcConstructionRecord record;
+            ConstructionProject project = c.CommissionCabin(out record);
+            var stockpile = new ConstructionSiteStockpile { ProjectId = project.ProjectId };
+            stockpile.Lines.Add(new ConstructionSiteStockpile.StockpileLine
+            {
+                DisplayName = "fieldstone", UnitLabel = "perch", Units = 2, Provenance = "lot-a",
+            });
+            stockpile.Lines.Add(new ConstructionSiteStockpile.StockpileLine
+            {
+                DisplayName = "lumber", UnitLabel = "board feet", Units = 4, Provenance = "lot-b",
+            });
+            c.Restock.FailOnceOnDisplayName = "lumber";
+
+            string refusal = c.Executor.CancelProject(project, stockpile, c.Restock, c.Tracker,
+                c.Tasks, c.Budgets, 12, c.Diag);
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(0, stockpile.AvailableUnits("fieldstone"), "Successfully returned goods leave the site.");
+            Assert.AreEqual(4, stockpile.AvailableUnits("lumber"), "Refused goods remain in site custody.");
+
+            Assert.IsNull(c.Executor.CancelProject(project, stockpile, c.Restock, c.Tracker,
+                c.Tasks, c.Budgets, 13, c.Diag));
+            Assert.AreEqual(2, c.Restock.Returned["fieldstone"]);
+            Assert.AreEqual(4, c.Restock.Returned["lumber"]);
+            Assert.AreEqual(0, stockpile.Lines.Count);
         }
 
         [Test]

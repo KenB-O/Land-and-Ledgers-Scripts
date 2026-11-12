@@ -4,6 +4,9 @@ using LandLedgers.Economy;
 using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using LandLedgers.Reporting;
+using LandLedgers.Tasks;
+using LandLedgers.Orchestration.Systems;
+using LandLedgers.Time;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -22,6 +25,8 @@ namespace LandLedgers.World
         [SerializeField] private GeneralStorePanelController managementPanel;
         [SerializeField] private PopulationManager populationManager;
         [SerializeField] private SharedBusinessRuntimeManager sharedBusinessRuntime;
+        private SimulationSystemsHub systemsHub;
+        private TimeManager timeManager;
         [SerializeField] private LayerMask raycastMask = ~0;
         [SerializeField, Min(1f)] private float raycastDistance = 2000f;
         [SerializeField] private bool logTargetDiagnostics = false;
@@ -46,14 +51,36 @@ namespace LandLedgers.World
         [SerializeField] private TMP_Text personInspectionTitle;
         [SerializeField] private TMP_Text personInspectionBody;
         [SerializeField] private Button personInspectionCloseButton;
+        [SerializeField] private Button personInspectionFollowButton;
+        [SerializeField] private Button personInspectionObserveNextButton;
+        private TMP_Text personInspectionFollowLabel;
+        private TMP_Text personInspectionObserveNextLabel;
+        private int followedPersonId = -1;
+        private int observationPersonId = -1;
+        private bool observationArmed;
+        private bool observationSpeedActive;
+        private SimulationSpeed previousObservationSpeed;
+        private float inspectionRefreshTimer;
 
         private void Awake()
         {
             AutoWire();
+            if (personInspectionFollowButton == null && personInspectionRoot != null)
+                personInspectionFollowButton = personInspectionRoot.Find("Follow")?.GetComponent<Button>();
+            personInspectionFollowLabel = personInspectionFollowButton != null
+                ? personInspectionFollowButton.GetComponentInChildren<TMP_Text>(true)
+                : null;
+            if (personInspectionObserveNextButton == null && personInspectionRoot != null)
+                personInspectionObserveNextButton = personInspectionRoot.Find("Observe Next")?.GetComponent<Button>();
+            personInspectionObserveNextLabel = personInspectionObserveNextButton != null
+                ? personInspectionObserveNextButton.GetComponentInChildren<TMP_Text>(true)
+                : null;
             if (personInspectionCloseButton != null)
             {
                 personInspectionCloseButton.onClick.AddListener(ClosePersonInspection);
             }
+            if (personInspectionFollowButton != null) personInspectionFollowButton.onClick.AddListener(FollowInspectedPerson);
+            if (personInspectionObserveNextButton != null) personInspectionObserveNextButton.onClick.AddListener(ToggleObserveNextActivity);
         }
 
         private void OnDestroy()
@@ -62,6 +89,8 @@ namespace LandLedgers.World
             {
                 personInspectionCloseButton.onClick.RemoveListener(ClosePersonInspection);
             }
+            if (personInspectionFollowButton != null) personInspectionFollowButton.onClick.RemoveListener(FollowInspectedPerson);
+            if (personInspectionObserveNextButton != null) personInspectionObserveNextButton.onClick.RemoveListener(ToggleObserveNextActivity);
         }
 
         public int LastRaycastHitCount => lastRaycastHitCount;
@@ -74,6 +103,19 @@ namespace LandLedgers.World
 
         private void Update()
         {
+            UpdateObservationRequest();
+            if (personInspectionRoot != null && personInspectionRoot.gameObject.activeSelf && populationManager != null
+                && populationManager.State != null && inspectedPersonId >= 0)
+            {
+                inspectionRefreshTimer += global::UnityEngine.Time.unscaledDeltaTime;
+                if (inspectionRefreshTimer >= 0.5f)
+                {
+                    inspectionRefreshTimer = 0f;
+                    PersonState inspected = populationManager.State.GetPerson(inspectedPersonId);
+                    if (inspected != null && personInspectionBody != null)
+                        personInspectionBody.text = BuildPersonInspectionText(inspected);
+                }
+            }
             Mouse mouse = Mouse.current;
             if (mouse == null || !mouse.leftButton.wasPressedThisFrame)
             {
@@ -124,11 +166,26 @@ namespace LandLedgers.World
             lastSelectedTargetSummary = string.Empty;
             lastRouteSummary = "No target resolved.";
 
+            // NonAlloc results are unordered and may omit a person when the buffer fills.
+            RaycastHit[] resolvedHits = lastRaycastHitCount == hits.Length
+                ? Physics.RaycastAll(ray, raycastDistance, raycastMask, QueryTriggerInteraction.Collide)
+                : hits;
+            if (resolvedHits != hits) lastRaycastHitCount = resolvedHits.Length;
+            float nearestSolidDistance = float.PositiveInfinity;
+            for (int i = 0; i < lastRaycastHitCount; i++)
+            {
+                Collider blocker = resolvedHits[i].collider;
+                if (blocker == null || blocker.isTrigger) continue;
+                WorldInspectableTarget owner = blocker.GetComponentInParent<WorldInspectableTarget>();
+                if (owner != null && owner.Kind == WorldInspectableTargetKind.Person) continue;
+                nearestSolidDistance = Mathf.Min(nearestSolidDistance, resolvedHits[i].distance);
+            }
+
             float bestDistance = float.PositiveInfinity;
             int bestPriority = int.MinValue;
             for (int i = 0; i < lastRaycastHitCount; i++)
             {
-                Collider collider = hits[i].collider;
+                Collider collider = resolvedHits[i].collider;
                 WorldInspectableTarget candidate = collider != null ? collider.GetComponentInParent<WorldInspectableTarget>() : null;
                 if (candidate == null)
                 {
@@ -142,11 +199,16 @@ namespace LandLedgers.World
                 }
 
                 lastInspectableCandidateCount++;
-                float distance = hits[i].distance;
+                float distance = resolvedHits[i].distance;
+                bool person = candidate.Kind == WorldInspectableTargetKind.Person;
+                if (person && distance > nearestSolidDistance + TargetDistanceTieTolerance) continue;
+                bool currentPerson = target != null && target.Kind == WorldInspectableTargetKind.Person;
                 int priority = GetTargetPriority(candidate);
                 bool closer = distance + TargetDistanceTieTolerance < bestDistance;
                 bool nearTie = Mathf.Abs(distance - bestDistance) <= TargetDistanceTieTolerance;
-                if (target == null || closer || (nearTie && priority > bestPriority))
+                // Invisible footprint triggers must not steal clicks from visible people.
+                if (target == null || (person && !currentPerson)
+                    || (person == currentPerson && (closer || (nearTie && priority > bestPriority))))
                 {
                     bestDistance = distance;
                     bestPriority = priority;
@@ -175,6 +237,8 @@ namespace LandLedgers.World
         {
             AutoWire();
             lastRouteSummary = string.Empty;
+            if (followedPersonId >= 0 && (target == null || target.Kind != WorldInspectableTargetKind.Person || target.PersonId != followedPersonId))
+                StopFollowingPerson();
             if (target == null)
             {
                 lastRouteSummary = "No target.";
@@ -338,6 +402,8 @@ namespace LandLedgers.World
             managementPanel ??= FindAnyObjectByType<GeneralStorePanelController>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            timeManager ??= FindAnyObjectByType<TimeManager>();
         }
 
         private void ShowPersonInspection(int personId)
@@ -352,6 +418,17 @@ namespace LandLedgers.World
                 return;
             }
 
+            inspectedPersonId = personId;
+
+            if (observationPersonId >= 0 && observationPersonId != personId)
+                CancelObservationRequest(true);
+            if (observationSpeedActive)
+                SetObserveButtonLabel($"RETURN {previousObservationSpeed}");
+            else if (observationArmed)
+                SetObserveButtonLabel("CANCEL WATCH");
+            else
+                SetObserveButtonLabel("WATCH NEXT");
+
             managementPanel?.CloseManagementPanel();
 
             if (personInspectionRoot == null || personInspectionTitle == null || personInspectionBody == null)
@@ -364,6 +441,42 @@ namespace LandLedgers.World
             personInspectionBody.text = BuildPersonInspectionText(person);
             personInspectionRoot.gameObject.SetActive(true);
             personInspectionRoot.SetAsLastSibling();
+            if (followedPersonId >= 0 && followedPersonId != personId) StopFollowingPerson();
+        }
+
+        private void FollowInspectedPerson()
+        {
+            AutoWire();
+            if (followedPersonId == inspectedPersonId && followedPersonId >= 0)
+            {
+                StopFollowingPerson();
+                return;
+            }
+            int personId = populationManager != null && populationManager.State != null
+                ? GetInspectedPersonIdFromTitle() : -1;
+            PopulationPathingDirector director = FindAnyObjectByType<PopulationPathingDirector>();
+            if (personId < 0 || director == null || !director.TryGetPresentationTransform(personId, out Transform target)
+                || strategyCamera == null || !strategyCamera.Follow(target))
+            {
+                if (strategyCamera != null) strategyCamera.StopFollowing();
+                followedPersonId = -1;
+                return;
+            }
+            followedPersonId = personId;
+            if (personInspectionFollowLabel != null) personInspectionFollowLabel.text = "STOP";
+        }
+
+        private void LateUpdate()
+        {
+            if (followedPersonId < 0) return;
+            PopulationPathingDirector director = FindAnyObjectByType<PopulationPathingDirector>();
+            if (director == null || !director.TryGetPresentationTransform(followedPersonId, out _)) StopFollowingPerson();
+        }
+
+        private int GetInspectedPersonIdFromTitle()
+        {
+            // Keep the stable id supplied by the actual selection route; never infer it from display text.
+            return inspectedPersonId;
         }
 
         private string BuildPersonInspectionText(PersonState person)
@@ -382,11 +495,28 @@ namespace LandLedgers.World
             AppendPersonField(text, "Home", DescribeBuilding(person.homeBuildingId), person.homeBuildingId >= 0);
             AppendPersonField(text, "Workplace", DescribeWorkplace(person.workplaceBuildingId), person.workplaceBuildingId >= 0);
             AppendPersonField(text, "Businesses owned", DescribeOwnedBusinesses(person.id), true);
-            string skillSummary = person.visibleWorkerProfile != null && person.visibleWorkerProfile.IsInitialized
-                ? $"General skill estimate {person.visibleWorkerProfile.generalSkill}/100"
-                : "No skill estimate recorded";
-            AppendPersonField(text, "Skills", skillSummary, true);
-            AppendPersonField(text, "Destination", person.currentDestinationBuildingId >= 0 ? person.currentDestinationBuildingId.ToString("000") : null, showDevelopmentPersonDetails);
+            LandLedgers.Skills.CapabilityEvidenceReading reading = CapabilityPresentation.FromPerson(person);
+            string skillSummary = reading != null && reading.Confidence != LandLedgers.Skills.CapabilityConfidence.Insufficient
+                ? CapabilityPresentation.FormatReading(reading)
+                : "Detailed skill records unavailable";
+            AppendPersonField(text, "Skills / work evidence", skillSummary, true);
+            AppendPersonField(text, "Current location", DescribeCurrentLocation(person.id, person.homeBuildingId), true);
+            AppendPersonField(text, "Current activity", DescribeActivity(person), true);
+            AppendPersonField(text, "Current task", DescribeCurrentTask(person.id), true);
+            AppendPersonField(text, "Next planned activity", DescribeNextActivity(person.id), true);
+            AppendPersonField(text, "Destination", person.currentDestinationBuildingId >= 0 ? DescribeBuilding(person.currentDestinationBuildingId) : null, person.currentDestinationBuildingId >= 0);
+            PopulationPathingDirector movementDirector = FindAnyObjectByType<PopulationPathingDirector>();
+            if (movementDirector != null && movementDirector.TryGetMovementReadout(person.id, out string movement,
+                    out _, out float estimatedSeconds))
+            {
+                AppendPersonField(text, "Movement status", movement, true);
+                if (estimatedSeconds > 0f && !float.IsInfinity(estimatedSeconds) && !float.IsNaN(estimatedSeconds)
+                    && timeManager != null)
+                    AppendPersonField(text, "Estimated arrival", FormatGameTime(timeManager.PreciseAbsoluteGameSeconds + estimatedSeconds), true);
+                if (!string.IsNullOrWhiteSpace(movementDirector.LastRouteFailure)
+                    && movementDirector.LastRouteFailure.Contains(person.DisplayName))
+                    AppendPersonField(text, "Blocked reason", movementDirector.LastRouteFailure, true);
+            }
 
             AppendRelations(text, person);
             AppendCapabilityEvidence(text, person);
@@ -422,6 +552,153 @@ namespace LandLedgers.World
             return business != null
                 ? $"{business.RuntimeDisplayName} at {DescribeBuilding(buildingId)}"
                 : DescribeBuilding(buildingId);
+        }
+
+        private string DescribeCurrentLocation(int personId, int fallbackBuildingId)
+        {
+            PopulationPathingDirector director = FindAnyObjectByType<PopulationPathingDirector>();
+            if (director != null && director.TryGetPresentationTransform(personId, out Transform presentation))
+                return $"On map near {presentation.position.x:0}, {presentation.position.z:0}";
+            return fallbackBuildingId >= 0 ? DescribeBuilding(fallbackBuildingId) : "No active on-map presentation";
+        }
+
+        private string DescribeActivity(PersonState person)
+        {
+            if (person == null) return "Unknown";
+            if (systemsHub != null && timeManager != null)
+            {
+                int day = timeManager.CurrentAbsoluteDayIndex;
+                int minute = Mathf.FloorToInt(timeManager.GameSecondsIntoDay / 60f);
+                foreach (PersonActivityReservation reservation in systemsHub.PersonSchedules.ActiveFor(person.id, day))
+                    if (minute >= reservation.StartMinuteOfDay && minute < reservation.EndMinuteOfDay)
+                        return $"{reservation.Activity} — {reservation.Label}";
+            }
+            string locationState = person.scheduleState switch
+            {
+                PopulationScheduleState.AtHome => "At home",
+                PopulationScheduleState.GoingToWork => "Travelling to work",
+                PopulationScheduleState.AtWork => "At work",
+                PopulationScheduleState.GoingShopping => "Shopping or travelling to shop",
+                PopulationScheduleState.AtStore => "At the store",
+                PopulationScheduleState.ReturningHome => "Travelling home",
+                _ => person.scheduleState.ToString()
+            };
+            return person.scheduleState == PopulationScheduleState.AtHome
+                ? locationState + "; no activity reserved now"
+                : locationState;
+        }
+
+        private string DescribeCurrentTask(int personId)
+        {
+            TaskAuthority authority = systemsHub != null ? systemsHub.Tasks : null;
+            if (authority == null) return "Task authority unavailable";
+            WorkTask selected = null;
+            foreach (WorkTask task in authority.GetAllOpenTasks())
+            {
+                if (task == null || !task.HasAssignee || task.AssigneeId.Kind != LandLedgers.Primitives.EntityKind.Person
+                    || task.AssigneeId.Id != personId) continue;
+                if (selected == null || task.Status == TaskStatus.InProgress
+                    || task.Status == TaskStatus.Assigned && selected.Status == TaskStatus.Queued) selected = task;
+            }
+            if (selected == null) return "No open task assigned";
+            TaskDefinition definition = authority.GetDefinition(selected.DefinitionId);
+            string name = definition != null ? definition.DisplayName : selected.DefinitionId;
+            return selected.Status == TaskStatus.InProgress
+                ? $"{name} — in progress, {selected.MinutesRemaining} min remaining"
+                : $"{name} — {selected.Status.ToString().ToLowerInvariant()}";
+        }
+
+        private string DescribeNextActivity(int personId)
+        {
+            if (systemsHub == null || timeManager == null) return "Schedule detail unavailable";
+            int day = timeManager.CurrentAbsoluteDayIndex;
+            int minute = Mathf.FloorToInt(timeManager.GameSecondsIntoDay / 60f);
+            PersonActivityReservation next = null;
+            foreach (PersonActivityReservation reservation in systemsHub.PersonSchedules.ActiveFor(personId, day))
+            {
+                if (reservation.StartMinuteOfDay < minute) continue;
+                if (next == null || reservation.StartMinuteOfDay < next.StartMinuteOfDay) next = reservation;
+            }
+            return next != null
+                ? $"{next.Activity} at {next.StartMinuteOfDay / 60:00}:{next.StartMinuteOfDay % 60:00} ({next.Label})"
+                : "No further activity reserved today";
+        }
+
+        private static string FormatGameTime(double absoluteSeconds)
+        {
+            int minuteOfDay = (int)(absoluteSeconds / 60d) % 1440;
+            int dayOffset = (int)(absoluteSeconds / 86400d);
+            return dayOffset > 0
+                ? $"in {dayOffset} day(s), {minuteOfDay / 60:00}:{minuteOfDay % 60:00}"
+                : $"{minuteOfDay / 60:00}:{minuteOfDay % 60:00}";
+        }
+
+        private void ToggleObserveNextActivity()
+        {
+            if (observationArmed || observationSpeedActive)
+            {
+                CancelObservationRequest(true);
+                return;
+            }
+
+            if (inspectedPersonId < 0 || timeManager == null || systemsHub == null || timeManager.IsPaused) return;
+            observationPersonId = inspectedPersonId;
+            observationArmed = true;
+            SetObserveButtonLabel("CANCEL WATCH");
+        }
+
+        private void CancelObservationRequest(bool restoreSpeed)
+        {
+            observationArmed = false;
+            if (restoreSpeed && observationSpeedActive && timeManager != null)
+                timeManager.SetSpeed(previousObservationSpeed);
+            observationSpeedActive = false;
+            observationPersonId = -1;
+            SetObserveButtonLabel("WATCH NEXT");
+        }
+
+        private void UpdateObservationRequest()
+        {
+            if (!observationArmed || timeManager == null || systemsHub == null) return;
+            if (populationManager == null || populationManager.State == null
+                || populationManager.State.GetPerson(observationPersonId) == null)
+            {
+                observationArmed = false;
+                SetObserveButtonLabel("WATCH NEXT");
+                return;
+            }
+
+            double now = timeManager.PreciseAbsoluteGameSeconds;
+            float secondsPerDay = timeManager.Settings != null ? timeManager.Settings.GameSecondsPerDay : 86400f;
+            PersonActivityReservation next = null;
+            foreach (PersonActivityReservation reservation in systemsHub.PersonSchedules.ActiveFor(
+                         observationPersonId, timeManager.CurrentAbsoluteDayIndex))
+            {
+                if (reservation.Activity == PersonActivityKind.Idle || reservation.Released) continue;
+                double start = timeManager.CurrentAbsoluteDayIndex * (double)secondsPerDay + reservation.StartMinuteOfDay * 60d;
+                if (start < now) continue;
+                if (next == null || reservation.StartMinuteOfDay < next.StartMinuteOfDay) next = reservation;
+            }
+            if (next == null) return;
+
+            // The horizon includes at least the next rendered clock step, so an
+            // opt-in request can catch short scheduled windows at high rates.
+            float frameAdvance = timeManager.CurrentGameSecondsPerRealSecond
+                * Mathf.Max(0.001f, global::UnityEngine.Time.unscaledDeltaTime);
+            float horizonSeconds = Mathf.Max(120f, frameAdvance + 30f);
+            double nextStart = timeManager.CurrentAbsoluteDayIndex * (double)secondsPerDay + next.StartMinuteOfDay * 60d;
+            if (nextStart - now > horizonSeconds) return;
+
+            observationArmed = false;
+            observationSpeedActive = true;
+            previousObservationSpeed = timeManager.CurrentSpeed;
+            timeManager.SetSpeed(SimulationSpeed.Observe);
+            SetObserveButtonLabel($"RETURN {previousObservationSpeed}");
+        }
+
+        private void SetObserveButtonLabel(string label)
+        {
+            if (personInspectionObserveNextLabel != null) personInspectionObserveNextLabel.text = label;
         }
 
         private string DescribeOwnedBusinesses(int personId)
@@ -503,6 +780,15 @@ namespace LandLedgers.World
             {
                 personInspectionRoot.gameObject.SetActive(false);
             }
+        }
+
+        private int inspectedPersonId = -1;
+
+        private void StopFollowingPerson()
+        {
+            if (strategyCamera != null) strategyCamera.StopFollowing();
+            followedPersonId = -1;
+            if (personInspectionFollowLabel != null) personInspectionFollowLabel.text = "FOLLOW";
         }
     }
 }

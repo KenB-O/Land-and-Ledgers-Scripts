@@ -18,6 +18,38 @@ namespace LandLedgers.EditorTests.Core
         }
 
         [Test]
+        public void RestoreWithSameResidentCountReplacesLookupAndRolloverTargets()
+        {
+            var restored = new WorkTimeBudgetStore();
+            restored.EnsureDay(7);
+            Assert.IsTrue(restored.GetOrCreate(TestPerson(1)).TryCommit(599, out _));
+            var saved = new WorkTimeBudgetStore();
+            saved.EnsureDay(7);
+            Assert.IsTrue(saved.GetOrCreate(TestPerson(1)).TryCommit(50, out _));
+            restored.LoadFromSaveDto(saved.CaptureSaveDto(), 7);
+            Assert.AreEqual(550, restored.GetOrCreate(TestPerson(1)).MinutesRemaining,
+                "An unchanged population count must not retain the detached 1-minute budget.");
+            restored.EnsureDay(8);
+            Assert.AreEqual(600, restored.GetOrCreate(TestPerson(1)).MinutesRemaining);
+        }
+
+        [Test]
+        public void BudgetSnapshotsAndRepeatedLoadsDoNotAliasMutableRuntime()
+        {
+            var store = new WorkTimeBudgetStore();
+            store.EnsureDay(7);
+            Assert.IsTrue(store.GetOrCreate(TestPerson(1)).TryCommit(50, out _));
+            var snapshot = store.CaptureSaveDto();
+            Assert.IsTrue(store.GetOrCreate(TestPerson(1)).TryCommit(100, out _));
+            Assert.AreEqual(50, snapshot.budgets[0].MinutesCommitted);
+            store.LoadFromSaveDto(snapshot, 7);
+            Assert.IsTrue(store.GetOrCreate(TestPerson(1)).TryCommit(100, out _));
+            store.LoadFromSaveDto(snapshot, 7);
+            Assert.AreEqual(550, store.GetOrCreate(TestPerson(1)).MinutesRemaining);
+            Assert.AreEqual(50, snapshot.budgets[0].MinutesCommitted);
+        }
+
+        [Test]
         public void MinuteFloor_ZeroOrNegative_ClampsToOne()
         {
             Assert.AreEqual(1, WorkTimeMath.ClampToWholeMinutes(0));

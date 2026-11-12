@@ -88,6 +88,59 @@ namespace LandLedgers.EditorTests.Pathing
         }
 
         [Test]
+        public void PedestrianRouteGoesAroundBuildingFootprintInsteadOfCrossingIt()
+        {
+            List<Object> cleanup = new();
+            try
+            {
+                CreateHarness(7, 5, cleanup, out TownGrid grid, out PathingManager pathing, out _);
+                FillBuildable(grid, 0f);
+                for (int z = 1; z <= 3; z++)
+                {
+                    TownCell wall = BuildableCell(0f);
+                    wall.occupancy = CellOccupancy.Building | CellOccupancy.Blocked;
+                    wall.buildingId = 41;
+                    wall.blocked = true;
+                    grid.SetCell(new GridCoord(3, z), wall);
+                }
+
+                Assert.IsTrue(pathing.TryFindPath(new GridCoord(0, 2), new GridCoord(6, 2), out PathingResult route), route.FailureReason);
+                Assert.That(route.Path.Count, Is.GreaterThan(7), "A legal route must go around the solid footprint.");
+                foreach (GridCoord point in route.Path)
+                    Assert.IsFalse(grid.GetCell(point).HasBuilding, $"Route crossed building cell {point}.");
+            }
+            finally { DestroyAll(cleanup); }
+        }
+
+        [Test]
+        public void PrivatePlotIsNotUsedAsTransitShortcutButEndpointParcelRemainsAccessible()
+        {
+            List<Object> cleanup = new();
+            try
+            {
+                CreateHarness(7, 5, cleanup, out TownGrid grid, out PathingManager pathing, out _);
+                FillBuildable(grid, 0f);
+                for (int z = 1; z <= 3; z++)
+                for (int x = 2; x <= 4; x++)
+                {
+                    TownCell parcel = grid.GetCell(new GridCoord(x, z));
+                    parcel.occupancy |= CellOccupancy.Plot;
+                    parcel.plotId = 8;
+                    grid.SetCell(new GridCoord(x, z), parcel);
+                }
+
+                Assert.IsTrue(pathing.TryFindPath(new GridCoord(0, 2), new GridCoord(6, 2), out PathingResult around), around.FailureReason);
+                foreach (GridCoord point in around.Path)
+                    Assert.AreNotEqual(8, grid.GetCell(point).plotId, $"Transit route crossed private parcel cell {point}.");
+
+                Assert.IsTrue(pathing.TryFindPath(new GridCoord(0, 2), new GridCoord(3, 2), out PathingResult toParcel), toParcel.FailureReason);
+                Assert.That(toParcel.Path.Exists(point => point.x >= 2 && point.x <= 4 && point.z >= 1 && point.z <= 3),
+                    Is.True, "A destination parcel remains reachable from public ground.");
+            }
+            finally { DestroyAll(cleanup); }
+        }
+
+        [Test]
         public void PathingCrossesAdjacentTerrainTilesAtProviderGroundedWaypointHeights()
         {
             List<Object> cleanup = new();

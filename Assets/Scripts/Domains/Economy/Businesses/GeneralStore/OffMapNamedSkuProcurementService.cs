@@ -300,6 +300,10 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     public sealed class NamedSkuProcurementSaveDto
     {
         public string BusinessId = string.Empty;
+        // Orders depend on this same boundary authority's finite stock,
+        // pending trades and receipt sequence. Restoring only local orders
+        // loses their arrivals and can reuse a completed receipt identity.
+        public ExternalMarketAuthoritySaveDto Market;
         public List<NamedSkuOrder> Orders = new List<NamedSkuOrder>();
         public List<NamedSkuLot> Lots = new List<NamedSkuLot>();
         public List<NamedSkuSale> Sales = new List<NamedSkuSale>();
@@ -323,7 +327,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     {
         private readonly string businessId;
         private readonly ExternalMarketAuthority market;
-        private readonly IBusinessCashPort businessCash;
+        private IBusinessCashPort businessCash;
         private readonly List<NamedSkuOrder> orders = new List<NamedSkuOrder>();
         private readonly List<NamedSkuLot> lots = new List<NamedSkuLot>();
         private readonly List<NamedSkuSale> sales = new List<NamedSkuSale>();
@@ -344,6 +348,17 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         }
 
         public string BusinessId => businessId;
+
+        /// <summary>Keep orders and market state, but bind payments to the
+        /// newly restored runtime of the same business.</summary>
+        public void RebindBusinessCash(IBusinessCashPort cash)
+        {
+            if (cash == null) throw new ArgumentNullException(nameof(cash));
+            if (cash is IBusinessIdentityCashPort identified
+                && !string.Equals(identified.BusinessId, businessId, StringComparison.Ordinal))
+                throw new ArgumentException("Procurement cash must belong to the same restored business.", nameof(cash));
+            businessCash = cash;
+        }
         public IReadOnlyList<NamedSkuOrder> Orders => orders;
         public IReadOnlyList<NamedSkuLot> Lots => lots;
         public IReadOnlyList<NamedSkuSale> Sales => sales;
@@ -1138,6 +1153,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             return new NamedSkuProcurementSaveDto
             {
                 BusinessId = businessId,
+                Market = market?.ExportState(),
                 Orders = new List<NamedSkuOrder>(orders),
                 Lots = new List<NamedSkuLot>(lots),
                 Sales = new List<NamedSkuSale>(sales),
@@ -1156,6 +1172,18 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             if (dto == null)
             {
                 return;
+            }
+
+            if (dto.Market != null)
+                market?.ImportState(dto.Market);
+            else if (dto.Orders != null && dto.Orders.Count > 0)
+            {
+                // Legacy saves did not retain external inventory or trades.
+                // Do not fabricate missing shipments or finite supplier stock.
+                // At least protect every historical receipt from future reuse.
+                foreach (NamedSkuOrder order in dto.Orders)
+                    if (order != null) market?.ReserveReceiptIdentity(order.ReceiptId);
+                diagnostics.Add("ImportState: legacy procurement save has no external market state; missing pending arrivals cannot be reconstructed. Historical receipt identities remain reserved.");
             }
 
             if (dto.Orders != null) for (int i = 0; i < dto.Orders.Count; i++)

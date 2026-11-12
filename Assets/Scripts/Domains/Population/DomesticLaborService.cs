@@ -55,12 +55,13 @@ namespace LandLedgers.Population
             PersonActivityKind activity = string.Equals(definitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal)
                 ? PersonActivityKind.Cooking
                 : PersonActivityKind.Work;
-            string reservationRefusal = schedules.TryReserve(personId, activity, dayIndex,
+            string reservationRefusal = schedules.TryReservePreemptingRest(personId, activity, dayIndex,
                 startMinuteOfDay, plannedMinutes,
-                "domestic: " + definition.DisplayName + " (household " + householdId + ")");
+                "domestic: " + definition.DisplayName + " (household " + householdId + ")", out string releasedRest);
             if (reservationRefusal != null)
                 return Refuse(diag, "DomesticLabor: " + reservationRefusal);
             string reservationId = LastReservationId(schedules, personId, dayIndex);
+            if (!string.IsNullOrEmpty(releasedRest)) diag?.Add("DomesticLabor: interrupted voluntary rest for necessary household work: " + releasedRest + ".");
 
             EntityId worker = EntityId.For(EntityKind.Person, personId);
             EntityId owner = EntityId.For(EntityKind.Household, householdId);
@@ -123,12 +124,13 @@ namespace LandLedgers.Population
             TaskDefinition definition = tasks.GetDefinition(task.DefinitionId);
             PersonActivityKind activity = string.Equals(task.DefinitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal)
                 ? PersonActivityKind.Cooking : PersonActivityKind.Work;
-            string reservationRefusal = schedules.TryReserve(personId, activity, dayIndex,
+            string reservationRefusal = schedules.TryReservePreemptingRest(personId, activity, dayIndex,
                 startMinuteOfDay, plannedMinutes,
-                "domestic: " + (definition != null ? definition.DisplayName : task.DefinitionId) + " (household " + householdId + ")");
+                "domestic: " + (definition != null ? definition.DisplayName : task.DefinitionId) + " (household " + householdId + ")", out string releasedRest);
             if (reservationRefusal != null)
                 return Refuse(diag, "DomesticLabor: " + reservationRefusal);
             string reservationId = LastReservationId(schedules, personId, dayIndex);
+            if (!string.IsNullOrEmpty(releasedRest)) diag?.Add("DomesticLabor: interrupted voluntary rest for necessary household work: " + releasedRest + ".");
             EntityId worker = EntityId.For(EntityKind.Person, personId);
             if (!tasks.AssignTask(taskId, worker, budgets, dayIndex, out string rejection))
             {

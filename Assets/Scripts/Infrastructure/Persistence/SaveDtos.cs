@@ -303,6 +303,10 @@ namespace LandLedgers.Persistence
         public float gameSecondsIntoDay;
         public int shortTickIndex;
         public float shortTickAccumulatorGameSeconds;
+        // Additive catch-up queue; absent in older saves means no pending time.
+        public double pendingGameSeconds;
+        public double gameSecondsRemainder;
+        public double shortTickRemainder;
         public SimulationSpeed currentSpeed;
         public SimulationSpeed lastNonPausedSpeed;
         public bool isPaused;
@@ -1009,6 +1013,11 @@ namespace LandLedgers.Persistence
         public string businessId = string.Empty;
         public BusinessType businessType;
         public int currentCashCents;
+        public long nextRetailReceiptSequence;
+        public int lastDailyRetailCostOfGoodsSoldCents;
+        public int weekToDateRetailCostOfGoodsSoldCents;
+        public int lastDailyUncostedRetailUnitsSold;
+        public int weekToDateUncostedRetailUnitsSold;
         public int lastDailyRevenueCents;
         public int lastWeeklyPayrollCents;
         public int lastWeeklyReorderBudgetCents;
@@ -1123,6 +1132,8 @@ namespace LandLedgers.Persistence
         public string custodianBusinessId = string.Empty;
         public string provenance = string.Empty;
         public int createdDayIndex = -1;
+        public bool acquisitionCostKnown;
+        public int remainingAcquisitionCostCents;
     }
 
     [Serializable]

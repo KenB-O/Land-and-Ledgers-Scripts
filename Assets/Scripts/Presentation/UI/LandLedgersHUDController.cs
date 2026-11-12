@@ -14,6 +14,20 @@ namespace LandLedgers.UI
     {
         public const string DefaultControlHintMessage = "Manage C | Pause Space | Move WASD | Raise R | Lower F | Rotate RMB/QE | Zoom Wheel";
 
+        private TMP_Dropdown speedSelector;
+        private readonly System.Collections.Generic.List<SimulationSpeed> selectableSpeeds =
+            new System.Collections.Generic.List<SimulationSpeed> {
+                SimulationSpeed.RealTime, SimulationSpeed.Observe, SimulationSpeed.Speed1x,
+                SimulationSpeed.Speed2x, SimulationSpeed.Speed5x, SimulationSpeed.Speed10x,
+                SimulationSpeed.Speed50x, SimulationSpeed.Speed100x, SimulationSpeed.Speed250x,
+                SimulationSpeed.Speed500x };
+        private static readonly string[] SpeedOptions = {
+            "Real Time · 1× actual · 24h/day", "Observe · 10× actual · 2h 24m/day",
+            "Normal · 60× actual · 24m/day", "Fast · 2× Normal · 12m/day",
+            "Very Fast · 5× Normal · 4m 48s/day", "Rapid · 10× Normal · 2m 24s/day",
+            "Warp · 50× Normal · 28.8s/day", "Turbo · 100× Normal · 14.4s/day",
+            "Extreme · 250× Normal · 5.76s/day", "Experimental · 500× Normal · 2.88s/day" };
+
         private const float TopBarHeight = 72f;
         private const float AlertStripHeight = 52f;
         private const float FirstSessionGuidanceTopGap = 14f;
@@ -768,6 +782,21 @@ namespace LandLedgers.UI
 
         private void RefreshSpeedState(SimulationSpeed speed)
         {
+            if (speedSelector != null && speed != SimulationSpeed.Paused)
+            {
+                int selected = selectableSpeeds.IndexOf(speed);
+                if (selected < 0)
+                {
+                    // Retain legacy saved modes without putting them in the
+                    // ordinary selector or silently changing a restored speed.
+                    selectableSpeeds.Add(speed);
+                    speedSelector.options.Add(new TMP_Dropdown.OptionData($"Legacy {(int)speed}× Normal"));
+                    speedSelector.template.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, selectableSpeeds.Count * 32f + 12f);
+                    selected = selectableSpeeds.Count - 1;
+                }
+                speedSelector.SetValueWithoutNotify(selected);
+                speedSelector.RefreshShownValue();
+            }
             RefreshPauseButtonLabel(speed);
             ApplyButtonState(pauseButton, speed == SimulationSpeed.Paused);
             ApplyButtonState(speed1xButton, speed == SimulationSpeed.Speed1x);
@@ -978,6 +1007,7 @@ namespace LandLedgers.UI
 
         private void ApplySpeedButtonLabelsAndHideLegacyDuplicate()
         {
+            EnsureHybridSpeedSelector();
             SetButtonLabel(speed5xButton, "5x");
             SetButtonLabel(speed10xButton, "10x");
             SetButtonLabel(speed50xButton, "50x");
@@ -989,6 +1019,99 @@ namespace LandLedgers.UI
             {
                 obsoleteDuplicateSpeed250xButton.gameObject.SetActive(false);
             }
+        }
+
+        private void EnsureHybridSpeedSelector()
+        {
+            if (!Application.isPlaying || speed1xButton == null) return;
+            if (speedSelector == null)
+            {
+                RectTransform source = speed1xButton.transform as RectTransform;
+                GameObject dropdownObject = TMP_DefaultControls.CreateDropdown(new TMP_DefaultControls.Resources());
+                dropdownObject.name = "HUD_HybridSpeedSelector";
+                dropdownObject.transform.SetParent(source.parent, false);
+                dropdownObject.transform.SetSiblingIndex(source.GetSiblingIndex());
+                RectTransform rect = dropdownObject.GetComponent<RectTransform>();
+                rect.anchorMin = source.anchorMin;
+                rect.anchorMax = source.anchorMax;
+                rect.pivot = source.pivot;
+                rect.anchoredPosition = source.anchoredPosition;
+                rect.sizeDelta = new Vector2(400f, 34f);
+                LayoutElement layout = dropdownObject.AddComponent<LayoutElement>();
+                layout.preferredWidth = 400f;
+                layout.preferredHeight = 34f;
+                speedSelector = dropdownObject.GetComponent<TMP_Dropdown>();
+                speedSelector.ClearOptions();
+                speedSelector.AddOptions(new System.Collections.Generic.List<string>(SpeedOptions));
+                TMP_Text sourceLabel = speed1xButton.GetComponentInChildren<TMP_Text>(true);
+                foreach (TMP_Text label in dropdownObject.GetComponentsInChildren<TMP_Text>(true))
+                {
+                    if (sourceLabel != null) label.font = sourceLabel.font;
+                    label.fontSize = 20f;
+                    label.enableAutoSizing = true;
+                    label.fontSizeMin = 18f;
+                    label.fontSizeMax = 20f;
+                    label.color = inactiveButtonTextColor;
+                    label.textWrappingMode = TextWrappingModes.NoWrap;
+                }
+                Color panel = inactiveButtonColor;
+                panel.a = 1f;
+                ColorBlock theme = speedSelector.colors;
+                theme.normalColor = panel;
+                theme.highlightedColor = Color.Lerp(panel, activeButtonColor, 0.35f);
+                theme.selectedColor = theme.highlightedColor;
+                theme.pressedColor = activeButtonColor;
+                speedSelector.colors = theme;
+                speedSelector.targetGraphic.color = Color.white;
+                Transform arrow = dropdownObject.transform.Find("Arrow");
+                if (arrow != null)
+                {
+                    UnityEngine.UI.Image arrowImage = arrow.GetComponent<UnityEngine.UI.Image>();
+                    if (arrowImage != null) arrowImage.enabled = false;
+                    var arrowText = new GameObject("Chevron", typeof(RectTransform), typeof(TextMeshProUGUI));
+                    arrowText.transform.SetParent(arrow, false);
+                    RectTransform arrowRect = (RectTransform)arrowText.transform;
+                    arrowRect.anchorMin = Vector2.zero;
+                    arrowRect.anchorMax = Vector2.one;
+                    arrowRect.offsetMin = arrowRect.offsetMax = Vector2.zero;
+                    TMP_Text arrowLabel = arrowText.GetComponent<TextMeshProUGUI>();
+                    if (sourceLabel != null) arrowLabel.font = sourceLabel.font;
+                    arrowLabel.text = "v";
+                    arrowLabel.fontSize = 18f;
+                    arrowLabel.color = inactiveButtonTextColor;
+                    arrowLabel.alignment = TextAlignmentOptions.Center;
+                    arrowLabel.raycastTarget = false;
+                }
+                RectTransform template = speedSelector.template;
+                template.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, selectableSpeeds.Count * 32f + 12f);
+                UnityEngine.UI.Image panelImage = template.GetComponent<UnityEngine.UI.Image>();
+                if (panelImage != null) panelImage.color = panel;
+                UnityEngine.UI.Toggle item = template.GetComponentInChildren<UnityEngine.UI.Toggle>(true);
+                if (item != null)
+                {
+                    item.colors = theme;
+                    item.targetGraphic.color = Color.white;
+                    if (item.graphic != null) item.graphic.color = activeButtonColor;
+                    ((RectTransform)item.transform).SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, 32f);
+                }
+                UnityEngine.UI.ScrollRect scroll = template.GetComponent<UnityEngine.UI.ScrollRect>();
+                if (scroll != null)
+                {
+                    scroll.horizontal = false;
+                    scroll.vertical = false;
+                    scroll.scrollSensitivity = 0f;
+                    if (scroll.verticalScrollbar != null) scroll.verticalScrollbar.gameObject.SetActive(false);
+                    if (scroll.viewport != null)
+                    {
+                        scroll.viewport.offsetMin = new Vector2(4f, 4f);
+                        scroll.viewport.offsetMax = new Vector2(-4f, -4f);
+                    }
+                }
+                speedSelector.onValueChanged.AddListener(index => timeManager?.SetSpeed(selectableSpeeds[index]));
+            }
+            foreach (Button legacy in new[] { realTimeButton, speed1xButton, speed2xButton, speed5xButton,
+                speed10xButton, speed50xButton, speed100xButton, speed250xButton })
+                if (legacy != null) legacy.gameObject.SetActive(false);
         }
 
         private void ConfigureSpeedButtonsForCurrentHierarchy()

@@ -646,6 +646,7 @@ namespace LandLedgers.FirstLedger
                             UsesItemLevelInventory = true,
                             ItemPriceOverrideCents = runtimeFeed.RetailPriceCents,
                         };
+                        lastRuntimeFeedDiagnosticSignature = string.Empty;
                         runtimeOffer.OfferedItemIds.Add(runtimeFeed.FeedItemId);
                         offers.Add(runtimeOffer);
                     }
@@ -656,10 +657,9 @@ namespace LandLedgers.FirstLedger
                         "no available identified item lots back it");
                 }
             }
-            else
-            {
-                lastRuntimeFeedDiagnosticSignature = string.Empty;
-            }
+            // A caller without the runtime feed registry has not observed a
+            // recovered offer. Keep the last refusal across household probes;
+            // a genuinely available feed offer above resets it.
 
             if (droppedReasons.Count > 0)
             {
@@ -1584,8 +1584,8 @@ namespace LandLedgers.FirstLedger
             builder.AppendLine($"Cash {FormatMoney(runtimeState.CurrentCashCents)} | Protected {FormatMoney(GetProtectedBusinessCashReserveCents())} | Stock {runtimeState.StockHealth01:P0}");
             builder.AppendLine(BuildStoreSupplyReadinessLine());
             builder.AppendLine(BuildStorePostureLine());
-            builder.AppendLine($"Today {FormatMoney(runtimeState.LastDailyRevenueCents)} | Gross {FormatMoney(GetLastDailyGrossProfitCents())} | {lastDailyUnitsSold} units");
-            builder.AppendLine($"Week {FormatMoney(runtimeState.WeekToDateRevenueCents)} | Gross {FormatMoney(GetWeekToDateGrossProfitCents())} | Net {FormatMoney(EstimatedWeeklyNetCashFlowCents)}");
+            builder.AppendLine($"Today {FormatMoney(runtimeState.LastDailyRevenueCents)} | Gross {FormatMoney(GetLastDailyGrossProfitCents())}{BuildRetailCostCoverageNote(false)} | {lastDailyUnitsSold} units");
+            builder.AppendLine($"Week {FormatMoney(runtimeState.WeekToDateRevenueCents)} | Gross {FormatMoney(GetWeekToDateGrossProfitCents())}{BuildRetailCostCoverageNote(true)} | Net {FormatMoney(EstimatedWeeklyNetCashFlowCents)}");
             builder.AppendLine(BuildDemandLossLine());
             builder.AppendLine(BuildSaturdayReadinessLine());
             builder.AppendLine(BuildCashBridgeSummary());
@@ -1749,15 +1749,15 @@ namespace LandLedgers.FirstLedger
                 return 0;
             }
 
-            int acceptedUnits = runtimeState.ApplyDeliveredShipment(categoryId, requestedUnits);
+            int acceptedUnits = StoreWeeklyReorderPlanner.ReceivePaidOffMapShipment(
+                runtimeState, categoryId, requestedUnits, unitCostCents,
+                out int spendCents, out string receiptRefusal);
             if (acceptedUnits <= 0)
             {
-                status = $"Blocked off-map reorder intake for {GetCategoryDisplayName(categoryId)}.";
+                status = $"Blocked off-map reorder intake for {GetCategoryDisplayName(categoryId)}: {receiptRefusal}.";
                 return 0;
             }
 
-            int spendCents = acceptedUnits * Mathf.Max(0, unitCostCents);
-            runtimeState.SpendCents(spendCents);
             lastWeeklyReorderSpendCents += spendCents;
             lastWeeklyReorderUnitsReceived += acceptedUnits;
             lastWeeklyReorderUnitsRemaining = GetPendingReorderUnits();
@@ -1873,8 +1873,8 @@ namespace LandLedgers.FirstLedger
             builder.AppendLine();
 
             builder.AppendLine("Trading");
-            builder.AppendLine($"Today: Sales {FormatMoney(runtimeState.LastDailyRevenueCents)} | Gross {FormatMoney(GetLastDailyGrossProfitCents())} | Units {lastDailyUnitsSold}");
-            builder.AppendLine($"Week: Sales {FormatMoney(runtimeState.WeekToDateRevenueCents)} | Gross {FormatMoney(GetWeekToDateGrossProfitCents())} | Units {runtimeState.WeekToDateUnitsSold}");
+            builder.AppendLine($"Today: Sales {FormatMoney(runtimeState.LastDailyRevenueCents)} | Gross {FormatMoney(GetLastDailyGrossProfitCents())}{BuildRetailCostCoverageNote(false)} | Units {lastDailyUnitsSold}");
+            builder.AppendLine($"Week: Sales {FormatMoney(runtimeState.WeekToDateRevenueCents)} | Gross {FormatMoney(GetWeekToDateGrossProfitCents())}{BuildRetailCostCoverageNote(true)} | Units {runtimeState.WeekToDateUnitsSold}");
             builder.AppendLine(BuildDemandLossLine());
             builder.AppendLine();
 
@@ -4445,7 +4445,7 @@ namespace LandLedgers.FirstLedger
             return "[General Store][Daily] "
                 + $"{date}: {lastDailyCustomerHouseholds}/{generatedHouseholdCount} households bought "
                 + $"{lastDailyUnitsSold} units for {FormatMoney(runtimeState != null ? runtimeState.LastDailyRevenueCents : 0)}. "
-                + $"COGS {FormatMoney(lastDailyCostOfGoodsSoldCents)}; gross {FormatMoney(GetLastDailyGrossProfitCents())}. "
+                + $"COGS {FormatMoney(GetRecordedDailyCostOfGoodsSoldCents())}; gross {FormatMoney(GetLastDailyGrossProfitCents())}{BuildRetailCostCoverageNote(false)}. "
                 + $"Reserve demand local {lastDailyReserveLocalUnits} units / {FormatMoney(lastDailyReserveLocalSpendCents)}; "
                 + $"off-map {lastDailyReserveOffMapUnits} units / {FormatMoney(lastDailyReserveOffMapLostDemandCents)} lost. "
                 + $"Store wallet spend {FormatMoney(lastDailyWalletSpendCents)}; household wallets "
@@ -4462,7 +4462,7 @@ namespace LandLedgers.FirstLedger
                 + $"payroll {FormatMoney(runtimeState != null ? runtimeState.LastWeeklyPayrollCents : 0)}, "
                 + $"reorder spend {FormatMoney(lastWeeklyReorderSpendCents)}, "
                 + $"cash-held reorder {lastWeeklyCashConstrainedReorderUnits}u/{FormatMoney(lastWeeklyCashConstrainedReorderCostCents)}, "
-                + $"week gross {FormatMoney(GetWeekToDateGrossProfitCents())}, "
+                + $"week gross {FormatMoney(GetWeekToDateGrossProfitCents())}{BuildRetailCostCoverageNote(true)}, "
                 + $"household wallet pool {FormatMoney(GetTotalHouseholdSpendingMoneyCents())}.";
         }
 
@@ -5833,12 +5833,25 @@ namespace LandLedgers.FirstLedger
 
         private int GetLastDailyGrossProfitCents()
         {
-            return (runtimeState != null ? runtimeState.LastDailyRevenueCents : 0) - Mathf.Max(0, lastDailyCostOfGoodsSoldCents);
+            return (runtimeState != null ? runtimeState.LastDailyRevenueCents : 0) - GetRecordedDailyCostOfGoodsSoldCents();
         }
 
         private int GetWeekToDateGrossProfitCents()
         {
-            return (runtimeState != null ? runtimeState.WeekToDateRevenueCents : 0) - Mathf.Max(0, weekToDateCostOfGoodsSoldCents);
+            return (runtimeState != null ? runtimeState.WeekToDateRevenueCents : 0) - GetRecordedWeeklyCostOfGoodsSoldCents();
+        }
+
+        private int GetRecordedDailyCostOfGoodsSoldCents() => Mathf.Max(0, lastDailyCostOfGoodsSoldCents)
+            + (runtimeState?.LastDailyRetailCostOfGoodsSoldCents ?? 0);
+
+        private int GetRecordedWeeklyCostOfGoodsSoldCents() => Mathf.Max(0, weekToDateCostOfGoodsSoldCents)
+            + (runtimeState?.WeekToDateRetailCostOfGoodsSoldCents ?? 0);
+
+        private string BuildRetailCostCoverageNote(bool weekly)
+        {
+            int unknown = weekly ? runtimeState?.WeekToDateUncostedRetailUnitsSold ?? 0
+                : runtimeState?.LastDailyUncostedRetailUnitsSold ?? 0;
+            return unknown > 0 ? $" (cost basis incomplete for {unknown} sold units)" : string.Empty;
         }
 
         private string BuildCashBridgeSummary()
@@ -5850,7 +5863,7 @@ namespace LandLedgers.FirstLedger
 
             int stockBuys = Mathf.Max(0, lastWeeklyReorderSpendCents) + Mathf.Max(0, lastWeeklyLocalSupplySpendCents);
             int transferDelta = runtimeState.LastWeeklyCashTransferInCents - runtimeState.LastWeeklyCashTransferOutCents;
-            return $"Cash changed because: sales {FormatMoney(runtimeState.WeekToDateRevenueCents)}, COGS {FormatMoney(weekToDateCostOfGoodsSoldCents)}, payroll {FormatMoney(runtimeState.LastWeeklyPayrollCents)}, stock buys {FormatMoney(stockBuys)}, owner draw {FormatMoney(runtimeState.LastWeeklyOwnerDistributionCents)}, transfers {FormatSignedMoney(transferDelta)}.";
+            return $"Cash changed because: sales {FormatMoney(runtimeState.WeekToDateRevenueCents)}, COGS {FormatMoney(GetRecordedWeeklyCostOfGoodsSoldCents())}, payroll {FormatMoney(runtimeState.LastWeeklyPayrollCents)}, stock buys {FormatMoney(stockBuys)}, owner draw {FormatMoney(runtimeState.LastWeeklyOwnerDistributionCents)}, transfers {FormatSignedMoney(transferDelta)}.";
         }
 
         private string BuildWeeklyCashBridgeLine()
@@ -5862,10 +5875,10 @@ namespace LandLedgers.FirstLedger
 
             int startingCash = runtimeState.LastWeeklyCashBeforeCents;
             int endingCash = runtimeState.LastWeeklyCashAfterCents;
-            int grossProfit = runtimeState.WeekToDateRevenueCents - Mathf.Max(0, weekToDateCostOfGoodsSoldCents);
+            int grossProfit = GetWeekToDateGrossProfitCents();
             int stockBuys = Mathf.Max(0, lastWeeklyReorderSpendCents) + Mathf.Max(0, lastWeeklyLocalSupplySpendCents);
             string direction = endingCash > startingCash ? "healthier" : endingCash < startingCash ? "weaker" : "steady";
-            return $"Weekly bridge: start {FormatMoney(startingCash)} | sales {FormatMoney(runtimeState.WeekToDateRevenueCents)} | COGS {FormatMoney(weekToDateCostOfGoodsSoldCents)} | gross {FormatMoney(grossProfit)} | payroll {FormatMoney(runtimeState.LastWeeklyPayrollCents)} | reorder {FormatMoney(lastWeeklyReorderSpendCents)} | local intake {FormatMoney(lastWeeklyLocalSupplySpendCents)} | owner draw {FormatMoney(runtimeState.LastWeeklyOwnerDistributionCents)} | end {FormatMoney(endingCash)} ({direction})";
+            return $"Weekly bridge: start {FormatMoney(startingCash)} | sales {FormatMoney(runtimeState.WeekToDateRevenueCents)} | COGS {FormatMoney(GetRecordedWeeklyCostOfGoodsSoldCents())} | gross {FormatMoney(grossProfit)} | payroll {FormatMoney(runtimeState.LastWeeklyPayrollCents)} | reorder {FormatMoney(lastWeeklyReorderSpendCents)} | local intake {FormatMoney(lastWeeklyLocalSupplySpendCents)} | owner draw {FormatMoney(runtimeState.LastWeeklyOwnerDistributionCents)} | end {FormatMoney(endingCash)} ({direction})";
         }
 
         private string GetCategoryDisplayName(string categoryId)
@@ -6243,7 +6256,7 @@ namespace LandLedgers.FirstLedger
                 {
                     string refusal = state.TryAddRetailItemLot(lotId, item.ItemId, item.CategoryId, item.Unit,
                         quantity, business.InstanceId, business.InstanceId,
-                        $"development-town-opening-inventory:{configuration.ConfigurationId}:{businessKey}", dayIndex);
+                        $"development-town-opening-inventory:{configuration.ConfigurationId}:{businessKey}", dayIndex, 0);
                     if (!string.IsNullOrWhiteSpace(refusal))
                     {
                         error = $"Opening inventory refused for '{businessKey}/{item.ItemId}': {refusal}";

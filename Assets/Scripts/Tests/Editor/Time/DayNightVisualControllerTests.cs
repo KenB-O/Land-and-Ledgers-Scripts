@@ -31,7 +31,7 @@ namespace LandLedgers.Editor.Time
         }
 
         [Test]
-        public void AcceleratedSpeedsMonotonicallyAttenuateNight()
+        public void AcceleratedSpeedsRetainAStableNightPresentation()
         {
             float at1x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed1x, 1f);
             float at10x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed10x, 10f);
@@ -39,14 +39,18 @@ namespace LandLedgers.Editor.Time
             float at50x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed50x, 50f);
             float at100x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed100x, 100f);
             float at250x = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed250x, 250f);
+            float observe = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Observe, 10f);
+            float experimental = DayNightVisualController.ResolveSpeedAttenuation(SimulationSpeed.Speed500x, 500f);
 
-            Assert.AreEqual(1f, at1x, 0.0001f);
-            Assert.That(at10x, Is.LessThan(at1x));
-            Assert.That(at25x, Is.LessThan(at10x));
-            Assert.That(at50x, Is.LessThan(at25x));
-            Assert.That(at100x, Is.LessThan(at50x));
-            Assert.That(at250x, Is.LessThan(at100x));
-            Assert.That(at250x, Is.GreaterThan(0f));
+            Assert.That(at1x, Is.LessThan(1f));
+            Assert.That(at1x, Is.GreaterThanOrEqualTo(0.55f));
+            Assert.That(at10x, Is.GreaterThanOrEqualTo(0.45f));
+            Assert.That(at25x, Is.GreaterThanOrEqualTo(0.45f));
+            Assert.That(at50x, Is.GreaterThanOrEqualTo(0.40f));
+            Assert.That(at100x, Is.GreaterThanOrEqualTo(0.40f));
+            Assert.That(at250x, Is.GreaterThanOrEqualTo(0.40f));
+            Assert.That(observe, Is.GreaterThanOrEqualTo(0.55f));
+            Assert.That(experimental, Is.GreaterThanOrEqualTo(0.40f));
         }
 
         [Test]
@@ -59,11 +63,9 @@ namespace LandLedgers.Editor.Time
             float at100xNight = DayNightVisualController.ResolveNightExposureStops(
                 0f, SimulationSpeed.Speed100x, 100f);
 
-            Assert.That(realTimeNight, Is.LessThanOrEqualTo(-3.9f));
-            Assert.That(at25xNight, Is.LessThan(0f));
-            Assert.That(Mathf.Abs(at25xNight), Is.GreaterThan(2f));
-            Assert.That(Mathf.Abs(at100xNight), Is.GreaterThan(2f));
-            Assert.That(Mathf.Abs(at100xNight), Is.LessThan(Mathf.Abs(at25xNight)));
+            Assert.That(realTimeNight, Is.GreaterThanOrEqualTo(3.4f));
+            Assert.That(at25xNight, Is.GreaterThan(1.5f));
+            Assert.That(at100xNight, Is.GreaterThan(1.3f));
         }
 
         [Test]

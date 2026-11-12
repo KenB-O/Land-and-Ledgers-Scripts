@@ -101,7 +101,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 destination.BusinessId,
                 destination.BusinessId,
                 retailProvenance,
-                dayIndex);
+                dayIndex,
+                ConsumedAcquisitionCost(source, consumption));
             if (refusal != null)
             {
                 result.Refusal = refusal;
@@ -141,6 +142,24 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     result.RetailLotId, CustodyTransferLog.CauseRetailReceipt), out _);
             }
             return result;
+        }
+        private static int ConsumedAcquisitionCost(OffMapNamedSkuProcurementService source,
+            NamedSkuLotConsumptionRecord consumption)
+        {
+            long cost = 0;
+            foreach (NamedSkuLotConsumption part in consumption.ConsumedLotUnits)
+            {
+                NamedSkuLot lot = null;
+                foreach (NamedSkuLot candidate in source.Lots)
+                    if (candidate.LotId == part.LotId) { lot = candidate; break; }
+                if (lot == null || lot.QuantityUnits <= 0 || lot.TotalCostCents <= 0) return -1;
+                int consumedAfter = lot.QuantityUnits - lot.RemainingUnits;
+                int consumedBefore = consumedAfter - part.Units;
+                if (consumedBefore < 0) return -1;
+                cost += (long)lot.TotalCostCents * consumedAfter / lot.QuantityUnits
+                    - (long)lot.TotalCostCents * consumedBefore / lot.QuantityUnits;
+            }
+            return cost <= int.MaxValue ? (int)cost : -1;
         }
     }
 }

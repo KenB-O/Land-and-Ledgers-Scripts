@@ -39,7 +39,22 @@ namespace LandLedgers.Population
 
         public void Register(IGoodsSupplier supplier)
         {
-            if (supplier != null) suppliers.Add(supplier);
+            if (supplier == null) return;
+            if (!string.IsNullOrWhiteSpace(supplier.SupplierBusinessId))
+            {
+                // A restored business replaces its old runtime; retaining both
+                // adapters would allow sales against detached inventory/cash.
+                int first = -1;
+                for (int i = 0; i < suppliers.Count; i++)
+                {
+                    if (!string.Equals(suppliers[i]?.SupplierBusinessId, supplier.SupplierBusinessId,
+                        StringComparison.Ordinal)) continue;
+                    if (first < 0) { first = i; suppliers[i] = supplier; }
+                    else { suppliers.RemoveAt(i); i--; }
+                }
+                if (first >= 0) return;
+            }
+            suppliers.Add(supplier);
         }
 
         /// <summary>Phase C: all registered suppliers (for legitimate-knowledge filtering).</summary>

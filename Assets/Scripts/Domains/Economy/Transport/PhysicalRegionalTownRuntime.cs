@@ -78,6 +78,18 @@ namespace LandLedgers.Economy.Transport
             return true;
         }
 
+        /// <summary>Repositions existing views after world restore without recreating transport or destinations.</summary>
+        public void RefreshWorldFrame(TownWorldController townWorld)
+        {
+            if (townWorld == null) return;
+            foreach (var town in RegionalTownRegistry.All)
+            {
+                if (town == null || !townInstances.TryGetValue(town.TownId, out var instance) || instance == null) continue;
+                Vector3 centre = RegionalMilesToWorldPoint(townWorld, town.CentreEastMiles, town.CentreNorthMiles);
+                if (instance.transform.position != centre) instance.transform.position = centre;
+            }
+        }
+
         public bool TryGetDestination(string locationId, out Transform destination, out string businessId)
         {
             businessId = string.Empty;
@@ -128,11 +140,16 @@ namespace LandLedgers.Economy.Transport
             GameObject prefab,
             TownWorldController townWorld)
         {
-            if (townInstances.TryGetValue(town.TownId, out GameObject existing) && existing != null)
-                return existing;
-
             Vector3 centre = RegionalMilesToWorldPoint(townWorld,
                 town.CentreEastMiles, town.CentreNorthMiles, 0f);
+            if (townInstances.TryGetValue(town.TownId, out GameObject existing) && existing != null)
+            {
+                // A restored world may have a different regional-to-scene offset
+                // from the temporary NewGame that created this runtime instance.
+                if (existing.transform.position != centre) existing.transform.position = centre;
+                return existing;
+            }
+
             var townObject = Instantiate(prefab, centre, Quaternion.identity);
             townObject.name = $"{town.DisplayName} — Physical Regional Town";
             townInstances[town.TownId] = townObject;

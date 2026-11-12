@@ -85,6 +85,40 @@ public sealed class MillbrookFlourReorderTests
     }
 
     [Test]
+    public void FreightCommittedFlourStillBlocksDuplicateProcurement()
+    {
+        var supplier = NewSupplier();
+        var cash = new FakeBusinessCashPort(20000);
+        var diag = new List<string>();
+        Assert.IsNull(MillbrookFlourReorder.PlaceReorder(supplier, cash, BuyerBusinessId, BuyerName,
+            2, 1, diag, out var first));
+        Assert.IsNull(supplier.CommitFreightPickup(first.LotId, "shipment-1", 2));
+        int before = cash.BalanceCents;
+        Assert.IsNotNull(MillbrookFlourReorder.PlaceReorder(supplier, cash, BuyerBusinessId, BuyerName,
+            2, 2, diag, out _));
+        Assert.AreEqual(before, cash.BalanceCents);
+        Assert.AreEqual(1, supplier.Lots.Count);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ExplicitNetShortageCanAddSupplyWithoutCountingPendingTwice(bool committed)
+    {
+        var supplier = NewSupplier();
+        var cash = new FakeBusinessCashPort(20000);
+        var diag = new List<string>();
+        Assert.IsNull(MillbrookFlourReorder.PlaceReorder(supplier, cash, BuyerBusinessId, BuyerName,
+            1, 1, diag, out var first));
+        if (committed) Assert.IsNull(supplier.CommitFreightPickup(first.LotId, "shipment-1", 1));
+        Assert.IsNull(MillbrookFlourReorder.PlaceReorder(supplier, cash, BuyerBusinessId, BuyerName,
+            1, 2, diag, out var additional, outstandingAlreadyCounted: true));
+        Assert.AreEqual(1, additional.PackageUnits);
+        Assert.AreEqual(2, supplier.Lots.Count);
+        Assert.AreEqual(20000 - 96, cash.BalanceCents);
+        Assert.AreEqual(210, supplier.GetInventoryUnits("bakery_flour_sack"));
+    }
+
+    [Test]
     public void RefusedRequestLotBlocksAllLaterReorders()
     {
         // Plan 07 Slice 0 discriminator, reorder half (AUD-334): the

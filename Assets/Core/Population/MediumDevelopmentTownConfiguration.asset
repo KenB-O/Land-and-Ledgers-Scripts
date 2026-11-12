@@ -1,0 +1,202 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fc972e2dd5e242a6b411008defae1771, type: 3}
+  m_Name: MediumDevelopmentTownConfiguration
+  m_EditorClassIdentifier: Assembly-CSharp::LandLedgers.Population.DevelopmentTownConfiguration
+  configurationId: development-medium-2026
+  seedOffset: 73017
+  generatePopulationFromSettings: 1
+  generatedPopulationSettings: {fileID: 11400000, guid: 9d7cc1907a0a75e41a718bd71e32c115, type: 2}
+  people: []
+  households: []
+  relationships: []
+  businesses:
+  - key: mediumdevelopmenttown-general-store
+    operationId: general-store
+    ownerPersonKey: generated-person-1
+    businessId: mediumdevelopmenttown-general-store
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 50000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-blacksmith
+    operationId: blacksmith
+    ownerPersonKey: generated-person-2
+    businessId: mediumdevelopmenttown-blacksmith
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 22000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-butcher
+    operationId: butcher
+    ownerPersonKey: generated-person-3
+    businessId: mediumdevelopmenttown-butcher
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 24000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-freight-company
+    operationId: livery-freight
+    ownerPersonKey: generated-person-4
+    businessId: mediumdevelopmenttown-freight-company
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 15000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-doctor
+    operationId: doctor
+    ownerPersonKey: generated-person-5
+    businessId: mediumdevelopmenttown-doctor
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 17000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-sawmill
+    operationId: sawmill
+    ownerPersonKey: generated-person-6
+    businessId: mediumdevelopmenttown-sawmill
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 22000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-lumber-yard
+    operationId: lumber-yard
+    ownerPersonKey: generated-person-7
+    businessId: mediumdevelopmenttown-lumber-yard
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 19000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-boarding-house
+    operationId: boarding-house
+    ownerPersonKey: generated-person-8
+    businessId: mediumdevelopmenttown-boarding-house
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 13000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-ranch
+    operationId: ranch
+    ownerPersonKey: generated-person-9
+    businessId: mediumdevelopmenttown-ranch
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 21000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: mediumdevelopmenttown-crop-farm
+    operationId: crop-farm
+    ownerPersonKey: generated-person-10
+    businessId: mediumdevelopmenttown-crop-farm
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 19000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  businessCashTargets:
+  - businessKey: mediumdevelopmenttown-general-store
+    targetCashCents: 50000
+  - businessKey: mediumdevelopmenttown-blacksmith
+    targetCashCents: 22000
+  - businessKey: mediumdevelopmenttown-butcher
+    targetCashCents: 24000
+  - businessKey: mediumdevelopmenttown-freight-company
+    targetCashCents: 15000
+  - businessKey: mediumdevelopmenttown-doctor
+    targetCashCents: 17000
+  - businessKey: mediumdevelopmenttown-sawmill
+    targetCashCents: 22000
+  - businessKey: mediumdevelopmenttown-lumber-yard
+    targetCashCents: 19000
+  - businessKey: mediumdevelopmenttown-boarding-house
+    targetCashCents: 13000
+  - businessKey: mediumdevelopmenttown-ranch
+    targetCashCents: 21000
+  - businessKey: mediumdevelopmenttown-crop-farm
+    targetCashCents: 19000
+  householdCashTargets:
+  - anchorPersonKey: generated-person-0
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-2
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-3
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-8
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-9
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-12
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-13
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-15
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-16
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-17
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-22
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-28
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-31
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-33
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-39
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-41
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-43
+    targetCashCents: 25000
+  - anchorPersonKey: generated-person-44
+    targetCashCents: 25000
+  openingInventory: []
+  openingEquipment: []
+  wholesaleAccounts: []
+  freightBusinessKey: mediumdevelopmenttown-freight-company
+  openingBakeryFuelUnits: 0
+  openingBakeryFlourPounds: 0
+  openingBakeryNotionsUnits: 0
+  fuelDealerIntakeUnitsPerBakeryUnit: 0
+  openingHorseId: A0
+  openingWagonId: opening-freight-wagon
+  enableMortality: 1
+  enableFertility: 1

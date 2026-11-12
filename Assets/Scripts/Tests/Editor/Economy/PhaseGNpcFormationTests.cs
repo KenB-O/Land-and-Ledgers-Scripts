@@ -311,6 +311,90 @@ namespace LandLedgers.EditorTests.Economy
             return investigation;
         }
 
+        [Test]
+        public void Investigation_FindsFlexibleWindowAfterRoutineJobSeeking()
+        {
+            var f = new Fixture();
+            Assert.IsNull(f.Scheduler.TryReserve(42, PersonActivityKind.JobSeeking, 10,
+                540, 180, "motivated job search"));
+
+            var investigation = new NpcBusinessInvestigation();
+            Assert.IsNull(investigation.Start("inv-flex", FlourOpportunity(), f.Scheduler,
+                120, 10, f.Events, f.Diag));
+
+            List<PersonActivityReservation> reservations = f.Scheduler.ActiveFor(42, 10);
+            Assert.AreEqual(2, reservations.Count);
+            Assert.AreEqual(PersonActivityKind.Investigation, reservations[1].Activity);
+            Assert.AreEqual(720, reservations[1].StartMinuteOfDay,
+                "The preferred 10:00 slot is blocked, so investigation uses the first suitable free window.");
+            Assert.GreaterOrEqual(reservations[1].StartMinuteOfDay,
+                reservations[0].EndMinuteOfDay, "Job seeking and investigation never overlap.");
+        }
+
+        [Test]
+        public void Investigation_StillRefusesWhenNoFlexibleWindowExists()
+        {
+            var f = new Fixture();
+            Assert.IsNull(f.Scheduler.TryReserve(42, PersonActivityKind.JobSeeking, 10,
+                480, 600, "existing commitment"));
+            var investigation = new NpcBusinessInvestigation();
+
+            string refusal = investigation.Start("inv-blocked", FlourOpportunity(), f.Scheduler,
+                120, 10, f.Events, f.Diag);
+
+            Assert.IsNotNull(refusal);
+            StringAssert.Contains("no free 120-minute investigation window", refusal);
+            Assert.AreEqual(NpcInvestigationVerdict.Unspecified, investigation.Verdict);
+            Assert.AreEqual(1, f.Scheduler.ActiveFor(42, 10).Count,
+                "A refused investigation creates no overlapping reservation.");
+        }
+
+        [Test]
+        public void Entrepreneurship_IgnoresCategoryOnlyNeedsButObservesExactProducts()
+        {
+            Assert.AreEqual(0, ObserveNeed(HouseholdItemCatalog.UnspecifiedMeatId),
+                "Category-only meat need cannot become a fictional retail product.");
+            Assert.AreEqual(1, ObserveNeed(HouseholdItemCatalog.BreadId),
+                "An authored exact SKU remains a legitimate observed opportunity candidate.");
+        }
+
+        private static int ObserveNeed(string itemId)
+        {
+            var population = new PopulationState();
+            population.people.Add(new PersonState
+            {
+                id = 42,
+                firstName = "Test",
+                lastName = "Founder",
+                ageBand = AgeBand.Adult18Plus,
+                laborAccessLevel = LaborAccessLevel.FullLaborMarket,
+            });
+            var memberships = new HouseholdMembershipRegistry();
+            Assert.IsNull(memberships.Register(new HouseholdMembership
+            {
+                MembershipId = 1,
+                PersonId = 42,
+                HouseholdId = 7,
+                Lifecycle = HouseholdMembershipLifecycle.Active,
+            }));
+            var needs = new HouseholdNeedRegistry();
+            HouseholdPurchasingNeed need = needs.CreateNeed(7, itemId, 0);
+            need.UnitsNeeded = 3;
+
+            var driver = new NpcEntrepreneurshipDriver();
+            driver.EvaluateWeek(8, new NpcEntrepreneurshipDriver.EntrepreneurshipContext
+            {
+                Population = population,
+                Memberships = memberships,
+                Ledgers = new HouseholdLedgerRegistry(),
+                Needs = needs,
+                Schedules = new PersonScheduleTracker(),
+                Events = new NpcBusinessEventLog(),
+                CreationPort = new FakeCreationPort(),
+            }, new List<string>());
+            return driver.TrackedPersonCount;
+        }
+
         private NpcOpportunity FlourOpportunity()
         {
             return new NpcOpportunity
@@ -437,7 +521,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Investigation_CostsRealTime_DoubleBookingRefused()
+        public void Investigation_UsesFreeWindowAroundExistingWork_NoDoubleBooking()
         {
             var f = new Fixture();
             // P42 is already working 10:00-14:00 on day 10.
@@ -445,8 +529,17 @@ namespace LandLedgers.EditorTests.Economy
 
             var inv = new NpcBusinessInvestigation();
             string refusal = inv.Start("inv-1", FlourOpportunity(), f.Scheduler, 120, 10, f.Events, f.Diag);
-            Assert.IsNotNull(refusal, "Double-booking a Person's time must be refused loudly.");
-            Assert.AreEqual(NpcInvestigationVerdict.Unspecified, inv.Verdict, "No investigation starts on refused time.");
+            Assert.IsNull(refusal, "A motivated investigation should use a legitimate free window around work.");
+            Assert.AreEqual(NpcInvestigationVerdict.Underway, inv.Verdict);
+            List<PersonActivityReservation> reservations = f.Scheduler.ActiveFor(42, 10);
+            Assert.AreEqual(2, reservations.Count);
+            PersonActivityReservation investigationReservation = reservations.Find(x => x.Activity == PersonActivityKind.Investigation);
+            PersonActivityReservation workReservation = reservations.Find(x => x.Activity == PersonActivityKind.Work);
+            Assert.AreEqual(480, investigationReservation.StartMinuteOfDay,
+                "The nearest available slot before the work shift is selected.");
+            Assert.IsTrue(investigationReservation.EndMinuteOfDay <= workReservation.StartMinuteOfDay
+                || workReservation.EndMinuteOfDay <= investigationReservation.StartMinuteOfDay,
+                "Work and investigation remain exclusive.");
         }
 
         [Test]

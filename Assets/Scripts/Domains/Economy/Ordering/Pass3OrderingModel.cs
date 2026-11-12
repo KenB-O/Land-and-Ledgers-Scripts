@@ -36,9 +36,33 @@
 //     identity/provenance; that endowment is NOT created by this file.
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace LandLedgers.Economy.Ordering
 {
+    [Serializable]
+    public sealed class Pass3WholesaleShelfLot
+    {
+        public string BakeryLotId = string.Empty;
+        public int BakedDayIndex = -1;
+        public int ReceivedDayIndex = -1;
+        public string Condition = string.Empty;
+        public int UnitWholesaleCostCents;
+        public int BackUnits;
+        public int ShelfUnits;
+
+        public Pass3WholesaleShelfLot Copy(int backUnits, int shelfUnits) => new Pass3WholesaleShelfLot
+        {
+            BakeryLotId = BakeryLotId ?? string.Empty,
+            BakedDayIndex = BakedDayIndex,
+            ReceivedDayIndex = ReceivedDayIndex,
+            Condition = Condition ?? string.Empty,
+            UnitWholesaleCostCents = Math.Max(0, UnitWholesaleCostCents),
+            BackUnits = Math.Max(0, backUnits),
+            ShelfUnits = Math.Max(0, shelfUnits),
+        };
+    }
+
     /// <summary>Who is placing (or delegating) an order.</summary>
     public enum Pass3ActorKind
     {
@@ -65,6 +89,33 @@ namespace LandLedgers.Economy.Ordering
         public int BackUnits;
         public int ShelfCapacityUnits;
         public int BackCapacityUnits;
+        public List<Pass3WholesaleShelfLot> WholesaleLots = new List<Pass3WholesaleShelfLot>();
+
+        public void RegisterWholesaleLot(string bakeryLotId, int units, int bakedDayIndex,
+            int receivedDayIndex, string condition, int unitWholesaleCostCents)
+        {
+            if (string.IsNullOrWhiteSpace(bakeryLotId) || units <= 0) return;
+            WholesaleLots ??= new List<Pass3WholesaleShelfLot>();
+            WholesaleLots.Add(new Pass3WholesaleShelfLot
+            {
+                BakeryLotId = bakeryLotId.Trim(),
+                BakedDayIndex = bakedDayIndex,
+                ReceivedDayIndex = receivedDayIndex,
+                Condition = condition ?? string.Empty,
+                UnitWholesaleCostCents = Math.Max(0, unitWholesaleCostCents),
+                BackUnits = units,
+            });
+        }
+
+        public void RestoreWholesaleLots(IEnumerable<Pass3WholesaleShelfLot> lots)
+        {
+            WholesaleLots = new List<Pass3WholesaleShelfLot>();
+            if (lots == null) return;
+            foreach (Pass3WholesaleShelfLot lot in lots)
+                if (lot != null && !string.IsNullOrWhiteSpace(lot.BakeryLotId)
+                    && lot.BackUnits >= 0 && lot.ShelfUnits >= 0 && lot.BackUnits + lot.ShelfUnits > 0)
+                    WholesaleLots.Add(lot.Copy(lot.BackUnits, lot.ShelfUnits));
+        }
 
         /// <summary>Total markup amount per unit, price minus cost. May be negative; a negative margin is reported, never hidden.</summary>
         public int MarkupTotalCents()
@@ -134,6 +185,18 @@ namespace LandLedgers.Economy.Ordering
             }
             BackUnits -= units;
             ShelfUnits += units;
+            int trackedMove = Math.Min(units, WholesaleLots?.Sum(l => Math.Max(0, l.BackUnits)) ?? 0);
+            int remainingTracked = trackedMove;
+            if (WholesaleLots != null)
+                foreach (Pass3WholesaleShelfLot lot in WholesaleLots)
+                {
+                    if (remainingTracked <= 0) break;
+                    if (lot == null || lot.BackUnits <= 0) continue;
+                    int moved = Math.Min(remainingTracked, lot.BackUnits);
+                    lot.BackUnits -= moved;
+                    lot.ShelfUnits += moved;
+                    remainingTracked -= moved;
+                }
             return true;
         }
 
@@ -149,6 +212,12 @@ namespace LandLedgers.Economy.Ordering
         /// </summary>
         public bool ConsumeShelfUnits(int units, List<string> diag)
         {
+            return ConsumeShelfUnits(units, diag, out _);
+        }
+
+        public bool ConsumeShelfUnits(int units, List<string> diag, out List<Pass3WholesaleShelfLot> consumedLots)
+        {
+            consumedLots = new List<Pass3WholesaleShelfLot>();
             if (units <= 0)
             {
                 if (diag != null) diag.Add("Pass3Ordering: consuming shelf stock for '" + ProductId + "' needs a positive quantity.");
@@ -159,8 +228,33 @@ namespace LandLedgers.Economy.Ordering
                 if (diag != null) diag.Add("Pass3Ordering: consuming shelf stock for '" + ProductId + "' refused: only " + ShelfUnits + " on shelf, asked " + units + ".");
                 return false;
             }
+            int remainingTracked = Math.Min(units, WholesaleLots?.Sum(l => Math.Max(0, l.ShelfUnits)) ?? 0);
+            if (WholesaleLots != null)
+                foreach (Pass3WholesaleShelfLot lot in WholesaleLots)
+                {
+                    if (remainingTracked <= 0) break;
+                    if (lot == null || lot.ShelfUnits <= 0) continue;
+                    int taken = Math.Min(remainingTracked, lot.ShelfUnits);
+                    consumedLots.Add(lot.Copy(0, taken));
+                    lot.ShelfUnits -= taken;
+                    remainingTracked -= taken;
+                }
             ShelfUnits -= units;
             return true;
+        }
+
+        public void RestoreConsumedWholesaleLots(IEnumerable<Pass3WholesaleShelfLot> consumedLots)
+        {
+            if (consumedLots == null) return;
+            WholesaleLots ??= new List<Pass3WholesaleShelfLot>();
+            foreach (Pass3WholesaleShelfLot consumed in consumedLots)
+            {
+                if (consumed == null || consumed.ShelfUnits <= 0 || string.IsNullOrWhiteSpace(consumed.BakeryLotId)) continue;
+                Pass3WholesaleShelfLot existing = WholesaleLots.Find(l => l != null
+                    && string.Equals(l.BakeryLotId, consumed.BakeryLotId, StringComparison.OrdinalIgnoreCase));
+                if (existing == null) WholesaleLots.Add(consumed.Copy(0, consumed.ShelfUnits));
+                else existing.ShelfUnits += consumed.ShelfUnits;
+            }
         }
 
         /// <summary>Move stock from the front shelf back into back storage. Same refusal rules as MoveToShelf, mirrored.</summary>
@@ -183,6 +277,17 @@ namespace LandLedgers.Economy.Ordering
             }
             ShelfUnits -= units;
             BackUnits += units;
+            int remainingTracked = Math.Min(units, WholesaleLots?.Sum(l => Math.Max(0, l.ShelfUnits)) ?? 0);
+            if (WholesaleLots != null)
+                foreach (Pass3WholesaleShelfLot lot in WholesaleLots)
+                {
+                    if (remainingTracked <= 0) break;
+                    if (lot == null || lot.ShelfUnits <= 0) continue;
+                    int moved = Math.Min(remainingTracked, lot.ShelfUnits);
+                    lot.ShelfUnits -= moved;
+                    lot.BackUnits += moved;
+                    remainingTracked -= moved;
+                }
             return true;
         }
     }

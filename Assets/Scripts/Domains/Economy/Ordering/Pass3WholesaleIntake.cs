@@ -69,6 +69,9 @@ namespace LandLedgers.Economy.Ordering
         public string BakeryLotId = string.Empty;
         public string ProductId = string.Empty;
         public int UnitsReceived;
+        public int BakedDayIndex = -1;
+        public int TransferDayIndex = -1;
+        public int UnitWholesalePriceCents;
         public string Condition = string.Empty; // Fresh or DayOld
         public Pass3WholesaleSettlement Settlement;
     }
@@ -155,12 +158,17 @@ namespace LandLedgers.Economy.Ordering
                 line.CostCents = wholesalePriceCents;
             }
             line.BackUnits += units;
+            line.RegisterWholesaleLot(bakeryLotId.Trim(), units, bakedDayIndex,
+                transferDayIndex, condition, wholesalePriceCents);
             deliveredLotIds.Add(bakeryLotId.Trim());
             return new Pass3WholesaleIntakeResult
             {
                 BakeryLotId = bakeryLotId.Trim(),
                 ProductId = productId.Trim(),
                 UnitsReceived = units,
+                BakedDayIndex = bakedDayIndex,
+                TransferDayIndex = transferDayIndex,
+                UnitWholesalePriceCents = wholesalePriceCents,
                 Condition = condition,
                 Settlement = new Pass3WholesaleSettlement
                 {

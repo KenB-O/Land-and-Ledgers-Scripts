@@ -16,6 +16,15 @@ namespace LandLedgers.Economy.Transport
 
         public TransportVisualState State => state;
 
+        public void BindAnimator(Animator rigAnimator)
+        {
+            if (rigAnimator == null || rigAnimator == animator) return;
+            if (animator != null && authoredSpeedCaptured) animator.speed = authoredAnimatorSpeed;
+            animator = rigAnimator;
+            authoredSpeedCaptured = false;
+            CaptureAnimatorDefaults();
+        }
+
         private void Awake()
         {
             if (animator == null) animator = GetComponent<Animator>();

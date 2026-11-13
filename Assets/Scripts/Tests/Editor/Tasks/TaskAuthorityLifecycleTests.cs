@@ -233,6 +233,44 @@ namespace LandLedgers.EditorTests.Tasks
         }
 
         [Test]
+        public void InterruptReassignCycle_BudgetNeutralAtSweepScale()
+        {
+            TaskAuthority authority = CreateAuthority(baseMinutes: 60);
+            WorkTimeBudgetStore budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            string reason;
+
+            WorkTask task = CreateAssignedStarted(authority, budgets);
+            LandLedgers.Primitives.EntityId worker = Person(1);
+            WorkTimeBudget budget = budgets.GetOrCreate(worker);
+            int remainingBeforeWork = budget.MinutesRemaining;
+            Assert.AreEqual(60, budget.MinutesCommitted, "first assignment commits the full 60 minutes");
+
+            Assert.IsTrue(authority.RecordWork(task.TaskId, 30, budgets, 1, out reason), reason);
+            Assert.AreEqual(30, task.MinutesRemaining, "30 of 60 minutes worked, 30 remain");
+            Assert.AreEqual(30, budget.MinutesWorked, "worked minutes are recorded on the budget");
+
+            // Plan 05: the stale-InProgress sweep relies on the Slice 03
+            // remainder commit, so pin it under sweep-scale repetition —
+            // ten interrupt/re-assign cycles must never grow the commitment.
+            for (int cycle = 0; cycle < 10; cycle++)
+            {
+                Assert.IsTrue(authority.InterruptTask(task.TaskId, budgets, out reason), reason);
+                Assert.AreEqual(TaskStatus.Queued, task.Status, "cycle " + cycle + ": interruption re-queues the task");
+                Assert.AreEqual(30, budget.MinutesCommitted,
+                    "cycle " + cycle + ": interrupt releases only the 30 unworked minutes");
+
+                Assert.IsTrue(authority.AssignTask(task.TaskId, worker, budgets, out reason), reason);
+                Assert.AreEqual(60, budget.MinutesCommitted,
+                    "cycle " + cycle + ": re-assignment commits only the 30 remaining minutes on top of the 30 already spent, not a second full 60");
+                Assert.AreEqual(remainingBeforeWork, budget.MinutesRemaining,
+                    "cycle " + cycle + ": interrupt plus re-assignment is budget-neutral");
+                Assert.AreEqual(30, task.MinutesRemaining,
+                    "cycle " + cycle + ": the work requirement is unchanged by the cycle");
+            }
+        }
+
+        [Test]
         public void CancelAndComplete_AffectOnlyTheirTaskAndTerminalCompletionIsExactlyOnce()
         {
             TaskAuthority authority = CreateAuthority();

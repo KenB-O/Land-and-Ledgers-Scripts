@@ -8159,6 +8159,73 @@ namespace LandLedgers.Orchestration.Systems
                     if (IsArrivalDrivenTravelTask(task)) continue;
                     List<PersonActivityReservation> activeReservations =
                         hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex);
+                    // Plan 05 (Slice 05): stale-InProgress sweep, folded in as
+                    // a pre-accrual gate. An InProgress task whose reservation
+                    // window has expired accrues zero scheduled minutes forever
+                    // while holding its worker; a zero-remaining InProgress
+                    // task bricks its worker the same way. The decision lives
+                    // in the pure helper (StaleInProgressSweep.Decide) so the
+                    // harness can pin it; this loop only applies the verdict.
+                    // The rescue re-derives the window in place (the F2
+                    // catch-up transplant) — never interrupt + re-queue, so
+                    // the budget commitment is untouched and the worker is
+                    // held throughout. A rescued task accrues from the NEXT
+                    // tick, not this one: the fresh window starts at
+                    // minuteOfDay and the current tick window ends there.
+                    StaleInProgressVerdict sweepVerdict = StaleInProgressSweep.Decide(
+                        task, activeReservations, dayIndex, minuteOfDay, TaskReservationLabel(task),
+                        IsArrivalDrivenTravelTask(task));
+                    switch (sweepVerdict.Decision)
+                    {
+                        case StaleInProgressDecision.Skip:
+                        case StaleInProgressDecision.UntouchedHealthy:
+                            break;
+                        case StaleInProgressDecision.CompleteZeroRemaining:
+                            CompleteTaskWithCausalOutcome(task, dayIndex, wholeMinutes);
+                            if (!task.IsOpen)
+                            {
+                                ReleaseAutonomousTaskReservation(task, dayIndex);
+                                HandleCompletedBusinessFeedTask(task, dayIndex);
+                                HandleCompletedOpeningHitchTask(task, dayIndex);
+                                HandleCompletedFreightMeetingTask(task, dayIndex);
+                            }
+                            continue;
+                        case StaleInProgressDecision.DeferNoFitToday:
+                            LogRefusalDayKeyed("stale-inprogress-nofit:" + task.TaskId, dayIndex,
+                                "[StaleInProgress] Task '" + task.TaskId + "' window expired but "
+                                + sweepVerdict.Reason + " — left InProgress, retrying tomorrow.");
+                            continue;
+                        case StaleInProgressDecision.RescueReDerive:
+                            int remaining = Math.Max(1, task.MinutesRemaining);
+                            ReleaseAutonomousTaskReservation(task, dayIndex);
+                            string reserveRefusal = hub.PersonSchedules.TryReserve(
+                                task.AssigneeId.Id, sweepVerdict.ActivityToReserve, dayIndex,
+                                minuteOfDay, remaining, TaskReservationLabel(task));
+                            if (reserveRefusal != null)
+                            {
+                                // Parked: InProgress, no window, budget
+                                // untouched, diagnostic recorded. The next
+                                // tick retries; as the day passes the colliding
+                                // window ends and the re-derive eventually fits.
+                                LogRefusalDayKeyed("stale-inprogress:" + task.TaskId, dayIndex,
+                                    "[StaleInProgress] Task '" + task.TaskId + "' window expired but "
+                                    + "the fresh window could not be reserved: " + reserveRefusal);
+                                continue;
+                            }
+                            foreach (PersonActivityReservation reservation in hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex))
+                            {
+                                if (reservation != null && string.Equals(reservation.Label, TaskReservationLabel(task), StringComparison.Ordinal))
+                                {
+                                    autonomousTaskReservations[task.TaskId] = reservation.ReservationId;
+                                    break;
+                                }
+                            }
+                            Debug.Log($"[BusinessTask] P{task.AssigneeId.Id} task '{task.TaskId}' missed its scheduled window; " +
+                                $"re-reserved [{minuteOfDay}, {minuteOfDay + remaining}] as {sweepVerdict.ActivityToReserve}.", this);
+                            continue;
+                        default:
+                            break;
+                    }
                     // JourneyModel-duration travel consumes the reserved Travel
                     // window like other scheduled work. Explicit navigation tasks
                     // were filtered above and still complete only on actor arrival.

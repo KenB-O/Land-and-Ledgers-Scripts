@@ -81,7 +81,16 @@ namespace LandLedgers.Population
             if (!tasks.StartTask(task.TaskId, dayIndex, out rejection))
             {
                 schedules.Release(reservationId);
-                budgets.GetOrCreate(worker).ReleaseCommitment(task.PlannedMinutes);
+                if (!tasks.InterruptTask(task.TaskId, budgets, out string interruptRejection))
+                {
+                    // Domestic definitions are interruptible by default, so this is
+                    // defense only: leave the task Assigned and say so loudly. The
+                    // driver's next-day ReconcileStalled remains the backstop (it
+                    // cancels loudly when interruption is impossible); the service
+                    // never destroys a demand it was asked to schedule.
+                    diag?.Add("DomesticLabor: could not interrupt refused task " + task.TaskId +
+                        " (" + interruptRejection + ") — left Assigned for ReconcileStalled.");
+                }
                 return Refuse(diag, "DomesticLabor: start refused — " + rejection);
             }
 
@@ -140,7 +149,11 @@ namespace LandLedgers.Population
             if (!tasks.StartTask(taskId, dayIndex, out rejection))
             {
                 schedules.Release(reservationId);
-                budgets.GetOrCreate(worker).ReleaseCommitment(task.PlannedMinutes);
+                if (!tasks.InterruptTask(taskId, budgets, out string interruptRejection))
+                {
+                    diag?.Add("DomesticLabor: could not interrupt refused requeued task " + taskId +
+                        " (" + interruptRejection + ") — left Assigned for ReconcileStalled.");
+                }
                 return Refuse(diag, "DomesticLabor: requeued task start refused — " + rejection);
             }
 

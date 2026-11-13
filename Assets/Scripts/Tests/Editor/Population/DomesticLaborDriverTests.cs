@@ -387,6 +387,59 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void Driver_RefusedStart_IsQueuedImmediately_AndReadoptedNextDay()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3);
+            inputs.MealsAtHomeCount = 0;
+            inputs.CleaningNeeded = true;
+            inputs.HasAnimals = false;
+
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, f.Driver.Pending.Count, "exactly one planned task (chores, window 660)");
+            Assert.AreEqual(DomesticTaskCatalog.ChoresId, f.Driver.Pending[0].DefinitionId);
+
+            // Occupier created AFTER DriveDay, so planning is unaffected: a
+            // reservation-less InProgress task owned by the store business.
+            var storeDef = new TaskDefinition("store.serve", "Serve customers", 60);
+            string rejection;
+            Assert.IsTrue(f.Tasks.RegisterDefinition(storeDef, out rejection), rejection);
+            WorkTask occupier = f.Tasks.CreateTask("store.serve",
+                EntityId.For(EntityKind.Business, 9001), 100);
+            Assert.IsNotNull(occupier);
+            Assert.IsTrue(f.Tasks.AssignTask(occupier.TaskId, EntityId.For(EntityKind.Person, 3),
+                f.Budgets, out rejection), rejection);
+            Assert.IsTrue(f.Tasks.StartTask(occupier.TaskId, 100, out rejection), rejection);
+
+            f.Driver.AdvanceTick(100 * 86400f + 660 * 60f, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(0, f.Driver.InFlight.Count, "the refused entry must not start");
+            List<WorkTask> open = f.Tasks.GetOpenTasks(EntityId.For(EntityKind.Household, 7));
+            Assert.AreEqual(1, open.Count);
+            EntityId taskId = open[0].TaskId;
+            // Red before the fix: Assigned. This is this test's only red
+            // assertion; steps 4-5 pass before and after (before, via the
+            // next-day ReconcileStalled sweep; after, by direct adoption).
+            Assert.AreEqual(TaskStatus.Queued, open[0].Status,
+                "refused task must be Queued immediately, with no DriveDay since the refusal");
+
+            Assert.IsTrue(f.Tasks.InterruptTask(occupier.TaskId, f.Budgets, out rejection), rejection);
+
+            f.Driver.DriveDay(inputs, 101, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, f.Driver.Pending.Count);
+            Assert.AreEqual(taskId, f.Driver.Pending[0].ExistingTaskId);
+            Assert.AreEqual("Pending", f.Driver.Pending[0].Status);
+
+            f.Driver.AdvanceTick(101 * 86400f + 660 * 60f, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(TaskStatus.InProgress, f.Tasks.FindTask(taskId).Status);
+            Assert.AreEqual(1, f.Driver.InFlight.Count);
+            Assert.AreEqual(1, f.Domestic.Assignments.Count);
+            Assert.AreEqual(taskId, f.Domestic.Assignments[0].TaskId);
+        }
+
+        [Test]
         public void SaveLoad_RoundTripsPendingAndInFlight()
         {
             var f = new Fixture();

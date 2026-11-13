@@ -424,12 +424,12 @@ namespace LandLedgers.FirstLedger
             }
         }
 
-        /// <summary>Plan 16: first filled clerk_helper slot's person id, or
-        /// false when no clerk slot is filled. The TendCustomer assignee comes
+        /// <summary>Plan 16: first paid-active clerk_helper slot's person id, or
+        /// false when no clerk slot is paid-active. The TendCustomer assignee comes
         /// from here; a customer with no clerk waits in the queue (no task is
         /// created for them in this slice). Slot identification mirrors
         /// GetGeneralStoreRoleDisplayName (:2731, "clerk_helper"); the worker
-        /// id parse mirrors FindPersonForWorkerSlot (:3087-3096,
+        /// id parse mirrors FindPersonForWorkerSlot (:3087-3097,
         /// int.TryParse on slot.AssignedWorkerId).</summary>
         public bool TryGetServiceClerkPersonId(out int personId)
         {

@@ -1148,12 +1148,23 @@ namespace LandLedgers.Editor.Economy
             AssertCarriedBatch(g.Loop.PersonInventory.CarriedItems(personId)[0], snap.MidTrip, personId, "continue");
 
             // (c) Deposit after Continue through the loop's receipt path.
+            // QA-25: assert on the REGISTRY's live need, not on
+            // RestoredImmediate.Need. RestoreImmediate hands back the
+            // pre-import copy (CopyNeed at :814, then ImportState copies
+            // again), so the copy's Status never moves when the deposit
+            // fulfills the registry instance. GetOpenNeed returns the
+            // stored reference — the same object ReceiveCarriedBatch
+            // resolves — so this capture is the live instance.
+            HouseholdPurchasingNeed liveNeed =
+                g.Needs.GetOpenNeed(g.HouseholdId, HouseholdItemCatalog.BreadId);
+            Assert.IsNotNull(liveNeed,
+                "the restored registry must hold the open bread need before the Continue deposit");
             string error = g.Loop.ReceiveCarriedBatch(snap.MidTrip.BatchId, g.Day, g.Diagnostics);
             Assert.IsNull(error, "the Continue deposit must succeed: " + error);
             AssertDepositedOnce(g, snap.MidTrip.BatchId, snap.MidTrip.ReceiptId, personId, restored.CustodyLog, "continue deposit");
             Assert.IsNull(g.Needs.GetOpenNeed(g.HouseholdId, HouseholdItemCatalog.BreadId),
                 "the need must be fulfilled by the Continue deposit");
-            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, restored.Need.Status,
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, liveNeed.Status,
                 "the restored need must be fulfilled by the Continue deposit");
             Assert.AreEqual(16, g.Port.ItemStockUnits(HouseholdItemCatalog.BreadId),
                 "Continue must not re-settle against the fresh store — its stock stays 16 (no second purchase)");

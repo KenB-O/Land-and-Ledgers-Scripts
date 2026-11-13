@@ -179,6 +179,31 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// QA-19: registers one restored trip's need against the registry,
+        /// idempotently — returns the registry-owned instance for the same
+        /// (HouseholdId, NeedSequence), or null when the registry holds no
+        /// such open need. The driver calls this when it restores a trip so
+        /// the trip's need and the registry's need are ONE object, never two
+        /// copies of the same demand: a delivery receipt decrements that one
+        /// object and the registry need shrinks (and fulfills at zero).
+        /// A null return leaves the trip's need untouched; the caller decides
+        /// whether that is loud (see ShoppingTripDriver).
+        /// </summary>
+        public HouseholdPurchasingNeed AttachRestoredNeed(HouseholdPurchasingNeed dtoNeed)
+        {
+            if (dtoNeed == null) return null;
+            foreach (HouseholdPurchasingNeed open in needs.GetOpenNeeds(dtoNeed.HouseholdId))
+            {
+                if (open != null && open.NeedSequence == dtoNeed.NeedSequence)
+                {
+                    return open;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Priority U-3: Continue for a restored (or stranded) in-transit
         /// batch. Deposits one batch the loop still holds in custody into
         /// household storage through the existing receipt path

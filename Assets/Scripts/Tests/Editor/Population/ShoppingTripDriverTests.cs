@@ -722,5 +722,80 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(90, g.Store.Stock[HouseholdItemCatalog.FlourId]);
             Assert.AreEqual(1200, g.Store.CashReceived);
         }
+
+        [Test]
+        public void SaveLoad_MidTrip_NeedReunifiedWithRegistry_DeliveryDecrementsRegistryNeed()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+
+            // Advance to mid-outbound, then save everything (same shape as
+            // SaveLoad_MidTrip_ResumesToSameOutcome, up to the restore).
+            float start = Fixture.Day * 86400f;
+            f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+
+            // Restore into a FRESH fixture (new authorities, same scenario wiring).
+            var g = new Fixture();
+            float gStart = Fixture.Day * 86400f;
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(schedulesDto);
+            g.Driver.LoadFromSaveDto(driverDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            // NOTE: deliberately NO manual re-point of trip.Need here — the
+            // production fix (QA-19) must do it. The registry need is created
+            // with the same (HouseholdId 7, NeedSequence 0) as the saved trip.
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, gStart + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+
+            // The pin: the restored trip's Need IS the registry's need object.
+            PlannedShoppingTrip restoredTrip = g.Driver.ActiveTrips[0];
+            Assert.IsTrue(object.ReferenceEquals(restoredTrip.Need, gNeed),
+                "restored trip's Need is still the DTO orphan, not the registry need");
+
+            int unitsBefore = gNeed.UnitsNeeded;
+            Assert.AreEqual(10, unitsBefore);
+
+            // Continue the restored sim to completion (same drain as the
+            // existing test).
+            for (int t = 122; t < 2000 && g.Driver.ActiveTrips.Count > 0; t++)
+            {
+                float now = gStart + t * 300f;
+                g.Driver.AdvanceTick(now, Fixture.Day, g.DueEvents, g.Diag);
+                foreach (DueEvent ev in g.DueEvents.PopDue(now))
+                {
+                    g.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+                }
+            }
+
+            for (int i = 0; i < 50 && (g.DueEvents.ScheduledCount > 0 || g.Driver.ActiveTrips.Count > 0); i++)
+            {
+                foreach (DueEvent ev in g.DueEvents.PopDue(gStart + 3 * 86400f))
+                {
+                    g.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+                }
+            }
+
+            Assert.AreEqual(0, g.Driver.ActiveTrips.Count, "restored trip should finish\n" + string.Join("\n", g.Diag));
+            // The delivery actually happened through the real store...
+            Assert.AreEqual(90, g.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(1200, g.Store.CashReceived);
+            // ...and the REGISTRY need shrank by the delivered units, to zero.
+            Assert.AreEqual(0, gNeed.UnitsNeeded,
+                "registry need did not shrink: delivery decremented the orphan (got " + gNeed.UnitsNeeded + ", expected 0)");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
+        }
     }
 }

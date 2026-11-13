@@ -779,6 +779,7 @@ namespace LandLedgers.Population
                 // deposits it exactly once). Idempotent: a second load of
                 // the same DTO re-points at the already-held batch.
                 AttachTripBatchToLoop(trip);
+                AttachTripNeedToRegistry(trip);
             }
         }
 
@@ -797,6 +798,30 @@ namespace LandLedgers.Population
             {
                 trip.Batch = owned;
             }
+        }
+
+        /// <summary>
+        /// QA-19: re-points a restored trip's need at the registry-owned
+        /// instance for the same (HouseholdId, NeedSequence), via the loop.
+        /// Called on load and again on rehydrate: whichever of the needs
+        /// registry and the driver DTO loads last, the trip ends up pointing
+        /// at the registry instance. Idempotent: a second call returns the
+        /// same instance. Returns true when the trip was re-pointed.
+        /// A miss on load is silent (the registry may not be restored yet —
+        /// the fixture order loads the driver first); a miss on rehydrate
+        /// is diagnosed by the caller (see RehydrateAfterLoad).
+        /// </summary>
+        private bool AttachTripNeedToRegistry(PlannedShoppingTrip trip)
+        {
+            if (trip == null || trip.Need == null || loop == null) return false;
+            HouseholdPurchasingNeed owned = loop.AttachRestoredNeed(trip.Need);
+            if (owned != null)
+            {
+                trip.Need = owned;
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -826,6 +851,17 @@ namespace LandLedgers.Population
                 // turns out dead below still keeps its batch in loop
                 // custody (preserved, depositable via ReceiveCarriedBatch).
                 AttachTripBatchToLoop(trip);
+
+                // QA-19: re-point the restored trip's need at the registry
+                // instance — the registry may have loaded after this driver,
+                // replacing the instance this trip points at. Attaching is
+                // idempotent. A miss is diagnosed loudly but the trip is not
+                // aborted: it can still complete, and the receipt will
+                // decrement the DTO copy instead of the registry need.
+                if (!AttachTripNeedToRegistry(trip))
+                {
+                    diag.Add($"ShoppingTripDriver: trip {trip.TripId} household {trip.HouseholdId} need {trip.Need?.NeedSequence} has no registry instance — the receipt will decrement the DTO copy, not the registry need.");
+                }
 
                 var legs = new HouseholdShoppingLoop.PlannedTrip();
                 bool ok = true;

@@ -22,11 +22,14 @@ namespace LandLedgers.Editor.Integration
     /// deliberate mill breakdown + flour shortage, and a deliberate time
     /// conflict.
     ///
-    /// Every consequential state change happens through due events, so 1x
-    /// small steps, large steps, 10x, and 100x produce identical outcomes with
-    /// the same seed. Economic integrity: household cash moves only through
-    /// HouseholdLedger; business cash through the sim's single cash book;
-    /// goods move only by real production/consumption/purchase; person-time
+    /// Every consequential state change happens through due events, but step sizes
+    /// do not agree exactly: a task wanted at a given minute is first seen at the
+    /// step end, so at large steps its start — and therefore its completion — lands
+    /// later than at 1x (start-time quantization; see AdvanceTo). A refused window
+    /// start is retried once at due+60s and disposed on a second refusal, so it
+    /// never lingers Assigned blocking future work. Economic integrity: household
+    /// cash moves only through HouseholdLedger; business cash through the sim's single
+    /// cash book; goods move only by real production/consumption/purchase; person-time
     /// only through the schedule tracker + budget store; no fake persons.
     /// </summary>
     public sealed partial class LivingWorldSim

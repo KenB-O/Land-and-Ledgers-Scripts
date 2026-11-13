@@ -420,7 +420,7 @@ namespace LandLedgers.Population
                     if (minutes > 0)
                     {
                         lastQueueTickGameSeconds += minutes * 60f;
-                        TickCustomerQueues(minutes, dayIndex, diag);
+                        TickCustomerQueues(minutes, dayIndex, currentGameSeconds, dueEvents, diag);
                     }
                 }
             }
@@ -722,15 +722,17 @@ namespace LandLedgers.Population
             return true;
         }
 
-        /// <summary>Slice 18 Tier 1: ticks the store queue of every supplier with
-        /// a trip currently waiting at the store, then notes each balk. The lost
-        /// sale is already recorded by Tick; the diag is informational and states
-        /// the truth for the only live pre-Slice 17 case — a balked customer is
-        /// settled, their leg completes normally and they go home with their
-        /// batch (note 70 ruling (f)): no refusal, no return-empty, and no
-        /// "refused" wording for the OnShortTick warning filter. No release in
-        /// Tier 1.</summary>
-        private void TickCustomerQueues(int minutes, int dayIndex, List<string> diag)
+        /// <summary>Slice 18b: ticks the store queue of every supplier with
+        /// a trip currently waiting at the store. The method first sweeps
+        /// settled (InStore/AtStore) entries silently, so Tick can never
+        /// write a QueueBalk lost sale for a customer who already paid;
+        /// then it ticks the queue. A balk now means a genuinely unsettled
+        /// (AwaitingService) customer, who is released via ReturnEmpty with
+        /// the QueueBalk standing; the (pre-Slice 17) settled-balk case no
+        /// longer exists. A balked customer whose trip cannot be found, or
+        /// whose trip is not awaiting service, is skipped with a diag line
+        /// and the trip is unaffected.</summary>
+        private void TickCustomerQueues(int minutes, int dayIndex, float currentGameSeconds, IDueEventScheduler dueEvents, List<string> diag)
         {
             var businessIds = new List<string>();
             foreach (PlannedShoppingTrip trip in activeTrips)
@@ -758,13 +760,84 @@ namespace LandLedgers.Population
                     continue;
                 }
 
+                // Slice 18b: sweep settled (InStore/AtStore) entries silently
+                // BEFORE Tick — the lost sale is written inside Tick, so a
+                // settled entry must be gone before it runs.
+                foreach (PlannedShoppingTrip trip in activeTrips)
+                {
+                    if (trip == null) continue;
+                    if (trip.Candidate?.Supplier?.SupplierBusinessId != businessId) continue;
+                    if (trip.State == PlannedShoppingTrip.TripState.InStore
+                        || trip.State == PlannedShoppingTrip.TripState.AtStore)
+                    {
+                        RemoveStaleQueueEntry(trip);
+                    }
+                }
+
                 queue.Tick(minutes, dayIndex);
                 foreach (WaitingCustomer balked in queue.TakeBalked())
                 {
-                    int waited = balked.PatienceMinutesInitial - balked.PatienceMinutesRemaining;
-                    diag.Add($"ShoppingTripDriver: customer {balked.CustomerRef} balked after {waited} min waiting; entry removed, trip unaffected (pre-Slice 17: no release).");
+                    ReleaseBalkedCustomer(balked, dayIndex, currentGameSeconds, dueEvents, diag);
                 }
             }
+        }
+
+        /// <summary>Slice 18b: releases one balked customer. Only an
+        /// AwaitingService trip that has not settled is released: the
+        /// service task is cancelled, the stale service due is deregistered
+        /// from the driver's map, and the trip returns empty-handed through
+        /// ReturnEmpty (need stays open; the QueueBalk lost sale Tick
+        /// already recorded stands). A balked customer with no active trip,
+        /// or whose trip is settled or not awaiting service, is skipped
+        /// with a diag line — the sweep should have removed settled entries
+        /// before Tick, but this guard is what makes the release safe if it
+        /// ever misses.</summary>
+        private void ReleaseBalkedCustomer(WaitingCustomer balked, int dayIndex, float currentGameSeconds, IDueEventScheduler dueEvents, List<string> diag)
+        {
+            int waited = balked.PatienceMinutesInitial - balked.PatienceMinutesRemaining;
+            PlannedShoppingTrip trip = FindTripByRef(balked.CustomerRef);
+            if (trip == null)
+            {
+                diag.Add($"ShoppingTripDriver: customer {balked.CustomerRef} balked after {waited} min waiting; no active trip (stale entry), nothing released.");
+                return;
+            }
+
+            if (trip.State != PlannedShoppingTrip.TripState.AwaitingService || trip.UnitsSettled != 0 || trip.Batch != null)
+            {
+                diag.Add($"ShoppingTripDriver: customer {balked.CustomerRef} balked after {waited} min waiting; trip {trip.TripId} is {trip.State}, entry removed, trip unaffected.");
+                return;
+            }
+
+            WorkTask serviceTask = loop.FindServiceTask(trip.ServiceTaskId);
+            string cancelError = loop.CancelServiceTask(serviceTask, dayIndex, diag);
+            if (cancelError != null)
+            {
+                diag.Add($"ShoppingTripDriver: {cancelError}");
+            }
+
+            // Deregister unconditionally, even when the cancel errored: the
+            // stale service due must not reach the service-completion branch
+            // for a trip that has walked home (note 84 Finding 1 — the
+            // CancelTask due-scheduler seam is not installed in production,
+            // so this deregistration is load-bearing, not belt-and-braces).
+            serviceTaskIdStringToTripId.Remove(trip.ServiceTaskId.ToString());
+            ReturnEmpty(trip, $"Balked: patience exhausted after waiting {waited} min.", "balked", dayIndex, currentGameSeconds, dueEvents, diag);
+        }
+
+        /// <summary>Slice 18b: finds the active trip for a queue customer
+        /// ref, beside FindTrip (by TripId). The release needs a by-ref
+        /// lookup because TakeBalked yields CustomerRefs, not TripIds.</summary>
+        private PlannedShoppingTrip FindTripByRef(string customerRef)
+        {
+            foreach (PlannedShoppingTrip trip in activeTrips)
+            {
+                if (trip != null && string.Equals(HouseholdShoppingLoop.ServiceCustomerRefFor(trip), customerRef, StringComparison.Ordinal))
+                {
+                    return trip;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>Slice 18 Tier 1: removes a trip's queue entry silently (no

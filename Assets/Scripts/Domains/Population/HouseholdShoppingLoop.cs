@@ -2528,6 +2528,31 @@ namespace LandLedgers.Population
             return null;
         }
 
+        /// <summary>
+        /// Slice 18b: cancels a service task — the mirror of
+        /// CompleteServiceTask. Returns null on success, and on a null task,
+        /// and an error string when the task could not be cancelled (already
+        /// closed). The clerk is freed because a cancelled task leaves the
+        /// open set (IsOpen excludes Cancelled); whether CancelTask also
+        /// cancels the task's due events depends on the due-scheduler seam
+        /// (note 84 Finding 1: not installed in production), so the driver
+        /// deregisters its own map entry regardless.
+        /// </summary>
+        internal string CancelServiceTask(WorkTask serviceTask, int dayIndex, List<string> diag)
+        {
+            if (serviceTask == null)
+            {
+                return null;
+            }
+
+            if (!tasks.CancelTask(serviceTask.TaskId, budgets))
+            {
+                return $"Service task {serviceTask.TaskId} could not be cancelled (already closed).";
+            }
+
+            return null;
+        }
+
         /// <summary>Plan 16: finds a service task by id for the driver's
         /// completion branch. Returns null when the task is gone.
         /// TaskAuthority.FindTask is public (Core/Tasks/TaskAuthority.cs:626;

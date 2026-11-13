@@ -1351,7 +1351,14 @@ namespace LandLedgers.Editor.Population
         {
             var f = new Fixture();
             var log = new LostSaleLog();
-            CustomerQueue queue = WireService(f, log, -1);
+            // Slice 18b (note 89): the trip must be AWAITING SERVICE at
+            // arrival, not settled — the GENERAL sweep removes settled
+            // InStore entries by design, so exact decay can only be
+            // measured on an AwaitingService entry. Clerk + service wired
+            // (the S1 pattern); the service due (arrival + 4 min) stays
+            // pending because dues are no longer drained after arrival.
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
             f.LoopOptions.InStoreMinutes = 30;
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
@@ -1363,42 +1370,199 @@ namespace LandLedgers.Editor.Population
             // since the last tick. A jump straight to arrival would
             // over-decay by the 40-minute walk (the watermark sits at
             // departure), so the exact-decay assertions need fine steps.
+            // Once arrival is detected the drain stops entirely: the
+            // service due must stay pending (AdvanceTick does not process
+            // dues), so the task stays InProgress and the trip stays
+            // AwaitingService — and only InStore/AtStore entries are
+            // swept, so the AwaitingService entry is spared.
             float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
             float arrival = -1f;
             bool checkedTen = false;
             for (float now = departure; now <= departure + 3600f; now += 300f)
             {
                 f.Driver.AdvanceTick(now, Fixture.Day, f.DueEvents, f.Diag);
-                foreach (DueEvent ev in f.DueEvents.PopDue(now))
+                if (arrival < 0f)
                 {
-                    if (arrival < 0f && trip.Legs != null && trip.Legs.Outbound != null
-                        && ev.PayloadRef == trip.Legs.Outbound.TaskId.ToString())
+                    foreach (DueEvent ev in f.DueEvents.PopDue(now))
                     {
-                        arrival = ev.DueGameSeconds;
-                    }
+                        if (arrival < 0f && trip.Legs != null && trip.Legs.Outbound != null
+                            && ev.PayloadRef == trip.Legs.Outbound.TaskId.ToString())
+                        {
+                            arrival = ev.DueGameSeconds;
+                        }
 
-                    f.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+                        f.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+                    }
                 }
 
                 if (arrival >= 0f && !checkedTen && now >= arrival + 10 * 60f)
                 {
                     checkedTen = true;
                     Assert.AreEqual(10, queue.Waiting[0].PatienceMinutesRemaining, "10 elapsed minutes must decay patience 20 -> 10");
+                    Assert.AreEqual(1, queue.Waiting.Count, "AwaitingService entry is spared by the sweep");
                 }
 
                 if (arrival >= 0f && now >= arrival + 15 * 60f)
                 {
                     Assert.AreEqual(5, queue.Waiting[0].PatienceMinutesRemaining, "15 elapsed minutes must decay patience 20 -> 5");
+                    Assert.AreEqual(1, queue.Waiting.Count, "AwaitingService entry still present at +15 min");
+                    Assert.AreEqual(PlannedShoppingTrip.TripState.AwaitingService, trip.State, "trip still awaiting service at +15 min");
+                    Assert.IsNull(trip.Batch, "trip not settled at +15 min");
+                    Assert.AreEqual(0, trip.UnitsSettled, "no units settled at +15 min");
                     break;
                 }
             }
 
             Assert.IsTrue(checkedTen, "the +10 min check ran");
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State, "leg still open at +15 min");
+            Assert.AreEqual(PlannedShoppingTrip.TripState.AwaitingService, trip.State, "trip still awaiting service at end");
+        }
+
+        // ---- Slice 18b (Plan 23): balk release + settled-entry sweep (note 84, SOUND).
+        // B1 and B3 are red-first; the release and the sweep are the new behaviour.
+        [Test]
+        public void BalkRelease_AwaitingServiceCustomer_ReturnsEmpty()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.IsTrue(IsAwaitingService(trip));
+            Assert.IsTrue(ServiceTaskIdOf(trip).IsValid);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.IsNull(trip.Batch);
+            WorkTask serviceTaskBefore = f.Tasks.FindTask(ServiceTaskIdOf(trip));
+            Assert.IsNotNull(serviceTaskBefore);
+            Assert.AreEqual(TaskStatus.InProgress, serviceTaskBefore.Status);
+            // Slice 18b: accelerate patience (white-box, same class as Tier 1's
+            // long-leg fixtures — the timing is accelerated, the trip state is
+            // real). Do NOT touch the service due: it fires at arrival + 4 min
+            // and AdvanceTick does not process dues, so the task stays
+            // InProgress through the balk.
+            queue.Waiting[0].PatienceMinutesRemaining = 1;
+            f.Driver.AdvanceTick(arrival + 15 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            // The release keeps the lost sale — this customer did not settle.
+            Assert.AreEqual(1, log.Count, "released customer keeps the QueueBalk lost sale");
+            List<LostSaleEvent> balks = log.EventsFor(string.Empty);
+            Assert.AreEqual(1, balks.Count);
+            Assert.AreEqual(LostSaleReason.QueueBalk, balks[0].Reason);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.IsNull(trip.Batch);
+            Assert.AreEqual(0, trip.UnitsSettled);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(TaskStatus.Cancelled, f.Tasks.FindTask(ServiceTaskIdOf(trip)).Status);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status, "need stays open after the release");
+            Assert.IsNotNull(trip.Legs.Return, "return leg due is scheduled");
+            // Stale-due no-op: the service due may or may not have been
+            // cancelled with the task (seam, note 84 Finding 1 — in the
+            // fixture the scheduler is not installed, so it is not) —
+            // under either seam the outcome is the same.
+            foreach (DueEvent ev in f.DueEvents.PopDue(arrival + 5 * 60f))
+            {
+                f.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+            }
+
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            f.RunUntilDone(tickSeconds: 300);
+            Assert.AreEqual(0, f.Driver.ActiveTrips.Count);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Store.CashReceived);
         }
 
         [Test]
-        public void PatienceExpiry_BalksGenuineCustomer_WritesLostSale()
+        public void ServedEntry_LingersAfterFrontPop_SweptSilently()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            // WireService ONCE: a second call would create a new queue.
+            CustomerQueue queue = WireService(f, log, -1);
+            f.LoopOptions.InStoreMinutes = 30;
+            HouseholdPurchasingNeed needA = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            // Second household (customer B): person 4, household 8.
+            f.Population.people.Add(new PersonState { id = 4, firstName = "Bram", lastName = "Kett", age = 30, ageBand = AgeBand.Adult18Plus });
+            f.Population.households.Add(new HouseholdState { id = 8, householdName = "Kett" });
+            f.Membership.Register(new HouseholdMembership { MembershipId = 3, PersonId = 4, HouseholdId = 8, StartDayIndex = 0 });
+            f.Knowledge.LearnSupplier(4, "store-1", "lives in the same town", 0);
+            f.Ledgers.GetOrCreate(8).RecordInflow(0, 50000, HouseholdIncomeSource.WageEmployment, "emp-1", "seed wages", "test");
+            HouseholdPurchasingNeed needB = f.Needs.CreateNeed(8, HouseholdItemCatalog.FlourId, Fixture.Day);
+            needB.UnitsNeeded = 10;
+            needB.IsNecessity = true;
+            // The clerk resolver returns -1 for B's arrival and 3 for A's:
+            // a closure over a mutable local, via the WireService reflection
+            // pattern — WireService itself is NOT called twice.
+            int clerkId = -1;
+            System.Reflection.PropertyInfo clerkProp = typeof(HouseholdShoppingLoop).GetProperty("ResolveServiceClerkPersonId");
+            Assert.IsNotNull(clerkProp, "Plan 16 ResolveServiceClerkPersonId property missing");
+            clerkProp.SetValue(f.Loop, (System.Func<string, int>)(businessId => businessId == "store-1" ? clerkId : -1));
+            // Drive manually — DriveToArrival asserts ActiveTrips == 1.
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            f.Driver.PlanForHousehold(8, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(2, f.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip tripA = null, tripB = null;
+            foreach (PlannedShoppingTrip t in f.Driver.ActiveTrips)
+            {
+                if (t.HouseholdId == Fixture.HouseholdId) tripA = t;
+                else if (t.HouseholdId == 8) tripB = t;
+            }
+
+            Assert.IsNotNull(tripA);
+            Assert.IsNotNull(tripB);
+            float departure = Fixture.Day * 86400f + tripA.DepartureMinuteOfDay * 60f;
+            f.Driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            DueEvent outboundA = null, outboundB = null;
+            foreach (DueEvent ev in f.DueEvents.PopDue(departure + 86400f))
+            {
+                if (ev.PayloadRef == tripA.Legs.Outbound.TaskId.ToString()) outboundA = ev;
+                else if (ev.PayloadRef == tripB.Legs.Outbound.TaskId.ToString()) outboundB = ev;
+            }
+
+            Assert.IsNotNull(outboundA, "A outbound leg due event not scheduled");
+            Assert.IsNotNull(outboundB, "B outbound leg due event not scheduled");
+            float arrival = outboundA.DueGameSeconds;
+            Assert.AreEqual(outboundB.DueGameSeconds, arrival, "both trips arrive together");
+            // B arrives first with no clerk: settles immediately via (g1),
+            // InStore, entry [B].
+            f.Driver.HandleDueEvent(outboundB, Fixture.Day, arrival, f.DueEvents, f.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripB.State);
+            Assert.IsNotNull(tripB.Batch);
+            Assert.AreEqual(1, queue.WaitingCount);
+            // A arrives with the clerk: service starts, AwaitingService,
+            // entry [B, A].
+            clerkId = 3;
+            f.Driver.HandleDueEvent(outboundA, Fixture.Day, arrival, f.DueEvents, f.Diag);
+            Assert.IsTrue(IsAwaitingService(tripA));
+            Assert.AreEqual(2, queue.WaitingCount);
+            Assert.AreEqual(HouseholdShoppingLoop.ServiceCustomerRefFor(tripB), queue.Waiting[0].CustomerRef);
+            Assert.AreEqual(HouseholdShoppingLoop.ServiceCustomerRefFor(tripA), queue.Waiting[1].CustomerRef);
+            // Serve A: PopServiceDueEvent's window is arrival + 4 min + 1s,
+            // so B's InStore leg due (arrival + 30 min) is NOT popped.
+            // ServeNext pops waiting[0] = B (front, not the served trip —
+            // the mismatch); A settles and starts the InStore leg.
+            DueEvent serviceEv = PopServiceDueEvent(f, tripA, arrival);
+            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.AreEqual(HouseholdShoppingLoop.ServiceCustomerRefFor(tripA), queue.Waiting[0].CustomerRef, "A's entry lingers after the front-pop");
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripA.State);
+            Assert.IsNotNull(tripA.Batch);
+            Assert.AreEqual(2400, f.Store.CashReceived);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripB.State);
+            Assert.IsNotNull(tripB.Batch);
+            f.Driver.AdvanceTick(arrival + 25 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(0, queue.WaitingCount, "A's lingering entry was swept, no false QueueBalk");
+            Assert.AreEqual(0, log.Count, "no false lost sale for a settled customer");
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripA.State);
+            Assert.IsNotNull(tripA.Batch);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripB.State);
+            Assert.IsNotNull(tripB.Batch);
+            Assert.IsTrue(!f.Diag.Any(line => line.Contains("balked")), "sweep is silent");
+        }
+
+        [Test]
+        public void SettledEntry_SweptSilently_NoLostSale()
         {
             var f = new Fixture();
             var log = new LostSaleLog();
@@ -1408,17 +1572,13 @@ namespace LandLedgers.Editor.Population
             PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
             Assert.AreEqual(1, queue.WaitingCount);
             f.Driver.AdvanceTick(arrival + 25 * 60f, Fixture.Day, f.DueEvents, f.Diag);
-            Assert.AreEqual(0, queue.WaitingCount, "patience exhausted: the entry must balk out of the queue");
-            Assert.AreEqual(1, log.Count, "one QueueBalk lost sale");
-            List<LostSaleEvent> balks = log.EventsFor(string.Empty);
-            Assert.AreEqual(1, balks.Count);
-            Assert.AreEqual(LostSaleReason.QueueBalk, balks[0].Reason);
+            Assert.AreEqual(0, queue.WaitingCount, "settled entry must be swept before Tick, never balked");
+            Assert.AreEqual(0, log.Count, "no QueueBalk lost sale for a settled customer");
             Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State, "leg still open at +25 min");
-            // Note 70 ruling (f): the diag states the true pre-Slice 17 case —
-            // entry removed, trip unaffected — never a refusal or return-empty.
-            Assert.IsTrue(f.Diag.Any(line => line.Contains("balked")
-                && line.Contains("entry removed, trip unaffected (pre-Slice 17: no release)")),
-                "diag notes the balk with the corrected wording");
+            // Slice 18b: the sweep is silent — no "balked" line at all.
+            Assert.IsTrue(!f.Diag.Any(line => line.Contains("balked")), "swept entry writes no balk diag");
+            Assert.IsNotNull(trip.Batch);
+            Assert.AreEqual(1200, f.Store.CashReceived, "settlement untouched by the sweep");
         }
 
         [Test]
@@ -1463,16 +1623,16 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void TickSizeIndependence_PatienceDecay()
+        public void TickSizeIndependence_SettledSweep()
         {
             // 5-minute ticks.
             PatienceOutcome small = RunPatienceScenario(tickSeconds: 300);
             // 15-minute ticks.
             PatienceOutcome large = RunPatienceScenario(tickSeconds: 900);
-            Assert.AreEqual(0, small.QueueCount, "5-min ticks: patience must balk the entry out");
-            Assert.AreEqual(0, large.QueueCount, "15-min ticks: patience must balk the entry out");
-            Assert.AreEqual(1, small.LostSales, "5-min ticks: one QueueBalk");
-            Assert.AreEqual(1, large.LostSales, "15-min ticks: one QueueBalk");
+            Assert.AreEqual(0, small.QueueCount, "5-min ticks: settled entry must be swept out");
+            Assert.AreEqual(0, large.QueueCount, "15-min ticks: settled entry must be swept out");
+            Assert.AreEqual(0, small.LostSales, "5-min ticks: no QueueBalk for a settled customer");
+            Assert.AreEqual(0, large.LostSales, "15-min ticks: no QueueBalk for a settled customer");
             Assert.AreEqual(small.NeedStatus, large.NeedStatus, "need outcome must match across tick sizes");
             Assert.AreEqual(0, small.ActiveTrips, "5-min ticks: trip completes");
             Assert.AreEqual(0, large.ActiveTrips, "15-min ticks: trip completes");

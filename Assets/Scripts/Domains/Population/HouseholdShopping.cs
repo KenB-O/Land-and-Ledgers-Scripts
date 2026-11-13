@@ -127,7 +127,8 @@ namespace LandLedgers.Population
     /// Priority U-3: save data for the shopping loop's in-transit custody —
     /// every batch currently held in transit (in hand, on wagon, or
     /// arranged delivery), plus the batch-id sequence so a later settle
-    /// never reuses an id. Captured by
+    /// never reuses an id, plus the trip-id sequence so a later plan never
+    /// reuses a trip id (QA-20). Captured by
     /// HouseholdShoppingLoop.CaptureCustodySaveDto, restored by
     /// LoadCustodyFromSaveDto (clear-then-load, copy-on-load). The
     /// coordinator's save DTO carries plans only; this DTO is the custody
@@ -138,6 +139,16 @@ namespace LandLedgers.Population
     {
         public List<CarriedGoodsBatch> Batches = new List<CarriedGoodsBatch>();
         public int NextBatchSequence;
+        /// <summary>QA-20 (Plan 17): the shopping loop's trip-id sequence, so
+        /// a later plan never re-issues a trip id minted before the save.
+        /// Same shape as NextBatchSequence: persisted by
+        /// HouseholdShoppingLoop.CaptureCustodySaveDto, restored by
+        /// LoadCustodyFromSaveDto. Old saves read 0 (default int) — the
+        /// driver-side seed (ShoppingTripDriver.LoadFromSaveDto /
+        /// RehydrateAfterLoad) still raises the counter past restored ACTIVE
+        /// trip ids, so an old save is protected for live trips even though
+        /// its completed-trip ids are unrecoverable.</summary>
+        public int NextTripSequence;
     }
 
     /// <summary>

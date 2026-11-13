@@ -1100,5 +1100,126 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual(first, second);
             }
         }
+
+        /// <summary>
+        /// QA-20 (Plan 17): pre-save shape shared by the two persist tests —
+        /// one completed trip (trip-100-0), one still-active trip
+        /// (trip-100-1), and one failed plan (trip-100-2). The failed plan
+        /// consumes a sequence but never enters activeTrips, so its id exists
+        /// in no restorable record except the persisted counter — it is the
+        /// persist-vs-seed discriminator.
+        /// </summary>
+        private static List<string> PlanCompletedActiveAndFailedTrips(Fixture f)
+        {
+            HouseholdPurchasingNeed needA = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            string tripAId = f.Driver.ActiveTrips[0].TripId;
+            Assert.AreEqual("trip-100-0", tripAId);
+
+            f.RunUntilDone(tickSeconds: 300);
+            Assert.AreEqual(0, f.Driver.ActiveTrips.Count, "trip A should complete\n" + string.Join("\n", f.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, needA.Status);
+            Assert.AreEqual(90, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            string tripBId = f.Driver.ActiveTrips[0].TripId;
+            Assert.AreEqual("trip-100-1", tripBId);
+
+            HouseholdPurchasingNeed needF = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            needF.UnitsNeeded = 0;
+            PlannedShoppingTrip failed = f.Loop.PlanTrip(needF, Fixture.Day, f.LoopOptions);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, failed.State);
+            Assert.AreEqual("trip-100-2", failed.TripId);
+
+            return new List<string> { tripAId, tripBId, failed.TripId };
+        }
+
+        [Test]
+        public void TripSequence_PersistedAcrossCustodySaveLoad_DoesNotReissuePreSaveIds()
+        {
+            var f = new Fixture();
+            List<string> preSaveIds = PlanCompletedActiveAndFailedTrips(f);
+
+            HouseholdShoppingCustodySaveDto custodyDto = f.Loop.CaptureCustodySaveDto();
+            // Reached through reflection so this file still compiles
+            // against unmodified production code (red-first): the field
+            // does not exist yet before Plan 17.
+            System.Reflection.FieldInfo field = typeof(HouseholdShoppingCustodySaveDto).GetField("NextTripSequence");
+            Assert.IsNotNull(field, "HouseholdShoppingCustodySaveDto must carry NextTripSequence (QA-20, Plan 17).");
+            Assert.AreEqual(3, (int)field.GetValue(custodyDto));
+
+            var g = new Fixture();
+            g.Loop.LoadCustodyFromSaveDto(custodyDto);
+            HouseholdPurchasingNeed needG = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip newTrip = g.Loop.PlanTrip(needG, Fixture.Day, g.LoopOptions);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, newTrip.State);
+            Assert.AreEqual("trip-100-3", newTrip.TripId);
+            Assert.IsTrue(!preSaveIds.Contains(newTrip.TripId));
+        }
+
+        [Test]
+        public void TripSequence_PersistedAcrossDriverAndCustodySaveLoad_DoesNotReissuePreSaveIds()
+        {
+            var f = new Fixture();
+            List<string> preSaveIds = PlanCompletedActiveAndFailedTrips(f);
+            List<PlannedShoppingTripSaveDto> driverDto = f.Driver.CaptureSaveDto();
+            HouseholdShoppingCustodySaveDto custodyDto = f.Loop.CaptureCustodySaveDto();
+
+            var g = new Fixture();
+            // Driver-then-custody load order: the custody load must NOT
+            // wipe the seed raise from the driver load (Max form, Plan 17 §1.2(b)).
+            g.Driver.LoadFromSaveDto(driverDto);
+            g.Loop.LoadCustodyFromSaveDto(custodyDto);
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+            Assert.AreEqual("trip-100-1", g.Driver.ActiveTrips[0].TripId);
+
+            g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            g.Driver.PlanForHousehold(Fixture.HouseholdId, g.Needs, Fixture.Day, g.LoopOptions, g.Diag);
+            Assert.AreEqual(2, g.Driver.ActiveTrips.Count);
+            Assert.AreEqual("trip-100-3", g.Driver.ActiveTrips[1].TripId);
+            // The restored trip B legitimately keeps "trip-100-1" (a
+            // pre-save id); what must be fresh is the NEW trip's id, and
+            // the two live ids must be distinct.
+            Assert.IsTrue(!preSaveIds.Contains(g.Driver.ActiveTrips[1].TripId));
+            Assert.AreEqual(2, g.Driver.ActiveTrips.Select(t => t.TripId).Distinct().Count());
+        }
+
+        [Test]
+        public void TripSequence_RestoredActiveTrips_SeedPastThemOnOldSave()
+        {
+            var f = new Fixture();
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            Assert.AreEqual("trip-100-0", f.Driver.ActiveTrips[0].TripId);
+
+            // Deliberately NO custody DTO is captured or loaded — this
+            // simulates a save written BEFORE this fix.
+            var g = new Fixture();
+            g.Driver.LoadFromSaveDto(f.Driver.CaptureSaveDto());
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+            Assert.AreEqual("trip-100-0", g.Driver.ActiveTrips[0].TripId);
+
+            g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            // The first fresh need carries the same NeedSequence as the
+            // restored trip's need, so PlanForHousehold skips it (an active
+            // trip already exists for that need — HasActiveTripFor). The
+            // second need must be a DIFFERENT item: CreateNeed returns the
+            // existing open need for the same (household, item) key, so a
+            // second flour need would be the same object. Salt (stocked in
+            // the fresh fixture's store here) gets a new sequence and is
+            // planned as the new trip.
+            g.Store.Stock[HouseholdItemCatalog.SaltId] = 100;
+            g.Store.Prices[HouseholdItemCatalog.SaltId] = 120;
+            g.OpenNeed(HouseholdItemCatalog.SaltId, 10);
+            g.Driver.PlanForHousehold(Fixture.HouseholdId, g.Needs, Fixture.Day, g.LoopOptions, g.Diag);
+            Assert.AreEqual(2, g.Driver.ActiveTrips.Count);
+            Assert.AreEqual("trip-100-1", g.Driver.ActiveTrips[1].TripId);
+            Assert.AreEqual(2, g.Driver.ActiveTrips.Select(t => t.TripId).Distinct().Count());
+        }
     }
 }

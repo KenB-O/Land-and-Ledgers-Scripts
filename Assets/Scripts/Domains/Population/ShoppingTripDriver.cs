@@ -840,6 +840,14 @@ namespace LandLedgers.Population
                 // deposits it exactly once). Idempotent: a second load of
                 // the same DTO re-points at the already-held batch.
                 AttachTripBatchToLoop(trip);
+                // QA-20 (Plan 17): raise the loop's trip-id sequence past this
+                // restored trip's id, so a later plan cannot re-issue it. Never
+                // backward; a null loop is safe (loop is readonly and set in the
+                // ctor, but guard like AttachTripBatchToLoop does).
+                if (loop != null)
+                {
+                    loop.SeedTripSequenceFromTripId(trip.TripId);
+                }
                 AttachTripNeedToRegistry(trip);
             }
         }
@@ -912,6 +920,18 @@ namespace LandLedgers.Population
                 // turns out dead below still keeps its batch in loop
                 // custody (preserved, depositable via ReceiveCarriedBatch).
                 AttachTripBatchToLoop(trip);
+                // QA-20 (Plan 17): raise the loop's trip-id sequence past this
+                // restored trip's id, so a later plan cannot re-issue it. Never
+                // backward; a null loop is safe (loop is readonly and set in the
+                // ctor, but guard like AttachTripBatchToLoop does). Same
+                // load-order reason as the re-attach above: whichever of the
+                // custody DTO and the driver DTO loads last, the counter ends
+                // up raised past every restored active trip id. Idempotent
+                // (Max-only), so calling it in both places is safe.
+                if (loop != null)
+                {
+                    loop.SeedTripSequenceFromTripId(trip.TripId);
+                }
 
                 // QA-19: re-point the restored trip's need at the registry
                 // instance — the registry may have loaded after this driver,

@@ -127,7 +127,11 @@ namespace LandLedgers.Population
         /// </summary>
         public HouseholdShoppingCustodySaveDto CaptureCustodySaveDto()
         {
-            var dto = new HouseholdShoppingCustodySaveDto { NextBatchSequence = nextBatchSequence };
+            var dto = new HouseholdShoppingCustodySaveDto
+            {
+                NextBatchSequence = nextBatchSequence,
+                NextTripSequence = nextTripSequence,
+            };
             foreach (CarriedGoodsBatch batch in custodyBatches)
             {
                 if (batch == null) continue;
@@ -153,6 +157,18 @@ namespace LandLedgers.Population
             nextBatchSequence = 0;
             if (dto == null) return;
             nextBatchSequence = Math.Max(0, dto.NextBatchSequence);
+            // QA-20 (Plan 17): restore the trip-id sequence. DELIBERATE
+            // deviation from the batch counter's plain assignment above: the
+            // trip counter takes the MAX of the current value and the DTO
+            // value, never a plain assignment. The raise source for trips
+            // (restored ACTIVE trips, seeded by the driver — see
+            // SeedTripSequenceFromTripId) lives OUTSIDE this function and may
+            // already have run before this load; a plain assignment would wipe
+            // that raise on an old save (DTO value 0). Max is still idempotent
+            // for re-loading the same DTO, and loading an older save after a
+            // newer state keeps the larger counter — the safe direction for a
+            // monotonic id counter (ids are skipped, never reused).
+            nextTripSequence = Math.Max(nextTripSequence, Math.Max(0, dto.NextTripSequence));
             if (dto.Batches == null) return;
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (CarriedGoodsBatch batch in dto.Batches)
@@ -325,6 +341,42 @@ namespace LandLedgers.Population
             int dash = batchId.LastIndexOf('-');
             if (dash < 0 || dash == batchId.Length - 1) return -1;
             return int.TryParse(batchId.Substring(dash + 1), out int sequence) ? sequence : -1;
+        }
+
+        /// <summary>
+        /// QA-20 (Plan 17), complementary to the persisted counter: raises
+        /// the trip-id sequence past one restored trip's id, never backward.
+        /// Called by the driver for every trip it restores (LoadFromSaveDto
+        /// and RehydrateAfterLoad), so a save written BEFORE this fix — whose
+        /// custody DTO carries NextTripSequence 0 — still cannot re-issue
+        /// the id of a trip that is still live after the load. It does NOT
+        /// protect completed-trip or failed-plan ids on old saves: those ids
+        /// exist in no restorable record (see Plan 17 section 0.5). Agent 3
+        /// forward warning (freight half, note 27 §1.3), recorded here too:
+        /// this seeding and any future save slot are complementary, not
+        /// alternatives — if a future slice gives the loop a fuller save
+        /// slot, KEEP this seeding.
+        /// </summary>
+        public void SeedTripSequenceFromTripId(string tripId)
+        {
+            int sequence = TripSequence(tripId);
+            if (sequence >= 0)
+            {
+                nextTripSequence = Math.Max(nextTripSequence, sequence + 1);
+            }
+        }
+
+        /// <summary>Parses the trailing sequence from a "trip-{day}-{seq}"
+        /// trip id; -1 when it has none. Mirror of CustodyBatchSequence,
+        /// plus the "trip-" prefix check so a batch id can never seed the
+        /// trip counter.</summary>
+        private static int TripSequence(string tripId)
+        {
+            if (string.IsNullOrEmpty(tripId)) return -1;
+            if (!tripId.StartsWith("trip-", StringComparison.Ordinal)) return -1;
+            int dash = tripId.LastIndexOf('-');
+            if (dash < 0 || dash == tripId.Length - 1) return -1;
+            return int.TryParse(tripId.Substring(dash + 1), out int sequence) ? sequence : -1;
         }
 
         /// <summary>

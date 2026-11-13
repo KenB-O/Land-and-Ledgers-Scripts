@@ -1238,8 +1238,12 @@ namespace LandLedgers.Economy.Logistics
         /// load definition for this shipment ("freight:load:&lt;id&gt;" or
         /// "fr.load-freight") — a miswired lookup returning the 1-minute
         /// dispatch token (definition "freight-dispatch-assignment") can
-        /// never bind as a load task. Returns null when the lookup is
-        /// unwired, empty, or fails validation.
+        /// never bind as a load task. Non-terminal is the full terminal
+        /// set (TaskDurationDiagnostics: Complete / Failed / Cancelled /
+        /// ReworkRequired) — ReworkRequired is terminal for the instance
+        /// (TaskModels: "failed work that needs a corrective task"), so a
+        /// rework task must never bind as a live load task. Returns null
+        /// when the lookup is unwired, empty, or fails validation.
         /// </summary>
         private WorkTask FindRegisteredLoadTask(FreightShipmentHooks hooks,
             LogisticsShipmentState restored, string shipmentId)
@@ -1254,7 +1258,8 @@ namespace LandLedgers.Economy.Logistics
                 return null;
             if (candidate.Status == TaskStatus.Complete
                 || candidate.Status == TaskStatus.Failed
-                || candidate.Status == TaskStatus.Cancelled)
+                || candidate.Status == TaskStatus.Cancelled
+                || candidate.Status == TaskStatus.ReworkRequired)
                 return null;
             if (candidate.DefinitionId != "freight:load:" + shipmentId
                 && candidate.DefinitionId != "fr.load-freight")
@@ -1355,7 +1360,17 @@ namespace LandLedgers.Economy.Logistics
                     WorkTask t = FindRegisteredLoadTask(hooks, loadShipment, shipmentId)
                         ?? hooks.Tasks.FindOpenTask("freight:load:" + shipmentId,
                             EntityId.For(EntityKind.Business, 3), EntityId.Invalid);
-                    if (t != null)
+                    // A3b follow-up nit (b): bind only an OPEN task.
+                    // FindOpenTask excludes Complete only, so without this
+                    // guard it would re-bind the same dead task the
+                    // registered lookup just rejected (Failed, Cancelled,
+                    // ReworkRequired) and the shipment would stall in
+                    // Loading with a non-null binding instead of hitting
+                    // the Delayed net below. IsOpen is the authority's own
+                    // predicate (Queued / Assigned / InProgress / Paused /
+                    // WaitingOnPassiveProcess / WaitingOnDependency /
+                    // ResourcesReserved).
+                    if (t != null && t.IsOpen)
                     {
                         loadTasks[shipmentId] = t.TaskId;
                         continue;
@@ -1366,13 +1381,17 @@ namespace LandLedgers.Economy.Logistics
                         loadShipment.MarkDelayed(
                             "restored shipment '" + shipmentId + "' is Loading but its load task could not be re-bound after restore (no open load task found); delaying for a fresh load attempt",
                             LogisticsShipmentStatus.Planned);
+                        Log(hooks, "shipment '" + shipmentId + "' delayed: " + loadShipment.BlockedReason);
                     }
                 }
                 foreach (string shipmentId in dto.ShipmentIdsWithUnloadTasks)
                 {
                     WorkTask t = hooks.Tasks.FindOpenTask("freight:unload:" + shipmentId,
                         EntityId.For(EntityKind.Business, 3), EntityId.Invalid);
-                    if (t != null)
+                    // Same guard as the load loop, symmetric: a terminal
+                    // unload task must fall through to the Delayed net
+                    // below instead of binding a dead task.
+                    if (t != null && t.IsOpen)
                     {
                         unloadTasks[shipmentId] = t.TaskId;
                         continue;
@@ -1385,6 +1404,7 @@ namespace LandLedgers.Economy.Logistics
                         unloadShipment.MarkDelayed(
                             "restored shipment '" + shipmentId + "' is Unloading but its unload task could not be re-bound after restore (no open unload task found); delaying for a fresh unload attempt",
                             LogisticsShipmentStatus.Arrived);
+                        Log(hooks, "shipment '" + shipmentId + "' delayed: " + unloadShipment.BlockedReason);
                     }
                 }
             }

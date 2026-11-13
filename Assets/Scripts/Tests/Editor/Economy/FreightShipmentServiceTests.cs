@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using LandLedgers.Primitives;
@@ -813,6 +814,58 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(10, recipientStock["store-1"], "goods landed exactly once");
             Assert.IsTrue(reservations.IsReserved(ReservationKeyConventions.Asset("wagon-2"), 10f),
                 "null hooks: wagon-2 hold LEAKS after completion — the rebind production skips is the only release path");
+        }
+
+        // Slice A3b follow-up nit (a), unload net: restore a mid-unload
+        // shipment into a fresh TaskAuthority with no tasks at all, so
+        // neither the definition fallback nor any other lookup can find
+        // an unload task. The shipment must be Delayed with a named
+        // reason and resumeState Arrived — and the net must log to the
+        // hooks diagnostics, like every other MarkDelayed site in the
+        // service. The status assertions pass before the fix (the net
+        // exists); the diagnostics assertion is the red one.
+        [Test]
+        public void FreightServiceRestore_MissingUnloadTask_MarksDelayedWithNamedReasonAndLogsDiagnostic()
+        {
+            LogisticsShipmentState shipment = service.CreateShipment("ship-u1", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-1", hooks, out string r1);
+            Assert.IsNotNull(shipment, r1);
+            Assert.IsTrue(service.BeginLoading(shipment, loader, hooks, out string l1), l1);
+            int lguard = 0;
+            while (!shipment.loadApplied && lguard++ < 10)
+                Assert.IsTrue(service.WorkLoading(shipment, 60, hooks, out string w1), w1);
+            Assert.IsTrue(service.Dispatch(shipment, driver, null, hooks, out string d1), d1);
+            shipment.transitDurationGameSeconds = 200f;
+            service.AdvanceTransit(shipment, 200f, hooks);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status, "fixture: shipment arrived");
+            Assert.IsTrue(service.BeginUnloading(shipment, loader, hooks, out string u1), u1);
+            Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status, "fixture: shipment unloading");
+
+            FreightShipmentService.FreightServiceSaveDto dto =
+                service.CaptureSaveDto(new List<LogisticsShipmentState> { shipment });
+            Assert.IsTrue(dto.ShipmentIdsWithUnloadTasks.Contains("ship-u1"),
+                "fixture: the mid-unload DTO must list the shipment as having an unload task");
+
+            var service2 = FreshServiceWithWagons();
+            var restoreHooks = new FreightShipmentHooks
+            {
+                Tasks = new TaskAuthority(),
+                Budgets = budgets,
+                DayIndex = 42,
+                Diagnostics = new List<string>(),
+                ReceiveShipment = hooks.ReceiveShipment,
+            };
+            List<LogisticsShipmentState> restored = service2.RestoreSaveDto(dto, restoreHooks);
+            Assert.AreEqual(1, restored.Count, "one shipment restores");
+            LogisticsShipmentState rs = restored[0];
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, rs.Status,
+                "a shipment whose unload task cannot be re-bound must be Delayed, not left stalling in Unloading");
+            Assert.IsTrue(rs.BlockedReason.Contains("unload task"),
+                "the delay reason must name the unload task; reason: " + rs.BlockedReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, rs.resumeStateAfterDelay,
+                "the delayed shipment must resume to Arrived for a fresh unload attempt");
+            Assert.IsTrue(restoreHooks.Diagnostics.Any(d => d.Contains("ship-u1") && d.Contains("delayed")),
+                "the unload Delayed net must log to hooks diagnostics; diag: " + string.Join("; ", restoreHooks.Diagnostics));
         }
 
         private void RegisterSecondWagon()

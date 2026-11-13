@@ -2893,6 +2893,80 @@ namespace LandLedgers.Tests.Economy
                 "the delay reason must name the load task; reason: " + restored.BlockedReason);
             Assert.AreEqual(LogisticsShipmentStatus.Planned, restored.resumeStateAfterDelay,
                 "the delayed shipment must resume to Planned for a fresh load attempt");
+
+            // Slice A3b follow-up nit (a): the Delayed net must log to the
+            // hooks diagnostics, like every other MarkDelayed site in the
+            // service — a silent delay leaves no trace for the operator.
+            Assert.IsTrue(targetHooks.Diagnostics.Any(d => d.Contains(Q04ShipmentId) && d.Contains("delayed")),
+                "the load Delayed net must log to hooks diagnostics; diag: " + string.Join("; ", targetHooks.Diagnostics));
+        }
+
+        // Slice A3b follow-up nit (b): a registered dispatch task in
+        // ReworkRequired must NOT bind as the load task on restore.
+        // ReworkRequired is terminal for the instance (TaskModels.cs:
+        // "failed work that needs a corrective task. Terminal for this
+        // instance"), so adopting it would bind a dead task and stall the
+        // shipment in Loading with a non-null rebind — the exact stall
+        // the Delayed net exists to prevent. The restore must reject
+        // the dead task through BOTH lookups (the registered lookup and
+        // the definition fallback, which only excludes Complete) and
+        // Delay the shipment with a named reason and resumeState Planned.
+        [Test]
+        public void Q04_RestoreWithReworkRequiredLoadTask_RejectsBindingAndDelays()
+        {
+            Q04Scenario source = BuildQ04SourceScenario(completeLoad: false);
+            Q04Captured captured = CaptureQ04Scenario(source);
+            FreightShipmentService.FreightServiceSaveDto dto = source.FreightDriver.CaptureSaveDto();
+            Assert.IsTrue(dto.ShipmentIdsWithLoadTasks.Contains(Q04ShipmentId),
+                "the mid-load DTO must list the shipment as having a load task");
+
+            Q04Scenario target = NewQ04Scenario();
+            // The direct driver restore below restores freight only, not
+            // the task authority: load the source tasks (including the
+            // adopted InProgress load task) into the target authority
+            // first, exactly as RestoreQ04Scenario does for the full
+            // scenario. Without this the registered lookup has no task
+            // to find at all and the test proves nothing.
+            target.Tasks.LoadFromSaveDto(captured.Tasks);
+            WorkTask precheck = target.Tasks.FindTask(source.TaskId);
+            Assert.IsNotNull(precheck, "the adopted load task must load into the target authority");
+            Assert.AreEqual(TaskStatus.InProgress, precheck.Status, "the loaded task is InProgress before the first restore");
+            FreightShipmentHooks targetHooks = BuildQ04FreightHooks(target);
+            targetHooks.Schedules = target.Schedules;
+            targetHooks.MinuteOfDay = 480;
+            List<string> diag = new List<string>();
+            target.FreightDriver.RestoreSaveDto(dto, targetHooks, diag);
+
+            // First restore binds the adopted task, still InProgress.
+            WorkTask bound = target.Tasks.FindTask(source.TaskId);
+            Assert.IsNotNull(bound, "the adopted load task must bind on the first restore");
+            Assert.AreEqual(TaskStatus.InProgress, bound.Status, "the bound task is InProgress before failing it");
+
+            // Fail the load, then mark rework: Failed -> ReworkRequired
+            // is the only transition into ReworkRequired (policy table).
+            Assert.IsTrue(target.Tasks.CompleteTask(source.TaskId, TaskOutcome.RecoverableFailure, Q04DayIndex, target.Budgets),
+                "the adopted task must fail in the fixture");
+            Assert.AreEqual(TaskStatus.Failed, bound.Status, "the task is Failed after the failure outcome");
+            Assert.IsTrue(target.Tasks.MarkReworkRequired(source.TaskId, default(EntityId), "fixture: load failed, rework required", out string rej), rej);
+            Assert.AreEqual(TaskStatus.ReworkRequired, bound.Status, "the task is ReworkRequired before the second restore");
+
+            // Second restore of the same DTO over the same task authority:
+            // the registered lookup finds the dead task and must reject
+            // it, and the definition fallback must not re-bind it either.
+            List<string> diag2 = new List<string>();
+            target.FreightDriver.RestoreSaveDto(dto, targetHooks, diag2);
+            LogisticsShipmentState restored = target.FreightDriver.AllShipments()
+                .FirstOrDefault(sh => sh.ShipmentId == Q04ShipmentId);
+            Assert.IsNotNull(restored, "the restored shipment must exist after the second restore");
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, restored.Status,
+                "a shipment whose only load task is ReworkRequired must be Delayed, not left stalling in Loading");
+            Assert.IsTrue(restored.BlockedReason.Contains("load task"),
+                "the delay reason must name the load task; reason: " + restored.BlockedReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, restored.resumeStateAfterDelay,
+                "the delayed shipment must resume to Planned for a fresh load attempt");
+            FreightShipmentService.FreightServiceSaveDto recaptured = target.FreightDriver.CaptureSaveDto();
+            Assert.IsTrue(!recaptured.ShipmentIdsWithLoadTasks.Contains(Q04ShipmentId),
+                "no load-task binding may survive for the ReworkRequired task");
         }
     }
 }

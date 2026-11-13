@@ -31,6 +31,11 @@ namespace LandLedgers.Population
             Done = 5,
             Failed = 6,
             RecoveryPlanned = 7,
+            // Slice 17: arrived at the store, service task started,
+            // settlement waiting for the clerk's TendCustomer service to
+            // complete. Appended (serialized enums are append-only); the
+            // DTO persists State as an int and old saves never carry 8.
+            AwaitingService = 8,
         }
 
         public string TripId = string.Empty;
@@ -72,7 +77,7 @@ namespace LandLedgers.Population
         internal PlannedShoppingTripSaveDto CandidateDto;
 
         public bool IsActive => State == TripState.Planned || State == TripState.Outbound ||
-            State == TripState.AtStore || State == TripState.InStore || State == TripState.Returning || State == TripState.RecoveryPlanned;
+            State == TripState.AtStore || State == TripState.InStore || State == TripState.Returning || State == TripState.RecoveryPlanned || State == TripState.AwaitingService;
     }
 
     /// <summary>
@@ -483,14 +488,30 @@ namespace LandLedgers.Population
                 }
                 WorkTask serviceTask = loop.FindServiceTask(serviceTrip.ServiceTaskId);
                 string serviceError = loop.CompleteServiceTask(serviceTask, dayIndex, diag);
-                if (serviceError != null)
-                {
-                    diag.Add($"ShoppingTripDriver: service task {ev.PayloadRef} did not complete ({serviceError}); customer stays queued.");
-                    return;
-                }
                 CustomerQueue serviceQueue = loop.ResolveCustomerQueue?.Invoke(serviceTrip.Candidate?.Supplier?.SupplierBusinessId ?? string.Empty);
                 string servedRef = serviceQueue != null ? serviceQueue.ServeNext() : null;
-                diag.Add($"ShoppingTripDriver: TendCustomer service complete for trip {serviceTripId}; served '{servedRef ?? string.Empty}'.");
+                if (serviceError != null)
+                {
+                    // Slice 17 (d1): the failure is task bookkeeping, not a
+                    // customer refusal — settle anyway, as a no-service
+                    // customer settles (rule (g)).
+                    diag.Add($"ShoppingTripDriver: service task {ev.PayloadRef} did not complete ({serviceError}); settling anyway.");
+                }
+                else
+                {
+                    diag.Add($"ShoppingTripDriver: TendCustomer service complete for trip {serviceTripId}; served '{servedRef ?? string.Empty}'.");
+                }
+
+                // Slice 17: the service-completion branch is the settle
+                // trigger — settlement runs here, then the in-store leg.
+                string settleError = loop.SettleAfterService(serviceTrip, dayIndex, diag);
+                if (settleError != null)
+                {
+                    ReturnEmpty(serviceTrip, settleError, "settle after service failed", dayIndex, currentGameSeconds, dueEvents, diag);
+                    return;
+                }
+
+                StartInStoreLeg(serviceTrip, dayIndex, currentGameSeconds, dueEvents, diag);
                 return;
             }
 
@@ -592,7 +613,11 @@ namespace LandLedgers.Population
             }
         }
 
-        /// <summary>Arrival at the store: settle at the counter, then start the in-store leg.</summary>
+        /// <summary>Arrival at the store. Slice 17: when a TendCustomer
+        /// service task was started, settlement waits for service completion
+        /// — the in-store leg starts from the service-completion branch,
+        /// after SettleAfterService. Otherwise (no service task) settle at
+        /// the counter here and start the in-store leg, as before.</summary>
         private void ArriveNow(
             PlannedShoppingTrip trip, float currentGameSeconds, int dayIndex,
             IDueEventScheduler dueEvents, List<string> diag)
@@ -609,28 +634,7 @@ namespace LandLedgers.Population
             {
                 // Closed store or failed settlement: walk home empty-handed
                 // through the REAL return leg — the need stays open.
-                loop.CancelUnstartedInStoreLeg(trip, dayIndex, diag);
-                loop.RecordTripRefusal(trip, error, dayIndex);
-                // Slice 18 Tier 1: the trip is going home empty-handed, but its
-                // queue entry was made before settlement — remove it silently
-                // (no lost sale: a settle failure is not a balk).
-                RemoveStaleQueueEntry(trip);
-                diag.Add($"ShoppingTripDriver: trip {trip.TripId} need {trip.Need?.NeedSequence}: arrival failed ({error}) — returning empty-handed.");
-                trip.State = PlannedShoppingTrip.TripState.Returning;
-                string returnError = loop.BeginReturnLeg(trip, dayIndex, "return-empty", diag);
-                if (returnError == null && startPhysicalRoute != null
-                    && !startPhysicalRoute(trip.ShopperPersonId, trip.HomeLocationId ?? string.Empty))
-                    returnError = $"No physical route reaches home '{trip.HomeLocationId}'.";
-                if (returnError != null)
-                {
-                    loop.AbortTrip(trip, returnError, dayIndex, diag);
-                    activeTrips.Remove(trip);
-                    return;
-                }
-
-                ScheduleLegDue(trip, LegKind.Return,
-                    trip.Legs != null ? trip.Legs.Return : null,
-                    currentGameSeconds, dueEvents, diag);
+                ReturnEmpty(trip, error, "arrival failed", dayIndex, currentGameSeconds, dueEvents, diag);
                 return;
             }
 
@@ -644,14 +648,63 @@ namespace LandLedgers.Population
                     serviceTaskIdString, out serviceDueId);
                 serviceTaskIdStringToTripId[serviceTaskIdString] = trip.TripId;
                 diag.Add($"ShoppingTripDriver: TendCustomer service due in {trip.ServiceTaskPlannedMinutes} min ({serviceDueId}).");
+                // Slice 17: settlement waits for the service — the leg
+                // starts from the service-completion branch, after
+                // SettleAfterService. Do not start it here.
+                return;
             }
 
+            StartInStoreLeg(trip, dayIndex, currentGameSeconds, dueEvents, diag);
+        }
+
+        /// <summary>Slice 17: shared return-empty path — the ArriveNow error
+        /// path and the settle-after-service failure. Cancels the unstarted
+        /// in-store leg, records the refusal (need stays open), removes the
+        /// stale queue entry, and walks home through the real return leg.
+        /// The context names the failure honestly in the diag line.</summary>
+        private void ReturnEmpty(
+            PlannedShoppingTrip trip, string error, string context, int dayIndex,
+            float currentGameSeconds, IDueEventScheduler dueEvents, List<string> diag)
+        {
+            loop.CancelUnstartedInStoreLeg(trip, dayIndex, diag);
+            loop.RecordTripRefusal(trip, error, dayIndex);
+            // Slice 18 Tier 1: the trip is going home empty-handed, but its
+            // queue entry was made before settlement — remove it silently
+            // (no lost sale: a settle failure is not a balk).
+            RemoveStaleQueueEntry(trip);
+            diag.Add($"ShoppingTripDriver: trip {trip.TripId} need {trip.Need?.NeedSequence}: {context} ({error}) — returning empty-handed.");
+            trip.State = PlannedShoppingTrip.TripState.Returning;
+            string returnError = loop.BeginReturnLeg(trip, dayIndex, "return-empty", diag);
+            if (returnError == null && startPhysicalRoute != null
+                && !startPhysicalRoute(trip.ShopperPersonId, trip.HomeLocationId ?? string.Empty))
+                returnError = $"No physical route reaches home '{trip.HomeLocationId}'.";
+            if (returnError != null)
+            {
+                loop.AbortTrip(trip, returnError, dayIndex, diag);
+                activeTrips.Remove(trip);
+                return;
+            }
+
+            ScheduleLegDue(trip, LegKind.Return,
+                trip.Legs != null ? trip.Legs.Return : null,
+                currentGameSeconds, dueEvents, diag);
+        }
+
+        /// <summary>Slice 17: starts the in-store leg exactly as ArriveNow
+        /// did before the gate — BeginInStoreLeg (abort + remove on error),
+        /// the delivery due, then the InStore leg due. Returns false when
+        /// the trip was aborted. Shared by ArriveNow (no-service path) and
+        /// the service-completion branch (after SettleAfterService).</summary>
+        private bool StartInStoreLeg(
+            PlannedShoppingTrip trip, int dayIndex, float currentGameSeconds,
+            IDueEventScheduler dueEvents, List<string> diag)
+        {
             string inStoreError = loop.BeginInStoreLeg(trip, dayIndex, diag);
             if (inStoreError != null)
             {
                 loop.AbortTrip(trip, inStoreError, dayIndex, diag);
                 activeTrips.Remove(trip);
-                return;
+                return false;
             }
 
             if (trip.DeliveryMinutes > 0)
@@ -666,6 +719,7 @@ namespace LandLedgers.Population
             ScheduleLegDue(trip, LegKind.InStore,
                 trip.Legs != null ? trip.Legs.InStore : null,
                 currentGameSeconds, dueEvents, diag);
+            return true;
         }
 
         /// <summary>Slice 18 Tier 1: ticks the store queue of every supplier with
@@ -683,7 +737,8 @@ namespace LandLedgers.Population
             {
                 if (trip == null
                     || (trip.State != PlannedShoppingTrip.TripState.AtStore
-                        && trip.State != PlannedShoppingTrip.TripState.InStore))
+                        && trip.State != PlannedShoppingTrip.TripState.InStore
+                        && trip.State != PlannedShoppingTrip.TripState.AwaitingService))
                 {
                     continue;
                 }
@@ -994,7 +1049,9 @@ namespace LandLedgers.Population
         /// Must be called after the TaskAuthority and SupplierDirectory are
         /// restored; trips whose legs no longer resolve are aborted loudly.
         /// Trips persisted mid-settlement (AtStore) resume at the in-store leg
-        /// — settlement is never re-run (no double charge).
+        /// — settlement is never re-run (no double charge). Trips persisted
+        /// mid-wait (AwaitingService) settle on restore (Slice 17 (f1) — the
+        /// service linkage is runtime-only), then resume at the in-store leg.
         /// </summary>
         public void RehydrateAfterLoad(
             TaskAuthority tasks, Func<string, IGoodsSupplier> supplierByBusinessId,
@@ -1087,6 +1144,29 @@ namespace LandLedgers.Population
                 {
                     // Settlement already ran (batch/custody persisted); resume
                     // at the in-store leg without re-settling.
+                    string inStoreError = loop.BeginInStoreLeg(trip, dayIndex, diag);
+                    if (inStoreError != null)
+                    {
+                        diag.Add($"ShoppingTripDriver: trip {trip.TripId} could not resume at the in-store leg — {inStoreError}");
+                        dead.Add(trip);
+                        continue;
+                    }
+
+                    ScheduleLegDueAfterLoad(trip, currentGameSeconds, dueEvents, diag);
+                }
+                else if (trip.State == PlannedShoppingTrip.TripState.AwaitingService)
+                {
+                    // Slice 17 (f1): saved mid-wait — the service linkage is
+                    // runtime-only, so settle on restore, then resume at the
+                    // in-store leg exactly as the AtStore branch does.
+                    string settleError = loop.SettleAfterService(trip, dayIndex, diag);
+                    if (settleError != null)
+                    {
+                        diag.Add($"ShoppingTripDriver: trip {trip.TripId} could not settle on restore — {settleError}");
+                        dead.Add(trip);
+                        continue;
+                    }
+
                     string inStoreError = loop.BeginInStoreLeg(trip, dayIndex, diag);
                     if (inStoreError != null)
                     {

@@ -836,6 +836,14 @@ namespace LandLedgers.Editor.Population
             return queue;
         }
 
+        private static bool IsAwaitingService(PlannedShoppingTrip trip)
+        {
+            // Red-first: AwaitingService does not exist in unmodified
+            // production, so the state is compared by name — this compiles
+            // before and after the slice (Plan 16 reflection precedent).
+            return trip.State.ToString() == "AwaitingService";
+        }
+
         private static EntityId ServiceTaskIdOf(PlannedShoppingTrip trip)
         {
             // ServiceTaskId is internal: plain GetField only finds public
@@ -905,8 +913,10 @@ namespace LandLedgers.Editor.Population
             AddClerk(f);
             CustomerQueue queue = WireService(f, log, 3);
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
-            PlannedShoppingTrip trip = DriveToArrival(f, out _);
-            Assert.AreEqual(1200, f.Store.CashReceived);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            // Slice 17: settlement waits for service completion — nothing
+            // settles at arrival when a service task was started.
+            Assert.AreEqual(0, f.Store.CashReceived);
             Assert.AreEqual(1, queue.WaitingCount);
             WaitingCustomer waiting = queue.Waiting[0];
             // Plan 16 §1.3: the ref reuses the in-store leg format
@@ -922,6 +932,11 @@ namespace LandLedgers.Editor.Population
             WorkTask serviceTask = f.Tasks.FindTask(ServiceTaskIdOf(trip));
             Assert.IsNotNull(serviceTask);
             Assert.AreEqual(GeneralStoreTaskCatalog.TendCustomerId, serviceTask.DefinitionId);
+            // Slice 17: the 1200 lands after the service due, not at arrival.
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(1200, f.Store.CashReceived);
         }
 
         [Test]
@@ -1060,7 +1075,7 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void ServiceCompletionRefusal_LeavesQueueEntry()
+        public void ServiceCompletionRefusal_SettlesAnywayAndPopsQueue()
         {
             var f = new Fixture();
             var log = new LostSaleLog();
@@ -1078,8 +1093,18 @@ namespace LandLedgers.Editor.Population
             DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
             Assert.IsNotNull(serviceEv, "service due event not scheduled");
             f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
-            Assert.AreEqual(1, queue.WaitingCount);
+            // Slice 17 (d1, ruled by note 79): the failure is task
+            // bookkeeping, not a customer refusal — settle anyway and pop
+            // the queue, as on success. (Plan 22 §12 named one existing-test
+            // update; this is the second, forced by the same ruling — the
+            // old assertion pinned the pre-gate "customer stays queued"
+            // disposition that (d1) replaces. Flagged for Agent 3.)
+            Assert.AreEqual(0, queue.WaitingCount);
             Assert.AreEqual(TaskStatus.Complete, f.Tasks.FindTask(ServiceTaskIdOf(trip)).Status);
+            Assert.IsNotNull(trip.Batch);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
+            StringAssert.Contains("did not complete", string.Join("\n", f.Diag));
         }
 
         // ---- Plan 20: Plan 16 follow-ups (CancelTask disposal) ----
@@ -1477,6 +1502,155 @@ namespace LandLedgers.Editor.Population
                 NeedStatus = need.Status,
                 ActiveTrips = f.Driver.ActiveTrips.Count,
             };
+        }
+
+        // ---- Slice 17 (Plan 22): settle gate — settlement waits for the
+        // clerk's TendCustomer service to complete (note 79, SOUND).
+        // S1, S3, S4, S5 are red-first; S2 pins the unchanged no-service
+        // rule (g1) and passes before and after.
+        [Test]
+        public void ServiceCompletion_SettlesAfterService()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.IsNull(trip.Batch);
+            Assert.AreEqual(0, trip.UnitsSettled);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.IsTrue(IsAwaitingService(trip));
+            Assert.AreEqual(1, queue.WaitingCount);
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.IsNotNull(trip.Batch);
+            Assert.AreEqual(10, trip.UnitsSettled);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
+            Assert.AreEqual(0, queue.WaitingCount);
+        }
+
+        [Test]
+        public void NoClerk_SettlesAtArrivalAsToday()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            Assert.IsNotNull(trip.Batch);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(1, queue.WaitingCount);
+        }
+
+        [Test]
+        public void ServiceCompletionFailure_SettlesAnyway()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.IsNull(trip.Batch);
+            Assert.IsTrue(IsAwaitingService(trip));
+            Assert.IsTrue(f.Tasks.CompleteTask(ServiceTaskIdOf(trip), TaskOutcome.Success, Fixture.Day, f.Budgets));
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.IsNotNull(trip.Batch);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            StringAssert.Contains("did not complete", string.Join("\n", f.Diag));
+        }
+
+        [Test]
+        public void SettleFailureAfterService_ReturnsEmpty()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival,
+                afterPlan: () => f.Store.Stock[HouseholdItemCatalog.FlourId] = 0);
+            Assert.IsNull(trip.Batch);
+            Assert.IsTrue(IsAwaitingService(trip));
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, queue.WaitingCount);
+            Assert.AreEqual(0, log.Count);
+            Assert.AreEqual(0, f.Store.CashReceived);
+        }
+
+        [Test]
+        public void SaveLoad_AwaitingService_SettlesOnRestore()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.IsNull(trip.Batch);
+            Assert.IsTrue(IsAwaitingService(trip));
+            string serviceTaskIdString = ServiceTaskIdOf(trip).ToString();
+
+            // Capture all authority state (clear-then-load), as the :677-690 pattern.
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+
+            // Restore into a FRESH fixture (new authorities, same scenario wiring).
+            var g = new Fixture();
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(schedulesDto);
+            g.Driver.LoadFromSaveDto(driverDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+            foreach (PlannedShoppingTrip t in g.Driver.ActiveTrips)
+            {
+                t.Need = gNeed;
+            }
+
+            // The save happened at arrival, so restore "now" is the arrival time.
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, arrival, g.DueEvents, g.Diag);
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip restored = g.Driver.ActiveTrips[0];
+            Assert.IsNotNull(restored.Batch);
+            Assert.AreEqual(10, restored.UnitsSettled);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
+            Assert.AreEqual(1200, g.Store.CashReceived);
+            Assert.IsTrue(g.DueEvents.ScheduledCount > 0, "in-store leg due re-scheduled");
+
+            // The restored service due is stale: the map is empty, so
+            // handling it is a no-op. Pop only up to arrival + 5 min so the
+            // in-store due (arrival + 15) is not touched.
+            DueEvent staleServiceEv = null;
+            foreach (DueEvent ev in g.DueEvents.PopDue(arrival + 5 * 60f))
+            {
+                if (ev.PayloadRef == serviceTaskIdString)
+                {
+                    staleServiceEv = ev;
+                }
+            }
+
+            Assert.IsNotNull(staleServiceEv, "stale service due event not restored");
+            g.Driver.HandleDueEvent(staleServiceEv, Fixture.Day, staleServiceEv.DueGameSeconds, g.DueEvents, g.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
+            Assert.IsNotNull(restored.Batch);
+            Assert.AreEqual(1200, g.Store.CashReceived);
         }
     }
 }

@@ -2228,12 +2228,42 @@ namespace LandLedgers.Population
             return null;
         }
 
+        /// <summary>Slice 17: the settle part of ArriveAtStoreAndSettle,
+        /// callable after service completion (driver service branch) and on
+        /// restore (AwaitingService branch). Runs SettleAtCounter with the
+        /// trip's own data, then records Batch / UnitsSettled / AtStore plus
+        /// the delivery estimate. Returns null on success, the failure reason
+        /// on failure. The caller decides the disposition.</summary>
+        internal string SettleAfterService(PlannedShoppingTrip trip, int dayIndex, List<string> diag)
+        {
+            SettlementOutcome counter = SettleAtCounter(
+                trip.Result, trip.Legs, trip.Need, trip.Candidate, trip.ShopperPersonId, dayIndex, diag,
+                trip.Options ?? new ShoppingLoopOptions());
+            if (!counter.Success)
+            {
+                return counter.FailureReason;
+            }
+
+            trip.Batch = counter.Batch;
+            trip.UnitsSettled = counter.UnitsSold;
+            trip.State = PlannedShoppingTrip.TripState.AtStore;
+            if (trip.Candidate.UseDelivery)
+            {
+                trip.DeliveryMinutes = EstimateDeliveryMinutes(trip, diag);
+            }
+
+            return null;
+        }
+
         /// <summary>
         /// Pass IV: arrival at the store — location + schedule state update, the
-        /// trading-capability check (step 7), and the shared counter settlement
-        /// (steps 9–14). Returns null on success; on failure returns a reason
-        /// prefixed STORE_CLOSED or SETTLE_FAILED so the driver can walk the
-        /// shopper home empty-handed through the real return leg.
+        /// trading-capability check (step 7), and the queue/service block.
+        /// Slice 17: settlement (steps 9–14) runs at arrival only when no
+        /// service task exists; when a TendCustomer task was started the trip
+        /// waits in AwaitingService and the service-completion branch settles
+        /// it. Returns null on success; on failure returns a reason prefixed
+        /// STORE_CLOSED or SETTLE_FAILED so the driver can walk the shopper
+        /// home empty-handed through the real return leg.
         /// </summary>
         public string ArriveAtStoreAndSettle(PlannedShoppingTrip trip, int arrivalDayIndex, int arrivalMinuteOfDay, List<string> diag)
         {
@@ -2262,9 +2292,10 @@ namespace LandLedgers.Population
 
             // Plan 16: employee service. The shopper joins the store's live
             // queue and a TendCustomer task is created for a filled clerk.
-            // Settlement is UNCHANGED in this slice (it still runs below, at
-            // arrival); the gate that makes settlement wait for service is
-            // slice 17. Skips are silent-or-diagnostic only, never invented
+            // Slice 17: settlement waits for service — when a task was started
+            // the trip waits in AwaitingService (below) and the
+            // service-completion branch settles it; with no task it settles
+            // at arrival, as before. Skips are silent-or-diagnostic only, never invented
             // state: no queue -> today; unresolvable category -> skip (never
             // pass ItemId as CategoryId); full line -> skip WITHOUT calling
             // Enqueue (calling it would record a false QueueBalk lost sale for
@@ -2334,19 +2365,20 @@ namespace LandLedgers.Population
                 }
             }
 
-            SettlementOutcome counter = SettleAtCounter(
-                trip.Result, trip.Legs, need, chosen, shopperId, arrivalDayIndex, diag, trip.Options);
-            if (!counter.Success)
+            // Slice 17: settlement waits for service. A service task was
+            // started — the trip waits in AwaitingService and the
+            // service-completion branch settles it. No service task —
+            // settle immediately, as today (rule (g)).
+            if (trip.ServiceTaskId.IsValid)
             {
-                return $"SETTLE_FAILED: {counter.FailureReason}";
+                trip.State = PlannedShoppingTrip.TripState.AwaitingService;
+                return null;
             }
 
-            trip.Batch = counter.Batch;
-            trip.UnitsSettled = counter.UnitsSold;
-            trip.State = PlannedShoppingTrip.TripState.AtStore;
-            if (chosen.UseDelivery)
+            string settleError = SettleAfterService(trip, arrivalDayIndex, diag);
+            if (settleError != null)
             {
-                trip.DeliveryMinutes = EstimateDeliveryMinutes(trip, diag);
+                return $"SETTLE_FAILED: {settleError}";
             }
 
             return null;

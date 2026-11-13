@@ -5220,14 +5220,15 @@ namespace LandLedgers.Orchestration.Systems
                             Debug.LogWarning($"[FreightAgreement] Exit route unplanned for shipment '{stableShipmentId}': logistics runtime unavailable.", this);
                         }
                         // Slice F1: plan via the carrier method, which
-                        // resolves staging with presentation parity (B3
-                        // anchor -> B3 plot -> operator home anchor ->
-                        // operator home plot, each in-bounds and a road
-                        // cell). NON-GATING, as in S8: a planning failure
-                        // is warned, never a registration failure.
+                        // resolves staging from the carrier premises
+                        // anchor -> carrier premises plot (each in-bounds
+                        // and a road cell) and refuses when no valid
+                        // assigned commercial premises exist — the same
+                        // gate the presentation layer applies.
+                        // NON-GATING, as in S8: a planning failure is
+                        // warned, never a registration failure.
                         else if (logisticsRuntime.TryPlanFreightExitRouteForCarrier(
                             carrier,
-                            populationManager?.State?.GetPerson(accepted.AcceptingOperatorPersonId)?.homeBuildingId ?? -1,
                             exitPoint, out LogisticsRoutePlan exitPlan, out string exitRouteReason,
                             out GridCoord stagingCell, out string stagingSource))
                         {

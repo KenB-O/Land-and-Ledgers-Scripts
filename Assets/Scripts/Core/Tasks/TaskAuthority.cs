@@ -247,12 +247,20 @@ namespace LandLedgers.Tasks
 
             task.SetPlannedMinutes(plannedMinutes);
 
+            // Commit the remaining work, not the full estimate. A fresh
+            // task has no worked minutes, so MinutesRemaining equals
+            // plannedMinutes and the fresh path is unchanged. A re-queued
+            // interrupted task keeps its minutesWorked, so committing the
+            // full estimate would re-book minutes already worked
+            // (over-commit equals MinutesWorked per re-assignment).
+            int commitMinutes = task.MinutesRemaining;
+
             string budgetReason;
             if (budgetStore != null && currentDayIndex >= 0)
             {
                 budgetStore.EnsureDay(currentDayIndex);
             }
-            if (budgetStore != null && !budgetStore.TryCommitTask(workerId, plannedMinutes, out budgetReason))
+            if (budgetStore != null && !budgetStore.TryCommitTask(workerId, commitMinutes, out budgetReason))
             {
                 rejectionReason = "Cannot assign " + taskId + ": " + budgetReason;
                 return false;

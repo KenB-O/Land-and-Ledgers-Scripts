@@ -4439,6 +4439,29 @@ namespace LandLedgers.Orchestration.Systems
                 return false;
             }
 
+            // Request 3 (QA-05 hardening): freight load/unload handling
+            // tasks must never start through this funnel. It reserves
+            // with TaskReservationLabel, which would drop the second
+            // QA-05 barrier (AdvanceAutonomousWork would then accrue the
+            // task alongside WorkLoading/WorkUnloading, and
+            // CompleteTaskWithCausalOutcome plus
+            // ReleaseAutonomousTaskReservation could terminalize it out
+            // from under the freight driver). BeginLoading/BeginUnloading
+            // start handling tasks directly via AssignTask + StartTask
+            // and never use this funnel; no production caller passes a
+            // handling task today, so this refusal never fires in
+            // production. NARROW: this covers ONLY handling ids and
+            // business-3 ownership (see FreightHandlingTaskGuard). The
+            // "freight-dispatch-assignment" handshake and the
+            // freight-service meeting task DO start through this funnel
+            // by design and are NOT handling tasks.
+            if (FreightHandlingTaskGuard.IsFreightHandlingTask(task))
+            {
+                refusal = "freight handling task '" + task.DefinitionId
+                    + "' must not start through TryStartBusinessPersonTask; it is driven by WorkLoading/WorkUnloading.";
+                return false;
+            }
+
             // Slice F3: off-map person-time guard (Verify-6). While the
             // journey record says this person is off-map (day D through
             // D+2 for the freight trip), no town task may start for them —
@@ -8348,6 +8371,21 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     if (task == null || task.Status != TaskStatus.InProgress || !task.HasAssignee) continue;
                     if (IsArrivalDrivenTravelTask(task)) continue;
+                    // Request 3 (QA-05 hardening): freight load/unload
+                    // handling tasks accrue only via WorkLoading /
+                    // WorkUnloading, never here. Today this is already
+                    // true by two coincidences (the iteration set never
+                    // contains a business-3 task, and the QA-05
+                    // "freight:*" reservation labels never match
+                    // TaskReservationLabel) — this guard makes it
+                    // deliberate, so a future enumeration or label change
+                    // cannot start double-counting freight minutes.
+                    // Silent: per-tick, steady-state, same as the
+                    // arrival-travel continue above. The predicate lives
+                    // in FreightHandlingTaskGuard (Core/Tasks) so the
+                    // accrual skip, the start refusal, and the sweep skip
+                    // share one definition.
+                    if (FreightHandlingTaskGuard.IsFreightHandlingTask(task)) continue;
                     List<PersonActivityReservation> activeReservations =
                         hub.PersonSchedules.ActiveFor(task.AssigneeId.Id, dayIndex);
                     // Plan 05 (Slice 05): stale-InProgress sweep, folded in as

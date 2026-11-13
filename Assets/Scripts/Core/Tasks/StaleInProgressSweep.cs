@@ -95,18 +95,13 @@ namespace LandLedgers.Tasks
             // owned by literal business id 3, never reserve schedule windows,
             // and accrue via WorkLoading/WorkUnloading, not
             // AdvanceAutonomousWork. Never touch them here, even if one ever
-            // entered the autonomous iteration set. The skip has two
-            // independent clauses: the owner clause is the invariant (it
-            // survives a definition-id rename, e.g. QA-12 adoption to
-            // "fr.load-freight" / "fr.unload-freight"), and the
-            // definition-id clause is belt-and-braces (it survives an
-            // owner renumbering). Either clause alone skips the task.
-            if (task.OwnerId == EntityId.For(EntityKind.Business, 3)
-                || (task.DefinitionId != null
-                    && (task.DefinitionId.StartsWith("freight:load:", StringComparison.Ordinal)
-                        || task.DefinitionId.StartsWith("freight:unload:", StringComparison.Ordinal)
-                        || task.DefinitionId == "fr.load-freight"
-                        || task.DefinitionId == "fr.unload-freight")))
+            // entered the autonomous iteration set. The predicate lives in
+            // FreightHandlingTaskGuard (shared with the AdvanceAutonomousWork
+            // accrual skip and the TryStartBusinessPersonTask start refusal)
+            // so the three guards can never rot apart; it has two
+            // independent clauses (owner, then definition id) — either
+            // clause alone skips the task.
+            if (FreightHandlingTaskGuard.IsFreightHandlingTask(task))
             {
                 return new StaleInProgressVerdict(
                     StaleInProgressDecision.Skip, PersonActivityKind.Work,

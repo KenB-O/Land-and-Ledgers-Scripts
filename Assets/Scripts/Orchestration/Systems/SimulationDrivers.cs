@@ -3425,6 +3425,9 @@ namespace LandLedgers.Orchestration.Systems
                 Diagnostics = diag,
                 Reservations = hub.Reservations,
                 NowGameSeconds = AbsoluteNowGameSeconds(),
+                Schedules = hub.PersonSchedules,
+                MinuteOfDay = timeManager != null
+                    ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480,
                 ReceiveShipment = ReceiveFreightIntoDestinationStock,
                 // Slice S10: the off-map hold — AdvanceTick skips shipments
                 // whose wagon is off-map. Method-group assignment; the

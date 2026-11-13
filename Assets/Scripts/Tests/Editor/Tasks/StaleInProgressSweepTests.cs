@@ -24,7 +24,7 @@ namespace LandLedgers.EditorTests.Tasks
         private static string ReservationLabel(WorkTask task) => $"task:{task.TaskId}|{task.DefinitionId}";
 
         private static (TaskAuthority Authority, WorkTimeBudgetStore Budgets, WorkTask Task) StartTask(
-            string definitionId, int plannedMinutes, string customerRef = null)
+            string definitionId, int plannedMinutes, string customerRef = null, EntityId? owner = null)
         {
             var authority = new TaskAuthority();
             Assert.IsTrue(authority.RegisterDefinition(new TaskDefinition(
@@ -32,7 +32,7 @@ namespace LandLedgers.EditorTests.Tasks
             var budgets = new WorkTimeBudgetStore();
             budgets.EnsureDay(1);
             WorkTask task = authority.CreateTaskWithPlannedMinutes(
-                definitionId, Owner, 1, plannedMinutes, customerRef: customerRef ?? string.Empty);
+                definitionId, owner ?? Owner, 1, plannedMinutes, customerRef: customerRef ?? string.Empty);
             Assert.IsTrue(authority.AssignTask(task.TaskId, Worker, budgets, out reason), reason);
             Assert.IsTrue(authority.StartTask(task.TaskId, 1, out reason), reason);
             Assert.AreEqual(TaskStatus.InProgress, task.Status);
@@ -160,6 +160,8 @@ namespace LandLedgers.EditorTests.Tasks
 
         [TestCase("freight:load:ship-1")]
         [TestCase("freight:unload:ship-1")]
+        [TestCase("fr.load-freight")]
+        [TestCase("fr.unload-freight")]
         public void FreightDefinition_Skip(string definitionId)
         {
             (_, _, WorkTask task) = StartTask(definitionId, 30);
@@ -172,6 +174,23 @@ namespace LandLedgers.EditorTests.Tasks
 
             Assert.AreEqual(StaleInProgressDecision.Skip, verdict.Decision,
                 "freight load/unload tasks are Agent 2's (QA-01), never the autonomous sweep's");
+        }
+
+        [TestCase("ordinary-work")]
+        [TestCase("fr.load-freight")]
+        public void FreightOwner_Skip(string definitionId)
+        {
+            (_, _, WorkTask task) = StartTask(definitionId, 30,
+                owner: EntityId.For(EntityKind.Business, 3));
+            var reservations = new List<PersonActivityReservation>
+            {
+                Reservation(PersonActivityKind.Work, 480, 60, task),
+            };
+
+            StaleInProgressVerdict verdict = Decide(task, reservations, 700);
+
+            Assert.AreEqual(StaleInProgressDecision.Skip, verdict.Decision,
+                "a task owned by the freight business (id 3) is never the autonomous sweep's, whatever its definition id");
         }
 
         [Test]

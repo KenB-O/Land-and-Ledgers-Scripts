@@ -377,12 +377,14 @@ namespace LandLedgers.Tests.Economy
             {
                 LotId = ids.Allocate(EntityKind.Lot), FuelWoodUnits = 10,
                 SourceMillBusinessId = "mill-1", SourceLogLotId = "log-lot-1",
+                OwnerId = "mill-1",
                 StandId = "stand-1", Species = "pine", ProducedDayIndex = 1,
             }, diag), "first sawmill lot must be received: " + string.Join("; ", diag));
             Assert.IsNull(dealer.ReceiveSawmillLot(new SlabOffcutFuelLot
             {
                 LotId = ids.Allocate(EntityKind.Lot), FuelWoodUnits = 10,
                 SourceMillBusinessId = "mill-1", SourceLogLotId = "log-lot-1",
+                OwnerId = "mill-1",
                 StandId = "stand-1", Species = "pine", ProducedDayIndex = 2,
             }, diag));
             Assert.AreEqual(20, dealer.StockUnits, "dealer holds exactly the 20 units received");

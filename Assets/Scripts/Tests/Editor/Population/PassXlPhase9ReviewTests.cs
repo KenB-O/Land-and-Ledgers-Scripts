@@ -229,6 +229,7 @@ public sealed class PassXlPhase9ReviewTests
             LotId = EntityId.For(EntityKind.Lot, 1),
             FuelWoodUnits = 8,
             SourceMillBusinessId = "mill-1",
+            OwnerId = "mill-1",
             SourceLogLotId = "log-1",
             StandId = "stand-1",
             Species = "white-pine",

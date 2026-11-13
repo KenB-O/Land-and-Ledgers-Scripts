@@ -403,6 +403,7 @@ namespace LandLedgers.Editor.Economy
                 LotId = ids.Allocate(EntityKind.Lot),
                 FuelWoodUnits = 20,
                 SourceMillBusinessId = "mill-1",
+                OwnerId = "mill-1",
                 SourceLogLotId = "log-1",
                 StandId = "stand-1",
                 Species = "pine",

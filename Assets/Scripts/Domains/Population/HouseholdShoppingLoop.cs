@@ -2658,6 +2658,22 @@ namespace LandLedgers.Population
                 "No purchase settled; return journey remains required.");
         }
 
+        /// <summary>
+        /// Slice 18: the queue ref for a trip, in the same format the arrival
+        /// enqueue and the in-store leg's customerRef use —
+        /// "shop:{householdId}:{needSequence}". A trip whose need is unknown
+        /// yields a ref that matches nothing, so TryRemove is a no-op.
+        /// </summary>
+        public static string ServiceCustomerRefFor(PlannedShoppingTrip trip)
+        {
+            if (trip == null)
+            {
+                return string.Empty;
+            }
+
+            return $"shop:{trip.HouseholdId}:{trip.Need?.NeedSequence}";
+        }
+
         public void AbortTrip(PlannedShoppingTrip trip, string reason, int dayIndex, List<string> diag)
         {
             if (trip == null)
@@ -2669,6 +2685,11 @@ namespace LandLedgers.Population
             WorkTask[] openLegs = { trip.Legs?.Outbound, trip.Legs?.InStore, trip.Legs?.Return };
             foreach (WorkTask leg in openLegs)
                 if (leg != null && leg.IsOpen) tasks.CancelTask(leg.TaskId, budgets);
+            // Slice 18 Tier 1: the trip is leaving without service — remove its
+            // queue entry silently (no lost sale, no refusal). A trip that
+            // failed before arrival was never enqueued, so this is a no-op.
+            CustomerQueue queue = ResolveCustomerQueue?.Invoke(trip.Candidate?.Supplier?.SupplierBusinessId ?? string.Empty);
+            if (queue != null) queue.TryRemove(ServiceCustomerRefFor(trip));
             trip.State = PlannedShoppingTrip.TripState.Failed;
             trip.FailureReason = reason ?? "aborted";
             AddEvent(trip.Result, dayIndex, ShoppingEventKind.Failure, trip.ShopperPersonId, trip.Need,

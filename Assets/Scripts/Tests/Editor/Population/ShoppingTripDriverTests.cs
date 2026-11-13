@@ -854,10 +854,11 @@ namespace LandLedgers.Editor.Population
             return (int)field.GetValue(trip);
         }
 
-        private static PlannedShoppingTrip DriveToArrival(Fixture f, out float arrivalGameSeconds)
+        private static PlannedShoppingTrip DriveToArrival(Fixture f, out float arrivalGameSeconds, Action afterPlan = null)
         {
             f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
             Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            if (afterPlan != null) afterPlan();
             PlannedShoppingTrip trip = f.Driver.ActiveTrips[0];
             float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
             f.Driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
@@ -1315,6 +1316,167 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(2, g.Driver.ActiveTrips.Count);
             Assert.AreEqual("trip-100-1", g.Driver.ActiveTrips[1].TripId);
             Assert.AreEqual(2, g.Driver.ActiveTrips.Select(t => t.TripId).Distinct().Count());
+        }
+
+        // Slice 18 Tier 1 (Plan 21): patience tick + stale cleanup. Tier 2
+        // (customer release) is deferred to Slice 18b after Slice 17 (note 70
+        // ruling (a2)) — no release is built or tested here.
+        [Test]
+        public void PatienceTick_DecaysByElapsedMinutes()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            f.LoopOptions.InStoreMinutes = 30;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip trip = f.Driver.ActiveTrips[0];
+            // Step the clock in 5-minute increments from departure, draining
+            // dues at each step as RunUntilDone does: the queue watermark
+            // tracks real time, so the queue only ever decays the minutes
+            // since the last tick. A jump straight to arrival would
+            // over-decay by the 40-minute walk (the watermark sits at
+            // departure), so the exact-decay assertions need fine steps.
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            float arrival = -1f;
+            bool checkedTen = false;
+            for (float now = departure; now <= departure + 3600f; now += 300f)
+            {
+                f.Driver.AdvanceTick(now, Fixture.Day, f.DueEvents, f.Diag);
+                foreach (DueEvent ev in f.DueEvents.PopDue(now))
+                {
+                    if (arrival < 0f && trip.Legs != null && trip.Legs.Outbound != null
+                        && ev.PayloadRef == trip.Legs.Outbound.TaskId.ToString())
+                    {
+                        arrival = ev.DueGameSeconds;
+                    }
+
+                    f.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+                }
+
+                if (arrival >= 0f && !checkedTen && now >= arrival + 10 * 60f)
+                {
+                    checkedTen = true;
+                    Assert.AreEqual(10, queue.Waiting[0].PatienceMinutesRemaining, "10 elapsed minutes must decay patience 20 -> 10");
+                }
+
+                if (arrival >= 0f && now >= arrival + 15 * 60f)
+                {
+                    Assert.AreEqual(5, queue.Waiting[0].PatienceMinutesRemaining, "15 elapsed minutes must decay patience 20 -> 5");
+                    break;
+                }
+            }
+
+            Assert.IsTrue(checkedTen, "the +10 min check ran");
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State, "leg still open at +15 min");
+        }
+
+        [Test]
+        public void PatienceExpiry_BalksGenuineCustomer_WritesLostSale()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            f.LoopOptions.InStoreMinutes = 30;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.AreEqual(1, queue.WaitingCount);
+            f.Driver.AdvanceTick(arrival + 25 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(0, queue.WaitingCount, "patience exhausted: the entry must balk out of the queue");
+            Assert.AreEqual(1, log.Count, "one QueueBalk lost sale");
+            List<LostSaleEvent> balks = log.EventsFor(string.Empty);
+            Assert.AreEqual(1, balks.Count);
+            Assert.AreEqual(LostSaleReason.QueueBalk, balks[0].Reason);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State, "leg still open at +25 min");
+            // Note 70 ruling (f): the diag states the true pre-Slice 17 case —
+            // entry removed, trip unaffected — never a refusal or return-empty.
+            Assert.IsTrue(f.Diag.Any(line => line.Contains("balked")
+                && line.Contains("entry removed, trip unaffected (pre-Slice 17: no release)")),
+                "diag notes the balk with the corrected wording");
+        }
+
+        [Test]
+        public void LegCompletion_RemovesStaleEntry_Silently()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.AreEqual(1, queue.WaitingCount);
+            // Run the InStore leg due (default 15 min); pop past the due time
+            // so the boundary is not in question. The return leg due is
+            // scheduled during handling, after the pop, so it cannot leak in.
+            foreach (DueEvent ev in f.DueEvents.PopDue(arrival + 16 * 60f))
+            {
+                f.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+            }
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(0, queue.WaitingCount, "leg completion must remove the stale queue entry");
+            Assert.AreEqual(0, log.Count, "no false lost sale on a served leg");
+        }
+
+        [Test]
+        public void SettleFailure_RemovesEntry_Silently()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            // The planner rejects a zero-stock supplier ("no available stock
+            // (real lots exhausted)"), so a settle failure is only reachable
+            // when the shelves empty BETWEEN planning and arrival (another
+            // buyer) — zero the stock after planning, before the outbound
+            // leg is driven.
+            PlannedShoppingTrip trip = DriveToArrival(f, out _,
+                afterPlan: () => f.Store.Stock[HouseholdItemCatalog.FlourId] = 0);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State, "failed arrival walks home");
+            Assert.AreEqual(0, queue.WaitingCount, "failed arrival must remove the queue entry");
+            Assert.AreEqual(0, log.Count, "no false lost sale on a failed arrival");
+        }
+
+        [Test]
+        public void TickSizeIndependence_PatienceDecay()
+        {
+            // 5-minute ticks.
+            PatienceOutcome small = RunPatienceScenario(tickSeconds: 300);
+            // 15-minute ticks.
+            PatienceOutcome large = RunPatienceScenario(tickSeconds: 900);
+            Assert.AreEqual(0, small.QueueCount, "5-min ticks: patience must balk the entry out");
+            Assert.AreEqual(0, large.QueueCount, "15-min ticks: patience must balk the entry out");
+            Assert.AreEqual(1, small.LostSales, "5-min ticks: one QueueBalk");
+            Assert.AreEqual(1, large.LostSales, "15-min ticks: one QueueBalk");
+            Assert.AreEqual(small.NeedStatus, large.NeedStatus, "need outcome must match across tick sizes");
+            Assert.AreEqual(0, small.ActiveTrips, "5-min ticks: trip completes");
+            Assert.AreEqual(0, large.ActiveTrips, "15-min ticks: trip completes");
+        }
+
+        private sealed class PatienceOutcome
+        {
+            public int QueueCount;
+            public int LostSales;
+            public PurchasingNeedStatus NeedStatus;
+            public int ActiveTrips;
+        }
+
+        private static PatienceOutcome RunPatienceScenario(int tickSeconds)
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            f.LoopOptions.InStoreMinutes = 45;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            f.RunUntilDone(tickSeconds);
+            return new PatienceOutcome
+            {
+                QueueCount = queue.WaitingCount,
+                LostSales = log.Count,
+                NeedStatus = need.Status,
+                ActiveTrips = f.Driver.ActiveTrips.Count,
+            };
         }
     }
 }

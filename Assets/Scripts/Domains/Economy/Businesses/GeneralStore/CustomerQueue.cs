@@ -14,6 +14,9 @@ namespace LandLedgers.Economy.GeneralStore
         public int UnitsWanted;
         public int PriceCentsPerUnit;
         public int PatienceMinutesRemaining;
+        /// <summary>Slice 18: the patience budget the customer joined with, so a
+        /// balk diag can state the true minutes waited (initial minus remaining).</summary>
+        public int PatienceMinutesInitial;
         public int QueuedDayIndex;
 
         public WaitingCustomer() { }
@@ -42,6 +45,11 @@ namespace LandLedgers.Economy.GeneralStore
 
         private readonly List<WaitingCustomer> waiting = new List<WaitingCustomer>();
         private readonly LostSaleLog lostSales;
+
+        /// <summary>Slice 18: customers balked by the last Tick calls, kept until
+        /// TakeBalked drains them. Tick's int return and lost-sale contract are
+        /// unchanged; the drain is how the driver learns WHO balked.</summary>
+        private readonly List<WaitingCustomer> balkedCustomers = new List<WaitingCustomer>();
 
         public CustomerQueue() : this(null) { }
 
@@ -84,6 +92,7 @@ namespace LandLedgers.Economy.GeneralStore
                 UnitsWanted = Math.Max(0, unitsWanted),
                 PriceCentsPerUnit = Math.Max(0, priceCentsPerUnit),
                 PatienceMinutesRemaining = Math.Max(1, patienceMinutes),
+                PatienceMinutesInitial = Math.Max(1, patienceMinutes),
                 QueuedDayIndex = dayIndex,
             });
             return true;
@@ -108,6 +117,7 @@ namespace LandLedgers.Economy.GeneralStore
                 }
 
                 waiting.RemoveAt(i);
+                balkedCustomers.Add(customer);
                 balked++;
                 lostSales.Record(
                     dayIndex, MerchantBusinessId, MerchantName, customer.ActingPersonId,
@@ -117,6 +127,42 @@ namespace LandLedgers.Economy.GeneralStore
             }
 
             return balked;
+        }
+
+        /// <summary>
+        /// Slice 18: returns the customers balked by Tick since the last drain,
+        /// then clears the stash. The caller owns the returned list.
+        /// </summary>
+        public List<WaitingCustomer> TakeBalked()
+        {
+            var result = new List<WaitingCustomer>(balkedCustomers);
+            balkedCustomers.Clear();
+            return result;
+        }
+
+        /// <summary>
+        /// Slice 18: removes a waiting entry by customer ref, silently — no lost
+        /// sale, no diag. Returns whether one was removed. The stale-entry
+        /// cleanup calls this when a trip exits the store; a ref that was never
+        /// enqueued (or was already served or balked) is a no-op.
+        /// </summary>
+        public bool TryRemove(string customerRef)
+        {
+            if (string.IsNullOrEmpty(customerRef))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < waiting.Count; i++)
+            {
+                if (string.Equals(waiting[i].CustomerRef, customerRef, StringComparison.Ordinal))
+                {
+                    waiting.RemoveAt(i);
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

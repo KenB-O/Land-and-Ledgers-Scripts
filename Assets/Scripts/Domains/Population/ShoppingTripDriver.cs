@@ -189,6 +189,12 @@ namespace LandLedgers.Population
             new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<string> diagnostics = new List<string>();
 
+        /// <summary>Slice 18 Tier 1: game-seconds watermark for the customer-queue
+        /// patience tick (Plan 21 §1.3). Live-only, never persisted; -1 until the
+        /// first AdvanceTick call. Whole minutes only, forward motion only, so a
+        /// repeated or paused tick can never double-decay.</summary>
+        private float lastQueueTickGameSeconds = -1f;
+
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public IReadOnlyList<PlannedShoppingTrip> ActiveTrips => activeTrips;
         public HouseholdShoppingLoop Loop => loop;
@@ -390,6 +396,29 @@ namespace LandLedgers.Population
                     ArriveNow(trip, currentGameSeconds, dayIndex, dueEvents, diag);
                 }
             }
+
+            // Slice 18 Tier 1: patience tick for the store queues of trips
+            // currently waiting at the store (AtStore or InStore). Elapsed is
+            // watermarked whole minutes from forward motion only — the
+            // signature does not change and the decay is a function of total
+            // elapsed game minutes, never of tick count.
+            if (lastQueueTickGameSeconds < 0f)
+            {
+                lastQueueTickGameSeconds = currentGameSeconds;
+            }
+            else
+            {
+                float elapsedSeconds = currentGameSeconds - lastQueueTickGameSeconds;
+                if (elapsedSeconds > 0f)
+                {
+                    int minutes = (int)(elapsedSeconds / 60f);
+                    if (minutes > 0)
+                    {
+                        lastQueueTickGameSeconds += minutes * 60f;
+                        TickCustomerQueues(minutes, dayIndex, diag);
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -516,6 +545,11 @@ namespace LandLedgers.Population
                         break;
                     }
 
+                    // Slice 18 Tier 1: the leg is done and the customer leaves the
+                    // store — remove the queue entry silently. A served customer
+                    // was already popped by ServeNext, so this is a no-op for
+                    // them; an unserved one must not linger as a ghost.
+                    RemoveStaleQueueEntry(trip);
                     {
                         string homeLocation = trip.HomeLocationId ?? string.Empty;
                         string error = loop.BeginReturnLeg(trip, dayIndex, "return", diag);
@@ -577,6 +611,10 @@ namespace LandLedgers.Population
                 // through the REAL return leg — the need stays open.
                 loop.CancelUnstartedInStoreLeg(trip, dayIndex, diag);
                 loop.RecordTripRefusal(trip, error, dayIndex);
+                // Slice 18 Tier 1: the trip is going home empty-handed, but its
+                // queue entry was made before settlement — remove it silently
+                // (no lost sale: a settle failure is not a balk).
+                RemoveStaleQueueEntry(trip);
                 diag.Add($"ShoppingTripDriver: trip {trip.TripId} need {trip.Need?.NeedSequence}: arrival failed ({error}) — returning empty-handed.");
                 trip.State = PlannedShoppingTrip.TripState.Returning;
                 string returnError = loop.BeginReturnLeg(trip, dayIndex, "return-empty", diag);
@@ -628,6 +666,64 @@ namespace LandLedgers.Population
             ScheduleLegDue(trip, LegKind.InStore,
                 trip.Legs != null ? trip.Legs.InStore : null,
                 currentGameSeconds, dueEvents, diag);
+        }
+
+        /// <summary>Slice 18 Tier 1: ticks the store queue of every supplier with
+        /// a trip currently waiting at the store, then notes each balk. The lost
+        /// sale is already recorded by Tick; the diag is informational and states
+        /// the truth for the only live pre-Slice 17 case — a balked customer is
+        /// settled, their leg completes normally and they go home with their
+        /// batch (note 70 ruling (f)): no refusal, no return-empty, and no
+        /// "refused" wording for the OnShortTick warning filter. No release in
+        /// Tier 1.</summary>
+        private void TickCustomerQueues(int minutes, int dayIndex, List<string> diag)
+        {
+            var businessIds = new List<string>();
+            foreach (PlannedShoppingTrip trip in activeTrips)
+            {
+                if (trip == null
+                    || (trip.State != PlannedShoppingTrip.TripState.AtStore
+                        && trip.State != PlannedShoppingTrip.TripState.InStore))
+                {
+                    continue;
+                }
+
+                string businessId = trip.Candidate?.Supplier?.SupplierBusinessId ?? string.Empty;
+                if (!string.IsNullOrEmpty(businessId) && !businessIds.Contains(businessId))
+                {
+                    businessIds.Add(businessId);
+                }
+            }
+
+            foreach (string businessId in businessIds)
+            {
+                CustomerQueue queue = loop.ResolveCustomerQueue?.Invoke(businessId);
+                if (queue == null)
+                {
+                    continue;
+                }
+
+                queue.Tick(minutes, dayIndex);
+                foreach (WaitingCustomer balked in queue.TakeBalked())
+                {
+                    int waited = balked.PatienceMinutesInitial - balked.PatienceMinutesRemaining;
+                    diag.Add($"ShoppingTripDriver: customer {balked.CustomerRef} balked after {waited} min waiting; entry removed, trip unaffected (pre-Slice 17: no release).");
+                }
+            }
+        }
+
+        /// <summary>Slice 18 Tier 1: removes a trip's queue entry silently (no
+        /// lost sale, no refusal) when the trip exits the store. A ref that was
+        /// never enqueued — or was already served or balked — is a no-op.</summary>
+        private void RemoveStaleQueueEntry(PlannedShoppingTrip trip)
+        {
+            if (trip == null)
+            {
+                return;
+            }
+
+            CustomerQueue queue = loop.ResolveCustomerQueue?.Invoke(trip.Candidate?.Supplier?.SupplierBusinessId ?? string.Empty);
+            if (queue != null) queue.TryRemove(HouseholdShoppingLoop.ServiceCustomerRefFor(trip));
         }
 
         private void CompleteLeg(WorkTask leg, PlannedShoppingTrip trip, int dayIndex, List<string> diag)

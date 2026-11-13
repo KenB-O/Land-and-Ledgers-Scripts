@@ -126,6 +126,16 @@ namespace LandLedgers.Economy.Logistics
             new Dictionary<string, EntityId>(StringComparer.Ordinal);
         private readonly Dictionary<string, EntityId> unloadTasks =
             new Dictionary<string, EntityId>(StringComparer.Ordinal);
+        // Slice A1 (QA-04): consecutive daily ticks the physical-receiving
+        // gate has held an unload task at zero minutes. A bound, not a
+        // bypass: after PhysicalReceivingPinLimit pinned ticks the task is
+        // closed with a failure outcome and the shipment is Delayed with the
+        // gate's own reason, so the driver retry can re-attempt it. The gate
+        // itself is never auto-passed. Service-side memory only: a save/load
+        // resets the count (custody state is unaffected).
+        public const int PhysicalReceivingPinLimit = 3;
+        private readonly Dictionary<string, int> physicalReceivingPins =
+            new Dictionary<string, int>(StringComparer.Ordinal);
         // Pass IX WS3 (A4-13): every shipment this service created or restored,
         // so exclusivity can be checked ACROSS live shipments. Terminal
         // shipments (Completed/Failed) hold nothing and never conflict.
@@ -233,6 +243,13 @@ namespace LandLedgers.Economy.Logistics
                 authority.ReleaseAllForTask(shipment.ShipmentId);
             }
             dispatchAuthorities.Remove(shipment.ShipmentId);
+        }
+
+        /// <summary>Slice A1 (QA-03): true while this shipment still holds a
+        /// dispatch reservation through the unified authority.</summary>
+        public bool HasDispatchReservation(LogisticsShipmentState shipment)
+        {
+            return shipment != null && dispatchAuthorities.ContainsKey(shipment.ShipmentId);
         }
 
         public void RegisterWagon(EquipmentAsset wagon)
@@ -480,6 +497,23 @@ namespace LandLedgers.Economy.Logistics
             return true;
         }
 
+        /// <summary>Slice A1 (QA-01): a load task whose work is done but whose
+        /// source debit refused must not strand the loader. Complete the task
+        /// with a failure outcome (the work was done; the objective failed),
+        /// free the loader, and Delay the shipment back to Planned so the
+        /// driver retry re-attempts the load through BeginLoading. No cargo
+        /// moves: the debit refused, so nothing was debited. Returns false
+        /// (the load did not complete); the return contract is unchanged.</summary>
+        private bool FailLoadOnDebitRefusal(LogisticsShipmentState shipment, EntityId taskId,
+            FreightShipmentHooks hooks, string reason)
+        {
+            hooks.Tasks.CompleteTask(taskId, TaskOutcome.RecoverableFailure, hooks.DayIndex, hooks.Budgets);
+            loadTasks.Remove(shipment.ShipmentId);
+            shipment.MarkDelayed(reason, LogisticsShipmentStatus.Planned);
+            Log(hooks, $"shipment '{shipment.ShipmentId}': load task closed as failed — {reason}");
+            return false;
+        }
+
         /// <summary>Works the loading task; on completion custody moves to the wagon.</summary>
         public bool WorkLoading(LogisticsShipmentState shipment, int minutes,
             FreightShipmentHooks hooks, out string reason)
@@ -504,7 +538,15 @@ namespace LandLedgers.Economy.Logistics
                     || hooks?.CommitSourceLot == null))
             {
                 reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' has no complete source-lot debit binding; no loading work recorded.";
-                return false;
+                // Slice A1 (QA-01, extended): the same strand as the
+                // post-done refusal. In practice only the debit hook can
+                // disappear between BeginLoading and WorkLoading (the lot
+                // id and SKU are set at creation and never blanked), so
+                // this fires for a hook unwired on today's daily drive.
+                // Waiting would leave the loader bound to an unworkable
+                // task; closing it and delaying back to Planned lets the
+                // driver retry through BeginLoading when the hook returns.
+                return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
             }
             bool done = loadTask.MinutesRemaining <= 0;
             if (!done && !hooks.Tasks.RecordWorkProgress(taskId,
@@ -523,13 +565,13 @@ namespace LandLedgers.Economy.Logistics
                 if (hooks?.CommitSourceLot == null)
                 {
                     reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires source-lot debit for '{shipment.cargoLotId}', but no debit authority is wired; source stock was not moved.";
-                    return false;
+                    return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
                 }
                 if (!hooks.CommitSourceLot(shipment, shipment.PlannedQuantityUnits, out reason))
                 {
                     if (string.IsNullOrWhiteSpace(reason)) reason = "source-lot debit refused; no cargo loaded.";
                     Log(hooks, $"shipment '{shipment.ShipmentId}': source debit refused for lot '{shipment.cargoLotId}': {reason}");
-                    return false;
+                    return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
                 }
                 shipment.sourceLotDebitApplied = true;
                 Log(hooks, $"shipment '{shipment.ShipmentId}': source lot '{shipment.cargoLotId}' ({shipment.cargoSkuId}) debited once; {shipment.PlannedQuantityUnits}u enters wagon custody.");
@@ -755,8 +797,35 @@ namespace LandLedgers.Economy.Logistics
                 {
                     if (routeAvailable && reason.StartsWith("Carrying:", StringComparison.Ordinal))
                         shipment.physicalLocationId = "person:" + unloadTask.AssigneeId.Id;
+                    // Slice A1 (QA-04): the gate may legitimately lag the
+                    // simulated work (the handler is still carrying), but it
+                    // must not pin forever. Count consecutive pinned ticks;
+                    // after the bound, close the unload task with a failure
+                    // outcome (freeing the unloader) and Delay the shipment
+                    // with the gate's own reason, so the driver retry can
+                    // re-attempt it. The gate is never auto-passed.
+                    int pins = 0;
+                    physicalReceivingPins.TryGetValue(shipment.ShipmentId, out pins);
+                    pins++;
+                    if (pins >= PhysicalReceivingPinLimit)
+                    {
+                        physicalReceivingPins.Remove(shipment.ShipmentId);
+                        hooks.Tasks.CompleteTask(taskId, TaskOutcome.RecoverableFailure, hooks.DayIndex, hooks.Budgets);
+                        unloadTasks.Remove(shipment.ShipmentId);
+                        string gateReason = string.IsNullOrWhiteSpace(reason)
+                            ? "physical receiving did not confirm"
+                            : reason.Trim();
+                        shipment.MarkDelayed(
+                            "physical receiving gate pinned for " + PhysicalReceivingPinLimit + " ticks: " + gateReason,
+                            LogisticsShipmentStatus.Arrived);
+                        Log(hooks, $"shipment '{shipment.ShipmentId}': unload task closed as failed — receiving gate pinned ({gateReason}); cargo remains in wagon custody.");
+                        return true;
+                    }
+                    physicalReceivingPins[shipment.ShipmentId] = pins;
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': physical receiving not yet confirmed (pin {pins}/{PhysicalReceivingPinLimit}): {reason}");
                     return true;
                 }
+                physicalReceivingPins.Remove(shipment.ShipmentId);
             }
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
             unloadTasks.Remove(shipment.ShipmentId);
@@ -969,6 +1038,7 @@ namespace LandLedgers.Economy.Logistics
             trackedShipments.Clear();
             loadTasks.Clear();
             unloadTasks.Clear();
+            physicalReceivingPins.Clear();
             dispatchAuthorities.Clear();
             if (dto == null) return out_;
             foreach (LogisticsShipmentSaveDto s in dto.Shipments)

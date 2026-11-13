@@ -457,11 +457,46 @@ namespace LandLedgers.Economy.Freight
                             service.BeginUnloading(shipment, handlerId, hooks, out reason);
                         break;
                     case LogisticsShipmentStatus.Delayed:
-                        // Honest unresolved state: cargo stays in custody.
+                        // Slice A1 (QA-02): Delayed is retryable, not terminal.
+                        // Resume when the recorded resume state is one the tick
+                        // can drive from (Planned, Loading, InTransit, Arrived);
+                        // a resume state of Unloading cannot proceed without an
+                        // open unload task, so it waits with a diagnostic. The
+                        // resumed shipment advances on the next tick; a
+                        // permanently refusing receiver therefore retries at
+                        // most once per day and stays visible in diagnostics.
+                        if (shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Planned
+                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Loading
+                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.InTransit
+                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Arrived)
+                        {
+                            service.ResumeShipment(shipment, hooks);
+                            diagnostics.Add($"FreightProductionDriver: shipment '{shipment.ShipmentId}' resumed from Delayed -> {shipment.Status}.");
+                        }
+                        else
+                        {
+                            diagnostics.Add($"FreightProductionDriver: shipment '{shipment.ShipmentId}' stays Delayed — resume state '{shipment.resumeStateAfterDelay}' cannot be driven from this tick.");
+                        }
                         break;
                 }
                 if (shipment.Status != before || shipment.loadApplied)
                     advanced++;
+            }
+
+            // Slice A1 (QA-03, partial): name live shipments holding a dispatch
+            // reservation while stalled in Delayed, so a wagon, driver and
+            // animals held past the stall are visible instead of silently
+            // locked. The hold itself still releases only on completion; the
+            // abandonment disposition (what happens to cargo on give-up) is an
+            // open owner decision, so no shipment is failed here.
+            foreach (LogisticsShipmentState shipment in AllShipments())
+            {
+                if (shipment == null || !FreightShipmentService.IsLiveShipment(shipment)) continue;
+                if (shipment.Status == LogisticsShipmentStatus.Delayed
+                    && service.HasDispatchReservation(shipment))
+                {
+                    diagnostics.Add($"FreightProductionDriver: shipment '{shipment.ShipmentId}' is Delayed and still holds its dispatch reservation (wagon '{shipment.physicalWagonAssetId}'); cargo remains in wagon custody.");
+                }
             }
 
             // Settlement: exactly the completed-and-accepted shipments, once

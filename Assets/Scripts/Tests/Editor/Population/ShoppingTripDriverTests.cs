@@ -1750,7 +1750,7 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void SaveLoad_AwaitingService_SettlesOnRestore()
+        public void SaveLoad_AwaitingService_ResumesWait()
         {
             var f = new Fixture();
             var log = new LostSaleLog();
@@ -1761,6 +1761,12 @@ namespace LandLedgers.Editor.Population
             Assert.IsNull(trip.Batch);
             Assert.IsTrue(IsAwaitingService(trip));
             string serviceTaskIdString = ServiceTaskIdOf(trip).ToString();
+            EntityId serviceTaskId = ServiceTaskIdOf(trip);
+            int plannedMinutes = ServiceTaskPlannedMinutesOf(trip);
+            WorkTask preTask = f.Tasks.FindTask(serviceTaskId);
+            Assert.IsNotNull(preTask, "service task not found pre-save");
+            Assert.AreEqual(TaskStatus.InProgress, preTask.Status);
+            EntityId preAssignee = preTask.AssigneeId;
 
             // Capture all authority state (clear-then-load), as the :677-690 pattern.
             var tasksDto = f.Tasks.CaptureSaveDto();
@@ -1788,29 +1794,238 @@ namespace LandLedgers.Editor.Population
                 Fixture.Day, arrival, g.DueEvents, g.Diag);
             Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
             PlannedShoppingTrip restored = g.Driver.ActiveTrips[0];
-            Assert.IsNotNull(restored.Batch);
-            Assert.AreEqual(10, restored.UnitsSettled);
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
-            Assert.AreEqual(1200, g.Store.CashReceived);
-            Assert.IsTrue(g.DueEvents.ScheduledCount > 0, "in-store leg due re-scheduled");
+            // Slice 19 (f2): the wait resumes — nothing settles on restore
+            // while the service task still lives.
+            Assert.IsTrue(IsAwaitingService(restored));
+            Assert.IsNull(restored.Batch);
+            Assert.AreEqual(0, restored.UnitsSettled);
+            Assert.AreEqual(0, g.Store.CashReceived);
+            Assert.AreEqual(serviceTaskId, ServiceTaskIdOf(restored));
+            Assert.AreEqual(plannedMinutes, ServiceTaskPlannedMinutesOf(restored));
+            WorkTask restoredTask = g.Tasks.FindTask(serviceTaskId);
+            Assert.IsNotNull(restoredTask, "service task not found after restore");
+            Assert.AreEqual(TaskStatus.InProgress, restoredTask.Status);
+            Assert.AreEqual(preAssignee, restoredTask.AssigneeId);
 
-            // The restored service due is stale: the map is empty, so
-            // handling it is a no-op. Pop only up to arrival + 5 min so the
-            // in-store due (arrival + 15) is not touched.
-            DueEvent staleServiceEv = null;
+            // The restored service due is owned again: the map entry was
+            // re-registered on rehydrate. Pop only up to arrival + 5 min so
+            // the in-store due (arrival + 15) is not touched.
+            DueEvent serviceEv = null;
             foreach (DueEvent ev in g.DueEvents.PopDue(arrival + 5 * 60f))
             {
                 if (ev.PayloadRef == serviceTaskIdString)
                 {
-                    staleServiceEv = ev;
+                    serviceEv = ev;
                 }
             }
 
-            Assert.IsNotNull(staleServiceEv, "stale service due event not restored");
-            g.Driver.HandleDueEvent(staleServiceEv, Fixture.Day, staleServiceEv.DueGameSeconds, g.DueEvents, g.Diag);
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
+            Assert.IsNotNull(serviceEv, "service due event not restored");
+            Assert.IsTrue(g.Driver.OwnsDueEvent(serviceEv), "restored service due is not owned by the driver");
+        }
+
+        [Test]
+        public void SaveLoad_AwaitingService_ServiceDueCompletesAfterRestore()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue fQueue = WireService(f, log, 3);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.IsNull(trip.Batch);
+            Assert.IsTrue(IsAwaitingService(trip));
+            string serviceTaskIdString = ServiceTaskIdOf(trip).ToString();
+            string customerRef = HouseholdShoppingLoop.ServiceCustomerRefFor(trip);
+            Assert.AreEqual(1, fQueue.WaitingCount);
+
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+            var queueDto = fQueue.CaptureSaveDto();
+
+            // Restore into a FRESH fixture (new authorities, same scenario wiring).
+            var g = new Fixture();
+            CustomerQueue gQueue = WireService(g, log, 3);
+            gQueue.LoadFromSaveDto(queueDto);
+            Assert.AreEqual(1, gQueue.WaitingCount);
+            Assert.AreEqual(customerRef, gQueue.Waiting[0].CustomerRef);
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(schedulesDto);
+            g.Driver.LoadFromSaveDto(driverDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+            foreach (PlannedShoppingTrip t in g.Driver.ActiveTrips)
+            {
+                t.Need = gNeed;
+            }
+
+            // The save happened at arrival, so restore "now" is the arrival time.
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, arrival, g.DueEvents, g.Diag);
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip restored = g.Driver.ActiveTrips[0];
+            Assert.IsTrue(IsAwaitingService(restored));
+            Assert.IsNull(restored.Batch);
+            Assert.AreEqual(0, restored.UnitsSettled);
+            Assert.AreEqual(0, g.Store.CashReceived);
+
+            // The restored service due fires exactly as live: the task
+            // completes, the queue pops, the trip settles at the counter.
+            DueEvent serviceEv = null;
+            foreach (DueEvent ev in g.DueEvents.PopDue(arrival + 5 * 60f))
+            {
+                if (ev.PayloadRef == serviceTaskIdString)
+                {
+                    serviceEv = ev;
+                }
+            }
+
+            Assert.IsNotNull(serviceEv, "service due event not restored");
+            Assert.IsTrue(g.Driver.OwnsDueEvent(serviceEv), "restored service due is not owned by the driver");
+            g.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, g.DueEvents, g.Diag);
+            Assert.AreEqual(TaskStatus.Complete, g.Tasks.FindTask(ServiceTaskIdOf(restored)).Status);
+            Assert.AreEqual(0, gQueue.WaitingCount);
             Assert.IsNotNull(restored.Batch);
+            Assert.AreEqual(10, restored.UnitsSettled);
             Assert.AreEqual(1200, g.Store.CashReceived);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
+            Assert.IsTrue(g.DueEvents.ScheduledCount > 0, "in-store leg due not scheduled");
+            Assert.AreEqual(PurchasingNeedStatus.Open, gNeed.Status);
+
+            // Drive the trip home: exactly-once settlement, no second settle.
+            g.RunUntilDone(tickSeconds: 300);
+            Assert.AreEqual(0, g.Driver.ActiveTrips.Count);
+            Assert.AreEqual(1200, g.Store.CashReceived);
+        }
+
+        [Test]
+        public void SaveLoad_AwaitingService_TaskGone_SettlesOnRestore()
+        {
+            // Phase (a): the service task is missing from the saved tasks.
+            {
+                var f = new Fixture();
+                var log = new LostSaleLog();
+                AddClerk(f);
+                CustomerQueue queue = WireService(f, log, 3);
+                f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+                PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+                Assert.IsTrue(IsAwaitingService(trip));
+                EntityId serviceTaskId = ServiceTaskIdOf(trip);
+
+                var tasksDto = f.Tasks.CaptureSaveDto();
+                tasksDto.tasks.RemoveAll(t => t.TaskId == serviceTaskId);
+                var budgetsDto = f.Budgets.CaptureSaveDto();
+                var schedulesDto = f.Tracker.CaptureSaveDto();
+                var driverDto = f.Driver.CaptureSaveDto();
+                var dueDto = f.DueEvents.CaptureSaveDto();
+
+                var g = new Fixture();
+                g.Tasks.LoadFromSaveDto(tasksDto);
+                g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+                g.Tracker.LoadFromSaveDto(schedulesDto);
+                g.Driver.LoadFromSaveDto(driverDto);
+                g.DueEvents.LoadFromSaveDto(dueDto);
+                HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+                foreach (PlannedShoppingTrip t in g.Driver.ActiveTrips)
+                {
+                    t.Need = gNeed;
+                }
+
+                g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                    Fixture.Day, arrival, g.DueEvents, g.Diag);
+                Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+                PlannedShoppingTrip restored = g.Driver.ActiveTrips[0];
+                Assert.IsNotNull(restored.Batch);
+                Assert.AreEqual(10, restored.UnitsSettled);
+                Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
+                Assert.AreEqual(1200, g.Store.CashReceived);
+                StringAssert.Contains("lost its live service task", string.Join("\n", g.Diag));
+            }
+
+            // Phase (b): the service task was cancelled before the save.
+            // DEVIATION from plan §6.3: the Cancelled-specific reason text
+            // is NOT asserted here. The red tree has no persisted
+            // ServiceTaskId to look up, so its reason is necessarily "no
+            // service task id" and a Cancelled-reason assertion cannot pass
+            // red; per the plan's own rule (T2 fails red => the test is
+            // wrong) the reason is pinned only by the generic line, while
+            // the Cancelled status of the restored task is pinned directly.
+            {
+                var f = new Fixture();
+                var log = new LostSaleLog();
+                AddClerk(f);
+                CustomerQueue queue = WireService(f, log, 3);
+                f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+                PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+                Assert.IsTrue(IsAwaitingService(trip));
+                EntityId serviceTaskId = ServiceTaskIdOf(trip);
+                Assert.IsTrue(f.Tasks.CancelTask(serviceTaskId, f.Budgets), "cancel of the service task refused");
+
+                var tasksDto = f.Tasks.CaptureSaveDto();
+                var budgetsDto = f.Budgets.CaptureSaveDto();
+                var schedulesDto = f.Tracker.CaptureSaveDto();
+                var driverDto = f.Driver.CaptureSaveDto();
+                var dueDto = f.DueEvents.CaptureSaveDto();
+
+                var g = new Fixture();
+                g.Tasks.LoadFromSaveDto(tasksDto);
+                g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+                g.Tracker.LoadFromSaveDto(schedulesDto);
+                g.Driver.LoadFromSaveDto(driverDto);
+                g.DueEvents.LoadFromSaveDto(dueDto);
+                HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+                foreach (PlannedShoppingTrip t in g.Driver.ActiveTrips)
+                {
+                    t.Need = gNeed;
+                }
+
+                g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                    Fixture.Day, arrival, g.DueEvents, g.Diag);
+                Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+                PlannedShoppingTrip restored = g.Driver.ActiveTrips[0];
+                Assert.IsNotNull(restored.Batch);
+                Assert.AreEqual(10, restored.UnitsSettled);
+                Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
+                Assert.AreEqual(1200, g.Store.CashReceived);
+                StringAssert.Contains("lost its live service task", string.Join("\n", g.Diag));
+                Assert.AreEqual(TaskStatus.Cancelled, g.Tasks.FindTask(serviceTaskId).Status);
+            }
+        }
+
+        [Test]
+        public void SaveLoad_QueueEntry_PatienceInitialTravels()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue fQueue = WireService(f, log, 3);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.AreEqual(1, fQueue.WaitingCount);
+            WaitingCustomer pre = fQueue.Waiting[0];
+            int preInitial = pre.PatienceMinutesInitial;
+            int preRemaining = pre.PatienceMinutesRemaining;
+            Assert.AreEqual(CustomerQueue.DefaultPatienceMinutes, preInitial);
+            Assert.AreEqual(CustomerQueue.DefaultPatienceMinutes, preRemaining);
+
+            var gQueue = new CustomerQueue(new LostSaleLog());
+            gQueue.LoadFromSaveDto(fQueue.CaptureSaveDto());
+            Assert.AreEqual(1, gQueue.WaitingCount);
+            WaitingCustomer restored = gQueue.Waiting[0];
+            Assert.AreEqual(pre.CustomerRef, restored.CustomerRef);
+            Assert.AreEqual(preRemaining, restored.PatienceMinutesRemaining);
+            Assert.AreEqual(preInitial, restored.PatienceMinutesInitial);
+
+            // Balk the restored entry: the waited computation reads
+            // Initial - Remaining, so a zero Initial would understate it.
+            gQueue.Tick(25, Fixture.Day);
+            List<WaitingCustomer> balked = gQueue.TakeBalked();
+            Assert.AreEqual(1, balked.Count);
+            Assert.AreEqual(preInitial, balked[0].PatienceMinutesInitial);
         }
     }
 }

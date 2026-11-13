@@ -217,6 +217,10 @@ namespace LandLedgers.Economy.GeneralStore
                     UnitsWanted = customer.UnitsWanted,
                     PriceCentsPerUnit = customer.PriceCentsPerUnit,
                     PatienceMinutesRemaining = customer.PatienceMinutesRemaining,
+                    // Slice 19 (f2): the patience budget the customer joined
+                    // with travels with the remaining minutes, so a restored
+                    // entry's balk diag states the true minutes waited.
+                    PatienceMinutesInitial = customer.PatienceMinutesInitial,
                     QueuedDayIndex = customer.QueuedDayIndex,
                 });
             }
@@ -241,6 +245,7 @@ namespace LandLedgers.Economy.GeneralStore
                     UnitsWanted = customer.UnitsWanted,
                     PriceCentsPerUnit = customer.PriceCentsPerUnit,
                     PatienceMinutesRemaining = customer.PatienceMinutesRemaining,
+                    PatienceMinutesInitial = customer.PatienceMinutesInitial,
                     QueuedDayIndex = customer.QueuedDayIndex,
                 });
             }

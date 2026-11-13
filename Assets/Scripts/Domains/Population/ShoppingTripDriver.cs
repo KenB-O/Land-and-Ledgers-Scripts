@@ -64,14 +64,14 @@ namespace LandLedgers.Population
         internal EntityId InStoreTaskId;
         internal EntityId ReturnTaskId;
 
-        /// <summary>Plan 16, live-only: the TendCustomer task serving this
-        /// trip's shopper, and its skill-scaled planned minutes (the due
-        /// time is scheduled from this, never from the 4-minute base).
-        /// NOT persisted in PlannedShoppingTripSaveDto in this slice: on a
-        /// save/load mid-service the link is lost (the task itself restores
-        /// through TaskAuthority). Persisting it plus re-registering the due
-        /// event on rehydrate is the section 8 follow-up, mirroring legs
-        /// (ScheduleLegDueAfterLoad, :676).</summary>
+        /// <summary>Plan 16: the TendCustomer task serving this trip's
+        /// shopper, and its skill-scaled planned minutes (the due time is
+        /// scheduled from this, never from the 4-minute base). Slice 19
+        /// (f2): persisted in PlannedShoppingTripSaveDto; on rehydrate the
+        /// due-event map entry is re-registered so a trip saved mid-wait
+        /// resumes its wait (the persisted due fires at its original
+        /// absolute time — the due is never re-scheduled, unlike legs
+        /// (ScheduleLegDueAfterLoad, :961)).</summary>
         internal EntityId ServiceTaskId;
         internal int ServiceTaskPlannedMinutes;
         internal PlannedShoppingTripSaveDto CandidateDto;
@@ -104,6 +104,13 @@ namespace LandLedgers.Population
         public EntityId OutboundTaskId;
         public EntityId InStoreTaskId;
         public EntityId ReturnTaskId;
+        // Slice 19 (f2): the TendCustomer service task serving this trip's
+        // shopper, and its skill-scaled planned minutes — so a trip saved
+        // mid-wait can resume its wait on rehydrate instead of settling
+        // on restore. Additive; old saves read the defaults (invalid id,
+        // 0 minutes) and take the fallback path.
+        public EntityId ServiceTaskId;
+        public int ServiceTaskPlannedMinutes;
         // Candidate scalars (supplier re-resolves by business id).
         public string SupplierBusinessId = string.Empty;
         public string SupplierName = string.Empty;
@@ -1044,6 +1051,7 @@ namespace LandLedgers.Population
         {
             activeTrips.Clear();
             legsByTaskIdString.Clear();
+            serviceTaskIdStringToTripId.Clear();
             if (dtos == null)
             {
                 return;
@@ -1123,8 +1131,11 @@ namespace LandLedgers.Population
         /// restored; trips whose legs no longer resolve are aborted loudly.
         /// Trips persisted mid-settlement (AtStore) resume at the in-store leg
         /// — settlement is never re-run (no double charge). Trips persisted
-        /// mid-wait (AwaitingService) settle on restore (Slice 17 (f1) — the
-        /// service linkage is runtime-only), then resume at the in-store leg.
+        /// mid-wait (AwaitingService) resume the wait when the service task
+        /// still lives (Slice 19 (f2) — the link persists and the due-event
+        /// map entry is re-registered); only when the service task is gone
+        /// or no longer running do they settle on restore (Slice 17 (f1)),
+        /// then resume at the in-store leg.
         /// </summary>
         public void RehydrateAfterLoad(
             TaskAuthority tasks, Func<string, IGoodsSupplier> supplierByBusinessId,
@@ -1229,9 +1240,27 @@ namespace LandLedgers.Population
                 }
                 else if (trip.State == PlannedShoppingTrip.TripState.AwaitingService)
                 {
-                    // Slice 17 (f1): saved mid-wait — the service linkage is
-                    // runtime-only, so settle on restore, then resume at the
-                    // in-store leg exactly as the AtStore branch does.
+                    // Slice 19 (f2): the service linkage survived the save —
+                    // resume the wait when the service task still lives. The
+                    // persisted service due fires at its original absolute
+                    // time; only the due-event map entry is re-registered
+                    // (MAP-ONLY, note 87 Q1 — never re-schedule the due).
+                    WorkTask serviceTask = trip.ServiceTaskId.IsValid
+                        ? tasks?.FindTask(trip.ServiceTaskId) : null;
+                    if (serviceTask != null && serviceTask.Status == TaskStatus.InProgress)
+                    {
+                        serviceTaskIdStringToTripId[trip.ServiceTaskId.ToString()] = trip.TripId;
+                        diag.Add($"ShoppingTripDriver: trip {trip.TripId} resumed mid-wait; service due re-registered.");
+                        continue;
+                    }
+
+                    // Fallback (Slice 17 (f1)): the service task is gone or
+                    // no longer running — settle on restore, then resume at
+                    // the in-store leg exactly as the AtStore branch does.
+                    string reason = !trip.ServiceTaskId.IsValid ? "no service task id"
+                        : serviceTask == null ? "service task not found"
+                        : $"service task {serviceTask.Status}";
+                    diag.Add($"ShoppingTripDriver: trip {trip.TripId} lost its live service task across save/load ({reason}) — settling on restore.");
                     string settleError = loop.SettleAfterService(trip, dayIndex, diag);
                     if (settleError != null)
                     {
@@ -1281,6 +1310,8 @@ namespace LandLedgers.Population
                 OutboundTaskId = trip.OutboundTaskId,
                 InStoreTaskId = trip.InStoreTaskId,
                 ReturnTaskId = trip.ReturnTaskId,
+                ServiceTaskId = trip.ServiceTaskId,
+                ServiceTaskPlannedMinutes = trip.ServiceTaskPlannedMinutes,
             };
             if (trip.Candidate != null)
             {
@@ -1334,6 +1365,8 @@ namespace LandLedgers.Population
                 OutboundTaskId = dto.OutboundTaskId,
                 InStoreTaskId = dto.InStoreTaskId,
                 ReturnTaskId = dto.ReturnTaskId,
+                ServiceTaskId = dto.ServiceTaskId,
+                ServiceTaskPlannedMinutes = dto.ServiceTaskPlannedMinutes,
                 CandidateDto = dto,
                 Result = new ShoppingTripResult
                 {

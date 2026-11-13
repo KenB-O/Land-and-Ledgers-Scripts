@@ -524,10 +524,17 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment.Status, "a refused delivery strands the shipment Delayed");
             Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.resumeStateAfterDelay,
                 "the Delayed resume state must be Arrived");
-            Tick();
-            Tick();
-            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment.Status,
-                "Delayed is a no-op in AdvanceTick — the strand holds across ticks");
+            // Slice A1 (QA-02): Delayed is retried by the production tick,
+            // not a no-op. The refusal is permanent, so the shipment cycles
+            // Delayed -> Arrived -> Unloading -> refused -> Delayed, and
+            // every custody and revenue assertion below still holds at any
+            // point in the cycle.
+            Tick(); // Delayed -> resumed to Arrived by the tick
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status, "the tick resumes a Delayed shipment");
+            Tick(); // Arrived -> BeginUnloading -> Unloading
+            Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status, "the retry re-offers the refused lot");
+            Tick(); // Unloading -> WorkUnloading refuses again -> Delayed
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment.Status, "a permanent refusal returns the shipment to Delayed");
             Assert.IsFalse(shipment.deliveryApplied, "nothing was delivered");
             Assert.IsTrue(shipment.sourceLotDebitApplied, "cargo stays in wagon custody");
             Assert.AreEqual(1, shipment.remainingQuantityUnits, "the sack stays on the wagon");
@@ -538,7 +545,9 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(0, freight.FindCompany(CarrierId).FindUncollectedFreightChargeShipmentIds().Count,
                 "an undelivered shipment is never in the collectable scan");
 
-            // The resume exists only as a manual path (§1.5 limit).
+            // The manual resume still works alongside the tick retry (Slice
+            // A1, QA-02): the tick now resumes Delayed shipments on its own,
+            // so the manual path is no longer the only one.
             freight.Service.ResumeShipment(shipment, hooks);
             Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status, "manual resume returns the shipment to Arrived");
         }

@@ -1065,6 +1065,19 @@ namespace LandLedgers.Economy
                 return;
             }
 
+            // Slice A1 (Agent 3 finding 1, defense in depth): a lot-backed
+            // shipment must be received through the detailed driver only.
+            // Crediting it here would land the lot as anonymous category
+            // stock with no lot branch and no receipt check. No LRM factory
+            // sets requiresSourceLotCustody today, so this fires only if a
+            // future caller routes a lot-backed shipment into this list.
+            if (shipment.requiresSourceLotCustody)
+            {
+                shipment.state = LogisticsShipmentStatus.Delayed;
+                shipment.blockedReason = "lot-backed shipment must be received through the detailed freight driver; LRM delivery refused";
+                return;
+            }
+
             int deliveredUnits = shipment.remainingQuantityUnits;
             if (deliveredUnits <= 0)
             {

@@ -244,10 +244,15 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             LogisticsShipmentState shipment = CreateViaDriver(driver, "ship-1", "wagon-1");
             Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status);
+            Assert.AreEqual(ShipmentHaulingMode.HiredFreight, shipment.HaulingMode,
+                "the carrier production path must identify this as contracted hired freight");
+            Assert.AreEqual("biz-freight-1", shipment.CarrierBusinessInstanceId);
             Assert.AreSame(shipment, driver.FindCompany("biz-freight-1").ActiveShipments[0],
                 "the carrier company's runtime owns the accepted shipment");
 
             int cashBefore = carrierRuntime.CurrentCashCents;
+            BusinessRuntimeState payerRuntime = driver.ResolvePayerRuntime("biz-store-1");
+            int payerCashBefore = payerRuntime.CurrentCashCents;
             TickUntil(driver, () => shipment.Status == LogisticsShipmentStatus.Completed, diag);
 
             Assert.AreEqual(LogisticsShipmentStatus.Completed, shipment.Status, string.Join("; ", diag));
@@ -256,11 +261,55 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(50, recipientStock["store-1"], "goods landed in recipient custody exactly once");
             Assert.AreEqual(cashBefore + 500, carrierRuntime.CurrentCashCents,
                 "the freight charge settled to the carrier after acceptance");
+            Assert.AreEqual(payerCashBefore - 500, payerRuntime.CurrentCashCents,
+                "the named customer bears the exact matching freight charge");
 
             // Further ticks settle nothing twice.
             TickUntil(driver, () => false, diag);
             Assert.AreEqual(cashBefore + 500, carrierRuntime.CurrentCashCents, "settlement is exactly-once");
+            Assert.AreEqual(payerCashBefore - 500, payerRuntime.CurrentCashCents, "payer is debited exactly once");
             Assert.AreEqual(50, recipientStock["store-1"], "no duplicated delivery on later ticks");
+        }
+
+        [Test]
+        public void CreateShipment_RefusesChargeThatDiffersFromAcceptedAgreement()
+        {
+            FreightProductionDriver driver = NewDriverWithCarrier(out _);
+            var request = new FreightServiceRequest
+            {
+                RequestId = "request-terms",
+                RequestingBusinessId = "store-1",
+                CarrierBusinessId = "biz-freight-1",
+                PickupBusinessId = "mill-1",
+                DestinationBusinessId = "store-1",
+                CargoLotId = "lot-terms",
+                CargoSkuId = "grain",
+                Quantity = 50,
+                RequestingPersonId = 701,
+                CarrierOperatorPersonId = 702,
+            };
+            Assert.IsNull(driver.ServiceAgreements.CreateRequest(request, out _));
+            Assert.IsNull(driver.ServiceAgreements.SetQuote(request.RequestId, new FreightServiceQuote
+            {
+                QuoteId = "quote-terms",
+                OneWayDistanceMiles = 1f,
+                ChargeableMiles = 1,
+                BaseServiceFeeCents = 100,
+                RatePerMileCents = 400,
+                MileageChargeCents = 400,
+                TotalPriceCents = 500,
+                PayerBusinessId = "store-1",
+            }));
+            Assert.IsNull(driver.ServiceAgreements.Accept(request.RequestId, 702, Day, 0f, out FreightServiceAgreement agreement));
+
+            LogisticsShipmentState shipment = driver.CreateShipment(
+                "biz-freight-1", "shipment-terms", "mill-1", "store-1", 50, GrainSpec(),
+                "wagon-1", hooks, driverA, teamA, 501, "store-1", new List<string>(), out string reason,
+                agreement.AgreementId, "lot-terms", "grain");
+
+            Assert.IsNull(shipment);
+            StringAssert.Contains("agreed price", reason);
+            Assert.IsEmpty(driver.AllShipments(), "a refused contract mismatch must not create an unowned shipment record");
         }
 
         [Test]

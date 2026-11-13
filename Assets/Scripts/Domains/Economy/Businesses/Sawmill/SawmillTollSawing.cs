@@ -218,6 +218,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                         LotId = entry.Lot.LotId,
                         LogUnits = entry.Lot.LogUnits,
                         MassKg = entry.Lot.MassKg,
+                        OwnerId = entry.Lot.OwnerId,
                         StandId = entry.Lot.StandId,
                         Species = entry.Lot.Species,
                         FelledBy = entry.Lot.FelledBy,
@@ -408,6 +409,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     {
                         LotId = entry.LumberLot.LotId,
                         LumberUnits = entry.LumberLot.LumberUnits,
+                        OwnerId = entry.LumberLot.OwnerId,
                         SourceLogLotId = entry.LumberLot.SourceLogLotId,
                         StandId = entry.LumberLot.StandId,
                         Species = entry.LumberLot.Species,
@@ -424,6 +426,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     {
                         LotId = entry.ByproductLot.LotId,
                         FuelWoodUnits = entry.ByproductLot.FuelWoodUnits,
+                        OwnerId = entry.ByproductLot.OwnerId,
                         SourceMillBusinessId = entry.ByproductLot.SourceMillBusinessId,
                         SourceLogLotId = entry.ByproductLot.SourceLogLotId,
                         StandId = entry.ByproductLot.StandId,

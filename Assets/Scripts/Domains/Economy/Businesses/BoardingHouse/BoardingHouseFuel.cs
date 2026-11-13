@@ -159,6 +159,13 @@ namespace LandLedgers.Economy.Businesses.BoardingHouse
                         "or the import order + origin (upstream-provenance doctrine).";
             }
 
+            for (int i = 0; i < lots.Count; i++)
+            {
+                BoardingHouseFuelLot existing = lots[i];
+                if (existing != null && existing.LotId.Equals(lot.LotId))
+                    return $"BoardingHouseFuelStock.ReceiveLot: a fuel lot with id {lot.LotId} is already in the store.";
+            }
+
             lots.Add(lot);
             diag.Add($"BoardingHouseFuelStock: received {lot.Units} × {lot.FuelName} (lot {lot.LotId}, day {lot.AcquiredDayIndex}) — {lot.ProvenanceChain()}.");
             return null;

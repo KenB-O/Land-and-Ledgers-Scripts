@@ -17,6 +17,25 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     public sealed class MillbrookFlourFreightCustodyAdapter
     {
         public const string FlourSkuId = "bakery_flour_sack";
+        private const float PoundsToKilograms = 0.45359237f;
+        private const float FlourSackVolumeCubicMeters = 0.01f;
+
+        /// <summary>
+        /// Builds the freight service's per-package physical specification
+        /// from one paid Millbrook lot. Inventory pounds are divided by the
+        /// lot's sack count before conversion; the existing sack-volume
+        /// factor is per sack and is multiplied by the shipment quantity only
+        /// inside FreightShipmentService.
+        /// </summary>
+        public static FreightCargoSpec BuildFreightCargoSpec(OffMapAidCargoLot lot)
+        {
+            if (lot == null || lot.PackageUnits <= 0) return null;
+            return new FreightCargoSpec
+            {
+                MassKgPerUnit = ((float)Math.Max(0, lot.InventoryUnits) / lot.PackageUnits) * PoundsToKilograms,
+                VolumeM3PerUnit = FlourSackVolumeCubicMeters,
+            };
+        }
 
         private readonly OffMapAidBusinessRuntime supplier;
         private readonly BakeryShopRuntime bakery;

@@ -755,27 +755,19 @@ namespace LandLedgers.Economy.Transport
             if (business.AssignedBuildingId >= 0
                 && townWorld.TryGetBuildingById(business.AssignedBuildingId, out PlacedBuilding businessBuilding)
                 && businessBuilding != null)
-            {
                 building = businessBuilding;
-                stagingLocation = $"Freight Company building {business.AssignedBuildingId}";
-            }
 
-            // The opening freight business has no dedicated premises in the
-            // expanded fixture. Keep its ordinary transport at its operator's
-            // authoritative home frontage until a real yard is assigned.
-            if (building == null && operatorPerson != null && operatorPerson.homeBuildingId >= 0
-                && townWorld.TryGetBuildingById(operatorPerson.homeBuildingId, out PlacedBuilding homeBuilding)
-                && homeBuilding != null)
+            SharedBusinessRuntimeManager businessAuthority = FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            bool assignmentValid = businessAuthority != null
+                && businessAuthority.IsBusinessAssignmentValid(business);
+            if (!FreightStagingCellSelector.TryValidateCommercialPremises(
+                    business.AssignedBuildingId, building != null ? building.id : -1,
+                    assignmentValid, out string premisesRefusal))
             {
-                building = homeBuilding;
-                stagingLocation = $"operator home frontage, building {operatorPerson.homeBuildingId}";
-            }
-
-            if (building == null)
-            {
-                refusal = $"Freight Company '{business.InstanceId}' has no placed building and its operator has no resolvable home building.";
+                refusal = $"Freight Company '{business.InstanceId}' cannot stage its horse and wagon: {premisesRefusal}";
                 return false;
             }
+            stagingLocation = $"Freight Company commercial premises, building {building.id}";
             TownGrid grid = townWorld.Grid;
             if (grid == null)
             {
@@ -1249,20 +1241,23 @@ namespace LandLedgers.Economy.Transport
                     reason = "body footprint crosses the parcel boundary.";
                     return false;
                 }
-                TownCell cell = grid.GetCell(coord);
-                bool hostBuildingCell = cell.HasBuilding && cell.buildingId == building.id;
-                if (cell.plotId != plot.id || cell.IsRoad
-                    || (!hostBuildingCell && (cell.blocked || cell.HasBuilding))
-                    || (cell.occupancy & CellOccupancy.Anchor) != 0
-                    || (!hostBuildingCell && (cell.occupancy & CellOccupancy.Blocked) != 0))
+                bool inBounds = grid.IsInBounds(coord);
+                TownCell cell = inBounds ? grid.GetCell(coord) : default;
+                if (!FreightStagingCellSelector.IsClearVehicleGroundCell(
+                        inBounds,
+                        plot.bounds.Contains(coord),
+                        cell.plotId,
+                        plot.id,
+                        cell.IsRoad,
+                        cell.HasBuilding,
+                        cell.blocked || (cell.occupancy & CellOccupancy.Blocked) != 0,
+                        (cell.occupancy & CellOccupancy.Anchor) != 0,
+                        cell.terrainZone != TerrainZone.Unknown && cell.terrainZone != TerrainZone.Blocked,
+                        cell.slopeDegrees,
+                        maxSlope,
+                        out string cellRefusal))
                 {
-                    reason = $"body footprint overlaps road, building, blocked ground, entrance or another parcel at {coord}.";
-                    return false;
-                }
-                if (cell.terrainZone == TerrainZone.Unknown || cell.terrainZone == TerrainZone.Blocked
-                    || !IsFinite(cell.slopeDegrees) || cell.slopeDegrees > maxSlope)
-                {
-                    reason = $"terrain at {coord} is unknown or too steep for stable staging.";
+                    reason = $"body footprint {cellRefusal} at {coord}.";
                     return false;
                 }
             }

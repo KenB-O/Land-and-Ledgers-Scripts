@@ -351,6 +351,7 @@ namespace LandLedgers.Economy.Farming.Delivery
                 remainingQuantityUnits = job.QuantityUnits,
                 freightChargeCents = job.FreightChargeCents,
                 freightPayerBusinessInstanceId = job.FreightPayerBusinessId,
+                haulingMode = ShipmentHaulingMode.HiredFreight,
                 sourceBusinessInstanceId = job.OriginBusinessId,
                 destinationBusinessInstanceId = job.DestinationBusinessId,
                 summaryLabel = $"{job.QuantityUnits} {job.ProductKind} ({job.OriginFarmId} → {job.DestinationName})",

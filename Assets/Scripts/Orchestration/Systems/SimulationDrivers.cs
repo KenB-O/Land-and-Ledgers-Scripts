@@ -13,6 +13,7 @@ using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
+using LandLedgers.Economy.Businesses.FuelDealer;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.BreadDrivers;
@@ -347,6 +348,8 @@ namespace LandLedgers.Orchestration.Systems
         private DailyNeedsService dailyNeedsService;
         private HouseholdConsumptionPlanner consumptionPlanner;
         private SupplierDirectory supplierDirectory;
+        private readonly HashSet<string> fuelDealerSupplierRegistrationLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
@@ -434,8 +437,77 @@ namespace LandLedgers.Orchestration.Systems
             }
             LandLedgers.Economy.Businesses.GeneralStore.GeneralStoreSupplierAdapter.RegisterIn(
                 supplierDirectory, storePort);
+            RegisterFuelDealerSuppliers();
             SeedLocalGeneralStoreKnowledge();
             BuildHouseholdShoppingLoop();
+        }
+
+        /// <summary>
+        /// Connects already-formed Fuel Dealer businesses to the same
+        /// household supplier directory. Stock remains in the existing
+        /// provenance-tracked Pass 9 fuel-yard intake; the business profile
+        /// and shared business runtime provide the configured price and cash
+        /// authority. An empty intake is registered as a known product with
+        /// zero offer stock, never as a fabricated sale.
+        /// </summary>
+        private void RegisterFuelDealerSuppliers()
+        {
+            if (supplierDirectory == null) return;
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null) return;
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null) return;
+
+            // Empty runtime holder only. Inventory arrives solely through the
+            // existing sawmill-byproduct custody transfer; this creates no
+            // stock, cash, or transaction.
+            pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null || business.BusinessType != BusinessType.FuelDealer) continue;
+
+                string businessId = business.InstanceId ?? string.Empty;
+                int priceCents = sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(business, "fuel_wood");
+                if (priceCents <= 0)
+                {
+                    LogFuelDealerSupplierWarningOnce(businessId,
+                        $"Fuel Dealer '{businessId}' has no configured positive fuel_wood sale price; supplier offer was not registered.");
+                    continue;
+                }
+
+                var cash = business.RuntimeState != null
+                    ? new Series2BusinessRuntimeCashPort(business.RuntimeState)
+                    : null;
+                if (!Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                        business, pass9.FuelIntake, cash, priceCents,
+                        out Series2FuelDealerSupplierAdapter adapter, out string refusal))
+                {
+                    LogFuelDealerSupplierWarningOnce(businessId,
+                        $"Fuel Dealer supplier registration refused for '{businessId}': {refusal}");
+                    continue;
+                }
+
+                Series2FuelDealerSupplierAdapter.RegisterIn(supplierDirectory, adapter);
+                if (fuelDealerSupplierRegistrationLogged.Add(businessId))
+                {
+                    Debug.Log($"[FuelDealerSupplier] Registered existing business '{business.RuntimeDisplayName}' " +
+                        $"(id='{businessId}', owner='{business.Owner.DisplayName}', building={business.AssignedBuildingId}) " +
+                        $"at '{adapter.LocationId}'; configured fuel_wood price={priceCents}c/bundle, " +
+                        $"yard intake={adapter.IntakeFuelWoodUnits} sourced unit(s), household-bundle conversion unset, " +
+                        $"saleable bundles={adapter.ItemStockUnits(HouseholdItemCatalog.FuelWoodId)}.", this);
+                }
+            }
+        }
+
+        private void LogFuelDealerSupplierWarningOnce(string businessId, string message)
+        {
+            string key = string.IsNullOrWhiteSpace(businessId) ? "<missing>" : businessId;
+            if (fuelDealerSupplierWarningsLogged.Add(key)) Debug.LogWarning("[FuelDealerSupplier] " + message, this);
         }
 
         /// <summary>Attaches the scenario's real membership authority for the production shopping loop.</summary>
@@ -482,13 +554,51 @@ namespace LandLedgers.Orchestration.Systems
         private IConstructionMaterialSource npcConstructionMaterialSource;
         private IConstructionParcelAuthority npcConstructionParcelAuthority;
         private INpcConstructionProcurementPort npcConstructionProcurement;
+        private INpcConstructionLaborPort npcConstructionLaborPort;
+        private NpcConstructionDriver npcConstructionDriver;
 
-        // W7 (2026-11-06): BindNpcConstructionPorts removed — it had zero
-        // callers, so no production path ever bound these ports. The
-        // fields above stay (DriveNpcConstruction reads them and waits
-        // loudly while they are unbound); the drive can never commission
-        // until a binding point is re-wired by a design decision — see the
-        // session checkpoint.
+        /// <summary>
+        /// Binds authored construction data and existing market adapters.
+        /// This is an explicit integration seam: it does not create designs,
+        /// prices, material stock, or commissions.
+        /// </summary>
+        public void ConfigureNpcConstruction(BuildingDesignCatalog catalog,
+            IConstructionMaterialPricePort prices, IConstructionMaterialSource materials = null,
+            INpcConstructionProcurementPort procurement = null,
+            IConstructionParcelAuthority parcelAuthority = null,
+            INpcConstructionLaborPort laborPort = null)
+        {
+            npcConstructionCatalog = catalog;
+            npcConstructionPricePort = prices;
+            npcConstructionMaterialSource = materials;
+            npcConstructionProcurement = procurement;
+            npcConstructionLaborPort = laborPort;
+            if (parcelAuthority != null) npcConstructionParcelAuthority = parcelAuthority;
+            if (npcConstructionDriver != null)
+                npcConstructionDriver.ConfigureRuntimePorts(catalog, prices, materials, null,
+                    procurement, laborPort ?? new DriversConstructionLaborPort(this),
+                    householdId => householdMemberships != null
+                        ? householdMemberships.GetActiveMembers(householdId)
+                        : new List<int>());
+        }
+
+        /// <summary>Queues an explicit household request; no autonomous build decision is made here.</summary>
+        public string QueueNpcConstructionRequest(NpcConstructionRequest request)
+        {
+            if (request == null || request.HouseholdId < 0
+                || string.IsNullOrWhiteSpace(request.DesignId)
+                || string.IsNullOrWhiteSpace(request.ParcelId))
+                return "A construction request requires a named household, design, and parcel.";
+            bool Duplicate(NpcConstructionRequest queued) => queued != null
+                && queued.HouseholdId == request.HouseholdId
+                && string.Equals(queued.DesignId, request.DesignId, System.StringComparison.Ordinal)
+                && string.Equals(queued.ParcelId, request.ParcelId, System.StringComparison.Ordinal);
+            if (npcConstructionRequests.Exists(Duplicate)
+                || (npcConstructionDriver != null && npcConstructionDriver.PendingRequests.Exists(Duplicate)))
+                return "The same household, design, and parcel request is already pending.";
+            npcConstructionRequests.Add(request);
+            return null;
+        }
 
         /// <summary>
         /// Pass XI WS2 (A-06): binds a player-owned bank's deposit ledger
@@ -504,11 +614,6 @@ namespace LandLedgers.Orchestration.Systems
             return hub.BankLedgerBindings.BindBankLedger(businessInstanceId, ledger, diag);
         }
 
-        // W7 (2026-11-06): QueueNpcConstructionRequest removed — it had
-        // zero callers, so no production path ever queued a request. The
-        // npcConstructionRequests list stays (DriveNpcConstruction drains
-        // it); it can never be filled until a queue entry point is re-wired
-        // by a design decision — see the session checkpoint.
         private readonly List<NpcConstructionRequest> npcConstructionRequests = new List<NpcConstructionRequest>();
 
         /// <summary>
@@ -523,33 +628,43 @@ namespace LandLedgers.Orchestration.Systems
             ConstructionProjectExecutor executor = hub.ConstructionExecutor;
             if (executor != null && executor.EquipmentReservations == null)
                 executor.EquipmentReservations = hub.Reservations;
-            var driver = new NpcConstructionDriver(
+            npcConstructionDriver ??= new NpcConstructionDriver(
                 hub.NpcConstructionCommissioner, executor, npcConstructionCatalog,
                 hub.ConstructionProjects, hub.CreditCash, hub.FinancialObligations,
                 hub.Ids, hub.Housing, npcConstructionPricePort,
                 npcConstructionMaterialSource, null, npcConstructionProcurement,
-                new DriversConstructionLaborPort(this),
+                npcConstructionLaborPort ?? new DriversConstructionLaborPort(this),
+                householdId => householdMemberships != null
+                    ? householdMemberships.GetActiveMembers(householdId)
+                    : new List<int>());
+            NpcConstructionDriver driver = npcConstructionDriver;
+            driver.ConfigureRuntimePorts(npcConstructionCatalog, npcConstructionPricePort,
+                npcConstructionMaterialSource, null, npcConstructionProcurement,
+                npcConstructionLaborPort ?? new DriversConstructionLaborPort(this),
                 householdId => householdMemberships != null
                     ? householdMemberships.GetActiveMembers(householdId)
                     : new List<int>());
             driver.MaterialSourceByHousehold = CreateHouseholdConstructionMaterialSource;
             var diag = new List<string>();
+            if (npcConstructionParcelAuthority == null)
+            {
+                AcquisitionMarketManager market = FindAnyObjectByType<AcquisitionMarketManager>();
+                if (market != null && market.Titles != null)
+                    npcConstructionParcelAuthority = new TitleConstructionParcelAuthority(market.Titles);
+            }
             if (npcConstructionParcelAuthority != null)
             {
                 foreach (NpcConstructionRequest request in npcConstructionRequests)
                     driver.PendingRequests.Add(request);
                 npcConstructionRequests.Clear();
                 driver.CommissionPending(npcConstructionParcelAuthority, absoluteDayIndex, diag);
-                // Refused commissions stay queued for the next day's drive
-                // (the driver keeps refused requests in its pending list).
-                foreach (NpcConstructionRequest request in driver.PendingRequests)
-                    npcConstructionRequests.Add(request);
             }
             else if (npcConstructionRequests.Count > 0)
             {
                 diag.Add("[SimulationDrivers] npc construction: queued commissions wait — no parcel authority bound.");
             }
             driver.Drive(absoluteDayIndex, diag);
+            ConstructionStagePresentation.RefreshAll(hub.ConstructionProjects);
             if (diag.Count > 0)
                 Debug.Log("[SimulationDrivers] npc construction day " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
@@ -709,7 +824,12 @@ namespace LandLedgers.Orchestration.Systems
                 shoppingTripDriver = new ShoppingTripDriver(
                     householdShoppingLoop,
                     TryStartShoppingPhysicalRoute,
-                    HasPhysicallyArrivedAtShoppingLocation);
+                    HasPhysicallyArrivedAtShoppingLocation,
+                    HasActiveShoppingPhysicalRoute,
+                    ShoppingRouteRemainingSeconds,
+                    CancelShoppingPhysicalRoute,
+                    timeManager != null && timeManager.Settings != null
+                        ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f);
             }
 
         }
@@ -868,6 +988,7 @@ namespace LandLedgers.Orchestration.Systems
             WireNpcBusinessCashStores();
             BindNpcBusinessCreation(sharedBusinessRuntime);
             InstallProductionPayrollGuards();
+            RegisterFuelDealerSuppliers();
         }
 
         /// <summary>
@@ -944,6 +1065,10 @@ namespace LandLedgers.Orchestration.Systems
                 AttachHouseholdMemberships(populationManager.Memberships);
             }
             SubscribeToTimeManager();
+
+            // Rebinds existing supplier adapters to the restored live business
+            // objects after the shared business authority has been rebuilt.
+            RegisterFuelDealerSuppliers();
 
             if (hub == null)
             {
@@ -5005,7 +5130,6 @@ namespace LandLedgers.Orchestration.Systems
                         return true;
                     }
 
-                    const float poundsToKg = 0.45359237f;
                     var diagnostics = new List<string>();
                     var hooks = new LandLedgers.Economy.Logistics.FreightShipmentHooks
                     {
@@ -5073,11 +5197,8 @@ namespace LandLedgers.Orchestration.Systems
                     LogisticsShipmentState created = FreightProduction.CreateShipment(
                         carrier.InstanceId, stableShipmentId, millbrookAidRuntime.BusinessId, bakery.InstanceId,
                         lot.PackageUnits,
-                        new LandLedgers.Economy.Logistics.FreightCargoSpec
-                        {
-                            MassKgPerUnit = ((float)lot.InventoryUnits / Math.Max(1, lot.PackageUnits)) * poundsToKg,
-                            VolumeM3PerUnit = 0.01f * Math.Max(1, lot.PackageUnits)
-                        }, wagon.AssetId, hooks, EntityId.For(EntityKind.Person, accepted.AcceptingOperatorPersonId),
+                        MillbrookFlourFreightCustodyAdapter.BuildFreightCargoSpec(lot),
+                        wagon.AssetId, hooks, EntityId.For(EntityKind.Person, accepted.AcceptingOperatorPersonId),
                         new List<EntityId> { horse.AnimalId }, accepted.AgreedPriceCents, accepted.PayerBusinessId,
                         diagnostics, out reason, accepted.AgreementId, lot.LotId, lot.SkuId,
                         holdForDispatchAuthorization: true, transitDurationGameSeconds: transitSeconds);
@@ -7132,6 +7253,7 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (string.IsNullOrWhiteSpace(message)) return false;
             return message.IndexOf("failed", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("aborted", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("could not", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("unknown", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("unavailable", StringComparison.OrdinalIgnoreCase) >= 0
@@ -7376,19 +7498,21 @@ namespace LandLedgers.Orchestration.Systems
                 state?.BakeryRuntime ?? state?.BakeryDriver?.Bakery;
             if (bakery == null) return;
 
+            LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource liveFuelSource =
+                TryBuildPaidBakeryFuelSource(state, bakery);
+            // The legacy Pass 8 source moves dealer lots but has no payment
+            // authority. Do not let a restored/cached instance turn live
+            // replenishment into a free delivery. If paid supplier terms are
+            // not fully configured, only fuel already in the Bakery can pass.
+            liveFuelSource ??= new LandLedgers.Economy.BreadDrivers.Series2InStockBakeryFuelSource(bakery);
+
             if (state.BakeryDriver == null)
             {
-                LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource source = state.FuelSource
-                    ?? (LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource)
-                        new LandLedgers.Economy.BreadDrivers.Series2InStockBakeryFuelSource(bakery);
-                state.BakeryDriver = new Series2BakeryProductionDriver(bakery, source);
+                state.BakeryDriver = new Series2BakeryProductionDriver(bakery, liveFuelSource);
             }
             else
             {
-                LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource source = state.FuelSource
-                    ?? (LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource)
-                        new LandLedgers.Economy.BreadDrivers.Series2InStockBakeryFuelSource(bakery);
-                state.BakeryDriver.AttachFuelSource(source);
+                state.BakeryDriver.AttachFuelSource(liveFuelSource);
             }
 
             // Plan 01 (2026-11-06, slice 1B): this method is a thin
@@ -7725,22 +7849,14 @@ namespace LandLedgers.Orchestration.Systems
                 diagnostics.Add("DriveBakeryWholesalePlanning: SharedBusinessRuntimeManager is unwired — the bakery's unmet flour/notions needs were not registered for weekly demand collection.");
             }
 
-            // Plan 10 E4 (Obj 8): the daily fuel-blocker line, built once
-            // per planned day from observed state — fuel need (batches x
-            // FuelUnitsPerFiring), fuel on hand in the bakery store, the
-            // authored D-2 factor from the town configuration (0 = unset),
-            // and the dealer/intake state. No live FuelYardByproductIntake
-            // exists in the First Ledger daily flow: the only production
-            // construction is the scripted ThreeBusinessSlice (grep-verified
-            // E4), so the intake state is observed as absent, not assumed.
-            // The attached source is the in-stock stand-in unless a dealer
-            // source was constructed (B1's work, not this slice's). This
-            // line diagnoses only — no fuel moves, no source is attached
-            // or replaced.
+            // Plan 10: summarize the real daily fuel decision from the
+            // attached source and the existing Pass 9 yard intake. A missing
+            // authored unit conversion or empty yard remains a blocked supply;
+            // this diagnostic never creates inventory.
             if (result.BatchesPlanned > 0)
             {
-                LandLedgers.Economy.FreightFuel.Series2DealerBakeryFuelSource dealerSource =
-                    state.FuelSource as LandLedgers.Economy.FreightFuel.Series2DealerBakeryFuelSource;
+                LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource paidSource =
+                    liveFuelSource as LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource;
                 int authoredFactor = developmentTownConfiguration != null
                     ? developmentTownConfiguration.FuelDealerIntakeUnitsPerBakeryUnit : 0;
                 diagnostics.Add(LandLedgers.Economy.BreadDrivers.BakeryFuelBlockerDiagnostics.BuildFuelLine(
@@ -7750,9 +7866,9 @@ namespace LandLedgers.Orchestration.Systems
                         FuelUnitsOnHand = bakery.FuelStock.UnitsOnHand(
                             LandLedgers.Economy.Businesses.Bakery.BakeryBreadCatalog.FuelItemId),
                         AuthoredFactor = authoredFactor > 0 ? (int?)authoredFactor : null,
-                        YardIntakeExistsInDailyFlow = false,
-                        DealerSourceAttached = dealerSource != null,
-                        DealerFuelUnitsOnHand = dealerSource != null ? dealerSource.FuelUnitsOnHand() : 0,
+                        YardIntakeExistsInDailyFlow = state.FuelIntake != null,
+                        DealerSourceAttached = paidSource != null,
+                        DealerFuelUnitsOnHand = paidSource != null ? paidSource.FuelUnitsOnHand() : 0,
                     }));
             }
 
@@ -7764,6 +7880,64 @@ namespace LandLedgers.Orchestration.Systems
                     $"{result.TransfersCompleted} transfer(s), {result.UnitsStocked}u stocked.", this);
             if (diagnostics.Count > 0)
                 Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
+        }
+
+        private LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource TryBuildPaidBakeryFuelSource(
+            Series2Pass9SaveState pass9,
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery)
+        {
+            int intakeUnitsPerBakeryUnit = developmentTownConfiguration != null
+                ? developmentTownConfiguration.FuelDealerIntakeUnitsPerBakeryUnit : 0;
+            if (pass9?.FuelIntake == null || intakeUnitsPerBakeryUnit <= 0
+                || bakery == null || hub?.Ids == null)
+                return null;
+
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null || sharedBusinessRuntime.Businesses == null) return null;
+
+            BusinessInstanceState bakeryBusiness = null;
+            BusinessInstanceState dealerBusinessWithStock = null;
+            BusinessInstanceState firstPricedDealer = null;
+            int dealerUnitPrice = 0;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null || business.RuntimeState == null) continue;
+                if (business.BusinessType == BusinessType.Bakery
+                    && string.Equals(business.InstanceId, bakery.BusinessInstanceId, StringComparison.OrdinalIgnoreCase))
+                    bakeryBusiness = business;
+                if (business.BusinessType != BusinessType.FuelDealer) continue;
+
+                int configuredPrice = sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(business, "fuel_wood");
+                if (configuredPrice <= 0) continue;
+                if (firstPricedDealer == null)
+                {
+                    firstPricedDealer = business;
+                    dealerUnitPrice = configuredPrice;
+                }
+                if (pass9.FuelIntake.TotalFuelWoodUnitsFor(business.InstanceId) > 0)
+                {
+                    dealerBusinessWithStock = business;
+                    dealerUnitPrice = configuredPrice;
+                    break;
+                }
+            }
+
+            BusinessInstanceState dealerBusiness = dealerBusinessWithStock ?? firstPricedDealer;
+            if (dealerBusiness == null || bakeryBusiness == null) return null;
+            long pricePerBakeryUnit = (long)dealerUnitPrice * intakeUnitsPerBakeryUnit;
+            if (pricePerBakeryUnit <= 0 || pricePerBakeryUnit > int.MaxValue) return null;
+
+            return new LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource(
+                pass9.FuelIntake,
+                dealerBusiness.InstanceId,
+                dealerBusiness.RuntimeState,
+                bakery,
+                bakeryBusiness.RuntimeState,
+                hub.Ids,
+                intakeUnitsPerBakeryUnit,
+                (int)pricePerBakeryUnit);
         }
 
         /// <summary>
@@ -8240,6 +8414,14 @@ namespace LandLedgers.Orchestration.Systems
             // confirmed Store arrival. Do not report plans as purchases.
             var shoppingFailureByNeed = new Dictionary<string, string>(StringComparer.Ordinal);
 
+            if (householdShoppingLoop != null)
+                foreach (ShoppingTripResult result in householdShoppingLoop.TripHistory)
+                    if (result?.Events != null)
+                        foreach (ShoppingDiagnosticEvent ev in result.Events)
+                            if (ev != null && ev.Kind == ShoppingEventKind.Failure
+                                && ev.DayIndex >= absoluteDayIndex - 1 && ev.DayIndex <= absoluteDayIndex)
+                                shoppingFailureByNeed[result.HouseholdId + ":" + result.ItemId] = ev.Summary;
+
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null)
@@ -8264,8 +8446,18 @@ namespace LandLedgers.Orchestration.Systems
                         PersonLocationId = ResolvePersonJourneyLocation,
                         SetPersonLocation = SetPersonJourneyLocation
                     },
-                    diagnostics);
+                    diagnostics,
+                    shoppingFailureByNeed);
             }
+
+            if (shoppingTripDriver != null)
+                foreach (PlannedShoppingTrip trip in shoppingTripDriver.ActiveTrips)
+                    if (trip?.Need != null)
+                    {
+                        string key = trip.HouseholdId + ":" + trip.Need.ItemId;
+                        if (!shoppingFailureByNeed.ContainsKey(key))
+                            shoppingFailureByNeed[key] = $"trip {trip.TripId} need {trip.Need.NeedSequence}: {trip.State}";
+                    }
 
             // Plan 02 Slice 5: one daily shopping summary line (not one line
             // per trip): purchases made, cents spent, and the needs still
@@ -8587,6 +8779,9 @@ namespace LandLedgers.Orchestration.Systems
                 return false;
             }
 
+            presentation.ShoppingTripOwnsPerson = id => shoppingTripDriver != null
+                && shoppingTripDriver.HasDepartedTripForPerson(id);
+
             PersonState person = populationManager?.State?.GetPerson(personId);
             bool returningHome = person != null && person.homeBuildingId == buildingId;
             PopulationScheduleState state = returningHome
@@ -8603,6 +8798,27 @@ namespace LandLedgers.Orchestration.Systems
             LandLedgers.FirstLedger.PopulationPathingDirector presentation =
                 FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
             return presentation != null && presentation.IsPersonPhysicallyAtBuilding(personId, buildingId);
+        }
+
+        private bool? HasActiveShoppingPhysicalRoute(int personId, string locationId)
+        {
+            if (!TryParseTownBuildingLocation(locationId, out int buildingId)) return false;
+            var director = FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            return director == null ? (bool?)null : director.HasActiveTaskRouteToBuilding(personId, buildingId);
+        }
+
+        private float? ShoppingRouteRemainingSeconds(int personId, string locationId)
+        {
+            if (!TryParseTownBuildingLocation(locationId, out int buildingId)) return null;
+            var director = FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            return director != null ? director.GetTaskRouteRemainingSeconds(personId, buildingId) : null;
+        }
+
+        private void CancelShoppingPhysicalRoute(int personId, string locationId)
+        {
+            if (!TryParseTownBuildingLocation(locationId, out int buildingId)) return;
+            var director = FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            director?.CancelTaskRouteToBuilding(personId, buildingId);
         }
 
         private static bool TryParseTownBuildingLocation(string locationId, out int buildingId)

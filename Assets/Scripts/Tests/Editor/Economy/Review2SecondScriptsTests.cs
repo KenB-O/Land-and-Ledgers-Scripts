@@ -105,6 +105,7 @@ namespace LandLedgers.Tests.Economy
                 remainingQuantityUnits = 0,
                 freightChargeCents = chargeCents,
                 freightPayerBusinessInstanceId = payerId,
+                haulingMode = ShipmentHaulingMode.HiredFreight,
                 cargoClass = LogisticsCargoClass.PackagedGoods,
                 state = LogisticsShipmentStatus.Completed,
                 deliveryApplied = true,
@@ -172,16 +173,18 @@ namespace LandLedgers.Tests.Economy
         }
 
         [Test]
-        public void Freight_LegacyCollect_DiagnosticMustNotClaimAVerifiedPayerDebit()
+        public void Freight_LegacyCollect_WithoutPayerAuthorityRefusesSettlement()
         {
             var diag = new List<string>();
             LogisticsShipmentState shipment = CompanyWithCompletedShipment("ss-ship-c", "bakery-1", 250, diag, out FreightCompanyRuntime company);
             Assert.IsNotNull(shipment);
             int collected = company.CollectFreightCharge("ss-ship-c", diag);
-            Assert.AreEqual(250, collected, "the legacy overload still returns the charge; behaviour is unchanged");
+            Assert.AreEqual(0, collected, "an unverified collection path must not settle the charge");
             string joined = string.Join(" ", diag);
-            Assert.IsTrue(joined.Contains("NOT verified"),
-                "the legacy diagnostic must say plainly that no payer debit was verified: " + joined);
+            Assert.IsTrue(joined.Contains("verified till"),
+                "the refusal should identify the missing payer authority: " + joined);
+            Assert.IsFalse(shipment.FreightRevenueCollected,
+                "the charge remains eligible for a later verified settlement");
             Assert.IsFalse(joined.Contains("from bakery-1 (external payer)"),
                 "the old wording read as a verified debit from the payer and must be gone: " + joined);
         }

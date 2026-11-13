@@ -19,6 +19,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
     {
         public EntityId LotId = EntityId.Invalid; // EntityKind.Lot (HF-1)
         public int LumberUnits;
+        public string OwnerId = string.Empty;
         public string SourceLogLotId = string.Empty; // the one log lot this was sawn from
         public string StandId = string.Empty;        // the timber stand the logs were felled from
         public string Species = string.Empty;
@@ -105,6 +106,8 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 return "SawmillLumberStock.ReceiveLot: a lumber lot needs positive units.";
             if (string.IsNullOrWhiteSpace(lot.SourceLogLotId))
                 return "SawmillLumberStock.ReceiveLot: no source log lot — orphan lumber refused.";
+            if (string.IsNullOrWhiteSpace(lot.OwnerId))
+                return "SawmillLumberStock.ReceiveLot: no recorded owner — ownership cannot be inferred.";
             if (string.IsNullOrWhiteSpace(lot.StandId))
                 return "SawmillLumberStock.ReceiveLot: no timber stand — the full provenance chain is required.";
             if (string.IsNullOrWhiteSpace(lot.MillBusinessId))
@@ -181,6 +184,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 {
                     LotId = lot.LotId,
                     LumberUnits = lot.LumberUnits,
+                    OwnerId = lot.OwnerId,
                     SourceLogLotId = lot.SourceLogLotId,
                     StandId = lot.StandId,
                     Species = lot.Species,

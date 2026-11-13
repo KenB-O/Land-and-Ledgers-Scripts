@@ -79,6 +79,8 @@ namespace LandLedgers.Time
         private SimulationTickContext dispatchTickContext;
 
         public event Action<SimulationFrameContext> VisualFrameUpdated;
+        /// <summary>Raised after the authoritative clock has processed this frame's game-time increment.</summary>
+        public event Action<SimulationFrameContext> SimulationTimeAdvanced;
         /// <summary>Raised at each chronological simulation boundary before its ordinary consumers run.</summary>
         public event Action<SimulationTickContext> BeforeShortTick;
         public event Action<SimulationTickContext> ShortTick;
@@ -228,6 +230,7 @@ namespace LandLedgers.Time
             {
                 float step = Mathf.Min(remainingGameSeconds, oneDay);
                 AdvanceGameSeconds(step);
+                PublishSimulationTimeAdvanced(0f, step);
                 remainingGameSeconds -= step;
             }
         }
@@ -385,27 +388,36 @@ namespace LandLedgers.Time
             if (realDeltaSeconds <= 0f || isPaused)
             {
                 LastAchievedGameSecondsPerRealSecond = 0f;
-                VisualFrameUpdated?.Invoke(new SimulationFrameContext(
+                var pausedContext = new SimulationFrameContext(
                     currentDate,
                     currentSpeed,
                     speedMultiplier,
                     Mathf.Max(0f, realDeltaSeconds),
                     0f,
                     timeOfDay01,
-                    gameSecondsIntoDay));
+                    gameSecondsIntoDay);
+                SimulationTimeAdvanced?.Invoke(pausedContext);
+                VisualFrameUpdated?.Invoke(pausedContext);
                 return;
             }
 
             float gameDeltaSeconds = realDeltaSeconds * speedMultiplier * (settings.GameSecondsPerDay / settings.realSecondsPerGameDayAt1x);
             gameDeltaSeconds = QueueAndAdvanceGameSeconds(gameDeltaSeconds);
             LastAchievedGameSecondsPerRealSecond = gameDeltaSeconds / realDeltaSeconds;
-
+            PublishSimulationTimeAdvanced(realDeltaSeconds, gameDeltaSeconds);
             VisualFrameUpdated?.Invoke(new SimulationFrameContext(
+                currentDate, currentSpeed, speedMultiplier, realDeltaSeconds,
+                gameDeltaSeconds, timeOfDay01, gameSecondsIntoDay));
+        }
+
+        private void PublishSimulationTimeAdvanced(float realDeltaSeconds, float gameDeltaSeconds)
+        {
+            SimulationTimeAdvanced?.Invoke(new SimulationFrameContext(
                 currentDate,
                 currentSpeed,
-                speedMultiplier,
-                realDeltaSeconds,
-                gameDeltaSeconds,
+                ResolveSpeedMultiplier(currentSpeed),
+                Mathf.Max(0f, realDeltaSeconds),
+                Mathf.Max(0f, gameDeltaSeconds),
                 timeOfDay01,
                 gameSecondsIntoDay));
         }

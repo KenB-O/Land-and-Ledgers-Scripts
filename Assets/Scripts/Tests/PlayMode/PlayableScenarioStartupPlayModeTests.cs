@@ -14,6 +14,126 @@ namespace LandLedgers.PlayMode
 {
     public sealed class PlayableScenarioStartupPlayModeTests
     {
+        [UnityTest, Timeout(300000)]
+        public IEnumerator LiveSmallTownShoppingDiagnostic()
+        {
+            // Capture every error explicitly: the known wagon placement error is
+            // reported as a baseline limitation, and any other error fails this run.
+            var errors = new List<string>();
+            Application.LogCallback observeLog = (condition, stack, type) =>
+            {
+                if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
+                    errors.Add(condition);
+            };
+            bool previousIgnore = LogAssert.ignoreFailingMessages;
+            LogAssert.ignoreFailingMessages = true;
+            Application.logMessageReceived += observeLog;
+            try
+            {
+                AsyncOperation load = SceneManager.LoadSceneAsync("Main Scene", LoadSceneMode.Single);
+                Assert.NotNull(load);
+                while (!load.isDone) yield return null;
+                yield return null;
+
+                Type directorType = RuntimeType("LandLedgers.FirstLedger.PopulationPathingDirector");
+                Type pathingType = RuntimeType("LandLedgers.Pathing.PathingManager");
+                Type populationType = RuntimeType("LandLedgers.Population.PopulationManager");
+                Type driverType = RuntimeType("LandLedgers.Orchestration.Systems.SimulationDrivers");
+                Type timeType = RuntimeType("LandLedgers.Time.TimeManager");
+                Component director = FindComponent(directorType);
+                Component pathing = FindComponent(pathingType);
+                Component population = FindComponent(populationType);
+                Component simulation = FindComponent(driverType);
+                Component time = FindComponent(timeType);
+                Assert.NotNull(director); Assert.NotNull(pathing); Assert.NotNull(population);
+                Assert.NotNull(simulation); Assert.NotNull(time);
+                float initializationDeadline = UnityEngine.Time.realtimeSinceStartup + 60f;
+                while (((int)(directorType.GetProperty("ManagedPeopleCount")?.GetValue(director) ?? 0) < 9
+                        || pathingType.GetProperty("Grid")?.GetValue(pathing) == null)
+                    && UnityEngine.Time.realtimeSinceStartup < initializationDeadline)
+                    yield return null;
+                object state = populationType.GetProperty("State")?.GetValue(population);
+                var people = state?.GetType().GetField("people")?.GetValue(state) as System.Collections.IList;
+                var households = state?.GetType().GetField("households")?.GetValue(state) as System.Collections.IList;
+                Assert.NotNull(people); Assert.NotNull(households);
+                int onMap = people.Cast<object>().Count(p => !(bool)p.GetType().GetField("isOffMap").GetValue(p));
+                int managed = (int)directorType.GetProperty("ManagedPeopleCount").GetValue(director);
+                Assert.AreEqual(9, onMap); Assert.AreEqual(5, households.Count); Assert.AreEqual(9, managed);
+                Assert.NotNull(pathingType.GetProperty("Grid").GetValue(pathing));
+                TestContext.WriteLine($"Real Main Scene: on-map={onMap}, households={households.Count}, managed={managed}, grid=ready.");
+
+                Type speedType = RuntimeType("LandLedgers.Time.SimulationSpeed");
+                timeType.GetMethod("SetSpeed").Invoke(time, new[] { Enum.Parse(speedType, "Speed25x") });
+                double start = (double)timeType.GetProperty("PreciseAbsoluteGameSeconds").GetValue(time);
+                TestContext.WriteLine($"Shopping observation started: gameSeconds={start}, speed=25x.");
+                FieldInfo shoppingField = driverType.GetField("shoppingTripDriver", BindingFlags.Instance | BindingFlags.NonPublic);
+                float deadline = UnityEngine.Time.realtimeSinceStartup + 120f;
+                var states = new Dictionary<string, string>();
+                int loggedTransitions = 0;
+                object successful = null;
+                while (UnityEngine.Time.realtimeSinceStartup < deadline && successful == null)
+                {
+                    object shopping = shoppingField.GetValue(simulation);
+                    if (shopping != null)
+                    {
+                        var trips = shopping.GetType().GetProperty("ActiveTrips").GetValue(shopping) as System.Collections.IEnumerable;
+                        if (trips != null) foreach (object trip in trips)
+                        {
+                            Type tt = trip.GetType();
+                            string id = (string)tt.GetField("TripId").GetValue(trip);
+                            string status = tt.GetField("State").GetValue(trip).ToString();
+                            if (!states.TryGetValue(id, out string previous) || previous != status)
+                            {
+                                states[id] = status;
+                                object need = tt.GetField("Need").GetValue(trip);
+                                if (loggedTransitions < 24 && (states.Count <= 5 || status != "Planned"))
+                                {
+                                    TestContext.WriteLine($"t={timeType.GetProperty("PreciseAbsoluteGameSeconds").GetValue(time)} trip={id} H{tt.GetField("HouseholdId").GetValue(trip)} P{tt.GetField("ShopperPersonId").GetValue(trip)} need={need?.GetType().GetField("NeedSequence")?.GetValue(need)} state={status}");
+                                    loggedTransitions++;
+                                }
+                            }
+                        }
+                        object loop = shopping.GetType().GetProperty("Loop").GetValue(shopping);
+                        var history = loop?.GetType().GetProperty("TripHistory")?.GetValue(loop) as System.Collections.IEnumerable;
+                        if (history != null) foreach (object result in history)
+                        {
+                            Type rt = result.GetType();
+                            if ((bool)rt.GetField("Success").GetValue(result) && (int)rt.GetField("ReceivedLotId").GetValue(result) >= 0)
+                            { successful = result; break; }
+                        }
+                    }
+                    if (successful == null) yield return new WaitForSecondsRealtime(1f);
+                }
+                double end = (double)timeType.GetProperty("PreciseAbsoluteGameSeconds").GetValue(time);
+                TestContext.WriteLine($"Observed game seconds: {start} -> {end}; live trip states observed={states.Count}.");
+                Assert.NotNull(successful, "No completed purchase and household receipt was observed within the bounded live run.");
+                Type resultType = successful.GetType();
+                int debit = (int)resultType.GetField("BuyerOutflowCents").GetValue(successful);
+                int cash = (int)resultType.GetField("StoreCashInCents").GetValue(successful);
+                int receivable = (int)resultType.GetField("StoreReceivableCents").GetValue(successful);
+                Assert.AreEqual(debit, cash + receivable, "The actual settlement must conserve money.");
+                TestContext.WriteLine($"Receipt: H{resultType.GetField("HouseholdId").GetValue(successful)}, P{resultType.GetField("ShopperPersonId").GetValue(successful)}, need={resultType.GetField("NeedSequence").GetValue(successful)}, item={resultType.GetField("ItemId").GetValue(successful)}, units={resultType.GetField("UnitsAcquired").GetValue(successful)}, debit={debit}c, cash={cash}c, receivable={receivable}c, receipt={resultType.GetField("ReceiptId").GetValue(successful)}, lot={resultType.GetField("ReceivedLotId").GetValue(successful)}.");
+                var events = resultType.GetField("Events").GetValue(successful) as System.Collections.IEnumerable;
+                var eventKinds = new HashSet<string>();
+                if (events != null) foreach (object ev in events)
+                {
+                    Type et = ev.GetType();
+                    string kind = et.GetField("Kind").GetValue(ev).ToString();
+                    eventKinds.Add(kind);
+                    TestContext.WriteLine($"shopping event {kind}: {et.GetField("Summary").GetValue(ev)}; {et.GetField("Details").GetValue(ev)}");
+                }
+                CollectionAssert.IsSubsetOf(new[] { "JourneyLeg", "RetailPurchase", "Custody", "Receipt" }, eventKinds);
+                Assert.IsTrue(errors.All(e => e.StartsWith("[OpeningTransportPresentation] Refused to place opening transport", StringComparison.Ordinal)),
+                    "Unexpected runtime errors: " + string.Join(" | ", errors));
+                TestContext.WriteLine($"Known opening wagon placement errors observed: {errors.Count}.");
+            }
+            finally
+            {
+                Application.logMessageReceived -= observeLog;
+                LogAssert.ignoreFailingMessages = previousIgnore;
+            }
+        }
+
         [UnityTest]
         public IEnumerator DevelopmentTownConfigurationStartsWithTheNamedPeopleHouseholdsAndBusinesses()
         {

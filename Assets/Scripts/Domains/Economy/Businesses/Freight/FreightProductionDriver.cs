@@ -229,6 +229,34 @@ namespace LandLedgers.Economy.Freight
                 return null;
             }
 
+            if (!string.IsNullOrWhiteSpace(freightServiceAgreementId))
+            {
+                FreightServiceAgreement agreement = serviceAgreements.FindAgreement(freightServiceAgreementId);
+                FreightServiceRequest request = agreement != null
+                    ? serviceAgreements.FindRequest(agreement.RequestId) : null;
+                var agreementMismatches = new List<string>();
+                if (agreement == null || request == null)
+                    agreementMismatches.Add("accepted agreement/request missing");
+                else
+                {
+                    if (agreement.Status != FreightServiceAgreementStatus.Accepted) agreementMismatches.Add("agreement not accepted");
+                    if (!string.Equals(agreement.CarrierBusinessId, carrierBusinessId, StringComparison.Ordinal)) agreementMismatches.Add("carrier");
+                    if (!string.Equals(agreement.PayerBusinessId, freightPayerBusinessId, StringComparison.Ordinal)) agreementMismatches.Add("payer");
+                    if (agreement.AgreedPriceCents != Math.Max(0, freightChargeCents)) agreementMismatches.Add("agreed price");
+                    if (!string.IsNullOrWhiteSpace(sourceLotId)
+                        && !string.Equals(agreement.CargoLotId, sourceLotId, StringComparison.Ordinal)) agreementMismatches.Add("source lot");
+                    if (!string.Equals(request.PickupBusinessId, sourceBusinessId, StringComparison.Ordinal)) agreementMismatches.Add("pickup business");
+                    if (!string.Equals(request.DestinationBusinessId, destinationBusinessId, StringComparison.Ordinal)) agreementMismatches.Add("destination business");
+                    if (!string.IsNullOrWhiteSpace(agreement.ShipmentId)
+                        && !string.Equals(agreement.ShipmentId, shipmentId, StringComparison.Ordinal)) agreementMismatches.Add("shipment identity");
+                }
+                if (agreementMismatches.Count > 0)
+                {
+                    reason = $"FreightProductionDriver: shipment '{shipmentId}' does not match the accepted agreement ({string.Join(", ", agreementMismatches)}).";
+                    return null;
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(sourceLotId))
             {
                 if (string.IsNullOrWhiteSpace(sourceSkuId))
@@ -272,6 +300,7 @@ namespace LandLedgers.Economy.Freight
             shipment.freightChargeCents = Math.Max(0, freightChargeCents);
             shipment.freightPayerBusinessInstanceId = freightPayerBusinessId ?? string.Empty;
             shipment.freightServiceAgreementId = freightServiceAgreementId ?? string.Empty;
+            shipment.haulingMode = ShipmentHaulingMode.HiredFreight;
             shipment.requiresDispatchAuthorization = holdForDispatchAuthorization;
             // Slice S4: a route-derived duration overrides the 120 s field
             // default (LRM 60 s floor). <= 0 means unset: legacy callers keep

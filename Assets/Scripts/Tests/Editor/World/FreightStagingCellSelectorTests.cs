@@ -42,6 +42,48 @@ namespace LandLedgers.EditorTests.World
         }
 
         [Test]
+        public void CommercialPremises_RequiresAssignedValidBusinessSite()
+        {
+            Assert.IsTrue(FreightStagingCellSelector.TryValidateCommercialPremises(
+                12, 12, true, out string validReason), validReason);
+            Assert.AreEqual(string.Empty, validReason);
+
+            Assert.IsFalse(FreightStagingCellSelector.TryValidateCommercialPremises(
+                -1, 7, false, out string missingReason));
+            StringAssert.Contains("residential operator property", missingReason);
+
+            Assert.IsFalse(FreightStagingCellSelector.TryValidateCommercialPremises(
+                12, 13, true, out string mismatchReason));
+            StringAssert.Contains("did not resolve", mismatchReason);
+
+            Assert.IsFalse(FreightStagingCellSelector.TryValidateCommercialPremises(
+                12, 12, false, out string invalidReason));
+            StringAssert.Contains("not a valid operating site", invalidReason);
+        }
+
+        [Test]
+        public void VehicleGround_RejectsRoadBuildingOutOfParcelAndBlockedCells()
+        {
+            Assert.IsTrue(FreightStagingCellSelector.IsClearVehicleGroundCell(
+                true, true, 4, 4, false, false, false, false, true, 2f, 8f, out string validReason), validReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCell(
+                true, true, 4, 4, true, false, false, false, true, 0f, 8f, out string roadReason));
+            StringAssert.Contains("road", roadReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCell(
+                true, true, 4, 4, false, true, false, false, true, 0f, 8f, out string buildingReason));
+            StringAssert.Contains("building footprint", buildingReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCell(
+                true, false, 4, 4, false, false, false, false, true, 0f, 8f, out string parcelReason));
+            StringAssert.Contains("assigned parcel", parcelReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCell(
+                true, true, 4, 4, false, false, true, false, true, 0f, 8f, out string blockedReason));
+            StringAssert.Contains("blocked ground", blockedReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCell(
+                false, false, -1, 4, false, false, false, false, false, 0f, 8f, out string boundsReason));
+            StringAssert.Contains("town grid", boundsReason);
+        }
+
+        [Test]
         public void Select_AnchorRoadCell_WinsOverPlot()
         {
             TownGrid grid = FreshGrid();

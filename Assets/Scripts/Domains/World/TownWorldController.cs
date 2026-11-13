@@ -5355,6 +5355,12 @@ namespace LandLedgers.World
             Vector2Int size = GetPlacementWorldFootprintSize(definition, plot.roadFrontageDirection);
             int width = size.x;
             int depth = size.y;
+            int roadSetback = ResolveRoadFacingSetbackCells(
+                definition.PrimaryUse == BuildingUseType.Residential
+                    && definition.CanHostHouseholds && !definition.CanHostWorkplace,
+                plot.depthCells,
+                depth,
+                settings.buildingSetbackCells);
 
             int xMin;
             int zMin;
@@ -5362,28 +5368,28 @@ namespace LandLedgers.World
             {
                 case GridDirection.East:
                     {
-                        int xMax = plot.bounds.xMaxInclusive - settings.buildingSetbackCells;
+                        int xMax = plot.bounds.xMaxInclusive - roadSetback;
                         xMin = xMax - width + 1;
                         zMin = plot.bounds.zMin + Mathf.Max(0, (plot.bounds.depth - depth) / 2);
                         break;
                     }
                 case GridDirection.West:
-                    xMin = plot.bounds.xMin + settings.buildingSetbackCells;
+                    xMin = plot.bounds.xMin + roadSetback;
                     zMin = plot.bounds.zMin + Mathf.Max(0, (plot.bounds.depth - depth) / 2);
                     break;
                 case GridDirection.North:
                     {
-                        int zMax = plot.bounds.zMaxInclusive - settings.buildingSetbackCells;
+                        int zMax = plot.bounds.zMaxInclusive - roadSetback;
                         zMin = zMax - depth + 1;
                         xMin = plot.bounds.xMin + Mathf.Max(0, (plot.bounds.width - width) / 2);
                         break;
                     }
                 case GridDirection.South:
-                    zMin = plot.bounds.zMin + settings.buildingSetbackCells;
+                    zMin = plot.bounds.zMin + roadSetback;
                     xMin = plot.bounds.xMin + Mathf.Max(0, (plot.bounds.width - width) / 2);
                     break;
                 default:
-                    xMin = plot.bounds.xMin + settings.buildingSetbackCells;
+                    xMin = plot.bounds.xMin + roadSetback;
                     zMin = plot.bounds.zMin + Mathf.Max(0, (plot.bounds.depth - depth) / 2);
                     break;
             }
@@ -5391,6 +5397,26 @@ namespace LandLedgers.World
             footprint = new GridRect(xMin, zMin, width, depth);
             return grid.RectCellsAreBuildable(footprint, true)
                 && TryResolveFootprintGroundHeight(footprint, true, out _, out _);
+        }
+
+        /// <summary>
+        /// Allocates spare parcel depth to a residential front yard while keeping
+        /// commercial shells at the configured street-facing setback. The house
+        /// offset scales with the parcel space left after fitting the actual shell.
+        /// </summary>
+        public static int ResolveRoadFacingSetbackCells(
+            bool standaloneResidence,
+            int parcelDepthCells,
+            int buildingDepthCells,
+            int configuredSetbackCells)
+        {
+            int baseline = Mathf.Max(0, configuredSetbackCells);
+            int availableDepth = Mathf.Max(0, parcelDepthCells - Mathf.Max(0, buildingDepthCells));
+            baseline = Mathf.Min(baseline, availableDepth);
+            if (!standaloneResidence) return baseline;
+
+            int sharedYardDepth = Mathf.Max(0, availableDepth - baseline * 2);
+            return baseline + sharedYardDepth / 2;
         }
 
         private bool TryResolveFootprintGroundHeight(

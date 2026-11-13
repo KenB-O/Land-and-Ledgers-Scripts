@@ -23,12 +23,10 @@
 // it was handed, and touches only Transforms and animator states — never
 // cash, lots, tasks, reservations, or shipment fields).
 //
-// Time scale: the same as AgentMover — simulation seconds per real
-// second from TimeManager.CurrentGameSecondsPerRealSecond (0 when
-// paused), so the team moves coherently with Ethan's own mover at 1x,
-// 100x, and (when it lands) 250x. The trip duration in game time equals
-// the planner's visibleTravelGameSeconds by construction (the helper
-// measures the same centre-to-centre length the planner priced).
+// Time: route distance advances only from the processed game-time delta
+// published by TimeManager. A Unity render frame never contributes travel
+// time, and hidden/missing render views do not prevent arrival progression.
+// The trip duration in game time remains distance / authored wagon speed.
 //
 // Animator: DrivingWagon while moving, Idle on arrival. Codex-1b note —
 // the horse rig is assigned HorseIdleController, which has no
@@ -91,6 +89,8 @@ namespace LandLedgers.Economy.Transport
         private bool regionalReturnToTownPath;
         private HorseWorldView horseView;
         private WagonWorldView wagonView;
+        private LandLedgers.Time.TimeManager subscribedTimeManager;
+        private Vector3 authoritativeHorsePosition;
 
         public bool IsLegActive => legActive || regionalLegActive;
         public string PhysicalJourneyId => physicalJourneyId;
@@ -146,6 +146,12 @@ namespace LandLedgers.Economy.Transport
                 return false;
             }
 
+            if (!SubscribeToSimulationClock())
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to start leg '{legLabel}': the authoritative simulation clock is unavailable.", this);
+                return false;
+            }
+
             horseView = GetComponentInChildren<HorseWorldView>();
             wagonView = GetComponentInChildren<WagonWorldView>();
             if (horseView == null || wagonView == null)
@@ -173,6 +179,7 @@ namespace LandLedgers.Economy.Transport
             this.physicalOriginLocationId = physicalOriginLocationId ?? string.Empty;
             regionalReturnToTownPath = false;
             regionalTargetPosition = regionalDestination != null ? regionalDestination.position : Vector3.zero;
+            authoritativeHorsePosition = horseView.transform.position;
             regionalLegActive = false;
             distanceTravelledMetres = 0f;
             lastHeading = Quaternion.identity;
@@ -217,6 +224,8 @@ namespace LandLedgers.Economy.Transport
                 || string.IsNullOrWhiteSpace(vehicleId))
                 return false;
 
+            if (!SubscribeToSimulationClock()) return false;
+
             horseView = GetComponentInChildren<HorseWorldView>();
             wagonView = GetComponentInChildren<WagonWorldView>();
             if (horseView == null || wagonView == null) return false;
@@ -237,6 +246,7 @@ namespace LandLedgers.Economy.Transport
             regionalDestination = null;
             regionalTargetPosition = WagonRiderPlacement.CellCenter(reversedPath[0], cellSizeMetres, gridOrigin);
             regionalTargetPosition.y = horseView.transform.position.y;
+            authoritativeHorsePosition = horseView.transform.position;
             regionalTravelElapsedSeconds = 0f;
             regionalTravelDurationSeconds = Vector3.Distance(horseView.transform.position, regionalTargetPosition)
                 / wagonSpeedMetresPerSecond;
@@ -250,17 +260,15 @@ namespace LandLedgers.Economy.Transport
             return true;
         }
 
-        private void Update()
+        /// <summary>
+        /// Advances the active wagon route by a delta already processed by
+        /// TimeManager. Rendering cadence and animator speed never contribute travel time.
+        /// The route remains authoritative if its renderers or view transforms
+        /// are temporarily unavailable after a valid departure.
+        /// </summary>
+        public void AdvanceSimulationTime(float simulationDeltaSeconds)
         {
-            if ((!legActive && !regionalLegActive) || horseView == null || wagonView == null) return;
-
-            // AgentMover.GetMovementTimeScale pattern: 0 when paused, else
-            // game seconds per real second. No TimeManager (tests/scenes
-            // without one) behaves as 1x.
-            float timeScale = MovementTimeScale();
-            if (timeScale <= 0f) return;
-            float simulationDeltaSeconds = UnityEngine.Time.unscaledDeltaTime * timeScale;
-            if (simulationDeltaSeconds <= 0f) return;
+            if ((!legActive && !regionalLegActive) || simulationDeltaSeconds <= 0f) return;
 
             if (regionalLegActive)
             {
@@ -278,25 +286,27 @@ namespace LandLedgers.Economy.Transport
                 return;
             }
 
-            Vector3 wagonMovementStart = wagonView.transform.position;
+            Vector3 wagonMovementStart = wagonView != null ? wagonView.transform.position : Vector3.zero;
 
             // Move the group by the world delta that lands the horse on the
             // path position; the group is a neutral root (world-zero, never
             // rotated), so the horse keeps its S6 placement relative to it
             // while the pair advances as one.
             horsePosition = GroundPosition(horsePosition);
-            transform.position += horsePosition - horseView.transform.position;
+            authoritativeHorsePosition = horsePosition;
+            if (horseView != null)
+                transform.position += horsePosition - horseView.transform.position;
 
             // The wagon trails ALONG THE PATH (not rigidly behind the
             // horse's current facing), so it follows the road around
             // corners instead of cutting them.
-            if (CoupledTransportProgress.TrailingPosition(path, distanceTravelledMetres, pairSeparationMetres,
+            if (wagonView != null && CoupledTransportProgress.TrailingPosition(path, distanceTravelledMetres, pairSeparationMetres,
                     cellSizeMetres, gridOrigin, out Vector3 wagonPosition))
             {
                 wagonView.transform.position = GroundPosition(wagonPosition);
             }
-            Vector3 wagonMovementEnd = wagonView.transform.position;
-            if ((wagonMovementEnd - wagonMovementStart).sqrMagnitude > 0.0001f)
+            Vector3 wagonMovementEnd = wagonView != null ? wagonView.transform.position : Vector3.zero;
+            if (wagonView != null && (wagonMovementEnd - wagonMovementStart).sqrMagnitude > 0.0001f)
                 ActualWagonMovementSegment?.Invoke(wagonMovementStart, wagonMovementEnd);
 
             // Face both views to the path heading (AgentMover.TickMove
@@ -311,11 +321,13 @@ namespace LandLedgers.Economy.Transport
                 // dismount facing — Ethan stands facing the direction
                 // the team travelled when the return leg ends.
                 lastHeading = Quaternion.LookRotation(heading, Vector3.up);
-                Quaternion wagonFacing = Quaternion.LookRotation(heading, Vector3.up) * Quaternion.Euler(0f, -90f, 0f);
+                Quaternion wagonFacing = lastHeading * Quaternion.Euler(0f, -90f, 0f);
                 Quaternion horseFacing = wagonFacing * Quaternion.Euler(0f, 90f, 0f);
                 float turnDegrees = turnSpeedDegreesPerSecond * simulationDeltaSeconds;
-                wagonView.transform.rotation = Quaternion.RotateTowards(wagonView.transform.rotation, wagonFacing, turnDegrees);
-                horseView.transform.rotation = Quaternion.RotateTowards(horseView.transform.rotation, horseFacing, turnDegrees);
+                if (wagonView != null)
+                    wagonView.transform.rotation = Quaternion.RotateTowards(wagonView.transform.rotation, wagonFacing, turnDegrees);
+                if (horseView != null)
+                    horseView.transform.rotation = Quaternion.RotateTowards(horseView.transform.rotation, horseFacing, turnDegrees);
             }
 
             // R1 (Objective 22): no escort. Ethan rides the wagon,
@@ -342,22 +354,21 @@ namespace LandLedgers.Economy.Transport
                 SetDriving(false);
                 if (hideOnArrival)
                 {
-                    if (regionalDestination != null
-                        && !string.IsNullOrWhiteSpace(physicalJourneyId)
+                    if (!string.IsNullOrWhiteSpace(physicalJourneyId)
                         && !string.IsNullOrWhiteSpace(physicalDestinationLocationId)
                         && !string.IsNullOrWhiteSpace(physicalVehicleId))
                     {
                         regionalLegActive = true;
                         SetDriving(true);
-                        Vector3 regionalTarget = regionalDestination.position;
-                        regionalTarget.y = horseView.transform.position.y;
+                        Vector3 regionalTarget = regionalTargetPosition;
+                        regionalTarget.y = authoritativeHorsePosition.y;
                         regionalTravelElapsedSeconds = 0f;
-                        regionalTravelDurationSeconds = Vector3.Distance(horseView.transform.position, regionalTarget)
+                        regionalTravelDurationSeconds = Vector3.Distance(authoritativeHorsePosition, regionalTarget)
                             / wagonSpeedMetresPerSecond;
                         SetRegionalPresentationVisible(false);
-                        float remainingRegionalMetres = Vector3.Distance(horseView.transform.position, regionalTarget);
+                        float remainingRegionalMetres = Vector3.Distance(authoritativeHorsePosition, regionalTarget);
                         Debug.Log($"[CoupledTransport] continuing physically beyond the town boundary for {legLabel}: " +
-                            $"horse={FormatWorld(horseView.transform.position)}, destination={FormatWorld(regionalTarget)}, " +
+                            $"horse={FormatWorld(authoritativeHorsePosition)}, destination={FormatWorld(regionalTarget)}, " +
                             $"remaining={remainingRegionalMetres:0.0}m; regional destination trigger required.", this);
                     }
                     else
@@ -378,7 +389,7 @@ namespace LandLedgers.Economy.Transport
                     // boarded, so nothing is attempted and nothing is
                     // logged — the pair-moves-without-Ethan warning
                     // already fired at leg start.
-                    if (director != null && ethanPersonId >= 0
+                    if (director != null && horseView != null && ethanPersonId >= 0
                         && !director.TryDismountRider(ethanPersonId,
                             GroundPosition(WagonRiderPlacement.CellCenter(path[path.Count - 1], cellSizeMetres, gridOrigin)),
                             lastHeading))
@@ -390,9 +401,32 @@ namespace LandLedgers.Economy.Transport
             }
         }
 
+        private void OnSimulationTimeAdvanced(LandLedgers.Time.SimulationFrameContext context)
+        {
+            // TimeManager reports the game-time increment it actually
+            // processed. Do not rescale wall-clock frame time here.
+            AdvanceSimulationTime(context.GameDeltaSeconds);
+        }
+
+        private bool SubscribeToSimulationClock()
+        {
+            if (subscribedTimeManager != null) return true;
+            subscribedTimeManager = LandLedgers.Time.TimeManager.Instance;
+            if (subscribedTimeManager == null) return false;
+            subscribedTimeManager.SimulationTimeAdvanced += OnSimulationTimeAdvanced;
+            return true;
+        }
+
+        private void OnDestroy()
+        {
+            if (subscribedTimeManager != null)
+                subscribedTimeManager.SimulationTimeAdvanced -= OnSimulationTimeAdvanced;
+            subscribedTimeManager = null;
+        }
+
         private void AdvanceRegionalLeg(float simulationDeltaSeconds)
         {
-            if (regionalDestination == null && !regionalReturnToTownPath)
+            if (!regionalReturnToTownPath && string.IsNullOrWhiteSpace(physicalDestinationLocationId))
             {
                 Debug.LogWarning($"[CoupledTransport] regional travel for {legLabel} lost its physical destination; team remains active at its current position.", this);
                 StopLeg();
@@ -402,21 +436,22 @@ namespace LandLedgers.Economy.Transport
             regionalTravelElapsedSeconds += simulationDeltaSeconds;
             if (regionalTravelElapsedSeconds < regionalTravelDurationSeconds) return;
 
-            Vector3 currentHorsePosition = horseView.transform.position;
-            Vector3 target = regionalReturnToTownPath ? regionalTargetPosition : regionalDestination.position;
+            Vector3 currentHorsePosition = authoritativeHorsePosition;
+            Vector3 target = regionalTargetPosition;
             target.y = currentHorsePosition.y;
             Vector3 heading = target - currentHorsePosition;
             if (heading.sqrMagnitude > 1e-6f)
             {
                 lastHeading = Quaternion.LookRotation(heading, Vector3.up);
-                wagonView.transform.rotation = lastHeading * Quaternion.Euler(0f, -90f, 0f);
-                horseView.transform.rotation = lastHeading;
+                if (wagonView != null) wagonView.transform.rotation = lastHeading * Quaternion.Euler(0f, -90f, 0f);
+                if (horseView != null) horseView.transform.rotation = lastHeading;
             }
             // Regional transit still consumes its full distance/speed duration
             // in simulation time, but the player does not watch a presentation
             // object cross tens of kilometres of empty Unity space.
-            transform.position += target - currentHorsePosition;
-            SetRegionalPresentationVisible(true);
+            authoritativeHorsePosition = target;
+            if (horseView != null) transform.position += target - horseView.transform.position;
+            if (horseView != null || wagonView != null) SetRegionalPresentationVisible(true);
 
             if (regionalReturnToTownPath)
             {
@@ -425,7 +460,7 @@ namespace LandLedgers.Economy.Transport
                 regionalDestination = null;
                 distanceTravelledMetres = 0f;
                 legActive = true;
-                Debug.Log($"[CoupledTransport] {legLabel} reached the town gateway at {FormatWorld(horseView.transform.position)} and continues along the authored road path.", this);
+                Debug.Log($"[CoupledTransport] {legLabel} reached the town gateway at {FormatWorld(authoritativeHorsePosition)} and continues along the authored road path.", this);
                 return;
             }
             // A successful destination binding was resolved when the journey
@@ -503,12 +538,5 @@ namespace LandLedgers.Economy.Transport
             wagonView?.gameObject.GetComponent<TransportAnimatorState>()?.SetState(state);
         }
 
-        private static float MovementTimeScale()
-        {
-            LandLedgers.Time.TimeManager timeManager = LandLedgers.Time.TimeManager.Instance;
-            if (timeManager == null) return 1f;
-            if (timeManager.IsPaused) return 0f;
-            return Mathf.Max(0f, timeManager.CurrentGameSecondsPerRealSecond);
-        }
     }
 }

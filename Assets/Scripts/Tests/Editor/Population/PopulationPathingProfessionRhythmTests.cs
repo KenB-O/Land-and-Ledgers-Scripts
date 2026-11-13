@@ -5,11 +5,45 @@ using LandLedgers.Population;
 using LandLedgers.World;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace LandLedgers.EditorTests.Population
 {
     public sealed class PopulationPathingProfessionRhythmTests
     {
+        [Test]
+        public void ShoppingOwnershipProtectsArrivalUntilTheTripReleasesThePerson()
+        {
+            GameObject owner = new("Route ownership test");
+            GameObject actor = new("Shopper");
+            try
+            {
+                var director = owner.AddComponent<PopulationPathingDirector>();
+                var mover = actor.AddComponent<AgentMover>();
+                mover.ShowAtCurrentLocation();
+                var person = new PersonState { id = 42, homeBuildingId = -1, currentDestinationBuildingId = -1 };
+                var managedType = typeof(PopulationPathingDirector).GetNestedType("ManagedPersonAgent", BindingFlags.NonPublic);
+                var managed = System.Activator.CreateInstance(managedType, person, mover, default(BuildingAnchor));
+                var agents = (System.Collections.IList)typeof(PopulationPathingDirector)
+                    .GetField("agents", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(director);
+                agents.Add(managed);
+                var send = typeof(PopulationPathingDirector).GetMethod("SendRouteForState", BindingFlags.NonPublic | BindingFlags.Instance,
+                    null, new[] { typeof(PopulationScheduleState), typeof(System.Predicate<PersonState>), typeof(System.Func<PersonState, int>) }, null);
+                int targetQueries = 0;
+                System.Func<PersonState, int> target = _ => { targetQueries++; return -1; };
+                director.ShoppingTripOwnsPerson = id => id == 42;
+                send.Invoke(director, new object[] { PopulationScheduleState.ReturningHome, null, target });
+                Assert.AreEqual(0, targetQueries, "scheduled movement must not replace an arrived shopper's destination");
+                Assert.IsTrue(mover.IsArrivedVisible);
+
+                director.ShoppingTripOwnsPerson = _ => false;
+                LogAssert.Expect(LogType.Warning, new System.Text.RegularExpressions.Regex("PopulationPathingDirector blocked a scheduled population route"));
+                send.Invoke(director, new object[] { PopulationScheduleState.ReturningHome, null, target });
+                Assert.AreEqual(1, targetQueries, "scheduled movement becomes eligible again when the trip releases ownership");
+            }
+            finally { Object.DestroyImmediate(actor); Object.DestroyImmediate(owner); }
+        }
+
         [Test]
         public void NewPathingDirectorDoesNotManufactureAmbientStreetJourneysByDefault()
         {
@@ -29,6 +63,20 @@ namespace LandLedgers.EditorTests.Population
             {
                 Object.DestroyImmediate(owner);
             }
+        }
+
+        [TestCase("receiving", true, true)]
+        [TestCase("Receiving", true, true)]
+        [TestCase("receiving", false, false)]
+        [TestCase("storage", true, false)]
+        public void FreightDoorwayFallbackRequiresAnAuthoredFrontDoorAndReceivingActivity(
+            string activityId, bool authoredFrontDoor, bool expected)
+        {
+            BuildingAnchor anchor = new() { type = AnchorType.FrontDoor, fromAuthoredMarker = authoredFrontDoor };
+            var resolver = typeof(PopulationPathingDirector).GetMethod("CanUseAuthoredDoorForFreightReceiving",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(resolver);
+            Assert.AreEqual(expected, resolver.Invoke(null, new object[] { activityId, anchor }));
         }
 
         [Test]

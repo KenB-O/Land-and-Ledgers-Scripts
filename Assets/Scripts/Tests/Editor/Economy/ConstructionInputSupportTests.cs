@@ -688,7 +688,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void LumberYardEarnsWeeklyRevenueFromLocalBuilderDemand()
+        public void LumberYardDoesNotBookWeeklyRevenueWithoutAnActualBuyer()
         {
             // This settlement/accounting regression does not exercise land
             // development, so it must not depend on the generated world having
@@ -700,12 +700,18 @@ namespace LandLedgers.Editor.Economy
             int stockBefore = Mathf.Max(80, lumber.TargetStockUnits);
             context.SetLumberYardStock(stockBefore);
             context.SetBusinessCash(yard, 50000);
+            int cashBefore = yard.RuntimeState.CurrentCashCents;
+            int revenueBefore = yard.RuntimeState.LastWeeklyLocalTransferRevenueCents;
 
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
-            Assert.Greater(yard.RuntimeState.LastWeeklyLocalTransferRevenueCents, 0);
-            Assert.Less(context.GetLumberYardStock(), stockBefore);
-            StringAssert.Contains("local builder demand", yard.RuntimeState.LastWeeklyOperationSummary);
+            Assert.AreEqual(revenueBefore, yard.RuntimeState.LastWeeklyLocalTransferRevenueCents,
+                "A weekly formula must not create sales revenue without a named buyer transaction.");
+            Assert.AreEqual(cashBefore, yard.RuntimeState.CurrentCashCents,
+                "No buyer means no sale proceeds enter the Yard cash account.");
+            Assert.AreEqual(stockBefore, context.GetLumberYardStock(),
+                "No buyer means lumber remains in the Yard's inventory.");
+            StringAssert.DoesNotContain("local builder demand", yard.RuntimeState.LastWeeklyOperationSummary);
         }
 
         [Test]
@@ -803,6 +809,17 @@ namespace LandLedgers.Editor.Economy
             StringAssert.Contains("Lumber Yard", lumber.sourceLabel);
             int sawmillBefore = context.GetSawmillStock();
             int yardBefore = context.GetLumberYardStock();
+            BusinessInstanceState yard = context.GetBusiness(BusinessType.LumberYard);
+            int yardCashBefore = yard.RuntimeState.CurrentCashCents;
+            int yardRevenueBefore = yard.RuntimeState.LastWeeklyLocalTransferRevenueCents;
+            int expectedLumberRevenue = 0;
+            foreach (ConstructionResourceSourceAllocation allocation in lumber.sourceAllocations)
+            {
+                if (allocation != null && string.Equals(allocation.businessInstanceId, yard.InstanceId, StringComparison.Ordinal))
+                {
+                    expectedLumberRevenue += allocation.TotalCostCents;
+                }
+            }
 
             bool built = context.AcquisitionMarket.TryConstructOnOwnedPlot(plotId, optionIndex, out PlacedBuilding building, out string message);
 
@@ -810,6 +827,12 @@ namespace LandLedgers.Editor.Economy
             Assert.NotNull(building);
             Assert.AreEqual(sawmillBefore, context.GetSawmillStock());
             Assert.AreEqual(yardBefore - lumber.requiredUnits, context.GetLumberYardStock());
+            Assert.Greater(expectedLumberRevenue, 0, "The quote must name the actual Yard stock at its authorized price.");
+            Assert.AreEqual(expectedLumberRevenue,
+                yard.RuntimeState.LastWeeklyLocalTransferRevenueCents - yardRevenueBefore,
+                "A named construction purchase posts revenue only for the actual Yard units transferred.");
+            Assert.AreEqual(expectedLumberRevenue, yard.RuntimeState.CurrentCashCents - yardCashBefore,
+                "The construction buyer's settlement credits the actual supplying Lumber Yard exactly once.");
         }
 
         [Test]

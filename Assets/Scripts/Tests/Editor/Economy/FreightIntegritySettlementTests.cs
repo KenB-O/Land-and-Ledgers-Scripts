@@ -304,24 +304,12 @@ namespace LandLedgers.EditorTests.Economy
         // AFTER the Slice 1 repair (SimulationDrivers.cs:4811-4816):
         // quantityUnits is the sack count, MassKgPerUnit is the PER-SACK mass
         // (the lot's total pounds divided by its sack count, converted to kg:
-        // 10 lb -> 4.5359 kg), VolumeM3PerUnit is 0.01 m3 per sack-count unit
-        // (unchanged in Slice 1 — its per-sack figure is unauthored, plan
-        // section 4 / B-P7-1, pinned not repaired). Slice 1 rewrite (2026-11-08):
-        // the mass line changed from `lot.InventoryUnits * poundsToKg` (the
-        // whole lot's mass passed as the per-unit mass, squaring the sack
-        // count) to the per-sack expression below; the ships assertion does
-        // not change. SimulationDrivers is harness-excluded, so the test
-        // replicates the formula (the P1 Slice 0 precedent); it pins the
-        // service-side consequence of the formula, and the call-site fix
-        // itself is source-reviewed + Codex-verified in Slice 1.
+        // 10 lb -> 4.5359 kg), and the registered per-sack volume. This
+        // calls the same production factory used by SimulationDrivers so
+        // the test cannot drift from the lot-to-cargo mapping.
         private static FreightCargoSpec ProductionCargoSpec(OffMapAidCargoLot lot)
         {
-            const float poundsToKg = 0.45359237f;
-            return new FreightCargoSpec
-            {
-                MassKgPerUnit = ((float)lot.InventoryUnits / Math.Max(1, lot.PackageUnits)) * poundsToKg,
-                VolumeM3PerUnit = 0.01f * Math.Max(1, lot.PackageUnits)
-            };
+            return MillbrookFlourFreightCustodyAdapter.BuildFreightCargoSpec(lot);
         }
 
         // Builds the production-spec shipment against a fresh service holding
@@ -411,7 +399,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void ProductionCargoSpec_SixteenSackLot_BlockedPreLoad()
+        public void ProductionCargoSpec_SixteenSackLot_PassesCapacityPreLoad()
         {
             // D-F1 (fixed-behaviour form, coordinator correction 2026-11-08,
             // Option 2): the production spec as written in Slice 0 squared
@@ -457,6 +445,8 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(Math.Abs(spec.MassKgPerUnit - 4.5359237f) < 0.001f,
                 "the corrected per-sack mass for a " + sacks + "-sack lot must be 10 lb in kg (4.5359), but was "
                 + spec.MassKgPerUnit);
+            Assert.AreEqual(0.01f, spec.VolumeM3PerUnit, 0.000001f,
+                "cargo volume must remain the existing per-sack factor; quantity is applied by the shipment service once");
             var service = new FreightShipmentService();
             service.RegisterWagon(wagon);
             LogisticsShipmentState created = service.CreateShipment(
@@ -1207,33 +1197,25 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void VolumeBoundary_TwentySackLot_Passes_TwentyOneSackLot_BlocksOnVolume()
+        public void VolumePerUnit_IsMultipliedOnceForTwentyAndTwentyOneSackLots()
         {
-            // Pins the CURRENT volume formula's boundary with the corrected
-            // mass: a 20-sack lot passes volume (4.00 m3, within the +0.0001
-            // tolerance) and a 21-sack lot blocks on volume (4.41 m3). This
-            // test pins the formula as written; it does NOT bless the squared
-            // volume formula as correct — its per-sack figure is unauthored
-            // (plan section 4 / B-P7-1, an owner decision). The mass leg is
-            // clean in both cases (20 sacks = 90.7 kg, 21 sacks = 95.3 kg,
-            // both far inside 450 kg), so the 21-sack block names volume.
+            // The production caller supplies a per-sack volume and the
+            // service multiplies by package quantity once: 20 sacks = .20m3,
+            // 21 sacks = .21m3. Both fit the existing 4m3 wagon; mass is
+            // likewise within its existing 450kg limit.
             OffMapAidCargoLot lot20 = PlaceLot(20, "volume-twenty-sack");
             LogisticsShipmentState created20 = CreateWithProductionSpec("freight-shipment:volume-20sack", lot20);
             Assert.IsTrue(!created20.IsPreLoadBlocked,
-                "a 20-sack lot must pass volume (4.00 m3 at capacity), but was blocked: " + created20.BlockedReason);
+                "a 20-sack lot must pass volume (0.20 m3), but was blocked: " + created20.BlockedReason);
             Assert.AreEqual(LogisticsShipmentStatus.Planned, created20.Status, "a 20-sack lot must be Planned");
             Assert.AreEqual(20, created20.PlannedQuantityUnits, "a 20-sack lot must plan 20 units");
 
             OffMapAidCargoLot lot21 = PlaceLot(21, "volume-twenty-one-sack");
             LogisticsShipmentState created21 = CreateWithProductionSpec("freight-shipment:volume-21sack", lot21);
-            Assert.IsTrue(created21.IsPreLoadBlocked,
-                "a 21-sack lot must block on volume (4.41 m3 over the 4 m3 wagon)");
-            Assert.IsTrue(created21.BlockedReason.Contains("volume"),
-                "the 21-sack block must name volume, but got '" + created21.BlockedReason + "'");
-            Assert.IsTrue(created21.BlockedReason.Contains("4.41"),
-                "the 21-sack block must name the 4.41 m3 checked volume, but got '" + created21.BlockedReason + "'");
-            Assert.IsTrue(!created21.BlockedReason.Contains("mass"),
-                "the 21-sack block must be a volume block, not a mass block, but got '" + created21.BlockedReason + "'");
+            Assert.IsFalse(created21.IsPreLoadBlocked,
+                "a 21-sack lot must be checked at .21m3, not 4.41m3: " + created21.BlockedReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, created21.Status);
+            Assert.AreEqual(21, created21.PlannedQuantityUnits);
         }
 
         // ---- Priority 7 Slice 5 (2026-11-08): cargo custody + physical

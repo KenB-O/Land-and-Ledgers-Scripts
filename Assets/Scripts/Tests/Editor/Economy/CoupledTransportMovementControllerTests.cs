@@ -6,7 +6,9 @@
 // CoupledTransportProgressTests, which keeps the pure-helper progress tests
 // in the harness.
 using System.Collections.Generic;
+using System.Reflection;
 using LandLedgers.Economy.Transport;
+using LandLedgers.Time;
 using LandLedgers.World;
 using NUnit.Framework;
 using UnityEngine;
@@ -69,6 +71,75 @@ namespace LandLedgers.EditorTests.Economy
             {
                 Object.DestroyImmediate(host);
             }
+        }
+
+        [TestCase(1f, 3)]
+        [TestCase(10f, 2)]
+        [TestCase(500f, 1)]
+        public void ActiveRoute_AdvancesFromSuppliedSimulationSecondsWithoutViews(
+            float nominalSpeedMultiplier, int frameCount)
+        {
+            // Different clock multipliers provide different processed game
+            // deltas. The transport consumes that delta directly and never
+            // multiplies real frame time by the selected speed again.
+            const float totalGameSeconds = 3f;
+            var host = new GameObject(nameof(ActiveRoute_AdvancesFromSuppliedSimulationSecondsWithoutViews));
+            try
+            {
+                CoupledTransportMovementController controller = host.AddComponent<CoupledTransportMovementController>();
+                SetPrivate(controller, "path", new List<GridCoord>
+                {
+                    new GridCoord(0, 0), new GridCoord(1, 0),
+                    new GridCoord(2, 0), new GridCoord(3, 0)
+                });
+                SetPrivate(controller, "cellSizeMetres", 1f);
+                SetPrivate(controller, "gridOrigin", new Vector3(50000f, 0f, 50000f));
+                SetPrivate(controller, "wagonSpeedMetresPerSecond", 1f);
+                SetPrivate(controller, "pairSeparationMetres", 1f);
+                SetPrivate(controller, "turnSpeedDegreesPerSecond", 720f);
+                SetPrivate(controller, "legActive", true);
+                SetPrivate(controller, "hideOnArrival", false);
+                SetPrivate(controller, "authoritativeHorsePosition", new Vector3(50000.5f, 0f, 50000.5f));
+                SetPrivate(controller, "horseView", null);
+                SetPrivate(controller, "wagonView", null);
+
+                float frameGameSeconds = totalGameSeconds / frameCount;
+                SimulationSpeed speed = nominalSpeedMultiplier >= 500f ? SimulationSpeed.Speed500x
+                    : nominalSpeedMultiplier >= 10f ? SimulationSpeed.Speed10x : SimulationSpeed.Speed1x;
+                MethodInfo advance = typeof(CoupledTransportMovementController).GetMethod(
+                    "OnSimulationTimeAdvanced", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.IsNotNull(advance);
+                for (int frame = 0; frame < frameCount; frame++)
+                {
+                    var context = new SimulationFrameContext(
+                        new SimulationDate(0, 0, 1, 1, 1, 1, 1897), speed,
+                        nominalSpeedMultiplier, 0.016f, frameGameSeconds, 0f, 0f);
+                    advance.Invoke(controller, new object[] { context });
+                }
+
+                Assert.IsFalse(controller.IsLegActive,
+                    $"A valid route must arrive after {totalGameSeconds} simulated seconds at nominal {nominalSpeedMultiplier}x even with no render views.");
+                Assert.That((float)GetPrivate(controller, "distanceTravelledMetres"),
+                    Is.EqualTo(totalGameSeconds).Within(0.0001f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        private static void SetPrivate(object target, string name, object value)
+        {
+            FieldInfo field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, $"Expected movement state field '{name}'.");
+            field.SetValue(target, value);
+        }
+
+        private static object GetPrivate(object target, string name)
+        {
+            FieldInfo field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, $"Expected movement state field '{name}'.");
+            return field.GetValue(target);
         }
     }
 }

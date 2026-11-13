@@ -375,14 +375,22 @@ namespace LandLedgers.Economy.BreadDrivers
                 diag.Add($"Series2BakeryProductionDriver: day {dayIndex} refused — {fuelProblem}");
                 return -1;
             }
+            int shelfUnitsBefore = CountShelfUnits(bakery);
+            int shelfLotsBefore = bakery.BreadShelf.Count;
             int baked = bakery.WorkDay(dayIndex, bakerKitUsable, ovenDefinition, findComponent, diag, idRegistry);
-            int loaves = 0;
-            foreach (var lot in bakery.BreadShelf)
-            {
-                if (lot != null && lot.BakedDayIndex == dayIndex) loaves += lot.UnitCount;
-            }
-            diag.Add($"Series2BakeryProductionDriver: day {dayIndex} baked {baked} batch(es), {loaves} unit(s) on the shelf baked today; shelf lots total {bakery.BreadShelf.Count}.");
+            int shelfUnitsAfter = CountShelfUnits(bakery);
+            int producedUnits = Math.Max(0, shelfUnitsAfter - shelfUnitsBefore);
+            int producedLots = Math.Max(0, bakery.BreadShelf.Count - shelfLotsBefore);
+            diag.Add($"Series2BakeryProductionDriver: day {dayIndex} baked {baked} batch(es), added {producedUnits} unit(s) in {producedLots} shelf lot(s); shelf now has {shelfUnitsAfter} unit(s) in {bakery.BreadShelf.Count} lot(s).");
             return baked;
+        }
+
+        private static int CountShelfUnits(BakeryShopRuntime runtime)
+        {
+            int units = 0;
+            foreach (var lot in runtime.BreadShelf)
+                if (lot != null) units += Math.Max(0, lot.UnitCount);
+            return units;
         }
 
         // NOTE (Pass 6 scope): staged-chain lots reach the sellable shelf

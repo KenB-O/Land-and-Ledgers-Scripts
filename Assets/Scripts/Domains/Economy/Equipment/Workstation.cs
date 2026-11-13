@@ -91,6 +91,7 @@ namespace LandLedgers.Economy.Equipment
         public string BusinessInstanceId = string.Empty;
         public string SpaceId = string.Empty; // the functional space it lives in
         public List<string> ComponentAssetIds = new List<string>();
+        public List<MotivePowerSource> MotivePowerSources = new List<MotivePowerSource>();
 
         /// <summary>
         /// Derives readiness from actual components. Returns null when ready;
@@ -125,6 +126,11 @@ namespace LandLedgers.Economy.Equipment
                     return reason;
                 }
             }
+
+            if (!def.MotivePowerSatisfied(MotivePowerSources, diagnostics))
+                return diagnostics.Count > 0
+                    ? diagnostics[diagnostics.Count - 1]
+                    : $"Workstation {def.DisplayName}: required motive power is unavailable.";
 
             return null; // ready
         }

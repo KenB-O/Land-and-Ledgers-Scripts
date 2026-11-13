@@ -29,6 +29,7 @@ namespace LandLedgers.Editor.Economy
         private FreightShipmentHooks hooks;
         private EntityId loader;
         private EntityId driver;
+        private EquipmentAsset wagon;
         private Dictionary<string, int> recipientStock;
 
         [SetUp]
@@ -60,7 +61,7 @@ namespace LandLedgers.Editor.Economy
             loader = EntityId.For(EntityKind.Person, 701);
             driver = EntityId.For(EntityKind.Person, 702);
 
-            var wagon = new EquipmentAsset
+            wagon = new EquipmentAsset
             {
                 AssetId = "wagon-1",
                 Kind = "farm-wagon",
@@ -73,6 +74,40 @@ namespace LandLedgers.Editor.Economy
         }
 
         private FreightCargoSpec GrainSpec() => new FreightCargoSpec { MassKgPerUnit = 2f, VolumeM3PerUnit = 0.01f };
+
+        [Test]
+        public void InvalidNonFiniteCargoVolume_BlocksWithoutOwningCargo()
+        {
+            LogisticsShipmentState shipment = service.CreateShipment("invalid-volume", "mill-1", "store-1",
+                10, new FreightCargoSpec { MassKgPerUnit = 2f, VolumeM3PerUnit = float.NaN },
+                "wagon-1", hooks, out _);
+
+            Assert.IsNotNull(shipment);
+            Assert.IsTrue(shipment.IsPreLoadBlocked);
+            Assert.IsFalse(shipment.loadApplied);
+            Assert.AreEqual(0, shipment.RemainingQuantityUnits);
+            Assert.IsFalse(service.BeginLoading(shipment, loader, hooks, out _));
+        }
+
+        [Test]
+        public void WagonCapacityReducedAfterPlanning_BlocksBeforeLoadTaskOrSourceDebit()
+        {
+            LogisticsShipmentState shipment = service.CreateShipment("capacity-changed", "mill-1", "store-1",
+                10, GrainSpec(), "wagon-1", hooks, out string createReason);
+            Assert.IsNotNull(shipment, createReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status);
+
+            wagon.CargoVolumeCapacityM3 = 0.05f;
+            bool began = service.BeginLoading(shipment, loader, hooks, out string reason);
+
+            Assert.IsFalse(began);
+            Assert.IsTrue(reason.Contains("volume"), reason);
+            Assert.AreEqual(LogisticsShipmentStatus.Failed, shipment.Status);
+            Assert.IsFalse(shipment.loadApplied);
+            Assert.AreEqual(0, shipment.RemainingQuantityUnits);
+            Assert.IsNull(tasks.GetDefinition("freight:load:capacity-changed"),
+                "the failed capacity check creates no loading task");
+        }
 
         [Test]
         public void SourceLotReceiptWaitsForPhysicalReceivingArrival()

@@ -18,6 +18,14 @@ namespace LandLedgers.EditorTests.Economy
     [TestFixture]
     public sealed class RevenueCollectionScanTests
     {
+        private static BusinessRuntimeState Runtime(string id, int cash)
+        {
+            var runtime = new BusinessRuntimeState();
+            runtime.BindBusinessIdentity(id);
+            runtime.SetCurrentCashCents(cash);
+            return runtime;
+        }
+
         private static FreightCompanyRuntime BuildCompany()
         {
             var company = new FreightCompanyRuntime("biz_freight_001");
@@ -34,6 +42,7 @@ namespace LandLedgers.EditorTests.Economy
                 remainingQuantityUnits = 0,
                 freightChargeCents = 500,
                 freightPayerBusinessInstanceId = payer,
+                haulingMode = ShipmentHaulingMode.HiredFreight,
                 cargoClass = LogisticsCargoClass.PackagedGoods,
                 state = LogisticsShipmentStatus.Planned,
             };
@@ -70,15 +79,19 @@ namespace LandLedgers.EditorTests.Economy
             var company = BuildCompany();
             var diag = new List<string>();
             company.TryAcceptShipment(CompletedShipment("s1", "biz_store_001"), diag);
-            var businessRuntime = new BusinessRuntimeState();
+            var businessRuntime = Runtime("biz_freight_001", 0);
+            var payer = Runtime("biz_store_001", 1000);
 
-            int posted = company.CollectAndPostUncollectedRevenue(businessRuntime, diag);
+            int posted = company.CollectAndPostUncollectedRevenue(businessRuntime,
+                id => id == "biz_store_001" ? payer : null, diag);
 
             Assert.AreEqual(500, posted);
             Assert.AreEqual(500, businessRuntime.CurrentCashCents, "The freight business earned its charge.");
+            Assert.AreEqual(500, payer.CurrentCashCents, "The customer paid the matching amount.");
             StringAssert.Contains("provenance: freight charge", string.Join(" ", diag.ToArray()));
 
-            int reposted = company.CollectAndPostUncollectedRevenue(businessRuntime, diag);
+            int reposted = company.CollectAndPostUncollectedRevenue(businessRuntime,
+                id => id == "biz_store_001" ? payer : null, diag);
             Assert.AreEqual(0, reposted, "Idempotent: the collected flag makes re-scans yield nothing.");
             Assert.AreEqual(500, businessRuntime.CurrentCashCents, "No double posting.");
             Assert.IsEmpty(company.FindUncollectedFreightChargeShipmentIds());
@@ -90,9 +103,9 @@ namespace LandLedgers.EditorTests.Economy
             var company = BuildCompany();
             var diag = new List<string>();
             company.TryAcceptShipment(CompletedShipment("self", "biz_freight_001"), diag); // self
-            var businessRuntime = new BusinessRuntimeState();
+            var businessRuntime = Runtime("biz_freight_001", 0);
 
-            int posted = company.CollectAndPostUncollectedRevenue(businessRuntime, diag);
+            int posted = company.CollectAndPostUncollectedRevenue(businessRuntime, _ => businessRuntime, diag);
 
             Assert.AreEqual(0, posted, "Canon §3.6: self-payer yields zero — no fabricated revenue.");
             Assert.AreEqual(0, businessRuntime.CurrentCashCents);
@@ -104,9 +117,9 @@ namespace LandLedgers.EditorTests.Economy
             var company = BuildCompany();
             var diag = new List<string>();
             company.TryAcceptShipment(CompletedShipment("nopayer", string.Empty), diag);
-            var businessRuntime = new BusinessRuntimeState();
+            var businessRuntime = Runtime("biz_freight_001", 0);
 
-            int posted = company.CollectAndPostUncollectedRevenue(businessRuntime, diag);
+            int posted = company.CollectAndPostUncollectedRevenue(businessRuntime, _ => null, diag);
 
             Assert.AreEqual(0, posted, "Missing payer yields zero.");
             Assert.AreEqual(0, businessRuntime.CurrentCashCents);

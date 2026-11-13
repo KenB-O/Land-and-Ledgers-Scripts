@@ -19,6 +19,67 @@ namespace LandLedgers.Pathing
     public static class FreightStagingCellSelector
     {
         /// <summary>
+        /// Freight may use only premises explicitly assigned to its business and
+        /// accepted by the shared business-site authority. An operator's home is
+        /// not a substitute for commercial premises.
+        /// </summary>
+        public static bool TryValidateCommercialPremises(
+            int assignedBuildingId,
+            int resolvedBuildingId,
+            bool businessAssignmentValid,
+            out string reason)
+        {
+            if (assignedBuildingId < 0)
+            {
+                reason = "No commercial premises are assigned to the freight business; residential operator property is not an authorized staging fallback.";
+                return false;
+            }
+            if (resolvedBuildingId < 0 || assignedBuildingId != resolvedBuildingId)
+            {
+                reason = $"Assigned freight premises Building {assignedBuildingId} did not resolve to the same active building.";
+                return false;
+            }
+            if (!businessAssignmentValid)
+            {
+                reason = $"Assigned Building {assignedBuildingId} is not a valid operating site for this freight business.";
+                return false;
+            }
+
+            reason = string.Empty;
+            return true;
+        }
+
+        /// <summary>Rejects any horse or wagon footprint cell outside clear parcel ground.</summary>
+        public static bool IsClearVehicleGroundCell(
+            bool inBounds,
+            bool insideParcel,
+            int cellPlotId,
+            int requiredPlotId,
+            bool isRoad,
+            bool hasBuilding,
+            bool blocked,
+            bool anchor,
+            bool terrainUsable,
+            float slopeDegrees,
+            float maximumSlopeDegrees,
+            out string reason)
+        {
+            if (!inBounds) reason = "outside the town grid";
+            else if (!insideParcel || cellPlotId != requiredPlotId) reason = "outside the assigned parcel";
+            else if (isRoad) reason = "overlaps a road";
+            else if (hasBuilding) reason = "overlaps a building footprint";
+            else if (blocked || anchor) reason = "overlaps blocked ground or an access anchor";
+            else if (!terrainUsable || float.IsNaN(slopeDegrees) || float.IsInfinity(slopeDegrees)
+                || slopeDegrees > maximumSlopeDegrees) reason = "terrain is unknown, blocked, or too steep";
+            else
+            {
+                reason = string.Empty;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Select the staging cell from an anchor candidate (a building's
         /// road-access anchor coord) and a plot candidate (the building
         /// plot's roadAccessCell). The anchor wins when usable; the plot

@@ -18,6 +18,50 @@ namespace LandLedgers.EditorTests.World
     [TestFixture]
     public sealed class BuildingWriterCutoverTests
     {
+        [Test]
+        public void RoadSetback_ResidentialUsesAvailableDepthButStorefrontKeepsStreetFrontage()
+        {
+            int storefront = TownWorldController.ResolveRoadFacingSetbackCells(
+                false, parcelDepthCells: 12, buildingDepthCells: 4, configuredSetbackCells: 1);
+            int house = TownWorldController.ResolveRoadFacingSetbackCells(
+                true, parcelDepthCells: 12, buildingDepthCells: 4, configuredSetbackCells: 1);
+
+            Assert.AreEqual(1, storefront, "Commercial placement retains its authored street setback.");
+            Assert.AreEqual(4, house, "A house on a deep parcel gains a proportionate front yard.");
+            Assert.Less(house, 12 - 4, "The setback must leave room for the actual building footprint.");
+        }
+
+        [Test]
+        public void RoadSetback_LargerHouseReceivesLessOffsetThanSmallHouseOnSameParcel()
+        {
+            int smallHouse = TownWorldController.ResolveRoadFacingSetbackCells(
+                true, parcelDepthCells: 12, buildingDepthCells: 4, configuredSetbackCells: 1);
+            int largerHouse = TownWorldController.ResolveRoadFacingSetbackCells(
+                true, parcelDepthCells: 12, buildingDepthCells: 8, configuredSetbackCells: 1);
+
+            Assert.AreEqual(4, smallHouse);
+            Assert.AreEqual(2, largerHouse);
+            Assert.Less(largerHouse, smallHouse);
+        }
+
+        [Test]
+        public void RoadSetback_ConstrainedParcelFallsBackToConfiguredMinimum()
+        {
+            int house = TownWorldController.ResolveRoadFacingSetbackCells(
+                true, parcelDepthCells: 7, buildingDepthCells: 5, configuredSetbackCells: 1);
+            Assert.AreEqual(1, house);
+            Assert.LessOrEqual(house + 5, 7);
+        }
+
+        [Test]
+        public void RoadSetback_ClampsMalformedDimensionsWithoutNegativeOffsets()
+        {
+            Assert.AreEqual(0, TownWorldController.ResolveRoadFacingSetbackCells(
+                true, parcelDepthCells: 3, buildingDepthCells: 5, configuredSetbackCells: 1));
+            Assert.AreEqual(0, TownWorldController.ResolveRoadFacingSetbackCells(
+                false, parcelDepthCells: 5, buildingDepthCells: 3, configuredSetbackCells: -2));
+        }
+
         // ------------------------------------------------------------------
         // Helpers
         // ------------------------------------------------------------------

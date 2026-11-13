@@ -45,6 +45,24 @@ namespace LandLedgers.Editor.Economy
             return registry;
         }
 
+        private static EquipmentTaskGate FellingEquipmentGate()
+        {
+            return new EquipmentTaskGate
+            {
+                AssetsSupplier = () => new List<EquipmentAsset>
+                {
+                    new EquipmentAsset
+                    {
+                        AssetId = "test-felling-axe",
+                        Kind = "felling-axe",
+                        OwnerKind = "business",
+                        OwnerId = "logging-1",
+                        Condition01 = 1f,
+                    },
+                },
+            };
+        }
+
         private static JourneyModel LandingToMillJourney()
         {
             var model = new JourneyModel();
@@ -133,6 +151,7 @@ namespace LandLedgers.Editor.Economy
             Assert.NotNull(lot);
             Assert.AreEqual(4, lot.LogUnits);
             Assert.IsTrue(lot.LotId.IsValid);
+            Assert.AreEqual("logging-1", lot.OwnerId, "Felled log stock belongs to the stand's timber-rights holder.");
             Assert.AreEqual("stand-1", lot.StandId, "Provenance travels with the lot.");
             Assert.AreEqual("white pine", lot.Species);
             Assert.AreEqual(6, registry.GetStand("stand-1").StandingTimberUnits);
@@ -147,7 +166,7 @@ namespace LandLedgers.Editor.Economy
             LoggingStandRegistry registry = RegistryWithGrantedStand("stand-mature", "logging-1", 2, diagnostics);
             var operation = new LoggingOperationRuntime("logging-1", ids);
             LogLot matureTree = operation.RunFelling(registry, "stand-mature", "logging-1", 1,
-                EntityId.For(EntityKind.Person, 3), 220, diagnostics);
+                EntityId.For(EntityKind.Person, 3), 220, diagnostics, FellingEquipmentGate());
             Assert.NotNull(matureTree);
             Assert.AreEqual(300f, matureTree.MassKg, 0.01f);
 
@@ -157,7 +176,7 @@ namespace LandLedgers.Editor.Economy
             LoggingStandRegistry overloadRegistry = RegistryWithGrantedStand("stand-overload", "logging-1", 2, diagnostics);
             var overloadedOperation = new LoggingOperationRuntime("logging-1", ids);
             LogLot twoTrees = overloadedOperation.RunFelling(overloadRegistry, "stand-overload", "logging-1", 2,
-                EntityId.For(EntityKind.Person, 3), 221, diagnostics);
+                EntityId.For(EntityKind.Person, 3), 221, diagnostics, FellingEquipmentGate());
             Assert.NotNull(twoTrees);
             Assert.AreEqual(600f, twoTrees.MassKg, 0.01f);
             LogHaul partialHaul = overloadedOperation.DispatchLogHaul(twoTrees.LotId, "mill-1", "mill-1-yard",
@@ -182,6 +201,21 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(lot, "Timber theft is a claim, not a harvest.");
             Assert.AreEqual(10, registry.GetStand("stand-1").StandingTimberUnits);
             Assert.IsTrue(diagnostics.Count > 0, "Refusals are loud, never silent.");
+        }
+
+        [Test]
+        public void FellViaRegistry_WithoutRealPersonRefusesBeforeConsumingStandingTimber()
+        {
+            var diagnostics = new List<string>();
+            var ids = new EntityIdRegistry();
+            var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
+
+            LogLot lot = registry.FellLogs(ids, "stand-1", "logging-1", 3,
+                EntityId.Invalid, 220, diagnostics);
+
+            Assert.IsNull(lot, "A felling record requires a real worker identity.");
+            Assert.AreEqual(10, registry.GetStand("stand-1").StandingTimberUnits);
+            Assert.AreEqual(0, lot == null ? 0 : lot.LogUnits);
         }
 
         [Test]
@@ -307,6 +341,23 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void Felling_WithoutEquipmentAuthorityRefusesWithoutConsumingStandingTimber()
+        {
+            var diagnostics = new List<string>();
+            var ids = new EntityIdRegistry();
+            var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
+            var runtime = new LoggingOperationRuntime("logging-1", ids);
+
+            LogLot refused = runtime.RunFelling(registry, "stand-1", "logging-1", 4,
+                EntityId.For(EntityKind.Person, 3), 220, diagnostics, null);
+
+            Assert.IsNull(refused);
+            Assert.AreEqual(10, registry.GetStand("stand-1").StandingTimberUnits);
+            Assert.AreEqual(0, runtime.LandingLogUnits);
+            Assert.IsTrue(diagnostics.Exists(d => d.Contains("no equipment authority")));
+        }
+
+        [Test]
         public void Haul_DispatchUnroutable_RefusedLoudly_LotStaysAtLanding()
         {
             var diagnostics = new List<string>();
@@ -314,7 +365,7 @@ namespace LandLedgers.Editor.Economy
             var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
             var runtime = new LoggingOperationRuntime("logging-1", ids);
             LogLot lot = runtime.RunFelling(registry, "stand-1", "logging-1", 4,
-                EntityId.For(EntityKind.Person, 3), 220, diagnostics);
+                EntityId.For(EntityKind.Person, 3), 220, diagnostics, FellingEquipmentGate());
             Assert.NotNull(lot);
 
             // No edge connects the landing to the mill: the journey model
@@ -343,7 +394,7 @@ namespace LandLedgers.Editor.Economy
             var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
             var runtime = new LoggingOperationRuntime("logging-1", ids);
             LogLot lot = runtime.RunFelling(registry, "stand-1", "logging-1", 4,
-                EntityId.For(EntityKind.Person, 3), 220, diagnostics);
+                EntityId.For(EntityKind.Person, 3), 220, diagnostics, FellingEquipmentGate());
             Assert.NotNull(lot);
 
             var bareGate = new EquipmentTaskGate(); // no wagon anywhere
@@ -362,7 +413,7 @@ namespace LandLedgers.Editor.Economy
             var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
             var runtime = new LoggingOperationRuntime("logging-1", ids);
             LogLot lot = runtime.RunFelling(registry, "stand-1", "logging-1", 4,
-                EntityId.For(EntityKind.Person, 3), 220, diagnostics);
+                EntityId.For(EntityKind.Person, 3), 220, diagnostics, FellingEquipmentGate());
             Assert.NotNull(lot);
             var millStock = new SawmillLogStock();
 
@@ -384,6 +435,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, millStock.TotalLogUnits);
             Assert.AreEqual("stand-1", millStock.Lots[0].StandId,
                 "Provenance survives the journey: stand -> lot -> haul -> mill intake.");
+            Assert.AreEqual("logging-1", millStock.Lots[0].OwnerId,
+                "The timber-rights owner remains attached to the conserved lot through haul and receipt.");
             Assert.AreEqual(3, runtime.LandingLogUnits, "Unloaded remainder stays in the landing stock.");
         }
 
@@ -395,7 +448,7 @@ namespace LandLedgers.Editor.Economy
             var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
             var runtime = new LoggingOperationRuntime("logging-1", ids);
             LogLot lot = runtime.RunFelling(registry, "stand-1", "logging-1", 4,
-                EntityId.For(EntityKind.Person, 3), 220, diagnostics);
+                EntityId.For(EntityKind.Person, 3), 220, diagnostics, FellingEquipmentGate());
 
             LogHaul haul = runtime.DispatchLogHaul(lot.LotId, "mill-1", "mill-1-yard",
                 LandingToMillJourney(), "landing-1", 221, diagnostics);
@@ -434,7 +487,7 @@ namespace LandLedgers.Editor.Economy
             var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
             var runtime = new LoggingOperationRuntime("logging-1", ids);
             LogLot lot = runtime.RunFelling(registry, "stand-1", "logging-1", 4,
-                EntityId.For(EntityKind.Person, 3), 220, diagnostics);
+                EntityId.For(EntityKind.Person, 3), 220, diagnostics, FellingEquipmentGate());
             LogHaul haul = runtime.DispatchLogHaul(lot.LotId, "mill-1", "mill-1-yard",
                 LandingToMillJourney(), "landing-1", 221, diagnostics);
             Assert.NotNull(haul);

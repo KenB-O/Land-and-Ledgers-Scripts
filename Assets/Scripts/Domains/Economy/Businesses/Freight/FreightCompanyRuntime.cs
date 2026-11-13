@@ -131,10 +131,35 @@ namespace LandLedgers.Economy.Freight
                 return false;
             }
 
+            if (string.IsNullOrWhiteSpace(shipment.ShipmentId))
+            {
+                diagnostics.Add("Shipment has no stable identity; carrier acceptance refused.");
+                return false;
+            }
+
             if (shipment.IsPreLoadBlocked)
             {
                 diagnostics.Add($"Shipment '{shipment.ShipmentId}' is pre-load blocked (zero cargo) — " +
                     "refused; phantom cargo is never hauled (MR-P001).");
+                return false;
+            }
+
+            if (shipment.HaulingMode != ShipmentHaulingMode.HiredFreight)
+            {
+                diagnostics.Add($"Shipment '{shipment.ShipmentId}' is {shipment.HaulingMode}; a freight carrier may accept only shipments assigned to hired freight.");
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(shipment.CarrierBusinessInstanceId)
+                && !string.Equals(shipment.CarrierBusinessInstanceId, businessInstanceId, StringComparison.Ordinal))
+            {
+                diagnostics.Add($"Shipment '{shipment.ShipmentId}' is already assigned to carrier '{shipment.CarrierBusinessInstanceId}'; '{businessInstanceId}' cannot take custody.");
+                return false;
+            }
+
+            if (FindShipment(shipment.ShipmentId) != null)
+            {
+                diagnostics.Add($"Shipment '{shipment.ShipmentId}' is already held by carrier '{businessInstanceId}'; duplicate acceptance refused.");
                 return false;
             }
 
@@ -272,27 +297,8 @@ namespace LandLedgers.Economy.Freight
         public int CollectFreightCharge(string shipmentId, List<string> diagnostics)
         {
             diagnostics ??= new List<string>();
-            LogisticsShipmentState shipment = FindShipment(shipmentId);
-            if (!TryValidateCollectable(shipment, shipmentId, diagnostics))
-            {
-                return 0;
-            }
-
-            // G-02: idempotent via the collected flag — a second call for the
-            // same shipment finds FreightRevenueCollected and is never
-            // rescanned, so the charge posts exactly once.
-            // Review 2 second scripts pass: the wording below used to
-            // say this charge was collected "from" the named payer,
-            // which reads as a verified debit. This legacy overload
-            // debits NOBODY — it only names the payer. The verified
-            // overload (payer runtime) is the only production path
-            // that may claim a payer paid. Behaviour is unchanged;
-            // only the diagnostic stops implying a debit.
-            shipment.freightRevenueCollected = true;
-            diagnostics.Add($"Collected {shipment.FreightChargeCents}c freight charge for '{shipmentId}' " +
-                $"(legacy path: payer debit NOT verified — named payer is {shipment.FreightPayerBusinessInstanceId}; " +
-                "production collection must use the verified overload).");
-            return shipment.FreightChargeCents;
+            diagnostics.Add($"Shipment '{shipmentId}': freight settlement requires the named payer's verified till; no cargo, cash, or settlement state changed.");
+            return 0;
         }
 
         /// <summary>
@@ -347,6 +353,13 @@ namespace LandLedgers.Economy.Freight
             {
                 diagnostics.Add($"Shipment '{shipmentId}' is {shipment.Status}; " +
                     "freight charges collect only on completed delivery.");
+                return false;
+            }
+
+            if (shipment.HaulingMode != ShipmentHaulingMode.HiredFreight
+                || !string.Equals(shipment.CarrierBusinessInstanceId, businessInstanceId, StringComparison.Ordinal))
+            {
+                diagnostics.Add($"Shipment '{shipmentId}' is not a completed hired-freight delivery assigned to '{businessInstanceId}'; no carrier charge is collectible.");
                 return false;
             }
 
@@ -405,19 +418,8 @@ namespace LandLedgers.Economy.Freight
         public int CollectAndPostUncollectedRevenue(BusinessRuntimeState businessRuntime, List<string> diagnostics)
         {
             diagnostics ??= new List<string>();
-            int posted = 0;
-            foreach (string shipmentId in FindUncollectedFreightChargeShipmentIds())
-            {
-                int cents = CollectFreightCharge(shipmentId, diagnostics);
-                if (cents <= 0 || businessRuntime == null)
-                    continue;
-                businessRuntime.RecordDailyServiceRevenue(FreightRevenueCategoryId, 1, cents);
-                posted += cents;
-                diagnostics.Add($"FreightCompanyRuntime: {cents}c freight revenue posted to {businessInstanceId} " +
-                    $"(provenance: freight charge, shipment '{shipmentId}').");
-            }
-
-            return posted;
+            diagnostics.Add("FreightCompanyRuntime: settlement requires a verified payer till resolver; no freight revenue posted.");
+            return 0;
         }
 
         /// <summary>
@@ -456,6 +458,54 @@ namespace LandLedgers.Economy.Freight
                 if (shipment == null)
                     continue;
                 BusinessRuntimeState payerRuntime = payerRuntimeResolver(shipment.FreightPayerBusinessInstanceId);
+
+                if (!TryValidateCollectable(shipment, shipmentId, diagnostics))
+                    continue;
+                if (payerRuntime == null
+                    || !string.Equals(payerRuntime.BusinessId, shipment.FreightPayerBusinessInstanceId, StringComparison.Ordinal))
+                {
+                    diagnostics.Add($"Shipment '{shipmentId}': named payer till is unavailable; freight charge remains outstanding.");
+                    continue;
+                }
+
+                string payableReason = FreightPayableReason(shipmentId);
+                BusinessNamedPayableRecord existingPayable = FindFreightPayable(payerRuntime, businessInstanceId, payableReason);
+                if (existingPayable != null)
+                {
+                    // A previously recorded contract debt is settled through
+                    // the existing payable authority; never debit the same
+                    // charge a second time through the direct cash path.
+                    payerRuntime.FlushNamedPayablesToAuthority();
+                    if (payerRuntime.CurrentCashCents < shipment.FreightChargeCents
+                        || string.IsNullOrWhiteSpace(existingPayable.ObligationId))
+                    {
+                        diagnostics.Add($"Shipment '{shipmentId}': freight payable remains outstanding ({existingPayable.AmountCents}c to '{businessInstanceId}'); payer lacks available cash or a linked obligation id.");
+                        continue;
+                    }
+
+                    if (!payerRuntime.TrySettleNamedPayable(existingPayable.ObligationId,
+                        shipment.FreightChargeCents, payerRuntime.PayrollDayIndex, out string payableReasonText))
+                    {
+                        diagnostics.Add($"Shipment '{shipmentId}': freight payable settlement refused — {payableReasonText}");
+                        continue;
+                    }
+
+                    payerRuntime.RecordWeeklyInputProcurement(0, shipment.FreightChargeCents);
+                    shipment.freightRevenueCollected = true;
+                    businessRuntime.RecordDailyServiceRevenue(FreightRevenueCategoryId, 1, shipment.FreightChargeCents);
+                    posted += shipment.FreightChargeCents;
+                    diagnostics.Add($"FreightCompanyRuntime: {shipment.FreightChargeCents}c shipment '{shipmentId}' payable settled; named payer debited and carrier credited exactly once.");
+                    continue;
+                }
+
+                if (payerRuntime.CurrentCashCents < shipment.FreightChargeCents)
+                {
+                    payerRuntime.AccrueOperatingLiabilityCents(shipment.FreightChargeCents,
+                        businessInstanceId, payableReason);
+                    diagnostics.Add($"Shipment '{shipmentId}': delivery charge {shipment.FreightChargeCents}c recorded as a named payable to '{businessInstanceId}'; no cash moved, agreement remains unsettled.");
+                    continue;
+                }
+
                 int cents = CollectFreightCharge(shipmentId, payerRuntime, diagnostics);
                 if (cents <= 0)
                     continue;
@@ -466,6 +516,24 @@ namespace LandLedgers.Economy.Freight
             }
 
             return posted;
+        }
+
+        private static string FreightPayableReason(string shipmentId) =>
+            $"Freight shipment '{shipmentId}'";
+
+        private static BusinessNamedPayableRecord FindFreightPayable(
+            BusinessRuntimeState payer, string carrierBusinessId, string reason)
+        {
+            if (payer?.NamedPayables == null)
+                return null;
+            foreach (BusinessNamedPayableRecord payable in payer.NamedPayables)
+            {
+                if (payable != null
+                    && string.Equals(payable.Creditor, carrierBusinessId, StringComparison.Ordinal)
+                    && string.Equals(payable.Reason, reason, StringComparison.Ordinal))
+                    return payable;
+            }
+            return null;
         }
 
         /// <summary>

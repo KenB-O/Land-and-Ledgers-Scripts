@@ -14,7 +14,8 @@ namespace LandLedgers.Pathing
             Hidden = 0,
             Moving = 1,
             DoorPause = 2,
-            ArrivedVisible = 3
+            ArrivedVisible = 3,
+            Failed = 4
         }
 
         [Header("References")]
@@ -159,6 +160,26 @@ namespace LandLedgers.Pathing
         public bool IsMoving => state == AgentMoveState.Moving;
         public bool IsRouteActive => state == AgentMoveState.Moving || state == AgentMoveState.DoorPause;
         public bool IsArrivedVisible => state == AgentMoveState.ArrivedVisible;
+        public float? EstimatedRemainingRouteSeconds
+        {
+            get
+            {
+                if (!IsRouteActive || pathingManager == null || pathingManager.Settings == null) return null;
+                PathingSettings settings = pathingManager.Settings;
+                float doorSeconds = Mathf.Max(0f, settings.doorArrivalPauseSeconds - (state == AgentMoveState.DoorPause ? doorPauseTimer : 0f));
+                return state == AgentMoveState.Moving
+                    ? RemainingWorldRouteDistance / Mathf.Max(0.01f, settings.pedestrianSpeedMetersPerSecond) + doorSeconds
+                    : doorSeconds;
+            }
+        }
+
+        public void CancelActiveRoute()
+        {
+            if (!IsRouteActive) return;
+            state = AgentMoveState.Failed;
+            measuredMovementSpeed = 0f;
+            UpdateAnimatorState(true);
+        }
         public float MeasuredMovementSpeed => measuredMovementSpeed;
         public float CurrentPresentationTimeScale => GetMovementTimeScale();
         public static float ResolvePresentationTimeScale(float authoritativeTimeScale, float maximumTimeScale, bool paused)
@@ -717,7 +738,10 @@ namespace LandLedgers.Pathing
         {
             if (pathingManager == null || pathingManager.Settings == null || currentWorldPath.Count == 0 || waypointIndex >= currentWorldPath.Count)
             {
-                CompleteRouteArrival();
+                state = AgentMoveState.Failed;
+                measuredMovementSpeed = 0f;
+                UpdateAnimatorState(true);
+                Debug.LogWarning($"AgentMover: route failed for {name}: path or pathing settings became unavailable before arrival.", this);
                 return 0f;
             }
 

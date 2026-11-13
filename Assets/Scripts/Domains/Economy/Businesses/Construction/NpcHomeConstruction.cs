@@ -29,6 +29,17 @@ namespace LandLedgers.Economy
     }
 
     /// <summary>
+    /// Marks material already held by the commissioning household. Staging
+    /// consumes that existing custody; it must not create a second supplier
+    /// payment. The original acquisition cost remains with its earlier
+    /// inventory transaction and is unknown when the source exposes no cost
+    /// basis.
+    /// </summary>
+    public interface IAlreadyOwnedConstructionMaterialSource : IConstructionMaterialSource
+    {
+    }
+
+    /// <summary>
     /// Phase D: tool custody for self-build labor — the commissioning
     /// household must actually hold the tools a design phase requires.
     /// The runtime adapter reads the household's real inventory.

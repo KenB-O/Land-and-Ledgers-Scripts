@@ -6,7 +6,9 @@ using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
+using LandLedgers.Time;
 using UnityEngine;
+using TimberSawmill = LandLedgers.Economy.Farming.Timber.Sawmill;
 
 namespace LandLedgers.Economy.Businesses.Sawmill
 {
@@ -120,7 +122,10 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             EntityId worker,
             int dayIndex,
             List<string> diag,
-            EquipmentTaskGate gate = null)
+            TaskAuthority taskAuthority,
+            EntityId taskId,
+            WorkTimeBudgetStore budgetStore,
+            EquipmentTaskGate gate)
         {
             diag = diag ?? diagnostics;
             if (idRegistry == null)
@@ -128,22 +133,44 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 diag.Add("SawmillShopRuntime: no EntityIdRegistry — sawing refused.");
                 return null;
             }
+            if (string.IsNullOrWhiteSpace(businessInstanceId))
+            {
+                diag.Add("SawmillShopRuntime: sawing refused — mill business identity is missing.");
+                return null;
+            }
             if (logsToSaw <= 0)
             {
                 diag.Add("SawmillShopRuntime: no logs requested.");
                 return null;
             }
+            if (!worker.IsValid || worker.Kind != EntityKind.Person)
+            {
+                diag.Add("SawmillShopRuntime: sawing refused — a valid Person must perform the work.");
+                return null;
+            }
+            if (gate == null)
+            {
+                diag.Add("SawmillShopRuntime: sawing refused — no equipment/workstation authority was supplied.");
+                return null;
+            }
+            LogLot sourceCandidate = logStock.PeekOldestLot(logsToSaw, diag);
+            if (sourceCandidate == null) return null;
+            if (string.IsNullOrWhiteSpace(sourceCandidate.OwnerId))
+            {
+                diag.Add($"SawmillShopRuntime: sawing refused — source log lot {sourceCandidate.LotId} has no recorded owner.");
+                return null;
+            }
+            SawmillConversionProfile profile = SawmillConversionData.DefaultForSpecies(sourceCandidate.Species);
+            if (!HasRequiredSawingWork(taskAuthority, taskId, worker,
+                logsToSaw * profile.SawMinutesPerLog, dayIndex, budgetStore, diag)) return null;
 
             // NX-1A: Canon 4.1 — the sawmill saw line workstation, with its
             // support requirements (Canon 5.2: saw-filing repair capability,
             // mill lubrication). Mirrors T1E Sawmill.SawLogs gating.
-            if (gate != null)
-            {
-                string blocked = gate.CheckCodes(
-                    new List<string> { EquipmentRequirementCodes.Workstation("sawmill-saw-line") },
-                    "business", businessInstanceId, dayIndex, diag);
-                if (blocked != null) return null;
-            }
+            string blocked = gate.CheckCodes(
+                new List<string> { EquipmentRequirementCodes.Workstation("sawmill-saw-line") },
+                "business", businessInstanceId, dayIndex, diag);
+            if (blocked != null) return null;
 
             // Tech X §3.9: a dull/broken saw gates ALL output until the filer works.
             if (blade.CheckSawGate(dayIndex, diag) != null) return null;
@@ -152,7 +179,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             if (sourceLot == null) return null;
 
             string sourceLogLotId = sourceLot.LotId.ToString();
-            var profile = SawmillConversionData.DefaultForSpecies(sourceLot.Species);
+            profile = SawmillConversionData.DefaultForSpecies(sourceLot.Species);
 
             blade.ApplyWear(profile.BladeWearPerLog01 * logsToSaw);
 
@@ -160,6 +187,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             {
                 LotId = idRegistry.Allocate(EntityKind.Lot),
                 LumberUnits = logsToSaw * profile.LumberPerLog,
+                OwnerId = sourceLot.OwnerId,
                 SourceLogLotId = sourceLogLotId,
                 StandId = sourceLot.StandId,
                 Species = sourceLot.Species,
@@ -180,6 +208,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             {
                 LotId = idRegistry.Allocate(EntityKind.Lot),
                 FuelWoodUnits = logsToSaw * profile.FuelWoodUnitsPerLog,
+                OwnerId = sourceLot.OwnerId,
                 SourceMillBusinessId = businessInstanceId,
                 SourceLogLotId = sourceLogLotId,
                 StandId = sourceLot.StandId,
@@ -192,6 +221,11 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 + $"into lumber lot {lumberLot.LotId} ({lumberLot.LumberUnits} units, profile '{profile.ProfileId}') "
                 + $"and byproduct lot {byproductLot.LotId} ({byproductLot.FuelWoodUnits} fuel-wood units). "
                 + $"Blade condition now {blade.Condition01:0.00}.");
+            if (!taskAuthority.CompleteTask(taskId, TaskOutcome.Success, dayIndex, budgetStore))
+            {
+                diag.Add($"SawmillShopRuntime: output for task {taskId} was produced but TaskAuthority refused completion; investigate task lifecycle before retrying.");
+                return null;
+            }
             if (blade.IsDull)
             {
                 diag.Add($"SawmillShopRuntime: blade '{blade.BladeId}' is now dull — the filer must work before the next run.");
@@ -345,12 +379,20 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             int dayIndex,
             SawmillTollPolicy policy,
             List<string> diag,
-            EquipmentTaskGate gate = null)
+            TaskAuthority taskAuthority,
+            EntityId taskId,
+            WorkTimeBudgetStore budgetStore,
+            EquipmentTaskGate gate)
         {
             diag = diag ?? diagnostics;
             if (idRegistry == null)
             {
                 diag.Add("SawmillShopRuntime: no EntityIdRegistry — toll sawing refused.");
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(businessInstanceId))
+            {
+                diag.Add("SawmillShopRuntime: toll sawing refused — mill business identity is missing.");
                 return null;
             }
             if (policy == null || !policy.OffersTollSawing)
@@ -364,20 +406,44 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 diag.Add("SawmillShopRuntime: no logs requested.");
                 return null;
             }
+            if (!worker.IsValid || worker.Kind != EntityKind.Person)
+            {
+                diag.Add("SawmillShopRuntime: toll sawing refused — a valid Person must perform the work.");
+                return null;
+            }
+            if (gate == null)
+            {
+                diag.Add("SawmillShopRuntime: toll sawing refused — no equipment/workstation authority was supplied.");
+                return null;
+            }
             if (string.IsNullOrWhiteSpace(tollLotId))
             {
                 diag.Add("SawmillShopRuntime: toll sawing requires the customer's toll lot id — anonymous toll sawing refused.");
                 return null;
             }
 
-            // NX-1A: Canon 4.1 — the sawmill saw line workstation.
-            if (gate != null)
+            TollLogCustodyLot tollCandidate = null;
+            foreach (TollLogCustodyLot candidate in tollLogStock.CustodyLots)
+                if (candidate != null && candidate.Lot != null
+                    && string.Equals(candidate.Lot.LotId.ToString(), tollLotId, StringComparison.Ordinal))
+                {
+                    tollCandidate = candidate;
+                    break;
+                }
+            if (tollCandidate == null)
             {
-                string blocked = gate.CheckCodes(
-                    new List<string> { EquipmentRequirementCodes.Workstation("sawmill-saw-line") },
-                    "business", businessInstanceId, dayIndex, diag);
-                if (blocked != null) return null;
+                diag.Add($"SawmillShopRuntime: toll sawing refused — toll lot '{tollLotId}' is not in mill custody.");
+                return null;
             }
+            SawmillConversionProfile tollProfile = SawmillConversionData.DefaultForSpecies(tollCandidate.Lot.Species);
+            if (!HasRequiredSawingWork(taskAuthority, taskId, worker,
+                logsToSaw * tollProfile.SawMinutesPerLog, dayIndex, budgetStore, diag)) return null;
+
+            // NX-1A: Canon 4.1 — the sawmill saw line workstation.
+            string blocked = gate.CheckCodes(
+                new List<string> { EquipmentRequirementCodes.Workstation("sawmill-saw-line") },
+                "business", businessInstanceId, dayIndex, diag);
+            if (blocked != null) return null;
 
             // Tech X §3.9: a dull/broken saw gates ALL output until the filer works.
             if (blade.CheckSawGate(dayIndex, diag) != null) return null;
@@ -407,6 +473,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     StandId = sourceLot.StandId,
                     Species = sourceLot.Species,
                     MillBusinessId = businessInstanceId,
+                    OwnerId = businessInstanceId,
                     SawedBy = worker,
                     SawedDayIndex = dayIndex,
                     ConversionProfileId = profile.ProfileId,
@@ -432,6 +499,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                         StandId = sourceLot.StandId,
                         Species = sourceLot.Species,
                         MillBusinessId = businessInstanceId,
+                        OwnerId = custody.CustomerId,
                         SawedBy = worker,
                         SawedDayIndex = dayIndex,
                         ConversionProfileId = profile.ProfileId,
@@ -452,6 +520,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     {
                         LotId = idRegistry.Allocate(EntityKind.Lot),
                         FuelWoodUnits = byproductUnits,
+                        OwnerId = custody.CustomerId,
                         SourceMillBusinessId = businessInstanceId,
                         SourceLogLotId = sourceLogLotId,
                         StandId = sourceLot.StandId,
@@ -480,12 +549,46 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             diag.Add($"SawmillShopRuntime {businessInstanceId}: TOLL sawed {logsSawn} logs from {custody.CustomerName}'s lot {tollLotId} "
                 + $"— customer keeps {customerLumber} lumber units; mill toll {tollInKind} in kind + {result.TollCashCents}c cash; "
                 + $"{byproductUnits} fuel-wood units to customer custody. Blade condition now {blade.Condition01:0.00}.");
+            if (!taskAuthority.CompleteTask(taskId, TaskOutcome.Success, dayIndex, budgetStore))
+            {
+                diag.Add($"SawmillShopRuntime: toll output for task {taskId} was produced but TaskAuthority refused completion; investigate task lifecycle before retrying.");
+                return null;
+            }
             if (blade.IsDull)
             {
                 diag.Add($"SawmillShopRuntime: blade '{blade.BladeId}' is now dull — the filer must work before the next run.");
             }
 
             return result;
+        }
+
+        private bool HasRequiredSawingWork(TaskAuthority taskAuthority, EntityId taskId,
+            EntityId worker, int requiredMinutes, int dayIndex,
+            WorkTimeBudgetStore budgetStore, List<string> diag)
+        {
+            if (taskAuthority == null || !taskId.IsValid || budgetStore == null)
+            {
+                diag.Add("SawmillShopRuntime: sawing refused — an authoritative saw-logs task and work-time budget authority are required.");
+                return false;
+            }
+            WorkTask task = taskAuthority.FindTask(taskId);
+            if (task == null || !string.Equals(task.DefinitionId, TimberSawmill.SawLogsTaskId, StringComparison.Ordinal))
+            {
+                diag.Add($"SawmillShopRuntime: sawing refused — task {taskId} is not the registered '{TimberSawmill.SawLogsTaskId}' activity.");
+                return false;
+            }
+            if (task.Status != TaskStatus.InProgress || task.AssigneeId != worker)
+            {
+                diag.Add($"SawmillShopRuntime: sawing refused — task {taskId} must be InProgress and assigned to worker {worker}.");
+                return false;
+            }
+            if (task.PlannedMinutes < Math.Max(1, requiredMinutes)
+                || task.MinutesWorked < task.PlannedMinutes)
+            {
+                diag.Add($"SawmillShopRuntime: sawing refused — task {taskId} has {task.MinutesWorked}/{task.PlannedMinutes} simulated work minutes; {requiredMinutes} minutes are required for this lot.");
+                return false;
+            }
+            return true;
         }
 
         /// <summary>
@@ -562,6 +665,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 {
                     LotId = lot.LotId,
                     FuelWoodUnits = lot.FuelWoodUnits,
+                    OwnerId = lot.OwnerId,
                     SourceMillBusinessId = lot.SourceMillBusinessId,
                     SourceLogLotId = lot.SourceLogLotId,
                     StandId = lot.StandId,

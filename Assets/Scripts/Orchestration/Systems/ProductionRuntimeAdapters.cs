@@ -12,7 +12,7 @@ namespace LandLedgers.Orchestration.Systems
     /// a construction allowance. Yard/business sources can be supplied by the
     /// corresponding business runtime when a project is commissioned there.
     /// </summary>
-    public sealed class HouseholdConstructionMaterialSource : IConstructionMaterialSource
+    public sealed class HouseholdConstructionMaterialSource : IAlreadyOwnedConstructionMaterialSource
     {
         private readonly HouseholdInventory inventory;
 

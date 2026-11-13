@@ -1967,14 +1967,8 @@ namespace LandLedgers.Population
             // commitments released) — never a half-planned trip.
             if (!ReserveTripWindows(trip, result, need, shopperId, legs, dayIndex, options, diag))
             {
-                foreach (WorkTask leg in new[] { legs.Outbound, legs.InStore, legs.Return })
-                {
-                    if (leg != null && leg.Status == TaskStatus.Assigned)
-                    {
-                        string ignore;
-                        tasks.InterruptTask(leg.TaskId, budgets, out ignore);
-                    }
-                }
+                CancelPlannedLegs(legs);
+                options.DepartureMinuteOfDay = requestedDeparture;
 
                 trip.State = PlannedShoppingTrip.TripState.Failed;
                 if (!tripHistory.Contains(result))
@@ -2247,6 +2241,46 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// An arrival can be legitimate while the seller refuses settlement
+        /// (for example, a real stockout or closed store). In that case the
+        /// shopper still returns home, but the planned in-store work never
+        /// begins. Cancel that unused assignment and its shopping window so it
+        /// cannot remain as an orphaned task after the return trip completes.
+        /// </summary>
+        internal void CancelUnstartedInStoreLeg(PlannedShoppingTrip trip, int dayIndex, List<string> diag)
+        {
+            WorkTask leg = trip?.Legs?.InStore;
+            if (leg == null || !leg.IsOpen
+                || (leg.Status != TaskStatus.Assigned && leg.Status != TaskStatus.Queued))
+            {
+                return;
+            }
+
+            if (!tasks.CancelTask(leg.TaskId, budgets))
+            {
+                return;
+            }
+
+            string reservationLabel = TaskReservationLabel(leg);
+            List<PersonActivityReservation> reservations = scheduleTracker.ActiveFor(
+                trip.ShopperPersonId, trip.DayIndex);
+            foreach (PersonActivityReservation reservation in reservations)
+            {
+                if (reservation.Activity != PersonActivityKind.Shopping
+                    || !string.Equals(reservation.Label, reservationLabel, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                scheduleTracker.Release(reservation.ReservationId);
+                trip.WindowReservationIds?.Remove(reservation.ReservationId);
+            }
+
+            (diag ?? new List<string>()).Add(
+                $"Day {dayIndex}: cancelled unused in-store task {leg.TaskId} after seller refusal; shopper retains the authorized return journey.");
+        }
+
+        /// <summary>
         /// Pass IV: records the worked minutes of one finished leg and completes
         /// it — travel and shopping occupy real budgeted person-time.
         /// </summary>
@@ -2417,6 +2451,16 @@ namespace LandLedgers.Population
         /// Pass IV: aborts a trip loudly — releases windows, records the failure
         /// event, keeps the need open. Never silently drops a trip.
         /// </summary>
+        public void RecordTripRefusal(PlannedShoppingTrip trip, string reason, int dayIndex)
+        {
+            if (trip?.Result == null) return;
+            trip.FailureReason = reason ?? "Shopping refused.";
+            trip.Result.FailureReason = trip.FailureReason;
+            AddEvent(trip.Result, dayIndex, ShoppingEventKind.Failure, trip.ShopperPersonId, trip.Need,
+                $"Trip {trip.TripId} need {trip.Need?.NeedSequence}: {trip.FailureReason}",
+                "No purchase settled; return journey remains required.");
+        }
+
         public void AbortTrip(PlannedShoppingTrip trip, string reason, int dayIndex, List<string> diag)
         {
             if (trip == null)
@@ -2425,6 +2469,9 @@ namespace LandLedgers.Population
             }
 
             diag = diag ?? new List<string>();
+            WorkTask[] openLegs = { trip.Legs?.Outbound, trip.Legs?.InStore, trip.Legs?.Return };
+            foreach (WorkTask leg in openLegs)
+                if (leg != null && leg.IsOpen) tasks.CancelTask(leg.TaskId, budgets);
             trip.State = PlannedShoppingTrip.TripState.Failed;
             trip.FailureReason = reason ?? "aborted";
             AddEvent(trip.Result, dayIndex, ShoppingEventKind.Failure, trip.ShopperPersonId, trip.Need,
@@ -2438,6 +2485,57 @@ namespace LandLedgers.Population
             }
 
             diag.Add($"Day {dayIndex}: shopping trip {trip.TripId} ABORTED — {trip.FailureReason}");
+        }
+
+        public void ExpireUndepartedTrip(PlannedShoppingTrip trip, int dayIndex, List<string> diag)
+        {
+            if (trip == null || trip.State != PlannedShoppingTrip.TripState.Planned) return;
+            AbortTrip(trip, "Missed shopping departure on day " + trip.DayIndex + ".", dayIndex, diag);
+        }
+
+        public bool TryPlanPaidReturnRecovery(PlannedShoppingTrip trip, int dayIndex, ShoppingLoopOptions options, List<string> diag)
+        {
+            if (trip?.Batch == null || trip.Batch.Custody != GoodsCustodyState.InHand
+                || trip.Batch.HolderPersonId != trip.ShopperPersonId || trip.Legs == null
+                || trip.Candidate?.Supplier == null || options == null) return false;
+            PersonState shopper = population.GetPerson(trip.ShopperPersonId);
+            if (shopper == null || ValidateShopper(shopper) != null
+                || !membership.GetActiveMembers(trip.HouseholdId).Contains(trip.ShopperPersonId)) return false;
+
+            EntityId worker = personEntityId(trip.ShopperPersonId);
+            var travelDiagnostics = new List<string>();
+            WorkTask travel = JourneyTravel.PlanWorkTravel(tasks, journeys, worker,
+                trip.Candidate.Supplier.LocationId, trip.HomeLocationId, TravelMode.Foot, dayIndex, travelDiagnostics);
+            if (travel == null) return false;
+            if (!tasks.AssignTask(travel.TaskId, worker, budgets, out _))
+            {
+                tasks.CancelTask(travel.TaskId, budgets);
+                return false;
+            }
+
+            int duration = GetPlannedMinutes(travel);
+            var ids = new List<string>();
+            int departure = Math.Max(0, options.DepartureMinuteOfDay);
+            while (departure + duration <= 1440)
+            {
+                if (TryReserveWindow(trip.ShopperPersonId, PersonActivityKind.Travel, dayIndex,
+                        departure, duration, TaskReservationLabel(travel), ids) == null) break;
+                departure += 15;
+            }
+            if (ids.Count == 0)
+            {
+                tasks.CancelTask(travel.TaskId, budgets);
+                return false;
+            }
+
+            trip.Legs.Return = travel;
+            trip.Legs.ReturnMinutes = duration;
+            trip.WindowReservationIds = ids;
+            trip.DayIndex = dayIndex;
+            trip.DepartureMinuteOfDay = departure;
+            trip.State = PlannedShoppingTrip.TripState.RecoveryPlanned;
+            (diag ?? new List<string>()).Add($"Day {dayIndex}: trip {trip.TripId} reserved paid batch {trip.Batch.BatchId} recovery for P{trip.ShopperPersonId} at minute {departure}.");
+            return true;
         }
 
         // ---------- steps, factored ----------
@@ -2954,6 +3052,7 @@ namespace LandLedgers.Population
             diag.AddRange(returnDiag);
             if (trip.Return == null && !SameLocation(chosen.Supplier.LocationId, homeLocation))
             {
+                CancelPlannedLegs(trip);
                 Fail(result, need, shopperId, dayIndex,
                     $"Blocked journey: could not plan return {chosen.Supplier.LocationId} → {homeLocation}.", diag, options);
                 return false;
@@ -2969,6 +3068,7 @@ namespace LandLedgers.Population
 
                 if (!tasks.AssignTask(leg.TaskId, shopperEid, budgets, out string assignReason))
                 {
+                    CancelPlannedLegs(trip);
                     // Priority 4 Slice 4: feed the refusal into the
                     // task-duration diagnostic (L6) where one is wired.
                     // The leg task was created above, so the observer has
@@ -2989,6 +3089,13 @@ namespace LandLedgers.Population
                 $"Trip scheduled: {trip.OutboundMinutes} min out, {options.InStoreMinutes} min in store, {trip.ReturnMinutes} min back.",
                 "real TaskAuthority tasks assigned against the shopper's work-time budget.");
             return true;
+        }
+
+        private void CancelPlannedLegs(PlannedTrip trip)
+        {
+            if (trip == null) return;
+            foreach (WorkTask leg in new[] { trip.Outbound, trip.InStore, trip.Return })
+                if (leg != null && leg.IsOpen) tasks.CancelTask(leg.TaskId, budgets);
         }
 
         /// <summary>Steps 6/8/15: execute one task leg through the real task system.</summary>

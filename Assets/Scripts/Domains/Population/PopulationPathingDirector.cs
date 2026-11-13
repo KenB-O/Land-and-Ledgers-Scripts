@@ -70,6 +70,7 @@ namespace LandLedgers.FirstLedger
         private TimeManager timeManager;
 
         private SimulationSystemsHub systemsHub;
+        public Func<int, bool> ShoppingTripOwnsPerson { get; set; }
 
         [SerializeField]
         private GeneralStoreRuntimeManager storeRuntime;
@@ -909,6 +910,10 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
+                if ((managed.routeMode == AgentRouteMode.TaskDirected && managed.mover != null && managed.mover.IsRouteActive)
+                    || (ShoppingTripOwnsPerson != null && ShoppingTripOwnsPerson(managed.person.id)))
+                    continue;
+
                 int destinationBuildingId = targetBuildingId(managed.person);
                 if (TrySendAgent(managed, destinationBuildingId, nextState, out ScheduledRouteFailureKind failureKind))
                 {
@@ -996,6 +1001,39 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
+        public bool HasActiveTaskRouteToBuilding(int personId, int buildingId)
+        {
+            foreach (ManagedPersonAgent managed in agents)
+                if (managed?.person != null && managed.person.id == personId)
+                    return managed.routeMode == AgentRouteMode.TaskDirected
+                        && managed.person.currentDestinationBuildingId == buildingId
+                        && managed.mover != null && managed.mover.IsRouteActive;
+            return false;
+        }
+
+        public float? GetTaskRouteRemainingSeconds(int personId, int buildingId)
+        {
+            foreach (ManagedPersonAgent managed in agents)
+                if (managed?.person != null && managed.person.id == personId
+                    && managed.routeMode == AgentRouteMode.TaskDirected
+                    && managed.person.currentDestinationBuildingId == buildingId)
+                    return managed.mover != null ? managed.mover.EstimatedRemainingRouteSeconds : null;
+            return null;
+        }
+
+        public void CancelTaskRouteToBuilding(int personId, int buildingId)
+        {
+            foreach (ManagedPersonAgent managed in agents)
+                if (managed?.person != null && managed.person.id == personId
+                    && managed.routeMode == AgentRouteMode.TaskDirected
+                    && managed.person.currentDestinationBuildingId == buildingId)
+                {
+                    managed.mover?.CancelActiveRoute();
+                    managed.routeMode = AgentRouteMode.None;
+                    return;
+                }
+        }
+
         /// <summary>
         /// Physically routes an existing on-map freight handler to an authored
         /// business activity point. The packaged crate is an attachment only;
@@ -1015,7 +1053,24 @@ namespace LandLedgers.FirstLedger
             }
             BuildingFootprintAuthority authority = building.runtimeFootprintAuthority;
             if (!authority.TryGetActivityLocation(activityId, targetBuildingId,
-                    out ResolvedBuildingActivityLocation activity, out reason)) return false;
+                    out ResolvedBuildingActivityLocation activity, out reason))
+            {
+                // Some operating buildings have a real authored exterior door but
+                // no separately authored receiving station. Freight may be handed
+                // off at that doorway; never substitute the blocked drop-off cell
+                // or infer arrival from shipment state.
+                bool hasAuthoredDoor = building.TryGetAnchor(AnchorType.FrontDoor, out BuildingAnchor authoredDoor);
+                if (CanUseAuthoredDoorForFreightReceiving(activityId, hasAuthoredDoor ? authoredDoor : default))
+                {
+                    if (TryCarryFreightToAuthoredDoor(personId, targetBuildingId, building, out arrived, out string doorReason))
+                    {
+                        reason = string.Empty;
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(doorReason)) reason = $"{reason} Doorway fallback: {doorReason}";
+                }
+                return false;
+            }
 
             for (int i = 0; i < agents.Count; i++)
             {
@@ -1092,6 +1147,81 @@ namespace LandLedgers.FirstLedger
             }
             reason = $"No visible managed agent exists for freight handler P{personId}.";
             return false;
+        }
+
+        private bool TryCarryFreightToAuthoredDoor(int personId, int targetBuildingId, PlacedBuilding building,
+            out bool arrived, out string reason)
+        {
+            arrived = false;
+            reason = string.Empty;
+            if (building == null || !building.TryGetAnchor(AnchorType.FrontDoor, out BuildingAnchor authoredDoor)
+                || !authoredDoor.fromAuthoredMarker
+                || !TryGetDoorAnchor(targetBuildingId, out BuildingAnchor routeDoor, out _))
+            {
+                reason = "The destination has no valid authored front-door approach.";
+                return false;
+            }
+
+            Vector3 destination = pathingManager.CoordToPathWorld(routeDoor.coord);
+            float arrivalRadius = Mathf.Max(1f, pathingManager.Grid.CellSizeMeters * 0.7f);
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId || managed.mover == null) continue;
+
+                AgentMover mover = managed.mover;
+                Vector3 actorPosition = mover.transform.position;
+                float distance = Vector2.Distance(new Vector2(actorPosition.x, actorPosition.z),
+                    new Vector2(destination.x, destination.z));
+                if (!mover.IsRouteActive && mover.IsArrivedVisible && distance <= arrivalRadius
+                    && managed.person.currentDestinationBuildingId == targetBuildingId)
+                {
+                    arrived = true;
+                    mover.SetFreightCargoVisible(true);
+                    Vector3 forward = building.runtimeFootprintAuthority.transform.forward;
+                    forward.y = 0f;
+                    if (forward.sqrMagnitude > 0.0001f) mover.transform.rotation = Quaternion.LookRotation(forward.normalized);
+                    return true;
+                }
+
+                if (mover.IsRouteActive
+                    && (managed.routeMode != AgentRouteMode.TaskDirected
+                        || managed.person.currentDestinationBuildingId != targetBuildingId))
+                {
+                    reason = "The freight handler is already traveling for another destination or task.";
+                    return false;
+                }
+
+                mover.SetFreightCargoVisible(true);
+                if (mover.IsRouteActive)
+                {
+                    // Keep the freight driver as the route owner while it waits
+                    // for this legitimate door-to-door journey to finish.
+                    managed.routeMode = AgentRouteMode.TaskDirected;
+                    return true;
+                }
+
+                managed.person.scheduleState = PopulationScheduleState.AtWork;
+                managed.person.currentDestinationBuildingId = targetBuildingId;
+                if (!TrySendAgent(managed, targetBuildingId, PopulationScheduleState.AtWork,
+                        out _, out reason))
+                {
+                    mover.SetFreightCargoVisible(false);
+                    return false;
+                }
+
+                managed.routeMode = AgentRouteMode.TaskDirected;
+                return true;
+            }
+
+            reason = $"No visible managed agent exists for freight handler P{personId}.";
+            return false;
+        }
+
+        internal static bool CanUseAuthoredDoorForFreightReceiving(string activityId, BuildingAnchor frontDoor)
+        {
+            return string.Equals(activityId, "receiving", System.StringComparison.OrdinalIgnoreCase)
+                && frontDoor.fromAuthoredMarker;
         }
 
         public void HideFreightCargoVisual(int personId)

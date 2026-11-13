@@ -29,6 +29,36 @@ namespace LandLedgers.Economy
     }
 
     /// <summary>
+    /// Production parcel gate backed by the existing title chain. This only
+    /// authorizes a household that currently holds the named parcel; leases
+    /// and easements need their own explicit authority before they can grant
+    /// construction rights.
+    /// </summary>
+    public sealed class TitleConstructionParcelAuthority : IConstructionParcelAuthority
+    {
+        private readonly TitleAuthority titles;
+
+        public TitleConstructionParcelAuthority(TitleAuthority titles)
+        {
+            this.titles = titles;
+        }
+
+        public string AuthorizeBuild(int householdId, string parcelId, int dayIndex, List<string> diagnostics)
+        {
+            if (householdId < 0) return "a valid commissioning household is required.";
+            if (string.IsNullOrWhiteSpace(parcelId)) return "a registered parcel id is required.";
+            if (titles == null) return "the live TitleAuthority is unavailable.";
+            string holder = titles.CurrentHolder(parcelId);
+            if (holder == null) return $"parcel '{parcelId}' is not registered in TitleAuthority.";
+            string expected = "household:" + householdId;
+            if (!string.Equals(holder, expected, StringComparison.Ordinal))
+                return $"parcel '{parcelId}' is held by '{holder}', not '{expected}'.";
+            diagnostics?.Add($"TitleConstructionParcelAuthority: H{householdId} holds parcel '{parcelId}' and may commission construction.");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Pass VIII Worker 3: returns staged material lines to their source
     /// (the supplier's real lots) when a project is cancelled. The port is
     /// all-or-nothing per line: a line is either fully returned or not at

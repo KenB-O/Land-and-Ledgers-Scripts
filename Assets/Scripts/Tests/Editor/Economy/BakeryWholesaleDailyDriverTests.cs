@@ -576,7 +576,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void ShortShelf_Refuses_AccountStaysDue_ShelfUntouched()
+        public void ShortShelf_PartiallyFulfills_RecordsShortDelivery_AndSettlesOnlyTransferredUnits()
         {
             Slice s = NewSlice();
             InstallOven(s);
@@ -595,12 +595,20 @@ namespace LandLedgers.Editor.Economy
 
             Assert.AreEqual(2, result.BatchesPlanned, "48 units plan two batches");
             Assert.AreEqual(0, result.BatchesBaked, "flour for one batch cannot cover two");
-            Assert.AreEqual(0, result.TransfersCompleted, "the transfer refuses on the short shelf");
-            Assert.AreEqual(2, account.NextDeliveryDayIndex, "the account stays due");
-            Assert.AreEqual(5000, s.StoreRuntime.CurrentCashCents, "cash unchanged");
-            Assert.AreEqual(2000, s.BakeryRuntime.CurrentCashCents, "cash unchanged");
-            Assert.AreEqual(24, s.Bakery.BreadShelf[0].UnitCount, "the shelf is untouched");
-            Assert.AreEqual(0, s.Bakery.WholesaleDeliveries.Count, "no delivery record");
+            Assert.AreEqual(1, result.TransfersCompleted, "the available finished lot is delivered partially");
+            Assert.AreEqual(3, account.NextDeliveryDayIndex, "the account cadence advances once for the short delivery");
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "only 24 delivered loaves at the contracted 2c are charged");
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents, "Bakery receives only the settled 48c");
+            Assert.AreEqual(0, s.Bakery.BreadShelf[0].UnitCount, "the exact delivered lot quantity leaves the shelf");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "one short delivery record");
+            Assert.AreEqual(24, s.Bakery.WholesaleDeliveries[0].Units);
+            Assert.IsFalse(s.Bakery.WholesaleDeliveries[0].FullyCovered, "the 48-loaf order remains visibly short");
+            Assert.AreEqual(24, s.StorePort.CategoryStockUnits("staple_food"), "the buyer receives only actual transferred loaves");
+
+            BakeryWholesaleDailyResult repeated = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+            Assert.AreEqual(0, repeated.TransfersCompleted, "repeating the same day cannot settle the short delivery again");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "no duplicate delivery record");
+            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "no duplicate buyer charge");
         }
 
         [Test]

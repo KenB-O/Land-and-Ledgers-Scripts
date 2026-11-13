@@ -75,18 +75,18 @@ namespace LandLedgers.Economy
     {
         private readonly NpcConstructionCommissioner commissioner;
         private readonly ConstructionProjectExecutor executor;
-        private readonly BuildingDesignCatalog catalog;
+        private BuildingDesignCatalog catalog;
         private readonly IList<ConstructionProject> projects;
         private readonly CreditCashBridge cash;
         private readonly FinancialObligationAuthority obligations;
         private readonly EntityIdRegistry ids;
         private readonly HousingAuthority housing;
-        private readonly IConstructionMaterialPricePort pricePort;
-        private readonly IConstructionMaterialSource materialSource;
-        private readonly string defaultSupplierOwnerName;
-        private readonly INpcConstructionProcurementPort procurement;
-        private readonly INpcConstructionLaborPort labor;
-        private readonly Func<int, IReadOnlyList<int>> householdMembers;
+        private IConstructionMaterialPricePort pricePort;
+        private IConstructionMaterialSource materialSource;
+        private string defaultSupplierOwnerName;
+        private INpcConstructionProcurementPort procurement;
+        private INpcConstructionLaborPort labor;
+        private Func<int, IReadOnlyList<int>> householdMembers;
         private readonly List<string> diagnostics = new List<string>();
         /// <summary>
         /// Packages whose procurement leg failed after the sale stood: the
@@ -144,6 +144,24 @@ namespace LandLedgers.Economy
             this.procurement = procurement;
             this.labor = labor;
             this.householdMembers = householdMembers;
+        }
+
+        /// <summary>
+        /// Refreshes runtime adapters while retaining this driver's project,
+        /// pending-request, and failed-procurement state across daily drives.
+        /// </summary>
+        public void ConfigureRuntimePorts(BuildingDesignCatalog designCatalog,
+            IConstructionMaterialPricePort prices, IConstructionMaterialSource materials,
+            string supplierOwnerName, INpcConstructionProcurementPort procurementPort,
+            INpcConstructionLaborPort laborPort, Func<int, IReadOnlyList<int>> members)
+        {
+            catalog = designCatalog;
+            pricePort = prices;
+            materialSource = materials;
+            defaultSupplierOwnerName = supplierOwnerName;
+            procurement = procurementPort;
+            labor = laborPort;
+            householdMembers = members;
         }
 
         /// <summary>
@@ -342,6 +360,22 @@ namespace LandLedgers.Economy
             if (source == null) source = materialSource;
             if (source == null)
                 return "no material source and no procurement port bound — materials come from real lots only.";
+            if (source is IAlreadyOwnedConstructionMaterialSource)
+            {
+                // These lots are already in the commissioning household's custody.
+                // Consume them at the authorized stage without charging a second
+                // supplier payment. HouseholdInventory does not expose original
+                // unit-cost basis, so do not invent an accounting amount.
+                string ownedStockProblem = executor.StagePackageMaterials(
+                    project, package, source, dayIndex, diag);
+                if (ownedStockProblem != null) return ownedStockProblem;
+                NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
+                if (funding != null)
+                    funding.Notes = "Staged from materials already owned by the commissioning household; prior acquisition cost basis is not exposed by household inventory.";
+                record.Decisions.Add($"day {dayIndex}: staged '{package.PhaseName}' from household-owned lots; no new supplier payment was made.");
+                diag.Add($"NpcConstructionDriver: package '{package.PackageId}' staged from household-owned inventory; no duplicate supplier payment.");
+                return null;
+            }
             return commissioner.FundAndStagePackage(executor, project, record, package,
                 source, pricePort, cash, buyerOwnerName, defaultSupplierOwnerName,
                 obligations, ids, dayIndex, diag);

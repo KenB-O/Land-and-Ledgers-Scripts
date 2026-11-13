@@ -244,6 +244,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                     LotId = Lot.LotId,
                     LogUnits = Lot.LogUnits,
                     MassKg = Lot.MassKg,
+                    OwnerId = Lot.OwnerId,
                     StandId = Lot.StandId,
                     Species = Lot.Species,
                     FelledBy = Lot.FelledBy,

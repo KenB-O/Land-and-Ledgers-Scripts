@@ -245,6 +245,46 @@ namespace LandLedgers.Editor.World
         }
 
         [Test]
+        public void TypedStationLookupRequiresReachableAuthoredPosition()
+        {
+            GameObject building = new("Station lookup test");
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring floor = new() { floorIndex = 0 };
+                floor.walkableAreas.Add(Rectangle("Floor", -3f, -3f, 3f, 3f));
+                floor.exclusionAreas.Add(Rectangle("Cabinet", -.5f, -.5f, .5f, .5f));
+                GetInteriorFloors(authority).Add(floor);
+                GetEntrancePairs(authority).Add(new BuildingEntrancePairAuthoring
+                {
+                    id = "main-entrance", indoorPositionLocal = new Vector3(-2f, 0f, -2f),
+                    outdoorApproachLocal = new Vector3(-2f, 0f, -4f)
+                });
+                var stations = GetActivityLocations(authority);
+                stations.Add(new BuildingActivityLocationAuthoring
+                {
+                    id = "blocked", type = BuildingActivityLocationType.Counter,
+                    positionLocal = Vector3.zero
+                });
+                Assert.IsFalse(authority.TryFindReachableActivityLocation(BuildingActivityLocationType.Counter,
+                    "main-entrance", 4, out _, out _, out string blocked));
+                StringAssert.Contains("Cabinet", blocked);
+                stations.Add(new BuildingActivityLocationAuthoring
+                {
+                    id = "usable", type = BuildingActivityLocationType.Counter,
+                    positionLocal = new Vector3(2f, 0f, 2f)
+                });
+                Assert.IsTrue(authority.TryFindReachableActivityLocation(BuildingActivityLocationType.Counter,
+                    "main-entrance", 4, out var station, out var route, out string reason), reason);
+                Assert.AreEqual("usable", station.Id);
+                Assert.That(route.Count, Is.GreaterThan(1));
+                Assert.IsFalse(authority.TryFindReachableActivityLocation(BuildingActivityLocationType.Storage,
+                    "main-entrance", 4, out _, out _, out _));
+            }
+            finally { Object.DestroyImmediate(building); }
+        }
+
+        [Test]
         public void ResidentInteriorRouteStartsAtActualPositionAndAvoidsFurnitureExclusion()
         {
             GameObject building = new("Resident interior route test");

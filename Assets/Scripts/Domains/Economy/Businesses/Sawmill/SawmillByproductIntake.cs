@@ -18,6 +18,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
     {
         public EntityId LotId = EntityId.Invalid; // EntityKind.Lot (HF-1)
         public int FuelWoodUnits;
+        public string OwnerId = string.Empty;
         public string SourceMillBusinessId = string.Empty;
         public string SourceLogLotId = string.Empty;
         public string StandId = string.Empty;
@@ -70,10 +71,29 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 return "FuelYardByproductIntake.ReceiveByproductLot: a lot needs an EntityId — anonymous stock is refused.";
             if (lot.FuelWoodUnits <= 0)
                 return "FuelYardByproductIntake.ReceiveByproductLot: a lot needs positive fuel-wood units.";
+            if (string.IsNullOrWhiteSpace(lot.OwnerId))
+                return "FuelYardByproductIntake.ReceiveByproductLot: no recorded owner — byproduct custody cannot be inferred.";
             if (string.IsNullOrWhiteSpace(lot.SourceMillBusinessId))
                 return "FuelYardByproductIntake.ReceiveByproductLot: no source mill — orphan fuel refused.";
             if (string.IsNullOrWhiteSpace(lot.SourceLogLotId) || string.IsNullOrWhiteSpace(lot.StandId))
                 return "FuelYardByproductIntake.ReceiveByproductLot: incomplete upstream chain — slabs must trace to a log lot and a stand.";
+
+            // Lot identity is global custody identity, not a per-dealer stock
+            // key. Reject replayed or cross-yard receipts before adding any
+            // quantity so one physical byproduct cannot appear in two yards.
+            foreach (KeyValuePair<string, List<SlabOffcutFuelLot>> entry in lotsByFuelDealer)
+            {
+                List<SlabOffcutFuelLot> existingLots = entry.Value;
+                if (existingLots == null) continue;
+                for (int i = 0; i < existingLots.Count; i++)
+                {
+                    SlabOffcutFuelLot existing = existingLots[i];
+                    if (existing == null || !existing.LotId.Equals(lot.LotId)) continue;
+                    string refusal = $"FuelYardByproductIntake.ReceiveByproductLot: lot {lot.LotId} is already held by FuelDealer '{entry.Key}'; duplicate custody refused.";
+                    diag.Add(refusal);
+                    return refusal;
+                }
+            }
 
             List<SlabOffcutFuelLot> held;
             if (!lotsByFuelDealer.TryGetValue(fuelDealerBusinessId, out held))
@@ -197,6 +217,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     {
                         LotId = lot.LotId,
                         FuelWoodUnits = lot.FuelWoodUnits,
+                        OwnerId = lot.OwnerId,
                         SourceMillBusinessId = lot.SourceMillBusinessId,
                         SourceLogLotId = lot.SourceLogLotId,
                         StandId = lot.StandId,

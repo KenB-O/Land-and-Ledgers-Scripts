@@ -56,6 +56,19 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void ReceiveLot_RefusesDuplicateIdentityWithoutIncreasingStock()
+        {
+            var diagnostics = new List<string>();
+            var stock = new BoardingHouseFuelStock();
+            BoardingHouseFuelLot lot = DealerLot(new EntityIdRegistry(), 10, 100);
+
+            Assert.IsNull(stock.ReceiveLot(lot, diagnostics));
+            StringAssert.Contains("already in the store", stock.ReceiveLot(lot, diagnostics));
+            Assert.AreEqual(10, stock.UnitsOnHand(BoardingHouseFuelSupply.FuelMaterialId));
+            Assert.AreEqual(1, stock.Lots.Count);
+        }
+
+        [Test]
         public void TryBurnUnits_IsAtomicFifo()
         {
             var diag = new List<string>();

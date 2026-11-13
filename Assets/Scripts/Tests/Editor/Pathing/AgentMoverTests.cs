@@ -10,6 +10,28 @@ namespace LandLedgers.EditorTests.Pathing
 {
     public sealed class AgentMoverTests
     {
+        [Test]
+        public void MissingActiveRouteDataFailsWithoutEmittingArrival()
+        {
+            GameObject actor = new("Invalid Route Actor");
+            try
+            {
+                AgentMover mover = actor.AddComponent<AgentMover>();
+                FieldInfo state = typeof(AgentMover).GetField("state", BindingFlags.Instance | BindingFlags.NonPublic);
+                state.SetValue(mover, System.Enum.Parse(state.FieldType, "Moving"));
+                int arrivals = 0;
+                mover.ArrivedAtDestination += _ => arrivals++;
+                LogAssert.Expect(LogType.Warning, "AgentMover: route failed for Invalid Route Actor: path or pathing settings became unavailable before arrival.");
+                typeof(AgentMover).GetMethod("TickMove", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(mover, new object[] { 10f });
+                Assert.IsFalse(mover.IsRouteActive);
+                Assert.IsFalse(mover.IsArrivedVisible);
+                Assert.AreEqual(0, arrivals);
+                Assert.AreEqual(Vector3.zero, actor.transform.position);
+            }
+            finally { Object.DestroyImmediate(actor); }
+        }
+
         [TestCase(0f, 1.5f, false, 0f)]
         [TestCase(1f, 1.5f, false, 1f)]
         [TestCase(10f, 1.5f, false, 1.5f)]

@@ -40,6 +40,7 @@ namespace LandLedgers.Economy.Farming.Timber
         public EntityId LotId = EntityId.Invalid; // EntityKind.Lot (HF-1)
         public int LogUnits;
         public float MassKg;
+        public string OwnerId = string.Empty; // timber-rights holder that owns the felled inventory
         public string StandId = string.Empty;
         public string Species = string.Empty;
         public EntityId FelledBy = EntityId.Invalid; // worker person id (labor provenance)
@@ -140,6 +141,12 @@ namespace LandLedgers.Economy.Farming.Timber
                 return null;
             }
 
+            if (!worker.IsValid || worker.Kind != EntityKind.Person)
+            {
+                diagnostics.Add("TimberHarvest: felling requires a valid Person as the recorded worker; no timber was felled.");
+                return null;
+            }
+
             if (float.IsNaN(stand.KilogramsPerLog) || float.IsInfinity(stand.KilogramsPerLog) || stand.KilogramsPerLog <= 0f)
             {
                 diagnostics.Add($"TimberHarvest: stand '{stand.StandId}' has an invalid per-log mass; no timber was felled.");
@@ -167,6 +174,7 @@ namespace LandLedgers.Economy.Farming.Timber
                 LotId = idRegistry.Allocate(EntityKind.Lot),
                 LogUnits = felled,
                 MassKg = felled * Mathf.Max(0f, stand.KilogramsPerLog),
+                OwnerId = stand.TimberRightsHolderId,
                 StandId = stand.StandId,
                 Species = stand.Species,
                 FelledBy = worker,

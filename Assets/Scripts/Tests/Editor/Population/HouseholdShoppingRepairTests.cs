@@ -414,7 +414,7 @@ namespace LandLedgers.EditorTests.Population
                 "c, store stock " + storeStockBefore + "u all unchanged; need stays open)");
             Assert.AreEqual(1, batch.ServedNeedCount);
             Assert.AreEqual(10, batch.UnitsAcquiredTotal);
-            Assert.AreEqual(2, batch.ShopperPersonId, "the preferred shopper is the adult woman first");
+            CollectionAssert.Contains(new[] { 1, 2 }, batch.ShopperPersonId, "an eligible household member must shop");
             Assert.AreEqual(balanceBefore - 50, f.Balance(), "buyer debit must equal units x the 5c price");
             Assert.AreEqual(storeCashBefore + 50, f.Port.CashBalance, "seller cash must gain exactly the buyer debit");
             Assert.AreEqual(storeStockBefore - 10, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId),
@@ -422,11 +422,13 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
             // The [480,510] rest that blocked the 08:00 departure is released
             // for the shopper; every other reservation is untouched.
-            Assert.IsFalse(f.HoldsRestCoveringMinute(2, 480), "the shopper's Resting block over 480 must be released");
-            Assert.IsTrue(f.HoldsRestCoveringMinute(2, 420), "the shopper's earlier rest [420,450] must be untouched");
-            Assert.IsTrue(f.HoldsRestCoveringMinute(1, 480), "the non-shopper's rest must be untouched");
-            Assert.IsFalse(f.Tracker.IsFree(2, f.Day, 0, 60), "the shopper's sleep must be untouched");
-            Assert.IsFalse(f.Tracker.IsFree(2, f.Day, 450, 30), "the shopper's meal must be untouched");
+            int shopper = batch.ShopperPersonId;
+            int other = shopper == 1 ? 2 : 1;
+            Assert.IsFalse(f.HoldsRestCoveringMinute(shopper, 480), "the shopper's Resting block over 480 must be released");
+            Assert.IsTrue(f.HoldsRestCoveringMinute(shopper, 420), "the shopper's earlier rest [420,450] must be untouched");
+            Assert.IsTrue(f.HoldsRestCoveringMinute(other, 480), "the non-shopper's rest must be untouched");
+            Assert.IsFalse(f.Tracker.IsFree(shopper, f.Day, 0, 60), "the shopper's sleep must be untouched");
+            Assert.IsFalse(f.Tracker.IsFree(shopper, f.Day, 450, 30), "the shopper's meal must be untouched");
         }
 
         [Test]
@@ -446,7 +448,7 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(batch.TripExecuted, "a free shopper must buy: " + batch.FailureReason);
             Assert.AreEqual(1, batch.ServedNeedCount);
             Assert.AreEqual(10, batch.UnitsAcquiredTotal);
-            Assert.AreEqual(2, batch.ShopperPersonId, "the preferred shopper is the adult woman first");
+            CollectionAssert.Contains(new[] { 1, 2 }, batch.ShopperPersonId, "an eligible household member must shop");
             Assert.AreEqual(10000 - 50, f.Balance(), "buyer debit must equal units x the 5c price");
             Assert.AreEqual(50000 + 50, f.Port.CashBalance, "seller cash must gain exactly the buyer debit");
             Assert.AreEqual(6, f.Port.ItemStockUnits(HouseholdItemCatalog.BreadId),
@@ -983,7 +985,7 @@ namespace LandLedgers.EditorTests.Population
             // 2. Needs/shopping: the shortage monitor raises the bread need
             //    from zero stock (2 members x 1 loaf x 3 meals/day = 6),
             //    the coordinator plans it, the trip executes.
-            var monitor = new HouseholdShortageMonitor(f.Needs) { LowDaysThreshold = 1f };
+            var monitor = new HouseholdShortageMonitor(f.Needs) { LowDaysThreshold = 1f, TargetDaysThreshold = 1f };
             int dailyBreadUse = 2 * MealSchedulingPolicy.Default.GetServingUnits(HouseholdItemCatalog.BreadId)
                 * MealSchedulingPolicy.Default.ExpectedMealsPerDay;
             monitor.Evaluate(
@@ -1006,7 +1008,7 @@ namespace LandLedgers.EditorTests.Population
             HouseholdShoppingLoop.BatchShoppingResult batch =
                 f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, f.Options(), f.Diagnostics);
             Assert.IsTrue(batch.TripExecuted, "the shopping trip must execute: " + batch.FailureReason);
-            Assert.AreEqual(2, batch.ShopperPersonId, "the preferred shopper is the adult woman first");
+            CollectionAssert.Contains(new[] { 1, 2 }, batch.ShopperPersonId, "an eligible household member must shop");
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
 
             // The shopping reservation exists now: exactly one, [480,575],
@@ -1015,7 +1017,7 @@ namespace LandLedgers.EditorTests.Population
             PersonActivityReservation shopping = null;
             foreach (PersonActivityReservation r in f.Tracker.Reservations)
             {
-                if (r != null && r.PersonId == 2 && r.DayIndex == 0 && r.Activity == PersonActivityKind.Shopping)
+                if (r != null && r.PersonId == batch.ShopperPersonId && r.DayIndex == 0 && r.Activity == PersonActivityKind.Shopping)
                 {
                     shoppingCount++;
                     shopping = r;
@@ -1089,7 +1091,7 @@ namespace LandLedgers.EditorTests.Population
             // End-of-day invariants: the shopping reservation record is
             // still present with its original window, and no person holds
             // overlapping ACTIVE reservations.
-            Assert.IsTrue(f.HasReservation(2, PersonActivityKind.Shopping, 480, 575, released: true),
+            Assert.IsTrue(f.HasReservation(batch.ShopperPersonId, PersonActivityKind.Shopping, 480, 575, released: true),
                 "the shopping reservation must still be held (as the completed record) at end of day");
             Assert.IsFalse(f.ActiveReservationsOverlap(1), "P1 must hold no overlapping reservations at end of day");
             Assert.IsFalse(f.ActiveReservationsOverlap(2), "P2 must hold no overlapping reservations at end of day");

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.Financing;
 using LandLedgers.FirstLedger;
 using EntityId = LandLedgers.Primitives.EntityId;
 using LandLedgers.Primitives;
@@ -60,6 +61,7 @@ namespace LandLedgers.EditorTests.Economy
                 remainingQuantityUnits = qty,
                 freightChargeCents = 500,
                 freightPayerBusinessInstanceId = "biz_store_001",
+                haulingMode = ShipmentHaulingMode.HiredFreight,
                 cargoClass = LogisticsCargoClass.PackagedGoods,
                 state = LogisticsShipmentStatus.Planned,
             };
@@ -154,6 +156,80 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void TryAcceptShipment_RefusesSelfHaulAndOtherCarrierCustody()
+        {
+            FreightCompanyRuntime company = BuildCompany();
+            var diagnostics = new List<string>();
+            LogisticsShipmentState shipment = BuildShipment("self-haul", 10);
+            shipment.haulingMode = ShipmentHaulingMode.SourceDelivers;
+            Assert.IsFalse(company.TryAcceptShipment(shipment, diagnostics));
+            Assert.AreEqual(string.Empty, shipment.CarrierBusinessInstanceId);
+            Assert.IsEmpty(company.ActiveShipments);
+
+            shipment.haulingMode = ShipmentHaulingMode.HiredFreight;
+            shipment.carrierBusinessInstanceId = "biz-other-carrier";
+            Assert.IsFalse(company.TryAcceptShipment(shipment, diagnostics));
+            Assert.AreEqual("biz-other-carrier", shipment.CarrierBusinessInstanceId);
+            Assert.IsEmpty(company.ActiveShipments);
+        }
+
+        [Test]
+        public void TryAcceptShipment_RejectsDuplicateShipmentIdentity()
+        {
+            FreightCompanyRuntime company = BuildCompany();
+            var diagnostics = new List<string>();
+            LogisticsShipmentState shipment = BuildShipment("duplicate", 10);
+            Assert.IsTrue(company.TryAcceptShipment(shipment, diagnostics));
+
+            LogisticsShipmentState duplicate = BuildShipment("duplicate", 10);
+            Assert.IsFalse(company.TryAcceptShipment(duplicate, diagnostics));
+            Assert.AreEqual(1, company.ActiveShipments.Count);
+            Assert.AreEqual(string.Empty, duplicate.CarrierBusinessInstanceId);
+        }
+
+        [Test]
+        public void VerifiedCollection_InsufficientFundsCreatesOnePayable_ThenPaysCarrierOnce()
+        {
+            FreightCompanyRuntime company = BuildCompany();
+            var diagnostics = new List<string>();
+            LogisticsShipmentState shipment = BuildShipment("payable-shipment", 10);
+            shipment.state = LogisticsShipmentStatus.Completed;
+            shipment.deliveryApplied = true;
+            Assert.IsTrue(company.TryAcceptShipment(shipment, diagnostics));
+
+            var payer = new BusinessRuntimeState();
+            payer.BindBusinessIdentity("biz_store_001");
+            payer.SetCurrentCashCents(0);
+            payer.ObligationAuthority = new FinancialObligationAuthority();
+            payer.ObligationIdRegistry = new EntityIdRegistry();
+            var carrier = new BusinessRuntimeState();
+            carrier.BindBusinessIdentity("biz_freight_001");
+            carrier.SetCurrentCashCents(0);
+            BusinessRuntimeState Resolve(string id) => id == payer.BusinessId ? payer : null;
+
+            Assert.AreEqual(0, company.CollectAndPostUncollectedRevenue(carrier, Resolve, diagnostics));
+            Assert.AreEqual(0, company.CollectAndPostUncollectedRevenue(carrier, Resolve, diagnostics));
+            Assert.AreEqual(0, payer.CurrentCashCents);
+            Assert.AreEqual(0, carrier.CurrentCashCents);
+            Assert.AreEqual(1, payer.NamedPayables.Count, "repeated retries must not duplicate the shipment debt");
+            Assert.AreEqual("biz_freight_001", payer.NamedPayables[0].Creditor);
+            Assert.AreEqual(500, payer.NamedPayables[0].AmountCents);
+            Assert.IsFalse(shipment.FreightRevenueCollected,
+                "the freight charge remains unsettled until real cash pays the recorded payable");
+
+            payer.SetCurrentCashCents(500);
+            Assert.AreEqual(500, company.CollectAndPostUncollectedRevenue(carrier, Resolve, diagnostics));
+            Assert.AreEqual(0, payer.CurrentCashCents);
+            Assert.AreEqual(500, carrier.CurrentCashCents);
+            Assert.IsEmpty(payer.NamedPayables);
+            Assert.IsTrue(shipment.FreightRevenueCollected);
+
+            Assert.AreEqual(0, company.CollectAndPostUncollectedRevenue(carrier, Resolve, diagnostics));
+            Assert.AreEqual(0, payer.CurrentCashCents);
+            Assert.AreEqual(500, carrier.CurrentCashCents);
+        }
+
+        [Test]
         public void CollectFreightCharge_OnlyFromExternalPayer_OnCompletion()
         {
             FreightCompanyRuntime company = BuildCompany();
@@ -166,7 +242,14 @@ namespace LandLedgers.EditorTests.Economy
 
             shipment.state = LogisticsShipmentStatus.Completed;
             shipment.deliveryApplied = true;
-            Assert.AreEqual(500, company.CollectFreightCharge("s1", diagnostics));
+            Assert.AreEqual(0, company.CollectFreightCharge("s1", diagnostics),
+                "A named payer without a verified till cannot be charged or marked settled.");
+            var payer = new BusinessRuntimeState();
+            payer.BindBusinessIdentity("biz_store_001");
+            payer.SetCurrentCashCents(1000);
+            Assert.AreEqual(500, company.CollectFreightCharge("s1", payer, diagnostics));
+            Assert.AreEqual(500, payer.CurrentCashCents);
+            Assert.IsTrue(shipment.FreightRevenueCollected);
         }
 
         [Test]

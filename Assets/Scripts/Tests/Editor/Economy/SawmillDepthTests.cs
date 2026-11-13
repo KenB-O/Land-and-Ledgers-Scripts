@@ -3,8 +3,11 @@ using EntityId = LandLedgers.Primitives.EntityId;
 using System.Collections.Generic;
 using LandLedgers.Tasks;
 using LandLedgers.Economy.Businesses.Sawmill;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Primitives;
+using LandLedgers.Time;
 using NUnit.Framework;
 
 namespace LandLedgers.Editor.Economy
@@ -14,7 +17,7 @@ namespace LandLedgers.Editor.Economy
     /// provenance, spare inventory, re-set vs file, retirement to scrap),
     /// run labor minutes, green-lumber stacking day, and the toll-sawing
     /// commercial form (customer logs in custody, explicit toll policy).
-    /// Written, not run (no Unity in this environment).
+    /// Focused EditMode coverage for the existing sawmill authorities.
     /// </summary>
     [TestFixture]
     public sealed class SawmillDepthTests
@@ -26,6 +29,7 @@ namespace LandLedgers.Editor.Economy
                 LotId = EntityId.For(EntityKind.Lot, lotNumber),
                 LogUnits = logs,
                 MassKg = logs * 300f,
+                OwnerId = "mill-1",
                 StandId = standId,
                 Species = species,
                 FelledBy = EntityId.For(EntityKind.Person, 5001),
@@ -40,6 +44,79 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             Assert.IsNull(mill.ReceiveLogLot(DocumentedLogLot(9101, logs, "stand-1"), diag));
             return mill;
+        }
+
+        private sealed class SawTaskContext
+        {
+            public TaskAuthority Tasks;
+            public WorkTimeBudgetStore Budgets;
+            public EntityId TaskId;
+            public EquipmentTaskGate Gate;
+        }
+
+        private static SawTaskContext StartSawTask(int logs, EntityId worker, int day,
+            string species = "white pine", bool hasMotivePower = true, bool completeWork = true)
+        {
+            int minutes = logs * SawmillConversionData.DefaultForSpecies(species).SawMinutesPerLog;
+            var tasks = new TaskAuthority();
+            Sawmill.RegisterTaskDefinitions(tasks);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(day);
+            var task = tasks.CreateTaskWithPlannedMinutes(Sawmill.SawLogsTaskId,
+                EntityId.For(EntityKind.Business, 1), day, minutes);
+            Assert.IsTrue(tasks.AssignTask(task.TaskId, worker, budgets, day, out var assignReason), assignReason);
+            Assert.IsTrue(tasks.StartTask(task.TaskId, day, out var startReason), startReason);
+            if (completeWork)
+            {
+                Assert.IsTrue(tasks.RecordWorkProgress(task.TaskId, minutes, budgets, day,
+                    out bool reached, out var workReason), workReason);
+                Assert.IsTrue(reached);
+            }
+
+            var workstations = new BusinessWorkstations("mill-1");
+            var station = workstations.GetOrCreate("sawmill-saw-line");
+            station.SpaceId = "mill-saw-floor";
+            station.InstallComponent("saw-line");
+            station.InstallComponent("log-carriage");
+            station.InstallComponent("drive-system");
+            if (hasMotivePower)
+                station.MotivePowerSources.Add(new MotivePowerSource(MotivePowerKind.Steam, "recorded steam engine"));
+            var gate = new EquipmentTaskGate
+            {
+                WorkstationsFor = (kind, id) => workstations,
+                FindWorkstationDefinition = id => id == "sawmill-saw-line" ? WorkstationCatalog.SawmillSawLine : null,
+                FindComponent = id => id == "saw-line"
+                    ? new WorkstationComponentView { AssetId = id, Kind = "saw-line", Condition01 = 1f, IsUsable = true }
+                    : id == "log-carriage"
+                        ? new WorkstationComponentView { AssetId = id, Kind = "log-carriage", Condition01 = 1f, IsUsable = true }
+                        : id == "drive-system"
+                            ? new WorkstationComponentView { AssetId = id, Kind = "drive-system", Condition01 = 1f, IsUsable = true }
+                            : (WorkstationComponentView?)null,
+                SupportSupplier = () =>
+                {
+                    var support = new SupportContext();
+                    support.ConsumableUnits[SupportContext.Key("consumable", "mill-lubrication")] = 1;
+                    support.AvailableRepairCapabilities.Add("saw-filing");
+                    return support;
+                },
+            };
+            return new SawTaskContext { Tasks = tasks, Budgets = budgets, TaskId = task.TaskId, Gate = gate };
+        }
+
+        private static SawmillSawingResult RunSawing(SawmillShopRuntime mill, int logs,
+            EntityId worker, int day, List<string> diag, string species = "white pine")
+        {
+            var context = StartSawTask(logs, worker, day, species);
+            return mill.RunSawing(logs, worker, day, diag, context.Tasks, context.TaskId, context.Budgets, context.Gate);
+        }
+
+        private static SawmillTollSawingResult RunTollSawing(SawmillShopRuntime mill,
+            string lotId, int logs, EntityId worker, int day, SawmillTollPolicy policy, List<string> diag,
+            string species = "white pine")
+        {
+            var context = StartSawTask(logs, worker, day, species);
+            return mill.RunTollSawing(lotId, logs, worker, day, policy, diag,
+                context.Tasks, context.TaskId, context.Budgets, context.Gate);
         }
 
         private static SawmillBladeState ProcuredSpare(string bladeId, string source)
@@ -119,7 +196,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, mill.Blade.ResetCount, "Re-sets are factual history on the blade.");
             Assert.IsTrue(mill.Blade.MaintenanceLog[0].Contains("re-set"));
 
-            var result = mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 211, diag);
+            var result = RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 211, diag);
             Assert.NotNull(result, "Output resumes after the re-set.");
         }
 
@@ -164,7 +241,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(mill.ReceiveSpareBlade(ProcuredSpare("spare-1", "Hawkins Machine Works"), diag));
 
             mill.Blade.ApplyWear(0.95f); // fitted blade broken
-            Assert.IsNull(mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 210, diag),
+            Assert.IsNull(RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 210, diag),
                 "Broken blade gates output before the swap.");
 
             Assert.IsNull(mill.FitSpareBlade("spare-1", 211, diag));
@@ -174,7 +251,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, mill.BladeInventory.Spares.Count, "The old blade parks back as a spare.");
             Assert.AreEqual("mill-1-blade", mill.BladeInventory.Spares[0].BladeId);
 
-            var result = mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 211, diag);
+            var result = RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 211, diag);
             Assert.NotNull(result, "Sawing resumes on the fitted spare.");
         }
 
@@ -190,7 +267,7 @@ namespace LandLedgers.Editor.Economy
             Assert.NotNull(refusal, "No spare on hand — the mill stays gated, nothing conjured.");
             Assert.IsTrue(string.Join(" ", diag).Contains("no spare blade"),
                 "The shortfall is loud and never auto-ordered.");
-            Assert.IsNull(mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 211, diag));
+            Assert.IsNull(RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 211, diag));
         }
 
         [Test]
@@ -204,7 +281,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(mill.Blade.IsRetired);
             Assert.AreEqual(1, mill.BladeInventory.Scrap.Count, "Identity and history kept in scrap.");
             Assert.AreEqual("cracked plate", mill.BladeInventory.Scrap[0].RetiredReason);
-            Assert.IsNull(mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 211, diag),
+            Assert.IsNull(RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 211, diag),
                 "A retired blade gates sawing until a spare is fitted.");
             Assert.IsTrue(string.Join(" ", diag).Contains("retired scrap"));
         }
@@ -217,16 +294,64 @@ namespace LandLedgers.Editor.Economy
             var mill = MillWithLogs(10);
             var diag = new List<string>();
 
-            var soft = mill.RunSawing(6, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var soft = RunSawing(mill, 6, EntityId.For(EntityKind.Person, 5002), 210, diag);
             Assert.NotNull(soft);
             Assert.AreEqual(180, soft.SawMinutes, "6 logs x 30 saw-minutes/log (white pine data).");
 
             var ids = new EntityIdRegistry();
             var hardMill = new SawmillShopRuntime("mill-2", ids);
             Assert.IsNull(hardMill.ReceiveLogLot(DocumentedLogLot(9102, 10, "stand-2", "oak"), diag));
-            var hard = hardMill.RunSawing(4, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var hard = RunSawing(hardMill, 4, EntityId.For(EntityKind.Person, 5002), 210, diag, "oak");
             Assert.NotNull(hard);
             Assert.AreEqual(180, hard.SawMinutes, "4 logs x 45 saw-minutes/log (oak data).");
+        }
+
+        [Test]
+        public void Sawing_RefusesWithoutRecordedMotivePower_WithoutConsumingLogs()
+        {
+            var mill = MillWithLogs(4);
+            var worker = EntityId.For(EntityKind.Person, 5002);
+            var context = StartSawTask(2, worker, 210, hasMotivePower: false);
+            var diag = new List<string>();
+
+            Assert.IsNull(mill.RunSawing(2, worker, 210, diag, context.Tasks, context.TaskId,
+                context.Budgets, context.Gate));
+            Assert.AreEqual(4, mill.LogStock.TotalLogUnits);
+            Assert.AreEqual(0, mill.LumberStock.TotalLumberUnits);
+            StringAssert.Contains("motive power", string.Join(" ", diag));
+        }
+
+        [Test]
+        public void Sawing_RefusesBeforeSimulatedWorkDuration_WithoutConsumingLogs()
+        {
+            var mill = MillWithLogs(4);
+            var worker = EntityId.For(EntityKind.Person, 5002);
+            var context = StartSawTask(2, worker, 210, completeWork: false);
+            var diag = new List<string>();
+
+            Assert.IsNull(mill.RunSawing(2, worker, 210, diag, context.Tasks, context.TaskId,
+                context.Budgets, context.Gate));
+            Assert.AreEqual(4, mill.LogStock.TotalLogUnits);
+            Assert.AreEqual(0, mill.LumberStock.TotalLumberUnits);
+            StringAssert.Contains("simulated work minutes", string.Join(" ", diag));
+        }
+
+        [Test]
+        public void Sawing_CompletedTaskCannotProduceTwice()
+        {
+            var mill = MillWithLogs(4);
+            var worker = EntityId.For(EntityKind.Person, 5002);
+            var context = StartSawTask(2, worker, 210);
+            var diag = new List<string>();
+
+            var first = mill.RunSawing(2, worker, 210, diag, context.Tasks, context.TaskId,
+                context.Budgets, context.Gate);
+            Assert.NotNull(first);
+            Assert.IsNull(mill.RunSawing(2, worker, 210, diag, context.Tasks, context.TaskId,
+                context.Budgets, context.Gate));
+            Assert.AreEqual(2, mill.LogStock.TotalLogUnits);
+            Assert.AreEqual(8, mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(4, mill.ByproductStock[0].FuelWoodUnits);
         }
 
         [Test]
@@ -235,7 +360,7 @@ namespace LandLedgers.Editor.Economy
             var mill = MillWithLogs(10);
             var diag = new List<string>();
 
-            var result = mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var result = RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 210, diag);
 
             Assert.NotNull(result);
             Assert.AreEqual(2, result.LogsSawn);
@@ -253,7 +378,7 @@ namespace LandLedgers.Editor.Economy
             var mill = MillWithLogs(10);
             var diag = new List<string>();
 
-            var result = mill.RunSawing(4, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var result = RunSawing(mill, 4, EntityId.For(EntityKind.Person, 5002), 210, diag);
 
             Assert.NotNull(result);
             Assert.AreEqual(210, result.LumberLot.StackedDayIndex,
@@ -272,7 +397,7 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             Assert.IsNull(mill.ReceiveTollLogLot(DocumentedLogLot(9201, 8, "stand-9"), "farmer-1", "A. Farmer", 209, diag));
 
-            var result = mill.RunTollSawing(
+            var result = RunTollSawing(mill,
                 EntityId.For(EntityKind.Lot, 9201).ToString(), 4,
                 EntityId.For(EntityKind.Person, 5002), 210, policy, diag);
 
@@ -304,7 +429,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(mill.ReceiveTollLogLot(DocumentedLogLot(9201, 8, "stand-9"), "farmer-1", "A. Farmer", 209, diag));
             var policy = new SawmillTollPolicy(tollCashCentsPerLog: 5, tollInKindLumberShare01: 0.25f);
 
-            var result = mill.RunTollSawing(
+            var result = RunTollSawing(mill,
                 EntityId.For(EntityKind.Lot, 9201).ToString(), 8,
                 EntityId.For(EntityKind.Person, 5002), 210, policy, diag);
 
@@ -333,7 +458,7 @@ namespace LandLedgers.Editor.Economy
             mill.Blade.ApplyWear(0.70f); // dull
             var policy = new SawmillTollPolicy(tollCashCentsPerLog: 5, tollInKindLumberShare01: 0.25f);
 
-            var result = mill.RunTollSawing(
+            var result = RunTollSawing(mill,
                 EntityId.For(EntityKind.Lot, 9201).ToString(), 4,
                 EntityId.For(EntityKind.Person, 5002), 210, policy, diag);
 
@@ -348,7 +473,7 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             Assert.IsNull(mill.ReceiveTollLogLot(DocumentedLogLot(9201, 8, "stand-9"), "farmer-1", "A. Farmer", 209, diag));
             var policy = new SawmillTollPolicy(tollCashCentsPerLog: 5, tollInKindLumberShare01: 0.25f);
-            Assert.NotNull(mill.RunTollSawing(
+            Assert.NotNull(RunTollSawing(mill,
                 EntityId.For(EntityKind.Lot, 9201).ToString(), 8,
                 EntityId.For(EntityKind.Person, 5002), 210, policy, diag));
 
@@ -381,7 +506,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(mill.ReceiveSpareBlade(ProcuredSpare("spare-1", "Hawkins Machine Works"), diag));
             Assert.IsNull(mill.ReceiveTollLogLot(DocumentedLogLot(9201, 8, "stand-9"), "farmer-1", "A. Farmer", 209, diag));
             var policy = new SawmillTollPolicy(tollCashCentsPerLog: 5, tollInKindLumberShare01: 0.25f);
-            Assert.NotNull(mill.RunTollSawing(
+            Assert.NotNull(RunTollSawing(mill,
                 EntityId.For(EntityKind.Lot, 9201).ToString(), 4,
                 EntityId.For(EntityKind.Person, 5002), 210, policy, diag));
             mill.Blade.ApplyWear(0.20f);

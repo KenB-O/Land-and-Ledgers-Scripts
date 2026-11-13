@@ -88,6 +88,25 @@ namespace LandLedgers.Tasks
         }
 
         /// <summary>
+        /// States where an assigned worker is actively occupied and cannot begin
+        /// another task. Assigned work may be queued sequentially for the worker,
+        /// while a passive process deliberately releases the worker.
+        /// </summary>
+        public static bool BlocksConcurrentTaskStart(TaskStatus status)
+        {
+            switch (status)
+            {
+                case TaskStatus.ResourcesReserved:
+                case TaskStatus.InProgress:
+                case TaskStatus.Paused:
+                case TaskStatus.WaitingOnDependency:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
         /// States in which equipment/workspace/material reservations are still held.
         /// </summary>
         public static bool HoldsResourceReservations(TaskStatus status)

@@ -309,6 +309,13 @@ namespace LandLedgers.Economy.Freight
             if (shipment.Status != LogisticsShipmentStatus.Completed || !shipment.deliveryApplied
                 || !shipment.freightRevenueCollected)
                 return "Fulfilment requires a completed shipment with delivery applied and freight revenue collected.";
+            if (shipment.HaulingMode != ShipmentHaulingMode.HiredFreight
+                || !string.Equals(shipment.CarrierBusinessInstanceId, agreement.CarrierBusinessId, StringComparison.Ordinal)
+                || !string.Equals(shipment.FreightPayerBusinessInstanceId, agreement.PayerBusinessId, StringComparison.Ordinal)
+                || shipment.FreightChargeCents != Mathf.Max(0, agreement.AgreedPriceCents)
+                || (shipment.requiresSourceLotCustody
+                    && !string.Equals(shipment.CargoLotId, agreement.CargoLotId, StringComparison.Ordinal)))
+                return "Fulfilment shipment terms do not match the accepted carrier, payer, price, hauling mode, or cargo lot.";
             agreement.Status = FreightServiceAgreementStatus.Fulfilled;
             agreement.FulfilmentStatus = "Fulfilled";
             return null;

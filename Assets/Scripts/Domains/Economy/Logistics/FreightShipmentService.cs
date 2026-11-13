@@ -308,21 +308,21 @@ namespace LandLedgers.Economy.Logistics
             };
             cargoSpecs[shipmentId] = cargo ?? new FreightCargoSpec();
 
+            string cargoRefusal = ValidateCargoSpec(cargoSpecs[shipmentId]);
+            if (cargoRefusal != null)
+            {
+                return BlockPreLoad(shipment, cargoRefusal, hooks);
+            }
+
             // Capacity check: mass AND volume. Over capacity -> blocked pre-load, zero cargo.
+            string capacityRefusal = CapacityRefusal(quantityUnits, cargoSpecs[shipmentId], wagon);
+            if (capacityRefusal != null)
+            {
+                return BlockPreLoad(shipment, capacityRefusal, hooks);
+            }
+
             float totalMassKg = quantityUnits * cargoSpecs[shipmentId].MassKgPerUnit;
             float totalVolumeM3 = quantityUnits * cargoSpecs[shipmentId].VolumeM3PerUnit;
-            if (totalMassKg > wagon.PayloadMassCapacityKg + 0.001f)
-            {
-                return BlockPreLoad(shipment,
-                    "cargo mass " + totalMassKg.ToString("0.0") + "kg exceeds wagon '" + wagonAssetId
-                    + "' capacity " + wagon.PayloadMassCapacityKg.ToString("0.0") + "kg.", hooks);
-            }
-            if (totalVolumeM3 > wagon.CargoVolumeCapacityM3 + 0.0001f)
-            {
-                return BlockPreLoad(shipment,
-                    "cargo volume " + totalVolumeM3.ToString("0.00") + "m3 exceeds wagon '" + wagonAssetId
-                    + "' capacity " + wagon.CargoVolumeCapacityM3.ToString("0.00") + "m3.", hooks);
-            }
 
             Log(hooks, "shipment '" + shipmentId + "' planned: " + quantityUnits + " units ("
                 + totalMassKg.ToString("0.0") + "kg, " + totalVolumeM3.ToString("0.00") + "m3) on wagon '"
@@ -379,6 +379,34 @@ namespace LandLedgers.Economy.Logistics
             return shipment;
         }
 
+        private static string ValidateCargoSpec(FreightCargoSpec cargo)
+        {
+            if (cargo == null) return "FreightShipmentService: cargo specification is missing.";
+            if (float.IsNaN(cargo.MassKgPerUnit) || float.IsInfinity(cargo.MassKgPerUnit) || cargo.MassKgPerUnit < 0f)
+                return "FreightShipmentService: cargo mass per unit must be a finite, non-negative value; shipment owns zero cargo.";
+            if (float.IsNaN(cargo.VolumeM3PerUnit) || float.IsInfinity(cargo.VolumeM3PerUnit) || cargo.VolumeM3PerUnit < 0f)
+                return "FreightShipmentService: cargo volume per unit must be a finite, non-negative value; shipment owns zero cargo.";
+            return null;
+        }
+
+        private static string CapacityRefusal(int quantityUnits, FreightCargoSpec cargo, EquipmentAsset wagon)
+        {
+            if (wagon == null) return "FreightShipmentService: registered wagon is unavailable; shipment cannot be loaded.";
+            float totalMassKg = quantityUnits * cargo.MassKgPerUnit;
+            float totalVolumeM3 = quantityUnits * cargo.VolumeM3PerUnit;
+            if (totalMassKg > wagon.PayloadMassCapacityKg + 0.001f)
+            {
+                return "cargo mass " + totalMassKg.ToString("0.0") + "kg exceeds wagon '" + wagon.AssetId
+                    + "' capacity " + wagon.PayloadMassCapacityKg.ToString("0.0") + "kg.";
+            }
+            if (totalVolumeM3 > wagon.CargoVolumeCapacityM3 + 0.0001f)
+            {
+                return "cargo volume " + totalVolumeM3.ToString("0.00") + "m3 exceeds wagon '" + wagon.AssetId
+                    + "' capacity " + wagon.CargoVolumeCapacityM3.ToString("0.00") + "m3.";
+            }
+            return null;
+        }
+
         /// <summary>Begins loading: creates the real handling-time WorkTask.</summary>
         public bool BeginLoading(LogisticsShipmentState shipment, EntityId loaderId,
             FreightShipmentHooks hooks, out string reason)
@@ -394,6 +422,22 @@ namespace LandLedgers.Economy.Logistics
             {
                 reason = "FreightShipmentService: shipment '" + shipment.ShipmentId + "' is " + shipment.Status + ", not Planned.";
                 return false;
+            }
+            // Capacity can change after planning (for example, a wagon can
+            // become damaged or be reconciled from its current authority).
+            // Recheck before creating the handling task or debiting a source lot.
+            if (wagons.TryGetValue(shipment.physicalWagonAssetId ?? string.Empty, out EquipmentAsset currentWagon)
+                && cargoSpecs.TryGetValue(shipment.ShipmentId, out FreightCargoSpec plannedCargo))
+            {
+                string invalidCargo = ValidateCargoSpec(plannedCargo);
+                string capacityRefusal = invalidCargo ?? CapacityRefusal(
+                    shipment.PlannedQuantityUnits, plannedCargo, currentWagon);
+                if (capacityRefusal != null)
+                {
+                    BlockPreLoad(shipment, capacityRefusal, hooks);
+                    reason = "FreightShipmentService: " + capacityRefusal + " Shipment failed before loading; source inventory remains untouched.";
+                    return false;
+                }
             }
             if (shipment.requiresSourceLotCustody
                 && (string.IsNullOrWhiteSpace(shipment.cargoLotId)

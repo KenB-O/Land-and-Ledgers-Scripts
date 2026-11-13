@@ -47,6 +47,19 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void ReceiveLot_RefusesDuplicateIdentityWithoutIncreasingStock()
+        {
+            var stock = new HotelFuelStock();
+            var diagnostics = new List<string>();
+            var lot = DealerLot(new EntityIdRegistry(), 40);
+
+            Assert.IsNull(stock.ReceiveLot(lot, diagnostics));
+            StringAssert.Contains("already in the fuel store", stock.ReceiveLot(lot, diagnostics));
+            Assert.AreEqual(40, stock.UnitsOnHand(HotelFuelSupply.FuelMaterialId));
+            Assert.AreEqual(1, stock.Lots.Count);
+        }
+
+        [Test]
         public void TryBurnUnits_IsAtomic_AndFifo()
         {
             var stock = new HotelFuelStock();

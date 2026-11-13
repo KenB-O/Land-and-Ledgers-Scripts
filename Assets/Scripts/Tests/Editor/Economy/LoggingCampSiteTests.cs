@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Primitives;
 using NUnit.Framework;
@@ -46,9 +48,35 @@ namespace LandLedgers.Editor.Economy
         {
             var camp = new LoggingCampSite(campId, "biz-1", standId, 300);
             for (int i = 0; i < loggerCount; i++)
-                Assert.IsNull(camp.AssignWorker(EntityId.For(EntityKind.Person, 100 + i),
+                Assert.IsNull(camp.AssignWorker(EntityId.For(EntityKind.Person, 1 + i),
                     LoggingCampRoles.Logger, 300, diag));
             return camp;
+        }
+
+        private static EquipmentTaskGate FellingEquipmentGate()
+        {
+            return new EquipmentTaskGate
+            {
+                AssetsSupplier = () => new List<EquipmentAsset>
+                {
+                    new EquipmentAsset
+                    {
+                        AssetId = "camp-felling-axe",
+                        Kind = "felling-axe",
+                        OwnerKind = "business",
+                        OwnerId = "biz-1",
+                        Condition01 = 1f,
+                    },
+                },
+            };
+        }
+
+        private static LogLot RunCampDayWithAxe(LoggingCampSite camp, LoggingStandRegistry registry,
+            LoggingOperationRuntime operation, string rightsHolder, int logsWanted, EntityId worker,
+            int dayIndex, int monthIndex, List<string> diag)
+        {
+            return camp.RunCampDay(registry, operation, rightsHolder, logsWanted, worker,
+                dayIndex, monthIndex, diag, FellingEquipmentGate());
         }
 
         private static void FeedCamp(LoggingCampSite camp, float units, List<string> diag)
@@ -119,7 +147,7 @@ namespace LandLedgers.Editor.Economy
             var camp = CampWithCrew("camp-1", "stand-1", ids, 2, diag);
             // No provisions delivered: the crew goes unfed.
 
-            LogLot lot = camp.RunCampDay(registry, operation, Holder, 10,
+            LogLot lot = RunCampDayWithAxe(camp, registry, operation, Holder, 10,
                 EntityId.For(EntityKind.Person, 1), 300, 6, diag);
 
             Assert.IsNull(lot, "An unfed crew is refused loudly — never auto-supplied.");
@@ -140,11 +168,12 @@ namespace LandLedgers.Editor.Economy
             FeedCamp(camp, 10f, diag);
 
             // June: 894 usable minutes; one two-person team; 894/90 = 9 logs/team capacity.
-            LogLot lot = camp.RunCampDay(registry, operation, Holder, 5,
+            LogLot lot = RunCampDayWithAxe(camp, registry, operation, Holder, 5,
                 EntityId.For(EntityKind.Person, 1), 300, 6, diag);
 
             Assert.IsNotNull(lot);
             Assert.AreEqual(5, lot.LogUnits);
+            Assert.AreEqual(Holder, lot.OwnerId, "The holder of the stand's timber rights owns the felled log inventory.");
             Assert.AreEqual("stand-1", lot.StandId, "Stand provenance survives the camp gate.");
             Assert.AreEqual(95, registry.GetStand("stand-1").StandingTimberUnits);
             Assert.AreEqual(5, operation.LandingLogUnits);
@@ -152,6 +181,58 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, camp.WorkDays.Count);
             Assert.AreEqual("full-request", camp.WorkDays[0].LimitReason);
             Assert.AreEqual(894, camp.WorkDays[0].WorkableMinutes);
+
+            float provisionsAfterSuccess = camp.SupplyLedger.Balance;
+            LogLot duplicate = RunCampDayWithAxe(camp, registry, operation, Holder, 5,
+                EntityId.For(EntityKind.Person, 1), 300, 6, diag);
+            Assert.IsNull(duplicate, "One camp cannot harvest twice for the same simulated workday.");
+            Assert.AreEqual(95, registry.GetStand("stand-1").StandingTimberUnits);
+            Assert.AreEqual(5, operation.LandingLogUnits);
+            Assert.AreEqual(provisionsAfterSuccess, camp.SupplyLedger.Balance,
+                "A duplicate workday attempt consumes no additional provisions.");
+            Assert.AreEqual(1, camp.WorkDays.Count);
+        }
+
+        [Test]
+        public void CampDay_RefusesWhenEquipmentAuthorityIsMissing_WithoutChangingResources()
+        {
+            var diag = new List<string>();
+            var ids = new EntityIdRegistry();
+            var registry = RegistryWithStand("stand-1", 20);
+            var operation = new LoggingOperationRuntime("biz-1", ids);
+            var camp = CampWithCrew("camp-1", "stand-1", ids, 2, diag);
+            FeedCamp(camp, 10f, diag);
+            float provisionsBefore = camp.SupplyLedger.Balance;
+
+            LogLot refused = camp.RunCampDay(registry, operation, Holder, 2,
+                EntityId.For(EntityKind.Person, 1), 300, 6, diag, null);
+
+            Assert.IsNull(refused);
+            Assert.AreEqual(20, registry.GetStand("stand-1").StandingTimberUnits);
+            Assert.AreEqual(0, operation.LandingLogUnits);
+            Assert.AreEqual(provisionsBefore, camp.SupplyLedger.Balance);
+            Assert.AreEqual(0, camp.WorkDays.Count);
+        }
+
+        [Test]
+        public void CampDay_RefusesUnrosteredFeller_WithoutChangingResources()
+        {
+            var diag = new List<string>();
+            var ids = new EntityIdRegistry();
+            var registry = RegistryWithStand("stand-1", 20);
+            var operation = new LoggingOperationRuntime("biz-1", ids);
+            var camp = CampWithCrew("camp-1", "stand-1", ids, 2, diag);
+            FeedCamp(camp, 10f, diag);
+            float provisionsBefore = camp.SupplyLedger.Balance;
+
+            LogLot refused = RunCampDayWithAxe(camp, registry, operation, Holder, 2,
+                EntityId.For(EntityKind.Person, 999), 300, 6, diag);
+
+            Assert.IsNull(refused);
+            Assert.AreEqual(20, registry.GetStand("stand-1").StandingTimberUnits);
+            Assert.AreEqual(0, operation.LandingLogUnits);
+            Assert.AreEqual(provisionsBefore, camp.SupplyLedger.Balance);
+            Assert.AreEqual(0, camp.WorkDays.Count);
         }
 
         [Test]
@@ -165,7 +246,7 @@ namespace LandLedgers.Editor.Economy
             FeedCamp(camp, 10f, diag);
 
             // December: 492 usable minutes; 492/90 = 5 logs for the single team.
-            LogLot lot = camp.RunCampDay(registry, operation, Holder, 50,
+            LogLot lot = RunCampDayWithAxe(camp, registry, operation, Holder, 50,
                 EntityId.For(EntityKind.Person, 1), 300, 12, diag);
 
             Assert.IsNotNull(lot);
@@ -186,15 +267,15 @@ namespace LandLedgers.Editor.Economy
             FeedCamp(camp, 40f, diag);
 
             // Day 1: crew cap 9 (June) fits in the 10-log landing.
-            Assert.IsNotNull(camp.RunCampDay(registry, operation, Holder, 20,
+            Assert.IsNotNull(RunCampDayWithAxe(camp, registry, operation, Holder, 20,
                 EntityId.For(EntityKind.Person, 1), 300, 6, diag));
             // Day 2: one log of room left.
-            Assert.IsNotNull(camp.RunCampDay(registry, operation, Holder, 20,
+            Assert.IsNotNull(RunCampDayWithAxe(camp, registry, operation, Holder, 20,
                 EntityId.For(EntityKind.Person, 1), 301, 6, diag));
             Assert.AreEqual(10, operation.LandingLogUnits);
             // Day 3: the landing is full — felling is refused, provisions untouched.
             float balanceBefore = camp.SupplyLedger.Balance;
-            LogLot refused = camp.RunCampDay(registry, operation, Holder, 20,
+            LogLot refused = RunCampDayWithAxe(camp, registry, operation, Holder, 20,
                 EntityId.For(EntityKind.Person, 1), 302, 6, diag);
             Assert.IsNull(refused, "A full landing refuses felling loudly — haul logs out first.");
             Assert.AreEqual(balanceBefore, camp.SupplyLedger.Balance,
@@ -213,7 +294,7 @@ namespace LandLedgers.Editor.Economy
             var camp = CampWithCrew("camp-1", "stand-1", ids, 2, diag);
             FeedCamp(camp, 10f, diag);
 
-            LogLot lot = camp.RunCampDay(registry, operation, "timber-thief", 5,
+            LogLot lot = RunCampDayWithAxe(camp, registry, operation, "timber-thief", 5,
                 EntityId.For(EntityKind.Person, 1), 300, 6, diag);
 
             Assert.IsNull(lot, "The T1E rights gate still refuses through the camp path.");
@@ -231,7 +312,7 @@ namespace LandLedgers.Editor.Economy
             var camp = CampWithCrew("camp-1", "stand-1", ids, 1, diag); // one logger: no team
             FeedCamp(camp, 10f, diag);
 
-            Assert.IsNull(camp.RunCampDay(registry, operation, Holder, 5,
+            Assert.IsNull(RunCampDayWithAxe(camp, registry, operation, Holder, 5,
                 EntityId.For(EntityKind.Person, 101), 300, 6, diag),
                 "Felling is two-person hand-tool work (T1E) — one logger is not a team.");
             Assert.AreEqual(10f, camp.SupplyLedger.Balance);
@@ -247,18 +328,18 @@ namespace LandLedgers.Editor.Economy
             var camp = CampWithCrew("camp-1", "stand-1", ids, 2, diag);
             FeedCamp(camp, 10f, diag);
 
-            Assert.IsNotNull(camp.RunCampDay(registry, operation, Holder, 5,
+            Assert.IsNotNull(RunCampDayWithAxe(camp, registry, operation, Holder, 5,
                 EntityId.For(EntityKind.Person, 1), 300, 6, diag));
             Assert.AreEqual(0, registry.GetStand("stand-1").StandingTimberUnits);
 
-            Assert.IsNull(camp.RunCampDay(registry, operation, Holder, 5,
+            Assert.IsNull(RunCampDayWithAxe(camp, registry, operation, Holder, 5,
                 EntityId.For(EntityKind.Person, 1), 301, 6, diag),
                 "A cut-out stand refuses the camp day — strike or relocate.");
 
             Assert.IsNull(camp.StrikeCamp(302, "stand cut out", diag));
             Assert.IsTrue(camp.IsStruck);
             Assert.IsNotNull(camp.StrikeCamp(303, "again", diag), "Striking twice is refused.");
-            Assert.IsNull(camp.RunCampDay(registry, operation, Holder, 5,
+            Assert.IsNull(RunCampDayWithAxe(camp, registry, operation, Holder, 5,
                 EntityId.For(EntityKind.Person, 1), 303, 6, diag),
                 "A struck camp works no more days.");
         }
@@ -284,10 +365,10 @@ namespace LandLedgers.Editor.Economy
 
             Assert.IsNull(camp.RelocateCamp("stand-2", registry, 300, diag));
             Assert.AreEqual("stand-2", camp.StandId);
-            Assert.IsNull(camp.RunCampDay(registry, operation, Holder, 5,
+            Assert.IsNull(RunCampDayWithAxe(camp, registry, operation, Holder, 5,
                 EntityId.For(EntityKind.Person, 1), 301, 6, diag),
                 "The camp cannot fell during parameterized relocation down days.");
-            Assert.IsNotNull(camp.RunCampDay(registry, operation, Holder, 5,
+            Assert.IsNotNull(RunCampDayWithAxe(camp, registry, operation, Holder, 5,
                 EntityId.For(EntityKind.Person, 1), 302, 6, diag),
                 "After the down days the camp fells at the new stand.");
             Assert.AreEqual(45, registry.GetStand("stand-2").StandingTimberUnits);
@@ -334,7 +415,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(20, operation.LandingCapacityLogUnits);
 
             Assert.IsNotNull(operation.RunFelling(registry, "stand-1", Holder, 15,
-                EntityId.For(EntityKind.Person, 1), 300, diag, null));
+                EntityId.For(EntityKind.Person, 1), 300, diag, FellingEquipmentGate()));
             Assert.AreEqual(15, operation.LandingLogUnits);
 
             Assert.IsNotNull(operation.SetLandingCapacity(10, diag),
@@ -356,8 +437,8 @@ namespace LandLedgers.Editor.Economy
             camp.Parameters.CampMoveDownDays = 2;
             camp.Parameters.BunkCapacity = 4;
             FeedCamp(camp, 10f, diag);
-            Assert.IsNotNull(camp.RunCampDay(registry, operation, Holder, 5,
-                EntityId.For(EntityKind.Person, 100), 300, 6, diag));
+            Assert.IsNotNull(RunCampDayWithAxe(camp, registry, operation, Holder, 5,
+                EntityId.For(EntityKind.Person, 1), 300, 6, diag));
 
             var restored = new LoggingCampSite(string.Empty, string.Empty, string.Empty, 0);
             restored.LoadFromSaveDto(camp.CaptureSaveDto());

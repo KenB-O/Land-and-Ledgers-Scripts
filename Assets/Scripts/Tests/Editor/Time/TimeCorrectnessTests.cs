@@ -76,6 +76,21 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
+        public void SimulationTimeAdvanced_ReportsOnlyClockProcessedSeconds()
+        {
+            TimeManager manager = CreateTimeManager();
+            var increments = new List<float>();
+            manager.SimulationTimeAdvanced += context => increments.Add(context.GameDeltaSeconds);
+
+            manager.AdvanceForValidation(2000f);
+
+            Assert.AreEqual(1, increments.Count,
+                "A single authoritative clock advancement publishes one matching movement delta.");
+            Assert.AreEqual(2000f, increments[0], 0.001f,
+                "Consumers receive processed game seconds, not a separately scaled render delta.");
+        }
+
+        [Test]
         public void ScenarioStartBeforeCalendarEpoch_UsesPositiveCampaignDaysAndRestoresDate()
         {
             var settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();

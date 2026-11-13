@@ -120,6 +120,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 LotId = oldest.LotId,
                 LogUnits = logsWanted,
                 MassKg = consumedMassKg,
+                OwnerId = oldest.OwnerId,
                 StandId = oldest.StandId,
                 Species = oldest.Species,
                 FelledBy = oldest.FelledBy,
@@ -130,6 +131,36 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             oldest.MassKg -= consumedMassKg;
             oldest.LotId = idRegistry.Allocate(EntityKind.Lot);
             return consumed;
+        }
+
+        /// <summary>Read-only FIFO preflight used to validate a production task before inventory is consumed.</summary>
+        public LogLot PeekOldestLot(int logsWanted, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (logsWanted <= 0)
+            {
+                diag.Add("SawmillLogStock: no logs requested.");
+                return null;
+            }
+
+            LogLot oldest = null;
+            foreach (var lot in lots)
+            {
+                if (lot == null || lot.LogUnits <= 0) continue;
+                if (oldest == null || lot.FelledDayIndex < oldest.FelledDayIndex) oldest = lot;
+            }
+            if (oldest == null)
+            {
+                diag.Add("SawmillLogStock: log yard is empty — nothing sawn, no stock invented.");
+                return null;
+            }
+            if (oldest.LogUnits < logsWanted)
+            {
+                diag.Add($"SawmillLogStock: REFUSED run of {logsWanted} logs — oldest lot {oldest.LotId} holds only {oldest.LogUnits}. "
+                    + "Provenance stays one-lot-per-lumber-lot: request the remainder separately.");
+                return null;
+            }
+            return oldest;
         }
 
         /// <summary>W4A save contract: lives inside the owning stock class.</summary>
@@ -149,6 +180,7 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                     LotId = lot.LotId,
                     LogUnits = lot.LogUnits,
                     MassKg = lot.MassKg,
+                    OwnerId = lot.OwnerId,
                     StandId = lot.StandId,
                     Species = lot.Species,
                     FelledBy = lot.FelledBy,

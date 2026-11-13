@@ -115,7 +115,7 @@ namespace LandLedgers.Economy.Businesses.Logging
             EntityId worker,
             int dayIndex,
             List<string> diag,
-            EquipmentTaskGate gate = null)
+            EquipmentTaskGate gate)
         {
             diag = diag ?? diagnostics;
             if (registry == null)
@@ -130,8 +130,13 @@ namespace LandLedgers.Economy.Businesses.Logging
             }
 
             // NX-1A: Canon 4.1 — felling is hand-tool work (T1E fell-timber
-            // codes: felling-axe OR crosscut-saw). No usable tool, no felling.
-            if (gate != null)
+            // codes: felling-axe OR crosscut-saw). Missing equipment authority
+            // is a refusal, not permission to skip the tool requirement.
+            if (gate == null)
+            {
+                diag.Add("LoggingOperationRuntime: FELLING REFUSED — no equipment authority was supplied to verify a felling axe or crosscut saw.");
+                return null;
+            }
             {
                 string blocked = gate.CheckCodes(
                     new List<string>
@@ -226,6 +231,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                     LotId = lot.LotId,
                     LogUnits = unitsThatFit,
                     MassKg = kgPerLog * unitsThatFit,
+                    OwnerId = lot.OwnerId,
                     StandId = lot.StandId,
                     Species = lot.Species,
                     FelledBy = lot.FelledBy,
@@ -307,6 +313,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                     LotId = lot.LotId,
                     LogUnits = lot.LogUnits,
                     MassKg = lot.MassKg,
+                    OwnerId = lot.OwnerId,
                     StandId = lot.StandId,
                     Species = lot.Species,
                     FelledBy = lot.FelledBy,

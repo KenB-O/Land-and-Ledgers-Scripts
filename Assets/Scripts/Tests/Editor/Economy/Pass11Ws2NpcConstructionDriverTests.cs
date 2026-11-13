@@ -69,6 +69,23 @@ namespace LandLedgers.EditorTests.Economy
             }
         }
 
+        private sealed class FakeOwnedMaterialSource : IAlreadyOwnedConstructionMaterialSource
+        {
+            public readonly Dictionary<string, int> Stock = new Dictionary<string, int>();
+            public int AvailableUnits(ConstructionMaterialRequirement requirement) => requirement != null
+                && Stock.TryGetValue(requirement.MaterialDisplayName, out int units) ? units : 0;
+            public string TryConsume(ConstructionMaterialRequirement requirement, int units,
+                string projectLabel, int dayIndex, List<string> diagnostics, out string provenanceLabel)
+            {
+                provenanceLabel = string.Empty;
+                int available = AvailableUnits(requirement);
+                if (available < units) return $"Only {available} owned '{requirement.MaterialDisplayName}' units are available.";
+                Stock[requirement.MaterialDisplayName] = available - units;
+                provenanceLabel = $"previously owned household lot: {requirement.MaterialDisplayName} x{units}";
+                return null;
+            }
+        }
+
         private sealed class FakeRestock : IConstructionMaterialRestock
         {
             public readonly Dictionary<string, int> Returned = new Dictionary<string, int>();
@@ -408,6 +425,44 @@ namespace LandLedgers.EditorTests.Economy
             foreach (ResidentialOccupancy occ in c.Housing.CurrentOccupanciesForPerson(101))
                 if (spaces.Contains(occ.SpaceId)) occupancies++;
             Assert.AreEqual(1, occupancies);
+        }
+
+        [Test]
+        public void Driver_HouseholdOwnedMaterials_ConsumesAtStage_WithoutSecondSupplierPayment()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var owned = new FakeOwnedMaterialSource();
+            owned.Stock["fieldstone"] = 40;
+            owned.Stock["lumber"] = 600;
+            NpcConstructionDriver driver = c.NewDriver();
+            driver.MaterialSourceByHousehold = _ => owned;
+
+            ConstructionProject project = c.DriveToComplete(driver, 10);
+            Assert.AreEqual(ConstructionProjectStatus.Complete, project.Status);
+            Assert.AreEqual(0, owned.Stock["fieldstone"]);
+            Assert.AreEqual(0, owned.Stock["lumber"]);
+            Assert.AreEqual(100000, c.HouseholdLedger.GetBalanceCents(),
+                "already-owned stock must not be charged again to the household");
+            Assert.AreEqual(0, c.YardPurse.ReadBalanceCents(),
+                "no new supplier sale occurred for household-owned lots");
+            NpcConstructionRecord record = c.Commissioner.FindRecordForProject(project.ProjectId);
+            Assert.IsTrue(record.Decisions.Exists(x => x.Contains("household-owned lots")));
+            Assert.IsTrue(record.FindFunding(project.WorkPackages[0].PackageId).Notes.Contains("cost basis is not exposed"));
+        }
+
+        [Test]
+        public void TitleConstructionParcelAuthority_RequiresCurrentHouseholdTitle()
+        {
+            var titles = new TitleAuthority();
+            var diag = new List<string>();
+            Assert.IsNotNull(titles.RegisterParcel("parcel-c", "construction parcel", 1f,
+                "household:7", TitleBasis.Purchase, 0, diag));
+            var authority = new TitleConstructionParcelAuthority(titles);
+            Assert.IsNull(authority.AuthorizeBuild(7, "parcel-c", 1, diag));
+            StringAssert.Contains("held by", authority.AuthorizeBuild(8, "parcel-c", 1, diag));
+            StringAssert.Contains("not registered", authority.AuthorizeBuild(7, "unknown", 1, diag));
         }
 
         [Test]

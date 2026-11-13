@@ -337,9 +337,29 @@ namespace LandLedgers.Economy.Businesses.Logging
                 diag.Add($"LoggingCampSite '{campId}': CAMP DAY REFUSED — camp is struck (day {dayStruck}).");
                 return null;
             }
+            foreach (LoggingCampWorkDay completedDay in workDays)
+            {
+                if (completedDay != null && completedDay.DayIndex == dayIndex)
+                {
+                    diag.Add($"LoggingCampSite '{campId}': CAMP DAY REFUSED — day {dayIndex} already produced logs for this camp.");
+                    return null;
+                }
+            }
             if (registry == null || operation == null)
             {
                 diag.Add($"LoggingCampSite '{campId}': CAMP DAY REFUSED — needs a stand registry and an operation.");
+                return null;
+            }
+
+            if (!worker.IsValid || worker.Kind != EntityKind.Person || !IsRosteredFeller(worker))
+            {
+                diag.Add($"LoggingCampSite '{campId}': CAMP DAY REFUSED — feller {worker} is not a valid rostered logger/feller.");
+                return null;
+            }
+
+            if (gate == null)
+            {
+                diag.Add($"LoggingCampSite '{campId}': CAMP DAY REFUSED — no equipment authority was supplied to verify a felling axe or crosscut saw.");
                 return null;
             }
 
@@ -467,6 +487,17 @@ namespace LandLedgers.Economy.Businesses.Logging
             diag.Add($"LoggingCampSite '{campId}': camp day complete — {lot.LogUnits} logs felled " +
                 $"({teams} team(s) x {perTeam}/team, {workable} workable minutes), {provisionsNeeded} provisions consumed.");
             return lot;
+        }
+
+        private bool IsRosteredFeller(EntityId worker)
+        {
+            foreach (LoggingCampCrewEntry entry in crew)
+            {
+                if (entry == null || !entry.Worker.Equals(worker)) continue;
+                return string.Equals(entry.Role, LoggingCampRoles.Logger, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(entry.Role, LoggingCampRoles.Feller, StringComparison.OrdinalIgnoreCase);
+            }
+            return false;
         }
 
         /// <summary>D2D save contract: lives inside the owning camp class.</summary>

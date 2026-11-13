@@ -3,8 +3,11 @@ using EntityId = LandLedgers.Primitives.EntityId;
 using System.Collections.Generic;
 using LandLedgers.Tasks;
 using LandLedgers.Economy.Businesses.Sawmill;
+using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Primitives;
+using LandLedgers.Time;
 using NUnit.Framework;
 
 namespace LandLedgers.Editor.Economy
@@ -24,6 +27,8 @@ namespace LandLedgers.Editor.Economy
             {
                 LotId = EntityId.For(EntityKind.Lot, lotNumber),
                 LogUnits = logs,
+                MassKg = logs * 300f,
+                OwnerId = "mill-1",
                 StandId = standId,
                 Species = "white pine",
                 FelledBy = EntityId.For(EntityKind.Person, 5001),
@@ -38,6 +43,51 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             Assert.IsNull(mill.ReceiveLogLot(DocumentedLogLot(9101, logs, "stand-1"), diag));
             return mill;
+        }
+
+        private static SawmillSawingResult RunSawing(SawmillShopRuntime mill, int logs,
+            EntityId worker, int day, List<string> diag, string species = "white pine")
+        {
+            int minutes = logs * SawmillConversionData.DefaultForSpecies(species).SawMinutesPerLog;
+            var tasks = new TaskAuthority();
+            Sawmill.RegisterTaskDefinitions(tasks);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(day);
+            var task = tasks.CreateTaskWithPlannedMinutes(Sawmill.SawLogsTaskId,
+                EntityId.For(EntityKind.Business, 1), day, minutes);
+            Assert.IsTrue(tasks.AssignTask(task.TaskId, worker, budgets, day, out var assignReason), assignReason);
+            Assert.IsTrue(tasks.StartTask(task.TaskId, day, out var startReason), startReason);
+            Assert.IsTrue(tasks.RecordWorkProgress(task.TaskId, minutes, budgets, day,
+                out bool reached, out var workReason), workReason);
+            Assert.IsTrue(reached, "The simulated saw-line labor duration must elapse before conversion.");
+
+            var registry = new BusinessWorkstations("mill-1");
+            var station = registry.GetOrCreate("sawmill-saw-line");
+            station.SpaceId = "mill-saw-floor";
+            station.InstallComponent("saw-line-1");
+            station.InstallComponent("log-carriage-1");
+            station.InstallComponent("drive-system-1");
+            station.MotivePowerSources.Add(new MotivePowerSource(MotivePowerKind.Steam, "recorded steam engine"));
+            var gate = new EquipmentTaskGate
+            {
+                WorkstationsFor = (kind, id) => registry,
+                FindWorkstationDefinition = id => id == "sawmill-saw-line" ? WorkstationCatalog.SawmillSawLine : null,
+                FindComponent = id => id == "saw-line-1"
+                    ? new WorkstationComponentView { AssetId = id, Kind = "saw-line", Condition01 = 1f, IsUsable = true }
+                    : id == "log-carriage-1"
+                        ? new WorkstationComponentView { AssetId = id, Kind = "log-carriage", Condition01 = 1f, IsUsable = true }
+                        : id == "drive-system-1"
+                            ? new WorkstationComponentView { AssetId = id, Kind = "drive-system", Condition01 = 1f, IsUsable = true }
+                            : (WorkstationComponentView?)null,
+                SupportSupplier = () =>
+                {
+                    var support = new SupportContext();
+                    support.ConsumableUnits[SupportContext.Key("consumable", "mill-lubrication")] = 1;
+                    support.AvailableRepairCapabilities.Add("saw-filing");
+                    return support;
+                },
+            };
+            return mill.RunSawing(logs, worker, day, diag, tasks, task.TaskId, budgets, gate);
         }
 
         // ---- Log intake: provenance validation ----
@@ -123,7 +173,7 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(mill.ReceiveLogLot(DocumentedLogLot(9101, 10, "stand-1"), diag));
 
             var worker = EntityId.For(EntityKind.Person, 5002);
-            var result = mill.RunSawing(6, worker, 210, diag);
+            var result = RunSawing(mill, 6, worker, 210, diag);
 
             Assert.NotNull(result);
             Assert.AreEqual(6, result.LogsSawn);
@@ -131,6 +181,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual("stand-1", result.LumberLot.StandId);
             Assert.AreEqual("white pine", result.LumberLot.Species);
             Assert.AreEqual("mill-1", result.LumberLot.MillBusinessId);
+            Assert.AreEqual("mill-1", result.LumberLot.OwnerId, "Input ownership carries through the conversion.");
             Assert.AreEqual(worker, result.LumberLot.SawedBy);
             Assert.AreEqual(210, result.LumberLot.SawedDayIndex);
             Assert.AreEqual("softwood-standard", result.LumberLot.ConversionProfileId);
@@ -146,12 +197,13 @@ namespace LandLedgers.Editor.Economy
             var mill = MillWithLogs(10);
             var diag = new List<string>();
 
-            var result = mill.RunSawing(6, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var result = RunSawing(mill, 6, EntityId.For(EntityKind.Person, 5002), 210, diag);
 
             Assert.NotNull(result.ByproductLot);
             Assert.AreEqual(12, result.ByproductLot.FuelWoodUnits, "6 logs x 2 fuel-wood/log (data).");
             Assert.AreEqual("mill-1", result.ByproductLot.SourceMillBusinessId);
             Assert.AreEqual("stand-1", result.ByproductLot.StandId);
+            Assert.AreEqual("mill-1", result.ByproductLot.OwnerId, "Byproduct ownership follows the source log lot.");
             Assert.AreEqual(EntityId.For(EntityKind.Lot, 9101).ToString(), result.ByproductLot.SourceLogLotId);
             Assert.AreEqual(1, mill.ByproductStock.Count, "Byproduct held as a real lot in the mill yard.");
         }
@@ -163,7 +215,7 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             var profile = SawmillConversionData.DefaultForSpecies("white pine");
 
-            mill.RunSawing(5, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            RunSawing(mill, 5, EntityId.For(EntityKind.Person, 5002), 210, diag);
 
             Assert.AreEqual(1f - 5 * profile.BladeWearPerLog01, mill.Blade.Condition01, 0.0001f,
                 "Blade wear is data-driven, per log sawn.");
@@ -176,7 +228,7 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             float conditionBefore = mill.Blade.Condition01;
 
-            var result = mill.RunSawing(6, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var result = RunSawing(mill, 6, EntityId.For(EntityKind.Person, 5002), 210, diag);
 
             Assert.IsNull(result, "Short-supply runs are refused, not blended across lots.");
             Assert.AreEqual(3, mill.LogStock.TotalLogUnits, "Refused runs consume nothing.");
@@ -193,7 +245,7 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             mill.Blade.ApplyWear(0.70f); // condition 0.30 — dull, not broken
 
-            var result = mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var result = RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 210, diag);
 
             Assert.IsNull(result, "A dull saw gates ALL output (Tech X §3.9).");
             Assert.AreEqual(10, mill.LogStock.TotalLogUnits, "Gated runs consume nothing.");
@@ -207,7 +259,7 @@ namespace LandLedgers.Editor.Economy
             var diag = new List<string>();
             mill.Blade.ApplyWear(0.95f); // condition 0.05 — broken
 
-            var result = mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            var result = RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 210, diag);
 
             Assert.IsNull(result);
             Assert.IsTrue(string.Join(" ", diag).Contains("BROKEN"), "Broken is reported distinctly from dull.");
@@ -229,7 +281,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, mill.Blade.MaintenanceLog.Count, "Filing records diligence history.");
             Assert.IsTrue(mill.Blade.MaintenanceLog[0].Contains("211"));
 
-            var result = mill.RunSawing(2, EntityId.For(EntityKind.Person, 5002), 211, diag);
+            var result = RunSawing(mill, 2, EntityId.For(EntityKind.Person, 5002), 211, diag);
             Assert.NotNull(result, "Output resumes after the filer works.");
         }
 
@@ -255,7 +307,7 @@ namespace LandLedgers.Editor.Economy
         {
             var mill = MillWithLogs(10);
             var diag = new List<string>();
-            mill.RunSawing(6, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            RunSawing(mill, 6, EntityId.For(EntityKind.Person, 5002), 210, diag);
             var intake = new FuelYardByproductIntake();
 
             int transferred = mill.TransferByproductsToFuelDealer("fuel-dealer-1", intake, diag);
@@ -271,6 +323,47 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void FuelYardIntake_RejectsDuplicateLotIdentityAcrossOwners()
+        {
+            var intake = new FuelYardByproductIntake();
+            var diagnostics = new List<string>();
+            var firstReceipt = new SlabOffcutFuelLot
+            {
+                LotId = EntityId.For(EntityKind.Lot, 9202),
+                FuelWoodUnits = 12,
+                OwnerId = "mill-1",
+                SourceMillBusinessId = "mill-1",
+                SourceLogLotId = "log-1",
+                StandId = "stand-1",
+                Species = "white pine",
+                ProducedDayIndex = 210,
+            };
+
+            Assert.IsNull(intake.ReceiveByproductLot("fuel-dealer-1", firstReceipt, diagnostics));
+            var duplicateReceipt = new SlabOffcutFuelLot
+            {
+                LotId = firstReceipt.LotId,
+                FuelWoodUnits = 99,
+                OwnerId = "mill-1",
+                SourceMillBusinessId = "mill-1",
+                SourceLogLotId = "log-1",
+                StandId = "stand-1",
+                Species = "white pine",
+                ProducedDayIndex = 210,
+            };
+
+            string sameDealerRefusal = intake.ReceiveByproductLot("fuel-dealer-1", duplicateReceipt, diagnostics);
+            StringAssert.Contains("already held by FuelDealer 'fuel-dealer-1'", sameDealerRefusal);
+            string otherDealerRefusal = intake.ReceiveByproductLot("fuel-dealer-2", duplicateReceipt, diagnostics);
+            StringAssert.Contains("already held by FuelDealer 'fuel-dealer-1'", otherDealerRefusal);
+
+            Assert.AreEqual(12, intake.TotalFuelWoodUnitsFor("fuel-dealer-1"), "the original physical quantity remains authoritative");
+            Assert.AreEqual(0, intake.TotalFuelWoodUnitsFor("fuel-dealer-2"), "a second yard cannot claim the same lot");
+            Assert.AreEqual(1, intake.LotsFor("fuel-dealer-1").Count);
+            Assert.AreEqual(0, intake.LotsFor("fuel-dealer-2").Count);
+        }
+
+        [Test]
         public void FuelYardIntake_Refuses_OrphanLots()
         {
             var intake = new FuelYardByproductIntake();
@@ -280,6 +373,7 @@ namespace LandLedgers.Editor.Economy
             {
                 LotId = EntityId.For(EntityKind.Lot, 9201),
                 FuelWoodUnits = 12,
+                OwnerId = "mill-1",
                 SourceMillBusinessId = string.Empty, // no mill named
                 SourceLogLotId = "9101",
                 StandId = "stand-1",
@@ -319,7 +413,7 @@ namespace LandLedgers.Editor.Economy
         {
             var mill = MillWithLogs(10);
             var diag = new List<string>();
-            mill.RunSawing(4, EntityId.For(EntityKind.Person, 5002), 210, diag);
+            RunSawing(mill, 4, EntityId.For(EntityKind.Person, 5002), 210, diag);
             mill.Blade.ApplyWear(0.10f);
             mill.Blade.RecordFiling(211, diag); // resets to 1.0, adds a log entry
 
@@ -348,6 +442,7 @@ namespace LandLedgers.Editor.Economy
             {
                 LotId = EntityId.For(EntityKind.Lot, 9201),
                 FuelWoodUnits = 12,
+                OwnerId = "mill-1",
                 SourceMillBusinessId = "mill-1",
                 SourceLogLotId = "9101",
                 StandId = "stand-1",

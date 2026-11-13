@@ -212,6 +212,47 @@ namespace LandLedgers.World
         public IReadOnlyList<BuildingEntrancePairAuthoring> EntrancePairs => entrancePairs;
         public IReadOnlyList<BuildingActivityLocationAuthoring> ActivityLocations => activityLocations;
 
+        /// <summary>
+        /// Find an authored station of the requested type with a valid route from
+        /// the specified entrance. This establishes geometry only; callers must
+        /// separately check access rights and reserve the worker's time.
+        /// </summary>
+        public bool TryFindReachableActivityLocation(BuildingActivityLocationType type, string entranceId,
+            int buildingInstanceId, out ResolvedBuildingActivityLocation location,
+            out List<Vector3> worldWaypoints, out string reason)
+        {
+            location = default;
+            worldWaypoints = null;
+            reason = $"No reachable {type} activity is authored on '{name}'.";
+            if (activityLocations == null) return false;
+            if (!TryGetEntrancePair(entranceId, out var entrance, out reason)) return false;
+            foreach (BuildingActivityLocationAuthoring candidate in activityLocations)
+            {
+                if (candidate == null || candidate.type != type) continue;
+                if (!TryGetActivityLocation(candidate.id, buildingInstanceId, out var resolved, out string invalid))
+                {
+                    reason = invalid;
+                    continue;
+                }
+                if (entrance.floorIndex != resolved.FloorIndex
+                    || !MatchesSpace(entrance.functionalSpaceId, resolved.FunctionalSpaceId))
+                {
+                    reason = $"Activity '{candidate.id}' is on a different floor or functional space from entrance '{entranceId}'.";
+                    continue;
+                }
+                if (!TryBuildInteriorActivityRoute(entranceId, candidate.id, out var route, out string blocked))
+                {
+                    reason = blocked;
+                    continue;
+                }
+                location = resolved;
+                worldWaypoints = route;
+                reason = string.Empty;
+                return true;
+            }
+            return false;
+        }
+
         public bool TryGetActivityLocation(string id, int buildingInstanceId, out ResolvedBuildingActivityLocation location, out string reason)
         {
             location = default;

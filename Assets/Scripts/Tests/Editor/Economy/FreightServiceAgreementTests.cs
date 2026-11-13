@@ -215,6 +215,21 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void MarkFulfilled_RefusesShipmentWhoseFinancialTermsDifferFromAgreement()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.IsNull(book.LinkShipment(agreement.AgreementId, "freight-shipment:request-1"));
+            var shipment = NewPreparedShipment(
+                "freight-shipment:request-1", agreement.AgreementId, LogisticsShipmentStatus.Completed);
+            shipment.deliveryApplied = true;
+            shipment.freightRevenueCollected = true;
+            shipment.freightChargeCents = agreement.AgreedPriceCents - 1;
+
+            StringAssert.Contains("terms do not match", book.MarkFulfilled(agreement.AgreementId, shipment));
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status);
+        }
+
+        [Test]
         public void MarkFulfilledRefusesIncompleteShipments()
         {
             FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
@@ -288,6 +303,7 @@ namespace LandLedgers.EditorTests.Economy
                 "freight-shipment:request-fulfilled", fulfilled.AgreementId, LogisticsShipmentStatus.Completed);
             completedShipment.deliveryApplied = true;
             completedShipment.freightRevenueCollected = true;
+            completedShipment.cargoLotId = fulfilled.CargoLotId;
             Assert.IsNull(book.MarkFulfilled(fulfilled.AgreementId, completedShipment));
 
             FreightServiceAgreementBookSaveDto dto = book.CaptureSaveDto();
@@ -641,6 +657,11 @@ namespace LandLedgers.EditorTests.Economy
             {
                 shipmentId = shipmentId,
                 freightServiceAgreementId = agreementId,
+                cargoLotId = "lot-1",
+                carrierBusinessInstanceId = "freight-1",
+                freightPayerBusinessInstanceId = "bakery-1",
+                freightChargeCents = 125,
+                haulingMode = ShipmentHaulingMode.HiredFreight,
                 state = status,
                 requiresDispatchAuthorization = true,
                 loadApplied = false

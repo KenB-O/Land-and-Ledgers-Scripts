@@ -13,6 +13,7 @@ using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.FreightFuel;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using UnityEngine;
 
 namespace LandLedgers.Editor.Economy
 {
@@ -196,6 +197,131 @@ namespace LandLedgers.Editor.Economy
                     ProducedDayIndex = 2,
                 }, diag));
             return dealer;
+        }
+
+        [Test]
+        public void FuelDealerLiveRegistration_UsesFormedBusinessAndProfilePrice_EmptyYardCannotSell()
+        {
+            BusinessProfileDefinition profile = Resources.Load<BusinessProfileDefinition>(
+                "Core/Economy/BusinessProfiles/FuelDealerProfile");
+            Assert.NotNull(profile, "the production Fuel Dealer profile must be available");
+            ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
+            ItemCategoryDefinition category = profile.FindCategory("fuel_wood");
+            Assert.NotNull(fuel);
+            Assert.NotNull(category);
+            int configuredPrice = fuel.Pricing.GetCostPlusPriceCents(category.DefaultMarkupMultiplier, 0f);
+            Assert.Greater(configuredPrice, 0, "price comes from the authored profile calculation, not an adapter fallback");
+
+            BusinessInstanceState business = BusinessInstanceState.Create(
+                "jacob-fuel-dealer", profile, 17, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            Assert.AreEqual(0, business.RuntimeState.GetCategoryStock("fuel_wood").CurrentStockUnits,
+                "catalog startingStockUnits do not create stock without a receipt or production event");
+            var intake = new FuelYardByproductIntake();
+            var cash = new Series2BusinessRuntimeCashPort(business.RuntimeState);
+            Assert.IsTrue(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                business, intake, cash, configuredPrice,
+                out Series2FuelDealerSupplierAdapter adapter, out string refusal), refusal);
+            Assert.AreEqual("jacob-fuel-dealer", adapter.SupplierBusinessId);
+            Assert.AreEqual("building:17", adapter.LocationId);
+            Assert.AreEqual("Jacob", business.Owner.DisplayName);
+
+            var directory = new SupplierDirectory();
+            Series2FuelDealerSupplierAdapter.RegisterIn(directory, adapter);
+            Assert.AreEqual(1, directory.All.Count, "one existing business identity registers one supplier");
+            Assert.AreSame(adapter, directory.All[0]);
+            int fuelSellers = 0;
+            foreach (IGoodsSupplier supplier in directory.SuppliersFor("fuel_wood")) fuelSellers++;
+            Assert.AreEqual(1, fuelSellers, "the registered business is discoverable for its configured category");
+            Assert.IsTrue(adapter.RecognizesItem("fuel_wood"));
+            Assert.IsFalse(adapter.OffersItem("fuel_wood"), "a known Fuel Dealer with an empty yard is not a saleable offer");
+            Assert.AreEqual(0, adapter.ItemStockUnits("fuel_wood"));
+
+            // Explicit test parameter lets this case isolate genuine missing
+            // stock from the separate unresolved live conversion gate.
+            adapter.FuelUnitsPerHouseholdUnit = 1;
+            var diagnostics = new List<string>();
+            int cashBefore = business.RuntimeState.CurrentCashCents;
+            Assert.AreEqual(0, adapter.SellItem("fuel_wood", 1, 0, CashSettlement(), diagnostics));
+            Assert.AreEqual(0, intake.TotalFuelWoodUnitsFor(business.InstanceId));
+            Assert.AreEqual(cashBefore, business.RuntimeState.CurrentCashCents,
+                "missing stock creates no fuel or business revenue");
+            StringAssert.Contains("real stock exhausted or short", string.Join("; ", diagnostics));
+        }
+
+        [Test]
+        public void FuelDealerLiveRegistration_RequiresExplicitIntakeBundleConversion()
+        {
+            BusinessProfileDefinition profile = Resources.Load<BusinessProfileDefinition>(
+                "Core/Economy/BusinessProfiles/FuelDealerProfile");
+            ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
+            ItemCategoryDefinition category = profile.FindCategory("fuel_wood");
+            int configuredPrice = fuel.Pricing.GetCostPlusPriceCents(category.DefaultMarkupMultiplier, 0f);
+            BusinessInstanceState business = BusinessInstanceState.Create(
+                "jacob-fuel-dealer", profile, 17, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            var intake = new FuelYardByproductIntake();
+            var ids = new EntityIdRegistry();
+            Assert.IsNull(intake.ReceiveByproductLot(business.InstanceId, new SlabOffcutFuelLot
+            {
+                LotId = ids.Allocate(EntityKind.Lot),
+                FuelWoodUnits = 12,
+                SourceMillBusinessId = "mill-1",
+                SourceLogLotId = "log-lot-1",
+                StandId = "stand-1",
+                Species = "pine",
+                ProducedDayIndex = 1,
+            }, new List<string>()));
+            Assert.IsTrue(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                business, intake, new Series2BusinessRuntimeCashPort(business.RuntimeState), configuredPrice,
+                out Series2FuelDealerSupplierAdapter adapter, out string refusal), refusal);
+
+            Assert.AreEqual(0, adapter.FuelUnitsPerHouseholdUnit,
+                "live wiring must not turn the legacy 1:1 test convenience into an approved conversion");
+            Assert.IsFalse(adapter.OffersItem("fuel_wood"));
+            var diagnostics = new List<string>();
+            Assert.AreEqual(0, adapter.SellItem("fuel_wood", 1, 1, CashSettlement(), diagnostics));
+            Assert.AreEqual(12, intake.TotalFuelWoodUnitsFor(business.InstanceId));
+            Assert.AreEqual(0, business.RuntimeState.CurrentCashCents);
+            StringAssert.Contains("quantity is not configured", string.Join("; ", diagnostics));
+
+            // Explicit test parameter only: the production hookup leaves this
+            // unresolved until an authorized conversion is configured.
+            adapter.FuelUnitsPerHouseholdUnit = 2;
+            Assert.AreEqual(6, adapter.ItemStockUnits("fuel_wood"));
+            Assert.IsTrue(adapter.OffersItem("fuel_wood"));
+            Assert.AreEqual(3, adapter.SellItem("fuel_wood", 3, 1, CashSettlement(), diagnostics));
+            Assert.AreEqual(6, intake.TotalFuelWoodUnitsFor(business.InstanceId));
+            Assert.AreEqual(configuredPrice * 3, business.RuntimeState.CurrentCashCents);
+        }
+
+        [Test]
+        public void FuelDealerLiveRegistration_RejectsWrongBusinessAndUnassignedPremises()
+        {
+            BusinessProfileDefinition profile = Resources.Load<BusinessProfileDefinition>(
+                "Core/Economy/BusinessProfiles/FuelDealerProfile");
+            var intake = new FuelYardByproductIntake();
+            BusinessProfileDefinition storeProfile = Resources.Load<BusinessProfileDefinition>(
+                "Core/Economy/BusinessProfiles/GeneralStoreProfile");
+            Assert.NotNull(storeProfile);
+            BusinessInstanceState store = BusinessInstanceState.Create(
+                "store-1", storeProfile, 17, BusinessOwnerIdentity.Npc(1, "Store", "Owner"));
+            var cash = new Series2BusinessRuntimeCashPort(store.RuntimeState);
+            Assert.IsFalse(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                store,
+                intake, cash, 25, out _, out string wrongType));
+            StringAssert.Contains("not Fuel Dealer", wrongType);
+            BusinessInstanceState unplacedFuelDealer = BusinessInstanceState.Create(
+                "fuel-unplaced", profile, -1, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            Assert.IsFalse(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                unplacedFuelDealer, intake, new Series2BusinessRuntimeCashPort(unplacedFuelDealer.RuntimeState),
+                25, out _, out string noPremises));
+            StringAssert.Contains("assigned premises", noPremises);
+
+            BusinessInstanceState placedFuelDealer = BusinessInstanceState.Create(
+                "fuel-1", profile, 17, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            var wrongCash = new Series2BusinessRuntimeCashPort(new BusinessRuntimeState());
+            Assert.IsFalse(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                placedFuelDealer, intake, wrongCash, 25, out _, out string wrongCashOwner));
+            StringAssert.Contains("cash authority belongs", wrongCashOwner);
         }
 
         // ---- Retail adapter cash failure: WARNING-only, sale stands ----

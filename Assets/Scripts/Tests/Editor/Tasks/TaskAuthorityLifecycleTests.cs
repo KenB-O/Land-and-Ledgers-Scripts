@@ -154,6 +154,82 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.IsTrue(authority.StartTask(second.TaskId, 1, out reason), reason);
         }
 
+        [TestCase(TaskStatus.Paused)]
+        [TestCase(TaskStatus.WaitingOnDependency)]
+        [TestCase(TaskStatus.ResourcesReserved)]
+        public void StartTask_RefusesConcurrentWorkWhileFirstTaskStillOwnsWorker(TaskStatus blockingState)
+        {
+            TaskAuthority authority = CreateAuthority();
+            WorkTimeBudgetStore budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            WorkTask first = authority.CreateTask("test.sweep", Business(1), 1);
+            WorkTask second = authority.CreateTask("test.sweep", Business(2), 1);
+            Assert.IsTrue(authority.AssignTask(first.TaskId, Person(7), budgets, out string reason), reason);
+            Assert.IsTrue(authority.AssignTask(second.TaskId, Person(7), budgets, out reason), reason);
+            Assert.IsTrue(authority.StartTask(first.TaskId, 1, out reason), reason);
+
+            switch (blockingState)
+            {
+                case TaskStatus.Paused:
+                    Assert.IsTrue(authority.PauseTask(first.TaskId, budgets, "temporary interruption", out reason), reason);
+                    break;
+                case TaskStatus.WaitingOnDependency:
+                    Assert.IsTrue(authority.MarkWaitingOnDependency(first.TaskId, "required delivery", "waiting", out reason), reason);
+                    break;
+                case TaskStatus.ResourcesReserved:
+                    Assert.IsTrue(authority.MarkResourcesReserved(first.TaskId, "fixture-reservation", "workstation held", out reason), reason);
+                    break;
+            }
+
+            Assert.IsFalse(authority.StartTask(second.TaskId, 1, out reason));
+            StringAssert.Contains(first.TaskId.ToString(), reason);
+            Assert.AreEqual(TaskStatus.Assigned, second.Status, "The refused task remains assigned for its later turn.");
+
+            if (blockingState == TaskStatus.Paused)
+            {
+                Assert.IsTrue(authority.InterruptTask(first.TaskId, budgets, out reason), reason);
+            }
+            else
+            {
+                Assert.IsTrue(authority.CancelTask(first.TaskId, budgets));
+            }
+
+            Assert.IsTrue(authority.StartTask(second.TaskId, 1, out reason),
+                reason + " Ending the owning task should release the worker so the next legitimate task can start.");
+        }
+
+        [Test]
+        public void CancelAndComplete_AffectOnlyTheirTaskAndTerminalCompletionIsExactlyOnce()
+        {
+            TaskAuthority authority = CreateAuthority();
+            WorkTimeBudgetStore budgets = new WorkTimeBudgetStore();
+            FakeReservationAuthority reservations = new FakeReservationAuthority();
+            authority.SetReservationAuthority(reservations);
+            authority.SetReservationRequestBuilder((task, definition) =>
+                new ReservationRequest(task.TaskId.ToString(), "lifecycle regression"));
+            budgets.EnsureDay(1);
+
+            WorkTask cancelled = authority.CreateTask("test.sweep", Business(1), 1);
+            WorkTask unrelated = authority.CreateTask("test.sweep", Business(2), 1);
+            Assert.IsTrue(authority.AssignTask(cancelled.TaskId, Person(1), budgets, out string reason), reason);
+            Assert.IsTrue(authority.AssignTask(unrelated.TaskId, Person(2), budgets, out reason), reason);
+            Assert.IsTrue(authority.StartTask(cancelled.TaskId, 1, out reason), reason);
+            Assert.IsTrue(authority.StartTask(unrelated.TaskId, 1, out reason), reason);
+            Assert.AreEqual(2, reservations.LiveReservationCount);
+
+            Assert.IsTrue(authority.CancelTask(cancelled.TaskId, budgets));
+            Assert.IsFalse(authority.CancelTask(cancelled.TaskId, budgets), "A terminal task cannot be cancelled twice.");
+            Assert.AreEqual(TaskStatus.Cancelled, cancelled.Status);
+            Assert.AreEqual(TaskStatus.InProgress, unrelated.Status, "Cancellation is scoped to the supplied task ID.");
+            Assert.AreEqual(1, reservations.LiveReservationCount, "Only the cancelled task's reservation is released.");
+
+            Assert.IsTrue(authority.CompleteTask(unrelated.TaskId, TaskOutcome.Success, 1, budgets));
+            Assert.IsFalse(authority.CompleteTask(unrelated.TaskId, TaskOutcome.Success, 1, budgets),
+                "A terminal task cannot emit a second completion.");
+            Assert.AreEqual(TaskStatus.Complete, unrelated.Status);
+            Assert.AreEqual(0, reservations.LiveReservationCount);
+        }
+
         [Test]
         public void MarkResourcesReserved_Assigned_StoresHandleId()
         {

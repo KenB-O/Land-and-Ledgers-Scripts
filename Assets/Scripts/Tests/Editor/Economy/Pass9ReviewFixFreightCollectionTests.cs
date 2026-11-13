@@ -45,6 +45,7 @@ namespace LandLedgers.EditorTests.Economy
                 remainingQuantityUnits = 0,
                 freightChargeCents = 500,
                 freightPayerBusinessInstanceId = "biz-store-1",
+                haulingMode = ShipmentHaulingMode.HiredFreight,
                 cargoClass = LogisticsCargoClass.PackagedGoods,
                 state = LogisticsShipmentStatus.Completed,
                 deliveryApplied = true,

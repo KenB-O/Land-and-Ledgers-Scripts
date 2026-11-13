@@ -153,6 +153,13 @@ namespace LandLedgers.Economy.Businesses.Hotel
                         "or the import order + origin (upstream-provenance doctrine).";
             }
 
+            for (int i = 0; i < lots.Count; i++)
+            {
+                HotelFuelLot existing = lots[i];
+                if (existing != null && existing.LotId.Equals(lot.LotId))
+                    return $"HotelFuelStock.ReceiveLot: lot refused — lot {lot.LotId} already in the fuel store.";
+            }
+
             lots.Add(lot);
             diag.Add($"HotelFuelStock: received {lot.Units} × {lot.FuelName} (lot {lot.LotId}, day {lot.AcquiredDayIndex}) — {lot.ProvenanceChain()}.");
             return null;

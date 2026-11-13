@@ -83,8 +83,6 @@ namespace LandLedgers.Economy
         private const int SawmillOffMapLogBuyMaxUnits = 6;
         private const int SawmillOffMapLumberSellMaxUnits = 24;
         private const int LumberYardOffMapBuyMaxUnits = 40;
-        private const int LumberYardOffMapSellMaxUnits = 24;
-        private const int LumberYardLocalBuilderDemandMaxUnits = 48;
         private const float HouseholdAffinityChoiceInfluence01 = 0.24f;
         private const float LocalMarketPriceCaptureSensitivity01 = 0.85f;
         private const float LocalMarketMinimumCapture01 = 0.38f;
@@ -161,6 +159,44 @@ namespace LandLedgers.Economy
 
         public IReadOnlyList<BusinessInstanceState> Businesses => businesses;
         public string Status => status;
+
+        /// <summary>
+        /// Returns the configured sell price used by shared business market
+        /// settlement for a currently registered business category. A missing
+        /// business, profile, or category has no sale price and returns zero;
+        /// callers must not substitute a fallback price.
+        /// </summary>
+        public int GetConfiguredCategorySalePriceCents(BusinessInstanceState business, string categoryId)
+        {
+            if (business == null || business.RuntimeState == null
+                || string.IsNullOrWhiteSpace(categoryId)
+                || FindBusiness(business.InstanceId) != business)
+            {
+                return 0;
+            }
+
+            BusinessProfileDefinition profile = FindProfile(business.BusinessType);
+            if (profile?.Business == null
+                || !profile.Business.OwnsCategory(categoryId)
+                || profile.FindCategory(categoryId) == null)
+            {
+                return 0;
+            }
+
+            bool hasConfiguredItem = false;
+            ReadOnlySpan<ItemDefinition> items = profile.Items;
+            for (int i = 0; i < items.Length; i++)
+            {
+                if (items[i] != null && string.Equals(items[i].CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
+                {
+                    hasConfiguredItem = true;
+                    break;
+                }
+            }
+            if (!hasConfiguredItem) return 0;
+
+            return Mathf.Max(0, GetAverageCategoryTransferPriceCents(business, profile, categoryId));
+        }
 
         /// <summary>Supplies an authored opening roster before startup initialization.</summary>
         public void ConfigureOpeningBusinessRoster(IReadOnlyList<OpeningRosterEntry> roster)
@@ -1169,8 +1205,6 @@ namespace LandLedgers.Economy
             operationCount += ResolveArchetypeRoutedWeeklyOperations(builder);
 
             transferCount += ResolveLumberIndustryOffMapFallback(builder);
-            transferCount += ResolveLumberYardLocalBuilderDemand(builder);
-
             transferCount += ResolveArchetypeRoutedLocalMarketSales(builder);
 
             cashTransferCount += ResolveAutomaticBusinessCashTransfers(BusinessCashAutoTransferMode.UpperOnly, builder);
@@ -6762,115 +6796,8 @@ namespace LandLedgers.Economy
                 }
             }
 
-            int reserveCash = GetSharedOperatingCashBufferCents(yard);
-            if (yard.RuntimeState.CurrentCashCents < reserveCash)
-            {
-                int sellUnits = Mathf.Min(LumberYardOffMapSellMaxUnits, Mathf.Max(0, lumber.CurrentStockUnits - lowStockFloor));
-                if (sellUnits > 0)
-                {
-                    LogisticsShipmentState shipment = logisticsRuntime != null
-                        ? logisticsRuntime.CreateOffMapOutboundShipment(
-                            yard,
-                            CategoryLumber,
-                            sellUnits,
-                            80,
-                            $"{yard.RuntimeDisplayName} off-map lumber",
-                            true)
-                        : null;
-                    if (shipment != null
-                        && shipment.RoutePlan != null
-                        && shipment.RoutePlan.VisiblePath != null
-                        && shipment.RoutePlan.VisiblePath.Count > 0
-                        && yard.RuntimeState.TryConsumeCategoryStockUnits(CategoryLumber, sellUnits, out int consumed)
-                        && consumed > 0)
-                    {
-                        AppendTransferToOperationSummary(yard, $"; queued {consumed} lumber off-map");
-                        AppendSummarySegment(summary, $"{GetBusinessSummaryLabel(yard)} off-map lumber queued {consumed}");
-                        changed += consumed;
-                    }
-                }
-            }
-
             yard.RefreshCapacityState();
             return changed;
-        }
-
-        private int ResolveLumberYardLocalBuilderDemand(StringBuilder summary)
-        {
-            int total = 0;
-            for (int i = 0; i < businesses.Count; i++)
-            {
-                BusinessInstanceState yard = businesses[i];
-                if (yard == null || yard.BusinessType != BusinessType.LumberYard || yard.RuntimeState == null)
-                {
-                    continue;
-                }
-
-                total += ResolveLumberYardLocalBuilderDemand(yard, summary);
-            }
-
-            return total;
-        }
-
-        private int ResolveLumberYardLocalBuilderDemand(BusinessInstanceState yard, StringBuilder summary)
-        {
-            BusinessRuntimeState runtime = yard != null ? yard.RuntimeState : null;
-            if (yard == null || runtime == null)
-            {
-                return 0;
-            }
-
-            CategoryStockState lumber = runtime.GetCategoryStock(CategoryLumber);
-            if (lumber == null)
-            {
-                return 0;
-            }
-
-            float efficiency01 = GetHealthAdjustedOperatingEfficiency01(yard);
-            int requestedUnits = Mathf.RoundToInt(LumberYardLocalBuilderDemandMaxUnits * efficiency01);
-            List<string> blockedReasons = new();
-            SeedBlockedReasons(runtime, blockedReasons);
-            AppendStaffingBlockedReasons(runtime, blockedReasons);
-            if (requestedUnits <= 0)
-            {
-                AddBlockedReason(blockedReasons, "no staffed lumber yard sales capacity");
-            }
-
-            if (lumber.CurrentStockUnits <= 0)
-            {
-                AddBlockedReason(blockedReasons, "no stocked lumber for local builders");
-            }
-
-            int soldUnits = 0;
-            int revenue = 0;
-            if (requestedUnits > 0 && lumber.CurrentStockUnits > 0)
-            {
-                int units = Mathf.Min(requestedUnits, lumber.CurrentStockUnits);
-                if (runtime.TryConsumeCategoryStockUnits(CategoryLumber, units, out int consumed) && consumed > 0)
-                {
-                    soldUnits = consumed;
-                    int unitPrice = GetAverageCategoryTransferPriceCents(yard, FindProfile(BusinessType.LumberYard), CategoryLumber);
-                    revenue = soldUnits * unitPrice;
-                    runtime.AddWeeklyLocalTransferRevenue(
-                        revenue,
-                        $"sold {soldUnits} lumber to local builder demand for {FormatMoney(revenue)}");
-                }
-            }
-
-            yard.ApplyWeeklyOperationResult(soldUnits);
-            yard.ApplyDailyServiceResult(0);
-            yard.RefreshCapacityState();
-
-            string blocked = BuildBlockedReason(blockedReasons);
-            string result = $"sold {soldUnits}/{Mathf.Max(0, requestedUnits)} lumber to local builder demand for {FormatMoney(revenue)}";
-            runtime.RecordWeeklyOperation(0, soldUnits, result, blocked);
-            RecordOperationSummary(yard, string.IsNullOrWhiteSpace(blocked) ? result : $"{result}; blocked: {blocked}");
-            if (soldUnits > 0)
-            {
-                AppendSummarySegment(summary, $"{GetBusinessSummaryLabel(yard)} local builders {soldUnits} {FormatMoney(revenue)}");
-            }
-
-            return soldUnits;
         }
 
         private int GetSawmillToLumberYardDeliveryCostPerUnitCents(BusinessInstanceState sawmill, BusinessInstanceState yard)
@@ -10142,8 +10069,7 @@ namespace LandLedgers.Economy
             {
                 string hauling = linkedSawmillSupportNode != null && linkedSawmillSupportNode.InternalHaulingOwned ? "owned hauling" : "market hauling";
                 int onHand = GetCategoryStockUnits(business.RuntimeState, CategoryLumber);
-                int localBuilderDemand = Mathf.Min(onHand, LumberYardLocalBuilderDemandMaxUnits);
-                return $"Yard context: {onHand} lumber on hand | builder demand up to {localBuilderDemand}/wk | {hauling}";
+                return $"Yard context: {onHand} lumber on hand | sales require a funded buyer or authorized construction purchase | {hauling}";
             }
 
             if (business.BusinessType == BusinessType.LiveryFreight)
@@ -10181,8 +10107,7 @@ namespace LandLedgers.Economy
             if (business.BusinessType == BusinessType.LumberYard)
             {
                 int onHand = GetCategoryStockUnits(business.RuntimeState, CategoryLumber);
-                int builderDemand = Mathf.Min(onHand, LumberYardLocalBuilderDemandMaxUnits);
-                return $"Lumber flow: {onHand} lumber on hand | builder demand cap {builderDemand}/wk | recurring transfers stay active through the town freight chain";
+                return $"Lumber flow: {onHand} lumber on hand | named recurring orders and construction purchases transfer actual stock";
             }
 
             return string.Empty;

@@ -310,9 +310,10 @@ namespace LandLedgers.Tasks
                 foreach (WorkTask activeTask in tasks)
                 {
                     if (activeTask == null || ReferenceEquals(activeTask, task) || !activeTask.HasAssignee
-                        || activeTask.Status != TaskStatus.InProgress || activeTask.AssigneeId != task.AssigneeId) continue;
+                        || !TaskLifecyclePolicy.BlocksConcurrentTaskStart(activeTask.Status)
+                        || activeTask.AssigneeId != task.AssigneeId) continue;
                     rejectionReason = "Cannot start task " + taskId + ": " + task.AssigneeId
-                        + " is already occupied by in-progress task " + activeTask.TaskId + ".";
+                        + " is already occupied by task " + activeTask.TaskId + " (" + activeTask.Status + ").";
                     return false;
                 }
             }

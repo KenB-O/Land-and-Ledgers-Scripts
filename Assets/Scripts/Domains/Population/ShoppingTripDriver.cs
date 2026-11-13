@@ -29,6 +29,7 @@ namespace LandLedgers.Population
             Returning = 4,
             Done = 5,
             Failed = 6,
+            RecoveryPlanned = 7,
         }
 
         public string TripId = string.Empty;
@@ -59,7 +60,7 @@ namespace LandLedgers.Population
         internal PlannedShoppingTripSaveDto CandidateDto;
 
         public bool IsActive => State == TripState.Planned || State == TripState.Outbound ||
-            State == TripState.AtStore || State == TripState.InStore || State == TripState.Returning;
+            State == TripState.AtStore || State == TripState.InStore || State == TripState.Returning || State == TripState.RecoveryPlanned;
     }
 
     /// <summary>
@@ -151,12 +152,20 @@ namespace LandLedgers.Population
         {
             public string TripId = string.Empty;
             public LegKind Kind;
+            public bool HasProgressSample;
+            public float RemainingSeconds;
+            public float LastProgressGameSeconds;
         }
 
         private readonly HouseholdShoppingLoop loop;
         private readonly Func<int, string, bool> startPhysicalRoute;
         private readonly Func<int, string, bool> hasPhysicallyArrived;
+        private readonly Func<int, string, bool?> hasActivePhysicalRoute;
+        private readonly Func<int, string, float?> remainingPhysicalRouteSeconds;
+        private readonly Action<int, string> cancelPhysicalRoute;
+        private readonly float routeObservationIntervalSeconds;
         private readonly List<PlannedShoppingTrip> activeTrips = new List<PlannedShoppingTrip>();
+        private readonly List<PlannedShoppingTrip> returnRecoveries = new List<PlannedShoppingTrip>();
         private readonly Dictionary<string, InFlightLeg> legsByTaskIdString =
             new Dictionary<string, InFlightLeg>(StringComparer.Ordinal);
         private readonly List<string> diagnostics = new List<string>();
@@ -165,14 +174,31 @@ namespace LandLedgers.Population
         public IReadOnlyList<PlannedShoppingTrip> ActiveTrips => activeTrips;
         public HouseholdShoppingLoop Loop => loop;
         public bool HasActiveTripForNeed(int needSequence) => HasActiveTripFor(needSequence);
+        public bool HasDepartedTripForPerson(int personId)
+        {
+            foreach (PlannedShoppingTrip trip in activeTrips)
+                if (trip != null && trip.ShopperPersonId == personId && trip.IsActive
+                    && trip.State != PlannedShoppingTrip.TripState.Planned
+                    && trip.State != PlannedShoppingTrip.TripState.RecoveryPlanned)
+                    return true;
+            return false;
+        }
 
         public ShoppingTripDriver(HouseholdShoppingLoop loop,
             Func<int, string, bool> startPhysicalRoute = null,
-            Func<int, string, bool> hasPhysicallyArrived = null)
+            Func<int, string, bool> hasPhysicallyArrived = null,
+            Func<int, string, bool?> hasActivePhysicalRoute = null,
+            Func<int, string, float?> remainingPhysicalRouteSeconds = null,
+            Action<int, string> cancelPhysicalRoute = null,
+            float routeObservationIntervalSeconds = 900f)
         {
             this.loop = loop ?? throw new ArgumentNullException(nameof(loop));
             this.startPhysicalRoute = startPhysicalRoute;
             this.hasPhysicallyArrived = hasPhysicallyArrived;
+            this.hasActivePhysicalRoute = hasActivePhysicalRoute;
+            this.remainingPhysicalRouteSeconds = remainingPhysicalRouteSeconds;
+            this.cancelPhysicalRoute = cancelPhysicalRoute;
+            this.routeObservationIntervalSeconds = Math.Max(1f, routeObservationIntervalSeconds);
         }
 
         public bool OwnsDueEvent(DueEvent ev)
@@ -199,7 +225,8 @@ namespace LandLedgers.Population
             HouseholdNeedRegistry needs,
             int dayIndex,
             ShoppingLoopOptions options,
-            List<string> diag)
+            List<string> diag,
+            IDictionary<string, string> failureByNeed = null)
         {
             diag = diag ?? diagnostics;
             if (needs == null)
@@ -208,11 +235,37 @@ namespace LandLedgers.Population
                 return;
             }
 
+            foreach (PlannedShoppingTrip recovery in new List<PlannedShoppingTrip>(returnRecoveries))
+            {
+                if (recovery.HouseholdId != householdId) continue;
+                string seller = recovery.Candidate?.Supplier?.LocationId;
+                if (hasPhysicallyArrived == null || !hasPhysicallyArrived(recovery.ShopperPersonId, seller)) continue;
+                if (loop.TryPlanPaidReturnRecovery(recovery, dayIndex, options, diag))
+                {
+                    returnRecoveries.Remove(recovery);
+                    activeTrips.Add(recovery);
+                }
+            }
+
             List<HouseholdPurchasingNeed> open = needs.GetOpenNeeds(householdId);
             foreach (HouseholdPurchasingNeed need in open)
             {
                 if (need == null || HasActiveTripFor(need.NeedSequence))
                 {
+                    continue;
+                }
+
+                CarriedGoodsBatch pendingCustody = null;
+                foreach (CarriedGoodsBatch batch in loop.ActiveCustodyBatches)
+                    if (batch != null && batch.HouseholdId == householdId && batch.Units > 0
+                        && batch.Custody != GoodsCustodyState.ReceivedAtHousehold
+                        && string.Equals(batch.ItemId, need.ItemId, StringComparison.OrdinalIgnoreCase))
+                        { pendingCustody = batch; break; }
+                if (pendingCustody != null)
+                {
+                    string reason = $"Paid batch {pendingCustody.BatchId} for need {need.NeedSequence} remains in {pendingCustody.Custody} custody with P{pendingCustody.HolderPersonId}; physical recovery and household receipt are required.";
+                    if (failureByNeed != null) failureByNeed[householdId + ":" + need.ItemId] = reason;
+                    diag.Add($"ShoppingTripDriver: H{householdId} {reason}");
                     continue;
                 }
 
@@ -224,6 +277,8 @@ namespace LandLedgers.Population
                 }
                 else
                 {
+                    if (failureByNeed != null)
+                        failureByNeed[householdId + ":" + need.ItemId] = trip.FailureReason;
                     diag.Add($"ShoppingTripDriver: trip planning failed for need {need.NeedSequence}: {trip.FailureReason}");
                 }
             }
@@ -251,13 +306,42 @@ namespace LandLedgers.Population
             var snapshot = new List<PlannedShoppingTrip>(activeTrips);
             foreach (PlannedShoppingTrip trip in snapshot)
             {
-                if (trip == null || trip.State != PlannedShoppingTrip.TripState.Planned)
+                if (trip == null || (trip.State != PlannedShoppingTrip.TripState.Planned
+                    && trip.State != PlannedShoppingTrip.TripState.RecoveryPlanned))
                 {
+                    continue;
+                }
+
+                if (trip.DayIndex < dayIndex)
+                {
+                    if (trip.State == PlannedShoppingTrip.TripState.RecoveryPlanned)
+                    {
+                        loop.AbortTrip(trip, "Missed paid-goods recovery departure.", dayIndex, diag);
+                        QueuePaidReturnRecovery(trip);
+                    }
+                    else loop.ExpireUndepartedTrip(trip, dayIndex, diag);
+                    activeTrips.Remove(trip);
                     continue;
                 }
 
                 if (trip.DayIndex != dayIndex || minuteOfDay < trip.DepartureMinuteOfDay)
                 {
+                    continue;
+                }
+
+                if (trip.State == PlannedShoppingTrip.TripState.RecoveryPlanned)
+                {
+                    string recoveryError = loop.BeginReturnLeg(trip, dayIndex, "paid-goods recovery", diag);
+                    if (recoveryError == null && startPhysicalRoute != null
+                        && !startPhysicalRoute(trip.ShopperPersonId, trip.HomeLocationId))
+                        recoveryError = $"No physical route reaches home '{trip.HomeLocationId}'.";
+                    if (recoveryError != null)
+                    {
+                        loop.AbortTrip(trip, recoveryError, dayIndex, diag);
+                        activeTrips.Remove(trip);
+                        QueuePaidReturnRecovery(trip);
+                    }
+                    else ScheduleLegDue(trip, LegKind.Return, trip.Legs.Return, currentGameSeconds, dueEvents, diag);
                     continue;
                 }
 
@@ -352,7 +436,7 @@ namespace LandLedgers.Population
                 && hasPhysicallyArrived != null
                 && !hasPhysicallyArrived(trip.ShopperPersonId, expectedLocation))
             {
-                ScheduleArrivalRetry(trip, leg.Kind, currentGameSeconds, dueEvents, diag);
+                ScheduleArrivalRetry(trip, leg.Kind, dayIndex, currentGameSeconds, dueEvents, diag);
                 return;
             }
             legsByTaskIdString.Remove(ev.PayloadRef);
@@ -393,6 +477,7 @@ namespace LandLedgers.Population
                         {
                             loop.AbortTrip(trip, error, dayIndex, diag);
                             activeTrips.Remove(trip);
+                            QueuePaidReturnRecovery(trip);
                             break;
                         }
 
@@ -411,6 +496,11 @@ namespace LandLedgers.Population
                         {
                             loop.AbortTrip(trip, error, dayIndex, diag);
                         }
+                        else if (trip.Batch != null && trip.Batch.Custody == GoodsCustodyState.ReceivedAtHousehold)
+                        {
+                            trip.FailureReason = string.Empty;
+                            trip.Result.FailureReason = string.Empty;
+                        }
 
                         activeTrips.Remove(trip);
                     }
@@ -428,7 +518,7 @@ namespace LandLedgers.Population
             if (hasPhysicallyArrived != null
                 && !hasPhysicallyArrived(trip.ShopperPersonId, storeLocation))
             {
-                ScheduleArrivalRetry(trip, LegKind.Outbound, currentGameSeconds, dueEvents, diag);
+                ScheduleArrivalRetry(trip, LegKind.Outbound, dayIndex, currentGameSeconds, dueEvents, diag);
                 return;
             }
             string error = loop.ArriveAtStoreAndSettle(trip, dayIndex, MinuteOfDay(currentGameSeconds), diag);
@@ -436,9 +526,14 @@ namespace LandLedgers.Population
             {
                 // Closed store or failed settlement: walk home empty-handed
                 // through the REAL return leg — the need stays open.
-                diag.Add($"ShoppingTripDriver: arrival failed ({error}) — returning empty-handed.");
+                loop.CancelUnstartedInStoreLeg(trip, dayIndex, diag);
+                loop.RecordTripRefusal(trip, error, dayIndex);
+                diag.Add($"ShoppingTripDriver: trip {trip.TripId} need {trip.Need?.NeedSequence}: arrival failed ({error}) — returning empty-handed.");
                 trip.State = PlannedShoppingTrip.TripState.Returning;
                 string returnError = loop.BeginReturnLeg(trip, dayIndex, "return-empty", diag);
+                if (returnError == null && startPhysicalRoute != null
+                    && !startPhysicalRoute(trip.ShopperPersonId, trip.HomeLocationId ?? string.Empty))
+                    returnError = $"No physical route reaches home '{trip.HomeLocationId}'.";
                 if (returnError != null)
                 {
                     loop.AbortTrip(trip, returnError, dayIndex, diag);
@@ -490,7 +585,7 @@ namespace LandLedgers.Population
         {
             if (leg == null)
             {
-                ScheduleArrivalRetry(trip, kind, currentGameSeconds, dueEvents, diag);
+                ScheduleArrivalRetry(trip, kind, trip.DayIndex, currentGameSeconds, dueEvents, diag);
                 return;
             }
 
@@ -503,17 +598,50 @@ namespace LandLedgers.Population
             diag.Add($"ShoppingTripDriver: {kind} leg due in {leg.PlannedMinutes} min ({dueId}).");
         }
 
-        private void ScheduleArrivalRetry(PlannedShoppingTrip trip, LegKind kind,
+        private void ScheduleArrivalRetry(PlannedShoppingTrip trip, LegKind kind, int dayIndex,
             float currentGameSeconds, IDueEventScheduler dueEvents, List<string> diag)
         {
+            string destination = kind == LegKind.Outbound ? trip.Candidate?.Supplier?.LocationId : trip.HomeLocationId;
             WorkTask leg = kind == LegKind.Outbound ? trip.Legs?.Outbound : trip.Legs?.Return;
             string taskIdString = leg != null
                 ? leg.TaskId.ToString()
                 : $"arrival-check:{trip.TripId}:{kind}";
+            if (!legsByTaskIdString.TryGetValue(taskIdString, out InFlightLeg tracking) || tracking == null)
+                tracking = new InFlightLeg { TripId = trip.TripId, Kind = kind };
+            if (kind != LegKind.InStore && hasActivePhysicalRoute != null
+                && (hasPhysicallyArrived == null || !hasPhysicallyArrived(trip.ShopperPersonId, destination))
+                && hasActivePhysicalRoute(trip.ShopperPersonId, destination) == false)
+            {
+                loop.AbortTrip(trip, $"Physical {kind} route to '{destination}' is no longer active; arrival was not confirmed.", dayIndex, diag);
+                legsByTaskIdString.Remove(taskIdString);
+                activeTrips.Remove(trip);
+                return;
+            }
+
+            float? remaining = kind != LegKind.InStore && remainingPhysicalRouteSeconds != null
+                ? remainingPhysicalRouteSeconds(trip.ShopperPersonId, destination) : null;
+            if (remaining.HasValue && !float.IsNaN(remaining.Value) && !float.IsInfinity(remaining.Value) && remaining.Value >= 0f)
+            {
+                if (!tracking.HasProgressSample || remaining.Value < tracking.RemainingSeconds
+                    || currentGameSeconds < tracking.LastProgressGameSeconds)
+                {
+                    tracking.HasProgressSample = true;
+                    tracking.RemainingSeconds = remaining.Value;
+                    tracking.LastProgressGameSeconds = currentGameSeconds;
+                }
+                else if (currentGameSeconds - tracking.LastProgressGameSeconds
+                    > tracking.RemainingSeconds + routeObservationIntervalSeconds)
+                {
+                    cancelPhysicalRoute?.Invoke(trip.ShopperPersonId, destination);
+                    loop.AbortTrip(trip, $"Physical {kind} route to '{destination}' made no progress over its remaining route time and observation interval.", dayIndex, diag);
+                    legsByTaskIdString.Remove(taskIdString);
+                    activeTrips.Remove(trip);
+                    return;
+                }
+            }
             dueEvents.Schedule(DueEventKind.TaskCompletionDue, currentGameSeconds + 60f,
                 taskIdString, out _);
-            legsByTaskIdString[taskIdString] = new InFlightLeg { TripId = trip.TripId, Kind = kind };
-            diag.Add($"ShoppingTripDriver: {kind} physical arrival is not confirmed; trip remains open and route is checked again in one game minute.");
+            legsByTaskIdString[taskIdString] = tracking;
         }
 
         private void RebuildInFlightLeg(PlannedShoppingTrip trip)
@@ -592,6 +720,14 @@ namespace LandLedgers.Population
             }
 
             return false;
+        }
+
+        private void QueuePaidReturnRecovery(PlannedShoppingTrip trip)
+        {
+            if (trip?.Batch == null || trip.Batch.Custody != GoodsCustodyState.InHand
+                || hasPhysicallyArrived == null
+                || !hasPhysicallyArrived(trip.ShopperPersonId, trip.Candidate?.Supplier?.LocationId)) return;
+            if (!returnRecoveries.Contains(trip)) returnRecoveries.Add(trip);
         }
 
         private static int MinuteOfDay(float gameSeconds)

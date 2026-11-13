@@ -349,6 +349,7 @@ namespace LandLedgers.EditorTests.Economy
                 deliveredQuantityUnits = 1,
                 freightChargeCents = FreightChargeCents,
                 freightPayerBusinessInstanceId = BakeryId,
+                haulingMode = ShipmentHaulingMode.HiredFreight,
                 cargoClass = LogisticsCargoClass.PackagedGoods,
                 state = LogisticsShipmentStatus.Completed,
                 deliveryApplied = true,
@@ -426,47 +427,47 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void LegacyCollect_SetsFlagWithoutDebiting_PayerCashUnchanged()
+        public void LegacyCollect_WithoutPayerAuthorityRefusesAndLeavesChargeRetryable()
         {
-            // RULE: production must NEVER call this overload. It sets the
-            // collected flag and returns the charge while debiting nobody;
-            // the flag it sets also blocks the verified retry, so a legacy
-            // collection is unrecoverable (Note-17, P2).
-            FreightCompanyRuntime company = BuildLegacyFenceCompany("audit-legacy-1", out _);
+            // No settlement overload may mark a charge collected without a
+            // verified payer debit.
+            FreightCompanyRuntime company = BuildLegacyFenceCompany("audit-legacy-1", out LogisticsShipmentState shipment);
             BusinessRuntimeState payer = Runtime(BakeryId, 600);
             BusinessRuntimeState carrier = Runtime(CarrierId, 0);
 
             int returned = company.CollectFreightCharge("audit-legacy-1", diag);
-            Assert.AreEqual(FreightChargeCents, returned, "the legacy overload returns the charge");
-            Assert.AreEqual(600, payer.CurrentCashCents, "the legacy overload debits NOBODY — payer cash unchanged");
-            Assert.AreEqual(0, carrier.CurrentCashCents, "no carrier credit posts from the legacy call itself");
-            Assert.AreEqual(0, company.FindUncollectedFreightChargeShipmentIds().Count,
-                "the legacy call sets the collected flag");
+            Assert.AreEqual(0, returned, "the unverified overload refuses settlement");
+            Assert.AreEqual(600, payer.CurrentCashCents);
+            Assert.AreEqual(0, carrier.CurrentCashCents);
+            Assert.AreEqual(1, company.FindUncollectedFreightChargeShipmentIds().Count,
+                "the charge remains available for a verified retry");
 
             int verified = company.CollectFreightCharge("audit-legacy-1", payer, diag);
-            Assert.AreEqual(0, verified,
-                "the verified retry now returns 0 — the legacy flag blocks it, so the 125c is unrecoverable");
-            Assert.AreEqual(600, payer.CurrentCashCents, "the blocked retry debits nothing either");
+            Assert.AreEqual(FreightChargeCents, verified);
+            Assert.AreEqual(600 - FreightChargeCents, payer.CurrentCashCents);
+            Assert.IsTrue(shipment.FreightRevenueCollected);
         }
 
         [Test]
-        public void LegacyCollectAndPost_PostsRevenueWithoutDebiting()
+        public void LegacyCollectAndPost_WithoutPayerResolverPostsNothing()
         {
-            // RULE: production uses ONLY the resolver overload
-            // (FreightProductionDriver.cs:448). The non-resolver overload
-            // manufactures carrier revenue with no debit, which is why it
-            // has no production callers (Note-17, P2).
+            // The non-resolver overload cannot prove the debit and therefore
+            // must not post carrier revenue.
             FreightCompanyRuntime company = BuildLegacyFenceCompany("audit-legacy-2", out _);
             BusinessRuntimeState payer = Runtime(BakeryId, 600);
             BusinessRuntimeState carrier = Runtime(CarrierId, 0);
 
             int posted = company.CollectAndPostUncollectedRevenue(carrier, diag);
-            Assert.AreEqual(FreightChargeCents, posted, "the non-resolver overload posts the charge");
-            Assert.AreEqual(FreightChargeCents, carrier.CurrentCashCents,
-                "carrier cash rises by the charge with no debit behind it");
-            Assert.AreEqual(600, payer.CurrentCashCents, "payer cash is unchanged — nobody was debited");
-            Assert.AreEqual(0, company.FindUncollectedFreightChargeShipmentIds().Count,
-                "the charge is marked collected, so the verified path can never recover it");
+            Assert.AreEqual(0, posted);
+            Assert.AreEqual(0, carrier.CurrentCashCents);
+            Assert.AreEqual(600, payer.CurrentCashCents);
+            Assert.AreEqual(1, company.FindUncollectedFreightChargeShipmentIds().Count);
+
+            int verified = company.CollectAndPostUncollectedRevenue(carrier,
+                id => id == BakeryId ? payer : null, diag);
+            Assert.AreEqual(FreightChargeCents, verified);
+            Assert.AreEqual(FreightChargeCents, carrier.CurrentCashCents);
+            Assert.AreEqual(600 - FreightChargeCents, payer.CurrentCashCents);
         }
 
         [Test]

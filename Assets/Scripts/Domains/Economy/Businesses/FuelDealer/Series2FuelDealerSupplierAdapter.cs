@@ -6,7 +6,8 @@
 // the selling surface over intake lots that already exist with
 // provenance, so a household can buy fuel from a named dealer through
 // the embodied shopping loop instead of the dealer being invisible
-// to shoppers.
+// to shoppers. Production binds this adapter to an existing formed
+// BusinessInstanceState; the adapter never creates that business.
 //
 // Item identity: households buy household item "fuel_wood"
 // (HouseholdItemCatalog.FuelWoodId). Intake lots hold fuel-wood units.
@@ -38,18 +39,15 @@
 // credit sale this dealer does not offer refuses with stock intact.
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Population;
 
 namespace LandLedgers.Economy.Businesses.FuelDealer
 {
-    /// <summary>
-    /// Series 2 Pass 7: fuel dealer supplier adapter over intake lots.
-    /// RegisterIn is the one registration call Codex makes from the
-    /// bootstrapper (this pass does NOT edit the bootstrapper).
-    /// </summary>
-    public sealed class Series2FuelDealerSupplierAdapter : IItemResolvingSupplier, IOffersTradeCredit
+    /// <summary>Fuel Dealer supplier adapter over provenance-tracked intake lots.</summary>
+    public sealed class Series2FuelDealerSupplierAdapter : IItemResolvingSupplier, IItemCatalogSupplier, IOffersTradeCredit
     {
         private readonly FuelYardByproductIntake intake;
         private readonly IBusinessCashPort cash;
@@ -94,11 +92,78 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
         public string SupplierName { get; }
         public string LocationId { get; }
         public string LastReceiptId => lastReceiptId;
+        public int IntakeFuelWoodUnits => intake.TotalFuelWoodUnitsFor(SupplierBusinessId);
 
         public static void RegisterIn(SupplierDirectory directory, Series2FuelDealerSupplierAdapter adapter)
         {
             if (directory == null || adapter == null) return;
             directory.Register(adapter);
+        }
+
+        /// <summary>
+        /// Builds the retail surface from an already-formed Fuel Dealer. The
+        /// business identity, owner, premises and financial runtime are all
+        /// validated from that live instance; this method never creates any of
+        /// them and never seeds its intake.
+        /// </summary>
+        public static bool TryCreateForBusiness(
+            BusinessInstanceState business,
+            FuelYardByproductIntake intake,
+            IBusinessCashPort cash,
+            int configuredPricePerBundleCents,
+            out Series2FuelDealerSupplierAdapter adapter,
+            out string refusal)
+        {
+            adapter = null;
+            refusal = string.Empty;
+            if (business == null)
+            {
+                refusal = "Fuel Dealer business instance is missing.";
+                return false;
+            }
+            if (business.BusinessType != BusinessType.FuelDealer)
+            {
+                refusal = $"Business '{business.InstanceId}' is {business.BusinessType}, not Fuel Dealer.";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(business.InstanceId)
+                || business.Owner == null
+                || business.AssignedBuildingId < 0
+                || business.RuntimeState == null
+                || !string.Equals(business.RuntimeState.BusinessId, business.InstanceId, StringComparison.Ordinal))
+            {
+                refusal = $"Fuel Dealer '{business.InstanceId}' lacks a stable identity, owner, assigned premises, or matching business runtime.";
+                return false;
+            }
+            if (intake == null || cash == null)
+            {
+                refusal = "Fuel Dealer requires its existing yard inventory and business cash authorities.";
+                return false;
+            }
+            if (cash is IBusinessIdentityCashPort identityCash
+                && !string.Equals(identityCash.BusinessId, business.InstanceId, StringComparison.Ordinal))
+            {
+                refusal = $"Fuel Dealer cash authority belongs to '{identityCash.BusinessId}', not '{business.InstanceId}'.";
+                return false;
+            }
+            if (configuredPricePerBundleCents <= 0)
+            {
+                refusal = "Fuel Dealer has no positive configured sale price; no retail offer registered.";
+                return false;
+            }
+
+            adapter = new Series2FuelDealerSupplierAdapter(
+                intake,
+                cash,
+                business.InstanceId,
+                business.RuntimeDisplayName,
+                $"building:{business.AssignedBuildingId}",
+                configuredPricePerBundleCents);
+            // The intake quantity-to-household-bundle factor remains an
+            // explicit configuration decision. Do not apply this adapter's
+            // legacy convenience default to live gameplay.
+            adapter.FuelUnitsPerHouseholdUnit = 0;
+            return true;
         }
 
         // ---- IGoodsSupplier (category surface: fuel_wood) ----
@@ -129,6 +194,13 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
 
         public bool OffersItem(string itemId)
         {
+            return RecognizesItem(itemId)
+                && ItemStockUnits(itemId) > 0
+                && ItemPricePerUnitCents(itemId) > 0;
+        }
+
+        public bool RecognizesItem(string itemId)
+        {
             return string.Equals(itemId, HouseholdItemCatalog.FuelWoodId, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -139,14 +211,15 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
 
         public int ItemStockUnits(string itemId)
         {
-            if (!OffersItem(itemId)) return 0;
-            int perUnit = Math.Max(1, FuelUnitsPerHouseholdUnit);
+            if (!RecognizesItem(itemId)) return 0;
+            int perUnit = FuelUnitsPerHouseholdUnit;
+            if (perUnit <= 0) return 0;
             return intake.TotalFuelWoodUnitsFor(SupplierBusinessId) / perUnit;
         }
 
         public int ItemPricePerUnitCents(string itemId)
         {
-            return OffersItem(itemId) ? Math.Max(0, PricePerHouseholdUnitCents) : 0;
+            return RecognizesItem(itemId) ? Math.Max(0, PricePerHouseholdUnitCents) : 0;
         }
 
         public string CheckTradingCapability(int absoluteDayIndex, int minuteOfDay)
@@ -158,7 +231,12 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
         public int SellItem(
             string itemId, int requestedUnits, int dayIndex, ShoppingSettlement settlement, List<string> diagnostics)
         {
-            if (!OffersItem(itemId) || requestedUnits <= 0) return 0;
+            if (!RecognizesItem(itemId) || requestedUnits <= 0) return 0;
+            if (FuelUnitsPerHouseholdUnit <= 0)
+            {
+                diagnostics?.Add($"'{SupplierName}' cannot sell household fuel bundles: intake-to-bundle quantity is not configured; stock and cash untouched.");
+                return 0;
+            }
             string tradingProblem = CheckTradingCapability(dayIndex, 0);
             if (tradingProblem != null)
             {
@@ -171,6 +249,12 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
                 diagnostics?.Add($"'{SupplierName}' has no legitimate fuel price — free goods are not commerce.");
                 return 0;
             }
+
+            if (ItemStockUnits(itemId) < requestedUnits)
+            {
+                diagnostics?.Add($"'{SupplierName}' cannot fill {requestedUnits}u fuel_wood: real stock exhausted or short; no sale settled.");
+                return 0;
+            }
             if (settlement != null && settlement.Mode == ShoppingSettlementMode.TradeCreditObligation)
             {
                 if (!OffersTradeCreditValue || TradeCreditLimitCentsValue <= 0 || requestedUnits * unitPrice > TradeCreditLimitCentsValue)
@@ -180,7 +264,7 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
                 }
             }
 
-            int intakeUnits = requestedUnits * Math.Max(1, FuelUnitsPerHouseholdUnit);
+            int intakeUnits = requestedUnits * FuelUnitsPerHouseholdUnit;
             List<FuelYardByproductIntake.FuelYardDispenseLine> lines =
                 intake.TryDispenseUnits(SupplierBusinessId, intakeUnits, dayIndex, diagnostics);
             if (lines == null || lines.Count == 0)
@@ -196,7 +280,7 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
                 dispensed += Math.Max(0, line.UnitsTaken);
                 if (!string.IsNullOrWhiteSpace(line.ProvenanceChain)) provenances.Add(line.ProvenanceChain);
             }
-            int sold = dispensed / Math.Max(1, FuelUnitsPerHouseholdUnit);
+            int sold = dispensed / FuelUnitsPerHouseholdUnit;
             if (sold <= 0) return 0;
             int revenue = sold * unitPrice;
 

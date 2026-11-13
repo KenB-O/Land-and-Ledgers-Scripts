@@ -7912,6 +7912,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: Crate04 (1)
       objectReference: {fileID: 0}
+    - target: {fileID: 3750476296893148027, guid: f3ef3261f5ac7e04eac113221d1ec727, type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 9183845286949617008, guid: f3ef3261f5ac7e04eac113221d1ec727, type: 3}
       propertyPath: m_LocalScale.x
       value: 0.8064518
@@ -8045,6 +8049,14 @@ PrefabInstance:
     - target: {fileID: 8717852998500511489, guid: d9226263bda77ec47b4804ec4c15f51c, type: 3}
       propertyPath: m_Name
       value: Crate With Packages (1)
+      objectReference: {fileID: 0}
+    - target: {fileID: 8717852998500511489, guid: d9226263bda77ec47b4804ec4c15f51c, type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8721747746922061542, guid: d9226263bda77ec47b4804ec4c15f51c, type: 3}
+      propertyPath: m_IsActive
+      value: 0
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

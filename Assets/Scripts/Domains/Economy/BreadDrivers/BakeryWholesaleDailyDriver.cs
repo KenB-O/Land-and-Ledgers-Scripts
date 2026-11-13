@@ -649,11 +649,25 @@ namespace LandLedgers.Economy.BreadDrivers
                 if (sourceLot?.InputProvenance != null) provenance.AddRange(sourceLot.InputProvenance);
 
                 int retailPriceCents = inputs.StorePort.CategoryPricePerUnitCents(StoreCategoryId);
+                // The accepted account quantity is a maximum for this
+                // delivery, not permission to create stock. A short real
+                // lot can fulfill a partial order; the actual quantity is
+                // charged and recorded below, and the account records the
+                // shortage instead of retrying the same paid transfer.
+                int transferUnits = sourceLot != null
+                    ? Math.Min(Math.Max(0, account.UnitsPerDelivery), sourceLot.UnitCount)
+                    : 0;
+                if (transferUnits <= 0)
+                {
+                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} stays due — no sellable finished bread lot is available; no reservation, receipt, or payment was created.");
+                    continue;
+                }
+
                 var options = new Review2WholesaleTransferOptions
                 {
                     Bakery = bakery,
                     BakeryProductId = account.ProductId,
-                    Units = account.UnitsPerDelivery,
+                    Units = transferUnits,
                     WholesalePriceCents = account.PricePerUnitCents,
                     RetailPriceCents = retailPriceCents,
                     TransferDayIndex = dayIndex,
@@ -686,7 +700,7 @@ namespace LandLedgers.Economy.BreadDrivers
                     continue;
                 }
                 result.TransfersCompleted++;
-                wholesaleRevenueTodayCents += account.UnitsPerDelivery * account.PricePerUnitCents;
+                wholesaleRevenueTodayCents += transfer.AmountCents;
 
                 Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
                     inputs.StoreCatalog, transfer.StoreProductId, transfer.Units, StoreCategoryId, inputs.StorePort, diag,

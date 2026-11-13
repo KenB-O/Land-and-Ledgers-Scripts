@@ -7,6 +7,8 @@ using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.Sawmill;
+using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
@@ -14,6 +16,8 @@ using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.Tasks;
+using LandLedgers.Time;
 using LandLedgers.World.Journeys;
 using UnityEngine;
 
@@ -103,9 +107,88 @@ namespace LandLedgers.Orchestration.Player
     {
         public bool Success;
         public int Units;
+        public int IntakeUnits;
         public int TotalCents;
+        public string BakeryLotId = string.Empty;
         public List<string> ConsumedIntakeLotIds = new List<string>();
         public string Diagnostic = string.Empty;
+    }
+
+    /// <summary>
+    /// Paid, live-intake supplier used by Bakery production. This is a
+    /// source adapter over the existing inter-business sale authority;
+    /// it does not hold stock or cash of its own.
+    /// </summary>
+    public sealed class Series2PaidDealerBakeryFuelSource : ISeries2BakeryFuelSource
+    {
+        private readonly FuelYardByproductIntake intake;
+        private readonly BusinessRuntimeState dealerRuntime;
+        private readonly BakeryShopRuntime bakery;
+        private readonly BusinessRuntimeState bakeryRuntime;
+        private readonly EntityIdRegistry ids;
+        private readonly string dealerBusinessId;
+        private readonly int intakeUnitsPerBakeryUnit;
+        private readonly int priceCentsPerBakeryUnit;
+
+        public Series2PaidDealerBakeryFuelSource(
+            FuelYardByproductIntake intake, string dealerBusinessId,
+            BusinessRuntimeState dealerRuntime, BakeryShopRuntime bakery,
+            BusinessRuntimeState bakeryRuntime, EntityIdRegistry ids,
+            int intakeUnitsPerBakeryUnit, int priceCentsPerBakeryUnit)
+        {
+            this.intake = intake ?? throw new ArgumentNullException(nameof(intake));
+            this.dealerBusinessId = string.IsNullOrWhiteSpace(dealerBusinessId)
+                ? throw new ArgumentException("A registered dealer id is required.", nameof(dealerBusinessId))
+                : dealerBusinessId;
+            this.dealerRuntime = dealerRuntime ?? throw new ArgumentNullException(nameof(dealerRuntime));
+            this.bakery = bakery ?? throw new ArgumentNullException(nameof(bakery));
+            this.bakeryRuntime = bakeryRuntime ?? throw new ArgumentNullException(nameof(bakeryRuntime));
+            this.ids = ids ?? throw new ArgumentNullException(nameof(ids));
+            if (intakeUnitsPerBakeryUnit <= 0)
+                throw new ArgumentOutOfRangeException(nameof(intakeUnitsPerBakeryUnit), "An authored positive conversion is required.");
+            if (priceCentsPerBakeryUnit <= 0)
+                throw new ArgumentOutOfRangeException(nameof(priceCentsPerBakeryUnit), "A configured positive price is required.");
+            this.intakeUnitsPerBakeryUnit = intakeUnitsPerBakeryUnit;
+            this.priceCentsPerBakeryUnit = priceCentsPerBakeryUnit;
+        }
+
+        public string DealerBusinessId => dealerBusinessId;
+        public int IntakeUnitsPerBakeryUnit => intakeUnitsPerBakeryUnit;
+        public int PriceCentsPerBakeryUnit => priceCentsPerBakeryUnit;
+
+        public int FuelUnitsOnHand()
+        {
+            return intake.TotalFuelWoodUnitsFor(dealerBusinessId) / intakeUnitsPerBakeryUnit;
+        }
+
+        public string SupplyTo(BakeryShopRuntime target, int unitsNeeded, int dayIndex, List<string> diag)
+        {
+            diag ??= new List<string>();
+            if (target == null || target != bakery || target.FuelStock == null)
+                return "Series2PaidDealerBakeryFuelSource: target is not the registered Bakery; no sale attempted.";
+            if (unitsNeeded <= 0)
+                return "Series2PaidDealerBakeryFuelSource: positive Bakery fuel need required; no sale attempted.";
+
+            int available = FuelUnitsOnHand();
+            int onHand = target.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId);
+            int stillNeeded = Math.Max(0, unitsNeeded - onHand);
+            if (stillNeeded == 0)
+            {
+                diag.Add($"Series2PaidDealerBakeryFuelSource: Bakery store already holds {onHand}u; no order or payment needed.");
+                return null;
+            }
+            if (available < stillNeeded)
+                return $"Series2PaidDealerBakeryFuelSource: dealer '{dealerBusinessId}' can cover {available}u of {stillNeeded}u needed; shortfall left blocked, no payment or stock moved.";
+
+            ThreeBusinessFuelSaleResult sale = ThreeBusinessSlice.SellFuelToBakery(
+                intake, dealerBusinessId, dealerRuntime, target, bakeryRuntime, ids,
+                stillNeeded, priceCentsPerBakeryUnit, intakeUnitsPerBakeryUnit, dayIndex, diag);
+            if (sale == null || !sale.Success)
+                return sale?.Diagnostic ?? "Series2PaidDealerBakeryFuelSource: purchase failed; no production supply confirmed.";
+
+            diag.Add($"Bakery fuel procurement: dealer '{dealerBusinessId}' sold {sale.IntakeUnits} intake unit(s) for {sale.TotalCents}c; Bakery received {sale.Units}u in lot {sale.BakeryLotId}.");
+            return null;
+        }
     }
 
     public sealed class ThreeBusinessBreadSaleResult
@@ -211,22 +294,49 @@ namespace LandLedgers.Orchestration.Player
             BusinessRuntimeState bakeryRuntime, EntityIdRegistry ids,
             int units, int unitPriceCents, int dayIndex, List<string> diag)
         {
+            return SellFuelToBakery(intake, dealerBusinessId, dealerRuntime, bakery,
+                bakeryRuntime, ids, units, unitPriceCents, 1, dayIndex, diag);
+        }
+
+        /// <summary>
+        /// Paid fuel transfer with an explicit caller-authored intake-to-Bakery
+        /// conversion. Price is per resulting Bakery fuel unit. Stock and funds
+        /// are checked before movement, and all legs roll back on a rejected
+        /// Bakery lot receipt.
+        /// </summary>
+        public static ThreeBusinessFuelSaleResult SellFuelToBakery(
+            FuelYardByproductIntake intake, string dealerBusinessId,
+            BusinessRuntimeState dealerRuntime, BakeryShopRuntime bakery,
+            BusinessRuntimeState bakeryRuntime, EntityIdRegistry ids,
+            int units, int priceCentsPerBakeryUnit, int intakeUnitsPerBakeryUnit,
+            int dayIndex, List<string> diag)
+        {
             var result = new ThreeBusinessFuelSaleResult();
             diag = diag ?? new List<string>();
             if (intake == null || dealerRuntime == null || bakery == null || bakeryRuntime == null || ids == null
-                || string.IsNullOrWhiteSpace(dealerBusinessId) || units <= 0 || unitPriceCents < 0)
+                || string.IsNullOrWhiteSpace(dealerBusinessId) || units <= 0
+                || priceCentsPerBakeryUnit < 0 || intakeUnitsPerBakeryUnit <= 0)
             {
-                result.Diagnostic = "SellFuelToBakery: intake, dealer, bakery, runtimes, positive units, and a non-negative price are required.";
+                result.Diagnostic = "SellFuelToBakery: intake, dealer, bakery, runtimes, positive units, non-negative price, and positive authored conversion are required.";
                 return result;
             }
 
-            if (intake.TotalFuelWoodUnitsFor(dealerBusinessId) < units)
+            long intakeUnitsLong = (long)units * intakeUnitsPerBakeryUnit;
+            long totalPriceLong = (long)units * priceCentsPerBakeryUnit;
+            if (intakeUnitsLong > int.MaxValue || totalPriceLong > int.MaxValue)
             {
-                result.Diagnostic = $"SellFuelToBakery: intake holds {intake.TotalFuelWoodUnitsFor(dealerBusinessId)}u for '{dealerBusinessId}', requested {units}u; nothing moved.";
+                result.Diagnostic = "SellFuelToBakery: requested quantity or price exceeds supported transaction limits; nothing moved.";
+                return result;
+            }
+            int intakeUnits = (int)intakeUnitsLong;
+            int totalPrice = (int)totalPriceLong;
+
+            if (intake.TotalFuelWoodUnitsFor(dealerBusinessId) < intakeUnits)
+            {
+                result.Diagnostic = $"SellFuelToBakery: intake holds {intake.TotalFuelWoodUnitsFor(dealerBusinessId)}u for '{dealerBusinessId}', requested {intakeUnits}u; nothing moved.";
                 return result;
             }
 
-            int totalPrice = units * unitPriceCents;
             if (!bakeryRuntime.TrySpendCents(totalPrice))
             {
                 result.Diagnostic = $"SellFuelToBakery: bakery cash {bakeryRuntime.CurrentCashCents}c cannot pay {totalPrice}c; nothing moved.";
@@ -234,7 +344,7 @@ namespace LandLedgers.Orchestration.Player
             }
 
             var taken = new List<KeyValuePair<SlabOffcutFuelLot, int>>();
-            int remaining = units;
+            int remaining = intakeUnits;
             foreach (var lot in intake.LotsFor(dealerBusinessId))
             {
                 if (remaining <= 0) break;
@@ -256,9 +366,10 @@ namespace LandLedgers.Orchestration.Player
 
             dealerRuntime.AddCashCents(totalPrice);
             string firstLotId = taken.Count > 0 ? taken[0].Key.LotId.ToString() : string.Empty;
+            EntityId bakeryLotId = ids.Allocate(EntityKind.Lot);
             string problem = bakery.FuelStock.ReceiveLot(new BakeryFuelLot
             {
-                LotId = ids.Allocate(EntityKind.Lot),
+                LotId = bakeryLotId,
                 FuelName = BakeryBreadCatalog.FuelItemId,
                 Units = units,
                 AcquiredDayIndex = dayIndex,
@@ -280,8 +391,10 @@ namespace LandLedgers.Orchestration.Player
 
             result.Success = true;
             result.Units = units;
+            result.IntakeUnits = intakeUnits;
             result.TotalCents = totalPrice;
-            result.Diagnostic = $"SellFuelToBakery: {units}u fuel from '{dealerBusinessId}' to the bakery for {totalPrice}c.";
+            result.BakeryLotId = bakeryLotId.ToString();
+            result.Diagnostic = $"SellFuelToBakery: {units}u Bakery fuel from '{dealerBusinessId}' ({intakeUnits} intake units) for {totalPrice}c.";
             return result;
         }
 
@@ -616,8 +729,22 @@ namespace LandLedgers.Orchestration.Player
             string grantProblem = registry.GrantTimberRights("stand-slice-1", "boniecki-fuel-dealer-1", startDay, "town-land-office");
             if (grantProblem != null) { report.Diagnostics.Add("Run failed: timber rights grant refused: " + grantProblem); return null; }
             var logging = new LoggingOperationRuntime("boniecki-fuel-dealer-1", ids);
+            var fellingTools = new EquipmentTaskGate
+            {
+                AssetsSupplier = () => new List<EquipmentAsset>
+                {
+                    new EquipmentAsset
+                    {
+                        AssetId = "slice-felling-axe",
+                        Kind = "felling-axe",
+                        OwnerKind = "business",
+                        OwnerId = "boniecki-fuel-dealer-1",
+                        Condition01 = 1f,
+                    },
+                },
+            };
             LogLot felled = logging.RunFelling(registry, "stand-slice-1", "boniecki-fuel-dealer-1", 4,
-                EntityId.For(EntityKind.Person, 5), startDay, diag);
+                EntityId.For(EntityKind.Person, 5), startDay, diag, fellingTools);
             if (felled == null) { report.Diagnostics.Add("Run failed: felling refused."); report.Diagnostics.AddRange(diag); return null; }
             var journey = new JourneyModel();
             journey.RegisterLocation(new JourneyLocation("landing-1", JourneyLocationKind.Waypoint, "North Landing", 2f, 0f));
@@ -629,7 +756,54 @@ namespace LandLedgers.Orchestration.Player
             var mill = new SawmillShopRuntime("slice-mill-1", ids);
             logging.DeliverArrivedHauls(mill.LogStock, diag);
             if (mill.LogStock.TotalLogUnits != 4) { report.Diagnostics.Add($"Run failed: mill log stock is {mill.LogStock.TotalLogUnits}, expected 4."); report.Diagnostics.AddRange(diag); return null; }
-            SawmillSawingResult sawing = mill.RunSawing(4, EntityId.For(EntityKind.Person, 5), startDay, diag);
+            EntityId sawyer = EntityId.For(EntityKind.Person, 5);
+            var sawTasks = new TaskAuthority();
+            Sawmill.RegisterTaskDefinitions(sawTasks);
+            var sawBudgets = new WorkTimeBudgetStore();
+            sawBudgets.EnsureDay(startDay);
+            var sawTask = sawTasks.CreateTaskWithPlannedMinutes(Sawmill.SawLogsTaskId,
+                EntityId.For(EntityKind.Business, 6), startDay, 4 * SawmillConversionData.DefaultForSpecies("white pine").SawMinutesPerLog);
+            string sawAssignFailure = null;
+            string sawStartFailure = null;
+            string sawWorkFailure = null;
+            if (!sawTasks.AssignTask(sawTask.TaskId, sawyer, sawBudgets, startDay, out sawAssignFailure)
+                || !sawTasks.StartTask(sawTask.TaskId, startDay, out sawStartFailure)
+                || !sawTasks.RecordWorkProgress(sawTask.TaskId, sawTask.PlannedMinutes, sawBudgets, startDay,
+                    out bool sawWorkComplete, out sawWorkFailure)
+                || !sawWorkComplete)
+            {
+                report.Diagnostics.Add("Run failed: saw-line labor did not complete: "
+                    + (sawAssignFailure ?? sawStartFailure ?? sawWorkFailure ?? "planned simulated work remains."));
+                return null;
+            }
+            var sawStations = new BusinessWorkstations("slice-mill-1");
+            var sawStation = sawStations.GetOrCreate("sawmill-saw-line");
+            sawStation.SpaceId = "slice-mill-saw-floor";
+            sawStation.InstallComponent("slice-saw-line");
+            sawStation.InstallComponent("slice-log-carriage");
+            sawStation.InstallComponent("slice-drive-system");
+            sawStation.MotivePowerSources.Add(new MotivePowerSource(MotivePowerKind.Steam, "recorded steam engine"));
+            var sawGate = new EquipmentTaskGate
+            {
+                WorkstationsFor = (kind, id) => sawStations,
+                FindWorkstationDefinition = id => id == "sawmill-saw-line" ? WorkstationCatalog.SawmillSawLine : null,
+                FindComponent = id => id == "slice-saw-line"
+                    ? new WorkstationComponentView { AssetId = id, Kind = "saw-line", Condition01 = 1f, IsUsable = true }
+                    : id == "slice-log-carriage"
+                        ? new WorkstationComponentView { AssetId = id, Kind = "log-carriage", Condition01 = 1f, IsUsable = true }
+                        : id == "slice-drive-system"
+                            ? new WorkstationComponentView { AssetId = id, Kind = "drive-system", Condition01 = 1f, IsUsable = true }
+                            : (WorkstationComponentView?)null,
+                SupportSupplier = () =>
+                {
+                    var support = new SupportContext();
+                    support.ConsumableUnits[SupportContext.Key("consumable", "mill-lubrication")] = 1;
+                    support.AvailableRepairCapabilities.Add("saw-filing");
+                    return support;
+                },
+            };
+            SawmillSawingResult sawing = mill.RunSawing(4, sawyer, startDay, diag,
+                sawTasks, sawTask.TaskId, sawBudgets, sawGate);
             if (sawing == null || sawing.ByproductLot == null) { report.Diagnostics.Add("Run failed: sawing refused."); report.Diagnostics.AddRange(diag); return null; }
             report.FuelWoodUnitsProduced = sawing.ByproductLot.FuelWoodUnits;
             var intake = new FuelYardByproductIntake();

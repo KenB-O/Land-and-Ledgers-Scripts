@@ -7412,6 +7412,14 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        /// <summary>
+        /// Plan 04 (Cause F): delay before a refused passive-process resume is
+        /// re-attempted. One game-hour: far above the per-tick drain cadence
+        /// (no warning spam), far below a day (a freed worker is re-used
+        /// promptly). A timing tuning constant, not a rate or quantity.
+        /// </summary>
+        private const float PassiveResumeRetryDelayGameSeconds = 60f * DurationConventions.SecondsPerMinute;
+
         private void ResumeTaskAfterPassiveProcess(DueEvent dueEvent, List<string> diag)
         {
             WorkTask task = hub.Tasks.FindTaskByIdString(dueEvent.PayloadRef);
@@ -7429,7 +7437,32 @@ namespace LandLedgers.Orchestration.Systems
             string reason;
             if (!hub.Tasks.ResumeTask(task.TaskId, "passive process complete", out reason))
             {
-                diag.Add("PassiveProcessComplete could not resume task " + task.TaskId + ": " + reason);
+                // The due event was already consumed (popped) before this
+                // handler ran, so a bare refusal would strand the task in
+                // WaitingOnPassiveProcess with no further trigger. Re-arm
+                // the event under its stable id, on ANY refusal — both
+                // refusal causes are transient (occupancy clears when the
+                // blocking task completes; unaffordability clears when the
+                // day budget resets). Repeated refusals replace the same
+                // stable id, never duplicate; success or terminalization
+                // cancels by payload.
+                string rearmEventId = DueEventIdConventions.ForTask(
+                    task.TaskId.ToString(), DueEventKind.PassiveProcessComplete);
+                string rearmRefusal = hub.DueEvents.ScheduleWithEventId(
+                    rearmEventId, DueEventKind.PassiveProcessComplete,
+                    timeManager.AbsoluteGameSeconds + PassiveResumeRetryDelayGameSeconds,
+                    task.TaskId.ToString());
+                if (rearmRefusal == null)
+                {
+                    task.SetDueEventId(rearmEventId);
+                    diag.Add("PassiveProcessComplete deferred for task " + task.TaskId + ": " + reason +
+                        "; re-armed for +60 game-minutes");
+                }
+                else
+                {
+                    diag.Add("PassiveProcessComplete could not resume task " + task.TaskId + ": " + reason +
+                        " (re-arm refused: " + rearmRefusal + ")");
+                }
             }
         }
 

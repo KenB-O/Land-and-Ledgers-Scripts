@@ -477,6 +477,175 @@ namespace LandLedgers.EditorTests.Tasks
                 "resume re-books the remaining commitment");
         }
 
+        [TestCase(TaskStatus.InProgress, "in-progress")]
+        [TestCase(TaskStatus.Paused, "paused")]
+        [TestCase(TaskStatus.WaitingOnDependency, "waiting on dependency")]
+        public void ResumeTask_RefusedWhileWorkerBusy_LeavesTaskWaiting(TaskStatus blockingState, string blockingWord)
+        {
+            var authority = CreateAuthority(baseMinutes: 60);
+            var budgets = new WorkTimeBudgetStore();
+            authority.SetWorkTimeBudgetStore(budgets);
+            budgets.EnsureDay(1);
+            string reason;
+
+            WorkTask first = authority.CreateTask("test.sweep", Business(1), 1);
+            WorkTask second = authority.CreateTask("test.sweep", Business(2), 1);
+            Assert.IsTrue(authority.AssignTask(first.TaskId, Person(7), budgets, out reason), reason);
+            Assert.IsTrue(authority.AssignTask(second.TaskId, Person(7), budgets, out reason), reason);
+            Assert.IsTrue(authority.StartTask(first.TaskId, 1, out reason), reason);
+            Assert.IsTrue(
+                authority.MarkWaitingOnPassiveProcess(first.TaskId, "due-PassiveProcessComplete-first", "dough proofing", out reason),
+                reason);
+            Assert.AreEqual(60, budgets.GetOrCreate(Person(7)).MinutesCommitted,
+                "waiting releases the first task's 60 minutes; only the second task's 60 remain committed");
+
+            Assert.IsTrue(authority.StartTask(second.TaskId, 1, out reason), reason);
+            switch (blockingState)
+            {
+                case TaskStatus.Paused:
+                    Assert.IsTrue(authority.PauseTask(second.TaskId, budgets, "temporary interruption", out reason), reason);
+                    break;
+                case TaskStatus.WaitingOnDependency:
+                    Assert.IsTrue(authority.MarkWaitingOnDependency(second.TaskId, "required delivery", "waiting", out reason), reason);
+                    break;
+            }
+            Assert.AreEqual(60, budgets.GetOrCreate(Person(7)).MinutesCommitted,
+                "only the second task's minutes are committed");
+
+            Assert.IsFalse(authority.ResumeTask(first.TaskId, "proofed", out reason));
+            StringAssert.Contains(second.TaskId.ToString(), reason);
+            StringAssert.Contains(blockingWord, reason);
+            Assert.AreEqual(TaskStatus.WaitingOnPassiveProcess, first.Status, "the refused task stays waiting");
+            Assert.AreEqual("due-PassiveProcessComplete-first", first.DueEventId,
+                "a refused resume does not clear the due event id");
+            Assert.AreEqual(blockingState, second.Status, "the blocking task is untouched");
+            Assert.AreEqual(60, budgets.GetOrCreate(Person(7)).MinutesCommitted,
+                "the guard runs before the budget re-commit, so a refused resume commits nothing");
+        }
+
+        [Test]
+        public void ResumeTask_SucceedsWhenWorkerFree_RecommitsOnlyRemainingMinutes()
+        {
+            var authority = CreateAuthority(baseMinutes: 60);
+            var budgets = new WorkTimeBudgetStore();
+            authority.SetWorkTimeBudgetStore(budgets);
+            string reason;
+
+            WorkTask task = CreateAssignedStarted(authority, budgets);
+            WorkTimeBudget budget = budgets.GetOrCreate(Person(1));
+            int remainingBeforeWork = budget.MinutesRemaining;
+            Assert.AreEqual(60, budget.MinutesCommitted, "first assignment commits the full 60 minutes");
+
+            bool reached;
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, 30, budgets, 1, out reached, out reason), reason);
+            Assert.IsFalse(reached);
+            Assert.AreEqual(30, task.MinutesRemaining, "30 of 60 minutes worked, 30 remain");
+
+            Assert.IsTrue(
+                authority.MarkWaitingOnPassiveProcess(task.TaskId, "due-PassiveProcessComplete-x", "dough proofing", out reason),
+                reason);
+            Assert.AreEqual(30, budget.MinutesCommitted,
+                "waiting releases only the 30 unworked minutes; the 30 already worked stay spent");
+
+            Assert.IsTrue(authority.ResumeTask(task.TaskId, "proofed", out reason), reason);
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.AreEqual(60, budget.MinutesCommitted,
+                "resume re-books only the 30 remaining minutes (30 spent + 30 committed), not a second full 60");
+            Assert.AreEqual(remainingBeforeWork, budget.MinutesRemaining,
+                "resume is budget-neutral: the day budget still reflects exactly 30 spent + 30 committed");
+        }
+
+        [Test]
+        public void ResumeInterruptReassignCycle_IsBudgetNeutral()
+        {
+            var authority = CreateAuthority(baseMinutes: 60);
+            var budgets = new WorkTimeBudgetStore();
+            authority.SetWorkTimeBudgetStore(budgets);
+            string reason;
+
+            WorkTask task = CreateAssignedStarted(authority, budgets);
+            WorkTimeBudget budget = budgets.GetOrCreate(Person(1));
+            int remainingBeforeWork = budget.MinutesRemaining;
+            Assert.AreEqual(60, budget.MinutesCommitted, "first assignment commits the full 60 minutes");
+
+            bool reached;
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, 30, budgets, 1, out reached, out reason), reason);
+            Assert.AreEqual(30, task.MinutesRemaining, "30 of 60 minutes worked, 30 remain");
+            Assert.AreEqual(30, budget.MinutesWorked, "worked minutes are recorded on the budget");
+
+            Assert.IsTrue(
+                authority.MarkWaitingOnPassiveProcess(task.TaskId, "due-PassiveProcessComplete-x", "dough proofing", out reason),
+                reason);
+            Assert.AreEqual(30, budget.MinutesCommitted,
+                "waiting releases only the 30 unworked minutes");
+
+            Assert.IsTrue(authority.ResumeTask(task.TaskId, "proofed", out reason), reason);
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.AreEqual(60, budget.MinutesCommitted,
+                "resume re-books only the 30 remaining minutes");
+
+            Assert.IsTrue(authority.InterruptTask(task.TaskId, budgets, out reason), reason);
+            Assert.AreEqual(TaskStatus.Queued, task.Status, "interruption re-queues the task");
+            Assert.AreEqual(30, budget.MinutesCommitted, "interrupt releases only the 30 unworked minutes");
+
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, out reason), reason);
+            Assert.AreEqual(60, budget.MinutesCommitted,
+                "re-assignment commits only the 30 remaining minutes on top of the 30 already spent, not a second full 60");
+            Assert.AreEqual(remainingBeforeWork, budget.MinutesRemaining,
+                "resume, interrupt and re-assignment together are budget-neutral: the day budget still reflects exactly 30 spent + 30 committed");
+            Assert.AreEqual(30, task.MinutesRemaining, "the work requirement is unchanged by the cycle");
+        }
+
+        [Test]
+        public void RearmPassiveResume_ReplacesRatherThanDuplicates()
+        {
+            var authority = CreateAuthority();
+            var scheduler = new DueEventScheduler();
+            authority.SetDueEventScheduler(scheduler);
+
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 1);
+            string taskId = task.TaskId.ToString();
+            string stableId = DueEventIdConventions.ForTask(taskId, DueEventKind.PassiveProcessComplete);
+            Assert.AreEqual("due-PassiveProcessComplete-" + taskId, stableId,
+                "the re-arm uses the stable per-task convention id");
+
+            Assert.IsNull(scheduler.ScheduleWithEventId(stableId, DueEventKind.PassiveProcessComplete, 3600f, taskId));
+            Assert.AreEqual(1, scheduler.ScheduledCount);
+            Assert.IsNull(scheduler.ScheduleWithEventId(stableId, DueEventKind.PassiveProcessComplete, 7200f, taskId));
+            Assert.AreEqual(1, scheduler.ScheduledCount,
+                "a repeated refusal replaces the same stable id, never duplicates");
+            Assert.AreEqual(stableId, scheduler.PeekNext().EventId);
+            Assert.AreEqual(7200f, scheduler.PeekNext().DueGameSeconds,
+                "the replacement carries the later due time");
+        }
+
+        [Test]
+        public void RearmPassiveResume_FiresOnlyAfterDelay_AndCancelsByPayload()
+        {
+            var authority = CreateAuthority();
+            var scheduler = new DueEventScheduler();
+            authority.SetDueEventScheduler(scheduler);
+
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 1);
+            string taskId = task.TaskId.ToString();
+            string stableId = DueEventIdConventions.ForTask(taskId, DueEventKind.PassiveProcessComplete);
+
+            Assert.IsNull(scheduler.ScheduleWithEventId(stableId, DueEventKind.PassiveProcessComplete, 3600f, taskId));
+            Assert.AreEqual(0, scheduler.PopDue(3599f).Count,
+                "the re-armed event does not fire before its one-hour delay");
+            Assert.AreEqual(1, scheduler.ScheduledCount);
+
+            List<DueEvent> due = scheduler.PopDue(3600f);
+            Assert.AreEqual(1, due.Count, "the re-armed event fires at its due time");
+            Assert.AreEqual(stableId, due[0].EventId);
+            Assert.AreEqual(0, scheduler.ScheduledCount);
+
+            Assert.IsNull(scheduler.ScheduleWithEventId(stableId, DueEventKind.PassiveProcessComplete, 3600f, taskId));
+            scheduler.CancelForPayload(taskId);
+            Assert.AreEqual(0, scheduler.ScheduledCount,
+                "terminal cleanup cancels a pending retry by payload, regardless of event id");
+        }
+
         [Test]
         public void WaitingOnDependency_RecordsDescription_HoldsCommitment()
         {

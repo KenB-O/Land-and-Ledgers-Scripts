@@ -155,6 +155,25 @@ namespace LandLedgers.Tasks
             }
 
             bool releasedForPassiveProcess = task.Status == TaskStatus.WaitingOnPassiveProcess;
+
+            // Cause F: a resume must not double-occupy a worker who has
+            // started other work while this task waited on its passive
+            // process. Same blocking-state scan StartTask uses, placed
+            // BEFORE the budget re-commit so a refused resume commits
+            // nothing and a later successful resume cannot double-commit.
+            if (task.HasAssignee)
+            {
+                foreach (WorkTask activeTask in tasks)
+                {
+                    if (activeTask == null || ReferenceEquals(activeTask, task) || !activeTask.HasAssignee
+                        || !TaskLifecyclePolicy.BlocksConcurrentTaskStart(activeTask.Status)
+                        || activeTask.AssigneeId != task.AssigneeId) continue;
+                    rejectionReason = "Cannot resume task " + taskId + ": " + task.AssigneeId
+                        + " is already occupied by task " + activeTask.TaskId + " (" + OccupancyStatusWord(activeTask.Status) + ").";
+                    return false;
+                }
+            }
+
             if (releasedForPassiveProcess && ambientBudgetStore != null && task.HasAssignee && task.MinutesRemaining > 0)
             {
                 string budgetReason;

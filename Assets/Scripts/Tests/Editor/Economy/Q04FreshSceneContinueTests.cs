@@ -1419,6 +1419,12 @@ namespace LandLedgers.Tests.Economy
                 Reservations = scenario.Equipment,
                 NowGameSeconds = 0f,
             };
+            // Slice A3 (QA-12): the adoption lookup, read lazily from the
+            // scenario's own agreement book at BeginLoading time (after
+            // RegisterDispatchTask). Both the source and the restore hooks
+            // are built by this method over their own scenario.
+            hooks.FindRegisteredDispatchTask = (LogisticsShipmentState shipment) =>
+                scenario.FreightDriver?.ServiceAgreements?.FindAgreement(shipment.FreightServiceAgreementId)?.DispatchTaskId;
             hooks.ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string reason) =>
             {
                 reason = string.Empty;
@@ -2242,20 +2248,30 @@ namespace LandLedgers.Tests.Economy
             Assert.IsTrue(!target.Pass9.CarrierSettlement.AlreadySettled(Q04ShipmentId),
                 "the mid-journey shipment must not read as settled after restore");
 
-            // (12) Pending task: same id, fr.load-freight, open
-            // (ResourcesReserved), 15 planned minutes, 0 worked, same
-            // assignee, same reservation handle id.
+            // (12) Load task: same id, fr.load-freight, COMPLETED — QA-12
+            // adoption makes the registered dispatch task the load task, so
+            // it ran its 15 minutes and completed in the source scenario.
+            // The pre-adoption world left it open with 0 worked and minted
+            // a second load task; that two-task shape is the QA-12 defect
+            // (a leaked open task holding the dock and 15 committed minutes
+            // forever), so the old open/0-worked assertions pinned the
+            // defect, not the intended world. Same assignee; the
+            // reservation handle id is cleared on completion by
+            // TaskAuthority.ReleaseTaskResources (the equipment hold itself
+            // stays live in this fixture because the reservation-authority
+            // seam is not installed — see (13) — so the dock-hold
+            // assertions below still hold).
             WorkTask task = target.Tasks.FindTask(source.TaskId);
-            Assert.IsNotNull(task, "the pending task must restore with its id");
+            Assert.IsNotNull(task, "the load task must restore with its id");
             Assert.AreEqual("fr.load-freight", task.DefinitionId, "the task definition must restore");
-            Assert.IsTrue(task.IsOpen, "the task must stay open");
-            Assert.AreEqual(TaskStatus.ResourcesReserved, task.Status, "the task must stay ResourcesReserved");
+            Assert.IsTrue(!task.IsOpen, "the task must be closed: adoption ran it to completion");
+            Assert.AreEqual(TaskStatus.Complete, task.Status, "the task must be Complete after adoption ran the load");
             Assert.AreEqual(15, task.PlannedMinutes, "the task must keep its 15 planned minutes");
-            Assert.AreEqual(0, task.MinutesWorked, "the task must keep 0 minutes worked");
+            Assert.AreEqual(15, task.MinutesWorked, "the task must keep its 15 worked minutes");
             Assert.AreEqual(EntityId.For(EntityKind.Person, 701), task.AssigneeId, "the assignee must restore");
-            Assert.AreEqual(source.HandleId, task.ReservationHandleId, "the task's handle id must restore verbatim");
-            Assert.AreEqual(expectedSetCount, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
-                "exactly the expected open tasks must exist for the freight owner (the completed load tasks are not open)");
+            Assert.AreEqual(string.Empty, task.ReservationHandleId, "the task's handle id is cleared on completion");
+            Assert.AreEqual(0, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "no open tasks may remain for the freight owner: adoption completed every load task (the completed load tasks are not open)");
 
             // (13) Person reservations + equipment holds + due event
             // + budget: the shopper's Work + Shopping windows, the
@@ -2309,14 +2325,16 @@ namespace LandLedgers.Tests.Economy
                     targetBudget = budget;
             Assert.IsNotNull(targetBudget, "P701's work-time budget must restore");
             Assert.AreEqual(600, targetBudget.DailyBudgetMinutes, "the daily budget must restore at 600 minutes");
-            // 20 committed minutes, composed exactly: 15 for the open
-            // fr.load-freight task + 5 for the shipment's load task
-            // (base 5 = max(5, (16+9)/10)). The load task worked its
-            // 5 minutes and completed with 0 remaining, so its
-            // commitment is not released — only unused commitment is.
-            Assert.AreEqual(20, targetBudget.MinutesCommitted, "the committed minutes must restore (15 + 5)");
-            Assert.AreEqual(5, targetBudget.MinutesWorked,
-                "the 5 worked minutes on the completed load task must restore");
+            // 15 committed minutes, composed exactly: 15 for the adopted
+            // fr.load-freight load task. QA-12 adoption removes the second
+            // minted load task (base 5 = max(5, (16+9)/10)) the pre-adoption
+            // world minted, so the old 20 = 15 open + 5 minted no longer
+            // applies. The adopted task worked its 15 minutes and completed
+            // with 0 remaining, so its commitment is not released — only
+            // unused commitment is.
+            Assert.AreEqual(15, targetBudget.MinutesCommitted, "the committed minutes must restore (15, the adopted load task)");
+            Assert.AreEqual(15, targetBudget.MinutesWorked,
+                "the 15 worked minutes on the completed load task must restore");
 
             // (2, store side) Store: one retail lot, 24 loaves,
             // category pool 24, endowment recorded exactly once and
@@ -2442,19 +2460,22 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(4, breadLot2.QuantityUnits, "the household 2 bread lot must hold its 4 units");
             Assert.AreEqual(0, breadLot2.HeldUnits, "the household 2 bread lot holds nothing");
 
-            // (12) Two open tasks for the freight owner, the second
-            // assigned to P703 with its own handle.
-            Assert.AreEqual(2, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
-                "exactly two open tasks must exist for the freight owner in save A");
+            // (12) No open tasks for the freight owner in save A: QA-12
+            // adoption ran both dispatch tasks to completion (see the
+            // Slice 7 note in AssertQ04ScenarioRestored). The second
+            // task is Complete with its 15 minutes worked, same assignee,
+            // handle id cleared on completion.
+            Assert.AreEqual(0, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "no open tasks may remain for the freight owner in save A: adoption completed both load tasks");
             WorkTask task2 = target.Tasks.FindTask(source.TaskId2);
-            Assert.IsNotNull(task2, "the second pending task must restore with its id");
+            Assert.IsNotNull(task2, "the second load task must restore with its id");
             Assert.AreEqual("fr.load-freight", task2.DefinitionId, "the second task definition must restore");
-            Assert.IsTrue(task2.IsOpen, "the second task must stay open");
-            Assert.AreEqual(TaskStatus.ResourcesReserved, task2.Status, "the second task must stay ResourcesReserved");
+            Assert.IsTrue(!task2.IsOpen, "the second task must be closed: adoption ran it to completion");
+            Assert.AreEqual(TaskStatus.Complete, task2.Status, "the second task must be Complete after adoption ran the load");
             Assert.AreEqual(15, task2.PlannedMinutes, "the second task must keep its 15 planned minutes");
-            Assert.AreEqual(0, task2.MinutesWorked, "the second task must keep 0 minutes worked");
+            Assert.AreEqual(15, task2.MinutesWorked, "the second task must keep its 15 worked minutes");
             Assert.AreEqual(EntityId.For(EntityKind.Person, 703), task2.AssigneeId, "the second assignee must restore");
-            Assert.AreEqual(source.HandleId2, task2.ReservationHandleId, "the second task's handle id must restore verbatim");
+            Assert.AreEqual(string.Empty, task2.ReservationHandleId, "the second task's handle id is cleared on completion");
 
             // (13) Person reservations: P1's two windows as Slice 7
             // pins them, plus P2's Work window [480,720].
@@ -2542,18 +2563,20 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(0, obligation2.Payments.Count, "no payment must restore on the second obligation");
             Assert.IsTrue(!obligation2.Settled, "the second obligation must stay unsettled");
 
-            // P703's work-time budget: 15 committed for the open task
-            // + 5 for the completed load task, 5 worked — the same
-            // composition as P701's in Slice 7.
+            // P703's work-time budget: 15 committed for the adopted
+            // load task, 15 worked — the same composition as P701's in
+            // Slice 7 after QA-12 adoption (the old 20 = 15 open + 5
+            // minted no longer applies; adoption removes the second
+            // minted load task).
             WorkTimeBudget budget703 = null;
             foreach (WorkTimeBudget budget in target.Budgets.CaptureSaveDto().budgets)
                 if (budget != null && budget.PersonId == EntityId.For(EntityKind.Person, 703))
                     budget703 = budget;
             Assert.IsNotNull(budget703, "P703's work-time budget must restore in save A");
             Assert.AreEqual(600, budget703.DailyBudgetMinutes, "the P703 daily budget must restore at 600 minutes");
-            Assert.AreEqual(20, budget703.MinutesCommitted, "the P703 committed minutes must restore (15 + 5)");
-            Assert.AreEqual(5, budget703.MinutesWorked,
-                "the 5 worked minutes on the second completed load task must restore");
+            Assert.AreEqual(15, budget703.MinutesCommitted, "the P703 committed minutes must restore (15, the adopted load task)");
+            Assert.AreEqual(15, budget703.MinutesWorked,
+                "the 15 worked minutes on the second completed load task must restore");
         }
 
         [Test]
@@ -2595,8 +2618,14 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(1, target.Errands.All.Count, "exactly the one kept errand plan must survive");
             Assert.IsNull(target.Tasks.FindTask(sourceA.TaskId2),
                 "the smaller load must drop the removed task");
-            Assert.AreEqual(1, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
-                "exactly the one kept open task must survive");
+            Assert.AreEqual(0, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "no open tasks may remain after the smaller load: the kept task completed under adoption");
+            WorkTask keptTask = null;
+            foreach (WorkTask t in target.Tasks.CaptureSaveDto().tasks)
+                if (t != null && t.DefinitionId == "fr.load-freight" && t.AssigneeId == EntityId.For(EntityKind.Person, 701))
+                    keptTask = t;
+            Assert.IsNotNull(keptTask, "the kept task must survive the smaller load");
+            Assert.AreEqual(TaskStatus.Complete, keptTask.Status, "the kept task must stay Complete after the smaller load");
             Assert.AreEqual(0, target.Schedules.ActiveFor(2, Q04DayIndex).Count,
                 "the smaller load must drop the removed person's reservation");
             Assert.AreEqual(0, target.Equipment.ReservationsForTask(sourceA.TaskId2.ToString()).Count,
@@ -2629,7 +2658,8 @@ namespace LandLedgers.Tests.Economy
             // Orphan count zero, computed the Slice 7 way: every open
             // task holding a handle must resolve it to a live
             // reservation. The removed task is gone, so it cannot
-            // orphan; the kept task's handle still resolves.
+            // orphan; the kept task is closed under adoption, so it
+            // holds no handle and cannot orphan either.
             int orphans = 0;
             foreach (WorkTask open in target.Tasks.CaptureSaveDto().tasks)
             {

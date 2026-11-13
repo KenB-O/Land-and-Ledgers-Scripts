@@ -60,6 +60,17 @@ namespace LandLedgers.Economy.Logistics
         public int MinuteOfDay;
 
         /// <summary>
+        /// Slice A3 (QA-12): the registered dispatch task id for the shipment's
+        /// agreement, when one exists. Returns the TaskAuthority task id string
+        /// (as stored on FreightServiceAgreement.DispatchTaskId), or null/empty
+        /// when the shipment has no registered dispatch task. The service never
+        /// references the agreement book directly; the hooks builder supplies
+        /// the lookup from its own book. Null means no adoption is attempted
+        /// and BeginLoading mints as before.
+        /// </summary>
+        public Func<LogisticsShipmentState, string> FindRegisteredDispatchTask;
+
+        /// <summary>
         /// Slice A2 (QA-05): true when the hooks' caller already holds the
         /// handling crew's windows itself (ConstructionMaterialFreight
         /// reserves whole-day crew windows before driving the chain, so the
@@ -360,6 +371,59 @@ namespace LandLedgers.Economy.Logistics
             }
         }
 
+        /// <summary>Slice A3 (QA-12): adopt the pre-registered dispatch
+        /// task for the shipment's agreement instead of minting a second
+        /// load task. Returns true when the task was adopted and started
+        /// (the shipment is Loading). Returns false with a non-empty
+        /// reason when adoption was attempted but blocked (reserve or
+        /// start refused); the caller must return that refusal without
+        /// minting. Returns false with an empty reason when there is
+        /// nothing to adopt (no lookup, no registered id, task missing or
+        /// not adoptable); the caller falls through to minting. Never
+        /// calls AssignTask: the adopted task's budget was already
+        /// committed when it was assigned. Never cancels the adopted
+        /// task: it belongs to the agreement, not to BeginLoading.</summary>
+        private bool TryAdoptDispatchTask(LogisticsShipmentState shipment, EntityId loaderId,
+            FreightShipmentHooks hooks, out string reason)
+        {
+            reason = string.Empty;
+            string registeredTaskId = hooks?.FindRegisteredDispatchTask?.Invoke(shipment);
+            if (string.IsNullOrEmpty(registeredTaskId)) return false;
+            WorkTask adopted = hooks.Tasks.FindTaskByIdString(registeredTaskId);
+            if (adopted == null)
+            {
+                Log(hooks, $"shipment '{shipment.ShipmentId}': registered dispatch task '{registeredTaskId}' is not in the task authority; minting a fresh load task.");
+                return false;
+            }
+            if ((adopted.Status != TaskStatus.Assigned && adopted.Status != TaskStatus.ResourcesReserved)
+                || adopted.AssigneeId != loaderId)
+            {
+                Log(hooks, $"shipment '{shipment.ShipmentId}': registered dispatch task '{registeredTaskId}' is {adopted.Status} assigned to {adopted.AssigneeId}, not adoptable for loader {loaderId}; minting a fresh load task.");
+                return false;
+            }
+            // Reserve-first (QA-05) applies to the adopted task too: its
+            // window is booked from its own remaining minutes, before
+            // StartTask. Its budget is already committed; the reservation
+            // is the only new booking.
+            if (!ReserveHandlerWindow(hooks, loaderId, shipment.ShipmentId,
+                "freight:load:" + shipment.ShipmentId, adopted.MinutesRemaining, loadReservations, out reason))
+            {
+                reason = "FreightShipmentService: load window refused: " + reason;
+                return false;
+            }
+            if (!hooks.Tasks.StartTask(adopted.TaskId, hooks.DayIndex, out reason))
+            {
+                reason = "FreightShipmentService: registered dispatch task could not start: " + reason;
+                ReleaseHandlerWindow(loadReservations, hooks, shipment.ShipmentId, loaderId, "freight:load:" + shipment.ShipmentId);
+                return false;
+            }
+            loadTasks[shipment.ShipmentId] = adopted.TaskId;
+            shipment.state = LogisticsShipmentStatus.Loading;
+            shipment.stageElapsedGameSeconds = 0f;
+            Log(hooks, "shipment '" + shipment.ShipmentId + "': loading started (adopted dispatch task " + adopted.TaskId + ", " + adopted.DefinitionId + ").");
+            return true;
+        }
+
         /// Creates a shipment (Planned). Over-capacity cargo is blocked pre-load:
         /// Failed with a reason, zero cargo owned (MR-P001).
         /// </summary>
@@ -569,6 +633,23 @@ namespace LandLedgers.Economy.Logistics
                 reason = "FreightShipmentService: " + loadConflict;
                 return false;
             }
+            // Slice A3 (QA-12): adopt the pre-registered dispatch task
+            // instead of minting a second load task. The overnight
+            // recovery made StartTask refuse ResourcesReserved tasks, so
+            // minting a second task for a handler who already holds the
+            // registered dispatch task always refuses on occupancy.
+            if (TryAdoptDispatchTask(shipment, loaderId, hooks, out reason))
+                return true;
+            if (!string.IsNullOrEmpty(reason))
+            {
+                // Adoption was attempted but blocked (reserve or start
+                // refused). Do not fall through to minting: the registered
+                // task exists and the refusal is about this handler, not
+                // about a missing task.
+                return false;
+            }
+            // No registered task, or it could not be adopted: fall through
+            // to the minting path below.
             string defId = "freight:load:" + shipment.ShipmentId;
             if (hooks.Tasks.GetDefinition(defId) == null)
             {

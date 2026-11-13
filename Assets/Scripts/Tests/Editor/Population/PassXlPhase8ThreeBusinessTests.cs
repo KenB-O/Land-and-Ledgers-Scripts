@@ -56,7 +56,7 @@ namespace LandLedgers.Editor.Population
         public void Run_EndToEnd_ThreeBusinessesProduceSellAndFeed_AllHouseholdsEat_CashReconciles()
         {
             ThreeBusinessSliceRunReport report = Run();
-            Assert.IsNotNull(report, "Composed run must succeed; see report diagnostics: " + (report != null ? string.Join("; ", report.Diagnostics) : "null"));
+            Assert.IsTrue(report != null && report.Succeeded, "Composed run must succeed; see report diagnostics: " + (report != null ? string.Join("; ", report.Diagnostics) : "null"));
 
             // Cash reconciliation, every step accounted for:
             // Store: 5000 - 1250 procurement - 1000 Kennedy draw + 800 flour sale + 240 feed sale - 100 final draw = 3690.

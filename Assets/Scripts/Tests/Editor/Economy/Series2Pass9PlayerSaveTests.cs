@@ -1,13 +1,19 @@
 using System.Collections.Generic;
 using System.Linq;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.GeneralStore;
+using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Core;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
+using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Economy.FreightFuel;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Logistics;
@@ -18,6 +24,7 @@ using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.World.Journeys;
 using NUnit.Framework;
 
 namespace LandLedgers.Tests.Economy
@@ -761,6 +768,285 @@ namespace LandLedgers.Tests.Economy
             Assert.IsFalse(binding.PayAndEat(autoEat, seller, ledger, 0, "household-1", "shop-1", new FakeTradeCreditPort(), diag),
                 "a seller that closed after travel must refuse payment");
             Assert.AreEqual(200, ledger.GetBalanceCents());
+        }
+
+        // ---- QA-29: Pass 9 save round-trip: timber/fuel runtimes + customer queue ----
+        //
+        // QA-29: the six timber/fuel runtimes plus CustomerQueue had no save
+        // slot in any container. The slots landed in Series2Pass9Save; these
+        // tests prove each runtime's state survives a capture/restore round
+        // trip and that a second restore replaces instead of doubling.
+
+        private static LoggingStandRegistry SliceStandRegistry(List<string> diag)
+        {
+            var registry = new LoggingStandRegistry();
+            Assert.IsNull(registry.RegisterStand(new TimberStand
+            {
+                StandId = "stand-slice-1",
+                DisplayName = "Slice Test Pines",
+                LocationId = "landing-1",
+                Species = "white pine",
+                StandingTimberUnits = 10,
+            }), "stand must register; diag: " + string.Join("; ", diag));
+            Assert.IsNull(registry.GrantTimberRights("stand-slice-1", "boniecki-fuel-dealer-1", 0, "town-land-office"),
+                "rights must grant; diag: " + string.Join("; ", diag));
+            return registry;
+        }
+
+        private static EquipmentTaskGate SliceAxeGate()
+        {
+            return new EquipmentTaskGate
+            {
+                AssetsSupplier = () => new List<EquipmentAsset>
+                {
+                    new EquipmentAsset
+                    {
+                        AssetId = "slice-felling-axe",
+                        Kind = "felling-axe",
+                        OwnerKind = "business",
+                        OwnerId = "boniecki-fuel-dealer-1",
+                        Condition01 = 1f,
+                    },
+                },
+            };
+        }
+
+        [Test]
+        public void Save_RoundTrip_QA29_StandRegistry_StandAndGrantSurvive_Idempotent()
+        {
+            var diag = new List<string>();
+            var registry = SliceStandRegistry(diag);
+
+            var source = NewState();
+            source.StandRegistry = registry;
+            Series2Pass9SaveDto dto = source.Capture(diag);
+
+            var target = NewState();
+            target.StandRegistry = new LoggingStandRegistry();
+            target.Restore(dto, null, diag);
+            TimberStand stand = target.StandRegistry.GetStand("stand-slice-1");
+            Assert.IsNotNull(stand, "the stand must survive the round trip");
+            Assert.AreEqual("white pine", stand.Species);
+            Assert.AreEqual(10, stand.StandingTimberUnits);
+            Assert.AreEqual("landing-1", stand.LocationId);
+            Assert.AreEqual(1, target.StandRegistry.RightsGrants.Count);
+            Assert.AreEqual("stand-slice-1", target.StandRegistry.RightsGrants[0].StandId);
+            Assert.AreEqual("boniecki-fuel-dealer-1", target.StandRegistry.RightsGrants[0].HolderId);
+            Assert.AreEqual(0, target.StandRegistry.RightsGrants[0].GrantDayIndex);
+
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(1, target.StandRegistry.RightsGrants.Count,
+                "a second restore replaces, never doubles the grant");
+            Assert.IsNotNull(target.StandRegistry.GetStand("stand-slice-1"));
+        }
+
+        [Test]
+        public void Save_RoundTrip_QA29_LoggingOperation_InFlightHaulSurvives_Idempotent()
+        {
+            var diag = new List<string>();
+            var ids = new EntityIdRegistry();
+            var registry = SliceStandRegistry(diag);
+            var operation = new LoggingOperationRuntime("boniecki-fuel-dealer-1", ids);
+            LogLot felled = operation.RunFelling(registry, "stand-slice-1", "boniecki-fuel-dealer-1", 2,
+                EntityId.For(EntityKind.Person, 5), 0, diag, SliceAxeGate());
+            Assert.IsNotNull(felled, "felling must produce a lot; diag: " + string.Join("; ", diag));
+            Assert.AreEqual(2, felled.LogUnits);
+
+            var journey = new JourneyModel();
+            journey.RegisterLocation(new JourneyLocation("landing-1", JourneyLocationKind.Waypoint, "North Landing", 2f, 0f));
+            journey.RegisterLocation(new JourneyLocation("mill-1-yard", JourneyLocationKind.Mill, "Local Sawmill", 0f, 0f) { BusinessId = "slice-mill-1" });
+            journey.AddEdge("landing-1", "mill-1-yard", 2f, "river road");
+            LogHaul haul = operation.DispatchLogHaul(felled.LotId, "slice-mill-1", "mill-1-yard", journey, "landing-1", 0, diag);
+            Assert.IsNotNull(haul, "dispatch must produce a haul; diag: " + string.Join("; ", diag));
+            operation.AdvanceHauls(10, diag);
+            Assert.AreEqual(LogHaulStatus.InTransit, haul.Status,
+                "10 minutes covers the 2-minute load and leaves the haul on the road (30-minute transit)");
+            Assert.AreEqual(1, operation.LandingLogUnits);
+
+            var source = NewState();
+            source.LoggingOperation = operation;
+            Series2Pass9SaveDto dto = source.Capture(diag);
+
+            var target = NewState();
+            target.LoggingOperation = new LoggingOperationRuntime("boniecki-fuel-dealer-1", ids);
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(1, target.LoggingOperation.Hauls.Count);
+            LogHaul restored = target.LoggingOperation.Hauls[0];
+            Assert.AreEqual(LogHaulStatus.InTransit, restored.Status,
+                "the in-flight haul must resume in transit, not as delivered or lost");
+            Assert.IsNotNull(restored.Lot);
+            Assert.AreEqual(1, restored.Lot.LogUnits);
+            Assert.AreEqual(1, target.LoggingOperation.LandingLogUnits);
+
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(1, target.LoggingOperation.Hauls.Count,
+                "a second restore replaces, never duplicates the haul");
+            Assert.AreEqual(LogHaulStatus.InTransit, target.LoggingOperation.Hauls[0].Status);
+        }
+
+        [Test]
+        public void Save_RoundTrip_QA29_Sawmill_LogStockSurvives_Idempotent()
+        {
+            var diag = new List<string>();
+            var ids = new EntityIdRegistry();
+            var mill = new SawmillShopRuntime("mill-1", ids);
+            Assert.IsNull(mill.ReceiveLogLot(new LogLot
+            {
+                LotId = EntityId.For(EntityKind.Lot, 9001),
+                LogUnits = 2,
+                MassKg = 600f,
+                OwnerId = "mill-1",
+                StandId = "stand-1",
+                Species = "white pine",
+                FelledBy = EntityId.For(EntityKind.Person, 5001),
+                FelledDayIndex = 200,
+            }, diag), "the log lot must be received; diag: " + string.Join("; ", diag));
+            Assert.AreEqual(2, mill.LogStock.TotalLogUnits);
+
+            var source = NewState();
+            source.Sawmill = mill;
+            Series2Pass9SaveDto dto = source.Capture(diag);
+
+            var target = NewState();
+            target.Sawmill = new SawmillShopRuntime("mill-1", ids);
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(2, target.Sawmill.LogStock.TotalLogUnits);
+            Assert.AreEqual(1, target.Sawmill.LogStock.Lots.Count);
+            Assert.AreEqual(EntityId.For(EntityKind.Lot, 9001), target.Sawmill.LogStock.Lots[0].LotId);
+
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(2, target.Sawmill.LogStock.TotalLogUnits,
+                "a second restore replaces, never doubles the log stock");
+            Assert.AreEqual(1, target.Sawmill.LogStock.Lots.Count);
+        }
+
+        [Test]
+        public void Save_RoundTrip_QA29_LumberYard_LumberStockSurvives_Idempotent()
+        {
+            var diag = new List<string>();
+            var yard = new LumberYardShopRuntime("yard-1", new EntityIdRegistry());
+            Assert.IsNull(yard.ReceiveLumberFromSawmill(new SawmillLumberLot
+            {
+                LotId = EntityId.For(EntityKind.Lot, 9401),
+                LumberUnits = 40,
+                SourceLogLotId = "log-9401",
+                StandId = "stand-1",
+                Species = "white pine",
+                MillBusinessId = "mill-1",
+                SawedBy = EntityId.For(EntityKind.Person, 5002),
+                SawedDayIndex = 210,
+                ConversionProfileId = "softwood-standard",
+            }, "merchantable", 220, 85, diag), "the lumber lot must be received; diag: " + string.Join("; ", diag));
+            Assert.AreEqual(1, yard.LumberStock.Lots.Count);
+            Assert.AreEqual(40, yard.LumberStock.Lots[0].LumberUnits);
+
+            var source = NewState();
+            source.LumberYard = yard;
+            Series2Pass9SaveDto dto = source.Capture(diag);
+
+            var target = NewState();
+            target.LumberYard = new LumberYardShopRuntime("yard-1", new EntityIdRegistry());
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(1, target.LumberYard.LumberStock.Lots.Count);
+            Assert.AreEqual(40, target.LumberYard.LumberStock.Lots[0].LumberUnits);
+            Assert.AreEqual("mill-1", target.LumberYard.LumberStock.Lots[0].SourceMillBusinessId);
+
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(1, target.LumberYard.LumberStock.Lots.Count,
+                "a second restore replaces, never doubles the lumber stock");
+        }
+
+        [Test]
+        public void Save_RoundTrip_QA29_LoggingCamp_CrewAndWorkDaySurvive_Idempotent()
+        {
+            var diag = new List<string>();
+            var ids = new EntityIdRegistry();
+            var registry = SliceStandRegistry(diag);
+            var operation = new LoggingOperationRuntime("boniecki-fuel-dealer-1", ids);
+            var camp = new LoggingCampSite("camp-slice-1", "boniecki-fuel-dealer-1", "stand-slice-1", 0);
+            EntityId feller = EntityId.For(EntityKind.Person, 5);
+            EntityId logger = EntityId.For(EntityKind.Person, 6);
+            Assert.IsNull(camp.AssignWorker(feller, LoggingCampRoles.Feller, 0, diag),
+                "the feller must join the crew; diag: " + string.Join("; ", diag));
+            Assert.IsNull(camp.AssignWorker(logger, LoggingCampRoles.Logger, 0, diag),
+                "the logger must join the crew; diag: " + string.Join("; ", diag));
+            Assert.IsNull(camp.SupplyLedger.RecordDelivery(
+                    LoggingCampSupplyLedger.BootstrapEndowmentSupplierId, 10f, 0, "slice setup", diag),
+                "provisions must be delivered; diag: " + string.Join("; ", diag));
+            LogLot felled = camp.RunCampDay(registry, operation, "boniecki-fuel-dealer-1", 1,
+                feller, 0, 4, diag, SliceAxeGate());
+            Assert.IsNotNull(felled, "the camp day must fell a log; diag: " + string.Join("; ", diag));
+            Assert.AreEqual(1, felled.LogUnits);
+            Assert.AreEqual(1, camp.WorkDays.Count);
+            Assert.AreEqual(1, camp.WorkDays[0].LogsFelled);
+            Assert.AreEqual(2, camp.WorkDays[0].LoggerCount,
+                "felling is two-person work, so the work day records both crew");
+            Assert.AreEqual(8f, camp.SupplyLedger.Balance, "two heads at one provision each");
+
+            var source = NewState();
+            source.LoggingCamp = camp;
+            Series2Pass9SaveDto dto = source.Capture(diag);
+
+            var target = NewState();
+            target.LoggingCamp = new LoggingCampSite("camp-slice-1", "boniecki-fuel-dealer-1", "stand-slice-1", 0);
+            target.Restore(dto, null, diag);
+            Assert.AreEqual("camp-slice-1", target.LoggingCamp.CampId);
+            Assert.AreEqual("stand-slice-1", target.LoggingCamp.StandId);
+            Assert.AreEqual(0, target.LoggingCamp.DayEstablished);
+            Assert.AreEqual(2, target.LoggingCamp.Crew.Count);
+            Assert.AreEqual(feller, target.LoggingCamp.Crew[0].Worker);
+            Assert.AreEqual(LoggingCampRoles.Feller, target.LoggingCamp.Crew[0].Role);
+            Assert.AreEqual(1, target.LoggingCamp.WorkDays.Count);
+            Assert.AreEqual(0, target.LoggingCamp.WorkDays[0].DayIndex);
+            Assert.AreEqual(1, target.LoggingCamp.WorkDays[0].LogsFelled);
+            Assert.AreEqual(2, target.LoggingCamp.WorkDays[0].LoggerCount);
+            Assert.AreEqual(8f, target.LoggingCamp.SupplyLedger.Balance);
+
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(2, target.LoggingCamp.Crew.Count,
+                "a second restore replaces, never doubles the crew");
+            Assert.AreEqual(1, target.LoggingCamp.WorkDays.Count);
+        }
+
+        [Test]
+        public void Save_RoundTrip_QA29_CustomerQueue_WaitingLineSurvives_Idempotent()
+        {
+            var diag = new List<string>();
+            var queue = new CustomerQueue();
+            queue.MerchantBusinessId = "general-store-1";
+            queue.MerchantName = "General Store";
+            Assert.IsTrue(queue.Enqueue("cust-1", 1, "fuel_wood", 2, 25, 0),
+                "the first customer must join the line");
+            Assert.IsTrue(queue.Enqueue("cust-2", 2, "fuel_wood", 1, 25, 0),
+                "the second customer must join the line");
+            Assert.AreEqual(2, queue.WaitingCount);
+            Assert.AreEqual("cust-1", queue.Waiting[0].CustomerRef);
+            Assert.AreEqual(20, queue.Waiting[0].PatienceMinutesRemaining);
+
+            var source = NewState();
+            source.CustomerQueue = queue;
+            Series2Pass9SaveDto dto = source.Capture(diag);
+
+            var target = NewState();
+            target.CustomerQueue = new CustomerQueue();
+            target.Restore(dto, null, diag);
+            Assert.AreEqual("general-store-1", target.CustomerQueue.MerchantBusinessId);
+            Assert.AreEqual("General Store", target.CustomerQueue.MerchantName);
+            Assert.AreEqual(2, target.CustomerQueue.WaitingCount);
+            Assert.AreEqual("cust-1", target.CustomerQueue.Waiting[0].CustomerRef);
+            Assert.AreEqual(1, target.CustomerQueue.Waiting[0].ActingPersonId);
+            Assert.AreEqual("fuel_wood", target.CustomerQueue.Waiting[0].CategoryId);
+            Assert.AreEqual(2, target.CustomerQueue.Waiting[0].UnitsWanted);
+            Assert.AreEqual(25, target.CustomerQueue.Waiting[0].PriceCentsPerUnit);
+            Assert.AreEqual(20, target.CustomerQueue.Waiting[0].PatienceMinutesRemaining);
+            Assert.AreEqual("cust-2", target.CustomerQueue.Waiting[1].CustomerRef);
+            Assert.AreEqual("cust-1", target.CustomerQueue.ServeNext(),
+                "the first customer is still served first after restore");
+            Assert.AreEqual(1, target.CustomerQueue.WaitingCount);
+
+            target.Restore(dto, null, diag);
+            Assert.AreEqual(2, target.CustomerQueue.WaitingCount,
+                "a second restore replaces, never doubles the line");
         }
     }
 }

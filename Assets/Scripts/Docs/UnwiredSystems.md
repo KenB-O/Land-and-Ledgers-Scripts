@@ -55,11 +55,11 @@ found, the test fails loudly rather than passing silently.
 | GrainElevatorShopRuntime | Domains/Economy/Businesses/GrainElevator/GrainElevatorShopRuntime.cs | Domains/Economy/Businesses/GrainElevator | (none) |
 | GrainMillShopRuntime | Domains/Economy/Businesses/GrainMill/GrainMillShopRuntime.cs | Domains/Economy/Businesses/GrainMill | (none) |
 | HotelShopRuntime | Domains/Economy/Businesses/Hotel/HotelShopRuntime.cs | Domains/Economy/Businesses/Hotel | (none) |
-| LumberYardShopRuntime | Domains/Economy/Businesses/LumberYard/LumberYardShopRuntime.cs | Domains/Economy/Businesses/LumberYard | (none) |
+| LumberYardShopRuntime | Domains/Economy/Businesses/LumberYard/LumberYardShopRuntime.cs | Domains/Economy/Businesses/LumberYard | Infrastructure/Persistence/Series2Pass9Save.cs |
 | NewspaperRuntime | Domains/Economy/Businesses/Newspaper/NewspaperRuntime.cs | Domains/Economy/Businesses/Newspaper | (none) |
 | RestaurantShopRuntime | Domains/Economy/Businesses/Restaurant/RestaurantShopRuntime.cs | Domains/Economy/Businesses/Restaurant | (none) |
 | SaloonRuntime | Domains/Economy/Businesses/Saloon/SaloonRuntime.cs | Domains/Economy/Businesses/Saloon | (none) |
-| SawmillShopRuntime | Domains/Economy/Businesses/Sawmill/SawmillShopRuntime.cs | Domains/Economy/Businesses/Sawmill | Orchestration/Player/ThreeBusinessSlice.cs |
+| SawmillShopRuntime | Domains/Economy/Businesses/Sawmill/SawmillShopRuntime.cs | Domains/Economy/Businesses/Sawmill | Orchestration/Player/ThreeBusinessSlice.cs; Infrastructure/Persistence/Series2Pass9Save.cs |
 | TailorShopRuntime | Domains/Economy/Businesses/Tailor/TailorShopRuntime.cs | Domains/Economy/Businesses/Tailor | (none) |
 | BankRuntime | Domains/Economy/Businesses/Bank/BankRuntime.cs | Domains/Economy/Businesses/Bank | (none) |
 | StagedProductionProcess | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
@@ -427,7 +427,12 @@ note records their audited status so the question does not reopen:
   sawing through it as a demo; that file is allowlisted in the row above
   as fixture-adjacent scaffolding, NOT as wiring. If the sawmill is ever
   constructed by a live driver or the bootstrapper, remove the allowlist
-  and the row together.
+  and the row together. Economic integration campaign Slice A10, QA-29
+  (2026-11-13): the Pass 9 save slot in `Series2Pass9Save.cs` names the
+  type so a future live mill instance can be saved and restored. That
+  file is allowlisted as persistence plumbing, NOT as wiring: the slot
+  holds no live instance (no hub owner, no driver) and captures/restores
+  with loud diagnostics until one is assigned.
 - Priority 8 Slice 3 (2026-11-08): `BakeryShopRuntime` was removed from
   the table above, not allowlisted: it is wired into the live tick by the
   campaign's own deliberate Bakery work. The bootstrapper owns the single
@@ -734,3 +739,15 @@ note records their audited status so the question does not reopen:
   reference to `PhysicalCapacityEvaluator` needs no allowlist, because
   the evaluator is already wired in production through the shopping
   loop and holds no registry row.
+- Economic integration campaign Slice A10, QA-29 (2026-11-13):
+  `SawmillShopRuntime` and `LumberYardShopRuntime` stay registered as
+  UNWIRED. Their Pass 9 save slots in `Series2Pass9Save.cs` name the
+  types so future live instances can be saved and restored; the file is
+  allowlisted in both rows as persistence plumbing, NOT as wiring. The
+  slots hold no live instance (no hub owner, no driver) and
+  capture/restore with loud diagnostics until instances are assigned.
+  The other QA-29 runtimes (`LoggingStandRegistry`,
+  `LoggingOperationRuntime`, `LoggingCampSite`, `CustomerQueue`) hold no
+  registry rows, so the slot references need no allowlist. If either
+  runtime is ever constructed by a live driver or the bootstrapper,
+  remove its allowlist and its row together.

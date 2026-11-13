@@ -137,5 +137,67 @@ namespace LandLedgers.Economy.GeneralStore
 
         /// <summary>Peeks at the waiting line without serving (diagnostics/UI).</summary>
         public IReadOnlyList<WaitingCustomer> Waiting => waiting;
+
+        /// <summary>
+        /// W4C save contract: lives inside the owning queue class. Persists
+        /// the waiting line and the merchant identity. The lost-sale log is
+        /// intentionally NOT persisted: it is diagnostics history, not
+        /// gameplay state (LostSaleEvent: "diagnostics, not entities"), so
+        /// after a load the log restarts empty and sequences restart.
+        /// </summary>
+        [Serializable]
+        public sealed class CustomerQueueSaveDto
+        {
+            public string MerchantBusinessId = string.Empty;
+            public string MerchantName = string.Empty;
+            public List<WaitingCustomer> Waiting = new List<WaitingCustomer>();
+        }
+
+        public CustomerQueueSaveDto CaptureSaveDto()
+        {
+            var dto = new CustomerQueueSaveDto
+            {
+                MerchantBusinessId = MerchantBusinessId ?? string.Empty,
+                MerchantName = MerchantName ?? string.Empty,
+            };
+            foreach (var customer in waiting)
+            {
+                if (customer == null) continue;
+                dto.Waiting.Add(new WaitingCustomer
+                {
+                    CustomerRef = customer.CustomerRef ?? string.Empty,
+                    ActingPersonId = customer.ActingPersonId,
+                    CategoryId = customer.CategoryId ?? string.Empty,
+                    UnitsWanted = customer.UnitsWanted,
+                    PriceCentsPerUnit = customer.PriceCentsPerUnit,
+                    PatienceMinutesRemaining = customer.PatienceMinutesRemaining,
+                    QueuedDayIndex = customer.QueuedDayIndex,
+                });
+            }
+            return dto;
+        }
+
+        public void LoadFromSaveDto(CustomerQueueSaveDto dto)
+        {
+            waiting.Clear();
+            if (dto == null) return;
+            MerchantBusinessId = dto.MerchantBusinessId ?? string.Empty;
+            MerchantName = dto.MerchantName ?? string.Empty;
+            if (dto.Waiting == null) return;
+            foreach (var customer in dto.Waiting)
+            {
+                if (customer == null) continue;
+                waiting.Add(new WaitingCustomer
+                {
+                    CustomerRef = customer.CustomerRef ?? string.Empty,
+                    ActingPersonId = customer.ActingPersonId,
+                    CategoryId = customer.CategoryId ?? string.Empty,
+                    UnitsWanted = customer.UnitsWanted,
+                    PriceCentsPerUnit = customer.PriceCentsPerUnit,
+                    PatienceMinutesRemaining = customer.PatienceMinutesRemaining,
+                    QueuedDayIndex = customer.QueuedDayIndex,
+                });
+            }
+        }
     }
 }

@@ -381,6 +381,17 @@ namespace LandLedgers.Persistence
         public FreightShipmentService.FreightServiceSaveDto Freight;
         public Pass9FuelSourceParamsDto FuelSourceParams;
 
+        // QA-29: timber/fuel/queue sections. LogHaul has no separate slot:
+        // it rides inside LoggingOperationSaveDto.Hauls and restores through
+        // LogHaul.FromSaveDto. Each section is additive; old saves leave it
+        // null and load with empty state — the honest old-save default.
+        public LandLedgers.Economy.Businesses.Logging.LoggingStandRegistry.LoggingStandRegistrySaveDto StandRegistry;
+        public LandLedgers.Economy.Businesses.Logging.LoggingOperationRuntime.LoggingOperationSaveDto LoggingOperation;
+        public SawmillShopRuntime.SawmillShopRuntimeSaveDto Sawmill;
+        public LandLedgers.Economy.Businesses.LumberYard.LumberYardShopRuntime.LumberYardShopRuntimeSaveDto LumberYard;
+        public LandLedgers.Economy.Businesses.Logging.LoggingCampSite.LoggingCampSiteSaveDto LoggingCamp;
+        public LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto CustomerQueue;
+
         /// <summary>
         /// Slice S2: per-business equipment registers (ovens' component
         /// assets + tool kits). Additive; old saves leave this empty and
@@ -440,6 +451,19 @@ namespace LandLedgers.Persistence
         public FreightProductionDriver FreightDriver;
         public Series2CarrierSettlement CarrierSettlement;
         public Series2DealerBakeryFuelSource FuelSource;
+
+        // QA-29: live timber/fuel/queue runtimes for the Pass 9 sections
+        // above. Same holder pattern as FuelIntake: Codex fills these with
+        // the live instances before the first save; a null field captures
+        // as an empty section and restores as a diagnostic, never a crash.
+        // No production driver owns these runtimes yet (Priority C timber
+        // integration), so they are null in production until wired.
+        public LandLedgers.Economy.Businesses.Logging.LoggingStandRegistry StandRegistry;
+        public LandLedgers.Economy.Businesses.Logging.LoggingOperationRuntime LoggingOperation;
+        public LandLedgers.Economy.Businesses.Sawmill.SawmillShopRuntime Sawmill;
+        public LandLedgers.Economy.Businesses.LumberYard.LumberYardShopRuntime LumberYard;
+        public LandLedgers.Economy.Businesses.Logging.LoggingCampSite LoggingCamp;
+        public LandLedgers.Economy.GeneralStore.CustomerQueue CustomerQueue;
 
         /// <summary>
         /// Slice S2: live per-business equipment registers, held here so
@@ -665,6 +689,69 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no fuel-yard intake supplied; fuel lots saved empty (the intake already had a DTO — it only needed this wiring).");
+            }
+
+            // QA-29: timber stand registry (stands + timber-rights grants).
+            if (StandRegistry != null)
+            {
+                dto.StandRegistry = StandRegistry.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no timber stand registry supplied; stands and rights saved empty.");
+            }
+
+            // QA-29: logging operation (landing stock + in-flight log hauls;
+            // hauls ride inside the operation DTO, no separate slot).
+            if (LoggingOperation != null)
+            {
+                dto.LoggingOperation = LoggingOperation.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no logging operation supplied; landing stock and hauls saved empty.");
+            }
+
+            // QA-29: sawmill shop (log/lumber stock, byproducts, blade, tolls).
+            if (Sawmill != null)
+            {
+                dto.Sawmill = Sawmill.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no sawmill supplied; mill stock saved empty.");
+            }
+
+            // QA-29: lumber yard shop (lumber/hardware stock, stockpile,
+            // delivery register, contractor ledger, cull disposal, sales).
+            if (LumberYard != null)
+            {
+                dto.LumberYard = LumberYard.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no lumber yard supplied; yard stock saved empty.");
+            }
+
+            // QA-29: logging camp (crew, work days, supply ledger).
+            if (LoggingCamp != null)
+            {
+                dto.LoggingCamp = LoggingCamp.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no logging camp supplied; camp state saved empty.");
+            }
+
+            // QA-29: customer queue (waiting line + merchant identity; the
+            // lost-sale log is diagnostics history and is not persisted).
+            if (CustomerQueue != null)
+            {
+                dto.CustomerQueue = CustomerQueue.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no customer queue supplied; queue saved empty.");
             }
 
             // Slice S2: equipment registers. Deep-copied, so later live
@@ -1029,6 +1116,66 @@ namespace LandLedgers.Persistence
             else if (dto.FuelIntake != null && dto.FuelIntake.Lots != null && dto.FuelIntake.Lots.Count > 0)
             {
                 diag.Add("Series2Pass9Save: fuel intake lots present in save but no intake supplied; fuel lots NOT restored.");
+            }
+
+            // QA-29: timber stand registry.
+            if (StandRegistry != null)
+            {
+                StandRegistry.LoadFromSaveDto(dto.StandRegistry);
+            }
+            else if (dto.StandRegistry != null && ((dto.StandRegistry.Stands != null && dto.StandRegistry.Stands.Count > 0) || (dto.StandRegistry.RightsGrants != null && dto.StandRegistry.RightsGrants.Count > 0)))
+            {
+                diag.Add("Series2Pass9Save: timber stands present in save but no stand registry supplied; stands NOT restored.");
+            }
+
+            // QA-29: logging operation (landing stock + in-flight log hauls).
+            if (LoggingOperation != null)
+            {
+                LoggingOperation.LoadFromSaveDto(dto.LoggingOperation);
+            }
+            else if (dto.LoggingOperation != null && ((dto.LoggingOperation.LandingStock != null && dto.LoggingOperation.LandingStock.Count > 0) || (dto.LoggingOperation.Hauls != null && dto.LoggingOperation.Hauls.Count > 0)))
+            {
+                diag.Add("Series2Pass9Save: logging operation state present in save but no logging operation supplied; landing stock and hauls NOT restored.");
+            }
+
+            // QA-29: sawmill shop.
+            if (Sawmill != null)
+            {
+                Sawmill.LoadFromSaveDto(dto.Sawmill);
+            }
+            else if (dto.Sawmill != null && dto.Sawmill.LogStock != null && dto.Sawmill.LogStock.Lots != null && dto.Sawmill.LogStock.Lots.Count > 0)
+            {
+                diag.Add("Series2Pass9Save: sawmill log stock present in save but no sawmill supplied; mill stock NOT restored.");
+            }
+
+            // QA-29: lumber yard shop.
+            if (LumberYard != null)
+            {
+                LumberYard.LoadFromSaveDto(dto.LumberYard);
+            }
+            else if (dto.LumberYard != null && dto.LumberYard.LumberStock != null && dto.LumberYard.LumberStock.Lots != null && dto.LumberYard.LumberStock.Lots.Count > 0)
+            {
+                diag.Add("Series2Pass9Save: lumber yard stock present in save but no lumber yard supplied; yard stock NOT restored.");
+            }
+
+            // QA-29: logging camp.
+            if (LoggingCamp != null)
+            {
+                LoggingCamp.LoadFromSaveDto(dto.LoggingCamp);
+            }
+            else if (dto.LoggingCamp != null && ((dto.LoggingCamp.Crew != null && dto.LoggingCamp.Crew.Count > 0) || (dto.LoggingCamp.WorkDays != null && dto.LoggingCamp.WorkDays.Count > 0)))
+            {
+                diag.Add("Series2Pass9Save: logging camp state present in save but no logging camp supplied; camp state NOT restored.");
+            }
+
+            // QA-29: customer queue.
+            if (CustomerQueue != null)
+            {
+                CustomerQueue.LoadFromSaveDto(dto.CustomerQueue);
+            }
+            else if (dto.CustomerQueue != null && dto.CustomerQueue.Waiting != null && dto.CustomerQueue.Waiting.Count > 0)
+            {
+                diag.Add("Series2Pass9Save: customer queue present in save but no customer queue supplied; queue NOT restored.");
             }
 
             // Slice S2: equipment registers — clear-then-load, idempotent.

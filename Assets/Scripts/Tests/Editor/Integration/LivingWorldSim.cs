@@ -94,6 +94,11 @@ namespace LandLedgers.Editor.Integration
         public readonly DomesticLaborDriver DomesticDriver = new DomesticLaborDriver();
 
         public readonly List<string> Diag = new List<string>();
+
+        // QA-21 fallback (a): window starts already retried once, by task id
+        // string. A refused window start is re-scheduled once at due+60s;
+        // a second refusal disposes the task instead of retrying forever.
+        private readonly HashSet<string> retriedWindowStarts = new HashSet<string>();
         public readonly Dictionary<int, string> PersonLocations = new Dictionary<int, string>();
 
         // ---------- sim-owned single-writer books ----------
@@ -590,9 +595,17 @@ namespace LandLedgers.Editor.Integration
 
         /// <summary>
         /// Advances the world to targetSeconds, processing due events in due
-        /// order. The step size changes NOTHING consequential: every state
-        /// change is event-driven, so 60s, 600s, 3600s, and 6000s steps give
-        /// identical outcomes.
+        /// order. The step size is NOT inconsequential: a task wanted at a
+        /// given minute is first seen at the step end, so at large steps
+        /// its start — and therefore its completion — lands later than at
+        /// 1x (start-time quantization, QA-21: on day 207 the 6000s step
+        /// ends are 00:20, 02:00, 03:40, 05:20, 07:00, 08:40, 10:20, so
+        /// the animal-care wanted at 08:00 starts at 08:40 and completes
+        /// at 09:20, after the 09:00 restock window opens — not at the
+        /// same time, so no equal-due tie exists to reorder). A refused
+        /// window start is therefore retried once at due+60s and disposed
+        /// (interrupt-and-requeue, else cancel) on a second refusal, so a
+        /// refused task never lingers Assigned blocking future work.
         /// </summary>
         public void AdvanceTo(float targetSeconds, float stepSeconds)
         {
@@ -738,6 +751,45 @@ namespace LandLedgers.Editor.Integration
             if (!Tasks.StartTask(task.TaskId, day, out rejection))
             {
                 Diag.Add("LivingWorldSim: StartTask refused for " + task.TaskId + ": " + rejection);
+                // QA-21 fallback (a): the occupancy is usually transient — the
+                // occupying task completes shortly after the window opens, but
+                // at large step sizes its completion is only dispatched at the
+                // next step end. Retry the window start once at due+60s; the
+                // retry pops at the next step end, by which time the occupier
+                // has normally completed. A second refusal disposes (d1) so a
+                // refused task never lingers Assigned blocking the dedup.
+                if (retriedWindowStarts.Add(task.TaskId.ToString()))
+                {
+                    string retryId;
+                    DueEvents.Schedule(DueEventKind.ActivityWindowDue,
+                        ev.DueGameSeconds + 60f, task.TaskId.ToString(), out retryId);
+                    Diag.Add("LivingWorldSim: window start for " + task.TaskId +
+                        " deferred — retry scheduled at +60s: " + rejection);
+                    return;
+                }
+
+                // Second refusal: dispose (d1). Interrupt + requeue: the same
+                // task is re-allocatable at the next day-cycle (the allocator
+                // picks up Queued tasks); the need stays covered by that task,
+                // so no duplicate is generated.
+                string ignore;
+                if (Tasks.InterruptTask(task.TaskId, Budgets, out ignore))
+                {
+                    Diag.Add("LivingWorldSim: refused window task " + task.TaskId +
+                        " interrupted and re-queued for re-allocation: " + rejection);
+                }
+                else if (Tasks.CancelTask(task.TaskId, Budgets))
+                {
+                    Diag.Add("LivingWorldSim: refused window task " + task.TaskId +
+                        " could not be interrupted (" + ignore + ") — cancelled: " + rejection);
+                }
+                else
+                {
+                    Diag.Add("LivingWorldSim: refused window task " + task.TaskId +
+                        " could neither be interrupted nor cancelled (" + ignore +
+                        ") — left Assigned, dedup will still see it: " + rejection);
+                }
+
                 return;
             }
 

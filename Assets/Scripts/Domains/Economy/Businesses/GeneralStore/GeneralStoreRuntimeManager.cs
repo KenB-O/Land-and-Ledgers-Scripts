@@ -429,7 +429,7 @@ namespace LandLedgers.FirstLedger
         /// from here; a customer with no clerk waits in the queue (no task is
         /// created for them in this slice). Slot identification mirrors
         /// GetGeneralStoreRoleDisplayName (:2731, "clerk_helper"); the worker
-        /// id parse mirrors FindPersonForWorkerSlot (:3019-3027,
+        /// id parse mirrors FindPersonForWorkerSlot (:3087-3096,
         /// int.TryParse on slot.AssignedWorkerId).</summary>
         public bool TryGetServiceClerkPersonId(out int personId)
         {
@@ -442,7 +442,7 @@ namespace LandLedgers.FirstLedger
             for (int i = 0; i < runtimeState.WorkerSlots.Count; i++)
             {
                 WorkerSlotState slot = runtimeState.WorkerSlots[i];
-                if (slot == null || !slot.IsFilled)
+                if (slot == null || !slot.IsPaidActive)
                 {
                     continue;
                 }
@@ -458,7 +458,7 @@ namespace LandLedgers.FirstLedger
                     return true;
                 }
 
-                return false;
+                continue;
             }
 
             return false;

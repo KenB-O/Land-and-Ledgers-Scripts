@@ -1081,6 +1081,101 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(TaskStatus.Complete, f.Tasks.FindTask(ServiceTaskIdOf(trip)).Status);
         }
 
+        // ---- Plan 20: Plan 16 follow-ups (CancelTask disposal) ----
+        //
+        // T1/T2 drive the arrival path with a clerk whose budget is
+        // exhausted (T1) or who is already occupied (T2); the created
+        // TendCustomer task is found through the authority's flat task
+        // list because the refused task never gets a stored handle
+        // (trip.ServiceTaskId is only set on start).
+        //
+        // T3-T5 as filed (suspended-skip, unpaid-skip, unparseable-skip
+        // on TryGetServiceClerkPersonId) CANNOT run in the Roslyn
+        // harness: GeneralStoreRuntimeManager.cs is harness-excluded and
+        // cannot be compiled in — it needs twelve unshimmable
+        // scene-runtime types (TownWorldController,
+        // TownPulseRuntimeManager, PopulationManager,
+        // PlayerPortfolioManager, LogisticsRuntimeManager,
+        // LandLedgersHUDController, SharedBusinessRuntimeManager,
+        // GeneralStoreTradingPort, GeneralStoreSaveDto,
+        // HouseholdAffinityEvaluator, HouseholdBusinessAffinityState,
+        // BusinessCashAutoTransferMode). Every test file that directly
+        // references the manager is likewise harness-excluded. The
+        // T3-T5 bodies are preserved in the session checkpoint for an
+        // Agent 3 ruling on placement (Unity-only test file vs dropped);
+        // items (b)/(c) below are implemented as ruled and verified by
+        // source inspection plus the full harness, NOT by a test.
+
+        private static WorkTask FindTendCustomerTask(Fixture f)
+        {
+            // TaskAuthority keeps a flat list of every task it created;
+            // the refused TendCustomer task is reachable here in both
+            // the red state (Queued/Assigned, still open) and the green
+            // state (Cancelled) because GetOpenTasks only returns open
+            // tasks.
+            System.Reflection.FieldInfo field = typeof(TaskAuthority).GetField("tasks",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.IsNotNull(field, "Plan 20 TaskAuthority.tasks field missing");
+            var all = (System.Collections.Generic.List<WorkTask>)field.GetValue(f.Tasks);
+            foreach (WorkTask t in all)
+            {
+                if (t.DefinitionId == GeneralStoreTaskCatalog.TendCustomerId)
+                {
+                    return t;
+                }
+            }
+
+            return null;
+        }
+
+        [Test]
+        public void AssignRefusedTask_IsCancelled_CustomerStaysQueued()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            // Exhaust the clerk's whole day budget (600 minutes) so the
+            // TendCustomer AssignTask refuses.
+            EntityId clerk = EntityId.For(EntityKind.Person, 3);
+            Assert.IsTrue(f.Budgets.GetOrCreate(clerk).TryCommit(600, out _), "clerk budget setup failed");
+            Assert.AreEqual(0, f.Budgets.GetOrCreate(clerk).MinutesRemaining);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
+            StringAssert.Contains("assign refused", string.Join("\n", f.Diag));
+            WorkTask serviceTask = FindTendCustomerTask(f);
+            Assert.IsNotNull(serviceTask, "no TendCustomer task was created");
+            Assert.AreEqual(TaskStatus.Cancelled, serviceTask.Status);
+        }
+
+        [Test]
+        public void StartRefusedTask_IsCancelled_AndBudgetReleased()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            EntityId clerk = EntityId.For(EntityKind.Person, 3);
+            // Occupy the clerk first: an InProgress task, so the
+            // TendCustomer StartTask refuses on occupancy.
+            WorkTask occupying = f.Tasks.CreateTaskWithPlannedMinutes(HouseholdShoppingLoop.ShoppingTaskId, clerk, Fixture.Day, 10);
+            Assert.IsTrue(f.Tasks.AssignTask(occupying.TaskId, clerk, f.Budgets, out string assignRejection), assignRejection);
+            Assert.IsTrue(f.Tasks.StartTask(occupying.TaskId, Fixture.Day, out string startRejection), startRejection);
+            int committedBefore = f.Budgets.GetOrCreate(clerk).MinutesCommitted;
+            Assert.Greater(committedBefore, 0);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
+            StringAssert.Contains("start refused", string.Join("\n", f.Diag));
+            WorkTask serviceTask = FindTendCustomerTask(f);
+            Assert.IsNotNull(serviceTask, "no TendCustomer task was created");
+            Assert.AreEqual(TaskStatus.Cancelled, serviceTask.Status);
+            Assert.AreEqual(committedBefore, f.Budgets.GetOrCreate(clerk).MinutesCommitted);
+        }
+
         [Test]
         public void StoreBusinessEntityId_NeverFreightThree()
         {

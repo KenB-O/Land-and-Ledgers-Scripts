@@ -2299,12 +2299,14 @@ namespace LandLedgers.Population
                                 started = tasks.StartTask(serviceTask.TaskId, arrivalDayIndex, out string startReason);
                                 if (!started)
                                 {
-                                    diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} start refused ({startReason}); customer stays queued.");
+                                    diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} start refused ({startReason}); customer stays queued; task cancelled.");
+                                    tasks.CancelTask(serviceTask.TaskId, budgets);
                                 }
                             }
                             else
                             {
-                                diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} assign refused ({assignReason}); customer stays queued.");
+                                diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} assign refused ({assignReason}); customer stays queued; task cancelled.");
+                                tasks.CancelTask(serviceTask.TaskId, budgets);
                             }
                             if (started)
                             {

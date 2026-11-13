@@ -470,6 +470,14 @@ namespace LandLedgers.Economy
                 Budgets = plan.Budgets,
                 DayIndex = dayIndex,
                 Diagnostics = diag,
+                // Slice A2 (QA-05): the coordinator already reserves whole-day
+                // crew windows for the loader and unloader before driving the
+                // chain (below), so the freight service must NOT reserve
+                // sub-windows inside them (TryReserve would refuse the
+                // overlap) and must not log the missing-calendar diagnostic.
+                // The crew's person-time is guarded by the coordinator's own
+                // windows, not by the service's reserve-first path.
+                CrewWindowsReservedByCaller = true,
                 ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string receiveReason) =>
                 {
                     receiveReason = string.Empty;

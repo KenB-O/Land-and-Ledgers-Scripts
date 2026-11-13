@@ -17,6 +17,7 @@ using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.Persistence;
+using LandLedgers.Population;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Freight;
@@ -38,6 +39,35 @@ namespace LandLedgers.Economy.Logistics
         public WorkTimeBudgetStore Budgets;
         public int DayIndex;
         public List<string> Diagnostics;
+
+        /// <summary>
+        /// Slice A2 (QA-05): the person-schedule calendar every other driver
+        /// reserves through. When set, BeginLoading/BeginUnloading reserve the
+        /// handler's window before creating the handling task (reserve-first);
+        /// when null, the current behaviour is kept and one diagnostic names
+        /// the missing calendar. Nullable-or-default so existing callers and
+        /// tests keep compiling.
+        /// </summary>
+        public PersonScheduleTracker Schedules;
+
+        /// <summary>
+        /// Slice A2 (QA-05): the tick's current minute of day (0-1439), set by
+        /// the hooks builder from the clock. The reservation start minute for
+        /// the handler's window. No fixed handling hour exists in the driver;
+        /// the contract is the clock's minute when the hooks are built
+        /// (Agent 1 wiring: Floor(TimeOfDay01 * 1440), fallback 480).
+        /// </summary>
+        public int MinuteOfDay;
+
+        /// <summary>
+        /// Slice A2 (QA-05): true when the hooks' caller already holds the
+        /// handling crew's windows itself (ConstructionMaterialFreight
+        /// reserves whole-day crew windows before driving the chain, so the
+        /// service must not double-reserve sub-windows inside them and must
+        /// not log the missing-calendar diagnostic). The service skips both
+        /// the reserve and the diagnostic when this is set.
+        /// </summary>
+        public bool CrewWindowsReservedByCaller;
 
         /// <summary>
         /// PASS7-008: recipient acceptance for an unloaded shipment. Returns the
@@ -126,6 +156,15 @@ namespace LandLedgers.Economy.Logistics
             new Dictionary<string, EntityId>(StringComparer.Ordinal);
         private readonly Dictionary<string, EntityId> unloadTasks =
             new Dictionary<string, EntityId>(StringComparer.Ordinal);
+        // Slice A2 (QA-05): the schedule-window reservation id held per
+        // shipment while its handling task is open, mirroring loadTasks /
+        // unloadTasks. Transient: cleared on restore (the tracker's own
+        // reservations persist via its save slot; release then falls back
+        // to a same-day label lookup).
+        private readonly Dictionary<string, string> loadReservations =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> unloadReservations =
+            new Dictionary<string, string>(StringComparer.Ordinal);
         // Slice A1 (QA-04): consecutive daily ticks the physical-receiving
         // gate has held an unload task at zero minutes. A bound, not a
         // bypass: after PhysicalReceivingPinLimit pinned ticks the task is
@@ -264,7 +303,63 @@ namespace LandLedgers.Economy.Logistics
                 hooks.Diagnostics.Add("FreightShipmentService: " + message);
         }
 
-        /// <summary>
+        /// <summary>Slice A2 (QA-05): reserve-first. Reserve the handler's
+        /// window before the handling task is created. Returns false with a
+        /// refusal when the calendar refuses; the caller then creates no task,
+        /// commits no budget, and moves no cargo. When no calendar is wired
+        /// the current behaviour is kept and one diagnostic names the missing
+        /// calendar, unless the caller already holds the crew windows
+        /// (CrewWindowsReservedByCaller). TryReserve generates the
+        /// reservation id internally, so it is recovered from the tracker's
+        /// active reservations for this person and day.</summary>
+        private bool ReserveHandlerWindow(FreightShipmentHooks hooks, EntityId handlerId,
+            string shipmentId, string label, int plannedMinutes,
+            Dictionary<string, string> reservations, out string refusal)
+        {
+            refusal = string.Empty;
+            if (hooks == null || hooks.Schedules == null || hooks.CrewWindowsReservedByCaller)
+            {
+                if (hooks != null && hooks.Schedules == null && !hooks.CrewWindowsReservedByCaller)
+                    Log(hooks, $"shipment '{shipmentId}': no PersonScheduleTracker wired (Schedules is null) — handling proceeds without a reserved window.");
+                return true;
+            }
+            refusal = hooks.Schedules.TryReserve(handlerId.Id, PersonActivityKind.Work,
+                hooks.DayIndex, hooks.MinuteOfDay, plannedMinutes, label);
+            if (refusal != null) return false;
+            foreach (PersonActivityReservation reservation in hooks.Schedules.ActiveFor(handlerId.Id, hooks.DayIndex))
+            {
+                if (reservation.Label == label && reservation.StartMinuteOfDay == hooks.MinuteOfDay)
+                {
+                    reservations[shipmentId] = reservation.ReservationId;
+                    break;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>Slice A2 (QA-05): release the handler's window for a
+        /// shipment whose handling task just terminalized. Dictionary-first
+        /// (the id stored at reserve time); falls back to a same-day label
+        /// lookup, which is the post-restore path (the service-side maps are
+        /// transient and cleared on restore). Never called while the task is
+        /// still open. Release is idempotent on the tracker.</summary>
+        private void ReleaseHandlerWindow(Dictionary<string, string> reservations,
+            FreightShipmentHooks hooks, string shipmentId, EntityId handlerId, string label)
+        {
+            if (reservations != null && reservations.TryGetValue(shipmentId, out string reservationId))
+            {
+                hooks?.Schedules?.Release(reservationId);
+                reservations.Remove(shipmentId);
+                return;
+            }
+            if (hooks?.Schedules == null || !handlerId.IsValid) return;
+            foreach (PersonActivityReservation reservation in hooks.Schedules.ActiveFor(handlerId.Id, hooks.DayIndex))
+            {
+                if (reservation.Label == label)
+                    hooks.Schedules.Release(reservation.ReservationId);
+            }
+        }
+
         /// Creates a shipment (Planned). Over-capacity cargo is blocked pre-load:
         /// Failed with a reason, zero cargo owned (MR-P001).
         /// </summary>
@@ -482,12 +577,23 @@ namespace LandLedgers.Economy.Logistics
                 hooks.Tasks.RegisterDefinition(new TaskDefinition(defId,
                     "Load " + shipment.PlannedQuantityUnits + " units (" + shipment.ShipmentId + ")", baseMinutes), out _);
             }
+            // Slice A2 (QA-05): reserve-first — the handler's calendar window
+            // is booked before the task exists, so a double-booked handler
+            // refuses here with no task, no budget, and no cargo moved.
+            int plannedMinutes = hooks.Tasks.EstimateMinutesForWorker(defId, loaderId);
+            if (!ReserveHandlerWindow(hooks, loaderId, shipment.ShipmentId,
+                defId, plannedMinutes, loadReservations, out reason))
+            {
+                reason = "FreightShipmentService: load window refused: " + reason;
+                return false;
+            }
             WorkTask task = hooks.Tasks.CreateTask(defId, EntityId.For(EntityKind.Business, 3), hooks.DayIndex);
             if (!hooks.Tasks.AssignTask(task.TaskId, loaderId, hooks.Budgets, out reason)
                 || !hooks.Tasks.StartTask(task.TaskId, hooks.DayIndex, out reason))
             {
                 reason = "FreightShipmentService: load task could not start: " + reason;
                 hooks.Tasks.CancelTask(task.TaskId, hooks.Budgets);
+                ReleaseHandlerWindow(loadReservations, hooks, shipment.ShipmentId, loaderId, defId);
                 return false;
             }
             loadTasks[shipment.ShipmentId] = task.TaskId;
@@ -507,7 +613,11 @@ namespace LandLedgers.Economy.Logistics
         private bool FailLoadOnDebitRefusal(LogisticsShipmentState shipment, EntityId taskId,
             FreightShipmentHooks hooks, string reason)
         {
+            WorkTask failedTask = hooks.Tasks.FindTask(taskId);
+            EntityId loaderId = failedTask != null ? failedTask.AssigneeId : EntityId.Invalid;
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.RecoverableFailure, hooks.DayIndex, hooks.Budgets);
+            // Slice A2 (QA-05): the task terminalized, so its window releases.
+            ReleaseHandlerWindow(loadReservations, hooks, shipment.ShipmentId, loaderId, "freight:load:" + shipment.ShipmentId);
             loadTasks.Remove(shipment.ShipmentId);
             shipment.MarkDelayed(reason, LogisticsShipmentStatus.Planned);
             Log(hooks, $"shipment '{shipment.ShipmentId}': load task closed as failed — {reason}");
@@ -577,6 +687,8 @@ namespace LandLedgers.Economy.Logistics
                 Log(hooks, $"shipment '{shipment.ShipmentId}': source lot '{shipment.cargoLotId}' ({shipment.cargoSkuId}) debited once; {shipment.PlannedQuantityUnits}u enters wagon custody.");
             }
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
+            // Slice A2 (QA-05): the task terminalized, so its window releases.
+            ReleaseHandlerWindow(loadReservations, hooks, shipment.ShipmentId, loadTask.AssigneeId, "freight:load:" + shipment.ShipmentId);
             loadTasks.Remove(shipment.ShipmentId);
             // Loading applied: the wagon now has custody of the full planned quantity.
             shipment.loadApplied = true;
@@ -740,12 +852,21 @@ namespace LandLedgers.Economy.Logistics
                 hooks.Tasks.RegisterDefinition(new TaskDefinition(defId,
                     "Unload " + shipment.RemainingQuantityUnits + " units (" + shipment.ShipmentId + ")", baseMinutes), out _);
             }
+            // Slice A2 (QA-05): reserve-first, same as BeginLoading.
+            int plannedMinutes = hooks.Tasks.EstimateMinutesForWorker(defId, unloaderId);
+            if (!ReserveHandlerWindow(hooks, unloaderId, shipment.ShipmentId,
+                defId, plannedMinutes, unloadReservations, out reason))
+            {
+                reason = "FreightShipmentService: unload window refused: " + reason;
+                return false;
+            }
             WorkTask task = hooks.Tasks.CreateTask(defId, EntityId.For(EntityKind.Business, 3), hooks.DayIndex);
             if (!hooks.Tasks.AssignTask(task.TaskId, unloaderId, hooks.Budgets, out reason)
                 || !hooks.Tasks.StartTask(task.TaskId, hooks.DayIndex, out reason))
             {
                 reason = "FreightShipmentService: unload task could not start: " + reason;
                 hooks.Tasks.CancelTask(task.TaskId, hooks.Budgets);
+                ReleaseHandlerWindow(unloadReservations, hooks, shipment.ShipmentId, unloaderId, defId);
                 return false;
             }
             unloadTasks[shipment.ShipmentId] = task.TaskId;
@@ -811,6 +932,8 @@ namespace LandLedgers.Economy.Logistics
                     {
                         physicalReceivingPins.Remove(shipment.ShipmentId);
                         hooks.Tasks.CompleteTask(taskId, TaskOutcome.RecoverableFailure, hooks.DayIndex, hooks.Budgets);
+                        // Slice A2 (QA-05): the task terminalized, so its window releases.
+                        ReleaseHandlerWindow(unloadReservations, hooks, shipment.ShipmentId, unloadTask.AssigneeId, "freight:unload:" + shipment.ShipmentId);
                         unloadTasks.Remove(shipment.ShipmentId);
                         string gateReason = string.IsNullOrWhiteSpace(reason)
                             ? "physical receiving did not confirm"
@@ -828,6 +951,11 @@ namespace LandLedgers.Economy.Logistics
                 physicalReceivingPins.Remove(shipment.ShipmentId);
             }
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
+            // Slice A2 (QA-05): the task completes BEFORE the receive attempt
+            // in this method, so releasing here covers every receive-attempt
+            // exit (Completed / Partial / Delayed-on-refusal) with one
+            // release point — the task is terminal from CompleteTask onward.
+            ReleaseHandlerWindow(unloadReservations, hooks, shipment.ShipmentId, unloadTask.AssigneeId, "freight:unload:" + shipment.ShipmentId);
             unloadTasks.Remove(shipment.ShipmentId);
 
             int remaining = Math.Max(0, shipment.remainingQuantityUnits);
@@ -1039,6 +1167,11 @@ namespace LandLedgers.Economy.Logistics
             loadTasks.Clear();
             unloadTasks.Clear();
             physicalReceivingPins.Clear();
+            // Slice A2 (QA-05): the reservation maps are transient; the
+            // tracker's own reservations persist via its save slot, so a
+            // post-restore release falls back to a same-day label lookup.
+            loadReservations.Clear();
+            unloadReservations.Clear();
             dispatchAuthorities.Clear();
             if (dto == null) return out_;
             foreach (LogisticsShipmentSaveDto s in dto.Shipments)

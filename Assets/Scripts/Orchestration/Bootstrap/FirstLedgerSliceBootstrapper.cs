@@ -9,6 +9,7 @@ using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Bakery;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
@@ -561,6 +562,7 @@ namespace LandLedgers.FirstLedger
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
             ConfigureLiveBakerySaveOwner();
+            ConfigureLiveLumberYardSaveOwner();
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
             simulationDrivers?.AttachDevelopmentTownConfiguration(ResolveDevelopmentTownConfiguration());
@@ -2047,6 +2049,9 @@ namespace LandLedgers.FirstLedger
             // warn-returns otherwise, leaving the state + freight driver above
             // in place for the degraded path (section 2.4).
             ConfigureLiveBakerySaveOwner();
+            // C2: same window, same rule — the yard holder must exist
+            // before the Pass XL restore consumes the state.
+            ConfigureLiveLumberYardSaveOwner();
         }
 
         // Q04 Slice 3 (re-plan): called by SaveLoadManager.LoadDefaultSlot
@@ -2155,6 +2160,73 @@ namespace LandLedgers.FirstLedger
                 Debug.Log("[FreightSave] Pass 9 save owner created the live freight driver before simulation startup.", this);
             }
             Debug.Log($"[BakeryRuntime] Bootstrap owns one live BakeryShopRuntime for '{bakeryBusiness.RuntimeDisplayName}' ({bakeryBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+        }
+
+        // C2: mirrors ConfigureLiveBakerySaveOwner for the lumber yard.
+        // Creates/reuses the yard runtime + Pass 9 holder when a
+        // LumberYard business instance exists; warn-returns otherwise,
+        // leaving the state in place for the degraded path (the compact
+        // preset has no yard). First NPC yard only: the Pass 9 slot is a
+        // single field, so a second yard business has no slot to save
+        // into and is warned about, never silently wired.
+        private void ConfigureLiveLumberYardSaveOwner()
+        {
+            if (sharedBusinessRuntime == null || saveLoadManager == null)
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: shared business runtime or SaveLoadManager is missing.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
+            if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: no authored LumberYard business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                pass9 = new Series2Pass9SaveState();
+                saveLoadManager.Series2Pass9State = pass9;
+            }
+
+            // Reuse, never replace: the hub accessor creates the runtime
+            // on first use and returns the live holder afterwards, so the
+            // hub dictionary and the Pass 9 holder share one instance.
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: hub returned no runtime.", this);
+                return;
+            }
+
+            if (pass9.LumberYard == null)
+            {
+                pass9.LumberYard = liveYardRuntime;
+            }
+            else if (!string.Equals(pass9.LumberYard.BusinessInstanceId, yardBusiness.InstanceId, StringComparison.Ordinal))
+            {
+                Debug.LogWarning($"[LumberYardRuntime] Replacing Pass 9 lumber yard holder '{pass9.LumberYard.BusinessInstanceId}' with the authored yard '{yardBusiness.InstanceId}' (the Pass 9 load's identity guard would refuse the mismatched DTO anyway).", this);
+                pass9.LumberYard = liveYardRuntime;
+            }
+
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate == null || candidate.BusinessType != BusinessType.LumberYard) continue;
+                if (string.Equals(candidate.InstanceId, yardBusiness.InstanceId, StringComparison.Ordinal)) continue;
+                Debug.LogWarning($"[LumberYardRuntime] Second LumberYard business '{candidate.InstanceId}' is unwired: the Pass 9 slot holds one yard only, so its stock is not saved.", this);
+                break;
+            }
+
+            Debug.Log($"[LumberYardRuntime] Bootstrap owns one live LumberYardShopRuntime for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
         }
 
         private void ConfigureMillbrookAidTable(SimulationDrivers drivers)

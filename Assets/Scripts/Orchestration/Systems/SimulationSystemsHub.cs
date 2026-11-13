@@ -31,6 +31,7 @@ using LandLedgers.Economy.Businesses.Doctor;
 using LandLedgers.Economy.Businesses.GrainMill;
 using LandLedgers.Economy.Businesses.Hotel;
 using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Economy.Businesses.Newspaper;
 using LandLedgers.Economy.Businesses.Restaurant;
@@ -182,6 +183,13 @@ namespace LandLedgers.Orchestration.Systems
         // register holds no equipment — the gate still refuses loudly.
         private Dictionary<string, BusinessEquipmentRegister> equipmentRegisters;
 
+        // C2: one live lumber yard runtime per LumberYard business,
+        // mirroring the per-business equipment registers above. The Pass 9
+        // save seam persists the first yard only (single holder field);
+        // see Series2Pass9Save.cs. A business with no runtime holds no
+        // yard stock.
+        private Dictionary<string, LumberYardShopRuntime> lumberYardRuntimes;
+
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
         {
@@ -195,6 +203,19 @@ namespace LandLedgers.Orchestration.Systems
             return register;
         }
 
+        /// <summary>C2: the lumber yard runtime for one business, created on first use (empty).</summary>
+        public LumberYardShopRuntime LumberYardRuntimeFor(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            lumberYardRuntimes ??= new Dictionary<string, LumberYardShopRuntime>(StringComparer.Ordinal);
+            if (!lumberYardRuntimes.TryGetValue(businessInstanceId, out LumberYardShopRuntime yard) || yard == null)
+            {
+                yard = new LumberYardShopRuntime(businessInstanceId, Ids);
+                lumberYardRuntimes[businessInstanceId] = yard;
+            }
+            return yard;
+        }
+
         /// <summary>
         /// Slice S2: adopts a register (e.g. one restored from the Pass 9
         /// save seam) as the hub's live holder for its business. Replaces
@@ -206,6 +227,19 @@ namespace LandLedgers.Orchestration.Systems
             if (register == null || string.IsNullOrWhiteSpace(register.BusinessInstanceId)) return;
             equipmentRegisters ??= new Dictionary<string, BusinessEquipmentRegister>(StringComparer.Ordinal);
             equipmentRegisters[register.BusinessInstanceId] = register;
+        }
+
+        /// <summary>
+        /// C2: adopts a runtime (e.g. one restored from the Pass 9 save
+        /// seam) as the hub's live holder for its business. Replaces by
+        /// business id, never merges — the save data is authoritative,
+        /// and re-registering the same runtime is idempotent.
+        /// </summary>
+        public void RegisterLumberYardRuntime(LumberYardShopRuntime runtime)
+        {
+            if (runtime == null || string.IsNullOrWhiteSpace(runtime.BusinessInstanceId)) return;
+            lumberYardRuntimes ??= new Dictionary<string, LumberYardShopRuntime>(StringComparer.Ordinal);
+            lumberYardRuntimes[runtime.BusinessInstanceId] = runtime;
         }
 
         // Pass IV Worker 2: the unified reservation authority (persisted),

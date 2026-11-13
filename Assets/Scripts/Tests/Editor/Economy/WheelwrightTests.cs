@@ -314,5 +314,48 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(1, restored.BuiltAssets.Count);
             Assert.AreEqual(order.WorkOrderId, restored.Repairs.Orders[0].WorkOrderId, "open orders persist");
         }
+
+        [Test]
+        public void Save_RoundTrip_PreservesIronworkPartIdentityAndProvenance()
+        {
+            var shop = NewShop();
+            EntityId wright = Person(11);
+            var skills = SkilledWheelwright(wright, 200);
+            var diagnostics = new List<string>();
+            EquipmentAsset wagon = shop.BuildWagon("spring-wagon", wright, 42, skills, null, diagnostics);
+            Assert.IsNotNull(wagon, string.Join("; ", diagnostics));
+            Assert.AreEqual(1, shop.IronworkPartsOnHand, "2 of 3 parts consumed by the build");
+
+            WheelwrightRuntime.WheelwrightSaveDto dto = shop.ToSaveDto();
+            var restored = new WheelwrightRuntime();
+            restored.LoadFromSaveDto(dto);
+
+            Assert.AreEqual(1, restored.IronworkPartsOnHand);
+            EquipmentAsset part = restored.IronworkStock[0];
+            Assert.AreEqual("IRONWORK-wheel-1-003", part.AssetId, "The surviving part keeps its shelf id, not a fresh phantom.");
+            Assert.AreEqual("smith-1", part.MadeByBusinessId);
+            Assert.AreEqual("Test Smithy", part.MadeByBusinessName);
+            Assert.IsTrue(part.MaterialLotIds.Contains("IMP-ORD-1-1"), "Material lot provenance survives.");
+        }
+
+        [Test]
+        public void Save_RoundTrip_RestoresOpenOrders_AndContinuesNumbering()
+        {
+            var shop = NewShop();
+            var diagnostics = new List<string>();
+            RepairWorkOrder order = shop.Repairs.Intake("C", "c-1", "WG-c", "Wagon C", "rim split",
+                WheelwrightRuntime.WheelwrightCapabilityCode, "yard", RepairUrgency.Urgent, 52, diagnostics);
+            Assert.AreEqual("WO-0001", order.WorkOrderId);
+
+            WheelwrightRuntime.WheelwrightSaveDto dto = shop.ToSaveDto();
+            var restored = new WheelwrightRuntime();
+            restored.LoadFromSaveDto(dto);
+
+            Assert.AreEqual(1, restored.Repairs.Orders.Count);
+            Assert.AreEqual("WO-0001", restored.Repairs.Orders[0].WorkOrderId);
+            RepairWorkOrder next = restored.Repairs.Intake("D", "d-1", "WG-d", "Wagon D", "axle cracked",
+                WheelwrightRuntime.WheelwrightCapabilityCode, "yard", RepairUrgency.Routine, 53, diagnostics);
+            Assert.AreEqual("WO-0002", next.WorkOrderId, "Numbering continues past the restored order, no duplicate id.");
+        }
     }
 }

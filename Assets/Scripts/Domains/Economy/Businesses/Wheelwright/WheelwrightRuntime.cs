@@ -1084,6 +1084,8 @@ namespace LandLedgers.Economy.Wheelwright
             public List<int> LumberUnits = new List<int>();
             public List<string> ConsumedLumberLotIds = new List<string>();
             public int IronworkPartsOnHand;
+            public List<EquipmentAsset> IronworkStock = new List<EquipmentAsset>();
+            public int NextRepairNumber = 1;
             public int NextAssetNumber = 1;
             public int NextIronworkNumber = 1;
             public int BuildRevenueCents;
@@ -1131,6 +1133,8 @@ namespace LandLedgers.Economy.Wheelwright
             }
             dto.ConsumedLumberLotIds.AddRange(consumedLumberLotIds);
             dto.IronworkPartsOnHand = ironworkStock.Count;
+            dto.IronworkStock.AddRange(ironworkStock);
+            dto.NextRepairNumber = repairQueue.ToSaveDto().NextNumber;
             foreach (var kv in builtAssets) dto.BuiltAssets.Add(kv.Value);
             foreach (RepairWorkOrder o in repairQueue.Orders)
                 if (o.Status != RepairOrderStatus.Complete && o.Status != RepairOrderStatus.Paid)
@@ -1165,9 +1169,41 @@ namespace LandLedgers.Economy.Wheelwright
             foreach (EquipmentAsset a in dto.BuiltAssets)
                 if (a != null && !string.IsNullOrWhiteSpace(a.AssetId))
                     builtAssets[a.AssetId] = a;
-            // Ironwork parts are EquipmentAssets whose ids were consumed at build;
-            // stock counts are informational — parts themselves are re-received
-            // from the smith at session start (no phantom stock).
+            // Ironwork parts are EquipmentAssets persisted directly, like
+            // BuiltAssets above. The shelf is the sole owner after the
+            // smith to wheelwright transfer, so only the shelf can persist
+            // them; the smith holds nothing to re-supply. The count field
+            // stays as a cross-check against the restored list.
+            ironworkStock.Clear();
+            if (dto.IronworkStock != null)
+                foreach (EquipmentAsset part in dto.IronworkStock)
+                    if (part != null && !string.IsNullOrWhiteSpace(part.AssetId))
+                        ironworkStock.Add(part);
+            // Open repair orders were persisted but never loaded, so a
+            // Save and Continue emptied the queue. The shared RepairQueue
+            // pair restores them. The next number is the max of the saved
+            // number and one past the largest restored order number, so
+            // old saves that carry no saved number cannot mint a duplicate
+            // work order id after load.
+            var queueDto = new RepairQueue.RepairQueueDto
+            {
+                NextNumber = Math.Max(1, dto.NextRepairNumber),
+            };
+            if (dto.OpenOrders != null)
+            {
+                foreach (RepairWorkOrder o in dto.OpenOrders)
+                {
+                    if (o == null) continue;
+                    queueDto.Orders.Add(o);
+                    if (!string.IsNullOrWhiteSpace(o.WorkOrderId)
+                        && o.WorkOrderId.StartsWith("WO-", StringComparison.Ordinal)
+                        && int.TryParse(o.WorkOrderId.Substring(3), out int orderNumber))
+                    {
+                        queueDto.NextNumber = Math.Max(queueDto.NextNumber, orderNumber + 1);
+                    }
+                }
+            }
+            repairQueue.LoadFromSaveDto(queueDto);
         }
     }
 }

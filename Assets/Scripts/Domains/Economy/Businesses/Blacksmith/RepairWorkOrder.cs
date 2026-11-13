@@ -176,5 +176,37 @@ namespace LandLedgers.Economy.Blacksmith
             RecomputeQueuePositions();
             diagnostics.Add("RepairQueue: priorities changed — queue positions recomputed.");
         }
+
+        // ---------- save DTO (inside the owning queue class) ----------
+
+        [Serializable]
+        public sealed class RepairQueueDto
+        {
+            public List<RepairWorkOrder> Orders = new List<RepairWorkOrder>();
+            public int NextNumber;
+        }
+
+        public RepairQueueDto ToSaveDto()
+        {
+            var dto = new RepairQueueDto { NextNumber = nextNumber };
+            dto.Orders.AddRange(orders);
+            return dto;
+        }
+
+        /// <summary>
+        /// Clear-then-load. A null DTO clears the queue to empty. Queue
+        /// positions are derived from urgency and opened day, so they are
+        /// recomputed on load rather than trusted from the DTO.
+        /// </summary>
+        public void LoadFromSaveDto(RepairQueueDto dto)
+        {
+            orders.Clear();
+            nextNumber = 1;
+            if (dto == null) return;
+            foreach (RepairWorkOrder o in dto.Orders)
+                if (o != null) orders.Add(o);
+            nextNumber = Math.Max(1, dto.NextNumber);
+            RecomputeQueuePositions();
+        }
     }
 }

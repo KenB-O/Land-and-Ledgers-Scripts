@@ -775,6 +775,38 @@ namespace LandLedgers.Orchestration.Systems
                     populationManager.State, householdMemberships, currentJourneys);
             }
 
+            // Plan 16: General Store employee service. The loop resolves the
+            // manager-bound store's live queue and a filled clerk by supplier
+            // business id; any other supplier resolves null / -1 and behaves
+            // exactly as today. The manager business id is
+            // CurrentBusiness.InstanceId falling back to "general-store" —
+            // the same string the trading port reports as StoreBusinessId
+            // (GeneralStoreTradingPort.cs:49) and the supplier adapter
+            // exposes as SupplierBusinessId
+            // (GeneralStoreSupplierAdapter.cs:144), so a live store trip's
+            // SupplierBusinessId matches it. The FindAnyObjectByType call is
+            // the existing production pattern (SimulationDrivers.cs:1192,
+            // :4288, :5352).
+            householdShoppingLoop.ResolveCustomerQueue = businessId =>
+            {
+                var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                if (manager == null) return null;
+                string managerBusinessId = manager.CurrentBusiness != null
+                    ? manager.CurrentBusiness.InstanceId
+                    : "general-store";
+                return string.Equals(managerBusinessId, businessId, StringComparison.Ordinal) ? manager.CustomerQueue : null;
+            };
+            householdShoppingLoop.ResolveServiceClerkPersonId = businessId =>
+            {
+                var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                if (manager == null) return -1;
+                string managerBusinessId = manager.CurrentBusiness != null
+                    ? manager.CurrentBusiness.InstanceId
+                    : "general-store";
+                if (!string.Equals(managerBusinessId, businessId, StringComparison.Ordinal)) return -1;
+                return manager.TryGetServiceClerkPersonId(out int clerkPersonId) ? clerkPersonId : -1;
+            };
+
             // Pass 9 person-hand persistence shares the same live authority
             // as task gating and inventory reads. Bind before any save or
             // Continue operation; old saves restore as an empty hand state.

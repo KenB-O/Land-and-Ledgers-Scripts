@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -394,6 +395,74 @@ namespace LandLedgers.FirstLedger
                 : null;
         public GeneralStoreBusinessDefinition StoreDefinition => storeDefinition;
         public int StoreBuildingId => storeBuildingId;
+
+        private CustomerQueue customerQueue;
+
+        /// <summary>Plan 16: the store's live waiting-customer queue. One per
+        /// manager-bound store; created lazily on first use. Merchant ids are
+        /// refreshed from the bound business on every access so a queue created
+        /// before the business forms does not keep stale ids. Save/load of the
+        /// waiting line is NOT here: the single save slot is Agent 2's A10
+        /// Pass 9 slot (Series2Pass9Save), which is not on this branch yet —
+        /// see Plan 16 section 2. Until it lands, the live queue is lost on
+        /// save/load, exactly as today (no live queue exists today).</summary>
+        public CustomerQueue CustomerQueue
+        {
+            get
+            {
+                if (customerQueue == null)
+                {
+                    customerQueue = new CustomerQueue();
+                }
+                customerQueue.MerchantBusinessId = currentBusiness != null
+                    ? currentBusiness.InstanceId
+                    : "general-store";
+                customerQueue.MerchantName = currentBusiness != null
+                    ? currentBusiness.RuntimeDisplayName
+                    : "General Store";
+                return customerQueue;
+            }
+        }
+
+        /// <summary>Plan 16: first filled clerk_helper slot's person id, or
+        /// false when no clerk slot is filled. The TendCustomer assignee comes
+        /// from here; a customer with no clerk waits in the queue (no task is
+        /// created for them in this slice). Slot identification mirrors
+        /// GetGeneralStoreRoleDisplayName (:2731, "clerk_helper"); the worker
+        /// id parse mirrors FindPersonForWorkerSlot (:3019-3027,
+        /// int.TryParse on slot.AssignedWorkerId).</summary>
+        public bool TryGetServiceClerkPersonId(out int personId)
+        {
+            personId = -1;
+            if (runtimeState == null || runtimeState.WorkerSlots == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < runtimeState.WorkerSlots.Count; i++)
+            {
+                WorkerSlotState slot = runtimeState.WorkerSlots[i];
+                if (slot == null || !slot.IsFilled)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(slot.SlotId, "clerk_helper", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (int.TryParse(slot.AssignedWorkerId, out int parsed))
+                {
+                    personId = parsed;
+                    return true;
+                }
+
+                return false;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// Builds the fallback trading port used before a specific store

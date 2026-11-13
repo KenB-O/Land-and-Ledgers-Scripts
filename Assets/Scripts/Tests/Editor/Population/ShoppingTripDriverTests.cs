@@ -1,5 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using LandLedgers.Economy.GeneralStore;
+using LandLedgers.Economy.Retail;
+using LandLedgers.FirstLedger;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -796,6 +800,305 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(0, gNeed.UnitsNeeded,
                 "registry need did not shrink: delivery decremented the orphan (got " + gNeed.UnitsNeeded + ", expected 0)");
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
+        }
+
+        // ---- Plan 16: General Store employee service (sub-items 1-4) ----
+        //
+        // The new production members (loop resolver properties, trip
+        // ServiceTaskId / ServiceTaskPlannedMinutes) are reached through
+        // reflection here so this file still compiles against unmodified
+        // production code: the red-first run must show per-test failures,
+        // not a whole-fixture compile error. TaskAuthority is public, so
+        // service-task lookup/completion in test setup uses f.Tasks
+        // directly; the loop's FindServiceTask / CompleteServiceTask are
+        // still exercised through the driver in tests 2 and 7.
+
+        private static void AddClerk(Fixture f)
+        {
+            f.Population.people.Add(new PersonState { id = 3, firstName = "Clerk", lastName = "Test", age = 30, ageBand = AgeBand.Adult18Plus });
+            f.Budgets.EnsureDay(Fixture.Day);
+        }
+
+        private static CustomerQueue WireService(Fixture f, LostSaleLog log, int clerkPersonId)
+        {
+            var queue = new CustomerQueue(log);
+            // The fixture registers only the shopping leg definitions
+            // (HouseholdShoppingLoop.RegisterTaskDefinitions); the store
+            // catalog is registered at boot in production
+            // (SimulationSystemsHub.cs:1063), so register it here.
+            GeneralStoreTaskCatalog.RegisterAll(f.Tasks);
+            System.Reflection.PropertyInfo queueProp = typeof(HouseholdShoppingLoop).GetProperty("ResolveCustomerQueue");
+            Assert.IsNotNull(queueProp, "Plan 16 ResolveCustomerQueue property missing");
+            queueProp.SetValue(f.Loop, (System.Func<string, CustomerQueue>)(businessId => businessId == "store-1" ? queue : null));
+            System.Reflection.PropertyInfo clerkProp = typeof(HouseholdShoppingLoop).GetProperty("ResolveServiceClerkPersonId");
+            Assert.IsNotNull(clerkProp, "Plan 16 ResolveServiceClerkPersonId property missing");
+            clerkProp.SetValue(f.Loop, (System.Func<string, int>)(businessId => businessId == "store-1" ? clerkPersonId : -1));
+            return queue;
+        }
+
+        private static EntityId ServiceTaskIdOf(PlannedShoppingTrip trip)
+        {
+            // ServiceTaskId is internal: plain GetField only finds public
+            // fields, so request non-public instance fields explicitly.
+            System.Reflection.FieldInfo field = typeof(PlannedShoppingTrip).GetField("ServiceTaskId",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.IsNotNull(field, "Plan 16 ServiceTaskId field missing");
+            return (EntityId)field.GetValue(trip);
+        }
+
+        private static int ServiceTaskPlannedMinutesOf(PlannedShoppingTrip trip)
+        {
+            System.Reflection.FieldInfo field = typeof(PlannedShoppingTrip).GetField("ServiceTaskPlannedMinutes",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.IsNotNull(field, "Plan 16 ServiceTaskPlannedMinutes field missing");
+            return (int)field.GetValue(trip);
+        }
+
+        private static PlannedShoppingTrip DriveToArrival(Fixture f, out float arrivalGameSeconds)
+        {
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip trip = f.Driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            f.Driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            DueEvent outbound = null;
+            foreach (DueEvent ev in f.DueEvents.PopDue(departure + 86400f))
+            {
+                if (ev.PayloadRef == trip.Legs.Outbound.TaskId.ToString())
+                {
+                    outbound = ev;
+                    break;
+                }
+            }
+
+            Assert.IsNotNull(outbound, "outbound leg due event not scheduled");
+            arrivalGameSeconds = outbound.DueGameSeconds;
+            f.Driver.HandleDueEvent(outbound, Fixture.Day, outbound.DueGameSeconds, f.DueEvents, f.Diag);
+            return trip;
+        }
+
+        private static DueEvent PopServiceDueEvent(Fixture f, PlannedShoppingTrip trip, float arrivalGameSeconds)
+        {
+            float serviceDue = arrivalGameSeconds + ServiceTaskPlannedMinutesOf(trip) * 60f;
+            DueEvent serviceEv = null;
+            foreach (DueEvent ev in f.DueEvents.PopDue(serviceDue + 1f))
+            {
+                if (ev.PayloadRef == ServiceTaskIdOf(trip).ToString())
+                {
+                    serviceEv = ev;
+                }
+                else
+                {
+                    f.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
+                }
+            }
+
+            return serviceEv;
+        }
+
+        [Test]
+        public void Arrival_EnqueuesShopperInStoreQueue()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(1, queue.WaitingCount);
+            WaitingCustomer waiting = queue.Waiting[0];
+            // Plan 16 §1.3: the ref reuses the in-store leg format
+            // shop:{HouseholdId}:{NeedSequence} (fixture household is 7).
+            Assert.AreEqual($"shop:{Fixture.HouseholdId}:{need.NeedSequence}", waiting.CustomerRef);
+            Assert.AreEqual(trip.ShopperPersonId, waiting.ActingPersonId);
+            Assert.AreEqual("staple_food", waiting.CategoryId);
+            Assert.AreEqual(trip.Candidate.UnitsPlanned, waiting.UnitsWanted);
+            Assert.AreEqual(trip.Candidate.UnitPriceCents, waiting.PriceCentsPerUnit);
+            Assert.AreEqual(CustomerQueue.DefaultPatienceMinutes, waiting.PatienceMinutesRemaining);
+            Assert.AreEqual(Fixture.Day, waiting.QueuedDayIndex);
+            Assert.IsTrue(ServiceTaskIdOf(trip).IsValid);
+            WorkTask serviceTask = f.Tasks.FindTask(ServiceTaskIdOf(trip));
+            Assert.IsNotNull(serviceTask);
+            Assert.AreEqual(GeneralStoreTaskCatalog.TendCustomerId, serviceTask.DefinitionId);
+        }
+
+        [Test]
+        public void ServiceTaskCompletion_PopsQueue()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            string servedRef = queue.Waiting[0].CustomerRef;
+            Assert.AreEqual($"shop:{Fixture.HouseholdId}:{need.NeedSequence}", servedRef);
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(TaskStatus.Complete, f.Tasks.FindTask(ServiceTaskIdOf(trip)).Status);
+            Assert.AreEqual(0, queue.WaitingCount);
+            StringAssert.Contains(servedRef, string.Join("\n", f.Diag));
+        }
+
+        [Test]
+        public void NoClerk_EnqueuesWithoutTask()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
+            StringAssert.Contains("no clerk", string.Join("\n", f.Diag));
+        }
+
+        [Test]
+        public void QueueFull_SkipsEnqueueWithoutLostSale()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.IsTrue(queue.Enqueue("prefill-" + i, Fixture.ShopperId, "staple_food", 1, 120, Fixture.Day));
+            }
+
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            Assert.AreEqual(5, queue.WaitingCount);
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.AreEqual("prefill-" + i, queue.Waiting[i].CustomerRef);
+            }
+
+            Assert.AreEqual(0, log.Count);
+            Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
+            StringAssert.Contains("queue full", string.Join("\n", f.Diag));
+        }
+
+        private sealed class EmptyCategoryStore : IItemResolvingSupplier
+        {
+            public string SupplierBusinessId { get; set; } = "store-1";
+            public string SupplierName { get; set; } = "General Store";
+            public string LocationId { get; set; } = "store";
+            public Dictionary<string, int> Stock = new Dictionary<string, int>();
+            public Dictionary<string, int> Prices = new Dictionary<string, int>();
+            public int CashReceived;
+            public string LastReceiptIdValue = string.Empty;
+            public int ReceiptSequence;
+            public bool Closed;
+
+            public bool HasCategory(string categoryId) => true;
+            public int StockUnits(string categoryId) => 0;
+            public int PricePerUnitCents(string categoryId) => 0;
+            public int Sell(string categoryId, int requestedUnits, int dayIndex, List<string> diagnostics) => 0;
+
+            public bool OffersItem(string itemId) => Stock.ContainsKey(itemId);
+            public string CategoryForItem(string itemId) => string.Empty;
+            public int ItemStockUnits(string itemId) => Stock.TryGetValue(itemId, out int s) ? s : 0;
+            public int ItemPricePerUnitCents(string itemId) => Prices.TryGetValue(itemId, out int p) ? p : 0;
+            public string CheckTradingCapability(int absoluteDayIndex, int minuteOfDay) =>
+                Closed ? "closed for the night" : null;
+
+            public string LastReceiptId => LastReceiptIdValue;
+
+            public int SellItem(string itemId, int requestedUnits, int dayIndex, ShoppingSettlement settlement, List<string> diagnostics)
+            {
+                int have = ItemStockUnits(itemId);
+                int sold = System.Math.Min(System.Math.Max(0, requestedUnits), have);
+                if (sold > 0)
+                {
+                    Stock[itemId] = have - sold;
+                    LastReceiptIdValue = $"rcpt-{++ReceiptSequence}";
+                    if (settlement != null && settlement.Mode == ShoppingSettlementMode.CashFromLedger)
+                    {
+                        CashReceived += settlement.AmountCents;
+                    }
+                }
+
+                return sold;
+            }
+        }
+
+        [Test]
+        public void UnresolvableCategory_SkipsEnqueue()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            var emptyStore = new EmptyCategoryStore();
+            emptyStore.Stock[HouseholdItemCatalog.FlourId] = 100;
+            emptyStore.Prices[HouseholdItemCatalog.FlourId] = 120;
+            f.Directory.Register(emptyStore);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            Assert.AreEqual(0, queue.WaitingCount);
+            Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
+            Assert.AreEqual(1200, emptyStore.CashReceived);
+            Assert.AreEqual(90, emptyStore.Stock[HouseholdItemCatalog.FlourId]);
+        }
+
+        [Test]
+        public void NullResolvers_BehaveAsToday()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            f.RunUntilDone(tickSeconds: 300);
+            Assert.AreEqual(0, f.Driver.ActiveTrips.Count, "trip should be done\n" + string.Join("\n", f.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+            Assert.AreEqual(50000 - 1200, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(90, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+        }
+
+        [Test]
+        public void ServiceCompletionRefusal_LeavesQueueEntry()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.AreEqual(1, queue.WaitingCount);
+            WorkTask task = f.Tasks.FindTask(ServiceTaskIdOf(trip));
+            Assert.IsNotNull(task);
+            int remaining = System.Math.Max(1, task.MinutesRemaining);
+            Assert.IsTrue(f.Tasks.RecordWorkProgress(task.TaskId, remaining, f.Budgets, Fixture.Day, out bool reached, out string rejection), rejection);
+            Assert.IsTrue(reached);
+            Assert.IsTrue(f.Tasks.CompleteTask(task.TaskId, TaskOutcome.Success, Fixture.Day, f.Budgets));
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.AreEqual(TaskStatus.Complete, f.Tasks.FindTask(ServiceTaskIdOf(trip)).Status);
+        }
+
+        [Test]
+        public void StoreBusinessEntityId_NeverFreightThree()
+        {
+            // Moved here from GeneralStoreTaskCatalogTests.cs per
+            // coordinator Decision B (Plan 16 §3): that file is
+            // harness-excluded, so the test could never appear in a
+            // full log. Reached through reflection so this file still
+            // compiles against unmodified production code (red-first):
+            // the helper does not exist yet before Plan 16.
+            System.Reflection.MethodInfo helper = typeof(GeneralStoreTaskCatalog).GetMethod("StoreBusinessEntityId");
+            Assert.IsNotNull(helper, "Plan 16 StoreBusinessEntityId helper missing");
+            foreach (string id in new[] { "player_general_store", "general-store-1", "biz-store", "store-1" })
+            {
+                var first = (EntityId)helper.Invoke(null, new object[] { id });
+                var second = (EntityId)helper.Invoke(null, new object[] { id });
+                Assert.AreNotEqual(EntityId.For(EntityKind.Business, 3), first);
+                Assert.AreEqual(first, second);
+            }
         }
     }
 }

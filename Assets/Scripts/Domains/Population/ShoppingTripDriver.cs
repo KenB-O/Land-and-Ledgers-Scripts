@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -57,6 +58,17 @@ namespace LandLedgers.Population
         internal EntityId OutboundTaskId;
         internal EntityId InStoreTaskId;
         internal EntityId ReturnTaskId;
+
+        /// <summary>Plan 16, live-only: the TendCustomer task serving this
+        /// trip's shopper, and its skill-scaled planned minutes (the due
+        /// time is scheduled from this, never from the 4-minute base).
+        /// NOT persisted in PlannedShoppingTripSaveDto in this slice: on a
+        /// save/load mid-service the link is lost (the task itself restores
+        /// through TaskAuthority). Persisting it plus re-registering the due
+        /// event on rehydrate is the section 8 follow-up, mirroring legs
+        /// (ScheduleLegDueAfterLoad, :676).</summary>
+        internal EntityId ServiceTaskId;
+        internal int ServiceTaskPlannedMinutes;
         internal PlannedShoppingTripSaveDto CandidateDto;
 
         public bool IsActive => State == TripState.Planned || State == TripState.Outbound ||
@@ -168,6 +180,13 @@ namespace LandLedgers.Population
         private readonly List<PlannedShoppingTrip> returnRecoveries = new List<PlannedShoppingTrip>();
         private readonly Dictionary<string, InFlightLeg> legsByTaskIdString =
             new Dictionary<string, InFlightLeg>(StringComparer.Ordinal);
+
+        /// <summary>Plan 16: TendCustomer service tasks awaiting their
+        /// completion due event, task-id string to trip id. Separate from
+        /// legsByTaskIdString: a service task is not a leg, and its due
+        /// event pops the store queue rather than completing a leg.</summary>
+        private readonly Dictionary<string, string> serviceTaskIdStringToTripId =
+            new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<string> diagnostics = new List<string>();
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
@@ -205,7 +224,8 @@ namespace LandLedgers.Population
         {
             if (ev == null) return false;
             if (ev.Kind == DueEventKind.TaskCompletionDue)
-                return legsByTaskIdString.ContainsKey(ev.PayloadRef ?? string.Empty);
+                return legsByTaskIdString.ContainsKey(ev.PayloadRef ?? string.Empty)
+                    || serviceTaskIdStringToTripId.ContainsKey(ev.PayloadRef ?? string.Empty);
             return ev.Kind == DueEventKind.JourneyStageDue
                 && !string.IsNullOrWhiteSpace(ev.PayloadRef)
                 && ev.PayloadRef.StartsWith("delivery:", StringComparison.Ordinal)
@@ -213,7 +233,8 @@ namespace LandLedgers.Population
         }
 
         public bool OwnsOpenTask(WorkTask task) => task != null
-            && legsByTaskIdString.ContainsKey(task.TaskId.ToString());
+            && (legsByTaskIdString.ContainsKey(task.TaskId.ToString())
+                || serviceTaskIdStringToTripId.ContainsKey(task.TaskId.ToString()));
 
         /// <summary>
         /// Day boundary: plans a real-time trip for every open need of the
@@ -416,6 +437,34 @@ namespace LandLedgers.Population
             DueEvent ev, int dayIndex, float currentGameSeconds,
             IDueEventScheduler dueEvents, List<string> diag)
         {
+            // Plan 16: TendCustomer service completion. Checked FIRST, before
+            // the legs lookup below: a service task is not a leg, and its due
+            // event pops the store queue rather than completing a leg.
+            // (Coordinator review correction: the legs lookup is in this
+            // method, not in HandleDueEvent, which only delegates here; use
+            // return, never break.)
+            if (serviceTaskIdStringToTripId.TryGetValue(ev.PayloadRef ?? string.Empty, out string serviceTripId))
+            {
+                serviceTaskIdStringToTripId.Remove(ev.PayloadRef);
+                PlannedShoppingTrip serviceTrip = FindTrip(serviceTripId);
+                if (serviceTrip == null)
+                {
+                    diag.Add($"ShoppingTripDriver: service task {ev.PayloadRef} has no trip; dropped.");
+                    return;
+                }
+                WorkTask serviceTask = loop.FindServiceTask(serviceTrip.ServiceTaskId);
+                string serviceError = loop.CompleteServiceTask(serviceTask, dayIndex, diag);
+                if (serviceError != null)
+                {
+                    diag.Add($"ShoppingTripDriver: service task {ev.PayloadRef} did not complete ({serviceError}); customer stays queued.");
+                    return;
+                }
+                CustomerQueue serviceQueue = loop.ResolveCustomerQueue?.Invoke(serviceTrip.Candidate?.Supplier?.SupplierBusinessId ?? string.Empty);
+                string servedRef = serviceQueue != null ? serviceQueue.ServeNext() : null;
+                diag.Add($"ShoppingTripDriver: TendCustomer service complete for trip {serviceTripId}; served '{servedRef ?? string.Empty}'.");
+                return;
+            }
+
             InFlightLeg leg;
             if (!legsByTaskIdString.TryGetValue(ev.PayloadRef ?? string.Empty, out leg) || leg == null)
             {
@@ -545,6 +594,18 @@ namespace LandLedgers.Population
                     trip.Legs != null ? trip.Legs.Return : null,
                     currentGameSeconds, dueEvents, diag);
                 return;
+            }
+
+            // Plan 16: the service task completes on its due event, like a leg.
+            if (trip.ServiceTaskId.IsValid)
+            {
+                string serviceTaskIdString = trip.ServiceTaskId.ToString();
+                string serviceDueId;
+                dueEvents.Schedule(DueEventKind.TaskCompletionDue,
+                    currentGameSeconds + Math.Max(1, trip.ServiceTaskPlannedMinutes) * 60f,
+                    serviceTaskIdString, out serviceDueId);
+                serviceTaskIdStringToTripId[serviceTaskIdString] = trip.TripId;
+                diag.Add($"ShoppingTripDriver: TendCustomer service due in {trip.ServiceTaskPlannedMinutes} min ({serviceDueId}).");
             }
 
             string inStoreError = loop.BeginInStoreLeg(trip, dayIndex, diag);

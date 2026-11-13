@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
+using LandLedgers.FirstLedger;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
@@ -71,6 +73,18 @@ namespace LandLedgers.Population
         private JourneyModel journeys;
         private readonly TaskAuthority tasks;
         private readonly WorkTimeBudgetStore budgets;
+
+        /// <summary>Plan 16, optional: resolves a store business id to its
+        /// live CustomerQueue, or null when the supplier has no queue (a
+        /// non-General-Store supplier, or the NPC store, which has no manager
+        /// queue in this slice). Null means "no queue configured": arrival
+        /// behaves exactly as today.</summary>
+        public Func<string, CustomerQueue> ResolveCustomerQueue { get; set; }
+
+        /// <summary>Plan 16, optional: resolves a store business id to a
+        /// filled clerk's person id, or -1 when no clerk is available.
+        /// Null means "no clerk resolution configured".</summary>
+        public Func<string, int> ResolveServiceClerkPersonId { get; set; }
         private readonly PersonScheduleTracker scheduleTracker;
         private readonly ShopperSellerKnowledge knowledge;
         private readonly FinancialObligationAuthority obligations;
@@ -2194,6 +2208,78 @@ namespace LandLedgers.Population
                     "Shopper returns empty-handed; trip rescheduled, need stays open.";
             }
 
+            // Plan 16: employee service. The shopper joins the store's live
+            // queue and a TendCustomer task is created for a filled clerk.
+            // Settlement is UNCHANGED in this slice (it still runs below, at
+            // arrival); the gate that makes settlement wait for service is
+            // slice 17. Skips are silent-or-diagnostic only, never invented
+            // state: no queue -> today; unresolvable category -> skip (never
+            // pass ItemId as CategoryId); full line -> skip WITHOUT calling
+            // Enqueue (calling it would record a false QueueBalk lost sale for
+            // a customer who is about to settle); no clerk -> enqueue only,
+            // no task.
+            CustomerQueue serviceQueue = ResolveCustomerQueue?.Invoke(chosen.Supplier.SupplierBusinessId);
+            if (serviceQueue != null)
+            {
+                string serviceCategoryId = chosen.ItemSupplier != null
+                    ? chosen.ItemSupplier.CategoryForItem(need.ItemId)
+                    : null;
+                if (!string.IsNullOrWhiteSpace(serviceCategoryId)
+                    && serviceQueue.WaitingCount < CustomerQueue.MaxToleratedQueueLength)
+                {
+                    string serviceCustomerRef = $"shop:{trip.HouseholdId}:{need.NeedSequence}";
+                    bool enqueued = serviceQueue.Enqueue(
+                        serviceCustomerRef, trip.ShopperPersonId, serviceCategoryId,
+                        chosen.UnitsPlanned, chosen.UnitPriceCents, arrivalDayIndex);
+                    if (enqueued)
+                    {
+                        int clerkPersonId = ResolveServiceClerkPersonId?.Invoke(chosen.Supplier.SupplierBusinessId) ?? -1;
+                        if (clerkPersonId >= 0)
+                        {
+                            EntityId storeEntity = GeneralStoreTaskCatalog.StoreBusinessEntityId(chosen.Supplier.SupplierBusinessId);
+                            WorkTask serviceTask = GeneralStoreTaskCatalog.EnqueueTendCustomer(
+                                tasks, storeEntity, arrivalDayIndex, serviceCustomerRef);
+                            EntityId clerkEntity = EntityId.For(EntityKind.Person, clerkPersonId);
+                            bool assigned = tasks.AssignTask(serviceTask.TaskId, clerkEntity, budgets, out string assignReason);
+                            bool started = false;
+                            if (assigned)
+                            {
+                                started = tasks.StartTask(serviceTask.TaskId, arrivalDayIndex, out string startReason);
+                                if (!started)
+                                {
+                                    diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} start refused ({startReason}); customer stays queued.");
+                                }
+                            }
+                            else
+                            {
+                                diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} assign refused ({assignReason}); customer stays queued.");
+                            }
+                            if (started)
+                            {
+                                trip.ServiceTaskId = serviceTask.TaskId;
+                                trip.ServiceTaskPlannedMinutes = serviceTask.PlannedMinutes;
+                            }
+                        }
+                        else
+                        {
+                            diag.Add($"Plan16: no clerk for store '{chosen.Supplier.SupplierBusinessId}'; customer {serviceCustomerRef} waits in the queue without a service task.");
+                        }
+                    }
+                    else
+                    {
+                        diag.Add($"Plan16: queue refused {serviceCustomerRef} (full at enqueue time); settling as today.");
+                    }
+                }
+                else if (string.IsNullOrWhiteSpace(serviceCategoryId))
+                {
+                    diag.Add($"Plan16: no category for item '{need.ItemId}'; customer not queued.");
+                }
+                else
+                {
+                    diag.Add($"Plan16: queue full ({serviceQueue.WaitingCount}); customer not queued, settling as today.");
+                }
+            }
+
             SettlementOutcome counter = SettleAtCounter(
                 trip.Result, trip.Legs, need, chosen, shopperId, arrivalDayIndex, diag, trip.Options);
             if (!counter.Success)
@@ -2329,6 +2415,38 @@ namespace LandLedgers.Population
 
             return null;
         }
+
+        /// <summary>Plan 16: records the worked minutes of one finished
+        /// TendCustomer task and completes it — the leg pattern
+        /// (CompleteLegTask), applied to the clerk's service task. Returns
+        /// an error string, or null on success. The caller (the driver)
+        /// pops the queue after a successful completion.</summary>
+        internal string CompleteServiceTask(WorkTask serviceTask, int dayIndex, List<string> diag)
+        {
+            if (serviceTask == null)
+            {
+                return null;
+            }
+
+            int remaining = Math.Max(1, serviceTask.MinutesRemaining);
+            if (!tasks.RecordWorkProgress(serviceTask.TaskId, remaining, budgets, dayIndex, out bool reached, out string rejection))
+            {
+                return $"Service task progress refused: {rejection}";
+            }
+
+            if (reached && !tasks.CompleteTask(serviceTask.TaskId, TaskOutcome.Success, dayIndex, budgets))
+            {
+                return $"Service task {serviceTask.TaskId} reached its plan but CompleteTask refused.";
+            }
+
+            return null;
+        }
+
+        /// <summary>Plan 16: finds a service task by id for the driver's
+        /// completion branch. Returns null when the task is gone.
+        /// TaskAuthority.FindTask is public (Core/Tasks/TaskAuthority.cs:626;
+        /// string overload :634).</summary>
+        internal WorkTask FindServiceTask(EntityId taskId) => tasks.FindTask(taskId);
 
         /// <summary>
         /// Pass IV: step 16 — physical receipt ONLY. Household inventory grows

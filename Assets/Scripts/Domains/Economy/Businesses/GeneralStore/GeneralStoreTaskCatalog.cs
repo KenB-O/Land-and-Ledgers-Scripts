@@ -102,6 +102,27 @@ namespace LandLedgers.FirstLedger
             return authority.CreateTask(TendCustomerId, storeId, currentDayIndex, customerRef);
         }
 
+        /// <summary>Plan 16: the TaskAuthority owner id for a store business,
+        /// derived from its string business id. Formula is the
+        /// RetailServiceDesk precedent (Generic/RetailServiceDesk.cs:472),
+        /// the only in-domain string-to-EntityId derivation in production.
+        /// Guard: the derived id is never Business 3, the freight-company
+        /// owner id (FreightShipmentService.cs:590, :863) that the sweep skip
+        /// and FreightHandlingTaskGuard treat as freight handling. There is no
+        /// canonical global string-to-EntityId map in source (the
+        /// AutonomousSocietyDriver BusinessIndex is local to that driver and
+        /// maps the store to 3, which would collide with freight), so this
+        /// helper plus its guard is the derivation for this slice.</summary>
+        public static EntityId StoreBusinessEntityId(string supplierBusinessId)
+        {
+            int id = Math.Abs((supplierBusinessId ?? string.Empty).GetHashCode()) % 1000000 + 1;
+            if (id == 3)
+            {
+                id = 4;
+            }
+            return EntityId.For(EntityKind.Business, id);
+        }
+
         /// <summary>
         /// A freight shipment arrived. Unload time = ceil(quantity / unitsPerMinute
         /// for the goods class), floored at 1 minute. Fragile/perishable classes are

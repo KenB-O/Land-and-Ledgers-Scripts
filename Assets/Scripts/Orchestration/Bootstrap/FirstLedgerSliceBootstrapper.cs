@@ -10,6 +10,7 @@ using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.LumberYard;
+using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
@@ -563,6 +564,7 @@ namespace LandLedgers.FirstLedger
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
             ConfigureLiveBakerySaveOwner();
             ConfigureLiveLumberYardSaveOwner();
+            ConfigureLiveSawmillSaveOwner();
             ConfigureLumberYardConstructionBindings();
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
@@ -2053,6 +2055,9 @@ namespace LandLedgers.FirstLedger
             // C2: same window, same rule — the yard holder must exist
             // before the Pass XL restore consumes the state.
             ConfigureLiveLumberYardSaveOwner();
+            // D1: same window, same rule — the mill holder must exist
+            // before the Pass XL restore consumes the state.
+            ConfigureLiveSawmillSaveOwner();
             // C3: same window, same rule — the price port and the yard
             // supplier registration are runtime state, re-established
             // here after every restore.
@@ -2232,6 +2237,73 @@ namespace LandLedgers.FirstLedger
             }
 
             Debug.Log($"[LumberYardRuntime] Bootstrap owns one live LumberYardShopRuntime for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+        }
+
+        // D1: mirrors ConfigureLiveLumberYardSaveOwner for the sawmill.
+        // Owns one live SawmillShopRuntime for the first NPC-owned Sawmill
+        // business and hands it to the Pass 9 holder, so the daily
+        // byproduct transfer (SimulationDrivers) has a live mill to draw
+        // from. First mill only (C2 rule); a second mill is warned about
+        // and gets nothing here. Called at NewGame and in the restore
+        // window, immediately after ConfigureLiveLumberYardSaveOwner.
+        private void ConfigureLiveSawmillSaveOwner()
+        {
+            if (sharedBusinessRuntime == null || saveLoadManager == null)
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: shared business runtime or SaveLoadManager is missing.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState millBusiness = FindDevelopmentBusiness(BusinessType.Sawmill);
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: no authored Sawmill business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                pass9 = new Series2Pass9SaveState();
+                saveLoadManager.Series2Pass9State = pass9;
+            }
+
+            // Reuse, never replace: the hub accessor creates the runtime
+            // on first use and returns the live holder afterwards, so the
+            // hub dictionary and the Pass 9 holder share one instance.
+            SawmillShopRuntime liveMillRuntime = systemsHub.SawmillRuntimeFor(millBusiness.InstanceId);
+            if (liveMillRuntime == null)
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: hub returned no runtime.", this);
+                return;
+            }
+
+            if (pass9.Sawmill == null)
+            {
+                pass9.Sawmill = liveMillRuntime;
+            }
+            else if (!string.Equals(pass9.Sawmill.BusinessInstanceId, millBusiness.InstanceId, StringComparison.Ordinal))
+            {
+                Debug.LogWarning($"[SawmillRuntime] Replacing Pass 9 sawmill holder '{pass9.Sawmill.BusinessInstanceId}' with the authored mill '{millBusiness.InstanceId}' (the Pass 9 load's identity guard would refuse the mismatched DTO anyway).", this);
+                pass9.Sawmill = liveMillRuntime;
+            }
+
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate == null || candidate.BusinessType != BusinessType.Sawmill) continue;
+                if (string.Equals(candidate.InstanceId, millBusiness.InstanceId, StringComparison.Ordinal)) continue;
+                Debug.LogWarning($"[SawmillRuntime] Second Sawmill business '{candidate.InstanceId}' is unwired: the Pass 9 slot holds one mill only, so its stock is not saved.", this);
+                break;
+            }
+
+            Debug.Log($"[SawmillRuntime] Bootstrap owns one live SawmillShopRuntime for '{millBusiness.RuntimeDisplayName}' ({millBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
         }
 
         // C3: mirrors ConfigureLiveLumberYardSaveOwner for the construction

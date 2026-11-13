@@ -58,7 +58,6 @@ found, the test fails loudly rather than passing silently.
 | NewspaperRuntime | Domains/Economy/Businesses/Newspaper/NewspaperRuntime.cs | Domains/Economy/Businesses/Newspaper | (none) |
 | RestaurantShopRuntime | Domains/Economy/Businesses/Restaurant/RestaurantShopRuntime.cs | Domains/Economy/Businesses/Restaurant | (none) |
 | SaloonRuntime | Domains/Economy/Businesses/Saloon/SaloonRuntime.cs | Domains/Economy/Businesses/Saloon | (none) |
-| SawmillShopRuntime | Domains/Economy/Businesses/Sawmill/SawmillShopRuntime.cs | Domains/Economy/Businesses/Sawmill | Orchestration/Player/ThreeBusinessSlice.cs; Infrastructure/Persistence/Series2Pass9Save.cs |
 | TailorShopRuntime | Domains/Economy/Businesses/Tailor/TailorShopRuntime.cs | Domains/Economy/Businesses/Tailor | (none) |
 | BankRuntime | Domains/Economy/Businesses/Bank/BankRuntime.cs | Domains/Economy/Businesses/Bank | (none) |
 | StagedProductionProcess | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
@@ -762,3 +761,19 @@ note records their audited status so the question does not reopen:
   load, with an identity guard on restore. The yard still has no
   driver, no stock, and no sale — those are Priority C follow-ons
   (C1 price port, C3 bindings), not registry questions.
+- Economic integration campaign Plan D1 Tier 1 (2026-11-13): the
+  `SawmillShopRuntime` row was removed together with its
+  allowlist, per the rule above. D1 gives the mill a hub owner
+  (`SimulationSystemsHub.SawmillRuntimeFor`, created on first use),
+  a bootstrapper-constructed live instance
+  (`FirstLedgerSliceBootstrapper.ConfigureLiveSawmillSaveOwner`),
+  and a daily custody-transfer caller
+  (`SimulationDrivers.TransferSawmillByproductsToFuelDealer`,
+  pass9.Sawmill primary with the hub as fallback), so the runtime is
+  no longer unwired by this registry's definition (production callers
+  exist and instances are created). The Pass 9 slot is now filled from
+  the hub before save and re-attached before load, with an identity
+  guard on restore. The mill still has no sawing driver (F6 owns
+  sawing), no stock in live play until F6 + D-F0 co-location, and no
+  sale until D-F1 — those are Priority D / F6 follow-ons, not registry
+  questions.

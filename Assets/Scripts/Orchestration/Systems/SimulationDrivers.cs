@@ -351,6 +351,7 @@ namespace LandLedgers.Orchestration.Systems
         private SupplierDirectory supplierDirectory;
         private readonly HashSet<string> fuelDealerSupplierRegistrationLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
@@ -523,6 +524,107 @@ namespace LandLedgers.Orchestration.Systems
         {
             string key = string.IsNullOrWhiteSpace(businessId) ? "<missing>" : businessId;
             if (fuelDealerSupplierWarningsLogged.Add(key)) Debug.LogWarning("[FuelDealerSupplier] " + message, this);
+        }
+
+        /// <summary>
+        /// D1: daily sawmill-byproduct custody transfer — moves the mill's
+        /// held byproduct lots into the first formed Fuel Dealer's intake
+        /// by custody, so the bakery's paid-source builder (when D-F2
+        /// lands) sees the day's stock. First mill and first dealer only
+        /// (C2 rule); a second mill or dealer warns and gets nothing.
+        /// Custody only: never pays the mill (D-F3 open), never creates a
+        /// lot, never touches a wagon or a shipment, never reads a price.
+        /// Loud refusal (diagnostic + once-per-piece warning) when any
+        /// piece is absent — the transfer never silently no-ops. Called
+        /// from OnDayChanged immediately before
+        /// DriveBakeryWholesalePlanning.
+        /// </summary>
+        private void TransferSawmillByproductsToFuelDealer(int dayIndex)
+        {
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogSawmillTransferWarningOnce("no-business-runtime",
+                    "Sawmill byproduct transfer skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogSawmillTransferWarningOnce("no-pass9",
+                    "Sawmill byproduct transfer skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            // Empty runtime holder only. Inventory arrives solely through
+            // the existing sawmill-byproduct custody transfer; this creates
+            // no stock, cash, or transaction.
+            pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+
+            BusinessInstanceState millBusiness = null;
+            BusinessInstanceState dealerBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-mill",
+                        $"Second Sawmill business '{business.InstanceId}' is unwired: the Pass 9 slot holds one mill only, so its byproducts are not transferred.");
+                }
+                else if (business.BusinessType == BusinessType.FuelDealer)
+                {
+                    if (dealerBusiness == null) dealerBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-dealer",
+                        $"Second Fuel Dealer business '{business.InstanceId}' is unwired: the transfer feeds the first dealer only.");
+                }
+            }
+
+            // Agent 3 note 68 ruling (2): pass9.Sawmill is PRIMARY — the
+            // bootstrapper owns the holder. The hub accessor is the fallback
+            // only when the holder is null AND a Sawmill business is formed,
+            // with a warning; it creates the (empty) runtime on first use.
+            LandLedgers.Economy.Businesses.Sawmill.SawmillShopRuntime mill = pass9.Sawmill;
+            if (mill == null)
+            {
+                if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+                {
+                    LogSawmillTransferWarningOnce("no-mill",
+                        "Sawmill byproduct transfer skipped: no formed Sawmill business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillTransferWarningOnce("holder-fallback",
+                    $"Sawmill byproduct transfer: Pass 9 mill holder is null; resolving the formed Sawmill '{millBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                mill = hub.SawmillRuntimeFor(millBusiness.InstanceId);
+                if (mill == null)
+                {
+                    LogSawmillTransferWarningOnce("hub-no-mill",
+                        "Sawmill byproduct transfer skipped: hub returned no mill runtime.");
+                    return;
+                }
+            }
+
+            if (dealerBusiness == null || string.IsNullOrWhiteSpace(dealerBusiness.InstanceId))
+            {
+                LogSawmillTransferWarningOnce("no-dealer",
+                    "Sawmill byproduct transfer skipped: no formed Fuel Dealer business is present in the shared runtime.");
+                return;
+            }
+
+            var diag = new List<string>();
+            int transferred = mill.TransferByproductsToFuelDealer(dealerBusiness.InstanceId, pass9.FuelIntake, diag);
+            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody ({string.Join("; ", diag)}).", this);
+        }
+
+        private void LogSawmillTransferWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (sawmillTransferWarningsLogged.Add(warningKey)) Debug.LogWarning("[SawmillTransfer] " + message, this);
         }
 
         /// <summary>Attaches the scenario's real membership authority for the production shopping loop.</summary>
@@ -1989,6 +2091,11 @@ namespace LandLedgers.Orchestration.Systems
             // boundary. This is execution of an already-started physical process;
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
+            // D1: the mill's byproduct lots move into the Fuel Dealer's
+            // intake by custody before the bakery plans its wholesale
+            // day, so the paid-source builder (when D-F2 lands) sees the
+            // day's transferred stock.
+            TransferSawmillByproductsToFuelDealer(absoluteDayIndex);
             DriveBakeryWholesalePlanning(absoluteDayIndex);
 
             // Muse Phase I: trade-credit aging is a daily read/transition over

@@ -190,6 +190,12 @@ namespace LandLedgers.Orchestration.Systems
         // yard stock.
         private Dictionary<string, LumberYardShopRuntime> lumberYardRuntimes;
 
+        // D1 (C2 mirror): one live sawmill runtime per Sawmill business.
+        // The Pass 9 save seam persists the first mill only (single
+        // holder field); see Series2Pass9Save.cs. A business with no
+        // runtime holds no mill stock.
+        private Dictionary<string, SawmillShopRuntime> sawmillRuntimes;
+
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
         {
@@ -240,6 +246,32 @@ namespace LandLedgers.Orchestration.Systems
             if (runtime == null || string.IsNullOrWhiteSpace(runtime.BusinessInstanceId)) return;
             lumberYardRuntimes ??= new Dictionary<string, LumberYardShopRuntime>(StringComparer.Ordinal);
             lumberYardRuntimes[runtime.BusinessInstanceId] = runtime;
+        }
+
+        /// <summary>D1 (C2 mirror): the sawmill runtime for one business, created on first use (empty).</summary>
+        public SawmillShopRuntime SawmillRuntimeFor(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            sawmillRuntimes ??= new Dictionary<string, SawmillShopRuntime>(StringComparer.Ordinal);
+            if (!sawmillRuntimes.TryGetValue(businessInstanceId, out SawmillShopRuntime mill) || mill == null)
+            {
+                mill = new SawmillShopRuntime(businessInstanceId, Ids);
+                sawmillRuntimes[businessInstanceId] = mill;
+            }
+            return mill;
+        }
+
+        /// <summary>
+        /// D1 (C2 mirror): adopts a runtime (e.g. one restored from the
+        /// Pass 9 save seam) as the hub's live holder for its business.
+        /// Replaces by business id, never merges — the save data is
+        /// authoritative, and re-registering the same runtime is idempotent.
+        /// </summary>
+        public void RegisterSawmillRuntime(SawmillShopRuntime runtime)
+        {
+            if (runtime == null || string.IsNullOrWhiteSpace(runtime.BusinessInstanceId)) return;
+            sawmillRuntimes ??= new Dictionary<string, SawmillShopRuntime>(StringComparer.Ordinal);
+            sawmillRuntimes[runtime.BusinessInstanceId] = runtime;
         }
 
         // Pass IV Worker 2: the unified reservation authority (persisted),

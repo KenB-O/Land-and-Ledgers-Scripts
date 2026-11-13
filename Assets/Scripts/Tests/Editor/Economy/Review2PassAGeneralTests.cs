@@ -408,6 +408,73 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void FuelDealerRegistration_StockedYardStillSellsNothing_ConversionUnset()
+        {
+            BusinessProfileDefinition profile = BuildFuelDealerProfile();
+            ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
+            ItemCategoryDefinition category = profile.FindCategory("fuel_wood");
+            int configuredPrice = fuel.Pricing.GetCostPlusPriceCents(category.DefaultMarkupMultiplier, 0f);
+            Assert.Greater(configuredPrice, 0, "price comes from the authored profile calculation, not an adapter fallback");
+
+            BusinessInstanceState business = BusinessInstanceState.Create(
+                "jacob-fuel-dealer", profile, 17, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            var intake = new FuelYardByproductIntake();
+            var ids = new EntityIdRegistry();
+            Assert.IsNull(intake.ReceiveByproductLot(business.InstanceId, new SlabOffcutFuelLot
+            {
+                LotId = ids.Allocate(EntityKind.Lot),
+                FuelWoodUnits = 20,
+                OwnerId = "mill-1",
+                SourceMillBusinessId = "mill-1",
+                SourceLogLotId = "log-lot-1",
+                StandId = "stand-1",
+                Species = "pine",
+                ProducedDayIndex = 1,
+            }, new List<string>()));
+            var cash = new Series2BusinessRuntimeCashPort(business.RuntimeState);
+            Assert.IsTrue(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                business, intake, cash, configuredPrice,
+                out Series2FuelDealerSupplierAdapter adapter, out string refusal), refusal);
+
+            var directory = new SupplierDirectory();
+            Series2FuelDealerSupplierAdapter.RegisterIn(directory, adapter);
+            Assert.AreEqual(1, directory.All.Count, "one existing business identity registers one supplier");
+            int fuelSellers = 0;
+            foreach (IGoodsSupplier supplier in directory.SuppliersFor("fuel_wood")) fuelSellers++;
+            Assert.AreEqual(1, fuelSellers, "the registered business is discoverable for its configured category");
+            Assert.AreEqual(0, adapter.FuelUnitsPerHouseholdUnit,
+                "live wiring must not turn the legacy 1:1 test convenience into an approved conversion");
+            Assert.AreEqual(0, adapter.ItemStockUnits("fuel_wood"), "a stocked yard sells nothing until the conversion decision lands");
+            Assert.IsFalse(adapter.OffersItem("fuel_wood"), "a stocked yard with no conversion is not a saleable offer");
+
+            var diagnostics = new List<string>();
+            int cashBefore = business.RuntimeState.CurrentCashCents;
+            Assert.AreEqual(0, adapter.SellItem("fuel_wood", 1, 0, CashSettlement(), diagnostics));
+            StringAssert.Contains("not configured", string.Join("; ", diagnostics));
+            Assert.AreEqual(cashBefore, business.RuntimeState.CurrentCashCents, "a refused sale moves no cash");
+            Assert.AreEqual(20, intake.TotalFuelWoodUnitsFor(business.InstanceId), "a refused sale leaves the yard untouched");
+        }
+
+        [Test]
+        public void FuelDealerRegistration_RefusesZeroPrice_NoOfferRegistered()
+        {
+            BusinessProfileDefinition profile = BuildFuelDealerProfile();
+            BusinessInstanceState business = BusinessInstanceState.Create(
+                "jacob-fuel-dealer", profile, 17, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            var intake = new FuelYardByproductIntake();
+            var cash = new Series2BusinessRuntimeCashPort(business.RuntimeState);
+
+            Assert.IsFalse(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                business, intake, cash, 0,
+                out Series2FuelDealerSupplierAdapter adapter, out string refusal));
+            StringAssert.Contains("no positive configured sale price", refusal);
+            Assert.IsNull(adapter, "a refused offer builds no adapter");
+
+            var directory = new SupplierDirectory();
+            Assert.AreEqual(0, directory.All.Count, "a refused offer registers nothing");
+        }
+
+        [Test]
         public void FuelDealerLiveRegistration_RejectsWrongBusinessAndUnassignedPremises()
         {
             BusinessProfileDefinition profile = BuildFuelDealerProfile();
